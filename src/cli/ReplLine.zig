@@ -225,7 +225,7 @@ pub fn deinit(self: *ReplLine) void {
 const CommandError =
     error{ DeleteEmptyLineBuffer, NewLine, ExitRepl } ||
     Allocator.Error ||
-    std.Io.File.ReadError ||
+    std.Io.File.ReadStreamingError ||
     std.Io.Writer.Error;
 
 const CommandFn = *const fn (*LineState) CommandError!void;
@@ -389,7 +389,7 @@ fn findCommandFn(state: *LineState) CommandFn {
 pub const ReadLineError =
     error{InvalidUtf8} ||
     Allocator.Error ||
-    std.Io.File.ReadError ||
+    std.Io.File.ReadStreamingError ||
     std.Io.Writer.Error ||
     CommandError ||
     switch (SUPPORTED_OS) {
@@ -401,10 +401,10 @@ pub const ReadLineError =
 /// Falls back to simple line reading when stdin is not a TTY (e.g., piped input).
 pub fn readLine(self: *ReplLine, outlive: Allocator, prompt: []const u8, stdin: std.Io.File) ReadLineError![]u8 {
     var stdout_buffer: [1024]u8 = undefined;
-    var stdout_writer = std.Io.File.stdout().writerStreaming(&stdout_buffer);
+    var stdout_writer = std.Io.File.stdout().writerStreaming(std.Options.debug_io, &stdout_buffer);
 
     // Use simple line reading for non-TTY input (pipes, redirects, tests)
-    if (!stdin.isTty()) {
+    if (!(stdin.isTty(std.Options.debug_io) catch false)) {
         return readLineSimple(outlive, prompt, &stdout_writer.interface, stdin);
     }
 
@@ -422,7 +422,7 @@ fn readLineSimple(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, i
     var read_buffer: [1]u8 = undefined;
 
     while (true) {
-        const bytes_read = try in.read(&read_buffer);
+        const bytes_read = try in.readStreaming(std.Options.debug_io, &.{&read_buffer});
         if (bytes_read == 0) {
             // EOF - return "exit" to signal REPL should exit
             line_buffer.deinit(outlive);
@@ -496,7 +496,7 @@ fn helper(self: *ReplLine, outlive: Allocator, prompt: []const u8, out: *std.Io.
     while (true) : ({
         try out.flush();
     }) {
-        const new_bytes = try in.read(&read_buf);
+        const new_bytes = try in.readStreaming(std.Options.debug_io, &.{&read_buf});
         if (new_bytes == 0) continue;
 
         events.clearRetainingCapacity();

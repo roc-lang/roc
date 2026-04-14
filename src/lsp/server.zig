@@ -294,9 +294,9 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
             var file = self.log_file orelse return;
             var buffer: [256]u8 = undefined;
             const msg = std.fmt.bufPrint(&buffer, fmt, args) catch return;
-            file.writeAll(msg) catch return;
-            file.writeAll("\n") catch {};
-            file.sync() catch {};
+            file.writeStreamingAll(std.Options.debug_io,msg) catch return;
+            file.writeStreamingAll(std.Options.debug_io,"\n") catch {};
+            file.sync(std.Options.debug_io) catch {};
         }
 
         /// Returns the stored document (testing helper; returns null outside tests).
@@ -314,8 +314,8 @@ pub fn runWithStdIo(allocator: std.mem.Allocator, debug: DebugOptions) !void {
 
     var stdin_buffer: [4096]u8 = undefined;
     var stdout_buffer: [4096]u8 = undefined;
-    const reader = stdin_file.readerStreaming(&stdin_buffer);
-    const writer = stdout_file.writerStreaming(&stdout_buffer);
+    const reader = stdin_file.readerStreaming(std.Options.debug_io, &stdin_buffer);
+    const writer = stdout_file.writerStreaming(std.Options.debug_io, &stdout_buffer);
 
     var log_file: ?std.Io.File = null;
     const enable_logging = debug.transport or debug.build or debug.syntax or debug.server;
@@ -323,14 +323,14 @@ pub fn runWithStdIo(allocator: std.mem.Allocator, debug: DebugOptions) !void {
         const log_info = try createLogFile(allocator);
         log_file = log_info.file;
         const stderr_file = std.Io.File.stderr();
-        stderr_file.writeAll("roc-lsp logging to ") catch {};
-        stderr_file.writeAll(log_info.path) catch {};
-        stderr_file.writeAll("\n") catch {};
+        stderr_file.writeStreamingAll(std.Options.debug_io,"roc-lsp logging to ") catch {};
+        stderr_file.writeStreamingAll(std.Options.debug_io,log_info.path) catch {};
+        stderr_file.writeStreamingAll(std.Options.debug_io,"\n") catch {};
         allocator.free(log_info.path);
         const divider = "\n===== roc-lsp session start =====\n";
-        log_file.?.writeAll(divider) catch {};
-        log_file.?.writeAll("\n") catch {};
-        log_file.?.sync() catch {};
+        log_file.?.writeStreamingAll(std.Options.debug_io,divider) catch {};
+        log_file.?.writeStreamingAll(std.Options.debug_io,"\n") catch {};
+        log_file.?.sync(std.Options.debug_io) catch {};
     }
 
     const StdServer = Server(@TypeOf(reader), @TypeOf(writer));
@@ -340,7 +340,7 @@ pub fn runWithStdIo(allocator: std.mem.Allocator, debug: DebugOptions) !void {
 
     if (log_file) |file| {
         if (!debug.transport) {
-            file.close();
+            file.close(std.Options.debug_io);
         }
     }
 }
@@ -356,17 +356,16 @@ fn createLogFile(allocator: std.mem.Allocator) !LogFileInfo {
     const filename = try allocator.dupe(u8, "roc-lsp-debug.log");
     defer allocator.free(filename);
     const absolute_path = try std.fs.path.resolve(allocator, &.{ dir_path, filename });
-    const file = std.Io.Dir.createFileAbsolute(absolute_path, .{
+    const file = std.Io.Dir.createFileAbsolute(std.Options.debug_io, absolute_path, .{
         .truncate = false,
         .read = true,
-        .mode = 0o600,
     }) catch |err| switch (err) {
-        error.PathAlreadyExists => try std.Io.Dir.openFileAbsolute(absolute_path, .{
+        error.PathAlreadyExists => try std.Io.Dir.openFileAbsolute(std.Options.debug_io, absolute_path, .{
             .mode = .read_write,
         }),
         else => return err,
     };
-    try file.seekFromEnd(0);
+    // File is opened in append mode (non-truncate)
     return .{ .file = file, .path = absolute_path };
 }
 
@@ -377,9 +376,12 @@ fn resolveTempDir(allocator: std.mem.Allocator) ![]u8 {
         [_][]const u8{ "TMPDIR", "TMP", "TEMP" };
 
     for (env_names) |name| {
-        const value = std.process.getEnvVarOwned(allocator, name) catch |err| switch (err) {
-            error.EnvironmentVariableNotFound => continue,
-            else => return err,
+        const value = blk: {
+            const key_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+            defer allocator.free(key_z);
+            const cval = std.c.getenv(key_z) orelse continue;
+            const len = std.mem.len(cval);
+            break :blk allocator.dupe(u8, cval[0..len]) catch return error.OutOfMemory;
         };
         return value;
     }

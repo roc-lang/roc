@@ -22,7 +22,7 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
             PayloadTooLarge,
         };
 
-        pub const WriteMessageError = WriterError || error{OutOfMemory};
+        pub const WriteMessageError = error{ OutOfMemory, WriteFailed };
 
         const max_header_line = 8 * 1024;
         const max_payload_size: usize = 16 * 1024 * 1024;
@@ -38,7 +38,7 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
 
         pub fn deinit(self: *Self) void {
             if (self.log_file) |*file| {
-                file.close();
+                file.close(std.Options.debug_io);
                 self.log_file = null;
             }
         }
@@ -81,9 +81,9 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
             return payload;
         }
 
-        pub fn sendBytes(self: *Self, payload: []const u8) (WriterError)!void {
+        pub fn sendBytes(self: *Self, payload: []const u8) WriteMessageError!void {
             var header_buffer: [64]u8 = undefined;
-            const header = try std.fmt.bufPrint(&header_buffer, "Content-Length: {d}\r\n\r\n", .{payload.len});
+            const header = std.fmt.bufPrint(&header_buffer, "Content-Length: {d}\r\n\r\n", .{payload.len}) catch return error.WriteFailed;
             try self.writeAll(header);
             if (payload.len != 0) {
                 try self.writeAll(payload);
@@ -125,7 +125,7 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
             return buffer.items;
         }
 
-        fn writeAll(self: *Self, bytes: []const u8) (WriterError)!void {
+        fn writeAll(self: *Self, bytes: []const u8) WriteMessageError!void {
             var offset: usize = 0;
             while (offset < bytes.len) {
                 const written = try self.writeSome(bytes[offset..]);
@@ -138,31 +138,29 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
 
         fn readSome(self: *Self, buffer: []u8) ReadMessageError!usize {
             if (@hasDecl(ReaderType, "read")) {
-                return try self.reader.read(buffer);
+                return self.reader.read(buffer) catch return error.EndOfStream;
             } else if (@hasField(ReaderType, "interface")) {
-                return try (&self.reader.interface).readSliceShort(buffer);
+                return (&self.reader.interface).readSliceShort(buffer) catch return error.EndOfStream;
             } else {
                 @compileError("ReaderType must provide either a read method or expose an interface field");
             }
         }
 
-        fn writeSome(self: *Self, bytes: []const u8) (WriterError)!usize {
+        fn writeSome(self: *Self, bytes: []const u8) WriteMessageError!usize {
             if (@hasDecl(WriterType, "write")) {
-                return try self.writer.write(bytes);
+                return self.writer.write(bytes) catch return error.WriteFailed;
             } else if (@hasField(WriterType, "interface")) {
-                return try (&self.writer.interface).write(bytes);
+                return (&self.writer.interface).write(bytes) catch return error.WriteFailed;
             } else {
                 @compileError("WriterType must provide either a write method or expose an interface field");
             }
         }
 
-        fn flushWriter(self: *Self) (WriterError)!void {
+        fn flushWriter(self: *Self) WriteMessageError!void {
             if (@hasDecl(WriterType, "flush")) {
-                return self.writer.flush();
+                self.writer.flush() catch return error.WriteFailed;
             } else if (@hasField(WriterType, "interface")) {
-                return (&self.writer.interface).flush();
-            } else {
-                return;
+                (&self.writer.interface).flush() catch return error.WriteFailed;
             }
         }
 
@@ -172,18 +170,18 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
             const header = std.fmt.bufPrint(
                 &header_buffer,
                 "[{d}] {s} ({d} bytes)\n",
-                .{ std.time.milliTimestamp(), direction, payload.len },
+                .{ @divTrunc(std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds, 1_000_000), direction, payload.len },
             ) catch return;
-            log_file.writeAll(header) catch return;
-            log_file.writeAll(payload) catch return;
-            log_file.writeAll("\n---\n") catch return;
-            log_file.sync() catch {};
+            log_file.writeStreamingAll(std.Options.debug_io, header) catch return;
+            log_file.writeStreamingAll(std.Options.debug_io, payload) catch return;
+            log_file.writeStreamingAll(std.Options.debug_io, "\n---\n") catch return;
+            log_file.sync(std.Options.debug_io) catch {};
         }
     };
 }
 
 fn encodeJson(allocator: std.mem.Allocator, value: anytype) error{OutOfMemory}![]u8 {
-    var writer: std.io.Writer.Allocating = .init(allocator);
+    var writer: std.Io.Writer.Allocating = .init(allocator);
     defer writer.deinit();
     std.json.Stringify.value(value, .{}, &writer.writer) catch return error.OutOfMemory;
     return writer.toOwnedSlice();

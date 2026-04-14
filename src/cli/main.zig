@@ -488,16 +488,16 @@ pub fn writeFdCoordinationFile(ctx: *CliContext, temp_exe_path: []const u8, shm_
     const fd_file_path = try std.fmt.allocPrint(ctx.arena, "{s}.txt", .{dir_path});
 
     // Create the file (exclusive - fail if exists to detect collisions)
-    const fd_file = std.Io.Dir.cwd().createFile(fd_file_path, .{ .exclusive = true }) catch |err| {
+    const fd_file = std.Io.Dir.cwd().createFile(std.Options.debug_io, fd_file_path, .{ .exclusive = true }) catch |err| {
         // Error is handled by caller with ctx.fail()
         return err;
     };
-    defer fd_file.close();
+    defer fd_file.close(std.Options.debug_io);
 
     // Write shared memory info to file
     const fd_str = try std.fmt.allocPrint(ctx.arena, "{}\n{}", .{ shm_handle.fd, shm_handle.size });
-    try fd_file.writeAll(fd_str);
-    try fd_file.sync();
+    try fd_file.writeStreamingAll(std.Options.debug_io, fd_str);
+    try fd_file.sync(std.Options.debug_io);
 }
 
 /// Create the temporary directory structure for fd communication.
@@ -564,7 +564,7 @@ pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, exe_dis
         createHardlink(allocs, exe_path, temp_exe_path) catch {
             // If hardlinking fails for any reason, fall back to copying
             // Common reasons: cross-device link, permissions, file already exists
-            try std.Io.Dir.cwd().copyFile(exe_path, std.Io.Dir.cwd(), temp_exe_path, .{});
+            try std.Io.Dir.cwd().copyFile(exe_path, std.Io.Dir.cwd(), temp_exe_path, std.Options.debug_io, .{});
         };
 
         return temp_exe_path;
@@ -897,7 +897,7 @@ fn generatePlatformHostShim(
 
     // Convert u32 array to bytes for writing
     const bytes = std.mem.sliceAsBytes(bitcode);
-    bc_file.writeAll(bytes) catch |err| {
+    bc_file.writeStreamingAll(std.Options.debug_io, bytes) catch |err| {
         return ctx.fail(.{ .file_write_failed = .{ .path = bitcode_path, .err = err } });
     };
 
@@ -1268,14 +1268,14 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         // After building, hardlink to cache for future runs
         // Force-hardlink (delete existing first) since hash collision means identical content
         std.log.debug("Caching executable to: {s}", .{exe_cache_path});
-        std.Io.Dir.cwd().deleteFile(exe_cache_path) catch |err| switch (err) {
+        std.Io.Dir.cwd().deleteFile(std.Options.debug_io, exe_cache_path) catch |err| switch (err) {
             error.FileNotFound => {}, // OK, doesn't exist
             else => std.log.debug("Could not delete existing cache file: {}", .{err}),
         };
         createHardlink(ctx, exe_path, exe_cache_path) catch |err| {
             // If hardlinking fails, fall back to copying
             std.log.debug("Hardlink to cache failed, copying: {}", .{err});
-            std.Io.Dir.cwd().copyFile(exe_path, std.Io.Dir.cwd(), exe_cache_path, .{}) catch |copy_err| {
+            std.Io.Dir.cwd().copyFile(exe_path, std.Io.Dir.cwd(), exe_cache_path, std.Options.debug_io, .{}) catch |copy_err| {
                 // Non-fatal - just means future runs won't be cached
                 std.log.debug("Failed to copy to cache: {}", .{copy_err});
             };
@@ -1311,15 +1311,15 @@ const NativeRunTermination = union(enum) {
 
 fn classifyNativeRunTermination(term: std.process.Child.Term, warning_count: usize) NativeRunTermination {
     return switch (term) {
-        .Exited => |code| if (code != 0)
+        .exited => |code| if (code != 0)
             .{ .exit_code = code }
         else if (warning_count > 0)
             .{ .exit_code = 2 }
         else
             .success,
-        .Signal => |signal| .{ .signal = signal },
-        .Stopped => |signal| .{ .stopped = signal },
-        .Unknown => |status| .{ .unknown = status },
+        .signal => |signal| .{ .signal = signal },
+        .stopped => |signal| .{ .stopped = signal },
+        .unknown => |status| .{ .unknown = status },
     };
 }
 
@@ -1646,31 +1646,32 @@ fn runWithPosixFdInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle:
     std.log.debug("Coordination file written successfully", .{});
 
     // Configure fd inheritance - clear FD_CLOEXEC so child process inherits the fd
-    // Use std.posix.fcntl which properly handles the variadic C function.
-    const current_flags = std.posix.fcntl(shm_handle.fd, std.posix.F.GETFD, 0) catch |err| {
+    const current_flags = std.c.fcntl(shm_handle.fd, std.c.F.GETFD);
+    if (current_flags == -1) {
         return ctx.fail(.{ .shared_memory_failed = .{
             .operation = "get fd flags",
-            .err = err,
+            .err = error.FdConfigFailed,
         } });
-    };
+    }
 
     // Clear FD_CLOEXEC - the flag value is 1
-    const new_flags = current_flags & ~@as(usize, 1);
-    _ = std.posix.fcntl(shm_handle.fd, std.posix.F.SETFD, new_flags) catch |err| {
+    const new_flags = current_flags & ~@as(c_int, 1);
+    if (std.c.fcntl(shm_handle.fd, std.c.F.SETFD, new_flags) == -1) {
         return ctx.fail(.{ .shared_memory_failed = .{
             .operation = "set fd flags",
-            .err = err,
+            .err = error.FdConfigFailed,
         } });
-    };
+    }
 
     // Debug-only verification that fd flags were actually cleared
     if (comptime builtin.mode == .Debug) {
-        const verify_flags = std.posix.fcntl(shm_handle.fd, std.posix.F.GETFD, 0) catch |err| {
+        const verify_flags = std.c.fcntl(shm_handle.fd, std.c.F.GETFD);
+        if (verify_flags == -1) {
             return ctx.fail(.{ .shared_memory_failed = .{
                 .operation = "verify fd flags",
-                .err = err,
+                .err = error.FdConfigFailed,
             } });
-        };
+        }
         if ((verify_flags & 1) != 0) {
             return ctx.fail(.{ .shared_memory_failed = .{
                 .operation = "clear FD_CLOEXEC",
@@ -1690,21 +1691,20 @@ fn runWithPosixFdInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle:
     }
 
     // Run the interpreter as a child process from the temp directory
-    var child = std.process.Child.init(argv, ctx.gpa);
-    child.cwd = std.Io.Dir.cwd().realpathAlloc(ctx.arena, ".") catch {
+    const child_cwd_path = std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, ".", ctx.arena) catch {
         return ctx.fail(.{ .directory_not_found = .{
             .path = ".",
         } });
     };
 
-    // Forward stdout and stderr
-    child.stdout_behavior = .Inherit;
-    child.stderr_behavior = .Inherit;
-
-    // Spawn the child process
     std.log.debug("Spawning child process: {s} with {} app args", .{ exe_path, app_args.len });
-    std.log.debug("Child process working directory: {s}", .{child.cwd.?});
-    child.spawn() catch |err| {
+    std.log.debug("Child process working directory: {s}", .{child_cwd_path});
+    var child = std.process.spawn(std.Options.debug_io, .{
+        .argv = argv,
+        .cwd = .{ .path = child_cwd_path },
+        .stdout = .inherit,
+        .stderr = .inherit,
+    }) catch |err| {
         return ctx.fail(.{ .child_process_spawn_failed = .{
             .command = exe_path,
             .err = err,
@@ -1713,7 +1713,7 @@ fn runWithPosixFdInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle:
     std.log.debug("Child process spawned successfully (PID: {})", .{child.id});
 
     // Wait for child to complete
-    const term = child.wait() catch |err| {
+    const term = child.wait(std.Options.debug_io) catch |err| {
         return ctx.fail(.{ .child_process_wait_failed = .{
             .command = exe_path,
             .err = err,
@@ -1731,7 +1731,7 @@ fn runWithPosixFdInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle:
 
     // Check the termination status
     switch (term) {
-        .Exited => |exit_code| {
+        .exited => |exit_code| {
             if (exit_code == 0) {
                 std.log.debug("Child process completed successfully", .{});
             } else {
@@ -1740,22 +1740,23 @@ fn runWithPosixFdInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle:
                 std.process.exit(exit_code);
             }
         },
-        .Signal => |signal| {
-            std.log.debug("Child process {s} killed by signal: {}", .{ exe_path, signal });
+        .signal => |signal| {
+            const sig_num = @intFromEnum(signal);
+            std.log.debug("Child process {s} killed by signal: {}", .{ exe_path, sig_num });
             const result = platform_validation.targets_validator.ValidationResult{
-                .process_signaled = .{ .signal = signal },
+                .process_signaled = .{ .signal = sig_num },
             };
             renderValidationError(ctx.gpa, result, ctx.io.stderr());
             // Standard POSIX convention: exit with 128 + signal number
-            std.process.exit(128 +| @as(u8, @truncate(signal)));
+            std.process.exit(128 +| @as(u8, @truncate(sig_num)));
         },
-        .Stopped => |signal| {
+        .stopped => |signal| {
             return ctx.fail(.{ .child_process_signaled = .{
                 .command = exe_path,
-                .signal = signal,
+                .signal = @intFromEnum(signal),
             } });
         },
-        .Unknown => |status| {
+        .unknown => |status| {
             return ctx.fail(.{ .child_process_failed = .{
                 .command = exe_path,
                 .exit_code = status,
@@ -2547,7 +2548,7 @@ fn discoverAndAddBundleModules(
     stderr: anytype,
 ) !void {
     // Resolve the entry point to an absolute path
-    const abs_entry = std.Io.Dir.cwd().realpathAlloc(ctx.gpa, first_roc_file) catch |err| {
+    const abs_entry = std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, first_roc_file, ctx.gpa) catch |err| {
         try stderr.print("Error: Could not resolve path '{s}': {}\n", .{ first_roc_file, err });
         return err;
     };
@@ -2589,7 +2590,7 @@ fn discoverAndAddBundleModules(
     defer bundled_set.deinit();
 
     for (file_paths.items) |rel_path| {
-        const abs_path = std.Io.Dir.cwd().realpathAlloc(ctx.gpa, rel_path) catch continue;
+        const abs_path = std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, rel_path, ctx.gpa) catch continue;
         defer ctx.gpa.free(abs_path);
         try bundled_set.put(try ctx.arena.dupe(u8, abs_path), {});
     }
@@ -2710,23 +2711,23 @@ pub fn rocBundle(ctx: *CliContext, args: cli_args.BundleArgs) !void {
     const stderr = ctx.io.stderr();
 
     // Start timing
-    const start_time = std.time.nanoTimestamp();
+    const start_time = std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds;
 
     // Get current working directory
     const cwd = std.Io.Dir.cwd();
 
     // Determine output directory
     var output_dir = if (args.output_dir) |dir|
-        try cwd.openDir(dir, .{})
+        try cwd.openDir(std.Options.debug_io, dir, .{})
     else
         cwd;
-    defer if (args.output_dir != null) output_dir.close();
+    defer if (args.output_dir != null) output_dir.close(std.Options.debug_io);
 
     // Create a temporary directory for the output file
-    var tmp_dir = try std.Io.Dir.cwd().makeOpenPath(".roc_bundle_tmp", .{});
+    var tmp_dir = try std.Io.Dir.cwd().createDirPathOpen(std.Options.debug_io, ".roc_bundle_tmp", .{});
     defer {
-        tmp_dir.close();
-        std.Io.Dir.cwd().deleteTree(".roc_bundle_tmp") catch {};
+        tmp_dir.close(std.Options.debug_io);
+        std.Io.Dir.cwd().deleteTree(std.Options.debug_io, ".roc_bundle_tmp") catch {};
     }
 
     // Collect all files to bundle
@@ -2757,13 +2758,13 @@ pub fn rocBundle(ctx: *CliContext, args: cli_args.BundleArgs) !void {
 
     // Check that all files exist and collect their sizes
     for (paths_to_use) |path| {
-        const file = cwd.openFile(path, .{}) catch |err| {
+        const file = cwd.openFile(std.Options.debug_io, path, .{}) catch |err| {
             try stderr.print("Error: Could not open file '{s}': {}\n", .{ path, err });
             return err;
         };
-        defer file.close();
+        defer file.close(std.Options.debug_io);
 
-        const stat = try file.stat();
+        const stat = try file.stat(std.Options.debug_io);
         uncompressed_size += stat.size;
 
         try file_paths.append(ctx.arena, path);
@@ -2870,12 +2871,12 @@ pub fn rocBundle(ctx: *CliContext, args: cli_args.BundleArgs) !void {
 
     // Create temporary output file
     const temp_filename = "temp_bundle.tar.zst";
-    const temp_file = try tmp_dir.createFile(temp_filename, .{
+    const temp_file = try tmp_dir.createFile(std.Options.debug_io, temp_filename, .{
         // Allow querying metadata (stat) on the handle, necessary for windows
         .read = true,
         .truncate = true,
     });
-    defer temp_file.close();
+    defer temp_file.close(std.Options.debug_io);
 
     // Create file path iterator
     const FilePathIterator = struct {
@@ -2896,7 +2897,7 @@ pub fn rocBundle(ctx: *CliContext, args: cli_args.BundleArgs) !void {
     var allocator_copy = ctx.arena;
     var error_ctx: bundle.ErrorContext = undefined;
     var temp_writer_buffer: [4096]u8 = undefined;
-    var temp_writer = temp_file.writer(&temp_writer_buffer);
+    var temp_writer = temp_file.writerStreaming(std.Options.debug_io, &temp_writer_buffer);
     const bundle_base_dir = rebased_base_dir orelse cwd;
     const final_filename = bundle.bundleFiles(
         &iter,
@@ -2922,14 +2923,14 @@ pub fn rocBundle(ctx: *CliContext, args: cli_args.BundleArgs) !void {
     try temp_writer.interface.flush();
 
     // Get the compressed file size
-    const compressed_stat = try temp_file.stat();
+    const compressed_stat = try temp_file.stat(std.Options.debug_io);
     const compressed_size = compressed_stat.size;
 
     // Move the temp file to the final location
-    try std.Io.Dir.rename(tmp_dir, temp_filename, output_dir, final_filename);
+    try tmp_dir.rename(temp_filename, output_dir, final_filename, std.Options.debug_io);
 
     // Calculate elapsed time
-    const end_time = std.time.nanoTimestamp();
+    const end_time = std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds;
     const elapsed_ns = @as(u64, @intCast(end_time - start_time));
     const elapsed_ms = elapsed_ns / 1_000_000;
 
@@ -2969,14 +2970,14 @@ fn rocUnbundle(ctx: *CliContext, args: cli_args.UnbundleArgs) !void {
         }
 
         // Check if directory already exists
-        cwd.access(dir_name, .{}) catch |err| switch (err) {
+        cwd.access(std.Options.debug_io, dir_name, .{}) catch |err| switch (err) {
             error.FileNotFound => {
                 // Good, directory doesn't exist
             },
             else => return err,
         };
 
-        if (cwd.openDir(dir_name, .{})) |_| {
+        if (cwd.openDir(std.Options.debug_io, dir_name, .{})) |_| {
             try stderr.print("Error: Directory {s} already exists\n", .{dir_name});
             had_errors = true;
             continue;
@@ -2985,21 +2986,21 @@ fn rocUnbundle(ctx: *CliContext, args: cli_args.UnbundleArgs) !void {
         }
 
         // Create the output directory
-        var output_dir = try cwd.makeOpenPath(dir_name, .{});
-        defer output_dir.close();
+        var output_dir = try cwd.createDirPathOpen(std.Options.debug_io, dir_name, .{});
+        defer output_dir.close(std.Options.debug_io);
 
         // Open the archive file
-        const archive_file = cwd.openFile(archive_path, .{}) catch |err| {
+        const archive_file = cwd.openFile(std.Options.debug_io, archive_path, .{}) catch |err| {
             try stderr.print("Error opening {s}: {s}\n", .{ archive_path, @errorName(err) });
             had_errors = true;
             continue;
         };
-        defer archive_file.close();
+        defer archive_file.close(std.Options.debug_io);
 
         // Unbundle the archive
         var error_ctx: unbundle.ErrorContext = undefined;
         var archive_reader_buffer: [4096]u8 = undefined;
-        var archive_reader = archive_file.reader(&archive_reader_buffer);
+        var archive_reader = archive_file.reader(std.Options.debug_io, &archive_reader_buffer);
         unbundle.unbundleFiles(
             ctx.gpa,
             &archive_reader.interface,
@@ -3145,7 +3146,7 @@ fn nativeEntrypointSymbolName(
 fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const target_mod = @import("target.zig");
 
-    var timer = try std.time.Timer.start();
+    const timer_start_ns = std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds;
 
     const output_path = if (args.output) |output|
         try ctx.arena.dupe(u8, output)
@@ -3409,7 +3410,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         switch (item) {
             .file_path => |path| {
                 const full_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir, target_name, path });
-                std.Io.Dir.cwd().access(full_path, .{}) catch {
+                std.Io.Dir.cwd().access(std.Options.debug_io, full_path, .{}) catch {
                     renderValidationError(ctx.gpa, .{ .missing_target_file = .{
                         .target = target,
                         .link_type = link_type,
@@ -3467,7 +3468,8 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         } });
     };
 
-    const elapsed_ms = @as(f64, @floatFromInt(timer.read())) / 1_000_000.0;
+    const elapsed_ns = @as(u64, @intCast(std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds - timer_start_ns));
+    const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
     const cache_stats = build_env.getBuildStats();
     const cache_percent = if (cache_stats.modules_total > 0)
         @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
@@ -3511,7 +3513,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const target_mod = @import("target.zig");
 
-    var timer = try std.time.Timer.start();
+    const timer_start_ns = std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds;
 
     const output_path = if (args.output) |output|
         try ctx.arena.dupe(u8, output)
@@ -3729,7 +3731,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         switch (item) {
             .file_path => |path| {
                 const full_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir, target_name, path });
-                std.Io.Dir.cwd().access(full_path, .{}) catch {
+                std.Io.Dir.cwd().access(std.Options.debug_io, full_path, .{}) catch {
                     renderValidationError(ctx.gpa, .{ .missing_target_file = .{
                         .target = target,
                         .link_type = link_type,
@@ -3751,7 +3753,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     const shim_filename = try std.fmt.allocPrint(ctx.arena, "libroc_interpreter_shim_{s}.a", .{target_name});
     const shim_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, shim_filename });
-    std.Io.Dir.cwd().access(shim_path, .{}) catch {
+    std.Io.Dir.cwd().access(std.Options.debug_io, shim_path, .{}) catch {
         extractReadRocFilePathShimLibrary(ctx, shim_path, target) catch |err| {
             return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
         };
@@ -3808,7 +3810,8 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         } });
     };
 
-    const elapsed_ms = @as(f64, @floatFromInt(timer.read())) / 1_000_000.0;
+    const elapsed_ns_embed = @as(u64, @intCast(std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds - timer_start_ns));
+    const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns_embed)) / 1_000_000.0;
     const cache_stats = build_env.getBuildStats();
     const cache_percent = if (cache_stats.modules_total > 0)
         @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
@@ -3853,11 +3856,11 @@ fn dumpLinkerInputs(ctx: *CliContext, link_config: linker.LinkConfig) !void {
     const stderr = ctx.io.stderr();
 
     // Create temp directory with unique name based on timestamp
-    const timestamp = std.time.timestamp();
+    const timestamp = @divTrunc(std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds, 1_000_000_000);
     const dir_name = try std.fmt.allocPrint(ctx.arena, "roc-linker-debug-{d}", .{timestamp});
     const dump_dir = try std.fs.path.join(ctx.arena, &.{ "/tmp", dir_name });
 
-    std.Io.Dir.cwd().createDirPath(dump_dir) catch |err| {
+    std.Io.Dir.cwd().createDirPath(std.Options.debug_io, dump_dir) catch |err| {
         try stderr.print("Failed to create debug dump directory '{s}': {}\n", .{ dump_dir, err });
         return err;
     };
@@ -3870,7 +3873,7 @@ fn dumpLinkerInputs(ctx: *CliContext, link_config: linker.LinkConfig) !void {
         const basename = std.fs.path.basename(src);
         const dest_name = try std.fmt.allocPrint(ctx.arena, "pre_{d}_{s}", .{ i, basename });
         const dest_path = try std.fs.path.join(ctx.arena, &.{ dump_dir, dest_name });
-        std.Io.Dir.cwd().copyFile(src, std.Io.Dir.cwd(), dest_path, .{}) catch |err| {
+        std.Io.Dir.cwd().copyFile(src, std.Io.Dir.cwd(), dest_path, std.Options.debug_io, .{}) catch |err| {
             try stderr.print("Warning: Failed to copy '{s}': {}\n", .{ src, err });
             continue;
         };
@@ -3882,7 +3885,7 @@ fn dumpLinkerInputs(ctx: *CliContext, link_config: linker.LinkConfig) !void {
         const basename = std.fs.path.basename(src);
         const dest_name = try std.fmt.allocPrint(ctx.arena, "obj_{d}_{s}", .{ i, basename });
         const dest_path = try std.fs.path.join(ctx.arena, &.{ dump_dir, dest_name });
-        std.Io.Dir.cwd().copyFile(src, std.Io.Dir.cwd(), dest_path, .{}) catch |err| {
+        std.Io.Dir.cwd().copyFile(src, std.Io.Dir.cwd(), dest_path, std.Options.debug_io, .{}) catch |err| {
             try stderr.print("Warning: Failed to copy '{s}': {}\n", .{ src, err });
             continue;
         };
@@ -3894,7 +3897,7 @@ fn dumpLinkerInputs(ctx: *CliContext, link_config: linker.LinkConfig) !void {
         const basename = std.fs.path.basename(src);
         const dest_name = try std.fmt.allocPrint(ctx.arena, "post_{d}_{s}", .{ i, basename });
         const dest_path = try std.fs.path.join(ctx.arena, &.{ dump_dir, dest_name });
-        std.Io.Dir.cwd().copyFile(src, std.Io.Dir.cwd(), dest_path, .{}) catch |err| {
+        std.Io.Dir.cwd().copyFile(src, std.Io.Dir.cwd(), dest_path, std.Options.debug_io, .{}) catch |err| {
             try stderr.print("Warning: Failed to copy '{s}': {}\n", .{ src, err });
             continue;
         };
@@ -3910,7 +3913,7 @@ fn dumpLinkerInputs(ctx: *CliContext, link_config: linker.LinkConfig) !void {
     // Build the file list for README
     var file_list = std.array_list.Managed(u8).init(ctx.arena);
     for (copied_files.items) |file| {
-        try file_list.writer().print("  {s}\n    <- {s} ({s})\n", .{ file.name, file.original, file.category });
+        try file_list.print("  {s}\n    <- {s} ({s})\n", .{ file.name, file.original, file.category });
     }
 
     // Write README.txt with instructions
@@ -3944,12 +3947,12 @@ fn dumpLinkerInputs(ctx: *CliContext, link_config: linker.LinkConfig) !void {
     });
 
     const readme_path = try std.fs.path.join(ctx.arena, &.{ dump_dir, "README.txt" });
-    const readme_file = std.Io.Dir.cwd().createFile(readme_path, .{}) catch |err| {
+    const readme_file = std.Io.Dir.cwd().createFile(std.Options.debug_io, readme_path, .{}) catch |err| {
         try stderr.print("Warning: Failed to create README.txt: {}\n", .{err});
         return;
     };
-    defer readme_file.close();
-    readme_file.writeAll(readme_content) catch |err| {
+    defer readme_file.close(std.Options.debug_io);
+    readme_file.writeStreamingAll(std.Options.debug_io, readme_content) catch |err| {
         try stderr.print("Warning: Failed to write README.txt: {}\n", .{err});
     };
 
@@ -4366,10 +4369,48 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const start_time = std.time.nanoTimestamp();
+    // Start timing
+    const start_time = std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds;
+
     const stdout = ctx.io.stdout();
     const stderr = ctx.io.stderr();
 
+    // Set up cache configuration based on command line args
+    const cache_config = CacheConfig{
+        .enabled = !args.no_cache,
+        .verbose = args.verbose,
+    };
+
+    // --- Test cache check (before any compilation) ---
+    // Read source to compute cache key for test result caching
+    const source: ?[]const u8 = if (!args.no_cache)
+        (std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, args.path, ctx.gpa, .unlimited) catch null)
+    else
+        null;
+    defer if (source) |s| ctx.gpa.free(s);
+
+    if (source) |src| {
+        {
+            const cache_key = CacheManager.generateCacheKey(src, build_options.compiler_version);
+            const test_cache_dir = cache_config.getTestCacheDir(ctx.gpa) catch null;
+            if (test_cache_dir) |dir| {
+                defer ctx.gpa.free(dir);
+                var test_cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default());
+                if (test_cache_manager.loadRawBytes(cache_key, dir)) |cached_data| {
+                    defer ctx.gpa.free(cached_data);
+                    replayTestCache(ctx.gpa, cached_data, args, stdout, stderr, src, start_time) catch |err| switch (err) {
+                        error.TestsFailed => return err,
+                        else => {}, // On invalid cache data, fall through to normal path
+                    };
+                    return;
+                }
+            }
+        }
+    }
+
+    // --- Normal compilation path (cache miss) ---
+
+    // Determine threading mode and thread count
     const thread_count: usize = args.max_threads orelse (std.Thread.getCpuCount() catch 1);
     const mode: Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
@@ -4438,7 +4479,342 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
         total.cached_modules += summary.cached_modules;
     }
 
-    const end_time = std.time.nanoTimestamp();
+    // Run tests using the selected backend
+    switch (args.opt.toBackend()) {
+        .dev, .llvm => {
+            // Run tests using dev backend (native code generation)
+            var dev_eval = eval.DevEvaluator.init(ctx.gpa, null) catch |err| {
+                try stderr.print("Failed to create dev evaluator: {}\n", .{err});
+                comptime_evaluator.deinit();
+                return err;
+            };
+            defer dev_eval.deinit();
+
+            // Build all_module_envs array with mutable pointers for codegen
+            // Module 0 must be the builtin module (layout store expects this)
+            var all_envs_list = std.array_list.Managed(*ModuleEnv).init(ctx.gpa);
+            defer all_envs_list.deinit();
+            try all_envs_list.append(@constCast(builtin_module_env));
+            try all_envs_list.append(@constCast(root_env));
+            for (other_modules) |mod_env| {
+                if (mod_env != builtin_module_env) {
+                    try all_envs_list.append(@constCast(mod_env));
+                }
+            }
+            const all_envs_mut = all_envs_list.items;
+
+            // Prepare modules for codegen (lambda lifting/set inference handled in lowering)
+            dev_eval.prepareModulesForCodegen(all_envs_mut) catch |err| {
+                try stderr.print("Failed to prepare modules for codegen: {}\n", .{err});
+                comptime_evaluator.deinit();
+                return err;
+            };
+
+            // Cast to const slice for generateCode
+            const all_envs_const: []const *ModuleEnv = all_envs_mut;
+
+            // Helper to run tests in a single module
+            const DevTestHelper = struct {
+                fn runModuleTests(
+                    dev: *eval.DevEvaluator,
+                    mod_env: *const ModuleEnv,
+                    envs: []const *ModuleEnv,
+                    allocator: std.mem.Allocator,
+                    results_list: *std.array_list.Managed(TestResultItem),
+                ) struct { passed: u32, failed: u32 } {
+                    var passed: u32 = 0;
+                    var failed: u32 = 0;
+
+                    const statements = mod_env.store.sliceStatements(mod_env.all_statements);
+                    for (statements) |stmt_idx| {
+                        const stmt = mod_env.store.getStatement(stmt_idx);
+                        if (stmt != .s_expect) continue;
+                        const region = mod_env.store.getStatementRegion(stmt_idx);
+
+                        // Generate native code for the expect body
+                        var code_result = dev.generateCode(
+                            @constCast(mod_env),
+                            stmt.s_expect.body,
+                            envs,
+                            null,
+                        ) catch {
+                            failed += 1;
+                            results_list.append(.{
+                                .result = .failed,
+                                .region = region,
+                                .error_msg = allocator.dupe(u8, "Dev backend: code generation failed") catch null,
+                            }) catch {};
+                            continue;
+                        };
+                        defer code_result.deinit();
+
+                        if (code_result.code.len == 0) {
+                            failed += 1;
+                            results_list.append(.{
+                                .result = .failed,
+                                .region = region,
+                                .error_msg = allocator.dupe(u8, "Dev backend: empty code generated") catch null,
+                            }) catch {};
+                            continue;
+                        }
+
+                        // Make code executable
+                        var executable = backend.ExecutableMemory.initWithEntryOffset(
+                            code_result.code,
+                            code_result.entry_offset,
+                        ) catch {
+                            failed += 1;
+                            results_list.append(.{
+                                .result = .failed,
+                                .region = region,
+                                .error_msg = allocator.dupe(u8, "Dev backend: failed to make code executable") catch null,
+                            }) catch {};
+                            continue;
+                        };
+                        defer executable.deinit();
+
+                        // Execute with crash protection and check bool result
+                        // DevEvaluator returns small tag unions like Bool through an
+                        // ABI-sized result slot, even when the logical layout is 1 byte.
+                        // Use a machine word here and inspect the low byte for the Bool
+                        // discriminant instead of passing a raw `*u8`.
+                        var result_word: u64 = 0;
+                        dev.callWithCrashProtection(&executable, @ptrCast(&result_word)) catch {
+                            failed += 1;
+                            const crash_msg = dev.getCrashMessage() orelse "Test crashed";
+                            results_list.append(.{
+                                .result = .failed,
+                                .region = region,
+                                .error_msg = allocator.dupe(u8, crash_msg) catch null,
+                            }) catch {};
+                            continue;
+                        };
+
+                        if (@as(u8, @truncate(result_word)) != 0) {
+                            passed += 1;
+                            results_list.append(.{
+                                .result = .passed,
+                                .region = region,
+                                .error_msg = null,
+                            }) catch {};
+                        } else {
+                            failed += 1;
+                            results_list.append(.{
+                                .result = .failed,
+                                .region = region,
+                                .error_msg = null,
+                            }) catch {};
+                        }
+                    }
+
+                    return .{ .passed = passed, .failed = failed };
+                }
+            };
+
+            // Run tests in the root module
+            {
+                var results_list = std.array_list.Managed(TestResultItem).init(ctx.gpa);
+                defer results_list.deinit();
+
+                const summary = DevTestHelper.runModuleTests(
+                    &dev_eval,
+                    root_env,
+                    all_envs_const,
+                    ctx.gpa,
+                    &results_list,
+                );
+                total_passed += summary.passed;
+                total_failed += summary.failed;
+
+                const results = try ctx.gpa.dupe(TestResultItem, results_list.items);
+                for (results) |result| {
+                    // Dev backend: use error_msg as the cache report (no rendered report available)
+                    const report_text: []const u8 = if (result.error_msg) |msg| ctx.gpa.dupe(u8, msg) catch "" else "";
+                    appendTestCacheEntry(&cache_entries, &cache_failure_reports, ctx.gpa, result.result == .passed, result.region, report_text);
+                }
+                try module_results.append(.{
+                    .env = root_env,
+                    .path = args.path,
+                    .results = results,
+                });
+            }
+
+            // Run tests in all imported modules
+            for (other_modules) |mod_env| {
+                if (mod_env == builtin_module_env) continue;
+
+                var results_list = std.array_list.Managed(TestResultItem).init(ctx.gpa);
+                defer results_list.deinit();
+
+                const summary = DevTestHelper.runModuleTests(
+                    &dev_eval,
+                    mod_env,
+                    all_envs_const,
+                    ctx.gpa,
+                    &results_list,
+                );
+                total_passed += summary.passed;
+                total_failed += summary.failed;
+
+                if (results_list.items.len > 0) {
+                    const results = ctx.gpa.dupe(TestResultItem, results_list.items) catch continue;
+
+                    // Find the module path from schedulers
+                    var mod_path: []const u8 = "<unknown>";
+                    var sched_iter2 = build_env.schedulers.iterator();
+                    outer_dev: while (sched_iter2.next()) |sched_entry| {
+                        const scheduler2 = sched_entry.value_ptr.*;
+                        for (scheduler2.modules.items) |*m| {
+                            if (m.env) |*env| {
+                                if (env == mod_env) {
+                                    mod_path = m.path;
+                                    break :outer_dev;
+                                }
+                            }
+                        }
+                    }
+
+                    for (results) |result| {
+                        const report_text: []const u8 = if (result.error_msg) |msg| ctx.gpa.dupe(u8, msg) catch "" else "";
+                        appendTestCacheEntry(&cache_entries, &cache_failure_reports, ctx.gpa, result.result == .passed, result.region, report_text);
+                    }
+
+                    module_results.append(.{
+                        .env = mod_env,
+                        .path = mod_path,
+                        .results = results,
+                    }) catch {
+                        ctx.gpa.free(results);
+                    };
+                }
+            }
+        },
+        .interpreter => {
+            // Run tests using interpreter backend (TestRunner)
+
+            // Run tests in the root module
+            {
+                var test_runner = TestRunner.init(
+                    ctx.gpa,
+                    @constCast(root_env),
+                    builtin_types,
+                    other_modules,
+                    builtin_module_env,
+                    &import_mapping,
+                ) catch |err| {
+                    try stderr.print("Failed to create test runner for root module: {}\n", .{err});
+                    comptime_evaluator.deinit();
+                    return err;
+                };
+                defer test_runner.deinit();
+
+                const summary = test_runner.eval_all() catch |err| {
+                    try stderr.print("Failed to evaluate tests in root module: {}\n", .{err});
+                    comptime_evaluator.deinit();
+                    return err;
+                };
+
+                total_passed += summary.passed;
+                total_failed += summary.failed;
+
+                // Copy test results for reporting and build cache entries
+                var results = try ctx.gpa.alloc(TestResultItem, test_runner.test_results.items.len);
+                for (test_runner.test_results.items, 0..) |tr, i| {
+                    results[i] = .{
+                        .result = if (tr.passed) .passed else .failed,
+                        .region = tr.region,
+                        .error_msg = if (tr.error_msg) |msg| try ctx.gpa.dupe(u8, msg) else null,
+                    };
+
+                    const report_text = renderTestFailureReport(&test_runner, tr, args.path, ctx.gpa);
+                    appendTestCacheEntry(&cache_entries, &cache_failure_reports, ctx.gpa, tr.passed, tr.region, report_text);
+                }
+
+                try module_results.append(.{
+                    .env = root_env,
+                    .path = args.path,
+                    .results = results,
+                });
+            }
+
+            // Run tests in all imported modules (recursive test execution)
+            for (other_modules) |mod_env| {
+                // Skip builtin module - no user tests there
+                if (mod_env == builtin_module_env) continue;
+
+                // Create import mapping for this module
+                var mod_import_mapping = Check.createImportMapping(
+                    ctx.gpa,
+                    @constCast(mod_env).getIdentStore(),
+                    mod_env,
+                    builtin_module_env,
+                    builtin_indices,
+                    null,
+                ) catch continue;
+                defer mod_import_mapping.deinit();
+
+                var test_runner = TestRunner.init(
+                    ctx.gpa,
+                    @constCast(mod_env),
+                    builtin_types,
+                    other_modules,
+                    builtin_module_env,
+                    &mod_import_mapping,
+                ) catch continue;
+                defer test_runner.deinit();
+
+                const summary = test_runner.eval_all() catch continue;
+
+                total_passed += summary.passed;
+                total_failed += summary.failed;
+
+                // Copy test results for reporting
+                if (test_runner.test_results.items.len > 0) {
+                    var results = ctx.gpa.alloc(TestResultItem, test_runner.test_results.items.len) catch continue;
+
+                    // Find the module path from schedulers (needed for report rendering)
+                    var mod_path: []const u8 = "<unknown>";
+                    var sched_iter2 = build_env.schedulers.iterator();
+                    outer: while (sched_iter2.next()) |sched_entry| {
+                        const scheduler2 = sched_entry.value_ptr.*;
+                        for (scheduler2.modules.items) |*m| {
+                            if (m.env) |*env| {
+                                if (env == mod_env) {
+                                    mod_path = m.path;
+                                    break :outer;
+                                }
+                            }
+                        }
+                    }
+
+                    for (test_runner.test_results.items, 0..) |tr, i| {
+                        results[i] = .{
+                            .result = if (tr.passed) .passed else .failed,
+                            .region = tr.region,
+                            .error_msg = if (tr.error_msg) |msg| ctx.gpa.dupe(u8, msg) catch null else null,
+                        };
+
+                        const report_text = renderTestFailureReport(&test_runner, tr, mod_path, ctx.gpa);
+                        appendTestCacheEntry(&cache_entries, &cache_failure_reports, ctx.gpa, tr.passed, tr.region, report_text);
+                    }
+
+                    module_results.append(.{
+                        .env = mod_env,
+                        .path = mod_path,
+                        .results = results,
+                    }) catch {
+                        ctx.gpa.free(results);
+                    };
+                }
+            }
+        },
+    }
+
+    // Clean up comptime evaluator
+    comptime_evaluator.deinit();
+
+    // Calculate elapsed time
+    const end_time = std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds;
     const elapsed_ns = @as(u64, @intCast(end_time - start_time));
     const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
     const cached_suffix = if (total.modules_with_tests > 0 and total.cached_modules == total.modules_with_tests)
@@ -4613,7 +4989,7 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) glue.GlueError!void {
     const temp_dir = createUniqueTempDir(ctx) catch {
         return error.TempDirCreation;
     };
-    defer std.Io.Dir.cwd().deleteTree(temp_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(std.Options.debug_io, temp_dir) catch {};
     return glue.rocGlue(ctx.gpa, ctx.io.stderr(), ctx.io.stdout(), .{
         .glue_spec = args.glue_spec,
         .output_dir = args.output_dir,
@@ -4634,7 +5010,7 @@ fn rocFormat(ctx: *CliContext, args: cli_args.FormatArgs) !void {
         return;
     }
 
-    var timer = try std.time.Timer.start();
+    const timer_start_ns = std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds;
     var elapsed: u64 = undefined;
     var failure_count: usize = 0;
     var had_errors: bool = false;
@@ -4652,7 +5028,7 @@ fn rocFormat(ctx: *CliContext, args: cli_args.FormatArgs) !void {
             failure_count += result.failure;
         }
 
-        elapsed = timer.read();
+        elapsed = @as(u64, @intCast(std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds - timer_start_ns));
         if (unformatted_files.items.len > 0) {
             try stdout.print("The following file(s) failed `roc format --check`:", .{});
             for (unformatted_files.items) |file_name| {
@@ -4674,7 +5050,7 @@ fn rocFormat(ctx: *CliContext, args: cli_args.FormatArgs) !void {
             success_count += result.success;
             failure_count += result.failure;
         }
-        elapsed = timer.read();
+        elapsed = @as(u64, @intCast(std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds - timer_start_ns));
         try stdout.print("Successfully formatted {} files\n", .{success_count});
         if (failure_count > 0) {
             try stdout.print("Failed to format {} files.\n", .{failure_count});
@@ -4791,7 +5167,7 @@ const DrainedReport = struct {
 const CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) struct {} else TimingInfo;
 
 /// Error set for BuildEnv.build operations
-const BuildAppError = std.mem.Allocator.Error || std.Io.File.OpenError || std.Io.File.ReadError || std.Io.File.WriteError || std.Thread.SpawnError || error{
+const BuildAppError = std.mem.Allocator.Error || std.Io.File.OpenError || std.Io.Dir.RealPathFileAllocError || std.Thread.SpawnError || error{
     // Custom BuildEnv errors
     ExpectedAppHeader,
     ExpectedPlatformString,
@@ -5124,7 +5500,7 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
     const stdout = ctx.io.stdout();
     const stderr = ctx.io.stderr();
 
-    var timer = try std.time.Timer.start();
+    const timer_start_ns = std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds;
 
     // Set up cache configuration based on command line args
     const cache_config = CacheConfig{
@@ -5145,7 +5521,7 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
     };
     defer check_result.deinit(ctx.gpa);
 
-    const elapsed = timer.read();
+    const elapsed = @as(u64, @intCast(std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds - timer_start_ns));
 
     // Render reports grouped by module
     for (check_result.reports) |module| {
@@ -5271,76 +5647,14 @@ fn printVerboseStats(writer: anytype, result: *const CheckResult) void {
 fn serveDocumentation(ctx: *CliContext, docs_dir: []const u8) !void {
     const stdout = ctx.io.stdout();
 
-    const address = try std.net.Address.parseIp("127.0.0.1", 8080);
-    var server = try address.listen(.{
-        .reuse_address = true,
-    });
-    defer server.deinit();
-
-    stdout.print("Visit http://localhost:8080 to view the docs at ./{s}/\n", .{docs_dir}) catch {};
-    stdout.print("Press Ctrl+C to stop the server\n", .{}) catch {};
-
-    while (true) {
-        const connection = try server.accept();
-        handleConnection(ctx, connection, docs_dir) catch |err| {
-            std.debug.print("Error handling connection: {}\n", .{err});
-        };
-    }
+    // TODO: Zig 0.16 removed std.net — needs migration to std.Io networking API
+    _ = docs_dir;
+    stdout.print("Error: Documentation server not yet supported with Zig 0.16\n", .{}) catch {};
+    return error.Unexpected;
 }
 
 /// Handle a single HTTP connection
-fn handleConnection(ctx: *CliContext, connection: std.net.Server.Connection, docs_dir: []const u8) !void {
-    defer connection.stream.close();
-
-    var buffer: [4096]u8 = undefined;
-    var reader_buffer: [512]u8 = undefined;
-    var conn_reader = connection.stream.reader(&reader_buffer);
-    var slices = [_][]u8{buffer[0..]};
-    const bytes_read = std.Io.Reader.readVec(conn_reader.interface(), &slices) catch |err| switch (err) {
-        error.EndOfStream => 0,
-        error.ReadFailed => return conn_reader.getError() orelse error.Unexpected,
-    };
-
-    if (bytes_read == 0) return;
-
-    const request = buffer[0..bytes_read];
-
-    // Parse the request line (e.g., "GET /path HTTP/1.1")
-    var lines = std.mem.splitSequence(u8, request, "\r\n");
-    const request_line = lines.next() orelse return;
-
-    var parts = std.mem.splitSequence(u8, request_line, " ");
-    const method = parts.next() orelse return;
-    const path = parts.next() orelse return;
-
-    if (!std.mem.eql(u8, method, "GET")) {
-        try sendResponse(connection.stream, "405 Method Not Allowed", "text/plain", "Method Not Allowed");
-        return;
-    }
-
-    // Determine the file path to serve
-    const file_path = try resolveFilePath(ctx, docs_dir, path);
-
-    // Try to open and serve the file
-    const file = std.Io.Dir.cwd().openFile(file_path, .{}) catch |err| {
-        switch (err) {
-            error.FileNotFound => try sendResponse(connection.stream, "404 Not Found", "text/plain", "File Not Found"),
-            else => try sendResponse(connection.stream, "500 Internal Server Error", "text/plain", "Internal Server Error"),
-        }
-        return;
-    };
-    defer file.close();
-
-    // Read file contents
-    const file_content = try file.readToEndAlloc(ctx.gpa, 10 * 1024 * 1024); // 10MB max
-    defer ctx.gpa.free(file_content);
-
-    // Determine content type
-    const content_type = getContentType(file_path);
-
-    // Send response
-    try sendResponse(connection.stream, "200 OK", content_type, file_content);
-}
+// TODO: Zig 0.16 removed std.net — handleConnection needs migration to std.Io networking API
 
 /// Resolve the file path based on the URL path.
 /// Returns arena-allocated path (no need to free).
@@ -5394,21 +5708,7 @@ fn getContentType(file_path: []const u8) []const u8 {
 }
 
 /// Send an HTTP response
-fn sendResponse(stream: std.net.Stream, status: []const u8, content_type: []const u8, body: []const u8) !void {
-    var response_buffer: [8192]u8 = undefined;
-    const response = try std.fmt.bufPrint(
-        &response_buffer,
-        "HTTP/1.1 {s}\r\n" ++
-            "Content-Type: {s}\r\n" ++
-            "Content-Length: {d}\r\n" ++
-            "Connection: close\r\n" ++
-            "\r\n",
-        .{ status, content_type, body.len },
-    );
-
-    try stream.writeAll(response);
-    try stream.writeAll(body);
-}
+// TODO: Zig 0.16 removed std.net — sendResponse needs migration to std.Io networking API
 
 fn rocDocs(ctx: *CliContext, args: cli_args.DocsArgs) !void {
     const trace = tracy.trace(@src());
@@ -5417,7 +5717,7 @@ fn rocDocs(ctx: *CliContext, args: cli_args.DocsArgs) !void {
     const stdout = ctx.io.stdout();
     const stderr = ctx.io.stderr();
 
-    var timer = try std.time.Timer.start();
+    const timer_start_ns = std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds;
 
     // Set up cache configuration based on command line args
     const cache_config = CacheConfig{
@@ -5440,7 +5740,7 @@ fn rocDocs(ctx: *CliContext, args: cli_args.DocsArgs) !void {
     defer result_with_env.deinit(ctx.gpa);
 
     const check_result = &result_with_env.check_result;
-    const elapsed = timer.read();
+    const elapsed = @as(u64, @intCast(std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds - timer_start_ns));
 
     // Render reports grouped by module
     for (check_result.reports) |module| {
@@ -5572,7 +5872,7 @@ fn generateDocs(
     try std.fs.cwd().deleteTree(base_output_dir);
 
     // Create output directory
-    std.Io.Dir.cwd().createDirPath(base_output_dir) catch |err| switch (err) {
+    std.Io.Dir.cwd().createDirPath(std.Options.debug_io, base_output_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
@@ -5651,7 +5951,7 @@ test "appendWindowsQuotedArg" {
 test "classifyNativeRunTermination preserves warning exit code" {
     const testing = std.testing;
 
-    const result = classifyNativeRunTermination(.{ .Exited = 0 }, 1);
+    const result = classifyNativeRunTermination(.{ .exited = 0 }, 1);
 
     try testing.expect(result == .exit_code);
     try testing.expectEqual(@as(u8, 2), result.exit_code);
@@ -5660,7 +5960,7 @@ test "classifyNativeRunTermination preserves warning exit code" {
 test "classifyNativeRunTermination preserves signal termination" {
     const testing = std.testing;
 
-    const result = classifyNativeRunTermination(.{ .Signal = 11 }, 0);
+    const result = classifyNativeRunTermination(.{ .signal = @enumFromInt(11) }, 0);
 
     try testing.expect(result == .signal);
     try testing.expectEqual(@as(u32, 11), result.signal);

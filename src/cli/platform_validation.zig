@@ -256,7 +256,7 @@ pub fn validateAllTargetFilesExist(
     config: TargetsConfig,
     platform_dir_path: []const u8,
 ) ?ValidationResult {
-    var platform_dir = std.Io.Dir.cwd().openDir(platform_dir_path, .{}) catch {
+    var platform_dir = std.Io.Dir.cwd().openDir(std.Options.debug_io, platform_dir_path, .{}) catch {
         return .{
             .missing_files_directory = .{
                 .platform_path = platform_dir_path,
@@ -264,7 +264,7 @@ pub fn validateAllTargetFilesExist(
             },
         };
     };
-    defer platform_dir.close();
+    defer platform_dir.close(std.Options.debug_io);
 
     const result = targets_validator.validateTargetFilesExist(allocator, config, platform_dir) catch {
         return .{

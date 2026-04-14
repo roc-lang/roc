@@ -16,18 +16,17 @@ pub const Thread = if (!is_freestanding) std.Thread else struct {};
 
 /// Native `std.Io.Mutex` on supported targets, no-op stub on freestanding.
 pub const Mutex = if (!is_freestanding) std.Io.Mutex else struct {
-    pub fn lock(_: *@This()) void {}
-    pub fn unlock(_: *@This()) void {}
+    pub fn lock(_: *@This(), _: anytype) error{Canceled}!void {}
+    pub fn lockUncancelable(_: *@This(), _: anytype) void {}
+    pub fn unlock(_: *@This(), _: anytype) void {}
 };
 
-/// Native `std.Thread.Condition` on supported targets, no-op stub on freestanding.
+/// Native `std.Io.Condition` on supported targets, no-op stub on freestanding.
 pub const Condition = if (!is_freestanding) std.Io.Condition else struct {
-    pub fn wait(_: *@This(), _: anytype) void {}
-    pub fn timedWait(_: *@This(), _: anytype, _: u64) error{Timeout}!void {
-        return error.Timeout;
-    }
-    pub fn signal(_: *@This()) void {}
-    pub fn broadcast(_: *@This()) void {}
+    pub fn wait(_: *@This(), _: anytype, _: anytype) error{Canceled}!void {}
+    pub fn waitUncancelable(_: *@This(), _: anytype, _: anytype) void {}
+    pub fn signal(_: *@This(), _: anytype) void {}
+    pub fn broadcast(_: *@This(), _: anytype) void {}
 };
 
 /// Returns the number of available CPU cores, falling back to 1 on error or freestanding targets.

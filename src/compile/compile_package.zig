@@ -429,8 +429,8 @@ pub const PackageEnv = struct {
     /// I/O abstraction for reading sources and other filesystem/stdio operations.
     io: Io = Io.default(),
 
-    lock: Mutex = .{},
-    cond: Condition = .{},
+    lock: Mutex = Mutex.init,
+    cond: Condition = Condition.init,
 
     // Work queue
     injector: std.ArrayList(Task),
@@ -694,13 +694,10 @@ pub const PackageEnv = struct {
             const work_len = self.injector.items.len;
             if (work_len == 0) {
                 if (self.remaining_modules == 0) break;
-                self.lock.lock();
-                defer self.lock.unlock();
+                self.lock.lockUncancelable(std.Options.debug_io);
+                defer self.lock.unlock(std.Options.debug_io);
                 if (self.remaining_modules == 0 and self.injector.items.len == 0) break;
-                self.cond.timedWait(&self.lock, 1_000_000) catch |err| switch (err) {
-                    error.Timeout => {},
-                    else => return err,
-                };
+                self.cond.waitUncancelable(std.Options.debug_io, &self.lock);
                 continue;
             }
 
@@ -741,8 +738,8 @@ pub const PackageEnv = struct {
     pub fn ensureModule(self: *PackageEnv, name: []const u8, path: []const u8) !ModuleId {
         // In multi-threaded mode, lock to prevent race conditions when growing arrays
         const needs_lock = self.mode == .multi_threaded and !threading.is_freestanding;
-        if (needs_lock) self.lock.lock();
-        defer if (needs_lock) self.lock.unlock();
+        if (needs_lock) self.lock.lockUncancelable(std.Options.debug_io);
+        defer if (needs_lock) self.lock.unlock(std.Options.debug_io);
 
         const module_id = try self.internModuleName(name);
 
@@ -792,14 +789,14 @@ pub const PackageEnv = struct {
         // In multi_threaded mode with a non-noop schedule_hook, forward to the global queue
         if (self.mode == .multi_threaded and !self.schedule_hook.isNoOp()) {
             // Look up the module to get its path and depth for the hook
-            self.lock.lock();
-            defer self.lock.unlock();
+            self.lock.lockUncancelable(std.Options.debug_io);
+            defer self.lock.unlock(std.Options.debug_io);
 
             self.schedule_hook.onSchedule(self.schedule_hook.ctx, self.package_name, st.name, st.path, st.depth);
         } else {
             // Default behavior: use internal injector
             try self.injector.append(self.gpa, .{ .module_id = module_id });
-            if (!threading.is_freestanding) self.cond.signal();
+            if (!threading.is_freestanding) self.cond.signal(std.Options.debug_io);
         }
     }
 
@@ -863,7 +860,7 @@ pub const PackageEnv = struct {
         // In local mode, it's invoked by the internal run* loops.
 
         // Acquire lock and atomically check/set working flag
-        if (!threading.is_freestanding) self.lock.lock();
+        if (!threading.is_freestanding) self.lock.lockUncancelable(std.Options.debug_io);
         const st = &self.modules.items[task.module_id];
 
         // Atomic compare-and-swap to claim work on this module
@@ -879,23 +876,23 @@ pub const PackageEnv = struct {
         };
 
         if (already_working) {
-            if (!threading.is_freestanding) self.lock.unlock();
+            if (!threading.is_freestanding) self.lock.unlock(std.Options.debug_io);
             return; // Another worker is already processing this module
         }
 
         // Snapshot phase while holding lock
         const phase = st.phase;
-        if (!threading.is_freestanding) self.lock.unlock();
+        if (!threading.is_freestanding) self.lock.unlock(std.Options.debug_io);
 
         // Process the module based on its phase
         defer {
             // Atomically clear working flag when done
             if (!threading.is_freestanding) {
-                self.lock.lock();
+                self.lock.lockUncancelable(std.Options.debug_io);
                 if (task.module_id < self.modules.items.len) {
                     self.modules.items[task.module_id].working.store(0, .seq_cst);
                 }
-                self.lock.unlock();
+                self.lock.unlock(std.Options.debug_io);
             } else {
                 // Single-threaded: simple clear
                 if (task.module_id < self.modules.items.len) {
@@ -1120,7 +1117,7 @@ pub const PackageEnv = struct {
         }
 
         // canonicalize using the AST
-        const canon_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
+        const canon_start = if (!threading.is_freestanding) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
 
         var imported_modules = std.ArrayList(CanonicalizeImport).empty;
         defer imported_modules.deinit(self.gpa);
@@ -1157,20 +1154,20 @@ pub const PackageEnv = struct {
             std.fs.path.dirname(st.path) orelse self.root_dir,
         );
 
-        const canon_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
+        const canon_end = if (!threading.is_freestanding) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
         if (!threading.is_freestanding) {
             self.total_canonicalize_ns += @intCast(canon_end - canon_start);
         }
 
         // Collect canonicalization diagnostics
-        const canon_diag_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
+        const canon_diag_start = if (!threading.is_freestanding) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
         const diags = try env.getDiagnostics();
         defer self.gpa.free(diags);
         for (diags) |d| {
             const report = try env.diagnosticToReport(d, self.gpa, st.path);
             try st.reports.append(self.gpa, report);
         }
-        const canon_diag_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
+        const canon_diag_end = if (!threading.is_freestanding) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
         if (!threading.is_freestanding) {
             self.total_canonicalize_diagnostics_ns += @intCast(canon_diag_end - canon_diag_start);
         }
@@ -1595,7 +1592,7 @@ pub const PackageEnv = struct {
         const available_artifacts = try available_artifact_views.toOwnedSlice(self.gpa);
         defer self.gpa.free(available_artifacts);
 
-        const check_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
+        const check_start = if (!threading.is_freestanding) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
         var typecheck_output = try typeCheckModule(
             self.gpa,
             env,
@@ -1610,13 +1607,13 @@ pub const PackageEnv = struct {
         if (typecheck_output.checked_artifact != null) {
             st.replaceCheckedArtifact(typecheck_output.takeCheckedArtifact());
         }
-        const check_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
+        const check_end = if (!threading.is_freestanding) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
         if (!threading.is_freestanding) {
             self.total_type_checking_ns += @intCast(check_end - check_start);
         }
 
         // Build reports from problems
-        const check_diag_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
+        const check_diag_start = if (!threading.is_freestanding) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
         var rb = try ReportBuilder.init(
             self.gpa,
             env,
@@ -1633,7 +1630,7 @@ pub const PackageEnv = struct {
             const rep = rb.build(prob) catch continue;
             try st.reports.append(self.gpa, rep);
         }
-        const check_diag_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
+        const check_diag_end = if (!threading.is_freestanding) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
         if (!threading.is_freestanding) {
             self.total_check_diagnostics_ns += @intCast(check_diag_end - check_diag_start);
         }
@@ -1653,7 +1650,7 @@ pub const PackageEnv = struct {
 
         // Wake dependents to re-check unblock
         for (st.dependents.items) |dep| try self.enqueue(dep);
-        if (!threading.is_freestanding) self.cond.broadcast();
+        if (!threading.is_freestanding) self.cond.broadcast(std.Options.debug_io);
     }
 
     fn resolveModulePath(self: *PackageEnv, mod_name: []const u8) ![]const u8 {
