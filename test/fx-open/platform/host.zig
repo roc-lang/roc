@@ -25,13 +25,12 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
     const result = allocator.rawAlloc(total_size, align_enum, @returnAddress());
 
     const base_ptr = result orelse {
-        const stderr: std.Io.File = .stderr();
         var buf: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "\x1b[31mHost error:\x1b[0m allocation failed for size={d} align={d}\n", .{
             total_size,
             roc_alloc.alignment,
         }) catch "\x1b[31mHost error:\x1b[0m allocation failed, out of memory\n";
-        stderr.writeAll(msg) catch {};
+        _ = std.posix.write(2, msg) catch 0;
         std.process.exit(1);
     };
 
@@ -98,8 +97,7 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
     // Perform reallocation
     const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
     const new_slice = allocator.realloc(old_slice, new_total_size) catch {
-        const stderr: std.Io.File = .stderr();
-        stderr.writeAll("\x1b[31mHost error:\x1b[0m reallocation failed, out of memory\n") catch {};
+        _ = std.posix.write(2, "\x1b[31mHost error:\x1b[0m reallocation failed, out of memory\n") catch 0;
         std.process.exit(1);
     };
 
@@ -134,11 +132,9 @@ fn rocExpectFailedFn(roc_expect: *const builtins.host_abi.RocExpectFailed, env: 
 fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) noreturn {
     _ = env;
     const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
-    const stderr: std.Io.File = .stderr();
-    var buf: [256]u8 = undefined;
-    var w = stderr.writer(&buf);
-    w.interface.print("\n\x1b[31mRoc crashed:\x1b[0m {s}\n", .{message}) catch {};
-    w.interface.flush() catch {};
+    var buf: [512]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "\n\x1b[31mRoc crashed:\x1b[0m {s}\n", .{message}) catch "\n\x1b[31mRoc crashed\x1b[0m\n";
+    _ = std.posix.write(2, msg) catch 0;
     std.process.exit(1);
 }
 
@@ -165,10 +161,9 @@ fn __main() callconv(.c) void {}
 // C compatible main for runtime
 fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     const exit_code = platform_main(argc, argv) catch |err| {
-        const stderr: std.Io.File = .stderr();
-        stderr.writeAll("HOST ERROR: ") catch {};
-        stderr.writeAll(@errorName(err)) catch {};
-        stderr.writeAll("\n") catch {};
+        _ = std.posix.write(2, "HOST ERROR: ") catch 0;
+        _ = std.posix.write(2, @errorName(err)) catch 0;
+        _ = std.posix.write(2, "\n") catch 0;
         return 1;
     };
     return exit_code;
@@ -184,9 +179,8 @@ const RocOps = builtins.host_abi.RocOps;
 /// Returns {} and takes Str as argument
 fn hostedStderrLine(_: *anyopaque, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
     const message = args.str.asSlice();
-    const stderr: std.Io.File = .stderr();
-    stderr.writeAll(message) catch {};
-    stderr.writeAll("\n") catch {};
+    _ = std.posix.write(2, message) catch 0;
+    _ = std.posix.write(2, "\n") catch 0;
 }
 
 /// Hosted function: Stdin.line! (index 1 - sorted alphabetically)
@@ -195,8 +189,7 @@ fn hostedStderrLine(_: *anyopaque, _: *anyopaque, args: *const extern struct { s
 fn hostedStdinLine(ops: *RocOps, result: *RocStr, _: *anyopaque) callconv(.c) void {
     // Read a line from stdin
     var buffer: [4096]u8 = undefined;
-    const stdin_file: std.Io.File = .stdin();
-    const bytes_read = stdin_file.read(&buffer) catch {
+    const bytes_read = std.posix.read(0, &buffer) catch {
         // Return empty string on error
         result.* = RocStr.empty();
         return;
@@ -231,9 +224,8 @@ fn hostedStdinLine(ops: *RocOps, result: *RocStr, _: *anyopaque) callconv(.c) vo
 /// Returns {} and takes Str as argument
 fn hostedStdoutLine(_: *anyopaque, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
     const message = args.str.asSlice();
-    const stdout: std.Io.File = .stdout();
-    stdout.writeAll(message) catch {};
-    stdout.writeAll("\n") catch {};
+    _ = std.posix.write(1, message) catch 0;
+    _ = std.posix.write(1, "\n") catch 0;
 }
 
 /// Array of hosted function pointers, sorted alphabetically by fully-qualified name

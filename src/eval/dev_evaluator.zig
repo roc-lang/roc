@@ -1225,7 +1225,7 @@ pub const DevEvaluator = struct {
                 const layout_store = code_result.layout_store orelse return error.UnsupportedType;
                 const result_layout = layout_store.getLayout(code_result.result_layout);
                 if (result_layout.tag == .tag_union) {
-                    const tu_data = layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+                    const tu_data = layout_store.getTagUnionData(result_layout.getTagUnion().idx);
                     if (tu_data.discriminant_offset == 0 and tu_data.size <= @sizeOf(u64)) {
                         var result: u64 = 0;
                         executable.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&self.roc_ops));

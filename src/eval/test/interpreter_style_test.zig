@@ -1660,7 +1660,7 @@ test "interpreter: singleton list [1] has list of Dec layout" {
     try std.testing.expectEqual(layout.LayoutTag.list, result.layout.tag);
 
     // Check that the element layout is Dec
-    const elem_layout_idx = result.layout.data.list;
+    const elem_layout_idx = result.layout.getIdx();
     try std.testing.expectEqual(layout.Idx.dec, elem_layout_idx);
 }
 

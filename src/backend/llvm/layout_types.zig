@@ -47,11 +47,11 @@ pub fn layoutToLlvmType(
 
 /// Convert a scalar layout to LLVM type
 fn scalarToLlvmType(builder: *Builder, layout_val: Layout) Error!Builder.Type {
-    return switch (layout_val.data.scalar.tag) {
+    return switch (layout_val.getScalar().tag) {
         .opaque_ptr => .ptr,
         .str => strLlvmType(builder), // RocStr: { ptr, len }
-        .int => intPrecisionToLlvmType(layout_val.data.scalar.data.int),
-        .frac => fracPrecisionToLlvmType(layout_val.data.scalar.data.frac),
+        .int => intPrecisionToLlvmType(layout_val.getScalar().getInt()),
+        .frac => fracPrecisionToLlvmType(layout_val.getScalar().getFrac()),
     };
 }
 
@@ -156,7 +156,7 @@ fn tagUnionToLlvmType(
     store: *const Store,
     layout_val: Layout,
 ) Error!Builder.Type {
-    const tu_layout = layout_val.data.tag_union;
+    const tu_layout = layout_val.getTagUnion();
     const tu_data = store.getTagUnion(tu_layout.idx);
 
     // Discriminant type based on size
@@ -235,7 +235,7 @@ pub fn shouldPassByPointer(store: *const Store, layout_val: Layout, config: Plat
             break :blk tuple_data.size > threshold;
         },
         .tag_union => blk: {
-            const tu_data = store.getTagUnion(layout_val.data.tag_union.idx);
+            const tu_data = store.getTagUnion(layout_val.getTagUnion().idx);
             break :blk tu_data.size > threshold;
         },
     };
@@ -255,7 +255,7 @@ pub fn isRefcounted(layout_val: Layout) bool {
         .list, .list_of_zst => true,
         .box, .box_of_zst => true,
         // Strings are refcounted
-        .scalar => layout_val.data.scalar.tag == .str,
+        .scalar => layout_val.getScalar().tag == .str,
         // These are value types, not refcounted themselves
         .record, .tuple, .tag_union, .closure, .zst => false,
     };
@@ -271,7 +271,7 @@ pub fn getLayoutSize(store: *const Store, layout_val: Layout, ptr_size: u32) u32
         .zst => 0,
         .record => store.getRecord(layout_val.data.record.idx).size,
         .tuple => store.getTuple(layout_val.data.tuple.idx).size,
-        .tag_union => store.getTagUnion(layout_val.data.tag_union.idx).size,
+        .tag_union => store.getTagUnion(layout_val.getTagUnion().idx).size,
     };
 }
 
@@ -282,17 +282,17 @@ fn getScalarSize(layout_val: Layout) u32 {
 
 /// Get the size of a scalar type with explicit pointer size
 pub fn getScalarSizeWithPtrSize(layout_val: Layout, ptr_size: u32) u32 {
-    return switch (layout_val.data.scalar.tag) {
+    return switch (layout_val.getScalar().tag) {
         .opaque_ptr => ptr_size,
         .str => ptr_size * 2, // { ptr, len }
-        .int => switch (layout_val.data.scalar.data.int) {
+        .int => switch (layout_val.getScalar().getInt()) {
             .u8, .i8 => 1,
             .u16, .i16 => 2,
             .u32, .i32 => 4,
             .u64, .i64 => 8,
             .u128, .i128 => 16,
         },
-        .frac => switch (layout_val.data.scalar.data.frac) {
+        .frac => switch (layout_val.getScalar().getFrac()) {
             .f32 => 4,
             .f64 => 8,
             .dec => 16,

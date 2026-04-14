@@ -2539,7 +2539,7 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { tr
     defer interpreter.bindings.items.len = 0;
 
     // Check if this is an integer or Dec
-    const int_value = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
+    const int_value = if (result.layout.tag == .scalar and result.layout.getScalar().tag == .int) blk: {
         // Suffixed integer literals (e.g., 255.U8, 42.I32) remain as integers
         break :blk result.asI128();
     } else blk: {
@@ -2586,7 +2586,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     defer interpreter.bindings.items.len = 0;
 
     // For boolean results, read the underlying byte value
-    const int_val: i64 = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
+    const int_val: i64 = if (result.layout.tag == .scalar and result.layout.getScalar().tag == .int) blk: {
         // Boolean represented as integer (discriminant)
         const val = result.asI128();
         break :blk @intCast(val);
@@ -2804,7 +2804,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     defer interpreter.bindings.items.len = 0;
 
     try std.testing.expect(result.layout.tag == .scalar);
-    try std.testing.expect(result.layout.data.scalar.tag == .str);
+    try std.testing.expect(result.layout.getScalar().tag == .str);
 
     const roc_str: *const builtins.str.RocStr = @ptrCast(@alignCast(result.ptr.?));
     const str_slice = roc_str.asSlice();
@@ -2878,7 +2878,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
 
         // Check if this is an integer or Dec
         try std.testing.expect(element.layout.tag == .scalar);
-        const int_val = if (element.layout.data.scalar.tag == .int) blk: {
+        const int_val = if (element.layout.getScalar().tag == .int) blk: {
             // Suffixed integer literals remain as integers
             break :blk element.asI128();
         } else blk: {
@@ -2927,7 +2927,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     // Verify we got a struct layout (records are now structs)
     try std.testing.expect(result.layout.tag == .struct_);
 
-    const struct_data = layout_cache.getStructData(result.layout.data.struct_.idx);
+    const struct_data = layout_cache.getStructData(result.layout.getStruct().idx);
     const sorted_fields = layout_cache.struct_fields.sliceRange(struct_data.getFields());
 
     try std.testing.expectEqual(expected_fields.len, sorted_fields.len);
@@ -2943,7 +2943,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
                 const field_layout = layout_cache.getLayout(sorted_field.layout);
                 try std.testing.expect(field_layout.tag == .scalar);
 
-                const offset = layout_cache.getStructFieldOffset(result.layout.data.struct_.idx, i);
+                const offset = layout_cache.getStructFieldOffset(result.layout.getStruct().idx, i);
                 const field_ptr = @as([*]u8, @ptrCast(result.ptr.?)) + offset;
                 const field_value = StackValue{
                     .layout = field_layout,
@@ -2952,7 +2952,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
                     .rt_var = result.rt_var, // use result's rt_var for field access
                 };
                 // Check if this is an integer or Dec
-                const int_val = if (field_layout.data.scalar.tag == .int) blk: {
+                const int_val = if (field_layout.getScalar().tag == .int) blk: {
                     // Suffixed integer literals remain as integers
                     break :blk field_value.asI128();
                 } else blk: {
@@ -3052,7 +3052,7 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
     }
 
     // Get the element layout
-    const elem_layout_idx = result.layout.data.list;
+    const elem_layout_idx = result.layout.getIdx();
     const elem_layout = layout_cache.getLayout(elem_layout_idx);
 
     // Use the ListAccessor to safely access list elements
@@ -3066,7 +3066,7 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
 
         // Check if this is an integer
         try std.testing.expect(element.layout.tag == .scalar);
-        try std.testing.expect(element.layout.data.scalar.tag == .int);
+        try std.testing.expect(element.layout.getScalar().tag == .int);
         const int_val = element.asI128();
 
         try std.testing.expectEqual(@as(i128, expected_val), int_val);
@@ -3155,7 +3155,7 @@ pub fn runExpectUnit(src: []const u8, should_trace: enum { trace, no_trace }) !v
     // Verify we got a ZST layout or an empty record (both represent unit/`{}`)
     const is_zst = result.layout.tag == .zst;
     const is_empty_struct = result.layout.tag == .struct_ and blk: {
-        const struct_data = layout_cache.getStructData(result.layout.data.struct_.idx);
+        const struct_data = layout_cache.getStructData(result.layout.getStruct().idx);
         break :blk struct_data.size == 0;
     };
 
@@ -5895,7 +5895,7 @@ test "LIR record field closures keep distinct field indices and payload layouts"
 
     const rec_layout = layout_store.getLayout(rec_lir.struct_.struct_layout);
     try std.testing.expect(rec_layout.tag == .struct_);
-    const rec_struct_idx = rec_layout.data.struct_.idx;
+    const rec_struct_idx = rec_layout.getStruct().idx;
     const add_a_struct_layout = layout_store.getLayout(add_a_lir.struct_access.struct_layout);
     const add_b_struct_layout = layout_store.getLayout(add_b_lir.struct_access.struct_layout);
     try std.testing.expect(add_a_struct_layout.tag == .struct_);
@@ -5904,11 +5904,11 @@ test "LIR record field closures keep distinct field indices and payload layouts"
     try std.testing.expectEqual(layout_store.layoutSize(rec_layout), layout_store.layoutSize(add_b_struct_layout));
     try std.testing.expectEqual(
         layout_store.getStructFieldOffset(rec_struct_idx, add_a_lir.struct_access.field_idx),
-        layout_store.getStructFieldOffset(add_a_struct_layout.data.struct_.idx, add_a_lir.struct_access.field_idx),
+        layout_store.getStructFieldOffset(add_a_struct_layout.getStruct().idx, add_a_lir.struct_access.field_idx),
     );
     try std.testing.expectEqual(
         layout_store.getStructFieldOffset(rec_struct_idx, add_b_lir.struct_access.field_idx),
-        layout_store.getStructFieldOffset(add_b_struct_layout.data.struct_.idx, add_b_lir.struct_access.field_idx),
+        layout_store.getStructFieldOffset(add_b_struct_layout.getStruct().idx, add_b_lir.struct_access.field_idx),
     );
 
     const add_a_size = layout_store.layoutSize(layout_store.getLayout(add_a_lir.struct_access.field_layout));
@@ -6228,7 +6228,7 @@ test "LIR lifted closure with function-valued captures keeps both capture slots"
     try std.testing.expect(captures_param == .bind);
     const captures_layout = layout_store.getLayout(captures_param.bind.layout_idx);
     try std.testing.expect(captures_layout.tag == .struct_);
-    const capture_fields = layout_store.struct_fields.sliceRange(layout_store.getStructData(captures_layout.data.struct_.idx).getFields());
+    const capture_fields = layout_store.struct_fields.sliceRange(layout_store.getStructData(captures_layout.getStruct().idx).getFields());
     try std.testing.expectEqual(@as(usize, 2), capture_fields.len);
     try std.testing.expect(capture_fields.get(0).layout != .zst);
     try std.testing.expect(capture_fields.get(1).layout != .zst);
@@ -7416,10 +7416,10 @@ test "interpreter reuse across multiple evaluations" {
 
             // With numeric literal constraints, integer literals may default to Dec instead of Int
             // Accept either int or Dec (frac) layout
-            const actual_value: i128 = switch (result.layout.data.scalar.tag) {
+            const actual_value: i128 = switch (result.layout.getScalar().tag) {
                 .int => result.asI128(),
                 .frac => blk: {
-                    try std.testing.expect(result.layout.data.scalar.data.frac == .dec);
+                    try std.testing.expect(result.layout.getScalar().getFrac() == .dec);
                     const dec_value = result.asDec(ops);
                     // Dec stores values scaled by 10^18, divide to get the integer part
                     break :blk @divTrunc(dec_value.num, builtins.dec.RocDec.one_point_zero_i128);

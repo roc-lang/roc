@@ -1116,9 +1116,9 @@ fn formatTagUnion(
         // Tag union optimized to scalar — discriminant only, no multi-variant payload
         if (sorted_tag) |tags| {
             defer allocator.free(tags);
-            if (lay.data.scalar.tag == .int) {
+            if (lay.getScalar().tag == .int) {
                 const raw = ptr orelse unreachable;
-                const disc: usize = switch (lay.data.scalar.data.int) {
+                const disc: usize = switch (lay.getScalar().getInt()) {
                     .u8 => raw[0],
                     .u16 => @as(u16, raw[0]) | (@as(u16, raw[1]) << 8),
                     .u32 => @intCast(@as(u32, raw[0]) | (@as(u32, raw[1]) << 8) | (@as(u32, raw[2]) << 16) | (@as(u32, raw[3]) << 24)),
@@ -1145,7 +1145,7 @@ fn formatTagUnion(
     }
 
     if (lay.tag == .tag_union) {
-        const tu_idx = lay.data.tag_union.idx;
+        const tu_idx = lay.getTagUnion().idx;
         const tu_data = layout_store.getTagUnionData(tu_idx);
         const disc_offset = layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
@@ -1257,7 +1257,7 @@ fn formatList(
         const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(ptr.?));
         const len = roc_list.len();
         if (len > 0) {
-            const elem_layout_idx = lay.data.list;
+            const elem_layout_idx = lay.getIdx();
             const elem_layout = layout_store.getLayout(elem_layout_idx);
             const elem_size = layout_store.layoutSize(elem_layout);
             var i: usize = 0;
@@ -1308,7 +1308,7 @@ fn formatBox(
 
     if (lay.tag == .box) {
         // Box layout: the value at ptr is a machine word (pointer to heap-allocated inner value)
-        const inner_layout = layout_store.getLayout(lay.data.box);
+        const inner_layout = layout_store.getLayout(lay.getIdx());
         if (ptr) |p| {
             const box_ptr: *const usize = @ptrCast(@alignCast(p));
             const inner_ptr: [*]const u8 = @ptrFromInt(box_ptr.*);
@@ -1341,7 +1341,7 @@ fn formatRecord(
     layout_store: *const layout_mod.Store,
 ) FormatError![]u8 {
     const types_store = &module_env.types;
-    const rec_data = layout_store.getStructData(lay.data.struct_.idx);
+    const rec_data = layout_store.getStructData(lay.getStruct().idx);
 
     if (rec_data.fields.count == 0) {
         return try allocator.dupe(u8, "{}");
@@ -1381,7 +1381,7 @@ fn formatRecord(
         try out.appendSlice(name_text);
         try out.appendSlice(": ");
 
-        const offset = layout_store.getStructFieldOffset(lay.data.struct_.idx, @intCast(layout_idx));
+        const offset = layout_store.getStructFieldOffset(lay.getStruct().idx, @intCast(layout_idx));
         const field_layout = layout_store.getLayout(l_fld.layout);
         const base_ptr = ptr.?;
         const field_ptr = base_ptr + offset;
@@ -1405,7 +1405,7 @@ fn formatTuple(
     layout_store: *const layout_mod.Store,
 ) FormatError![]u8 {
     const types_store = &module_env.types;
-    const tuple_data = layout_store.getStructData(lay.data.struct_.idx);
+    const tuple_data = layout_store.getStructData(lay.getStruct().idx);
     const layout_fields = layout_store.struct_fields.sliceRange(tuple_data.getFields());
     const elem_vars = types_store.sliceVars(tup.elems);
     const count = @min(layout_fields.len, elem_vars.len);
@@ -1425,7 +1425,7 @@ fn formatTuple(
         };
         const fld = layout_fields.get(sorted_idx);
         const field_layout = layout_store.getLayout(fld.layout);
-        const elem_offset = layout_store.getStructFieldOffset(lay.data.struct_.idx, @intCast(sorted_idx));
+        const elem_offset = layout_store.getStructFieldOffset(lay.getStruct().idx, @intCast(sorted_idx));
         const base_ptr = ptr.?;
         const elem_ptr = base_ptr + elem_offset;
         const rendered = try formatWithTypes(allocator, elem_ptr, field_layout, elem_vars[original_idx], module_env, layout_store);

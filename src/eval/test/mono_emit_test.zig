@@ -183,9 +183,9 @@ fn evalToInt(allocator: std.mem.Allocator, source: []const u8) !i128 {
     defer interpreter.bindings.items.len = 0;
 
     // Check if this is an integer or Dec
-    const result_int: i128 = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int)
+    const result_int: i128 = if (result.layout.tag == .scalar and result.layout.getScalar().tag == .int)
         result.asI128()
-    else if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .frac) blk: {
+    else if (result.layout.tag == .scalar and result.layout.getScalar().tag == .frac) blk: {
         // Unsuffixed numeric literals default to Dec
         const dec_value = result.asDec(ops);
         const RocDec = builtins.dec.RocDec;
@@ -479,10 +479,10 @@ fn evalTupleFirst(allocator: std.mem.Allocator, source: []const u8) !i128 {
         const fresh_var = try interpreter.runtime_types.fresh();
         var accessor = try result.asTuple(layout_cache);
         const first_elem = try accessor.getElement(0, fresh_var);
-        if (first_elem.layout.tag == .scalar and first_elem.layout.data.scalar.tag == .int) {
+        if (first_elem.layout.tag == .scalar and first_elem.layout.getScalar().tag == .int) {
             const tmp_sv = eval_mod.StackValue{ .layout = first_elem.layout, .ptr = first_elem.ptr, .is_initialized = true, .rt_var = fresh_var };
             return tmp_sv.asI128();
-        } else if (first_elem.layout.tag == .scalar and first_elem.layout.data.scalar.tag == .frac) {
+        } else if (first_elem.layout.tag == .scalar and first_elem.layout.getScalar().tag == .frac) {
             const tmp_sv = eval_mod.StackValue{ .layout = first_elem.layout, .ptr = first_elem.ptr, .is_initialized = true, .rt_var = fresh_var };
             const dec_value = tmp_sv.asDec(ops);
             const RocDec = builtins.dec.RocDec;

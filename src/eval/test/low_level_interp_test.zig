@@ -208,7 +208,7 @@ fn evalModuleAndGetDec(src: []const u8, decl_index: usize) !i128 {
         if (i == decl_index) {
             defer stack_value.decref(&result.evaluator.interpreter.runtime_layout_store, ops);
             // Dec values are stored as i128 internally
-            std.debug.assert(stack_value.layout.tag == .scalar and stack_value.layout.data.scalar.tag == .frac);
+            std.debug.assert(stack_value.layout.tag == .scalar and stack_value.layout.getScalar().tag == .frac);
             const ptr = @as(*const i128, @ptrCast(@alignCast(stack_value.ptr.?)));
             return ptr.*;
         }

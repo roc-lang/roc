@@ -874,7 +874,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         defer result.decref(layout_cache, ops);
 
         // Extract integer value (handles both integer and Dec types)
-        const int_value = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
+        const int_value = if (result.layout.tag == .scalar and result.layout.getScalar().tag == .int) blk: {
             break :blk result.asI128();
         } else blk: {
             const dec_value = result.asDec(ops);
@@ -972,7 +972,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
             // Verify we get the same result from the deserialized ModuleEnv
             // Extract integer value (handles both integer and Dec types)
-            const int_value = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
+            const int_value = if (result.layout.tag == .scalar and result.layout.getScalar().tag == .int) blk: {
                 break :blk result.asI128();
             } else blk: {
                 const dec_value = result.asDec(ops);

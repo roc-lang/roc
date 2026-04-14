@@ -367,8 +367,8 @@ pub const ComptimeEvaluator = struct {
         // This handles Bool types (which may be aliases or nominals not fully tracked
         // through rt_var). Only apply when the type is NOT detected as a bare tag union,
         // to avoid misidentifying tag union discriminants as Bool.
-        if (!is_tag_union and layout.tag == .scalar and layout.data.scalar.tag == .int and
-            layout.data.scalar.data.int == .u8)
+        if (!is_tag_union and layout.tag == .scalar and layout.getScalar().tag == .int and
+            layout.getScalar().getInt() == .u8)
         {
             const val = stack_value.asI128();
             if (val == 0 or val == 1) {
@@ -400,12 +400,12 @@ pub const ComptimeEvaluator = struct {
 
     /// Fold a scalar value (int, frac) to an e_num expression
     fn foldScalar(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue, layout: layout_mod.Layout) !void {
-        const scalar_tag = layout.data.scalar.tag;
+        const scalar_tag = layout.getScalar().tag;
         switch (scalar_tag) {
             .int => {
                 // Extract integer value
                 const value = stack_value.asI128();
-                const precision = layout.data.scalar.data.int;
+                const precision = layout.getScalar().getInt();
 
                 // Map precision to NumKind
                 const num_kind: CIR.NumKind = switch (precision) {
@@ -435,7 +435,7 @@ pub const ComptimeEvaluator = struct {
             },
             .frac => {
                 // Handle fractional/decimal types (Dec, F32, F64)
-                const frac_precision = layout.data.scalar.data.frac;
+                const frac_precision = layout.getScalar().getFrac();
 
                 switch (frac_precision) {
                     .dec => {
@@ -524,7 +524,7 @@ pub const ComptimeEvaluator = struct {
     fn foldTagUnionScalar(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
         // The value is the tag index directly (scalar integer).
         // The caller already verified layout.tag == .scalar, and scalar tag unions are always ints.
-        std.debug.assert(stack_value.layout.tag == .scalar and stack_value.layout.data.scalar.tag == .int);
+        std.debug.assert(stack_value.layout.tag == .scalar and stack_value.layout.getScalar().tag == .int);
         const tag_index: usize = @intCast(stack_value.asI128());
 
         // Get the runtime type variable from the StackValue
@@ -579,7 +579,7 @@ pub const ComptimeEvaluator = struct {
         const tag_field = try acc.getElement(1, tag_elem_rt_var);
 
         // Extract tag index - if not a scalar int, can't fold
-        if (tag_field.layout.tag != .scalar or tag_field.layout.data.scalar.tag != .int) {
+        if (tag_field.layout.tag != .scalar or tag_field.layout.getScalar().tag != .int) {
             return;
         }
         const tmp_sv = eval_mod.StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true, .rt_var = tag_elem_rt_var };
@@ -660,7 +660,7 @@ pub const ComptimeEvaluator = struct {
     /// Handles both zero-argument tags and tags with payloads
     fn foldTagUnionWithPayload(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
         // Get the tag union data from the layout store
-        const tag_union_layout = stack_value.layout.data.tag_union;
+        const tag_union_layout = stack_value.layout.getTagUnion();
         const tag_union_data = self.interpreter.runtime_layout_store.getTagUnionData(tag_union_layout.idx);
 
         // Read the discriminant using dynamic offset calculation
@@ -821,8 +821,8 @@ pub const ComptimeEvaluator = struct {
             resolved.desc.content.structure == .tag_union;
 
         // Handle Bool type specially (u8 scalar with value 0 or 1)
-        if (layout.tag == .scalar and layout.data.scalar.tag == .int and
-            layout.data.scalar.data.int == .u8)
+        if (layout.tag == .scalar and layout.getScalar().tag == .int and
+            layout.getScalar().getInt() == .u8)
         {
             const val = stack_value.asI128();
             if (val == 0 or val == 1) {
@@ -857,11 +857,11 @@ pub const ComptimeEvaluator = struct {
 
     /// Create a constant expression for a scalar value
     fn createScalarExpr(self: *ComptimeEvaluator, stack_value: eval_mod.StackValue, layout: layout_mod.Layout, region: base.Region) EvalError!CIR.Expr.Idx {
-        const scalar_tag = layout.data.scalar.tag;
+        const scalar_tag = layout.getScalar().tag;
         switch (scalar_tag) {
             .int => {
                 const value = stack_value.asI128();
-                const precision = layout.data.scalar.data.int;
+                const precision = layout.getScalar().getInt();
 
                 const num_kind: CIR.NumKind = switch (precision) {
                     .i8 => .i8,
@@ -894,7 +894,7 @@ pub const ComptimeEvaluator = struct {
                 return try self.env.addExpr(expr, region);
             },
             .frac => {
-                const frac_precision = layout.data.scalar.data.frac;
+                const frac_precision = layout.getScalar().getFrac();
                 switch (frac_precision) {
                     .dec => {
                         const dec_value = stack_value.asDec(self.get_ops());
@@ -970,7 +970,7 @@ pub const ComptimeEvaluator = struct {
 
     /// Create a zero-argument tag expression for a scalar tag union
     fn createTagUnionScalarExpr(self: *ComptimeEvaluator, stack_value: eval_mod.StackValue, region: base.Region) EvalError!CIR.Expr.Idx {
-        std.debug.assert(stack_value.layout.tag == .scalar and stack_value.layout.data.scalar.tag == .int);
+        std.debug.assert(stack_value.layout.tag == .scalar and stack_value.layout.getScalar().tag == .int);
         const tag_index: usize = @intCast(stack_value.asI128());
         const rt_var = stack_value.rt_var;
 
@@ -1013,7 +1013,7 @@ pub const ComptimeEvaluator = struct {
         const tag_elem_rt_var = try self.interpreter.runtime_types.fresh();
         const tag_field = try acc.getElement(1, tag_elem_rt_var);
 
-        if (tag_field.layout.tag != .scalar or tag_field.layout.data.scalar.tag != .int) {
+        if (tag_field.layout.tag != .scalar or tag_field.layout.getScalar().tag != .int) {
             return error.NotImplemented;
         }
 
@@ -1097,7 +1097,7 @@ pub const ComptimeEvaluator = struct {
 
     /// Create an expression for a tag union with explicit tag_union layout
     fn createTagUnionWithPayloadExpr(self: *ComptimeEvaluator, stack_value: eval_mod.StackValue, region: base.Region) EvalError!CIR.Expr.Idx {
-        const tag_union_layout = stack_value.layout.data.tag_union;
+        const tag_union_layout = stack_value.layout.getTagUnion();
         const tag_union_data = self.interpreter.runtime_layout_store.getTagUnionData(tag_union_layout.idx);
 
         const base_ptr = stack_value.ptr orelse return error.NotImplemented;
@@ -1926,7 +1926,7 @@ pub const ComptimeEvaluator = struct {
 
         // Try is a tag union [Ok(val), Err(err)]
         if (result.layout.tag == .scalar) {
-            if (result.layout.data.scalar.tag == .int) {
+            if (result.layout.getScalar().tag == .int) {
                 const tag_value = result.asI128();
                 // "Err" < "Ok" alphabetically, so Err = 0, Ok = 1
                 if (tag_value == 0) {
@@ -1963,7 +1963,7 @@ pub const ComptimeEvaluator = struct {
                 }
             };
 
-            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+            if (tag_field.layout.tag == .scalar and tag_field.layout.getScalar().tag == .int) {
                 const tag_value = tag_field.asI128();
                 if (tag_value == 0) {
                     // This is an Err - try to extract error message
@@ -2053,13 +2053,13 @@ pub const ComptimeEvaluator = struct {
             while (true) : (field_idx += 1) {
                 const iter_field_rt_var = self.interpreter.runtime_types.fresh() catch break;
                 const field = err_accessor.getFieldByIndex(field_idx, iter_field_rt_var) catch break;
-                if (field.layout.tag == .scalar and field.layout.data.scalar.tag == .str) {
+                if (field.layout.tag == .scalar and field.layout.getScalar().tag == .str) {
                     return try self.extractStrFromValue(field);
                 }
             }
 
             return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral error has no string message in InvalidNumeral", .{});
-        } else if (payload_field.layout.tag == .scalar and payload_field.layout.data.scalar.tag == .str) {
+        } else if (payload_field.layout.tag == .scalar and payload_field.layout.getScalar().tag == .str) {
             // Direct Str payload (single-tag union optimized to just the payload)
             return try self.extractStrFromValue(payload_field);
         }
@@ -2069,7 +2069,7 @@ pub const ComptimeEvaluator = struct {
 
     /// Extract a Str value from a StackValue
     fn extractStrFromValue(self: *ComptimeEvaluator, value: eval_mod.StackValue) ![]const u8 {
-        if (value.layout.tag == .scalar and value.layout.data.scalar.tag == .str) {
+        if (value.layout.tag == .scalar and value.layout.getScalar().tag == .str) {
             if (value.ptr) |ptr| {
                 const roc_str: *const builtins.str.RocStr = @ptrCast(@alignCast(ptr));
                 const str_bytes = roc_str.asSlice();
@@ -2082,7 +2082,7 @@ pub const ComptimeEvaluator = struct {
             return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral error string has null pointer", .{});
         }
         if (value.layout.tag == .scalar) {
-            return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral error payload is not a string (layout tag: scalar.{s})", .{@tagName(value.layout.data.scalar.tag)});
+            return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral error payload is not a string (layout tag: scalar.{s})", .{@tagName(value.layout.getScalar().tag)});
         }
         return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral error payload is not a string (layout tag: {s})", .{@tagName(value.layout.tag)});
     }
