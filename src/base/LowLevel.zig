@@ -444,6 +444,7 @@ pub const LowLevel = enum {
             .list_append_unsafe => arg_index == 1,
             .list_prepend => arg_index == 1,
             .list_set => arg_index == 2,
+            .list_split_first, .list_split_last => arg_index == 0,
             else => false,
         };
     }
