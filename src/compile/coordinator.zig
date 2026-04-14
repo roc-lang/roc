@@ -2006,7 +2006,7 @@ pub const Coordinator = struct {
 
     /// Execute a parse task (pure function)
     fn executeParse(self: *Coordinator, task: ParseTask) WorkerResult {
-        const start_time = if (threads_available) std.time.nanoTimestamp() else 0;
+        const start_time = if (threads_available) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
 
         // Read source
         const src = self.readModuleSource(task.path) catch |err| {
@@ -2105,7 +2105,7 @@ pub const Coordinator = struct {
         // NOTE: allocators not freed here - cleanup happens in executeCanonicalize
         const parse_ast = parse.parse(&allocators, &env.common) catch {
             // Parse failed but we still have partial env
-            const end_time = if (threads_available) std.time.nanoTimestamp() else 0;
+            const end_time = if (threads_available) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
             return .{
                 .parsed = .{
                     .package_name = task.package_name,
@@ -2133,7 +2133,7 @@ pub const Coordinator = struct {
             reports.append(worker_alloc, rep) catch {};
         }
 
-        const end_time = if (threads_available) std.time.nanoTimestamp() else 0;
+        const end_time = if (threads_available) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
 
         return .{
             .parsed = .{
@@ -2151,7 +2151,7 @@ pub const Coordinator = struct {
 
     /// Execute a canonicalize task (pure function)
     fn executeCanonicalize(self: *Coordinator, task: CanonicalizeTask) WorkerResult {
-        const start_time = if (threads_available) std.time.nanoTimestamp() else 0;
+        const start_time = if (threads_available) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
 
         const env = task.module_env;
         const ast = task.cached_ast;
@@ -2194,10 +2194,10 @@ pub const Coordinator = struct {
             self.io,
         ) catch {};
 
-        const canon_end = if (threads_available) std.time.nanoTimestamp() else 0;
+        const canon_end = if (threads_available) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
 
         // Collect diagnostics
-        const diag_start = if (threads_available) std.time.nanoTimestamp() else 0;
+        const diag_start = if (threads_available) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
         // Use worker allocator (thread-safe in multi-threaded mode) for result data
         const worker_alloc = self.getWorkerAllocator();
         // Pre-allocate to reduce allocation contention in multi-threaded mode
@@ -2210,7 +2210,7 @@ pub const Coordinator = struct {
             const rep = env.diagnosticToReport(d, worker_alloc, task.path) catch continue;
             reports.append(worker_alloc, rep) catch {};
         }
-        const diag_end = if (threads_available) std.time.nanoTimestamp() else 0;
+        const diag_end = if (threads_available) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
 
         // Discover imports from env.imports
         // Pre-allocate to reduce allocation contention in multi-threaded mode
@@ -2281,7 +2281,7 @@ pub const Coordinator = struct {
 
     /// Execute a type-check task (pure function)
     fn executeTypeCheck(self: *Coordinator, task: TypeCheckTask) WorkerResult {
-        const start_time = if (threads_available) std.time.nanoTimestamp() else 0;
+        const start_time = if (threads_available) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
 
         const env = task.module_env;
 
@@ -2314,10 +2314,10 @@ pub const Coordinator = struct {
         };
         defer checker.deinit();
 
-        const check_end = if (threads_available) std.time.nanoTimestamp() else 0;
+        const check_end = if (threads_available) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
 
         // Collect diagnostics
-        const diag_start = if (threads_available) std.time.nanoTimestamp() else 0;
+        const diag_start = if (threads_available) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
         // Use worker allocator (thread-safe in multi-threaded mode) for result data
         const worker_alloc = self.getWorkerAllocator();
         // Pre-allocate to reduce allocation contention in multi-threaded mode
@@ -2357,7 +2357,7 @@ pub const Coordinator = struct {
             reports.append(worker_alloc, rep) catch {};
         }
 
-        const diag_end = if (threads_available) std.time.nanoTimestamp() else 0;
+        const diag_end = if (threads_available) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
 
         // Free imported_envs slice (owned by coordinator)
         self.gpa.free(task.imported_envs);

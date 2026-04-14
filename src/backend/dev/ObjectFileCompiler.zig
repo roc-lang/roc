@@ -104,7 +104,7 @@ pub const ObjectFileCompiler = struct {
         defer result.deinit();
 
         // Write to file
-        std.Io.Dir.cwd().writeFile(.{
+        std.Io.Dir.cwd().writeFile(std.Options.debug_io, .{
             .sub_path = output_path,
             .data = result.object_bytes,
         }) catch |err| {

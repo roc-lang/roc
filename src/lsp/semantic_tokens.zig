@@ -234,7 +234,7 @@ pub fn extractSemanticTokens(
     const regions = tokenizer.output.tokens.items(.region);
 
     // Build semantic tokens list
-    var tokens: std.ArrayListUnmanaged(SemanticToken) = .{};
+    var tokens: std.ArrayListUnmanaged(SemanticToken) = .empty;
     errdefer tokens.deinit(allocator);
 
     for (tags, regions) |tag, region| {
@@ -340,7 +340,7 @@ pub fn extractSemanticTokensWithImports(
     // Create a semantic collector to walk the CIR
     var collector = SemanticCollector{
         .allocator = allocator,
-        .tokens = std.ArrayListUnmanaged(SemanticToken){},
+        .tokens = .empty,
         .module_env = &module_env,
         .info = info,
         .source = source,

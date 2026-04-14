@@ -274,7 +274,7 @@ pub const CacheManager = struct {
         defer self.allocator.free(full_subdir);
 
         // Create the subdirectory
-        self.io.createDirPath(full_subdir) catch |err| return err;
+        self.io.makePath(full_subdir) catch |err| return err;
     }
 
     /// Store raw bytes at a cache path determined by cache_key + entries_dir.

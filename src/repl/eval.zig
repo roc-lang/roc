@@ -71,7 +71,7 @@ fn renderParseDiagnosticForRepl(
         end_pos = pos;
     }
 
-    const trimmed = std.mem.trimRight(u8, full_result[0..end_pos], "\n");
+    const trimmed = std.mem.trimEnd(u8, full_result[0..end_pos], "\n");
     return try allocator.dupe(u8, trimmed);
 }
 
@@ -205,7 +205,9 @@ pub const Repl = struct {
 
             var can_buffer = std.ArrayList(u8).empty;
             defer can_buffer.deinit(self.allocator);
-            try tree.toStringPretty(can_buffer.writer(self.allocator).any(), .include_linecol);
+            var can_aw: std.Io.Writer.Allocating = .fromArrayList(self.allocator, &can_buffer);
+            defer can_buffer = can_aw.toArrayList();
+            try tree.toStringPretty(&can_aw.writer, .include_linecol);
 
             const can_html = try self.allocator.dupe(u8, can_buffer.items);
             try self.debug_can_html.append(can_html);
@@ -219,7 +221,9 @@ pub const Repl = struct {
 
             var types_buffer = std.ArrayList(u8).empty;
             defer types_buffer.deinit(self.allocator);
-            try tree.toStringPretty(types_buffer.writer(self.allocator).any(), .include_linecol);
+            var types_aw: std.Io.Writer.Allocating = .fromArrayList(self.allocator, &types_buffer);
+            defer types_buffer = types_aw.toArrayList();
+            try tree.toStringPretty(&types_aw.writer, .include_linecol);
 
             const types_html = try self.allocator.dupe(u8, types_buffer.items);
             try self.debug_types_html.append(types_html);
@@ -700,7 +704,7 @@ pub const Repl = struct {
             output = unmanaged.toManaged(self.allocator);
             // Trim trailing whitespace from the rendered report
             const rendered = output.items;
-            const trimmed = std.mem.trimRight(u8, rendered, " \t\r\n");
+            const trimmed = std.mem.trimEnd(u8, rendered, " \t\r\n");
             const result = try self.allocator.dupe(u8, trimmed);
             output.deinit();
             return .{ .type_error = result };

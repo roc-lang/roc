@@ -44,7 +44,7 @@ pub const DebugFlags = struct {
 /// Runs BuildEnv-backed syntax/type checks and converts reports to LSP diagnostics.
 pub const SyntaxChecker = struct {
     allocator: std.mem.Allocator,
-    mutex: std.Io.Mutex = .{},
+    mutex: std.Io.Mutex = std.Io.Mutex.init,
     /// Current build environment owned by the live check path.
     build_env: ?*BuildEnvHandle = null,
     /// Previous successful BuildEnv kept for module lookups (e.g., semantic tokens).
@@ -96,8 +96,8 @@ pub const SyntaxChecker = struct {
     pub fn check(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8, workspace_root: ?[]const u8) ![]Diagnostics.PublishDiagnostics {
         _ = workspace_root; // Reserved for future use
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Options.debug_io);
+        defer self.mutex.unlock(std.Options.debug_io);
 
         // Check if content has changed using hash comparison BEFORE building.
         // This avoids unnecessary rebuilds on focus/blur events.
@@ -106,7 +106,7 @@ pub const SyntaxChecker = struct {
             defer if (path) |p| self.allocator.free(p);
 
             const abs_path = if (path) |p|
-                std.Io.Dir.cwd().realpathAlloc(self.allocator, p) catch self.allocator.dupe(u8, p) catch null
+                std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, p, self.allocator) catch self.allocator.dupe(u8, p) catch null
             else
                 null;
             defer if (abs_path) |a| self.allocator.free(a);
@@ -240,7 +240,7 @@ pub const SyntaxChecker = struct {
         }
 
         // Create a fresh BuildEnv
-        const cwd = try std.process.getCwdAlloc(self.allocator);
+        const cwd = try std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, ".",self.allocator);
         defer self.allocator.free(cwd);
         var env = try BuildEnv.init(self.allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd);
         env.compiler_version = build_options.compiler_version;
@@ -299,9 +299,9 @@ pub const SyntaxChecker = struct {
     fn clearSnapshots(self: *SyntaxChecker) void {
         // Collect all handles and keys before clearing the map so we can
         // release snapshot ownership without mutating the map mid-iteration.
-        var envs: std.ArrayListUnmanaged(*BuildEnvHandle) = .{};
+        var envs: std.ArrayListUnmanaged(*BuildEnvHandle) = .empty;
         defer envs.deinit(self.allocator);
-        var keys: std.ArrayListUnmanaged([]const u8) = .{};
+        var keys: std.ArrayListUnmanaged([]const u8) = .empty;
         defer keys.deinit(self.allocator);
 
         var it = self.snapshot_envs.iterator();
@@ -400,7 +400,7 @@ pub const SyntaxChecker = struct {
         const imports = target_module_imports orelse return null;
 
         // Collect ModuleEnvs for all imports
-        var imported_envs: std.ArrayListUnmanaged(*ModuleEnv) = .{};
+        var imported_envs: std.ArrayListUnmanaged(*ModuleEnv) = .empty;
         errdefer imported_envs.deinit(self.allocator);
 
         // Local imports (within same package)
@@ -512,7 +512,7 @@ pub const SyntaxChecker = struct {
             .runtime_error, .fatal => 1,
         };
 
-        var writer: std.io.Writer.Allocating = .init(self.allocator);
+        var writer: std.Io.Writer.Allocating = .init(self.allocator);
         defer writer.deinit();
         try reporting.renderReportToLsp(&rep, &writer.writer, reporting.ReportingConfig.initLsp());
         const message = writer.toOwnedSlice() catch return error.OutOfMemory;
@@ -574,9 +574,9 @@ pub const SyntaxChecker = struct {
         var log_file = self.log_file orelse return;
         var buffer: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buffer, fmt, args) catch return;
-        log_file.writeAll(msg) catch return;
-        log_file.writeAll("\n") catch {};
-        log_file.sync() catch {};
+        log_file.writeStreamingAll(std.Options.debug_io,msg) catch return;
+        log_file.writeStreamingAll(std.Options.debug_io,"\n") catch {};
+        log_file.sync(std.Options.debug_io) catch {};
     }
 
     /// Temporary suppression to avoid noisy undefined-variable diagnostics from BuildEnv.
@@ -678,8 +678,8 @@ pub const SyntaxChecker = struct {
         line: u32,
         character: u32,
     ) !?HoverResult {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Options.debug_io);
+        defer self.mutex.unlock(std.Options.debug_io);
 
         const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();
@@ -1109,8 +1109,8 @@ pub const SyntaxChecker = struct {
         line: u32,
         character: u32,
     ) !?DefinitionResult {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Options.debug_io);
+        defer self.mutex.unlock(std.Options.debug_io);
 
         const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();
@@ -1366,19 +1366,19 @@ pub const SyntaxChecker = struct {
             self.allocator.free(cache_dir);
 
             // Write file if it doesn't exist
-            if (std.Io.Dir.cwd().access(builtin_cache_path, .{})) |_| {
+            if (std.Io.Dir.cwd().access(std.Options.debug_io, builtin_cache_path, .{})) |_| {
                 // Already exists
             } else |_| {
                 // Create parent dirs and write embedded source
                 if (std.fs.path.dirname(builtin_cache_path)) |dir| {
-                    std.Io.Dir.cwd().createDirPath(dir) catch {};
+                    std.Io.Dir.cwd().createDirPath(std.Options.debug_io, dir) catch {};
                 }
-                const file = std.Io.Dir.cwd().createFile(builtin_cache_path, .{}) catch {
+                const file = std.Io.Dir.cwd().createFile(std.Options.debug_io, builtin_cache_path, .{}) catch {
                     self.allocator.free(builtin_cache_path);
                     return null;
                 };
-                defer file.close();
-                file.writeAll(compiled_builtins.builtin_source) catch {
+                defer file.close(std.Options.debug_io);
+                file.writeStreamingAll(std.Options.debug_io, compiled_builtins.builtin_source) catch {
                     self.allocator.free(builtin_cache_path);
                     return null;
                 };
@@ -1703,8 +1703,8 @@ pub const SyntaxChecker = struct {
         line: u32,
         character: u32,
     ) !?HighlightResult {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Options.debug_io);
+        defer self.mutex.unlock(std.Options.debug_io);
 
         const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();
@@ -1759,8 +1759,8 @@ pub const SyntaxChecker = struct {
     ) ![]document_symbol_handler.SymbolInformation {
         const SymbolInformation = document_symbol_handler.SymbolInformation;
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Options.debug_io);
+        defer self.mutex.unlock(std.Options.debug_io);
 
         const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();
@@ -1769,7 +1769,7 @@ pub const SyntaxChecker = struct {
         const path = uri_util.uriToPath(allocator, uri) catch return &[_]SymbolInformation{};
         defer allocator.free(path);
 
-        const absolute_path = std.Io.Dir.cwd().realpathAlloc(allocator, path) catch
+        const absolute_path = std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, path, allocator) catch
             allocator.dupe(u8, path) catch return &[_]SymbolInformation{};
         defer allocator.free(absolute_path);
 
@@ -2099,8 +2099,8 @@ pub const SyntaxChecker = struct {
         line: u32,
         character: u32,
     ) !?completion_handler.CompletionResult {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Options.debug_io);
+        defer self.mutex.unlock(std.Options.debug_io);
 
         const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();

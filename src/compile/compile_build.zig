@@ -2038,8 +2038,8 @@ pub const BuildEnv = struct {
         try self.sink.buildOrder(pkg_names.items, module_names.items, depths.items);
 
         // Now that order is built, mark ready reports as emitted so they can be drained
-        self.sink.lock.lock();
-        defer self.sink.lock.unlock();
+        self.sink.lock.lockUncancelable(std.Options.debug_io);
+        defer self.sink.lock.unlock(std.Options.debug_io);
         // Mark entries without reports as emitted BEFORE calling tryEmitLocked
         // so they don't block other entries from being emitted.
         for (self.sink.entries.items) |*e| {

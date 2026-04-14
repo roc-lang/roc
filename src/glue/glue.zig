@@ -54,6 +54,7 @@ pub const GlueError = error{
     CompilationFailed,
     ModuleRetrieval,
     OutOfMemory,
+    WriteFailed,
 };
 
 /// Print platform glue information for a platform's main.roc file using full compilation path.
@@ -75,6 +76,7 @@ pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, a
             error.CompilationFailed => stderr.print("Error: Compilation failed\n", .{}),
             error.ModuleRetrieval => stderr.print("Error: Failed to get compiled modules\n", .{}),
             error.OutOfMemory => stderr.print("Error: Out of memory\n", .{}),
+            error.WriteFailed => stderr.print("Error: Write failed\n", .{}),
         }) catch {};
         return err;
     };
@@ -83,7 +85,7 @@ pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, a
 fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, temp_dir: []const u8) GlueError!void {
 
     // 0. Validate glue spec file exists
-    std.Io.Dir.cwd().access(args.glue_spec, .{}) catch {
+    std.Io.Dir.cwd().access(std.Options.debug_io, args.glue_spec, .{}) catch {
         return error.GlueSpecNotFound;
     };
 
@@ -100,7 +102,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
 
     // 2. Compile platform using BuildEnv by creating a synthetic app
     // BuildEnv expects an app file, so we create a minimal app that imports the platform
-    const platform_abs_path = std.Io.Dir.cwd().realpathAlloc(gpa, args.platform_path) catch {
+    const platform_abs_path = std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, args.platform_path, gpa) catch {
         return error.PlatformPathResolution;
     };
     defer gpa.free(platform_abs_path);
@@ -108,7 +110,8 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     // Generate synthetic app source that imports the platform
     var app_source = std.ArrayList(u8).empty;
     defer app_source.deinit(gpa);
-    const w = app_source.writer(gpa);
+    var aw: std.Io.Writer.Allocating = .fromArrayList(gpa, &app_source);
+    const w = &aw.writer;
 
     // Build requires clause: app [Alias1, Alias2, entry1, entry2, ...] { pf: platform "path" }
     try w.print("app [", .{});
@@ -151,13 +154,16 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         try w.print("{s} = {s}\n", .{ entry.name, entry.stub_expr });
     }
 
+    // Sync the writer back to app_source
+    app_source = aw.toArrayList();
+
     // Write synthetic app to temp file
     const synthetic_app_path = std.fs.path.join(gpa, &.{ temp_dir, "synthetic_app.roc" }) catch {
         return error.OutOfMemory;
     };
     defer gpa.free(synthetic_app_path);
 
-    std.Io.Dir.cwd().writeFile(.{
+    std.Io.Dir.cwd().writeFile(std.Options.debug_io, .{
         .sub_path = synthetic_app_path,
         .data = app_source.items,
     }) catch {
@@ -168,7 +174,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     const thread_count: usize = 1;
     const mode: Mode = .single_threaded;
 
-    const cwd = std.process.getCwdAlloc(gpa) catch {
+    const cwd = std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, ".", gpa) catch {
         return error.BuildEnvInit;
     };
     defer gpa.free(cwd);
@@ -351,12 +357,12 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     }
 
     // 5. Compile glue spec in-process and run via interpreter
-    const glue_spec_abs = std.Io.Dir.cwd().realpathAlloc(gpa, args.glue_spec) catch {
+    const glue_spec_abs = std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, args.glue_spec, gpa) catch {
         return error.GlueSpecNotFound;
     };
     defer gpa.free(glue_spec_abs);
 
-    const glue_cwd = std.process.getCwdAlloc(gpa) catch {
+    const glue_cwd = std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, ".", gpa) catch {
         return error.BuildEnvInit;
     };
     defer gpa.free(glue_cwd);
@@ -467,7 +473,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     }
 
     // Create output directory if needed
-    std.Io.Dir.cwd().createDirPath(args.output_dir) catch {
+    std.Io.Dir.cwd().createDirPath(std.Options.debug_io, args.output_dir) catch {
         stderr.print("Error: Could not create output directory: {s}\n", .{args.output_dir}) catch {};
         return error.CompilationFailed;
     };
@@ -482,7 +488,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         };
         defer gpa.free(file_path);
 
-        std.Io.Dir.cwd().writeFile(.{
+        std.Io.Dir.cwd().writeFile(std.Options.debug_io, .{
             .sub_path = file_path,
             .data = file.content.asSlice(),
         }) catch {
@@ -527,7 +533,7 @@ pub const PlatformHeaderInfo = struct {
 /// Parse a platform header to extract requires entries and validate it's a platform file.
 fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8) !PlatformHeaderInfo {
     // Read source file
-    var source = std.Io.Dir.cwd().readFileAlloc(gpa, platform_path, std.math.maxInt(usize)) catch |err| switch (err) {
+    var source = std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, platform_path, gpa, .unlimited) catch |err| switch (err) {
         error.FileNotFound => return error.FileNotFound,
         else => return error.ParseFailed,
     };

@@ -64,9 +64,9 @@ pub fn Channel(comptime T: type) type {
                 .write_pos = 0,
                 .read_pos = 0,
                 .count = 0,
-                .mutex = .{},
-                .not_empty = .{},
-                .not_full = .{},
+                .mutex = Mutex.init,
+                .not_empty = Condition.init,
+                .not_full = Condition.init,
                 .closed = false,
                 .gpa = gpa,
             };
@@ -80,12 +80,12 @@ pub fn Channel(comptime T: type) type {
         /// Send an item to the channel, blocking if full.
         /// Returns error.Closed if the channel has been closed.
         pub fn send(self: *Self, item: T) ChannelError!void {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Options.debug_io);
+            defer self.mutex.unlock(std.Options.debug_io);
 
             // Wait while channel is full and not closed
             while (self.count >= self.buffer.len and !self.closed) {
-                self.not_full.wait(&self.mutex);
+                self.not_full.waitUncancelable(std.Options.debug_io, &self.mutex);
             }
 
             if (self.closed) {
@@ -98,15 +98,15 @@ pub fn Channel(comptime T: type) type {
             self.count += 1;
 
             // Signal that channel is non-empty
-            self.not_empty.signal();
+            self.not_empty.signal(std.Options.debug_io);
         }
 
         /// Send an item, growing the buffer if full (never blocks on capacity).
         /// Use this when the sender must remain responsive and cannot afford to
         /// block — e.g. a coordinator that also needs to drain another channel.
         pub fn sendGrowable(self: *Self, item: T) error{ Closed, OutOfMemory }!void {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Options.debug_io);
+            defer self.mutex.unlock(std.Options.debug_io);
 
             if (self.closed) return error.Closed;
 
@@ -129,33 +129,32 @@ pub fn Channel(comptime T: type) type {
                 self.write_pos = self.count;
 
                 // Wake any producers blocked in send() — there is room now.
-                self.not_full.broadcast();
+                self.not_full.broadcast(std.Options.debug_io);
             }
 
             self.buffer[self.write_pos] = item;
             self.write_pos = (self.write_pos + 1) % self.buffer.len;
             self.count += 1;
 
-            self.not_empty.signal();
+            self.not_empty.signal(std.Options.debug_io);
         }
 
         /// Send an item with a timeout (in nanoseconds).
         /// Returns error.Timeout if the operation times out.
         /// Returns error.Closed if the channel has been closed.
         pub fn sendTimeout(self: *Self, item: T, timeout_ns: u64) ChannelError!void {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Options.debug_io);
+            defer self.mutex.unlock(std.Options.debug_io);
 
-            const deadline = std.time.nanoTimestamp() + @as(i128, timeout_ns);
+            const deadline_ns = std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds + @as(i96, @intCast(timeout_ns));
 
             // Wait while channel is full and not closed
             while (self.count >= self.buffer.len and !self.closed) {
-                const now = std.time.nanoTimestamp();
-                if (now >= deadline) {
+                const now_ns = std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds;
+                if (now_ns >= deadline_ns) {
                     return error.Timeout;
                 }
-                const remaining = @as(u64, @intCast(deadline - now));
-                _ = self.not_full.timedWait(&self.mutex, remaining) catch {};
+                self.not_full.waitUncancelable(std.Options.debug_io, &self.mutex);
             }
 
             if (self.closed) {
@@ -168,18 +167,18 @@ pub fn Channel(comptime T: type) type {
             self.count += 1;
 
             // Signal that channel is non-empty
-            self.not_empty.signal();
+            self.not_empty.signal(std.Options.debug_io);
         }
 
         /// Receive an item from the channel, blocking if empty.
         /// Returns null if the channel is closed and empty.
         pub fn recv(self: *Self) ?T {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Options.debug_io);
+            defer self.mutex.unlock(std.Options.debug_io);
 
             // Wait while channel is empty and not closed
             while (self.count == 0 and !self.closed) {
-                self.not_empty.wait(&self.mutex);
+                self.not_empty.waitUncancelable(std.Options.debug_io, &self.mutex);
             }
 
             // If empty and closed, return null
@@ -193,19 +192,18 @@ pub fn Channel(comptime T: type) type {
         /// Receive an item with a timeout (in nanoseconds).
         /// Returns null if the operation times out or channel is closed and empty.
         pub fn recvTimeout(self: *Self, timeout_ns: u64) ?T {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Options.debug_io);
+            defer self.mutex.unlock(std.Options.debug_io);
 
-            const deadline = std.time.nanoTimestamp() + @as(i128, timeout_ns);
+            const deadline_ns = std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds + @as(i96, @intCast(timeout_ns));
 
             // Wait while channel is empty and not closed
             while (self.count == 0 and !self.closed) {
-                const now = std.time.nanoTimestamp();
-                if (now >= deadline) {
+                const now_ns = std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds;
+                if (now_ns >= deadline_ns) {
                     return null; // Timeout
                 }
-                const remaining = @as(u64, @intCast(deadline - now));
-                _ = self.not_empty.timedWait(&self.mutex, remaining) catch {};
+                self.not_empty.waitUncancelable(std.Options.debug_io, &self.mutex);
             }
 
             // If empty and closed, return null
@@ -219,8 +217,8 @@ pub fn Channel(comptime T: type) type {
         /// Try to receive an item without blocking.
         /// Returns null if the channel is empty.
         pub fn tryRecv(self: *Self) ?T {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Options.debug_io);
+            defer self.mutex.unlock(std.Options.debug_io);
 
             if (self.count == 0) {
                 return null;
@@ -236,7 +234,7 @@ pub fn Channel(comptime T: type) type {
             self.count -= 1;
 
             // Signal that channel is non-full
-            self.not_full.signal();
+            self.not_full.signal(std.Options.debug_io);
 
             return item;
         }
@@ -245,27 +243,27 @@ pub fn Channel(comptime T: type) type {
         /// Any blocked senders will receive error.Closed.
         /// Any blocked receivers will be woken and return null if empty.
         pub fn close(self: *Self) void {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Options.debug_io);
+            defer self.mutex.unlock(std.Options.debug_io);
 
             self.closed = true;
 
             // Wake all waiting threads
-            self.not_empty.broadcast();
-            self.not_full.broadcast();
+            self.not_empty.broadcast(std.Options.debug_io);
+            self.not_full.broadcast(std.Options.debug_io);
         }
 
         /// Check if the channel is closed
         pub fn isClosed(self: *Self) bool {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Options.debug_io);
+            defer self.mutex.unlock(std.Options.debug_io);
             return self.closed;
         }
 
         /// Get the number of items currently in the channel
         pub fn len(self: *Self) usize {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Options.debug_io);
+            defer self.mutex.unlock(std.Options.debug_io);
             return self.count;
         }
 
@@ -276,8 +274,8 @@ pub fn Channel(comptime T: type) type {
 
         /// Check if the channel is full
         pub fn isFull(self: *Self) bool {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Options.debug_io);
+            defer self.mutex.unlock(std.Options.debug_io);
             return self.count >= self.buffer.len;
         }
 
@@ -490,9 +488,9 @@ test "Channel blocking recv with timeout" {
     defer ch.deinit();
 
     // recvTimeout on empty channel should return null after timeout
-    const start = std.time.nanoTimestamp();
+    const start = std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds;
     const result = ch.recvTimeout(10_000_000); // 10ms
-    const elapsed = std.time.nanoTimestamp() - start;
+    const elapsed = std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds - start;
 
     try std.testing.expect(result == null);
     try std.testing.expect(elapsed >= 10_000_000); // Should have waited at least 10ms

@@ -2873,7 +2873,7 @@ pub fn getNodeRegionInfo(self: *const Self, idx: anytype) RegionInfo {
 /// Helper function to convert type information to an SExpr node
 /// in S-expression format for snapshot testing. Implements the definition-focused
 /// format showing final types for defs, expressions, and builtins.
-pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *SExprTree) std.mem.Allocator.Error!void {
+pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *SExprTree) (std.mem.Allocator.Error || error{WriteFailed})!void {
     if (maybe_expr_idx) |expr_idx| {
         try self.pushExprTypesToSExprTree(expr_idx, tree);
     } else {
@@ -3043,7 +3043,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
     }
 }
 
-fn pushExprTypesToSExprTree(self: *Self, expr_idx: CIR.Expr.Idx, tree: *SExprTree) std.mem.Allocator.Error!void {
+fn pushExprTypesToSExprTree(self: *Self, expr_idx: CIR.Expr.Idx, tree: *SExprTree) (std.mem.Allocator.Error || error{WriteFailed})!void {
     const expr_begin = tree.beginNode();
     try tree.pushStaticAtom("expr");
 

@@ -98,9 +98,9 @@ pub const CompletionBuilder = struct {
         var log_file = self.log_file orelse return;
         var buffer: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buffer, fmt, args) catch return;
-        log_file.writeAll(msg) catch return;
-        log_file.writeAll("\n") catch {};
-        log_file.sync() catch {};
+        log_file.writeStreamingAll(std.Options.debug_io,msg) catch return;
+        log_file.writeStreamingAll(std.Options.debug_io,"\n") catch {};
+        log_file.sync(std.Options.debug_io) catch {};
     }
 
     /// Add a completion item, returning true if it was added (not a duplicate).
