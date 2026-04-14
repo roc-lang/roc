@@ -1277,7 +1277,7 @@ fn copyReturnedRocStr(
     const layout_val = layout_store.getLayout(ret_layout);
     const is_str =
         ret_layout == .str or
-        (layout_val.tag == .scalar and layout_val.data.scalar.tag == .str);
+        (layout_val.tag == .scalar and layout_val.getScalar().tag == .str);
 
     if (!is_str) {
         std.debug.panic(

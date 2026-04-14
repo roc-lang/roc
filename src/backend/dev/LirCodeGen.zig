@@ -1420,7 +1420,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                     }
                     const elem_size_align: layout.SizeAlign = switch (ret_layout_val.tag) {
-                        .list => ls.layoutSizeAlign(ls.getLayout(ret_layout_val.data.list)),
+                        .list => ls.layoutSizeAlign(ls.getLayout(ret_layout_val.getIdx())),
                         .list_of_zst => .{ .size = 0, .alignment = .@"1" },
                         else => unreachable,
                     };
@@ -1498,7 +1498,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const list_layout_idx = self.valueLayout(args[0]);
                     const list_layout_val = ls.getLayout(list_layout_idx);
                     const list_elem_layout: layout.Idx = switch (list_layout_val.tag) {
-                        .list => list_layout_val.data.list,
+                        .list => list_layout_val.getIdx(),
                         .list_of_zst => ll.ret_layout,
                         else => {
                             if (builtin.mode == .Debug) {
@@ -2601,7 +2601,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const ls = self.layout_store;
                     const ret_layout_val = ls.getLayout(ll.ret_layout);
                     if (ret_layout_val.tag == .tag_union) {
-                        const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
+                        const tu_data = ls.getTagUnionData(ret_layout_val.getTagUnion().idx);
                         const variants = ls.getTagUnionVariants(tu_data);
                         var ok_disc: ?u16 = null;
                         var err_disc: ?u16 = null;
@@ -2615,15 +2615,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 err_disc = @intCast(i);
                                 const err_layout = ls.getLayout(candidate);
                                 err_record_idx = switch (err_layout.tag) {
-                                    .struct_ => err_layout.data.struct_.idx,
+                                    .struct_ => err_layout.getStruct().idx,
                                     .tag_union => inner: {
-                                        const inner_tu = ls.getTagUnionData(err_layout.data.tag_union.idx);
+                                        const inner_tu = ls.getTagUnionData(err_layout.getTagUnion().idx);
                                         const inner_v = ls.getTagUnionVariants(inner_tu);
                                         if (inner_v.len == 0) break :inner null;
                                         const inner_payload = inner_v.get(0).payload_layout;
                                         const unwrapped = self.unwrapSingleFieldPayloadLayout(inner_payload) orelse inner_payload;
                                         const inner_layout = ls.getLayout(unwrapped);
-                                        if (inner_layout.tag == .struct_) break :inner inner_layout.data.struct_.idx;
+                                        if (inner_layout.tag == .struct_) break :inner inner_layout.getStruct().idx;
                                         break :inner null;
                                     },
                                     else => null,
@@ -3269,7 +3269,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // The argument is the Box — get its layout to find element info
                     const box_arg_layout = self.valueLayout(args[0]);
                     const box_layout_data = ls.getLayout(box_arg_layout);
-                    const erased_box_ptr = box_layout_data.tag == .scalar and box_layout_data.data.scalar.tag == .opaque_ptr;
+                    const erased_box_ptr = box_layout_data.tag == .scalar and box_layout_data.getScalar().tag == .opaque_ptr;
 
                     if (box_layout_data.tag == .box_of_zst or
                         (erased_box_ptr and ls.isZeroSized(ls.getLayout(ll.ret_layout))))
@@ -3666,7 +3666,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const list_abi = builtinInternalListAbi(ls, "dev.callListSublistFromRecord.builtin_list_abi", ll.ret_layout);
 
             const record_layout = ls.getLayout(record_layout_idx orelse unreachable);
-            const record_idx = record_layout.data.struct_.idx;
+            const record_idx = record_layout.getStruct().idx;
             const record_size = ls.getStructData(record_idx).size;
             // In shared layout, record field indices are canonical alphabetical order.
             // For { start : U64, len : U64 }, that means index 0 = len and index 1 = start.
@@ -3770,7 +3770,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Get the return record layout
             const ret_layout = ls.getLayout(ll.ret_layout);
             if (ret_layout.tag != .struct_) unreachable;
-            const record_idx = ret_layout.data.struct_.idx;
+            const record_idx = ret_layout.getStruct().idx;
             const record_data = ls.getStructData(record_idx);
             const result_size: u32 = record_data.size;
 
@@ -5437,7 +5437,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const ls = self.layout_store;
             const ret_layout_val = ls.getLayout(ll.ret_layout);
             std.debug.assert(ret_layout_val.tag == .tag_union);
-            const tu_idx = ret_layout_val.data.tag_union.idx;
+            const tu_idx = ret_layout_val.getTagUnion().idx;
             const tu_data = ls.getTagUnionData(tu_idx);
 
             const result_offset = self.codegen.allocStackSlot(tu_data.size);
@@ -5564,7 +5564,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (ret_layout_val.tag != .tag_union) {
                 std.debug.panic("generateNumFromStr: expected tag_union layout, got {s}", .{@tagName(ret_layout_val.tag)});
             }
-            const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
+            const tu_data = ls.getTagUnionData(ret_layout_val.getTagUnion().idx);
             const result_offset = self.codegen.allocStackSlot(tu_data.size);
             try self.zeroStackArea(result_offset, tu_data.size);
             const disc_offset: u32 = tu_data.discriminant_offset;
@@ -6187,14 +6187,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const ls = self.layout_store;
             const stored_layout = ls.getLayout(tu_layout_idx);
             if (stored_layout.tag == .box) {
-                const inner_layout_idx = stored_layout.data.box;
+                const inner_layout_idx = stored_layout.getIdx();
                 const lhs_norm = try self.normalizeValueLocationToLayout(lhs_loc, tu_layout_idx, inner_layout_idx);
                 const rhs_norm = try self.normalizeValueLocationToLayout(rhs_loc, tu_layout_idx, inner_layout_idx);
                 return self.generateTagUnionComparisonByLayout(lhs_norm, rhs_norm, inner_layout_idx, op);
             }
             if (stored_layout.tag != .tag_union) unreachable;
 
-            const tu_idx = stored_layout.data.tag_union.idx;
+            const tu_idx = stored_layout.getTagUnion().idx;
             const tu_data = ls.getTagUnionData(tu_idx);
             const total_size = tu_data.size;
 
@@ -6339,7 +6339,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // before falling into scalar size-based paths.
             const field_layout = ls.getLayout(field_layout_idx);
             if (field_layout.tag == .box) {
-                const inner_layout_idx = field_layout.data.box;
+                const inner_layout_idx = field_layout.getIdx();
                 const inner_layout = ls.getLayout(inner_layout_idx);
                 const lhs_norm = try self.normalizeValueLocationToLayout(.{ .stack = .{ .offset = lhs_off } }, field_layout_idx, inner_layout_idx);
                 const rhs_norm = try self.normalizeValueLocationToLayout(.{ .stack = .{ .offset = rhs_off } }, field_layout_idx, inner_layout_idx);
@@ -6501,7 +6501,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const ls = self.layout_store;
             const stored_layout = ls.getLayout(struct_layout_idx);
             if (stored_layout.tag == .box) {
-                const inner_layout_idx = stored_layout.data.box;
+                const inner_layout_idx = stored_layout.getIdx();
                 const lhs_norm = try self.normalizeValueLocationToLayout(lhs_loc, struct_layout_idx, inner_layout_idx);
                 const rhs_norm = try self.normalizeValueLocationToLayout(rhs_loc, struct_layout_idx, inner_layout_idx);
                 return self.generateStructComparisonByLayout(lhs_norm, rhs_norm, inner_layout_idx, op);
@@ -6511,7 +6511,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return .{ .immediate_i64 = if (op == .num_is_eq) 1 else 0 };
             }
 
-            const struct_idx = stored_layout.data.struct_.idx;
+            const struct_idx = stored_layout.getStruct().idx;
             const struct_data = ls.getStructData(struct_idx);
             const field_count = struct_data.fields.count;
             if (field_count == 0) {
@@ -6607,13 +6607,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const ls = self.layout_store;
             const list_layout = ls.getLayout(list_layout_idx);
             if (list_layout.tag == .box) {
-                const inner_layout_idx = list_layout.data.box;
+                const inner_layout_idx = list_layout.getIdx();
                 const lhs_norm = try self.normalizeValueLocationToLayout(lhs_loc, list_layout_idx, inner_layout_idx);
                 const rhs_norm = try self.normalizeValueLocationToLayout(rhs_loc, list_layout_idx, inner_layout_idx);
                 return self.generateListComparisonByLayout(lhs_norm, rhs_norm, inner_layout_idx, op);
             }
             const elem_layout_idx: layout.Idx = switch (list_layout.tag) {
-                .list => list_layout.data.list,
+                .list => list_layout.getIdx(),
                 .list_of_zst => .zst,
                 else => unreachable,
             };
@@ -7387,7 +7387,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const actual_layout_val = ls.getLayout(actual_layout);
             switch (actual_layout_val.tag) {
                 .box => {
-                    if (actual_layout_val.data.box != expected_layout) return loc;
+                    if (actual_layout_val.getIdx() != expected_layout) return loc;
 
                     const expected_size = self.getLayoutSize(expected_layout);
                     if (expected_size == 0) return .{ .immediate_i64 = 0 };
@@ -7452,8 +7452,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const expected_layout_val = self.layout_store.getLayout(expected_layout);
                 const actual_is_box = actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst;
                 const expected_is_box = expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst;
-                const actual_is_erased_ptr = actual_layout_val.tag == .scalar and actual_layout_val.data.scalar.tag == .opaque_ptr;
-                const expected_is_erased_ptr = expected_layout_val.tag == .scalar and expected_layout_val.data.scalar.tag == .opaque_ptr;
+                const actual_is_erased_ptr = actual_layout_val.tag == .scalar and actual_layout_val.getScalar().tag == .opaque_ptr;
+                const expected_is_erased_ptr = expected_layout_val.tag == .scalar and expected_layout_val.getScalar().tag == .opaque_ptr;
                 const actual_is_list = actual_layout_val.tag == .list or actual_layout_val.tag == .list_of_zst;
                 const expected_is_list = expected_layout_val.tag == .list or expected_layout_val.tag == .list_of_zst;
                 const boxing_compatible =
@@ -8566,7 +8566,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const source_layout_idx = self.localLayout(access.source);
             const source_layout = ls.getLayout(source_layout_idx);
             const base_layout_idx = switch (source_layout.tag) {
-                .box => source_layout.data.box,
+                .box => source_layout.getIdx(),
                 else => source_layout_idx,
             };
             const struct_loc = try self.normalizeValueLocationToLayout(raw_struct_loc, source_layout_idx, base_layout_idx);
@@ -8581,9 +8581,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 unreachable;
             }
 
-            const field_offset = ls.getStructFieldOffsetByOriginalIndex(struct_layout.data.struct_.idx, access.field_idx);
-            const field_size = ls.getStructFieldSizeByOriginalIndex(struct_layout.data.struct_.idx, access.field_idx);
-            const actual_field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(struct_layout.data.struct_.idx, access.field_idx);
+            const field_offset = ls.getStructFieldOffsetByOriginalIndex(struct_layout.getStruct().idx, access.field_idx);
+            const field_size = ls.getStructFieldSizeByOriginalIndex(struct_layout.getStruct().idx, access.field_idx);
+            const actual_field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(struct_layout.getStruct().idx, access.field_idx);
             const raw_field_loc = switch (struct_loc) {
                 .stack_str => |sv| blk: {
                     const field_base = sv + @as(i32, @intCast(field_offset));
@@ -8629,22 +8629,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const union_layout = ls.getLayout(source_layout_idx);
             const payload_layout_idx = switch (union_layout.tag) {
                 .tag_union => blk: {
-                    const variants = ls.getTagUnionVariants(ls.getTagUnionData(union_layout.data.tag_union.idx));
+                    const variants = ls.getTagUnionVariants(ls.getTagUnionData(union_layout.getTagUnion().idx));
                     break :blk variants.get(tpa.tag_discriminant).payload_layout;
                 },
                 .box => blk: {
-                    const inner_layout = ls.getLayout(union_layout.data.box);
+                    const inner_layout = ls.getLayout(union_layout.getIdx());
                     if (inner_layout.tag != .tag_union) {
                         return raw_value_loc;
                     }
-                    const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner_layout.data.tag_union.idx));
+                    const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner_layout.getTagUnion().idx));
                     break :blk variants.get(tpa.tag_discriminant).payload_layout;
                 },
                 else => tpa.target_layout,
             };
             const payload_layout = ls.getLayout(payload_layout_idx);
             const payload_offset: u32 = switch (payload_layout.tag) {
-                .struct_ => ls.getStructFieldOffsetByOriginalIndex(payload_layout.data.struct_.idx, tpa.payload_idx),
+                .struct_ => ls.getStructFieldOffsetByOriginalIndex(payload_layout.getStruct().idx, tpa.payload_idx),
                 else => blk: {
                     if (builtin.mode == .Debug and tpa.payload_idx != 0) {
                         std.debug.panic(
@@ -8669,7 +8669,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const raw_payload_loc = self.fieldLocationFromLayout(base_offset + @as(i32, @intCast(payload_offset)), payload_size, payload_layout_idx);
                 return self.requireExactValueLocationToLayout(raw_payload_loc, payload_layout_idx, tpa.target_layout, "tag_payload_access.inline");
             } else if (union_layout.tag == .box) {
-                const inner_layout = ls.getLayout(union_layout.data.box);
+                const inner_layout = ls.getLayout(union_layout.getIdx());
                 if (inner_layout.tag == .tag_union) {
                     const box_ptr_reg = try self.ensureInGeneralReg(raw_value_loc);
                     const dest_offset = self.codegen.allocStackSlot(payload_size);
@@ -8700,15 +8700,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const union_layout = ls.getLayout(source_layout_idx);
             const payload_layout_idx = switch (union_layout.tag) {
                 .tag_union => blk: {
-                    const variants = ls.getTagUnionVariants(ls.getTagUnionData(union_layout.data.tag_union.idx));
+                    const variants = ls.getTagUnionVariants(ls.getTagUnionData(union_layout.getTagUnion().idx));
                     break :blk variants.get(tps.tag_discriminant).payload_layout;
                 },
                 .box => blk: {
-                    const inner_layout = ls.getLayout(union_layout.data.box);
+                    const inner_layout = ls.getLayout(union_layout.getIdx());
                     if (inner_layout.tag != .tag_union) {
                         return raw_value_loc;
                     }
-                    const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner_layout.data.tag_union.idx));
+                    const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner_layout.getTagUnion().idx));
                     break :blk variants.get(tps.tag_discriminant).payload_layout;
                 },
                 else => tps.target_layout,
@@ -8726,7 +8726,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const raw_payload_loc = self.fieldLocationFromLayout(base_offset, payload_size, payload_layout_idx);
                 return self.requireExactValueLocationToLayout(raw_payload_loc, payload_layout_idx, tps.target_layout, "tag_payload_struct_access.inline");
             } else if (union_layout.tag == .box) {
-                const inner_layout = ls.getLayout(union_layout.data.box);
+                const inner_layout = ls.getLayout(union_layout.getIdx());
                 if (inner_layout.tag == .tag_union) {
                     const box_ptr_reg = try self.ensureInGeneralReg(raw_value_loc);
                     const dest_offset = self.codegen.allocStackSlot(payload_size);
@@ -8759,7 +8759,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             if (source_layout.tag == .tag_union) {
                 const stable_value_loc = try self.materializeValueToStackForLayout(raw_value_loc, source_layout_idx);
-                const tu_data = ls.getTagUnionData(source_layout.data.tag_union.idx);
+                const tu_data = ls.getTagUnionData(source_layout.getTagUnion().idx);
                 const disc_reg = try self.loadAndMaskDiscriminant(
                     stable_value_loc,
                     disc.target_layout != .u64,
@@ -8770,9 +8770,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             if (source_layout.tag == .box) {
-                const inner_layout = ls.getLayout(source_layout.data.box);
+                const inner_layout = ls.getLayout(source_layout.getIdx());
                 if (inner_layout.tag == .tag_union) {
-                    const tu_data = ls.getTagUnionData(inner_layout.data.tag_union.idx);
+                    const tu_data = ls.getTagUnionData(inner_layout.getTagUnion().idx);
                     const box_ptr_reg = try self.ensureInGeneralReg(raw_value_loc);
                     const disc_reg = try self.allocTempGeneral();
                     if (disc.target_layout != .u64) {
@@ -8915,9 +8915,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     const field_exprs = self.store.getLocalSpan(s.fields);
                     for (field_exprs, 0..) |field_expr_id, i| {
-                        const field_offset = ls.getStructFieldOffsetByOriginalIndex(inner_layout.data.struct_.idx, @intCast(i));
-                        const field_size = ls.getStructFieldSizeByOriginalIndex(inner_layout.data.struct_.idx, @intCast(i));
-                        const field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(inner_layout.data.struct_.idx, @intCast(i));
+                        const field_offset = ls.getStructFieldOffsetByOriginalIndex(inner_layout.getStruct().idx, @intCast(i));
+                        const field_size = ls.getStructFieldSizeByOriginalIndex(inner_layout.getStruct().idx, @intCast(i));
+                        const field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(inner_layout.getStruct().idx, @intCast(i));
                         const field_loc = self.requireExactValueLocationToLayout(
                             try self.emitValueLocal(field_expr_id),
                             self.valueLayout(field_expr_id),
@@ -8942,7 +8942,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .struct_ => {
                     const struct_layout = target_layout;
-                    const struct_data = ls.getStructData(struct_layout.data.struct_.idx);
+                    const struct_data = ls.getStructData(struct_layout.getStruct().idx);
                     const stack_size = struct_data.size;
                     if (stack_size == 0) {
                         return .{ .immediate_i64 = 0 };
@@ -8952,10 +8952,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const field_exprs = self.store.getLocalSpan(s.fields);
 
                     for (field_exprs, 0..) |field_expr_id, i| {
-                        const field_offset = ls.getStructFieldOffsetByOriginalIndex(struct_layout.data.struct_.idx, @intCast(i));
-                        const field_size = ls.getStructFieldSizeByOriginalIndex(struct_layout.data.struct_.idx, @intCast(i));
+                        const field_offset = ls.getStructFieldOffsetByOriginalIndex(struct_layout.getStruct().idx, @intCast(i));
+                        const field_size = ls.getStructFieldSizeByOriginalIndex(struct_layout.getStruct().idx, @intCast(i));
                         if (field_size == 0) continue;
-                        const field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(struct_layout.data.struct_.idx, @intCast(i));
+                        const field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(struct_layout.getStruct().idx, @intCast(i));
                         const field_loc = self.requireExactValueLocationToLayout(
                             try self.emitValueLocal(field_expr_id),
                             self.valueLayout(field_expr_id),
@@ -9032,7 +9032,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return .{ .immediate_i64 = tag.discriminant };
             }
 
-            const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
+            const tu_data = ls.getTagUnionData(union_layout.getTagUnion().idx);
             const stack_size = tu_data.size;
             if (stack_size <= 8) {
                 return .{ .immediate_i64 = tag.discriminant };
@@ -9097,7 +9097,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
                 try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
 
-                const inner_tu_data = ls.getTagUnionData(inner_layout.data.tag_union.idx);
+                const inner_tu_data = ls.getTagUnionData(inner_layout.getTagUnion().idx);
                 const variants = ls.getTagUnionVariants(inner_tu_data);
                 const variant_payload_layout: ?layout.Idx = if (tag.discriminant < variants.len)
                     variants.get(tag.discriminant).payload_layout
@@ -9148,7 +9148,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 unreachable;
             }
 
-            const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
+            const tu_data = ls.getTagUnionData(union_layout.getTagUnion().idx);
             const stack_size = tu_data.size;
             const base_offset = self.codegen.allocStackSlot(stack_size);
             try self.zeroStackArea(base_offset, stack_size);
@@ -9932,7 +9932,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const layout_val = ls.getLayout(layout_idx);
             return switch (layout_val.tag) {
-                .closure => self.runtimeRepresentationLayoutIdx(layout_val.data.closure.captures_layout_idx),
+                .closure => self.runtimeRepresentationLayoutIdx(layout_val.getClosure().captures_layout_idx),
                 else => layout_idx,
             };
         }
@@ -10169,7 +10169,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const layout_val = self.layout_store.getLayout(layout_idx);
             if (layout_val.tag != .struct_) return null;
 
-            const struct_data = self.layout_store.getStructData(layout_val.data.struct_.idx);
+            const struct_data = self.layout_store.getStructData(layout_val.getStruct().idx);
             const fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
             if (fields.len != 1) return null;
 
@@ -10266,7 +10266,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const ls = self.layout_store;
                             const tuple_layout = ls.getLayout(result_layout);
                             if (tuple_layout.tag == .struct_) {
-                                const tuple_data = ls.getStructData(tuple_layout.data.struct_.idx);
+                                const tuple_data = ls.getStructData(tuple_layout.getStruct().idx);
                                 const total_size = tuple_data.size;
 
                                 // Copy entire tuple as 8-byte chunks
@@ -10459,12 +10459,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const layout_val = ls.getLayout(self.runtimeRepresentationLayoutIdx(result_layout));
                     switch (layout_val.tag) {
                         .struct_ => {
-                            const struct_data = ls.getStructData(layout_val.data.struct_.idx);
+                            const struct_data = ls.getStructData(layout_val.getStruct().idx);
                             try self.copyStackToPtr(loc, saved_ptr_reg, struct_data.size);
                             return;
                         },
                         .tag_union => {
-                            const tu_data = ls.getTagUnionData(layout_val.data.tag_union.idx);
+                            const tu_data = ls.getTagUnionData(layout_val.getTagUnion().idx);
                             try self.copyStackToPtr(loc, saved_ptr_reg, tu_data.size);
                             return;
                         },
@@ -11262,7 +11262,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             switch (layout_val.tag) {
                 .closure => {
-                    try self.emitExplicitRcHelperCallForValue(.incref, value_loc, layout_val.data.closure.captures_layout_idx, rc_op.count);
+                    try self.emitExplicitRcHelperCallForValue(.incref, value_loc, layout_val.getClosure().captures_layout_idx, rc_op.count);
                 },
                 else => {
                     try self.emitExplicitRcHelperCallForValue(.incref, value_loc, rc_op.layout_idx, rc_op.count);
@@ -11280,7 +11280,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (!explicitRcLayoutValContainsRefcounted(ls, "dev.generateDecref.layout_rc", layout_val)) return value_loc;
 
             if (layout_val.tag == .closure) {
-                try self.emitExplicitRcHelperCallForValue(.decref, value_loc, layout_val.data.closure.captures_layout_idx, 1);
+                try self.emitExplicitRcHelperCallForValue(.decref, value_loc, layout_val.getClosure().captures_layout_idx, 1);
             } else {
                 try self.emitExplicitRcHelperCallForValue(.decref, value_loc, rc_op.layout_idx, 1);
             }
@@ -11320,7 +11320,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             switch (layout_val.tag) {
                 .closure => {
-                    try self.emitIncrefAtStackOffset(base_offset, layout_val.data.closure.captures_layout_idx);
+                    try self.emitIncrefAtStackOffset(base_offset, layout_val.getClosure().captures_layout_idx);
                 },
                 else => {
                     try self.emitExplicitRcHelperCallAtStackOffset(.incref, base_offset, layout_idx, 1);
@@ -11335,7 +11335,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             switch (layout_val.tag) {
                 .closure => {
-                    try self.emitDecrefAtStackOffset(base_offset, layout_val.data.closure.captures_layout_idx);
+                    try self.emitDecrefAtStackOffset(base_offset, layout_val.getClosure().captures_layout_idx);
                 },
                 else => {
                     try self.emitExplicitRcHelperCallAtStackOffset(.decref, base_offset, layout_idx, 1);
@@ -11351,7 +11351,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (!explicitRcLayoutValContainsRefcounted(ls, "dev.generateFree.layout_rc", layout_val)) return value_loc;
 
             switch (layout_val.tag) {
-                .closure => try self.emitExplicitRcHelperCallForValue(.decref, value_loc, layout_val.data.closure.captures_layout_idx, 1),
+                .closure => try self.emitExplicitRcHelperCallForValue(.decref, value_loc, layout_val.getClosure().captures_layout_idx, 1),
                 else => try self.emitExplicitRcHelperCallForValue(.free, value_loc, rc_op.layout_idx, 1),
             }
 
@@ -12610,7 +12610,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const runtime_ret_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
             const layout_val = ls.getLayout(runtime_ret_layout);
 
-            if (builtin.mode == .Debug and loc == .stack_str and !(layout_val.tag == .scalar and layout_val.data.scalar.tag == .str) and layout_val.tag != .list and layout_val.tag != .list_of_zst) {
+            if (builtin.mode == .Debug and loc == .stack_str and !(layout_val.tag == .scalar and layout_val.getScalar().tag == .str) and layout_val.tag != .list and layout_val.tag != .list_of_zst) {
                 std.debug.panic(
                     "LIR/codegen invariant violated: stack_str result with non-string/list return layout {s} (layout_idx={})",
                     .{
@@ -12635,7 +12635,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 // Scalars: dispatch by scalar kind
                 .scalar => {
-                    const scalar = layout_val.data.scalar;
+                    const scalar = layout_val.getScalar();
                     switch (scalar.tag) {
                         // 3 registers (24 bytes): strings
                         .str => {
@@ -13133,7 +13133,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const raw_iterable_loc = try self.emitValueLocal(for_stmt.iterable);
             const iterable_layout = self.valueLayout(for_stmt.iterable);
             const resolved_iterable_layout = switch (self.layout_store.getLayout(iterable_layout).tag) {
-                .box => self.layout_store.getLayout(iterable_layout).data.box,
+                .box => self.layout_store.getLayout(iterable_layout).getIdx(),
                 else => iterable_layout,
             };
             const iterable_loc = try self.normalizeValueLocationToLayout(raw_iterable_loc, iterable_layout, resolved_iterable_layout);
@@ -14518,7 +14518,7 @@ test "tag payload bind invariant rejects mismatched pattern layout" {
 
     const tag_union = test_state.layout_store.getLayout(tag_union_layout);
     const variants = test_state.layout_store.getTagUnionVariants(
-        test_state.layout_store.getTagUnionData(tag_union.data.tag_union.idx),
+        test_state.layout_store.getTagUnionData(tag_union.getTagUnion().idx),
     );
     const runtime_payload_layout = variants.get(0).payload_layout;
 
@@ -14568,7 +14568,7 @@ test "record equality uses layout-aware comparison" {
         .{ .index = 1, .layout = .i64 },
     });
     const record_layout_val = test_state.layout_store.getLayout(record_layout);
-    const record_idx = record_layout_val.data.struct_.idx;
+    const record_idx = record_layout_val.getStruct().idx;
     const record_data = test_state.layout_store.getStructData(record_idx);
     const committed_fields = test_state.layout_store.struct_fields.sliceRange(record_data.getFields());
     try std.testing.expectEqual(layout.Idx.i64, committed_fields.get(0).layout);

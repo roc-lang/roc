@@ -342,18 +342,18 @@ pub const Store = struct {
             .zst => try self.startInternKey(.zst),
             .box => {
                 try self.startInternKey(.box);
-                try self.appendInternKeyIdx(layout.data.box);
+                try self.appendInternKeyIdx(layout.getIdx());
             },
             .box_of_zst => try self.startInternKey(.box_of_zst),
             .erased_callable => try self.startInternKey(.erased_callable),
             .list => {
                 try self.startInternKey(.list);
-                try self.appendInternKeyIdx(layout.data.list);
+                try self.appendInternKeyIdx(layout.getIdx());
             },
             .list_of_zst => try self.startInternKey(.list_of_zst),
             .closure => {
                 try self.startInternKey(.closure);
-                try self.appendInternKeyIdx(layout.data.closure.captures_layout_idx);
+                try self.appendInternKeyIdx(layout.getClosure().captures_layout_idx);
             },
             .struct_ => {
                 const info = self.getStructInfo(layout);
@@ -1469,7 +1469,7 @@ pub const Store = struct {
     pub fn getListInfo(self: *const Self, layout: Layout) ListInfo {
         std.debug.assert(layout.tag == .list or layout.tag == .list_of_zst);
         const elem_layout_idx: Idx = switch (layout.tag) {
-            .list => layout.data.list,
+            .list => layout.getIdx(),
             .list_of_zst => .zst,
             else => unreachable,
         };
@@ -1486,7 +1486,7 @@ pub const Store = struct {
     pub fn runtimeRepresentationLayoutIdx(self: *const Self, layout_idx: Idx) Idx {
         const layout_val = self.getLayout(layout_idx);
         return switch (layout_val.tag) {
-            .closure => self.runtimeRepresentationLayoutIdx(layout_val.data.closure.captures_layout_idx),
+            .closure => self.runtimeRepresentationLayoutIdx(layout_val.getClosure().captures_layout_idx),
             else => layout_idx,
         };
     }
@@ -1541,7 +1541,7 @@ pub const Store = struct {
     pub fn getBoxInfo(self: *const Self, layout: Layout) BoxInfo {
         std.debug.assert(layout.tag == .box or layout.tag == .box_of_zst);
         const elem_layout_idx: Idx = switch (layout.tag) {
-            .box => layout.data.box,
+            .box => layout.getIdx(),
             .box_of_zst => .zst,
             else => unreachable,
         };
@@ -1558,10 +1558,10 @@ pub const Store = struct {
     /// Get bundled information about a struct layout (unified for records and tuples)
     pub fn getStructInfo(self: *const Self, layout: Layout) StructInfo {
         std.debug.assert(layout.tag == .struct_);
-        const struct_data = self.getStructData(layout.data.struct_.idx);
+        const struct_data = self.getStructData(layout.getStruct().idx);
         return StructInfo{
             .data = struct_data,
-            .alignment = layout.data.struct_.alignment,
+            .alignment = layout.getStruct().alignment,
             .fields = self.struct_fields.sliceRange(struct_data.getFields()),
             .contains_refcounted = self.layoutContainsRefcounted(layout),
         };
@@ -1574,11 +1574,11 @@ pub const Store = struct {
     /// Get bundled information about a tag union layout
     pub fn getTagUnionInfo(self: *const Self, layout: Layout) TagUnionInfo {
         std.debug.assert(layout.tag == .tag_union);
-        const tu_data = self.getTagUnionData(layout.data.tag_union.idx);
+        const tu_data = self.getTagUnionData(layout.getTagUnion().idx);
         return TagUnionInfo{
-            .idx = layout.data.tag_union.idx,
+            .idx = layout.getTagUnion().idx,
             .data = tu_data,
-            .alignment = layout.data.tag_union.alignment,
+            .alignment = layout.getTagUnion().alignment,
             .variants = self.tag_union_variants.sliceRange(tu_data.getVariants()),
             .contains_refcounted = self.layoutContainsRefcounted(layout),
         };
@@ -1587,7 +1587,7 @@ pub const Store = struct {
     /// Get bundled information about a scalar layout
     pub fn getScalarInfo(self: *const Self, layout: Layout) ScalarInfo {
         std.debug.assert(layout.tag == .scalar);
-        const scalar = layout.data.scalar;
+        const scalar = layout.getScalar();
         const size_align = self.layoutSizeAlign(layout);
         return ScalarInfo{
             .tag = scalar.tag,
@@ -1766,14 +1766,14 @@ pub const Store = struct {
     pub fn layoutSizeAlign(self: *const Self, layout: Layout) SizeAlign {
         const target_usize = self.targetUsize();
         return switch (layout.tag) {
-            .scalar => switch (layout.data.scalar.tag) {
+            .scalar => switch (layout.getScalar().tag) {
                 .int => .{
-                    .size = @intCast(layout.data.scalar.data.int.size()),
-                    .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.data.scalar.data.int.alignment().toByteUnits())),
+                    .size = @intCast(layout.getScalar().getInt().size()),
+                    .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.getScalar().getInt().alignment().toByteUnits())),
                 },
                 .frac => .{
-                    .size = @intCast(layout.data.scalar.data.frac.size()),
-                    .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.data.scalar.data.frac.alignment().toByteUnits())),
+                    .size = @intCast(layout.getScalar().getFrac().size()),
+                    .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.getScalar().getFrac().alignment().toByteUnits())),
                 },
                 .str => .{
                     .size = @intCast(3 * target_usize.size()), // ptr, byte length, capacity
@@ -1793,13 +1793,13 @@ pub const Store = struct {
                 .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
             },
             .struct_ => .{
-                .size = @intCast(self.getStructSize(layout.data.struct_.idx, layout.data.struct_.alignment)),
-                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.data.struct_.alignment.toByteUnits())),
+                .size = @intCast(self.getStructSize(layout.getStruct().idx, layout.getStruct().alignment)),
+                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.getStruct().alignment.toByteUnits())),
             },
             .closure => blk: {
                 // Closure layout: header + aligned capture data
                 const header_size = @sizeOf(layout_mod.Closure);
-                const captures_layout = self.getLayout(layout.data.closure.captures_layout_idx);
+                const captures_layout = self.getLayout(layout.getClosure().captures_layout_idx);
                 const captures_size_align = self.layoutSizeAlign(captures_layout);
                 const aligned_captures_offset = std.mem.alignForward(u32, header_size, @as(u32, @intCast(captures_size_align.alignment.toByteUnits())));
                 break :blk .{
@@ -1808,8 +1808,8 @@ pub const Store = struct {
                 };
             },
             .tag_union => .{
-                .size = @intCast(self.getTagUnionSize(layout.data.tag_union.idx, layout.data.tag_union.alignment)),
-                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.data.tag_union.alignment.toByteUnits())),
+                .size = @intCast(self.getTagUnionSize(layout.getTagUnion().idx, layout.getTagUnion().alignment)),
+                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.getTagUnion().alignment.toByteUnits())),
             },
             .zst => .{
                 .size = 0, // Zero-sized types have size 0
@@ -1889,11 +1889,9 @@ pub const Store = struct {
         }
 
         switch (l.tag) {
-            .scalar => return l.data.scalar.tag == .str,
-            .list => return true,
-            .list_of_zst => return true,
-            .box => return true,
-            .box_of_zst => return true,
+            .scalar => return l.getScalar().tag == .str,
+            .list, .list_of_zst => return true,
+            .box, .box_of_zst => return true,
             .erased_callable => return true,
             .zst => return false,
             .struct_, .tag_union, .closure => {},
@@ -1903,7 +1901,7 @@ pub const Store = struct {
 
         const contains_refcounted = switch (l.tag) {
             .struct_ => blk: {
-                const sd = self.getStructData(l.data.struct_.idx);
+                const sd = self.getStructData(l.getStruct().idx);
                 const fields = self.struct_fields.sliceRange(sd.getFields());
                 for (0..fields.len) |i| {
                     const field_layout = self.getLayout(fields.get(i).layout);
@@ -1914,7 +1912,7 @@ pub const Store = struct {
                 break :blk false;
             },
             .tag_union => blk: {
-                const tu_data = self.getTagUnionData(l.data.tag_union.idx);
+                const tu_data = self.getTagUnionData(l.getTagUnion().idx);
                 const variants = self.getTagUnionVariants(tu_data);
                 for (0..variants.len) |i| {
                     const variant_layout = self.getLayout(variants.get(i).payload_layout);
@@ -1925,7 +1923,7 @@ pub const Store = struct {
                 break :blk false;
             },
             .closure => blk: {
-                const captures_layout = self.getLayout(l.data.closure.captures_layout_idx);
+                const captures_layout = self.getLayout(l.getClosure().captures_layout_idx);
                 break :blk try self.layoutContainsRefcountedInner(captures_layout, visit_states);
             },
             .scalar, .list, .list_of_zst, .box, .box_of_zst, .erased_callable, .zst => unreachable,
@@ -1953,7 +1951,7 @@ pub const Store = struct {
         defer trace.end();
 
         switch (layout.tag) {
-            .scalar => return idxFromScalar(layout.data.scalar),
+            .scalar => return idxFromScalar(layout.getScalar()),
             .zst => return .zst,
             else => {},
         }
@@ -1981,7 +1979,7 @@ pub const Store = struct {
             const layout = self.getLayout(current);
             switch (layout.tag) {
                 .list, .list_of_zst => return current,
-                .box => current = layout.data.box,
+                .box => current = layout.getIdx(),
                 .box_of_zst => return null,
                 else => return null,
             }
@@ -2015,7 +2013,7 @@ test "layout store commits struct fields with a stable alignment sort" {
     const layout_val = store.getLayout(layout_idx);
     try testing.expectEqual(LayoutTag.struct_, layout_val.tag);
 
-    const struct_idx = layout_val.data.struct_.idx;
+    const struct_idx = layout_val.getStruct().idx;
     const committed = store.struct_fields.sliceRange(store.getStructData(struct_idx).getFields());
     try testing.expectEqual(@as(usize, 5), committed.len);
 
@@ -2052,10 +2050,10 @@ test "uninterned struct layouts use the same stable alignment sort as interned o
 
     try testing.expectEqual(LayoutTag.struct_, interned_layout.tag);
     try testing.expectEqual(LayoutTag.struct_, uninterned_layout.tag);
-    try testing.expectEqual(interned_layout.data.struct_.alignment, uninterned_layout.data.struct_.alignment);
+    try testing.expectEqual(interned_layout.getStruct().alignment, uninterned_layout.getStruct().alignment);
 
-    const interned_struct = store.getStructData(interned_layout.data.struct_.idx);
-    const uninterned_struct = store.getStructData(uninterned_layout.data.struct_.idx);
+    const interned_struct = store.getStructData(interned_layout.getStruct().idx);
+    const uninterned_struct = store.getStructData(uninterned_layout.getStruct().idx);
     try testing.expectEqual(interned_struct.size, uninterned_struct.size);
 
     const interned_fields = store.struct_fields.sliceRange(interned_struct.getFields());
@@ -2268,7 +2266,7 @@ fn expectCanonicalStructOrdering() !void {
     const layout_val = store.getLayout(idx);
     try testing.expectEqual(LayoutTag.struct_, layout_val.tag);
 
-    const data = store.getStructData(layout_val.data.struct_.idx);
+    const data = store.getStructData(layout_val.getStruct().idx);
     const fields = store.struct_fields.sliceRange(data.getFields());
     try testing.expectEqual(@as(usize, 4), fields.len);
     try testing.expectEqual(@as(u16, 1), fields.get(0).index);

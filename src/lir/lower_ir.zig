@@ -533,14 +533,14 @@ const Lowerer = struct {
                 .layout = source_layout,
             },
             .box => blk: {
-                const child = self.layouts.getLayout(layout.data.box);
+                const child = self.layouts.getLayout(layout.getIdx());
                 if (child.tag != .tag_union) {
                     lirInvariant("lir.lower_ir recursive tag source box did not contain a tag union");
                 }
-                const unboxed = try self.store.addLocal(.{ .layout_idx = layout.data.box });
+                const unboxed = try self.store.addLocal(.{ .layout_idx = layout.getIdx() });
                 break :blk .{
                     .source = unboxed,
-                    .layout = layout.data.box,
+                    .layout = layout.getIdx(),
                 };
             },
             else => lirInvariant("lir.lower_ir tag operation expected tag-union source layout"),
@@ -1271,7 +1271,7 @@ const Lowerer = struct {
     fn boxPayloadLayout(self: *const Lowerer, box_layout_idx: layout_mod.Idx) layout_mod.Idx {
         const box_layout = self.layouts.getLayout(box_layout_idx);
         return switch (box_layout.tag) {
-            .box => box_layout.data.box,
+            .box => box_layout.getIdx(),
             .box_of_zst => .zst,
             else => lirInvariant("lir.lower_ir box bridge expected box layout"),
         };
@@ -1286,7 +1286,7 @@ const Lowerer = struct {
             lirInvariant("lir.lower_ir list construction expected a resolved list layout");
         const list_layout = self.layouts.getLayout(resolved);
         return switch (list_layout.tag) {
-            .list => list_layout.data.list,
+            .list => list_layout.getIdx(),
             .list_of_zst => .zst,
             else => lirInvariant("lir.lower_ir list construction expected list layout"),
         };
@@ -1422,7 +1422,7 @@ const Lowerer = struct {
     fn nonZstListElementLayout(self: *const Lowerer, layout_idx: layout_mod.Idx) ?layout_mod.Idx {
         const list_layout = self.layouts.getLayout(layout_idx);
         return switch (list_layout.tag) {
-            .list => if (self.isZstLayout(list_layout.data.list)) null else list_layout.data.list,
+            .list => if (self.isZstLayout(list_layout.getIdx())) null else list_layout.getIdx(),
             .list_of_zst => null,
             else => null,
         };
@@ -1450,8 +1450,8 @@ const Lowerer = struct {
     fn boxLayoutContains(self: *const Lowerer, box_layout_idx: layout_mod.Idx, payload_layout_idx: layout_mod.Idx) bool {
         const box_layout = self.layouts.getLayout(box_layout_idx);
         return switch (box_layout.tag) {
-            .box => box_layout.data.box == payload_layout_idx or
-                (self.raw_layout_value_cache.get(box_layout.data.box) orelse box_layout.data.box) == payload_layout_idx,
+            .box => box_layout.getIdx() == payload_layout_idx or
+                (self.raw_layout_value_cache.get(box_layout.getIdx()) orelse box_layout.getIdx()) == payload_layout_idx,
             .box_of_zst => self.isZstLayout(payload_layout_idx),
             else => false,
         };
@@ -1466,9 +1466,9 @@ const Lowerer = struct {
         return switch (target_layout.tag) {
             .tag_union => self.tagUnionPayloadLayout(target_layout_idx, tag_discriminant),
             .box => blk: {
-                const inner = self.layouts.getLayout(target_layout.data.box);
+                const inner = self.layouts.getLayout(target_layout.getIdx());
                 if (inner.tag != .tag_union) break :blk null;
-                break :blk self.tagUnionPayloadLayout(target_layout.data.box, tag_discriminant);
+                break :blk self.tagUnionPayloadLayout(target_layout.getIdx(), tag_discriminant);
             },
             else => null,
         };
@@ -1477,14 +1477,14 @@ const Lowerer = struct {
     fn structFieldCount(self: *const Lowerer, struct_layout_idx: layout_mod.Idx) usize {
         const struct_layout = self.layouts.getLayout(struct_layout_idx);
         if (struct_layout.tag != .struct_) lirInvariant("lir.lower_ir struct bridge expected struct layout");
-        const data = self.layouts.getStructData(struct_layout.data.struct_.idx);
+        const data = self.layouts.getStructData(struct_layout.getStruct().idx);
         return data.getFields().count;
     }
 
     fn structLogicalFieldCount(self: *const Lowerer, struct_layout_idx: layout_mod.Idx) usize {
         const struct_layout = self.layouts.getLayout(struct_layout_idx);
         if (struct_layout.tag != .struct_) lirInvariant("lir.lower_ir struct bridge expected struct layout");
-        const data = self.layouts.getStructData(struct_layout.data.struct_.idx);
+        const data = self.layouts.getStructData(struct_layout.getStruct().idx);
         const fields = self.layouts.struct_fields.sliceRange(data.getFields());
         var max_field_index: usize = 0;
         for (0..fields.len) |i| {
@@ -1497,21 +1497,21 @@ const Lowerer = struct {
     fn structFieldLayout(self: *const Lowerer, struct_layout_idx: layout_mod.Idx, field_index: usize) layout_mod.Idx {
         const struct_layout = self.layouts.getLayout(struct_layout_idx);
         if (struct_layout.tag != .struct_) lirInvariant("lir.lower_ir struct bridge expected struct layout");
-        const layout = self.layouts.getStructFieldLayoutByOriginalIndex(struct_layout.data.struct_.idx, @intCast(field_index));
+        const layout = self.layouts.getStructFieldLayoutByOriginalIndex(struct_layout.getStruct().idx, @intCast(field_index));
         return if (layout == layout_mod.Idx.none) .zst else layout;
     }
 
     fn tagUnionVariantCount(self: *const Lowerer, tag_union_layout_idx: layout_mod.Idx) usize {
         const tag_union_layout = self.layouts.getLayout(tag_union_layout_idx);
         if (tag_union_layout.tag != .tag_union) lirInvariant("lir.lower_ir tag-union bridge expected tag-union layout");
-        const data = self.layouts.getTagUnionData(tag_union_layout.data.tag_union.idx);
+        const data = self.layouts.getTagUnionData(tag_union_layout.getTagUnion().idx);
         return self.layouts.getTagUnionVariants(data).len;
     }
 
     fn tagUnionPayloadLayout(self: *const Lowerer, tag_union_layout_idx: layout_mod.Idx, variant_index: usize) layout_mod.Idx {
         const tag_union_layout = self.layouts.getLayout(tag_union_layout_idx);
         if (tag_union_layout.tag != .tag_union) lirInvariant("lir.lower_ir tag-union bridge expected tag-union layout");
-        const data = self.layouts.getTagUnionData(tag_union_layout.data.tag_union.idx);
+        const data = self.layouts.getTagUnionData(tag_union_layout.getTagUnion().idx);
         const variants = self.layouts.getTagUnionVariants(data);
         if (variant_index >= variants.len) lirInvariant("lir.lower_ir tag-union bridge payload index exceeded variant count");
         return variants.get(@intCast(variant_index)).payload_layout;

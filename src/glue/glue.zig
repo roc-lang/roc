@@ -1483,8 +1483,8 @@ const GlueRocValueWriter = struct {
         if (record_layout.tag != .struct_) {
             glueInvariant("glue record '{s}' used non-struct layout {d}", .{ record_type_name, @intFromEnum(record_layout_idx) });
         }
-        const offset = self.layouts.getStructFieldOffsetByOriginalIndex(record_layout.data.struct_.idx, field_index);
-        const field_layout = self.layouts.getStructFieldLayoutByOriginalIndex(record_layout.data.struct_.idx, field_index);
+        const offset = self.layouts.getStructFieldOffsetByOriginalIndex(record_layout.getStruct().idx, field_index);
+        const field_layout = self.layouts.getStructFieldLayoutByOriginalIndex(record_layout.getStruct().idx, field_index);
         return .{
             .ptr = record_base + offset,
             .layout_idx = field_layout,
@@ -1499,7 +1499,7 @@ const GlueRocValueWriter = struct {
     fn listElementLayout(self: *const GlueRocValueWriter, list_layout_idx: layout.Idx) layout.Idx {
         const list_layout = self.layouts.getLayout(list_layout_idx);
         return switch (list_layout.tag) {
-            .list => list_layout.data.list,
+            .list => list_layout.getIdx(),
             .list_of_zst => .zst,
             else => glueInvariant("glue expected list layout, got {s}", .{@tagName(list_layout.tag)}),
         };

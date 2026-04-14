@@ -364,7 +364,7 @@ const StaticDataBuilder = struct {
 
         if (abi.elem_size != 0) {
             const elem_layout_idx = switch (list_layout.tag) {
-                .list => list_layout.data.list,
+                .list => list_layout.getIdx(),
                 .list_of_zst => layout_mod.Idx.zst,
                 else => staticDataInvariant("static List schema did not lower to list layout"),
             };
@@ -485,9 +485,9 @@ const StaticDataBuilder = struct {
         if (tuple_layout.tag != .struct_) staticDataInvariant("static tuple schema did not lower to struct layout");
 
         for (schemas, 0..) |schema, i| {
-            const field_layout_idx = self.layout_store.getStructFieldLayoutByOriginalIndex(tuple_layout.data.struct_.idx, @intCast(i));
+            const field_layout_idx = self.layout_store.getStructFieldLayoutByOriginalIndex(tuple_layout.getStruct().idx, @intCast(i));
             const field_layout = self.layout_store.getLayout(field_layout_idx);
-            const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(tuple_layout.data.struct_.idx, @intCast(i));
+            const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(tuple_layout.getStruct().idx, @intCast(i));
             if (self.layout_store.layoutSize(field_layout) == 0) continue;
             try self.writeValue(bytes, relocations, base_offset + field_offset, schema, values[i], field_layout_idx);
         }
@@ -514,9 +514,9 @@ const StaticDataBuilder = struct {
         if (record_layout.tag != .struct_) staticDataInvariant("static record schema did not lower to struct layout");
 
         for (fields_schema, 0..) |field_schema, i| {
-            const field_layout_idx = self.layout_store.getStructFieldLayoutByOriginalIndex(record_layout.data.struct_.idx, @intCast(i));
+            const field_layout_idx = self.layout_store.getStructFieldLayoutByOriginalIndex(record_layout.getStruct().idx, @intCast(i));
             const field_layout = self.layout_store.getLayout(field_layout_idx);
-            const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(record_layout.data.struct_.idx, @intCast(i));
+            const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(record_layout.getStruct().idx, @intCast(i));
             if (self.layout_store.layoutSize(field_layout) == 0) continue;
             try self.writeValue(bytes, relocations, base_offset + field_offset, field_schema.schema, values[i], field_layout_idx);
         }
@@ -575,7 +575,7 @@ const StaticDataBuilder = struct {
             );
         }
 
-        const tag_data = self.layout_store.getTagUnionData(tag_layout.data.tag_union.idx);
+        const tag_data = self.layout_store.getTagUnionData(tag_layout.getTagUnion().idx);
         if (tag_data.discriminant_size != 0) {
             self.writeDiscriminant(
                 bytes,
@@ -1203,7 +1203,7 @@ const StaticDataBuilder = struct {
             );
         }
 
-        const tag_data = layouts.getTagUnionData(layout.data.tag_union.idx);
+        const tag_data = layouts.getTagUnionData(layout.getTagUnion().idx);
         if (tag_data.discriminant_size != 0) {
             self.writeDiscriminant(
                 bytes,
@@ -1270,10 +1270,10 @@ const StaticDataBuilder = struct {
             const materialized = findMaterializedRecordField(materialization, fields, payload_context.materialization, field.field, seen) orelse {
                 staticDataInvariant("static erased capture record missing expected field");
             };
-            const field_layout_idx = layouts.getStructFieldLayoutByOriginalIndex(layout.data.struct_.idx, @intCast(logical_i));
+            const field_layout_idx = layouts.getStructFieldLayoutByOriginalIndex(layout.getStruct().idx, @intCast(logical_i));
             const field_layout = layouts.getLayout(field_layout_idx);
             if (layouts.layoutSize(field_layout) == 0) continue;
-            const field_offset = layouts.getStructFieldOffsetByOriginalIndex(layout.data.struct_.idx, @intCast(logical_i));
+            const field_offset = layouts.getStructFieldOffsetByOriginalIndex(layout.getStruct().idx, @intCast(logical_i));
             try self.writeErasedCapturePlan(
                 materialization,
                 bytes,
@@ -1334,10 +1334,10 @@ const StaticDataBuilder = struct {
             if (index >= items.len) staticDataInvariant("static erased capture tuple item index out of range");
             if (seen[index]) staticDataInvariant("static erased capture tuple duplicated item index");
             seen[index] = true;
-            const field_layout_idx = layouts.getStructFieldLayoutByOriginalIndex(layout.data.struct_.idx, @intCast(index));
+            const field_layout_idx = layouts.getStructFieldLayoutByOriginalIndex(layout.getStruct().idx, @intCast(index));
             const field_layout = layouts.getLayout(field_layout_idx);
             if (layouts.layoutSize(field_layout) == 0) continue;
-            const field_offset = layouts.getStructFieldOffsetByOriginalIndex(layout.data.struct_.idx, @intCast(index));
+            const field_offset = layouts.getStructFieldOffsetByOriginalIndex(layout.getStruct().idx, @intCast(index));
             try self.writeErasedCapturePlan(
                 materialization,
                 bytes,
@@ -1410,7 +1410,7 @@ const StaticDataBuilder = struct {
         }
         verifyAllSeen(seen, "static erased capture tag had extra payload");
 
-        const tag_data = layouts.getTagUnionData(layout.data.tag_union.idx);
+        const tag_data = layouts.getTagUnionData(layout.getTagUnion().idx);
         if (tag_data.discriminant_size != 0) {
             self.writeDiscriminant(bytes, base_offset + tag_data.discriminant_offset, tag_data.discriminant_size, selected.index);
         }
@@ -1456,7 +1456,7 @@ const StaticDataBuilder = struct {
 
         if (abi.elem_size != 0) {
             const elem_layout_idx = switch (list_layout.tag) {
-                .list => list_layout.data.list,
+                .list => list_layout.getIdx(),
                 .list_of_zst => layout_mod.Idx.zst,
                 else => staticDataInvariant("static erased capture list did not lower to list layout"),
             };
@@ -1980,12 +1980,12 @@ fn payloadLayoutForTagArg(
     const variant_layout = layouts.getLayout(variant_layout_idx);
     if (arg_count == 1) {
         if (variant_layout.tag == .struct_ and layouts.getStructInfo(variant_layout).fields.len == 1) {
-            return layouts.getStructFieldLayoutByOriginalIndex(variant_layout.data.struct_.idx, 0);
+            return layouts.getStructFieldLayoutByOriginalIndex(variant_layout.getStruct().idx, 0);
         }
         return variant_layout_idx;
     }
     if (variant_layout.tag != .struct_) staticDataInvariant("multi-payload tag did not use struct payload layout");
-    return layouts.getStructFieldLayoutByOriginalIndex(variant_layout.data.struct_.idx, arg_index);
+    return layouts.getStructFieldLayoutByOriginalIndex(variant_layout.getStruct().idx, arg_index);
 }
 
 fn payloadOffsetForTagArg(
@@ -1997,7 +1997,7 @@ fn payloadOffsetForTagArg(
     if (arg_count <= 1) return 0;
     const variant_layout = layouts.getLayout(variant_layout_idx);
     if (variant_layout.tag != .struct_) staticDataInvariant("multi-payload tag did not use struct payload layout");
-    return layouts.getStructFieldOffsetByOriginalIndex(variant_layout.data.struct_.idx, arg_index);
+    return layouts.getStructFieldOffsetByOriginalIndex(variant_layout.getStruct().idx, arg_index);
 }
 
 fn sortedIndexForOriginal(sorted: []const StaticDataBuilder.SortedVariant, original: u32) u32 {

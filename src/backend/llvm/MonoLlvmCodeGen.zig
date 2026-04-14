@@ -43,7 +43,6 @@ pub const MonoLlvmCodeGen = struct {
     pub fn reset(_: *MonoLlvmCodeGen) void {}
 
     pub fn generateCode(
-    pub fn generateCode(
         _: *MonoLlvmCodeGen,
         _: lir.LIR.LirProcSpecId,        _: layout.Idx,
     ) Error!GenerateResult {

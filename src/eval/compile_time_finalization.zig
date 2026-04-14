@@ -5620,7 +5620,7 @@ const PrivateCaptureBuilder = struct {
     ) Allocator.Error![]const checked_artifact.PrivateCaptureNodeId {
         const layout = self.layouts.getLayout(physical.layout_idx);
         const elem_layout_idx = switch (layout.tag) {
-            .list => layout.data.list,
+            .list => layout.getIdx(),
             .list_of_zst => layout_mod.Idx.zst,
             .zst => return &.{},
             else => compileTimeFinalizationInvariant("private List(T) capture did not lower to list layout"),
@@ -5657,7 +5657,7 @@ const PrivateCaptureBuilder = struct {
         const layout = self.layouts.getLayout(physical.layout_idx);
         const payload = switch (layout.tag) {
             .box => PhysicalValue{
-                .layout_idx = layout.data.box,
+                .layout_idx = layout.getIdx(),
                 .value = .{ .ptr = physical.value.read(?[*]u8) orelse compileTimeFinalizationInvariant("private Box(T) capture had null payload") },
             },
             .box_of_zst => PhysicalValue{ .layout_idx = .zst, .value = Value.zst },
@@ -5759,7 +5759,7 @@ const PrivateCaptureBuilder = struct {
     ) Allocator.Error![]const checked_artifact.ErasedCaptureExecutableMaterializationPlan {
         const layout = self.layouts.getLayout(physical.layout_idx);
         const elem_layout_idx = switch (layout.tag) {
-            .list => layout.data.list,
+            .list => layout.getIdx(),
             .list_of_zst => layout_mod.Idx.zst,
             .zst => return &.{},
             else => compileTimeFinalizationInvariant("erased capture List(T) materialization did not lower to list layout"),
@@ -5796,7 +5796,7 @@ const PrivateCaptureBuilder = struct {
         const layout = self.layouts.getLayout(physical.layout_idx);
         const payload = switch (layout.tag) {
             .box => PhysicalValue{
-                .layout_idx = layout.data.box,
+                .layout_idx = layout.getIdx(),
                 .value = .{ .ptr = physical.value.read(?[*]u8) orelse compileTimeFinalizationInvariant("erased capture Box(T) materialization had null payload") },
             },
             .box_of_zst => PhysicalValue{ .layout_idx = .zst, .value = Value.zst },
@@ -5818,11 +5818,11 @@ const PrivateCaptureBuilder = struct {
         switch (layout.tag) {
             .box => {
                 const payload = physical.value.read(?[*]u8) orelse compileTimeFinalizationInvariant("private capture aggregate used boxed layout with null payload");
-                const inner_layout = self.layouts.getLayout(layout.data.box);
+                const inner_layout = self.layouts.getLayout(layout.getIdx());
                 if (inner_layout.tag != expected_tag) {
                     compileTimeFinalizationInvariant("private capture boxed aggregate did not contain expected layout");
                 }
-                return .{ .layout_idx = layout.data.box, .value = .{ .ptr = payload } };
+                return .{ .layout_idx = layout.getIdx(), .value = .{ .ptr = payload } };
             },
             .box_of_zst => {
                 if (expected_tag != .zst) {
@@ -5844,9 +5844,9 @@ fn structFieldValue(
     if (struct_layout.tag != .struct_) {
         compileTimeFinalizationInvariant("private capture field read expected struct layout");
     }
-    const field_layout_idx = layouts.getStructFieldLayoutByOriginalIndex(struct_layout.data.struct_.idx, field_index);
+    const field_layout_idx = layouts.getStructFieldLayoutByOriginalIndex(struct_layout.getStruct().idx, field_index);
     const field_layout = layouts.getLayout(field_layout_idx);
-    const offset = layouts.getStructFieldOffsetByOriginalIndex(struct_layout.data.struct_.idx, field_index);
+    const offset = layouts.getStructFieldOffsetByOriginalIndex(struct_layout.getStruct().idx, field_index);
     return .{
         .layout_idx = field_layout_idx,
         .value = if (layouts.layoutSize(field_layout) == 0) Value.zst else value.offset(offset),
@@ -6491,7 +6491,7 @@ const ComptimeReifier = struct {
     ) Allocator.Error!ReifiedValue {
         const layout = self.layouts.getLayout(layout_idx);
         const elem_layout_idx = switch (layout.tag) {
-            .list => layout.data.list,
+            .list => layout.getIdx(),
             .list_of_zst => layout_mod.Idx.zst,
             else => reifierInvariant("List(T) const graph plan did not lower to list layout"),
         };
@@ -6533,7 +6533,7 @@ const ComptimeReifier = struct {
         const layout = self.layouts.getLayout(layout_idx);
         const payload = switch (layout.tag) {
             .box => PhysicalValue{
-                .layout_idx = layout.data.box,
+                .layout_idx = layout.getIdx(),
                 .value = .{ .ptr = value.read(?[*]u8) orelse reifierInvariant("Box(T) value had null payload pointer") },
             },
             .box_of_zst => PhysicalValue{
@@ -6585,9 +6585,9 @@ const ComptimeReifier = struct {
         errdefer self.allocator.free(value_fields);
 
         for (fields, 0..) |field, i| {
-            const field_layout_idx = self.layouts.getStructFieldLayoutByOriginalIndex(layout.data.struct_.idx, @intCast(i));
+            const field_layout_idx = self.layouts.getStructFieldLayoutByOriginalIndex(layout.getStruct().idx, @intCast(i));
             const field_layout = self.layouts.getLayout(field_layout_idx);
-            const offset = self.layouts.getStructFieldOffsetByOriginalIndex(layout.data.struct_.idx, @intCast(i));
+            const offset = self.layouts.getStructFieldOffsetByOriginalIndex(layout.getStruct().idx, @intCast(i));
             const field_value = if (self.layouts.layoutSize(field_layout) == 0) Value.zst else physical.value.offset(offset);
             const reified = try self.reifyPlanAtPath(
                 reificationPathWithU32(self.path, "record-field", @intFromEnum(field.field)),
@@ -6693,9 +6693,9 @@ const ComptimeReifier = struct {
         errdefer self.allocator.free(values);
 
         for (items, 0..) |item, i| {
-            const item_layout_idx = self.layouts.getStructFieldLayoutByOriginalIndex(layout.data.struct_.idx, @intCast(i));
+            const item_layout_idx = self.layouts.getStructFieldLayoutByOriginalIndex(layout.getStruct().idx, @intCast(i));
             const item_layout = self.layouts.getLayout(item_layout_idx);
-            const offset = self.layouts.getStructFieldOffsetByOriginalIndex(layout.data.struct_.idx, @intCast(i));
+            const offset = self.layouts.getStructFieldOffsetByOriginalIndex(layout.getStruct().idx, @intCast(i));
             const item_value = if (self.layouts.layoutSize(item_layout) == 0) Value.zst else physical.value.offset(offset);
             const reified = try self.reifyPlanAtPath(
                 reificationPathWithU32(self.path, "tuple-elem", item.index),
@@ -6968,11 +6968,11 @@ const ComptimeReifier = struct {
         switch (layout.tag) {
             .box => {
                 const payload = value.read(?[*]u8) orelse reifierInvariant("logical aggregate used boxed physical layout with null payload");
-                const inner_layout = self.layouts.getLayout(layout.data.box);
+                const inner_layout = self.layouts.getLayout(layout.getIdx());
                 if (inner_layout.tag != expected_tag) {
                     reifierInvariant("logical aggregate physical box did not contain expected layout tag");
                 }
-                return .{ .layout_idx = layout.data.box, .value = .{ .ptr = payload } };
+                return .{ .layout_idx = layout.getIdx(), .value = .{ .ptr = payload } };
             },
             .box_of_zst => {
                 if (expected_tag != .zst) reifierInvariant("logical aggregate used box_of_zst for non-ZST layout");
@@ -7002,12 +7002,12 @@ fn payloadLayoutForTagArg(
     const variant_layout = layouts.getLayout(variant_layout_idx);
     if (arg_count == 1) {
         if (variant_layout.tag == .struct_ and layouts.getStructInfo(variant_layout).fields.len == 1) {
-            return layouts.getStructFieldLayoutByOriginalIndex(variant_layout.data.struct_.idx, 0);
+            return layouts.getStructFieldLayoutByOriginalIndex(variant_layout.getStruct().idx, 0);
         }
         return variant_layout_idx;
     }
     if (variant_layout.tag != .struct_) reifierInvariant("multi-payload tag did not use struct payload layout");
-    return layouts.getStructFieldLayoutByOriginalIndex(variant_layout.data.struct_.idx, arg_index);
+    return layouts.getStructFieldLayoutByOriginalIndex(variant_layout.getStruct().idx, arg_index);
 }
 
 fn payloadOffsetForTagArg(
@@ -7019,7 +7019,7 @@ fn payloadOffsetForTagArg(
     if (arg_count <= 1) return 0;
     const variant_layout = layouts.getLayout(variant_layout_idx);
     if (variant_layout.tag != .struct_) reifierInvariant("multi-payload tag did not use struct payload layout");
-    return layouts.getStructFieldOffsetByOriginalIndex(variant_layout.data.struct_.idx, arg_index);
+    return layouts.getStructFieldOffsetByOriginalIndex(variant_layout.getStruct().idx, arg_index);
 }
 
 fn reifierInvariant(comptime message: []const u8) noreturn {

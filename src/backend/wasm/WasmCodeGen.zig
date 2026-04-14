@@ -2040,7 +2040,7 @@ fn unwrapSingleFieldPayloadLayout(self: *const Self, layout_idx: layout.Idx) ?la
     const layout_val = ls.getLayout(layout_idx);
     if (layout_val.tag != .struct_) return null;
 
-    const struct_data = ls.getStructData(layout_val.data.struct_.idx);
+    const struct_data = ls.getStructData(layout_val.getStruct().idx);
     const fields = ls.struct_fields.sliceRange(struct_data.getFields());
     if (fields.len != 1) return null;
 
@@ -2139,7 +2139,7 @@ fn compareCompositeByLayout(self: *Self, lhs_local: u32, rhs_local: u32, layout_
 
     switch (l.tag) {
         .struct_ => {
-            const struct_idx = l.data.struct_.idx;
+            const struct_idx = l.getStruct().idx;
             const struct_data = ls.getStructData(struct_idx);
             const field_count = struct_data.fields.count;
             if (field_count == 0) {
@@ -2186,7 +2186,7 @@ fn compareTagUnionByLayout(self: *Self, lhs_local: u32, rhs_local: u32, layout_i
     const l = ls.getLayout(layout_idx);
     std.debug.assert(l.tag == .tag_union);
 
-    const tu_layout = WasmLayout.tagUnionLayoutWithStore(l.data.tag_union.idx, ls);
+    const tu_layout = WasmLayout.tagUnionLayoutWithStore(l.getTagUnion().idx, ls);
     const disc_offset = tu_layout.discriminant_offset;
     const disc_size = tu_layout.discriminant_size;
 
@@ -2243,7 +2243,7 @@ fn compareTagUnionByLayout(self: *Self, lhs_local: u32, rhs_local: u32, layout_i
     // Payload comparison: compare based on variant
     // For simplicity, compare the payload bytes up to discriminant_offset
     // using layout-aware comparison for the variant's payload layout
-    const variants = ls.getTagUnionVariants(ls.getTagUnionData(l.data.tag_union.idx));
+    const variants = ls.getTagUnionVariants(ls.getTagUnionData(l.getTagUnion().idx));
     if (variants.len > 0) {
         const payload_size = disc_offset; // Payload occupies bytes [0..disc_offset)
         if (payload_size > 0) {
@@ -2342,7 +2342,7 @@ fn compareFieldByLayout(
     switch (field_layout.tag) {
         .list => {
             // List: call roc_list_eq or roc_list_str_eq
-            const elem_layout = field_layout.data.list;
+            const elem_layout = field_layout.getIdx();
             if (elem_layout == .str) {
                 const import_idx = self.list_str_eq_import orelse unreachable;
                 try self.emitLocalGet(lhs_local);
@@ -2361,7 +2361,7 @@ fn compareFieldByLayout(
                 WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
             } else if (ls.getLayout(elem_layout).tag == .list) {
                 // List of lists - use specialized host function with inner element size
-                const inner_elem_layout = ls.getLayout(elem_layout).data.list;
+                const inner_elem_layout = ls.getLayout(elem_layout).getIdx();
                 const inner_elem_size = self.layoutByteSize(inner_elem_layout);
                 const import_idx = self.list_list_eq_import orelse unreachable;
                 try self.emitLocalGet(lhs_local);
@@ -5777,7 +5777,7 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
             const target_vt = self.resolveValType(target_layout);
             const source_vt: ValType = switch (source_layout.tag) {
                 .tag_union => blk: {
-                    const tu_layout = WasmLayout.tagUnionLayoutWithStore(source_layout.data.tag_union.idx, ls);
+                    const tu_layout = WasmLayout.tagUnionLayoutWithStore(source_layout.getTagUnion().idx, ls);
                     if (tu_layout.size <= 4 and tu_layout.discriminant_offset == 0) {
                         if (tu_layout.discriminant_size == 0) {
                             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -5800,14 +5800,14 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                     }
                 },
                 .box => blk: {
-                    const inner_layout = ls.getLayout(source_layout.data.box);
+                    const inner_layout = ls.getLayout(source_layout.getIdx());
                     if (inner_layout.tag != .tag_union) {
                         std.debug.panic(
                             "WasmCodeGen invariant violated: discriminant access on boxed non-tag-union layout {s}",
                             .{@tagName(inner_layout.tag)},
                         );
                     }
-                    const tu_layout = WasmLayout.tagUnionLayoutWithStore(inner_layout.data.tag_union.idx, ls);
+                    const tu_layout = WasmLayout.tagUnionLayoutWithStore(inner_layout.getTagUnion().idx, ls);
                     try self.emitProcLocal(disc.source);
                     try self.emitLoadBySize(tu_layout.discriminant_size, @intCast(tu_layout.discriminant_offset));
                     break :blk .i32;
@@ -5859,20 +5859,20 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
             const union_layout = ls.getLayout(source_layout);
             const payload_layout_idx = switch (union_layout.tag) {
                 .tag_union => blk: {
-                    const variants = ls.getTagUnionVariants(ls.getTagUnionData(union_layout.data.tag_union.idx));
+                    const variants = ls.getTagUnionVariants(ls.getTagUnionData(union_layout.getTagUnion().idx));
                     break :blk variants.get(payload.tag_discriminant).payload_layout;
                 },
                 .box => blk: {
-                    const inner = ls.getLayout(union_layout.data.box);
+                    const inner = ls.getLayout(union_layout.getIdx());
                     if (inner.tag != .tag_union) break :blk .zst;
-                    const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner.data.tag_union.idx));
+                    const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner.getTagUnion().idx));
                     break :blk variants.get(payload.tag_discriminant).payload_layout;
                 },
                 else => .zst,
             };
             const payload_layout = ls.getLayout(payload_layout_idx);
             if (payload_layout.tag == .struct_) {
-                const field_offset = self.structFieldOffsetByOriginalIndexWasm(payload_layout.data.struct_.idx, payload.payload_idx);
+                const field_offset = self.structFieldOffsetByOriginalIndexWasm(payload_layout.getStruct().idx, payload.payload_idx);
                 if (field_offset > 0) {
                     self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                     WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
@@ -5895,13 +5895,13 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
             const union_layout = ls.getLayout(source_layout);
             const payload_layout_idx = switch (union_layout.tag) {
                 .tag_union => blk: {
-                    const variants = ls.getTagUnionVariants(ls.getTagUnionData(union_layout.data.tag_union.idx));
+                    const variants = ls.getTagUnionVariants(ls.getTagUnionData(union_layout.getTagUnion().idx));
                     break :blk variants.get(payload.tag_discriminant).payload_layout;
                 },
                 .box => blk: {
-                    const inner = ls.getLayout(union_layout.data.box);
+                    const inner = ls.getLayout(union_layout.getIdx());
                     if (inner.tag != .tag_union) break :blk .zst;
-                    const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner.data.tag_union.idx));
+                    const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner.getTagUnion().idx));
                     break :blk variants.get(payload.tag_discriminant).payload_layout;
                 },
                 else => .zst,
@@ -5948,7 +5948,7 @@ fn listElemLayout(self: *Self, list_layout_idx: layout.Idx) layout.Idx {
     const ls = self.getLayoutStore();
     const list_layout = ls.getLayout(list_layout_idx);
     return switch (list_layout.tag) {
-        .list => self.runtimeRepresentationLayoutIdx(list_layout.data.list),
+        .list => self.runtimeRepresentationLayoutIdx(list_layout.getIdx()),
         .list_of_zst => list_layout_idx,
         else => unreachable,
     };
@@ -5958,7 +5958,7 @@ fn runtimeRepresentationLayoutIdx(self: *const Self, layout_idx: layout.Idx) lay
     const ls = self.getLayoutStore();
     const layout_val = ls.getLayout(layout_idx);
     return switch (layout_val.tag) {
-        .closure => self.runtimeRepresentationLayoutIdx(layout_val.data.closure.captures_layout_idx),
+        .closure => self.runtimeRepresentationLayoutIdx(layout_val.getClosure().captures_layout_idx),
         else => layout_idx,
     };
 }
@@ -6262,17 +6262,17 @@ fn layoutStorageByteSize(self: *const Self, layout_idx: layout.Idx) u32 {
     const l = ls.getLayout(layout_idx);
     return switch (l.tag) {
         .zst => 0,
-        .scalar => switch (l.data.scalar.tag) {
+        .scalar => switch (l.getScalar().tag) {
             .str => 12,
             .opaque_ptr => 4,
-            .int => switch (l.data.scalar.data.int) {
+            .int => switch (l.getScalar().getInt()) {
                 .u8, .i8 => 1,
                 .u16, .i16 => 2,
                 .u32, .i32 => 4,
                 .u64, .i64 => 8,
                 .u128, .i128 => 16,
             },
-            .frac => switch (l.data.scalar.data.frac) {
+            .frac => switch (l.getScalar().getFrac()) {
                 .f32 => 4,
                 .f64 => 8,
                 .dec => 16,
@@ -6280,8 +6280,8 @@ fn layoutStorageByteSize(self: *const Self, layout_idx: layout.Idx) u32 {
         },
         .list, .list_of_zst => 12,
         .box, .box_of_zst => 4,
-        .tag_union => WasmLayout.tagUnionLayoutWithStore(l.data.tag_union.idx, ls).size,
-        .struct_ => WasmLayout.structSizeWithStore(l.data.struct_.idx, ls),
+        .tag_union => WasmLayout.tagUnionLayoutWithStore(l.getTagUnion().idx, ls).size,
+        .struct_ => WasmLayout.structSizeWithStore(l.getStruct().idx, ls),
         else => self.layoutByteSize(layout_idx),
     };
 }
@@ -6297,7 +6297,7 @@ fn layoutByteAlign(self: *const Self, layout_idx: layout.Idx) u32 {
             const l = ls.getLayout(layout_idx);
             return switch (l.tag) {
                 .list, .list_of_zst, .box, .box_of_zst => 4,
-                .scalar => if (l.data.scalar.tag == .str) 4 else @intCast(ls.layoutSizeAlign(l).alignment.toByteUnits()),
+                .scalar => if (l.getScalar().tag == .str) 4 else @intCast(ls.layoutSizeAlign(l).alignment.toByteUnits()),
                 else => @intCast(ls.layoutSizeAlign(l).alignment.toByteUnits()),
             };
         },
@@ -6309,25 +6309,25 @@ fn layoutStorageByteAlign(self: *const Self, layout_idx: layout.Idx) u32 {
     const l = ls.getLayout(layout_idx);
     return switch (l.tag) {
         .zst => 1,
-        .scalar => switch (l.data.scalar.tag) {
+        .scalar => switch (l.getScalar().tag) {
             .str => 4,
             .opaque_ptr => 4,
-            .int => switch (l.data.scalar.data.int) {
+            .int => switch (l.getScalar().getInt()) {
                 .u8, .i8 => 1,
                 .u16, .i16 => 2,
                 .u32, .i32 => 4,
                 .u64, .i64 => 8,
                 .u128, .i128 => 16,
             },
-            .frac => switch (l.data.scalar.data.frac) {
+            .frac => switch (l.getScalar().getFrac()) {
                 .f32 => 4,
                 .f64 => 8,
                 .dec => 16,
             },
         },
         .list, .list_of_zst, .box, .box_of_zst => 4,
-        .tag_union => WasmLayout.tagUnionLayoutWithStore(l.data.tag_union.idx, ls).alignment,
-        .struct_ => WasmLayout.structAlignWithStore(l.data.struct_.idx, ls),
+        .tag_union => WasmLayout.tagUnionLayoutWithStore(l.getTagUnion().idx, ls).alignment,
+        .struct_ => WasmLayout.structAlignWithStore(l.getStruct().idx, ls),
         else => self.layoutByteAlign(layout_idx),
     };
 }
@@ -6622,7 +6622,7 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
         return;
     }
 
-    const size = WasmLayout.structSizeWithStore(l.data.struct_.idx, ls);
+    const size = WasmLayout.structSizeWithStore(l.getStruct().idx, ls);
     if (size == 0) {
         // Zero-sized struct — push dummy pointer
         self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -6630,7 +6630,7 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
         return;
     }
 
-    const align_val: u32 = WasmLayout.structAlignWithStore(l.data.struct_.idx, ls);
+    const align_val: u32 = WasmLayout.structAlignWithStore(l.getStruct().idx, ls);
 
     const frame_offset = try self.allocStackMemory(size, align_val);
 
@@ -6652,9 +6652,9 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
     defer self.allocator.free(field_val_types);
 
     for (fields, 0..) |field_expr_id, i| {
-        const field_byte_size = self.structFieldSizeByOriginalIndexWasm(l.data.struct_.idx, @intCast(i));
+        const field_byte_size = self.structFieldSizeByOriginalIndexWasm(l.getStruct().idx, @intCast(i));
         if (field_byte_size == 0) continue;
-        const field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(l.data.struct_.idx, @intCast(i));
+        const field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(l.getStruct().idx, @intCast(i));
         const is_composite = self.isCompositeLayout(field_layout_idx);
         const field_vt = WasmLayout.resultValTypeWithStore(field_layout_idx, ls);
 
@@ -6697,9 +6697,9 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
 
     // Store each field from pre-computed locals
     for (fields, 0..) |_, i| {
-        const field_offset = self.structFieldOffsetByOriginalIndexWasm(l.data.struct_.idx, @intCast(i));
-        const field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(l.data.struct_.idx, @intCast(i));
-        const field_byte_size = self.structFieldSizeByOriginalIndexWasm(l.data.struct_.idx, @intCast(i));
+        const field_offset = self.structFieldOffsetByOriginalIndexWasm(l.getStruct().idx, @intCast(i));
+        const field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(l.getStruct().idx, @intCast(i));
+        const field_byte_size = self.structFieldSizeByOriginalIndexWasm(l.getStruct().idx, @intCast(i));
         if (field_byte_size == 0) continue;
         const is_composite = self.isCompositeLayout(field_layout_idx);
 
@@ -6732,9 +6732,9 @@ fn generateStructAccess(self: *Self, sa: anytype) Allocator.Error!void {
     const struct_layout = ls.getLayout(sa.struct_layout);
     std.debug.assert(struct_layout.tag == .struct_);
 
-    const field_offset = self.structFieldOffsetByOriginalIndexWasm(struct_layout.data.struct_.idx, sa.field_idx);
-    const field_byte_size = self.structFieldSizeByOriginalIndexWasm(struct_layout.data.struct_.idx, sa.field_idx);
-    const field_layout = ls.getLayout(ls.getStructFieldLayoutByOriginalIndex(struct_layout.data.struct_.idx, sa.field_idx));
+    const field_offset = self.structFieldOffsetByOriginalIndexWasm(struct_layout.getStruct().idx, sa.field_idx);
+    const field_byte_size = self.structFieldSizeByOriginalIndexWasm(struct_layout.getStruct().idx, sa.field_idx);
+    const field_layout = ls.getLayout(ls.getStructFieldLayoutByOriginalIndex(struct_layout.getStruct().idx, sa.field_idx));
 
     // Check if the field is a composite type
     if (self.isCompositeLayout(sa.field_layout) and field_byte_size > 0) {
@@ -6796,7 +6796,7 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
         unreachable;
     }
 
-    const tu_layout = WasmLayout.tagUnionLayoutWithStore(l.data.tag_union.idx, ls);
+    const tu_layout = WasmLayout.tagUnionLayoutWithStore(l.getTagUnion().idx, ls);
     const tu_size = tu_layout.size;
     const disc_offset = tu_layout.discriminant_offset;
     if (tu_size <= 4 and disc_offset == 0) {
@@ -7777,7 +7777,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const ls = self.getLayoutStore();
             const record_layout_idx = self.procLocalLayoutIdx(args[1]);
             const record_layout = ls.getLayout(record_layout_idx);
-            const record_idx = record_layout.data.struct_.idx;
+            const record_idx = record_layout.getStruct().idx;
             const len_field_off = self.structFieldOffsetByOriginalIndexWasm(record_idx, 0);
             const start_field_off = self.structFieldOffsetByOriginalIndexWasm(record_idx, 1);
             if (builtin.mode == .Debug) {
@@ -8173,8 +8173,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const ls = self.getLayoutStore();
             const ret_layout_val = ls.getLayout(ll.ret_layout);
             if (ret_layout_val.tag != .tag_union) unreachable;
-            const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
-            const tu_layout = WasmLayout.tagUnionLayoutWithStore(ret_layout_val.data.tag_union.idx, ls);
+            const tu_data = ls.getTagUnionData(ret_layout_val.getTagUnion().idx);
+            const tu_layout = WasmLayout.tagUnionLayoutWithStore(ret_layout_val.getTagUnion().idx, ls);
             const variants = ls.getTagUnionVariants(tu_data);
             var ok_disc: ?u16 = null;
             var err_disc: ?u16 = null;
@@ -8188,15 +8188,15 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     err_disc = @intCast(i);
                     const err_layout = ls.getLayout(candidate);
                     err_record_idx = switch (err_layout.tag) {
-                        .struct_ => err_layout.data.struct_.idx,
+                        .struct_ => err_layout.getStruct().idx,
                         .tag_union => inner: {
-                            const inner_tu = ls.getTagUnionData(err_layout.data.tag_union.idx);
+                            const inner_tu = ls.getTagUnionData(err_layout.getTagUnion().idx);
                             const inner_v = ls.getTagUnionVariants(inner_tu);
                             if (inner_v.len == 0) break :inner null;
                             const inner_payload = inner_v.get(0).payload_layout;
                             const unwrapped = self.unwrapSingleFieldPayloadLayout(inner_payload) orelse inner_payload;
                             const inner_layout = ls.getLayout(unwrapped);
-                            if (inner_layout.tag == .struct_) break :inner inner_layout.data.struct_.idx;
+                            if (inner_layout.tag == .struct_) break :inner inner_layout.getStruct().idx;
                             break :inner null;
                         },
                         else => null,
@@ -8227,7 +8227,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 const field_size = self.layoutStorageByteSize(field.layout);
                 const field_offset = self.structFieldOffsetByOriginalIndexWasm(rec_idx, field.index);
                 const is_index = switch (field_layout.tag) {
-                    .scalar => field_layout.data.scalar.tag == .int and switch (field_layout.data.scalar.data.int) {
+                    .scalar => field_layout.getScalar().tag == .int and switch (field_layout.getScalar().getInt()) {
                         .u64, .i64 => true,
                         else => false,
                     },
@@ -8307,7 +8307,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const ls = self.getLayoutStore();
             const ret_layout_val = ls.getLayout(ll.ret_layout);
             if (ret_layout_val.tag != .tag_union) unreachable;
-            const tu_layout = WasmLayout.tagUnionLayoutWithStore(ret_layout_val.data.tag_union.idx, ls);
+            const tu_layout = WasmLayout.tagUnionLayoutWithStore(ret_layout_val.getTagUnion().idx, ls);
             const disc_offset: u32 = tu_layout.discriminant_offset;
             const result_offset = try self.allocStackMemory(tu_layout.size, 4);
             const parse_spec = ll.op.numericParseSpec() orelse unreachable;
@@ -8501,7 +8501,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const ls = self.getLayoutStore();
             const box_layout_idx = self.procLocalLayoutIdx(box_expr);
             const box_layout = ls.getLayout(box_layout_idx);
-            const erased_box_ptr = box_layout.tag == .scalar and box_layout.data.scalar.tag == .opaque_ptr;
+            const erased_box_ptr = box_layout.tag == .scalar and box_layout.getScalar().tag == .opaque_ptr;
 
             if (box_layout.tag == .box_of_zst or
                 (erased_box_ptr and self.layoutByteSize(ll.ret_layout) == 0))
@@ -10604,7 +10604,7 @@ fn emitListEqWithElemLayout(self: *Self, lhs: ProcLocalId, rhs: ProcLocalId, ele
         const elem_l = ls.getLayout(elem_layout);
         if (elem_l.tag == .list) {
             // List of lists - use specialized host function with inner element size
-            const inner_elem_layout = elem_l.data.list;
+            const inner_elem_layout = elem_l.getIdx();
             const inner_elem_size = self.layoutByteSize(inner_elem_layout);
             const import_idx = self.list_list_eq_import orelse unreachable;
             try self.emitLocalGet(lhs_local);
@@ -12102,7 +12102,7 @@ fn resolveListElementPairLayout(self: *Self, ret_layout: layout.Idx) ListElement
     const ret_layout_val = ls.getLayout(ret_layout);
     if (ret_layout_val.tag != .struct_) unreachable;
 
-    const record_idx = ret_layout_val.data.struct_.idx;
+    const record_idx = ret_layout_val.getStruct().idx;
     const record_data = ls.getStructData(record_idx);
     const field0_layout = ls.getStructFieldLayout(record_idx, 0);
     const field1_layout = ls.getStructFieldLayout(record_idx, 1);
