@@ -30,7 +30,7 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
             total_size,
             roc_alloc.alignment,
         }) catch "\x1b[31mHost error:\x1b[0m allocation failed, out of memory\n";
-        _ = std.posix.write(2, msg) catch 0;
+        std.debug.print("{s}", .{msg});
         std.process.exit(1);
     };
 
@@ -97,7 +97,7 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
     // Perform reallocation
     const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
     const new_slice = allocator.realloc(old_slice, new_total_size) catch {
-        _ = std.posix.write(2, "\x1b[31mHost error:\x1b[0m reallocation failed, out of memory\n") catch 0;
+        std.debug.print("{s}", .{"\x1b[31mHost error:\x1b[0m reallocation failed, out of memory\n"});
         std.process.exit(1);
     };
 
@@ -134,7 +134,7 @@ fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaqu
     const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
     var buf: [512]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "\n\x1b[31mRoc crashed:\x1b[0m {s}\n", .{message}) catch "\n\x1b[31mRoc crashed\x1b[0m\n";
-    _ = std.posix.write(2, msg) catch 0;
+    std.debug.print("{s}", .{msg});
     std.process.exit(1);
 }
 
@@ -161,9 +161,9 @@ fn __main() callconv(.c) void {}
 // C compatible main for runtime
 fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     const exit_code = platform_main(argc, argv) catch |err| {
-        _ = std.posix.write(2, "HOST ERROR: ") catch 0;
-        _ = std.posix.write(2, @errorName(err)) catch 0;
-        _ = std.posix.write(2, "\n") catch 0;
+        std.debug.print("{s}", .{"HOST ERROR: "});
+        std.debug.print("{s}", .{@errorName(err)});
+        std.debug.print("{s}", .{"\n"});
         return 1;
     };
     return exit_code;
@@ -179,8 +179,8 @@ const RocOps = builtins.host_abi.RocOps;
 /// Returns {} and takes Str as argument
 fn hostedStderrLine(_: *anyopaque, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
     const message = args.str.asSlice();
-    _ = std.posix.write(2, message) catch 0;
-    _ = std.posix.write(2, "\n") catch 0;
+    std.debug.print("{s}", .{message});
+    std.debug.print("{s}", .{"\n"});
 }
 
 /// Hosted function: Stdin.line! (index 1 - sorted alphabetically)
@@ -189,7 +189,7 @@ fn hostedStderrLine(_: *anyopaque, _: *anyopaque, args: *const extern struct { s
 fn hostedStdinLine(ops: *RocOps, result: *RocStr, _: *anyopaque) callconv(.c) void {
     // Read a line from stdin
     var buffer: [4096]u8 = undefined;
-    const bytes_read = std.posix.read(0, &buffer) catch {
+    const bytes_read = std.Io.File.stdin().readStreaming(std.Options.debug_io, &.{&buffer}) catch {
         // Return empty string on error
         result.* = RocStr.empty();
         return;
@@ -224,8 +224,8 @@ fn hostedStdinLine(ops: *RocOps, result: *RocStr, _: *anyopaque) callconv(.c) vo
 /// Returns {} and takes Str as argument
 fn hostedStdoutLine(_: *anyopaque, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
     const message = args.str.asSlice();
-    _ = std.posix.write(1, message) catch 0;
-    _ = std.posix.write(1, "\n") catch 0;
+    std.Io.File.stdout().writeStreamingAll(std.Options.debug_io, message) catch {};
+    std.Io.File.stdout().writeStreamingAll(std.Options.debug_io, "\n") catch {};
 }
 
 /// Array of hosted function pointers, sorted alphabetically by fully-qualified name
