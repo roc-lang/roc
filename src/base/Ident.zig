@@ -559,7 +559,7 @@ test "Ident.Store empty CompactWriter roundtrip" {
     _ = try original.serialize(arena_allocator, &writer);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const file_size = writer.total_bytes;
@@ -626,7 +626,7 @@ test "Ident.Store basic CompactWriter roundtrip" {
     _ = try original.serialize(arena_allocator, &writer);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const file_size = writer.total_bytes;
@@ -708,7 +708,7 @@ test "Ident.Store with genUnique CompactWriter roundtrip" {
     _ = try original.serialize(arena_allocator, &writer);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const file_size = writer.total_bytes;
@@ -766,7 +766,7 @@ test "Ident.Store CompactWriter roundtrip" {
     _ = try original.serialize(arena_allocator, &writer);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const file_size = writer.total_bytes;
@@ -845,7 +845,7 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     _ = try original.serialize(arena_allocator, &writer);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const file_size = writer.total_bytes;

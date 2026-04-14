@@ -36,11 +36,11 @@ test "platform resolution - basic cli platform" {
         \\main = "Hello, World!"
     ;
 
-    var roc_file = temp_dir.dir.createFile("test.roc", .{}) catch unreachable;
-    defer roc_file.close();
-    roc_file.writeAll(roc_content) catch unreachable;
+    var roc_file = temp_dir.dir.createFile(std.testing.io, "test.roc", .{}) catch unreachable;
+    defer roc_file.close(std.testing.io);
+    roc_file.writeStreamingAll(std.testing.io, roc_content) catch unreachable;
 
-    const roc_path = try temp_dir.dir.realpathAlloc(allocs.gpa, "test.roc");
+    const roc_path = try temp_dir.dir.realPathFileAlloc(std.testing.io, "test.roc", allocs.gpa);
     defer allocs.gpa.free(roc_path);
 
     // This should return CliError since we don't have the actual CLI platform installed
@@ -70,11 +70,11 @@ test "platform resolution - no platform in file" {
         \\42 + 58
     ;
 
-    var roc_file = temp_dir.dir.createFile("test.roc", .{}) catch unreachable;
-    defer roc_file.close();
-    roc_file.writeAll(roc_content) catch unreachable;
+    var roc_file = temp_dir.dir.createFile(std.testing.io, "test.roc", .{}) catch unreachable;
+    defer roc_file.close(std.testing.io);
+    roc_file.writeStreamingAll(std.testing.io, roc_content) catch unreachable;
 
-    const roc_path = try temp_dir.dir.realpathAlloc(allocs.gpa, "test.roc");
+    const roc_path = try temp_dir.dir.realPathFileAlloc(std.testing.io, "test.roc", allocs.gpa);
     defer allocs.gpa.free(roc_path);
 
     const result = main.resolvePlatformPaths(&ctx, roc_path);
@@ -122,11 +122,11 @@ test "platform resolution - insecure HTTP URL rejected" {
         \\main = "Hello, World!"
     ;
 
-    var roc_file = temp_dir.dir.createFile("test.roc", .{}) catch unreachable;
-    defer roc_file.close();
-    roc_file.writeAll(roc_content) catch unreachable;
+    var roc_file = temp_dir.dir.createFile(std.testing.io, "test.roc", .{}) catch unreachable;
+    defer roc_file.close(std.testing.io);
+    roc_file.writeStreamingAll(std.testing.io, roc_content) catch unreachable;
 
-    const roc_path = try temp_dir.dir.realpathAlloc(allocs.gpa, "test.roc");
+    const roc_path = try temp_dir.dir.realPathFileAlloc(std.testing.io, "test.roc", allocs.gpa);
     defer allocs.gpa.free(roc_path);
 
     // Insecure HTTP URLs (not localhost) should fail validation
@@ -149,7 +149,7 @@ test "integration - shared memory setup and parsing" {
     defer allocs.deinit();
 
     // Get absolute path from current working directory
-    const cwd_path = std.Io.Dir.cwd().realpathAlloc(allocs.gpa, ".") catch return;
+    const cwd_path = std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocs.gpa) catch return;
     defer allocs.gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
@@ -200,7 +200,7 @@ test "integration - compilation pipeline for different platforms" {
     defer allocs.deinit();
 
     // Get absolute path from current working directory
-    const cwd_path = std.Io.Dir.cwd().realpathAlloc(allocs.gpa, ".") catch return;
+    const cwd_path = std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocs.gpa) catch return;
     defer allocs.gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
@@ -259,7 +259,7 @@ test "integration - error handling for non-existent file" {
     defer allocs.deinit();
 
     // Get absolute path from current working directory
-    const cwd_path = std.Io.Dir.cwd().realpathAlloc(allocs.gpa, ".") catch return;
+    const cwd_path = std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocs.gpa) catch return;
     defer allocs.gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
@@ -323,7 +323,7 @@ test "integration - automatic module dependency ordering" {
     defer allocs.deinit();
 
     // Get absolute path from current working directory
-    const cwd_path = std.Io.Dir.cwd().realpathAlloc(allocs.gpa, ".") catch return;
+    const cwd_path = std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocs.gpa) catch return;
     defer allocs.gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
@@ -381,7 +381,7 @@ test "integration - transitive module imports (module A imports module B)" {
     defer allocs.deinit();
 
     // Get absolute path from current working directory
-    const cwd_path = std.Io.Dir.cwd().realpathAlloc(allocs.gpa, ".") catch return;
+    const cwd_path = std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocs.gpa) catch return;
     defer allocs.gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
@@ -446,7 +446,7 @@ test "integration - diamond dependency pattern (A imports B and C, both import D
     defer allocs.deinit();
 
     // Get absolute path from current working directory
-    const cwd_path = std.Io.Dir.cwd().realpathAlloc(allocs.gpa, ".") catch return;
+    const cwd_path = std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocs.gpa) catch return;
     defer allocs.gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
@@ -501,7 +501,7 @@ test "integration - direct Core and Utils calls from app" {
     defer allocs.deinit();
 
     // Get absolute path from current working directory
-    const cwd_path = std.Io.Dir.cwd().realpathAlloc(allocs.gpa, ".") catch return;
+    const cwd_path = std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocs.gpa) catch return;
     defer allocs.gpa.free(cwd_path);
 
     // Create a CLI context for error reporting

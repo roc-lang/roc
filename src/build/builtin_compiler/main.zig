@@ -1787,7 +1787,7 @@ fn serializeModuleEnv(
     try serialized.serialize(env, arena_alloc, &writer);
 
     // Write to file
-    try writer.writeGather(arena_alloc, file, global_io);
+    try writer.writeGather(file, global_io);
 }
 
 /// Find a type declaration by name in a compiled module

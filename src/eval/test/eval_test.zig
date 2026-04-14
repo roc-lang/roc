@@ -892,13 +892,13 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
         var tmp_dir = testing.tmpDir(.{});
         defer tmp_dir.cleanup();
-        const tmp_file = try tmp_dir.dir.createFile("test_module_env.compact", .{ .read = true });
-        defer tmp_file.close();
+        const tmp_file = try tmp_dir.dir.createFile(std.testing.io, "test_module_env.compact", .{ .read = true });
+        defer tmp_file.close(std.testing.io);
 
         var writer = CompactWriter{
-            .iovecs = .{},
+            .iovecs = .empty,
             .total_bytes = 0,
-            .allocated_memory = .{},
+            .allocated_memory = .empty,
         };
         defer writer.deinit(arena_alloc);
 
@@ -911,13 +911,13 @@ test "ModuleEnv serialization and interpreter evaluation" {
         try serialized_ptr.serialize(&original_env, arena_alloc, &writer);
 
         // Write to file
-        try writer.writeGather(arena_alloc, tmp_file);
+        try writer.writeGather(tmp_file, std.testing.io);
 
         // Read back from file
-        const file_size = try tmp_file.getEndPos();
+        const file_size = writer.total_bytes;
         const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ModuleEnv)), @intCast(file_size));
         defer gpa.free(buffer);
-        _ = try tmp_file.pread(buffer, 0);
+        _ = try tmp_file.readPositionalAll(std.testing.io, buffer, 0);
 
         // Deserialize the ModuleEnv
         const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr + env_start_offset)));
@@ -2378,14 +2378,7 @@ test "early return: ? in closure passed to List.map" {
 
 test "early return: ? in closure passed to List.fold" {
     // Regression test: early return from closure in List.fold would crash
-    if (std.time.microTimestamp() >= 0) return error.SkipZigTest;
-    try runExpectI64(
-        \\{
-        \\    compute = |x| Ok(x?)
-        \\    result = List.fold([Ok(1), Err({})], [], |acc, x| List.append(acc, compute(x)))
-        \\    List.len(result)
-        \\}
-    , 2, .no_trace);
+    return error.SkipZigTest;
 }
 
 test "early return: ? in second argument of multi-arg call" {

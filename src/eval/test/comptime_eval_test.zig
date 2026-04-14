@@ -3314,10 +3314,10 @@ test "issue 9281: dev evaluator stack overflow with nested recursive opaque type
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const tmp_path = try tmp_dir.dir.realpathAlloc(test_allocator, ".");
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", test_allocator);
     defer test_allocator.free(tmp_path);
 
-    const repo_root = try std.Io.Dir.cwd().realpathAlloc(test_allocator, ".");
+    const repo_root = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", test_allocator);
     defer test_allocator.free(repo_root);
 
     const platform_main_path = try std.fs.path.join(test_allocator, &.{ repo_root, "test", "fx", "platform", "main.roc" });
@@ -3327,12 +3327,12 @@ test "issue 9281: dev evaluator stack overflow with nested recursive opaque type
     defer test_allocator.free(platform_header_path);
     std.mem.replaceScalar(u8, platform_header_path, '\\', '/');
 
-    try tmp_dir.dir.createDirPath("pkg");
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.createDirPath(std.testing.io, "pkg");
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "pkg/main.roc",
         .data = "package [Inner, Outer] {}\n",
     });
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "pkg/Inner.roc",
         .data =
         \\Inner := [
@@ -3341,7 +3341,7 @@ test "issue 9281: dev evaluator stack overflow with nested recursive opaque type
         \\]
         ,
     });
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "pkg/Outer.roc",
         .data =
         \\import Inner exposing [Inner]
@@ -3380,7 +3380,7 @@ test "issue 9281: dev evaluator stack overflow with nested recursive opaque type
     , .{platform_header_path});
     defer test_allocator.free(app_source);
 
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "app.roc",
         .data = app_source,
     });

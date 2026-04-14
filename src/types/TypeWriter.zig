@@ -260,18 +260,14 @@ pub fn writeWithoutConstraints(self: *TypeWriter, var_: Var) error{OutOfMemory, 
 /// 2. All on next line: "\n  where [a.plus : a -> a, b.minus : b -> b]"
 /// 3. One per line: "\n  where [\n    a.plus : a -> a,\n    b.minus : b -> b,\n  ]"
 fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_len: usize, format: Format) error{OutOfMemory, WriteFailed}!void {
-    var tmp_aw = collections_mod.managedWriter(&self.buf_tmp);
-    defer collections_mod.managedWriterFinish(&tmp_aw, &self.buf_tmp);
-    var tmp_writer: *ByteWrite = &tmp_aw.writer;
-
     // Ensure we have enough temp storage to collect dispatch constraints
     try self.static_dispatch_constraints_tmp.ensureUnusedCapacity(
         self.static_dispatch_constraints.items.len + 2,
     );
 
-    // Pre-allocate buffer space for constraint strings.
-    // Allocate 60 bytes for a potential from_numeral constraint (common and ~60 bytes),
-    // plus 30 bytes per additional constraint (estimated average).
+    // Pre-allocate buffer space for constraint strings BEFORE creating the
+    // managedWriter, because ensureUnusedCapacity on buf_tmp can reallocate,
+    // invalidating the writer's buffer pointer.
     try self.buf_tmp.ensureUnusedCapacity(
         60 + (self.static_dispatch_constraints.items.len - 1) * 30,
     );
@@ -286,31 +282,40 @@ fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_le
     // existing constraint data from nested types and gathering them for display.
     // (e.g., `!=` desugars to `is_eq().not()` - when printing the `is_eq` constraint's
     // return type `f`, we find that `f` has a `not` constraint which we also need to display)
-    var i: usize = 0;
     var total_constraint_len: usize = 0;
-    while (i < self.static_dispatch_constraints.items.len) : (i += 1) {
-        const item = self.static_dispatch_constraints.items[i];
+    {
+        // Use a block scope so the defer syncs buf_tmp before the sort/formatting below.
+        // While the writer is active, use tmp_aw.writer.end (not self.buf_tmp.items.len)
+        // to track positions, since writes go through the writer's internal state.
+        var tmp_aw = collections_mod.managedWriter(&self.buf_tmp);
+        defer collections_mod.managedWriterFinish(&tmp_aw, &self.buf_tmp);
+        var tmp_writer: *ByteWrite = &tmp_aw.writer;
 
-        const start = self.buf_tmp.items.len;
-        try self.writeVar(tmp_writer, item.dispatcher_var, root_var);
-        const type_name_end = self.buf_tmp.items.len;
+        var i: usize = 0;
+        while (i < self.static_dispatch_constraints.items.len) : (i += 1) {
+            const item = self.static_dispatch_constraints.items[i];
 
-        try tmp_writer.writeAll(".");
-        try tmp_writer.writeAll(self.idents.getText(item.constraint.fn_name));
-        try tmp_writer.writeAll(" : ");
+            const start = tmp_aw.writer.end;
+            try self.writeVar(tmp_writer, item.dispatcher_var, root_var);
+            const type_name_end = tmp_aw.writer.end;
 
-        try self.writeVar(tmp_writer, item.constraint.fn_var, root_var);
+            try tmp_writer.writeAll(".");
+            try tmp_writer.writeAll(self.idents.getText(item.constraint.fn_name));
+            try tmp_writer.writeAll(" : ");
 
-        const constraint_len = self.buf_tmp.items.len - start;
-        total_constraint_len += constraint_len;
+            try self.writeVar(tmp_writer, item.constraint.fn_var, root_var);
 
-        try self.static_dispatch_constraints_tmp.append(.{
-            .fn_name = item.constraint.fn_name,
-            .type_name_start = start,
-            .type_name_end = type_name_end,
-            .start = start,
-            .len = constraint_len,
-        });
+            const constraint_len = tmp_aw.writer.end - start;
+            total_constraint_len += constraint_len;
+
+            try self.static_dispatch_constraints_tmp.append(.{
+                .fn_name = item.constraint.fn_name,
+                .type_name_start = start,
+                .type_name_end = type_name_end,
+                .start = start,
+                .len = constraint_len,
+            });
+        }
     }
 
     // Sort constraints alphabetically by type name first, then by function name

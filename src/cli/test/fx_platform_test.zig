@@ -31,7 +31,7 @@ fn runDevBackendHostSelfTest(
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
 
     const output_path = try std.fs.path.join(allocator, &.{ tmp_path, "fx_dev_host_test" });
@@ -39,17 +39,18 @@ fn runDevBackendHostSelfTest(
 
     const cache_path = try std.fs.path.join(allocator, &.{ tmp_path, "roc-cache" });
     defer allocator.free(cache_path);
-    try tmp_dir.dir.createDirPath("roc-cache");
+    try tmp_dir.dir.createDirPath(std.testing.io, "roc-cache");
 
     const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_path});
     defer allocator.free(output_arg);
 
-    var env_map = try std.process.getEnvMap(allocator);
+    const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
+    const environ: std.process.Environ = .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
+    var env_map = try environ.createMap(allocator);
     defer env_map.deinit();
     try env_map.put("ROC_CACHE_DIR", cache_path);
 
-    const build_result = try std.process.run(.{
-        .allocator = allocator,
+    const build_result = try std.process.run(allocator, std.testing.io, .{
         .argv = &[_][]const u8{
             util.roc_binary_path,
             "build",
@@ -58,14 +59,13 @@ fn runDevBackendHostSelfTest(
             output_arg,
             roc_file,
         },
-        .env_map = &env_map,
-        .max_output_bytes = 10 * 1024 * 1024,
+        .environ_map = &env_map,
     });
     defer allocator.free(build_result.stdout);
     defer allocator.free(build_result.stderr);
 
     switch (build_result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 0) {
                 std.debug.print("roc build --opt=dev failed with exit code {}\n", .{code});
                 std.debug.print("STDOUT: {s}\n", .{build_result.stdout});
@@ -81,13 +81,11 @@ fn runDevBackendHostSelfTest(
         },
     }
 
-    return try std.process.run(.{
-        .allocator = allocator,
+    return try std.process.run(allocator, std.testing.io, .{
         .argv = &[_][]const u8{
             output_path,
             self_test_flag,
         },
-        .max_output_bytes = 10 * 1024 * 1024,
     });
 }
 
@@ -99,7 +97,7 @@ fn expectInterpreterRuntimeStackOverflow() !void {
     defer allocator.free(run_result.stderr);
 
     switch (run_result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 1) {
                 std.debug.print("Unexpected interpreter exit code: {}\n", .{code});
                 std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -129,7 +127,7 @@ fn expectDevRuntimeStackOverflow() !void {
     defer allocator.free(run_result.stderr);
 
     switch (run_result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 134) {
                 std.debug.print("Unexpected dev exit code: {}\n", .{code});
                 std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -140,7 +138,7 @@ fn expectDevRuntimeStackOverflow() !void {
             try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Roc crashed:") == null);
             try testing.expect(std.mem.indexOf(u8, run_result.stderr, "panic:") == null);
         },
-        .Signal => |sig| {
+        .signal => |sig| {
             std.debug.print("Host self-test crashed with signal {}\n", .{sig});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.StackOverflowNotHandled;
@@ -160,7 +158,7 @@ fn expectInterpreterRuntimeDivisionByZero() !void {
     defer allocator.free(run_result.stderr);
 
     switch (run_result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 1) {
                 std.debug.print("Unexpected interpreter exit code: {}\n", .{code});
                 std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -190,7 +188,7 @@ fn expectDevRuntimeDivisionByZero() !void {
     defer allocator.free(run_result.stderr);
 
     switch (run_result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 136) {
                 std.debug.print("Unexpected dev exit code: {}\n", .{code});
                 std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -201,7 +199,7 @@ fn expectDevRuntimeDivisionByZero() !void {
             try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Roc crashed:") == null);
             try testing.expect(std.mem.indexOf(u8, run_result.stderr, "panic:") == null);
         },
-        .Signal => |sig| {
+        .signal => |sig| {
             std.debug.print("Host self-test crashed with signal {}\n", .{sig});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.DivisionByZeroNotHandled;
@@ -405,7 +403,7 @@ test "fx platform check unused state var reports correct errors" {
 
     // The check should fail with errors
     switch (run_result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code == 0) {
                 std.debug.print("ERROR: roc check succeeded but we expected it to fail with errors\n", .{});
                 return error.UnexpectedSuccess;
@@ -538,7 +536,7 @@ test "custom platform and package qualifiers work in roc run" {
 
     // Check that roc run succeeded
     switch (run_result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 0) {
                 std.debug.print("\n❌ Run with custom qualifiers failed with exit code {}\n", .{code});
                 std.debug.print("STDOUT:\n{s}\n", .{run_result.stdout});
@@ -577,7 +575,7 @@ test "fx platform string interpolation type mismatch (interpreter)" {
 
     // The program should run (exit 0) with --allow-errors despite type errors
     switch (run_result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             try testing.expectEqual(@as(u8, 0), code);
         },
         else => {
@@ -613,26 +611,25 @@ test "fx platform run from different cwd" {
     const allocator = testing.allocator;
 
     // Get absolute path to roc binary since we'll change cwd
-    const roc_abs_path = try std.Io.Dir.cwd().realpathAlloc(allocator, util.roc_binary_path);
+    const roc_abs_path = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, util.roc_binary_path, allocator);
     defer allocator.free(roc_abs_path);
     var env_map = try util.buildIsolatedTestEnvMap(allocator, null);
     defer env_map.deinit();
 
     // Run roc from the test/fx directory with a relative path to app.roc
-    const run_result = try std.process.run(.{
-        .allocator = allocator,
+    const run_result = try std.process.run(allocator, std.testing.io, .{
         .argv = &[_][]const u8{
             roc_abs_path,
             "app.roc",
         },
-        .cwd = "test/fx",
-        .env_map = &env_map,
+        .cwd = .{ .path = "test/fx" },
+        .environ_map = &env_map,
     });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
     switch (run_result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 0) {
                 std.debug.print("Run failed with exit code {}\n", .{code});
                 std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
@@ -794,7 +791,7 @@ test "fx platform test_type_mismatch" {
     // This file is expected to fail compilation with a type mismatch error
     // The to_inspect method returns I64 instead of Str
     switch (run_result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 0) {
                 // Expected to fail - check for type mismatch error message
                 try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
@@ -822,7 +819,7 @@ test "fx platform issue8433" {
     // This file is expected to fail compilation with a TYPE MISMATCH error
     // (number literal used where Str is expected in string interpolation)
     switch (run_result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 0) {
                 // Expected to fail - check for type mismatch error message
                 try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
@@ -914,8 +911,8 @@ test "run with --allow-errors handles type mismatch in function args" {
     // Must not crash with SIGABRT — the process should exit cleanly (or with
     // a runtime error exit code), not be killed by a signal.
     switch (run_result.term) {
-        .Exited => {},
-        .Signal => |sig| {
+        .exited => {},
+        .signal => |sig| {
             std.debug.print("CRASH: process killed by signal {}\n", .{sig});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.TestUnexpectedResult;
@@ -1115,8 +1112,7 @@ test "fx platform inline expect fails in dev backend binary" {
     try util.checkSuccess(build_result);
 
     // Run the built binary
-    const run_result = try std.process.run(.{
-        .allocator = allocator,
+    const run_result = try std.process.run(allocator, std.testing.io, .{
         .argv = &[_][]const u8{"./issue8517"},
     });
     defer allocator.free(run_result.stdout);
@@ -1124,14 +1120,14 @@ test "fx platform inline expect fails in dev backend binary" {
 
     // Should exit with non-zero code (expect failure)
     switch (run_result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code == 0) {
                 std.debug.print("ERROR: dev backend binary exited with 0 but expect 1 == 2 should fail\n", .{});
                 std.debug.print("STDERR: {s}\n", .{run_result.stderr});
                 return error.UnexpectedSuccess;
             }
         },
-        .Signal => |sig| {
+        .signal => |sig| {
             std.debug.print("ERROR: dev backend binary crashed with signal {} instead of clean expect failure\n", .{sig});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.SegFault;
@@ -1246,7 +1242,7 @@ test "fx platform issue8826 app vs platform type mismatch" {
     // - App has: main! : List(Str) => Try({}, [Exit(I32)])
     // - Platform requires: main! : () => {}
     switch (run_result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 0) {
                 // Expected to fail - check for type mismatch error message
                 try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
@@ -1397,7 +1393,7 @@ test "fx platform issue9118 try operator on tuple in type method (interpreter)" 
     // the type error gracefully.
 
     switch (run_result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code == 0) {
                 std.debug.print("Expected type error but test succeeded\n", .{});
                 return error.UnexpectedSuccess;
@@ -1417,7 +1413,7 @@ test "fx platform issue9118 try operator on tuple in type method (interpreter)" 
                 return error.ExpectedTryMention;
             }
         },
-        .Signal => |sig| {
+        .signal => |sig| {
             // This is the bug we're testing for - it should NOT crash with a signal
             std.debug.print("CRITICAL: Test crashed with signal {} (this is the bug we're testing for)\n", .{sig});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});

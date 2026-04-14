@@ -359,21 +359,21 @@ fn forkAndExecute(
     dev_eval: *DevEvaluator,
     executable: *backend.ExecutableMemory,
 ) DevEvalError![]const u8 {
-    const pipe_fds = posix.pipe() catch {
-        return error.PipeCreationFailed;
-    };
+    var pipe_fds: [2]posix.fd_t = undefined;
+    if (std.c.pipe(&pipe_fds) != 0) return error.PipeCreationFailed;
     const pipe_read = pipe_fds[0];
     const pipe_write = pipe_fds[1];
 
-    const fork_result = posix.fork() catch {
-        posix.close(pipe_read);
-        posix.close(pipe_write);
+    const fork_result = std.c.fork();
+    if (fork_result < 0) {
+        _ = std.c.close(pipe_read);
+        _ = std.c.close(pipe_write);
         return error.ForkFailed;
-    };
+    }
 
     if (fork_result == 0) {
         // Child process
-        posix.close(pipe_read);
+        _ = std.c.close(pipe_read);
 
         // Use page_allocator in child — testing.allocator's leak tracking is
         // meaningless since we exit via _exit and no defers run.
@@ -390,35 +390,38 @@ fn forkAndExecute(
                 else => {},
             }
             std.debug.print("\n", .{});
-            posix.close(pipe_write);
+            _ = std.c.close(pipe_write);
             std.c._exit(1);
         };
 
         // Write the result string to the pipe
         var written: usize = 0;
         while (written < result_str.len) {
-            written += posix.write(pipe_write, result_str[written..]) catch {
-                posix.close(pipe_write);
+            const result = std.c.write(pipe_write, result_str[written..].ptr, result_str.len - written);
+            if (result < 0) {
+                _ = std.c.close(pipe_write);
                 std.c._exit(1);
-            };
+            }
+            written += @intCast(result);
         }
 
-        posix.close(pipe_write);
+        _ = std.c.close(pipe_write);
         std.c._exit(0);
     } else {
         // Parent process
-        posix.close(pipe_write);
+        _ = std.c.close(pipe_write);
 
         // Wait for child to exit
-        const wait_result = posix.waitpid(fork_result, 0);
-        const status = wait_result.status;
+        var status: c_int = undefined;
+        _ = std.c.waitpid(fork_result, &status, 0);
 
         // Parse the wait status (Unix encoding)
-        const termination_signal: u8 = @truncate(status & 0x7f);
+        const raw_status: u32 = @bitCast(status);
+        const termination_signal: u8 = @truncate(raw_status & 0x7f);
 
         if (termination_signal != 0) {
             // Child was killed by a signal (e.g. SIGSEGV)
-            posix.close(pipe_read);
+            _ = std.c.close(pipe_read);
             std.debug.print("\nChild process killed by signal {d} (", .{termination_signal});
             switch (termination_signal) {
                 11 => std.debug.print("SIGSEGV", .{}),
@@ -432,9 +435,9 @@ fn forkAndExecute(
             return error.ChildSegfaulted;
         }
 
-        const exit_code: u8 = @truncate((status >> 8) & 0xff);
+        const exit_code: u8 = @truncate((raw_status >> 8) & 0xff);
         if (exit_code != 0) {
-            posix.close(pipe_read);
+            _ = std.c.close(pipe_read);
             return error.ChildExecFailed;
         }
 
@@ -445,17 +448,17 @@ fn forkAndExecute(
         var read_buf: [4096]u8 = undefined;
         while (true) {
             const bytes_read = posix.read(pipe_read, &read_buf) catch {
-                posix.close(pipe_read);
+                _ = std.c.close(pipe_read);
                 return error.ChildExecFailed;
             };
             if (bytes_read == 0) break;
             result_buf.appendSlice(allocator, read_buf[0..bytes_read]) catch {
-                posix.close(pipe_read);
+                _ = std.c.close(pipe_read);
                 return error.OutOfMemory;
             };
         }
 
-        posix.close(pipe_read);
+        _ = std.c.close(pipe_read);
         return result_buf.toOwnedSlice(allocator) catch return error.OutOfMemory;
     }
 }

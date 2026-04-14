@@ -539,15 +539,15 @@ pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, exe_dis
         };
 
         // Try to create the fd file
-        const fd_file = std.Io.Dir.cwd().createFile(dir_name_with_txt, .{ .exclusive = true }) catch |err| switch (err) {
+        const fd_file = std.Io.Dir.cwd().createFile(std.Options.debug_io, dir_name_with_txt, .{ .exclusive = true }) catch |err| switch (err) {
             error.PathAlreadyExists => {
                 // File already exists, remove the directory and try again
-                std.Io.Dir.cwd().deleteDir(temp_dir_path) catch {};
+                std.Io.Dir.cwd().deleteDir(std.Options.debug_io, temp_dir_path) catch {};
                 continue;
             },
             else => {
                 // Clean up directory on other errors
-                std.Io.Dir.cwd().deleteDir(temp_dir_path) catch {};
+                std.Io.Dir.cwd().deleteDir(std.Options.debug_io, temp_dir_path) catch {};
                 return err;
             },
         };
@@ -556,12 +556,12 @@ pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, exe_dis
         // Write shared memory info to file (POSIX only - Windows uses command line args)
         const fd_str = try std.fmt.allocPrint(allocs.arena, "{}\n{}", .{ shm_handle.fd, shm_handle.size });
 
-        try fd_file.writeAll(fd_str);
+        try fd_file.writeStreamingAll(std.Options.debug_io, fd_str);
 
         // IMPORTANT: Flush and close the file explicitly before spawning child process
         // On Windows, having the file open can prevent child process access
-        try fd_file.sync(); // Ensure data is written to disk
-        fd_file.close();
+        try fd_file.sync(std.Options.debug_io); // Ensure data is written to disk
+        fd_file.close(std.Options.debug_io);
 
         // Create hardlink to executable in temp directory with display name
         const temp_exe_path = try std.fs.path.join(allocs.arena, &.{ temp_dir_path, exe_display_name });
@@ -1630,8 +1630,8 @@ fn rocRunDevShim(ctx: *CliContext, args: cli_args.RunArgs) !void {
 /// Extract the dev shim library to the given output path.
 fn extractDevShimLibrary(output_path: []const u8, target: ?roc_target.RocTarget) !void {
     if (builtin.is_test) {
-        const shim_file = try std.Io.Dir.cwd().createFile(output_path, .{});
-        defer shim_file.close();
+        const shim_file = try std.Io.Dir.cwd().createFile(std.Options.debug_io, output_path, .{});
+        defer shim_file.close(std.Options.debug_io);
         return;
     }
 
@@ -1926,7 +1926,7 @@ fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_h
         } }),
     };
 
-    const cwd = std.Io.Dir.cwd().realpathAlloc(ctx.arena, ".") catch {
+    const cwd = std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, ".", ctx.arena) catch {
         return ctx.fail(.{ .directory_not_found = .{
             .path = ".",
         } });
@@ -3469,8 +3469,8 @@ pub fn extractReadRocFilePathShimLibrary(ctx: *CliContext, output_path: []const 
 
     if (builtin.is_test) {
         // In test mode, create an empty file to avoid embedding issues
-        const shim_file = try std.Io.Dir.cwd().createFile(output_path, .{});
-        defer shim_file.close();
+        const shim_file = try std.Io.Dir.cwd().createFile(std.Options.debug_io, output_path, .{});
+        defer shim_file.close(std.Options.debug_io);
         return;
     }
 
@@ -6888,11 +6888,10 @@ fn printVerboseStats(writer: anytype, result: *const CheckResult) void {
 }
 
 /// Start an HTTP server to serve the generated documentation
-fn serveDocumentation(ctx: *CliContext, docs_dir: []const u8) !void {
+fn serveDocumentation(ctx: *CliContext, _: []const u8) !void {
     const stdout = ctx.io.stdout();
 
     // TODO: Zig 0.16 removed std.net — needs migration to std.Io networking API
-    _ = docs_dir;
     stdout.print("Error: Documentation server not yet supported with Zig 0.16\n", .{}) catch {};
     return error.Unexpected;
 }

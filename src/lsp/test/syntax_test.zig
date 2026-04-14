@@ -9,7 +9,7 @@ const completion_context = @import("../completion/context.zig");
 
 fn platformPath(allocator: std.mem.Allocator) ![]u8 {
     // Resolve from repo root to ensure absolute path
-    const repo_root = try std.Io.Dir.cwd().realpathAlloc(allocator, ".");
+    const repo_root = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(repo_root);
     const path = try std.fs.path.join(allocator, &.{ repo_root, "test", "str", "platform", "main.roc" });
     // Convert backslashes to forward slashes for cross-platform Roc source compatibility
@@ -58,10 +58,10 @@ const TestHarness = struct {
 
     /// Write a file to the tmp directory and register its path and URI.
     fn writeFile(self: *TestHarness, filename: []const u8, data: []const u8) !void {
-        try self.tmp.dir.writeFile(.{ .sub_path = filename, .data = data });
+        try self.tmp.dir.writeFile(std.testing.io, .{ .sub_path = filename, .data = data });
         if (self.file_path) |f| self.allocator.free(f);
         if (self.uri) |u| self.allocator.free(u);
-        self.file_path = try self.tmp.dir.realpathAlloc(self.allocator, filename);
+        self.file_path = try self.tmp.dir.realPathFileAlloc(std.testing.io, filename, self.allocator);
         self.uri = try uri_util.pathToUri(self.allocator, self.file_path.?);
     }
 

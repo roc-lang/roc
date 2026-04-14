@@ -26,7 +26,7 @@ fn runGlueCommand(
 }
 
 fn checkGlueSuccess(result: util.RocResult, label: []const u8) !void {
-    if (result.term != .Exited or result.term.Exited != 0) {
+    if (result.term != .exited or result.term.exited != 0) {
         std.debug.print("\n{s} command failed!\nstderr:\n{s}\nstdout:\n{s}\nExit term: {}\n", .{
             label, result.stderr, result.stdout, result.term,
         });
@@ -39,7 +39,7 @@ test "glue command with DebugGlue succeeds (interpreter)" {
 
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    const tmp_path = tmp_dir.dir.realpathAlloc(allocator, ".") catch unreachable;
+    const tmp_path = tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator) catch unreachable;
     defer allocator.free(tmp_path);
 
     const result = try runGlueCommand(allocator, "--opt=interpreter", "src/glue/src/DebugGlue.roc", tmp_path);
@@ -65,7 +65,7 @@ test "glue command with CGlue generates expected C header (interpreter)" {
 
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    const tmp_path = tmp_dir.dir.realpathAlloc(allocator, ".") catch unreachable;
+    const tmp_path = tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator) catch unreachable;
     defer allocator.free(tmp_path);
 
     const result = try runGlueCommand(allocator, "--opt=interpreter", "src/glue/src/CGlue.roc", tmp_path);
@@ -78,7 +78,7 @@ test "glue command with CGlue generates expected C header (interpreter)" {
     const generated_path = std.fs.path.join(allocator, &.{ tmp_path, "roc_platform_abi.h" }) catch unreachable;
     defer allocator.free(generated_path);
 
-    const generated_content = std.Io.Dir.cwd().readFileAlloc(allocator, generated_path, 1024 * 1024) catch |err| {
+    const generated_content = std.Io.Dir.cwd().readFileAlloc(std.testing.io, generated_path, allocator, .limited(1024 * 1024)) catch |err| {
         std.debug.print("\nFailed to read generated file '{s}': {}\n", .{ generated_path, err });
         try std.testing.expect(false);
         unreachable;
@@ -86,7 +86,7 @@ test "glue command with CGlue generates expected C header (interpreter)" {
     defer allocator.free(generated_content);
 
     // Read the expected header file
-    const expected_content = std.Io.Dir.cwd().readFileAlloc(allocator, "test/glue/fx_platform_cglue_expected.h", 1024 * 1024) catch |err| {
+    const expected_content = std.Io.Dir.cwd().readFileAlloc(std.testing.io, "test/glue/fx_platform_cglue_expected.h", allocator, .limited(1024 * 1024)) catch |err| {
         std.debug.print("\nFailed to read expected file: {}\n", .{err});
         try std.testing.expect(false);
         unreachable;
@@ -127,7 +127,7 @@ test "glue command generated C header compiles with zig cc (interpreter)" {
 
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    const tmp_path = tmp_dir.dir.realpathAlloc(allocator, ".") catch unreachable;
+    const tmp_path = tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator) catch unreachable;
     defer allocator.free(tmp_path);
 
     const glue_result = try runGlueCommand(allocator, "--opt=interpreter", "src/glue/src/CGlue.roc", tmp_path);
@@ -153,7 +153,7 @@ test "glue command generated C header compiles with zig cc (interpreter)" {
     const test_c_path = std.fs.path.join(allocator, &.{ tmp_path, "test_header.c" }) catch unreachable;
     defer allocator.free(test_c_path);
 
-    std.Io.Dir.cwd().writeFile(.{
+    std.Io.Dir.cwd().writeFile(std.testing.io, .{
         .sub_path = test_c_path,
         .data = test_c_content,
     }) catch |err| {
@@ -169,8 +169,7 @@ test "glue command generated C header compiles with zig cc (interpreter)" {
     defer allocator.free(include_flag);
 
     // Run: zig cc -c -std=c11 -Wall -Werror -I<tmp_path> test_header.c -o test_header.o
-    const cc_result = std.process.run(.{
-        .allocator = allocator,
+    const cc_result = std.process.run(allocator, std.testing.io, .{
         .argv = &.{
             "zig",
             "cc",
@@ -192,12 +191,12 @@ test "glue command generated C header compiles with zig cc (interpreter)" {
     defer allocator.free(cc_result.stderr);
 
     // Check compilation succeeded
-    if (cc_result.term != .Exited or cc_result.term.Exited != 0) {
+    if (cc_result.term != .exited or cc_result.term.exited != 0) {
         // Read the generated header for debugging
         const header_path = std.fs.path.join(allocator, &.{ tmp_path, "roc_platform_abi.h" }) catch unreachable;
         defer allocator.free(header_path);
 
-        const header_content = std.Io.Dir.cwd().readFileAlloc(allocator, header_path, 1024 * 1024) catch "<failed to read header>";
+        const header_content = std.Io.Dir.cwd().readFileAlloc(std.testing.io, header_path, allocator, .limited(1024 * 1024)) catch "<failed to read header>";
         defer if (header_content.ptr != "<failed to read header>".ptr) allocator.free(header_content);
 
         std.debug.print("\nzig cc compilation failed!\n", .{});
@@ -219,7 +218,7 @@ test "glue command with ZigGlue succeeds (interpreter)" {
 
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    const tmp_path = tmp_dir.dir.realpathAlloc(allocator, ".") catch unreachable;
+    const tmp_path = tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator) catch unreachable;
     defer allocator.free(tmp_path);
 
     const result = try runGlueCommand(allocator, "--opt=interpreter", "src/glue/src/ZigGlue.roc", tmp_path);
@@ -233,7 +232,7 @@ test "glue command with ZigGlue succeeds (interpreter)" {
     const generated_path = std.fs.path.join(allocator, &.{ tmp_path, "roc_platform_abi.zig" }) catch unreachable;
     defer allocator.free(generated_path);
 
-    const generated_content = std.Io.Dir.cwd().readFileAlloc(allocator, generated_path, 1024 * 1024) catch |err| {
+    const generated_content = std.Io.Dir.cwd().readFileAlloc(std.testing.io, generated_path, allocator, .limited(1024 * 1024)) catch |err| {
         std.debug.print("\nFailed to read generated file '{s}': {}\n", .{ generated_path, err });
         try std.testing.expect(false);
         unreachable;
@@ -272,7 +271,7 @@ test "CGlue.roc expect tests pass (interpreter)" {
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "unreachable") == null);
 
     // Should complete successfully
-    if (result.term != .Exited or result.term.Exited != 0) {
+    if (result.term != .exited or result.term.exited != 0) {
         std.debug.print("\nroc test CGlue.roc failed!\nstderr:\n{s}\nstdout:\n{s}\n", .{ result.stderr, result.stdout });
         std.debug.print("Exit term: {}\n", .{result.term});
         try std.testing.expect(false);

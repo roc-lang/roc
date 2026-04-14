@@ -15,19 +15,23 @@ pub const RocResult = struct {
 
 fn createIsolatedTestCacheDir(allocator: std.mem.Allocator) ![]u8 {
     const cache_dir_id = next_cache_dir_id.fetchAdd(1, .monotonic);
+    // Get a nanosecond timestamp for uniqueness across runs
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(.MONOTONIC, &ts);
+    const nano_ts: u64 = @intCast(ts.sec * std.time.ns_per_s + ts.nsec);
     const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{d}", .{
-        @as(u64, @intCast(std.time.nanoTimestamp())),
+        nano_ts,
         cache_dir_id,
     });
     defer allocator.free(cache_leaf);
 
-    const cwd_path = try std.Io.Dir.cwd().realpathAlloc(allocator, ".");
+    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(cwd_path);
 
     const cache_rel = try std.fs.path.join(allocator, &.{ ".zig-cache", "roc-test-cache", cache_leaf });
     defer allocator.free(cache_rel);
 
-    std.Io.Dir.cwd().createDirPath(cache_rel) catch |err| switch (err) {
+    std.Io.Dir.cwd().createDirPath(std.testing.io, cache_rel) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
@@ -40,9 +44,11 @@ fn createIsolatedTestCacheDir(allocator: std.mem.Allocator) ![]u8 {
 /// unique cache root so CLI tests do not share cache state accidentally.
 pub fn buildIsolatedTestEnvMap(
     allocator: std.mem.Allocator,
-    extra_env: ?*const std.process.EnvMap,
-) !std.process.EnvMap {
-    var env_map = try std.process.getEnvMap(allocator);
+    extra_env: ?*const std.process.Environ.Map,
+) !std.process.Environ.Map {
+    const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
+    const environ: std.process.Environ = .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
+    var env_map = try environ.createMap(allocator);
     errdefer env_map.deinit();
 
     if (extra_env) |extra| {
@@ -65,17 +71,15 @@ fn runChild(
     allocator: std.mem.Allocator,
     argv: []const []const u8,
     cwd_path: []const u8,
-    extra_env: ?*const std.process.EnvMap,
+    extra_env: ?*const std.process.Environ.Map,
 ) !RocResult {
     var env_map = try buildIsolatedTestEnvMap(allocator, extra_env);
     defer env_map.deinit();
 
-    const result = try std.process.run(.{
-        .allocator = allocator,
+    const result = try std.process.run(allocator, std.testing.io, .{
         .argv = argv,
-        .cwd = cwd_path,
-        .env_map = &env_map,
-        .max_output_bytes = 10 * 1024 * 1024, // 10MB
+        .cwd = .{ .path = cwd_path },
+        .environ_map = &env_map,
     });
 
     return RocResult{
@@ -94,10 +98,10 @@ pub fn runRocCommand(allocator: std.mem.Allocator, args: []const []const u8) !Ro
 pub fn runRocCommandWithEnv(
     allocator: std.mem.Allocator,
     args: []const []const u8,
-    extra_env: ?*const std.process.EnvMap,
+    extra_env: ?*const std.process.Environ.Map,
 ) !RocResult {
     // Get absolute path to roc binary from current working directory
-    const cwd_path = try std.Io.Dir.cwd().realpathAlloc(allocator, ".");
+    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(cwd_path);
     const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
     const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
@@ -123,10 +127,10 @@ pub fn runRocWithEnv(
     allocator: std.mem.Allocator,
     args: []const []const u8,
     test_file_path: []const u8,
-    extra_env: ?*const std.process.EnvMap,
+    extra_env: ?*const std.process.Environ.Map,
 ) !RocResult {
     // Get absolute path to roc binary from current working directory
-    const cwd_path = try std.Io.Dir.cwd().realpathAlloc(allocator, ".");
+    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(cwd_path);
     const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
     const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
@@ -164,7 +168,7 @@ pub fn checkSuccess(result: RocResult) !void {
     }
 
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 0) {
                 std.debug.print("Run failed with exit code {}\n", .{code});
                 std.debug.print("STDOUT: {s}\n", .{result.stdout});
@@ -172,7 +176,7 @@ pub fn checkSuccess(result: RocResult) !void {
                 return error.RunFailed;
             }
         },
-        .Signal => |sig| {
+        .signal => |sig| {
             std.debug.print("Process terminated by signal: {}\n", .{sig});
             std.debug.print("STDOUT: {s}\n", .{result.stdout});
             std.debug.print("STDERR: {s}\n", .{result.stderr});
@@ -191,13 +195,13 @@ pub fn checkSuccess(result: RocResult) !void {
 /// Verifies the process exited cleanly with a non-zero code, NOT that it crashed.
 pub fn checkFailure(result: RocResult) !void {
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code == 0) {
                 std.debug.print("ERROR: roc succeeded but we expected it to fail\n", .{});
                 return error.UnexpectedSuccess;
             }
         },
-        .Signal => |sig| {
+        .signal => |sig| {
             std.debug.print("ERROR: Process crashed with signal {} (expected clean failure with non-zero exit code)\n", .{sig});
             std.debug.print("STDOUT: {s}\n", .{result.stdout});
             std.debug.print("STDERR: {s}\n", .{result.stderr});
@@ -222,14 +226,14 @@ pub fn checkTestSuccess(result: RocResult) !void {
     }
 
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 0) {
                 std.debug.print("Test failed with exit code {}\n", .{code});
                 std.debug.print("STDERR: {s}\n", .{result.stderr});
                 return error.TestFailed;
             }
         },
-        .Signal => |sig| {
+        .signal => |sig| {
             std.debug.print("Process terminated by signal: {}\n", .{sig});
             std.debug.print("STDERR: {s}\n", .{result.stderr});
             return error.SegFault;
@@ -245,7 +249,7 @@ pub fn checkTestSuccess(result: RocResult) !void {
 /// Helper to run roc with stdin input (for REPL testing)
 pub fn runRocWithStdin(allocator: std.mem.Allocator, args: []const []const u8, stdin_input: []const u8) !RocResult {
     // Get absolute path to roc binary from current working directory
-    const cwd_path = try std.Io.Dir.cwd().realpathAlloc(allocator, ".");
+    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(cwd_path);
     const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
     const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
@@ -259,30 +263,42 @@ pub fn runRocWithStdin(allocator: std.mem.Allocator, args: []const []const u8, s
     defer allocator.free(argv);
 
     // Run roc with stdin pipe
-    var child = std.process.Child.init(argv, allocator);
     var env_map = try buildIsolatedTestEnvMap(allocator, null);
     defer env_map.deinit();
-    child.stdin_behavior = .Pipe;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    child.cwd = cwd_path;
-    child.env_map = &env_map;
 
-    try child.spawn();
+    var child = try std.process.spawn(std.testing.io, .{
+        .argv = argv,
+        .stdin = .pipe,
+        .stdout = .pipe,
+        .stderr = .pipe,
+        .cwd = .{ .path = cwd_path },
+        .environ_map = &env_map,
+    });
+    defer child.kill(std.testing.io);
 
     // Write input to stdin and close it
-    try child.stdin.?.writeAll(stdin_input);
-    child.stdin.?.close();
+    child.stdin.?.writeStreamingAll(std.testing.io, stdin_input) catch {};
+    child.stdin.?.close(std.testing.io);
     child.stdin = null;
 
-    // Collect output before waiting
-    const stdout = try child.stdout.?.readToEndAlloc(allocator, 10 * 1024 * 1024);
-    errdefer allocator.free(stdout);
-    const stderr = try child.stderr.?.readToEndAlloc(allocator, 10 * 1024 * 1024);
-    errdefer allocator.free(stderr);
+    // Collect output using MultiReader
+    var multi_reader_buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
+    var multi_reader: std.Io.File.MultiReader = undefined;
+    multi_reader.init(allocator, std.testing.io, multi_reader_buffer.toStreams(), &.{ child.stdout.?, child.stderr.? });
+    defer multi_reader.deinit();
 
-    // Wait for completion
-    const term = try child.wait();
+    while (multi_reader.fill(64, .none)) |_| {} else |err| switch (err) {
+        error.EndOfStream => {},
+        else => |e| return e,
+    }
+    try multi_reader.checkAnyError();
+
+    const term = try child.wait(std.testing.io);
+
+    const stdout = try multi_reader.toOwnedSlice(0);
+    errdefer allocator.free(stdout);
+    const stderr = try multi_reader.toOwnedSlice(1);
+    errdefer allocator.free(stderr);
 
     return RocResult{
         .stdout = stdout,

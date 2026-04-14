@@ -37,11 +37,9 @@ pub fn init() CompactWriter {
 /// Write all gathered buffers to a file sequentially using positional writes.
 pub fn writeGather(
     self: *@This(),
-    allocator: std.mem.Allocator,
     file: std.Io.File,
     io: std.Io,
 ) !void {
-    _ = allocator;
     var offset: u64 = 0;
     for (self.iovecs.items) |iovec| {
         const bytes = @as([*]const u8, @ptrCast(iovec.iov_base))[0..iovec.iov_len];

@@ -507,7 +507,8 @@ test "Channel producer-consumer coordination" {
     const producer = try std.Thread.spawn(.{}, struct {
         fn run(channel: *Channel(u32)) void {
             for (0..5) |i| {
-                std.Thread.sleep(1_000_000); // 1ms delay
+                // 1ms delay
+                _ = std.c.nanosleep(&.{ .sec = 0, .nsec = 1_000_000 }, null);
                 channel.send(@as(u32, @intCast(i))) catch return;
             }
         }

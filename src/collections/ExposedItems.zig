@@ -251,7 +251,7 @@ test "ExposedItems empty CompactWriter roundtrip" {
     _ = try original.serialize(allocator, &writer);
 
     // Write to file
-    try writer.writeGather(allocator, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);
@@ -307,7 +307,7 @@ test "ExposedItems basic CompactWriter roundtrip" {
     _ = try original.serialize(allocator, &writer);
 
     // Write to file
-    try writer.writeGather(allocator, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ExposedItems.Serialized)), writer.total_bytes);
@@ -363,7 +363,7 @@ test "ExposedItems with duplicates CompactWriter roundtrip" {
     _ = try original.serialize(allocator, &writer);
 
     // Write to file
-    try writer.writeGather(allocator, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ExposedItems.Serialized)), writer.total_bytes);
@@ -428,7 +428,7 @@ test "ExposedItems comprehensive CompactWriter roundtrip" {
     _ = try original.serialize(allocator, &writer);
 
     // Write to file
-    try writer.writeGather(allocator, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const serialized_align = @alignOf(ExposedItems);
@@ -496,7 +496,7 @@ test "ExposedItems edge cases CompactWriter roundtrip" {
         _ = try exposed.serialize(allocator, &writer);
 
         // Test writeGather
-        try writer.writeGather(allocator, file, io);
+        try writer.writeGather(file, io);
 
         // Read back and verify
         const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ExposedItems.Serialized)), writer.total_bytes);
