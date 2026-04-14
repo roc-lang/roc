@@ -122,10 +122,10 @@ fn addRocExportedFunction(builder: *Builder, entrypoint_fn: Builder.Function.Ind
 
     // Call roc_entrypoint(entry_idx, ops, ret_ptr, arg_ptr)
     const call_args = [_]Builder.Value{ idx_const.toValue(), ops_ptr, ret_ptr, arg_ptr };
-    try wip.call(.normal, .ccc, .none, entrypoint_fn.typeOf(builder), entrypoint_fn.toValue(builder), &call_args, "");
+    _ = try wip.call(.normal, .ccc, .none, entrypoint_fn.typeOf(builder), entrypoint_fn.toValue(builder), &call_args, "");
 
     // Return void
-    try wip.retVoid();
+    _ = try wip.retVoid();
 
     // Finish building the function
     try wip.finish();
@@ -165,7 +165,7 @@ pub fn createInterpreterShim(builder: *Builder, entrypoints: []const EntryPoint,
 
     // Add each exported entrypoint function
     for (entrypoints) |entry| {
-        try addRocExportedFunction(builder, entrypoint_fn, entry.name, entry.idx, target);
+        _ = try addRocExportedFunction(builder, entrypoint_fn, entry.name, entry.idx, target);
     }
 
     try addRocSerializedModule(builder, target, serialized_module);

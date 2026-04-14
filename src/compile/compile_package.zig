@@ -1508,8 +1508,8 @@ pub const PackageEnv = struct {
             const st = &self.modules.items[top.id];
             if (top.next_idx >= st.imports.items.len) {
                 visited.unset(top.id);
-                stack_ids.pop();
-                frames.pop();
+                _ = stack_ids.pop();
+                _ = frames.pop();
                 continue;
             }
 

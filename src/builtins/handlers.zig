@@ -151,7 +151,7 @@ fn installPosix() bool {
 }
 
 fn installWindows() bool {
-    SetUnhandledExceptionFilter(handleExceptionWindows);
+    _ = SetUnhandledExceptionFilter(handleExceptionWindows);
     handler_installed = true;
     return true;
 }
@@ -180,7 +180,7 @@ fn handleExceptionWindows(exception_info: *EXCEPTION_POINTERS) callconv(.winapi)
         // stack is in a fragile state and ExitProcess's DLL-detach cleanup can
         // trigger a secondary ACCESS_VIOLATION, producing exit code 5 (0xC0000005
         // truncated to u8) instead of the intended 134.
-        TerminateProcess(GetCurrentProcess(), 134);
+        _ = TerminateProcess(GetCurrentProcess(), 134);
         // Use @trap() instead of unreachable: unreachable is UB in ReleaseFast,
         // while @trap() always generates a defined trap instruction.
         @trap();

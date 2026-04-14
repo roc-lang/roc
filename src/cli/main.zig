@@ -1278,7 +1278,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
             ipc.platform.windows.UnmapViewOfFile(shm_handle.ptr);
             ipc.platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
         } else {
-            posix.munmap(shm_handle.ptr, shm_handle.mapped_size) catch {};
+            _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
             if (c.close(shm_handle.fd) != 0) {}
         }
     }
@@ -1623,7 +1623,7 @@ fn rocRunDevShim(ctx: *CliContext, args: cli_args.RunArgs) !void {
             ipc.platform.windows.UnmapViewOfFile(shm_handle.ptr);
             ipc.platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
         } else {
-            posix.munmap(shm_handle.ptr, shm_handle.mapped_size) catch {};
+            _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
             if (c.close(shm_handle.fd) != 0) {}
         }
     }
@@ -2078,7 +2078,7 @@ fn runWithPosixFdInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle:
 
     // Clear FD_CLOEXEC - the flag value is 1
     const new_flags = current_flags & ~@as(usize, 1);
-    std.posix.fcntl(shm_handle.fd, std.posix.F.SETFD, new_flags) catch |err| {
+    _ = std.posix.fcntl(shm_handle.fd, std.posix.F.SETFD, new_flags) catch |err| {
         return ctx.fail(.{ .shared_memory_failed = .{
             .operation = "set fd flags",
             .err = err,
@@ -5147,7 +5147,7 @@ fn appendTestCacheEntry(
         return;
     };
     cache_failure_reports.append(gpa, report_text) catch {
-        cache_entries.pop();
+        _ = cache_entries.pop();
         if (report_text.len > 0) gpa.free(report_text);
     };
 }
@@ -5507,7 +5507,6 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
         root_env,
         builtin_module_env,
         builtin_indices,
-        null,
     ) catch |err| {
         try stderr.print("Failed to create import mapping: {}\n", .{err});
         return err;
@@ -5540,7 +5539,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     // Only run evalAll if evaluation_order is set (not cached modules)
     // Cached modules have evaluation_order = null since it's not serialized
     if (root_env.evaluation_order != null) {
-        comptime_evaluator.evalAll() catch |err| {
+        _ = comptime_evaluator.evalAll() catch |err| {
             try stderr.print("Failed to evaluate declarations: {}\n", .{err});
             comptime_evaluator.deinit();
             return err;
@@ -5852,7 +5851,6 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                     mod_env,
                     builtin_module_env,
                     builtin_indices,
-                    null,
                 ) catch continue;
                 defer mod_import_mapping.deinit();
 

@@ -486,7 +486,7 @@ pub const CompletionBuilder = struct {
                 module_env.store.getPatternRegion(binding.pattern_idx).start.offset,
             ) catch null;
 
-            try self.addItem(.{
+            _ = try self.addItem(.{
                 .label = label,
                 .kind = kind,
                 .detail = detail,
@@ -537,7 +537,7 @@ pub const CompletionBuilder = struct {
                 def,
             ) catch null;
 
-            try self.addItem(.{
+            _ = try self.addItem(.{
                 .label = name,
                 .kind = kind,
                 .detail = detail,
@@ -595,7 +595,7 @@ pub const CompletionBuilder = struct {
                     stmt_idx,
                 ) catch null;
 
-                try self.addItem(.{
+                _ = try self.addItem(.{
                     .label = name,
                     .kind = kind,
                     .detail = detail,
@@ -1563,7 +1563,7 @@ pub const CompletionBuilder = struct {
             const tag_name = module_env.getIdentText(name_idx);
             if (tag_name.len == 0) continue;
 
-            try self.addItem(.{
+            _ = try self.addItem(.{
                 .label = tag_name,
                 .kind = @intFromEnum(CompletionItemKind.enum_member),
                 .detail = null,
