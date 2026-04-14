@@ -79,8 +79,8 @@ fn handleRocStackOverflow() noreturn {
         _ = kernel32.TerminateProcess(kernel32.GetCurrentProcess(), 134);
         @trap();
     } else if (comptime builtin.os.tag != .wasi) {
-        _ = posix.write(posix.STDERR_FILENO, STACK_OVERFLOW_MESSAGE) catch {};
-        posix.exit(134);
+        std.debug.print("{s}", .{STACK_OVERFLOW_MESSAGE});
+        std.process.exit(134);
     } else {
         std.process.exit(134);
     }
@@ -113,13 +113,13 @@ fn handleRocAccessViolation(fault_addr: usize) noreturn {
     } else {
         // POSIX (and WASI fallback)
         const msg = "\nSegmentation fault (SIGSEGV) in this Roc program.\nFault address: ";
-        _ = posix.write(posix.STDERR_FILENO, msg) catch {};
+        std.debug.print("{s}", .{msg});
 
         var addr_buf: [18]u8 = undefined;
         const addr_str = builtins.handlers.formatHex(fault_addr, &addr_buf);
-        _ = posix.write(posix.STDERR_FILENO, addr_str) catch {};
-        _ = posix.write(posix.STDERR_FILENO, "\n\n") catch {};
-        posix.exit(139);
+        std.debug.print("{s}", .{addr_str});
+        std.debug.print("{s}", .{"\n\n"});
+        std.process.exit(139);
     }
 }
 
@@ -144,8 +144,8 @@ fn handleRocArithmeticError() noreturn {
         _ = kernel32.WriteFile(stderr_handle, DIVISION_BY_ZERO_MESSAGE.ptr, DIVISION_BY_ZERO_MESSAGE.len, &bytes_written, null);
         kernel32.ExitProcess(136);
     } else if (comptime builtin.os.tag != .wasi) {
-        _ = posix.write(posix.STDERR_FILENO, DIVISION_BY_ZERO_MESSAGE) catch {};
-        posix.exit(136); // 128 + 8 (SIGFPE)
+        std.debug.print("{s}", .{DIVISION_BY_ZERO_MESSAGE});
+        std.process.exit(136); // 128 + 8 (SIGFPE)
     } else {
         std.process.exit(136);
     }
@@ -197,7 +197,7 @@ fn triggerSelfTestDivisionByZero() noreturn {
         kernel32.RaiseException(EXCEPTION_INT_DIVIDE_BY_ZERO, 0, 0, null);
     } else if (comptime builtin.os.tag != .wasi) {
         posix.raise(posix.SIG.FPE) catch {};
-        posix.exit(136);
+        std.process.exit(136);
     } else {
         std.process.exit(136);
     }
@@ -361,7 +361,7 @@ const HostEnv = struct {
     gpa: std.heap.DebugAllocator(.{ .safety = true }),
     test_state: TestState,
     /// Track Roc allocations for cleanup on test failure
-    roc_allocations: std.ArrayListUnmanaged(RocAllocation) = .{},
+    roc_allocations: std.ArrayListUnmanaged(RocAllocation) = .empty,
     /// Allocation counters for diagnostics
     alloc_count: usize = 0,
     dealloc_count: usize = 0,
