@@ -94,8 +94,8 @@ pub const Store = struct {
     pub fn idxFromScalar(scalar: Scalar) Idx {
         return switch (scalar.tag) {
             .str => .str,
-            .int => @enumFromInt(2 + @intFromEnum(scalar.data.int)),
-            .frac => @enumFromInt(@as(u32, 12) + (@intFromEnum(scalar.data.frac) - @intFromEnum(@TypeOf(scalar.data.frac).f32))),
+            .int => @enumFromInt(2 + @intFromEnum(scalar.getInt())),
+            .frac => @enumFromInt(@as(u32, 12) + (@intFromEnum(scalar.getFrac()) - @intFromEnum(@TypeOf(scalar.getFrac()).f32))),
             .opaque_ptr => .opaque_ptr,
         };
     }
