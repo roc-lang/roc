@@ -6829,11 +6829,16 @@ pub fn canonicalizeExpr(
                     };
                     // Filter guard's free vars (pattern-bound vars are not truly free)
                     if (can_guard_result.free_vars.len > 0) {
-                        const guard_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_guard_result.free_vars);
+                        // Copy before clearing — clearFrom poisons memory in debug mode
+                        const guard_fv_slice = self.scratch_free_vars.sliceFromSpan(can_guard_result.free_vars);
+                        const guard_free_vars_copy = try self.env.gpa.alloc(Pattern.Idx, guard_fv_slice.len);
+                        defer self.env.gpa.free(guard_free_vars_copy);
+                        @memcpy(guard_free_vars_copy, guard_fv_slice);
+
                         self.scratch_free_vars.clearFrom(body_free_vars_start);
                         var bound_vars_view = self.scratch_bound_vars.setViewFrom(branch_bound_vars_top);
                         defer bound_vars_view.deinit();
-                        for (guard_free_vars_slice) |fv| {
+                        for (guard_free_vars_copy) |fv| {
                             if (!bound_vars_view.contains(fv)) {
                                 try self.scratch_free_vars.append(fv);
                             }
@@ -6860,14 +6865,20 @@ pub fn canonicalizeExpr(
                 // Only truly free variables (not bound by this branch's pattern) should
                 // propagate up to the match expression's free_vars
                 if (can_body.free_vars.len > 0) {
-                    // Copy the free vars we need to filter
-                    const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_body.free_vars);
+                    // Copy the free vars to a temporary buffer before clearing,
+                    // because clearFrom poisons the memory in debug mode (Zig 0.16)
+                    // and the slice points into the same ArrayList we're clearing.
+                    const body_fv_slice = self.scratch_free_vars.sliceFromSpan(can_body.free_vars);
+                    const body_free_vars_copy = try self.env.gpa.alloc(Pattern.Idx, body_fv_slice.len);
+                    defer self.env.gpa.free(body_free_vars_copy);
+                    @memcpy(body_free_vars_copy, body_fv_slice);
+
                     // Clear back to before body canonicalization
                     self.scratch_free_vars.clearFrom(body_free_vars_start_after_guard);
                     // Re-add only filtered vars (not bound by branch patterns)
                     var bound_vars_view = self.scratch_bound_vars.setViewFrom(branch_bound_vars_top);
                     defer bound_vars_view.deinit();
-                    for (body_free_vars_slice) |fv| {
+                    for (body_free_vars_copy) |fv| {
                         if (!bound_vars_view.contains(fv)) {
                             try self.scratch_free_vars.append(fv);
                         }
