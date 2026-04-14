@@ -186,8 +186,8 @@ pub const Store = struct {
         const tag = @intFromEnum(scalar.tag);
 
         // Get the precision bits directly from the packed representation
-        // This works because in a packed union, all fields start at bit 0
-        const scalar_bits = @as(u7, @bitCast(scalar));
+        // Extract the meaningful 7 bits (4 data + 3 tag) from the 28-bit padded scalar
+        const scalar_bits: u7 = @truncate(@as(u28, @bitCast(scalar)));
         const precision = scalar_bits & 0xF; // Lower 4 bits contain precision for numeric types
 
         // Create masks for different tag ranges
@@ -752,14 +752,14 @@ pub const Store = struct {
     /// Get bundled information about a scalar layout
     pub fn getScalarInfo(self: *const Self, layout: Layout) ScalarInfo {
         std.debug.assert(layout.tag == .scalar);
-        const scalar = layout.data.scalar;
+        const scalar = layout.getScalar();
         const size_align = self.layoutSizeAlign(layout);
         return ScalarInfo{
             .tag = scalar.tag,
             .size = size_align.size,
             .alignment = @as(u32, 1) << @intFromEnum(size_align.alignment),
-            .int_precision = if (scalar.tag == .int) scalar.data.int else null,
-            .frac_precision = if (scalar.tag == .frac) scalar.data.frac else null,
+            .int_precision = if (scalar.tag == .int) scalar.getInt() else null,
+            .frac_precision = if (scalar.tag == .frac) scalar.getFrac() else null,
         };
     }
 
@@ -1899,7 +1899,7 @@ pub const Store = struct {
                 // which would cause spurious cycle detection when the alias var is encountered
                 // again. See issue #8708.
                 if (current.desc.content != .alias) {
-                    try self.work.in_progress_vars.put(.{ .module_idx = self.current_module_idx, .var_ = current.var_ }, {});
+                    try self.work.in_progress_vars.put(self.allocator, .{ .module_idx = self.current_module_idx, .var_ = current.var_ }, {});
                 }
 
                 layout = switch (current.desc.content) {
@@ -2136,7 +2136,7 @@ pub const Store = struct {
                             // We store the range (indices) rather than a slice to avoid
                             // dangling pointers if the vars storage is reallocated.
                             const type_args_range = types.Store.getNominalArgsRange(nominal_type);
-                            try self.work.in_progress_nominals.put(nominal_key, .{
+                            try self.work.in_progress_nominals.put(self.allocator, nominal_key, .{
                                 .nominal_var = current.var_,
                                 .backing_var = resolved_backing.var_,
                                 .type_args_range = type_args_range,
@@ -2905,7 +2905,7 @@ pub const Store = struct {
 
         // For scalar types, return the appropriate sentinel value instead of inserting
         if (layout.tag == .scalar) {
-            const result = idxFromScalar(layout.data.scalar);
+            const result = idxFromScalar(layout.getScalar());
             return result;
         }
 

@@ -25,6 +25,7 @@ const LinkType = target_mod.LinkType;
 const is_windows = builtin.target.os.tag == .windows;
 
 var stderr_file_writer: std.Io.File.Writer = .{
+    .io = std.Options.debug_io,
     .interface = std.Io.File.Writer.initInterface(&.{}),
     .file = if (is_windows) undefined else std.Io.File.stderr(),
     .mode = .streaming,
@@ -71,7 +72,7 @@ pub fn validatePlatformHeader(
     platform_source_path: []const u8,
 ) ValidationError!PlatformValidation {
     // Read platform source
-    var source = std.Io.Dir.cwd().readFileAlloc(allocator, platform_source_path, std.math.maxInt(usize)) catch {
+    var source = std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, platform_source_path, allocator, .unlimited) catch {
         renderFileReadError(allocator, platform_source_path);
         return error.FileReadError;
     };

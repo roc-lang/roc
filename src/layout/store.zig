@@ -1593,8 +1593,8 @@ pub const Store = struct {
             .tag = scalar.tag,
             .size = size_align.size,
             .alignment = @as(u32, 1) << @intFromEnum(size_align.alignment),
-            .int_precision = if (scalar.tag == .int) scalar.data.int else null,
-            .frac_precision = if (scalar.tag == .frac) scalar.data.frac else null,
+            .int_precision = if (scalar.tag == .int) scalar.getInt() else null,
+            .frac_precision = if (scalar.tag == .frac) scalar.getFrac() else null,
         };
     }
 

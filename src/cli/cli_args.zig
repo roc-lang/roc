@@ -544,10 +544,10 @@ fn parseUnbundle(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
 
     // If no paths specified, default to all .tar.zst files in current directory
     if (paths.items.len == 0) {
-        var cwd = try std.Io.Dir.cwd().openDir(".", .{ .iterate = true });
-        defer cwd.close();
+        var cwd = try std.Io.Dir.cwd().openDir(std.Options.debug_io, ".", .{ .iterate = true });
+        defer cwd.close(std.Options.debug_io);
         var iter = cwd.iterate();
-        while (try iter.next()) |entry| {
+        while (try iter.next(std.Options.debug_io)) |entry| {
             if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".tar.zst")) {
                 try paths.append(try alloc.dupe(u8, entry.name));
             }

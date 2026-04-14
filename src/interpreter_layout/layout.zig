@@ -43,23 +43,37 @@ pub const ScalarTag = enum(u3) {
     frac = 2, // Maps to Idx 12-14 (depending on precision)
 };
 
-/// The union portion of the Scalar packed tagged union.
-///
-/// Some scalars have extra information associated with them,
-/// such as the precision of a particular int or frac. This union
-/// stores that extra information.
-pub const ScalarUnion = packed union {
-    str: void,
-    int: types.Int.Precision,
-    frac: types.Frac.Precision,
-};
+/// Raw backing for scalar data (largest payload is Int.Precision = u4).
+/// In Zig 0.16, packed unions require uniform field widths, so we use
+/// a raw integer with typed accessors instead.
+pub const ScalarData = u4;
 
 /// A scalar value such as a str, int, or frac.
+/// Uses the Zig 0.16 pattern of packed struct with raw data + typed accessors.
 pub const Scalar = packed struct {
-    // This can't be a normal Zig tagged union because it uses a packed union to reduce memory use,
-    // and Zig tagged unions don't support being packed.
-    data: ScalarUnion,
+    data: ScalarData,
     tag: ScalarTag,
+    _pad: u21 = 0,
+
+    pub fn getInt(self: Scalar) types.Int.Precision {
+        return @enumFromInt(self.data);
+    }
+
+    pub fn getFrac(self: Scalar) types.Frac.Precision {
+        return @enumFromInt(@as(u3, @truncate(self.data)));
+    }
+
+    pub fn initStr() Scalar {
+        return .{ .data = 0, .tag = .str };
+    }
+
+    pub fn initInt(precision: types.Int.Precision) Scalar {
+        return .{ .data = @intFromEnum(precision), .tag = .int };
+    }
+
+    pub fn initFrac(precision: types.Frac.Precision) Scalar {
+        return .{ .data = @intFromEnum(precision), .tag = .frac };
+    }
 };
 
 /// Index into a Layout Store
@@ -126,20 +140,10 @@ pub const Closure = struct {
     source_env: *const @import("can").ModuleEnv,
 };
 
-/// The union portion of the Layout packed tagged union (the tag being LayoutTag).
-///
-/// The largest variant must fit in 28 bits to leave room for the u4 tag
-pub const LayoutUnion = packed union {
-    scalar: Scalar,
-    box: Idx,
-    box_of_zst: void,
-    list: Idx,
-    list_of_zst: void,
-    struct_: StructLayout,
-    closure: ClosureLayout,
-    zst: void,
-    tag_union: TagUnionLayout,
-};
+/// Raw backing type for the Layout data (28 bits).
+/// In Zig 0.16, packed unions require uniform field widths, so we use
+/// a raw integer with typed accessors on the Layout struct instead.
+pub const LayoutData = std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag));
 
 /// Field name plus the module that owns the Ident.Idx.
 /// This is explicit provenance so later stages never guess which ident store to use.
@@ -535,10 +539,38 @@ pub const ScalarInfo = struct {
 /// by alignment and then by field name (records) or tuple index (tuples).
 /// We store the original source index for each field (for tuple element access).
 pub const Layout = packed struct {
-    // This can't be a normal Zig tagged union because it uses a packed union to reduce memory use,
-    // and Zig tagged unions don't support being packed.
-    data: LayoutUnion,
+    // Zig 0.16: packed unions require uniform field widths, so we use a raw
+    // integer backing with typed accessors (wrap/unwrap pattern from Zir.zig).
+    data: LayoutData,
     tag: LayoutTag,
+
+    // -- Typed accessors for unpacking the raw data field --
+
+    pub fn getScalar(self: Layout) Scalar {
+        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(Scalar)), @truncate(self.data)));
+    }
+
+    pub fn getIdx(self: Layout) Idx {
+        return @enumFromInt(self.data);
+    }
+
+    pub fn getStruct(self: Layout) StructLayout {
+        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(StructLayout)), @truncate(self.data)));
+    }
+
+    pub fn getClosure(self: Layout) ClosureLayout {
+        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(ClosureLayout)), @truncate(self.data)));
+    }
+
+    pub fn getTagUnion(self: Layout) TagUnionLayout {
+        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(TagUnionLayout)), @truncate(self.data)));
+    }
+
+    fn packData(val: anytype) LayoutData {
+        const T = @TypeOf(val);
+        const bits = @bitSizeOf(T);
+        return @intCast(@as(std.meta.Int(.unsigned, bits), @bitCast(val)));
+    }
 
     /// This layout's alignment, given a particular target usize.
     pub fn alignment(self: Layout, target_usize: target.TargetUsize) std.mem.Alignment {
@@ -559,12 +591,12 @@ pub const Layout = packed struct {
 
     /// int layout with the given precision
     pub fn int(precision: types.Int.Precision) Layout {
-        return Layout{ .data = .{ .scalar = .{ .data = .{ .int = precision }, .tag = .int } }, .tag = .scalar };
+        return .{ .data = packData(Scalar.initInt(precision)), .tag = .scalar };
     }
 
     /// frac layout with the given precision
     pub fn frac(precision: types.Frac.Precision) Layout {
-        return Layout{ .data = .{ .scalar = .{ .data = .{ .frac = precision }, .tag = .frac } }, .tag = .scalar };
+        return .{ .data = packData(Scalar.initFrac(precision)), .tag = .scalar };
     }
 
     /// Default number layout (Dec) for unresolved polymorphic number types
@@ -584,33 +616,33 @@ pub const Layout = packed struct {
 
     /// str layout
     pub fn str() Layout {
-        return Layout{ .data = .{ .scalar = .{ .data = .{ .str = {} }, .tag = .str } }, .tag = .scalar };
+        return .{ .data = packData(Scalar.initStr()), .tag = .scalar };
     }
 
     /// box layout with the given element layout
     pub fn box(elem_idx: Idx) Layout {
-        return Layout{ .data = .{ .box = elem_idx }, .tag = .box };
+        return .{ .data = @intFromEnum(elem_idx), .tag = .box };
     }
 
     /// box of zero-sized type layout (e.g. Box({}))
     pub fn boxOfZst() Layout {
-        return Layout{ .data = .{ .box_of_zst = {} }, .tag = .box_of_zst };
+        return .{ .data = 0, .tag = .box_of_zst };
     }
 
     /// list layout with the given element layout
     pub fn list(elem_idx: Idx) Layout {
-        return Layout{ .data = .{ .list = elem_idx }, .tag = .list };
+        return .{ .data = @intFromEnum(elem_idx), .tag = .list };
     }
 
     /// list of zero-sized type layout (e.g. List({}))
     pub fn listOfZst() Layout {
-        return Layout{ .data = .{ .list_of_zst = {} }, .tag = .list_of_zst };
+        return .{ .data = 0, .tag = .list_of_zst };
     }
 
     /// struct layout with the given alignment and struct metadata (e.g. size and field layouts)
     /// Used for both records and tuples — at the layout level they are identical.
     pub fn struct_(struct_alignment: std.mem.Alignment, struct_idx: StructIdx) Layout {
-        return Layout{ .data = .{ .struct_ = .{ .alignment = struct_alignment, .idx = struct_idx } }, .tag = .struct_ };
+        return .{ .data = packData(StructLayout{ .alignment = struct_alignment, .idx = struct_idx }), .tag = .struct_ };
     }
 
     /// Backwards-compat aliases
@@ -618,20 +650,17 @@ pub const Layout = packed struct {
     pub const tuple = struct_;
 
     pub fn closure(captures_layout_idx: Idx) Layout {
-        return Layout{
-            .data = .{ .closure = .{ .captures_layout_idx = captures_layout_idx } },
-            .tag = .closure,
-        };
+        return .{ .data = packData(ClosureLayout{ .captures_layout_idx = captures_layout_idx }), .tag = .closure };
     }
 
     /// Zero-sized type layout (empty records, empty tuples, phantom types, etc.)
     pub fn zst() Layout {
-        return Layout{ .data = .{ .zst = {} }, .tag = .zst };
+        return .{ .data = 0, .tag = .zst };
     }
 
     /// tag union layout with the given alignment and tag union metadata
     pub fn tagUnion(tu_alignment: std.mem.Alignment, tu_idx: TagUnionIdx) Layout {
-        return Layout{ .data = .{ .tag_union = .{ .alignment = tu_alignment, .idx = tu_idx } }, .tag = .tag_union };
+        return .{ .data = packData(TagUnionLayout{ .alignment = tu_alignment, .idx = tu_idx }), .tag = .tag_union };
     }
 
     /// Check if a layout represents a heap-allocated type that needs refcounting
@@ -757,7 +786,6 @@ test "Layout scalar data access" {
     const str_layout = Layout.str();
     try testing.expectEqual(LayoutTag.scalar, str_layout.tag);
     try testing.expectEqual(ScalarTag.str, str_layout.getScalar().tag);
-    try testing.expectEqual({}, str_layout.data.scalar.data.str);
 }
 
 test "Layout non-scalar types" {

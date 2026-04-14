@@ -14,6 +14,10 @@ const Allocator = std.mem.Allocator;
 
 const Self = @This();
 
+/// System Io instance for OS-level file operations.
+/// Uses std.Options.debug_io which is always available.
+const sys_io: std.Io = std.Options.debug_io;
+
 ctx: ?*anyopaque,
 vtable: VTable,
 

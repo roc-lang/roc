@@ -153,14 +153,20 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
                 return buf.toOwnedSlice();
             },
             .int => {
-                const precision = scalar.data.int;
+                // Check for bool sentinel
+                if (self.layout_idx) |idx| {
+                    if (idx == Idx.bool) {
+                        return try allocator.dupe(u8, if (self.readBool()) "True" else "False");
+                    }
+                }
+                const precision = scalar.getInt();
                 return switch (precision) {
                     .u64, .u128 => try std.fmt.allocPrint(allocator, "{d}", .{self.readU128()}),
                     else => try std.fmt.allocPrint(allocator, "{d}", .{self.readI128()}),
                 };
             },
             .frac => {
-                return switch (scalar.data.frac) {
+                return switch (scalar.getFrac()) {
                     .f32 => blk: {
                         var buf: [400]u8 = undefined;
                         const slice = i128h.f32_to_str(&buf, self.readF32());
@@ -334,8 +340,8 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
                     return self.readI128() == other.readI128();
                 },
                 .frac => {
-                    if (s_scalar.data.frac != o_scalar.data.frac) return false;
-                    return switch (s_scalar.data.frac) {
+                    if (s_scalar.getFrac() != o_scalar.getFrac()) return false;
+                    return switch (s_scalar.getFrac()) {
                         .f32 => @as(u32, @bitCast(self.readF32())) == @as(u32, @bitCast(other.readF32())),
                         .f64 => @as(u64, @bitCast(self.readF64())) == @as(u64, @bitCast(other.readF64())),
                         .dec => self.readDec().num == other.readDec().num,
@@ -529,4 +535,99 @@ test "format box_of_zst" {
     const result = try val.format(allocator, ctx);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("Box({})", result);
+}
+
+test "equals bool" {
+    const bool_layout = Layout{
+        .tag = .scalar,
+        .data = .{ .scalar = .{ .data = .{ .int = .u8 }, .tag = .int } },
+    };
+    var t: [1]u8 = .{1};
+    var f: [1]u8 = .{0};
+    const vt = RocValue{ .ptr = &t, .lay = bool_layout, .layout_idx = Idx.bool };
+    const vf = RocValue{ .ptr = &f, .lay = bool_layout, .layout_idx = Idx.bool };
+    const ctx = FormatContext{ .layout_store = undefined, .ident_store = null };
+    try std.testing.expect(vt.equals(vt, ctx));
+    try std.testing.expect(vf.equals(vf, ctx));
+    try std.testing.expect(!vt.equals(vf, ctx));
+}
+
+test "equals i64" {
+    const i64_layout = Layout{
+        .tag = .scalar,
+        .data = .{ .scalar = .{ .data = .{ .int = .i64 }, .tag = .int } },
+    };
+    var a: [@sizeOf(i64)]u8 = undefined;
+    var b: [@sizeOf(i64)]u8 = undefined;
+    var c: [@sizeOf(i64)]u8 = undefined;
+    @memcpy(&a, std.mem.asBytes(&@as(i64, 42)));
+    @memcpy(&b, std.mem.asBytes(&@as(i64, 42)));
+    @memcpy(&c, std.mem.asBytes(&@as(i64, -1)));
+    const va = RocValue{ .ptr = &a, .lay = i64_layout };
+    const vb = RocValue{ .ptr = &b, .lay = i64_layout };
+    const vc = RocValue{ .ptr = &c, .lay = i64_layout };
+    const ctx = FormatContext{ .layout_store = undefined, .ident_store = null };
+    try std.testing.expect(va.equals(vb, ctx));
+    try std.testing.expect(!va.equals(vc, ctx));
+}
+
+test "equals f64" {
+    const f64_layout = Layout{
+        .tag = .scalar,
+        .data = .{ .scalar = .{ .data = .{ .frac = .f64 }, .tag = .frac } },
+    };
+    var a: [@sizeOf(f64)]u8 = undefined;
+    var b: [@sizeOf(f64)]u8 = undefined;
+    var c: [@sizeOf(f64)]u8 = undefined;
+    @memcpy(&a, std.mem.asBytes(&@as(f64, 3.14)));
+    @memcpy(&b, std.mem.asBytes(&@as(f64, 3.14)));
+    @memcpy(&c, std.mem.asBytes(&@as(f64, 2.71)));
+    const va = RocValue{ .ptr = &a, .lay = f64_layout };
+    const vb = RocValue{ .ptr = &b, .lay = f64_layout };
+    const vc = RocValue{ .ptr = &c, .lay = f64_layout };
+    const ctx = FormatContext{ .layout_store = undefined, .ident_store = null };
+    try std.testing.expect(va.equals(vb, ctx));
+    try std.testing.expect(!va.equals(vc, ctx));
+}
+
+test "equals dec" {
+    const dec_layout = Layout{
+        .tag = .scalar,
+        .data = .{ .scalar = .{ .data = .{ .frac = .dec }, .tag = .frac } },
+    };
+    const dec_a: i128 = 3 * RocDec.one_point_zero_i128;
+    const dec_b: i128 = 3 * RocDec.one_point_zero_i128;
+    const dec_c: i128 = 5 * RocDec.one_point_zero_i128;
+    var a: [@sizeOf(i128)]u8 = undefined;
+    var b: [@sizeOf(i128)]u8 = undefined;
+    var c: [@sizeOf(i128)]u8 = undefined;
+    @memcpy(&a, std.mem.asBytes(&dec_a));
+    @memcpy(&b, std.mem.asBytes(&dec_b));
+    @memcpy(&c, std.mem.asBytes(&dec_c));
+    const va = RocValue{ .ptr = &a, .lay = dec_layout };
+    const vb = RocValue{ .ptr = &b, .lay = dec_layout };
+    const vc = RocValue{ .ptr = &c, .lay = dec_layout };
+    const ctx = FormatContext{ .layout_store = undefined, .ident_store = null };
+    try std.testing.expect(va.equals(vb, ctx));
+    try std.testing.expect(!va.equals(vc, ctx));
+}
+
+test "equals zst" {
+    const zst_layout = Layout{
+        .tag = .zst,
+        .data = .{ .zst = {} },
+    };
+    const va = RocValue.zst(zst_layout);
+    const vb = RocValue.zst(zst_layout);
+    const ctx = FormatContext{ .layout_store = undefined, .ident_store = null };
+    try std.testing.expect(va.equals(vb, ctx));
+}
+
+test "equals mismatched tags" {
+    const zst_layout = Layout.zst();
+    const box_zst_layout = Layout.boxOfZst();
+    const va = RocValue.zst(zst_layout);
+    const vb = RocValue.zst(box_zst_layout);
+    const ctx = FormatContext{ .layout_store = undefined, .ident_store = null };
+    try std.testing.expect(!va.equals(vb, ctx));
 }

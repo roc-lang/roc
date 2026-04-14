@@ -183,8 +183,8 @@ pub const Work = struct {
             .resolved_tuple_fields = resolved_tuple_fields,
             .pending_tag_union_variants = pending_tag_union_variants,
             .resolved_tag_union_variants = resolved_tag_union_variants,
-            .in_progress_vars = std.AutoArrayHashMapUnmanaged(ModuleVarKey, void).init(allocator),
-            .in_progress_nominals = std.AutoArrayHashMapUnmanaged(NominalKey, NominalProgress).init(allocator),
+            .in_progress_vars = .{},
+            .in_progress_nominals = .{},
         };
     }
 
@@ -198,8 +198,8 @@ pub const Work = struct {
         self.resolved_tuple_fields.deinit(allocator);
         self.pending_tag_union_variants.deinit(allocator);
         self.resolved_tag_union_variants.deinit(allocator);
-        self.in_progress_vars.deinit();
-        self.in_progress_nominals.deinit();
+        self.in_progress_vars.deinit(allocator);
+        self.in_progress_nominals.deinit(allocator);
     }
 
     // NOTE: We do NOT have a clearRetainingCapacity function because all work fields

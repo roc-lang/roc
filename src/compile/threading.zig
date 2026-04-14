@@ -21,7 +21,7 @@ pub const Mutex = if (!is_freestanding) std.Io.Mutex else struct {
 };
 
 /// Native `std.Thread.Condition` on supported targets, no-op stub on freestanding.
-pub const Condition = if (!is_freestanding) std.Thread.Condition else struct {
+pub const Condition = if (!is_freestanding) std.Io.Condition else struct {
     pub fn wait(_: *@This(), _: anytype) void {}
     pub fn timedWait(_: *@This(), _: anytype, _: u64) error{Timeout}!void {
         return error.Timeout;

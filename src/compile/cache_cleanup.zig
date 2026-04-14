@@ -17,16 +17,17 @@ const Io = @import("io").Io;
 const threading = @import("threading.zig");
 
 const Allocator = std.mem.Allocator;
+const sys_io = std.Options.debug_io;
 
 const is_freestanding = threading.is_freestanding;
 
 /// Cleanup configuration constants
 pub const Config = struct {
     /// Maximum age for temp directories (5 minutes in nanoseconds)
-    pub const TEMP_MAX_AGE_NS: i128 = 5 * 60 * std.time.ns_per_s;
+    pub const TEMP_MAX_AGE_NS: i96 = 5 * 60 * std.time.ns_per_s;
 
     /// Maximum age for persistent cache files (30 days in nanoseconds)
-    pub const PERSISTENT_MAX_AGE_NS: i128 = 30 * 24 * 60 * 60 * std.time.ns_per_s;
+    pub const PERSISTENT_MAX_AGE_NS: i96 = 30 * 24 * 60 * 60 * std.time.ns_per_s;
 };
 
 /// Statistics from a cleanup operation
@@ -92,37 +93,37 @@ fn cleanupTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats, filesystem
     const temp_base = cache_config.getTempDir(filesystem, allocator) catch return;
     defer allocator.free(temp_base);
 
-    const now = std.time.nanoTimestamp();
+    const now = std.Io.Timestamp.now(sys_io, .real);
 
     // Open the temp/roc directory
-    var roc_dir = std.Io.Dir.cwd().openDir(temp_base, .{ .iterate = true }) catch return;
-    defer roc_dir.close();
+    var roc_dir = std.Io.Dir.cwd().openDir(sys_io, temp_base, .{ .iterate = true }) catch return;
+    defer roc_dir.close(sys_io);
 
     // Iterate over version directories
     var version_iter = roc_dir.iterate();
-    while (version_iter.next() catch null) |version_entry| {
+    while (version_iter.next(sys_io) catch null) |version_entry| {
         if (version_entry.kind != .directory) continue;
 
         const version_path = std.fs.path.join(allocator, &.{ temp_base, version_entry.name }) catch continue;
         defer allocator.free(version_path);
 
-        var version_dir = std.Io.Dir.cwd().openDir(version_path, .{ .iterate = true }) catch continue;
-        defer version_dir.close();
+        var version_dir = std.Io.Dir.cwd().openDir(sys_io, version_path, .{ .iterate = true }) catch continue;
+        defer version_dir.close(sys_io);
 
         // Iterate over random subdirectories within this version
         var random_iter = version_dir.iterate();
-        while (random_iter.next() catch null) |random_entry| {
+        while (random_iter.next(sys_io) catch null) |random_entry| {
             const entry_path = std.fs.path.join(allocator, &.{ version_path, random_entry.name }) catch continue;
             defer allocator.free(entry_path);
 
             if (random_entry.kind == .directory) {
                 // Check directory age
-                const dir_stat = std.Io.Dir.cwd().statFile(entry_path) catch continue;
-                const age_ns = now - dir_stat.mtime;
+                const dir_stat = std.Io.Dir.cwd().statFile(sys_io, entry_path, .{}) catch continue;
+                const age_ns = now.nanoseconds - dir_stat.mtime.nanoseconds;
 
                 if (age_ns > Config.TEMP_MAX_AGE_NS) {
                     // Delete the directory and its contents
-                    std.Io.Dir.cwd().deleteTree(entry_path) catch {
+                    std.Io.Dir.cwd().deleteTree(sys_io, entry_path) catch {
                         if (maybe_stats) |stats| stats.errors += 1;
                         continue;
                     };
@@ -131,17 +132,17 @@ fn cleanupTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats, filesystem
                     // Also try to delete the coordination file (.txt)
                     const txt_path = std.fmt.allocPrint(allocator, "{s}.txt", .{entry_path}) catch continue;
                     defer allocator.free(txt_path);
-                    std.Io.Dir.cwd().deleteFile(txt_path) catch {};
+                    std.Io.Dir.cwd().deleteFile(sys_io, txt_path) catch {};
                     if (maybe_stats) |stats| stats.temp_files_deleted += 1;
                 }
             } else if (random_entry.kind == .file) {
                 // Check if it's a stale .txt coordination file
                 if (std.mem.endsWith(u8, random_entry.name, ".txt")) {
-                    const file_stat = std.Io.Dir.cwd().statFile(entry_path) catch continue;
-                    const age_ns = now - file_stat.mtime;
+                    const file_stat = std.Io.Dir.cwd().statFile(sys_io, entry_path, .{}) catch continue;
+                    const age_ns = now.nanoseconds - file_stat.mtime.nanoseconds;
 
                     if (age_ns > Config.TEMP_MAX_AGE_NS) {
-                        std.Io.Dir.cwd().deleteFile(entry_path) catch {
+                        std.Io.Dir.cwd().deleteFile(sys_io, entry_path) catch {
                             if (maybe_stats) |stats| stats.errors += 1;
                             continue;
                         };
@@ -168,15 +169,15 @@ fn cleanupPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStats, fil
     const cache_base = config.getEffectiveCacheDir(allocator) catch return;
     defer allocator.free(cache_base);
 
-    const now = std.time.nanoTimestamp();
+    const now = std.Io.Timestamp.now(sys_io, .real);
 
     // Open the cache directory
-    var cache_dir = std.Io.Dir.cwd().openDir(cache_base, .{ .iterate = true }) catch return;
-    defer cache_dir.close();
+    var cache_dir = std.Io.Dir.cwd().openDir(sys_io, cache_base, .{ .iterate = true }) catch return;
+    defer cache_dir.close(sys_io);
 
     // Iterate over version directories
     var version_iter = cache_dir.iterate();
-    while (version_iter.next() catch null) |version_entry| {
+    while (version_iter.next(sys_io) catch null) |version_entry| {
         if (version_entry.kind != .directory) continue;
 
         const version_path = std.fs.path.join(allocator, &.{ cache_base, version_entry.name }) catch continue;
@@ -205,23 +206,23 @@ fn cleanupPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStats, fil
 }
 
 /// Clean up files in a cache subdirectory (mod/ or exe/) older than 30 days.
-fn cleanupCacheSubdir(allocator: Allocator, subdir_path: []const u8, now: i128, maybe_stats: ?*CleanupStats) void {
-    var subdir = std.Io.Dir.cwd().openDir(subdir_path, .{ .iterate = true }) catch return;
-    defer subdir.close();
+fn cleanupCacheSubdir(allocator: Allocator, subdir_path: []const u8, now: std.Io.Timestamp, maybe_stats: ?*CleanupStats) void {
+    var subdir = std.Io.Dir.cwd().openDir(sys_io, subdir_path, .{ .iterate = true }) catch return;
+    defer subdir.close(sys_io);
 
     // Iterate over subdirectories (hash buckets like "a0", "b1", etc.)
     var bucket_iter = subdir.iterate();
-    while (bucket_iter.next() catch null) |bucket_entry| {
+    while (bucket_iter.next(sys_io) catch null) |bucket_entry| {
         if (bucket_entry.kind != .directory) {
             // Direct file in the subdir - check age and delete if old
             const file_path = std.fs.path.join(allocator, &.{ subdir_path, bucket_entry.name }) catch continue;
             defer allocator.free(file_path);
 
-            const file_stat = std.Io.Dir.cwd().statFile(file_path) catch continue;
-            const age_ns = now - file_stat.mtime;
+            const file_stat = std.Io.Dir.cwd().statFile(sys_io, file_path, .{}) catch continue;
+            const age_ns = now.nanoseconds - file_stat.mtime.nanoseconds;
 
             if (age_ns > Config.PERSISTENT_MAX_AGE_NS) {
-                std.Io.Dir.cwd().deleteFile(file_path) catch {
+                std.Io.Dir.cwd().deleteFile(sys_io, file_path) catch {
                     if (maybe_stats) |stats| stats.errors += 1;
                     continue;
                 };
@@ -233,22 +234,22 @@ fn cleanupCacheSubdir(allocator: Allocator, subdir_path: []const u8, now: i128, 
         const bucket_path = std.fs.path.join(allocator, &.{ subdir_path, bucket_entry.name }) catch continue;
         defer allocator.free(bucket_path);
 
-        var bucket_dir = std.Io.Dir.cwd().openDir(bucket_path, .{ .iterate = true }) catch continue;
-        defer bucket_dir.close();
+        var bucket_dir = std.Io.Dir.cwd().openDir(sys_io, bucket_path, .{ .iterate = true }) catch continue;
+        defer bucket_dir.close(sys_io);
 
         // Iterate over cache files in this bucket
         var file_iter = bucket_dir.iterate();
-        while (file_iter.next() catch null) |file_entry| {
+        while (file_iter.next(sys_io) catch null) |file_entry| {
             if (file_entry.kind != .file) continue;
 
             const file_path = std.fs.path.join(allocator, &.{ bucket_path, file_entry.name }) catch continue;
             defer allocator.free(file_path);
 
-            const file_stat = std.Io.Dir.cwd().statFile(file_path) catch continue;
-            const age_ns = now - file_stat.mtime;
+            const file_stat = std.Io.Dir.cwd().statFile(sys_io, file_path, .{}) catch continue;
+            const age_ns = now.nanoseconds - file_stat.mtime.nanoseconds;
 
             if (age_ns > Config.PERSISTENT_MAX_AGE_NS) {
-                std.Io.Dir.cwd().deleteFile(file_path) catch {
+                std.Io.Dir.cwd().deleteFile(sys_io, file_path) catch {
                     if (maybe_stats) |stats| stats.errors += 1;
                     continue;
                 };
@@ -265,7 +266,7 @@ fn cleanupCacheSubdir(allocator: Allocator, subdir_path: []const u8, now: i128, 
 
 /// Try to delete a directory if it's empty.
 fn tryDeleteEmptyDir(path: []const u8) void {
-    std.Io.Dir.cwd().deleteDir(path) catch |err| switch (err) {
+    std.Io.Dir.cwd().deleteDir(sys_io, path) catch |err| switch (err) {
         error.DirNotEmpty => {}, // Expected, directory has contents
         else => {},
     };
@@ -275,12 +276,12 @@ fn tryDeleteEmptyDir(path: []const u8) void {
 /// Used for immediate cleanup after spawning a child process.
 pub fn deleteTempDir(allocator: Allocator, temp_dir_path: []const u8) void {
     // Delete the directory and its contents
-    std.Io.Dir.cwd().deleteTree(temp_dir_path) catch {};
+    std.Io.Dir.cwd().deleteTree(sys_io, temp_dir_path) catch {};
 
     // Delete the coordination file (.txt)
     const txt_path = std.fmt.allocPrint(allocator, "{s}.txt", .{temp_dir_path}) catch return;
     defer allocator.free(txt_path);
-    std.Io.Dir.cwd().deleteFile(txt_path) catch {};
+    std.Io.Dir.cwd().deleteFile(sys_io, txt_path) catch {};
 }
 
 // TODO: REMOVE THESE FOR THE 0.1.0 RELEASE - NOT NEEDED ANYMORE
@@ -300,12 +301,12 @@ fn cleanupLegacyTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats, file
     };
     defer allocator.free(temp_base);
 
-    var temp_dir = std.Io.Dir.cwd().openDir(temp_base, .{ .iterate = true }) catch return;
-    defer temp_dir.close();
+    var temp_dir = std.Io.Dir.cwd().openDir(sys_io, temp_base, .{ .iterate = true }) catch return;
+    defer temp_dir.close(sys_io);
 
     // Look for directories matching "roc-*" pattern (old naming convention)
     var iter = temp_dir.iterate();
-    while (iter.next() catch null) |entry| {
+    while (iter.next(sys_io) catch null) |entry| {
         if (entry.kind != .directory) continue;
 
         // Check if it starts with "roc-" (old prefix pattern)
@@ -314,7 +315,7 @@ fn cleanupLegacyTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats, file
             defer allocator.free(entry_path);
 
             // Delete the directory and its contents
-            std.Io.Dir.cwd().deleteTree(entry_path) catch {
+            std.Io.Dir.cwd().deleteTree(sys_io, entry_path) catch {
                 if (maybe_stats) |stats| stats.errors += 1;
                 continue;
             };
@@ -332,19 +333,19 @@ fn cleanupLegacyPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStat
     const cache_base = config.getEffectiveCacheDir(allocator) catch return;
     defer allocator.free(cache_base);
 
-    var cache_dir = std.Io.Dir.cwd().openDir(cache_base, .{ .iterate = true }) catch return;
-    defer cache_dir.close();
+    var cache_dir = std.Io.Dir.cwd().openDir(sys_io, cache_base, .{ .iterate = true }) catch return;
+    defer cache_dir.close(sys_io);
 
     // Look for old-style entries (hash directories or direct cache files)
     var iter = cache_dir.iterate();
-    while (iter.next() catch null) |entry| {
+    while (iter.next(sys_io) catch null) |entry| {
         const entry_path = std.fs.path.join(allocator, &.{ cache_base, entry.name }) catch continue;
         defer allocator.free(entry_path);
 
         if (entry.kind == .file) {
             // Old-style: direct .rcache files in the cache root
             if (std.mem.endsWith(u8, entry.name, ".rcache")) {
-                std.Io.Dir.cwd().deleteFile(entry_path) catch {
+                std.Io.Dir.cwd().deleteFile(sys_io, entry_path) catch {
                     if (maybe_stats) |stats| stats.errors += 1;
                     continue;
                 };
@@ -358,7 +359,7 @@ fn cleanupLegacyPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStat
 
             if (is_old_hash_dir) {
                 // Delete the entire old hash directory
-                std.Io.Dir.cwd().deleteTree(entry_path) catch {
+                std.Io.Dir.cwd().deleteTree(sys_io, entry_path) catch {
                     if (maybe_stats) |stats| stats.errors += 1;
                     continue;
                 };
@@ -390,10 +391,10 @@ fn isLegacyHashDir(name: []const u8) bool {
 
 test "Config constants are reasonable" {
     // 5 minutes in nanoseconds
-    try std.testing.expectEqual(@as(i128, 300_000_000_000), Config.TEMP_MAX_AGE_NS);
+    try std.testing.expectEqual(@as(i96, 300_000_000_000), Config.TEMP_MAX_AGE_NS);
 
     // 30 days in nanoseconds
-    try std.testing.expectEqual(@as(i128, 30 * 24 * 60 * 60 * 1_000_000_000), Config.PERSISTENT_MAX_AGE_NS);
+    try std.testing.expectEqual(@as(i96, 30 * 24 * 60 * 60 * 1_000_000_000), Config.PERSISTENT_MAX_AGE_NS);
 }
 
 test "CleanupStats initializes to zero" {
@@ -423,25 +424,25 @@ test "deleteTempDir deletes directory and coordination file" {
     defer tmp_dir.cleanup();
 
     // Create a subdirectory simulating a temp runtime dir
-    tmp_dir.dir.makeDir("test_temp_dir") catch unreachable;
+    tmp_dir.dir.createDir(sys_io, "test_temp_dir", .default_dir) catch unreachable;
 
     // Create a file inside the directory
-    const inner_file = tmp_dir.dir.createFile("test_temp_dir/executable", .{}) catch unreachable;
-    inner_file.close();
+    const inner_file = tmp_dir.dir.createFile(sys_io, "test_temp_dir/executable", .{}) catch unreachable;
+    inner_file.close(sys_io);
 
     // Create the coordination file (.txt)
-    const coord_file = tmp_dir.dir.createFile("test_temp_dir.txt", .{}) catch unreachable;
-    coord_file.close();
+    const coord_file = tmp_dir.dir.createFile(sys_io, "test_temp_dir.txt", .{}) catch unreachable;
+    coord_file.close(sys_io);
 
     // Get the full path to the temp dir
-    const temp_dir_path = tmp_dir.dir.realpathAlloc(allocator, "test_temp_dir") catch unreachable;
+    const temp_dir_path = std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "test_temp_dir" }) catch unreachable;
     defer allocator.free(temp_dir_path);
 
     // Verify both exist
-    tmp_dir.dir.access("test_temp_dir", .{}) catch {
+    tmp_dir.dir.access(sys_io, "test_temp_dir", .{}) catch {
         return error.TestSetupFailed;
     };
-    tmp_dir.dir.access("test_temp_dir.txt", .{}) catch {
+    tmp_dir.dir.access(sys_io, "test_temp_dir.txt", .{}) catch {
         return error.TestSetupFailed;
     };
 
@@ -449,7 +450,7 @@ test "deleteTempDir deletes directory and coordination file" {
     deleteTempDir(allocator, temp_dir_path);
 
     // Verify directory is deleted
-    tmp_dir.dir.access("test_temp_dir", .{}) catch |err| {
+    tmp_dir.dir.access(sys_io, "test_temp_dir", .{}) catch |err| {
         try std.testing.expectEqual(error.FileNotFound, err);
         return; // Success - directory was deleted
     };
@@ -462,23 +463,23 @@ test "tryDeleteEmptyDir deletes empty directory" {
     defer tmp_dir.cleanup();
 
     // Create an empty subdirectory
-    tmp_dir.dir.makeDir("empty_dir") catch unreachable;
+    tmp_dir.dir.createDir(sys_io, "empty_dir", .default_dir) catch unreachable;
 
     // Verify it exists
-    tmp_dir.dir.access("empty_dir", .{}) catch {
+    tmp_dir.dir.access(sys_io, "empty_dir", .{}) catch {
         return error.TestSetupFailed;
     };
 
     // Get the full path
     const allocator = std.testing.allocator;
-    const empty_dir_path = tmp_dir.dir.realpathAlloc(allocator, "empty_dir") catch unreachable;
+    const empty_dir_path = std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "empty_dir" }) catch unreachable;
     defer allocator.free(empty_dir_path);
 
     // Try to delete it
     tryDeleteEmptyDir(empty_dir_path);
 
     // Verify it's deleted
-    tmp_dir.dir.access("empty_dir", .{}) catch |err| {
+    tmp_dir.dir.access(sys_io, "empty_dir", .{}) catch |err| {
         try std.testing.expectEqual(error.FileNotFound, err);
         return; // Success
     };
@@ -490,20 +491,20 @@ test "tryDeleteEmptyDir does not delete non-empty directory" {
     defer tmp_dir.cleanup();
 
     // Create a subdirectory with a file
-    tmp_dir.dir.makeDir("nonempty_dir") catch unreachable;
-    const file = tmp_dir.dir.createFile("nonempty_dir/file.txt", .{}) catch unreachable;
-    file.close();
+    tmp_dir.dir.createDir(sys_io, "nonempty_dir", .default_dir) catch unreachable;
+    const file = tmp_dir.dir.createFile(sys_io, "nonempty_dir/file.txt", .{}) catch unreachable;
+    file.close(sys_io);
 
     // Get the full path
     const allocator = std.testing.allocator;
-    const nonempty_dir_path = tmp_dir.dir.realpathAlloc(allocator, "nonempty_dir") catch unreachable;
+    const nonempty_dir_path = std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "nonempty_dir" }) catch unreachable;
     defer allocator.free(nonempty_dir_path);
 
     // Try to delete it (should fail silently)
     tryDeleteEmptyDir(nonempty_dir_path);
 
     // Verify it still exists
-    tmp_dir.dir.access("nonempty_dir", .{}) catch {
+    tmp_dir.dir.access(sys_io, "nonempty_dir", .{}) catch {
         return error.DirectoryShouldExist;
     };
     // Success - directory still exists as expected
@@ -516,23 +517,23 @@ test "cleanupCacheSubdir deletes old files and keeps new files" {
     defer tmp_dir.cleanup();
 
     // Create a cache subdir structure
-    tmp_dir.dir.makeDir("cache_subdir") catch unreachable;
-    tmp_dir.dir.makeDir("cache_subdir/bucket1") catch unreachable;
-    tmp_dir.dir.makeDir("cache_subdir/bucket2") catch unreachable;
+    tmp_dir.dir.createDir(sys_io, "cache_subdir", .default_dir) catch unreachable;
+    tmp_dir.dir.createDir(sys_io, "cache_subdir/bucket1", .default_dir) catch unreachable;
+    tmp_dir.dir.createDir(sys_io, "cache_subdir/bucket2", .default_dir) catch unreachable;
 
     // Create files in bucket1
-    const file1 = tmp_dir.dir.createFile("cache_subdir/bucket1/old_file.rcache", .{}) catch unreachable;
-    file1.close();
+    const file1 = tmp_dir.dir.createFile(sys_io, "cache_subdir/bucket1/old_file.rcache", .{}) catch unreachable;
+    file1.close(sys_io);
 
-    const file2 = tmp_dir.dir.createFile("cache_subdir/bucket2/new_file.rcache", .{}) catch unreachable;
-    file2.close();
+    const file2 = tmp_dir.dir.createFile(sys_io, "cache_subdir/bucket2/new_file.rcache", .{}) catch unreachable;
+    file2.close(sys_io);
 
     // Get the full path
-    const subdir_path = tmp_dir.dir.realpathAlloc(allocator, "cache_subdir") catch unreachable;
+    const subdir_path = std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "cache_subdir" }) catch unreachable;
     defer allocator.free(subdir_path);
 
     // Get current time - files will be very recent (age ~0)
-    const now = std.time.nanoTimestamp();
+    const now = std.Io.Timestamp.now(sys_io, .real);
 
     // Track stats
     var stats = CleanupStats{};
@@ -544,15 +545,15 @@ test "cleanupCacheSubdir deletes old files and keeps new files" {
     try std.testing.expectEqual(@as(u32, 0), stats.cache_files_deleted);
 
     // Verify files exist
-    tmp_dir.dir.access("cache_subdir/bucket1/old_file.rcache", .{}) catch {
+    tmp_dir.dir.access(sys_io, "cache_subdir/bucket1/old_file.rcache", .{}) catch {
         return error.FileShouldExist;
     };
-    tmp_dir.dir.access("cache_subdir/bucket2/new_file.rcache", .{}) catch {
+    tmp_dir.dir.access(sys_io, "cache_subdir/bucket2/new_file.rcache", .{}) catch {
         return error.FileShouldExist;
     };
 
     // Now test with a fake "future" time that makes all files appear old
-    const far_future = now + Config.PERSISTENT_MAX_AGE_NS + std.time.ns_per_s;
+    const far_future: std.Io.Timestamp = .{ .nanoseconds = now.nanoseconds + Config.PERSISTENT_MAX_AGE_NS + std.time.ns_per_s };
     var stats2 = CleanupStats{};
 
     cleanupCacheSubdir(allocator, subdir_path, far_future, &stats2);
@@ -561,7 +562,7 @@ test "cleanupCacheSubdir deletes old files and keeps new files" {
     try std.testing.expectEqual(@as(u32, 2), stats2.cache_files_deleted);
 
     // Verify files are gone
-    tmp_dir.dir.access("cache_subdir/bucket1/old_file.rcache", .{}) catch |err| {
+    tmp_dir.dir.access(sys_io, "cache_subdir/bucket1/old_file.rcache", .{}) catch |err| {
         try std.testing.expectEqual(error.FileNotFound, err);
         // Continue to check the other file
     };
@@ -592,20 +593,20 @@ test "cleanup removes empty bucket directories" {
     defer tmp_dir.cleanup();
 
     // Create a cache subdir structure with empty buckets
-    tmp_dir.dir.makeDir("cache_subdir") catch unreachable;
-    tmp_dir.dir.makeDir("cache_subdir/empty_bucket") catch unreachable;
+    tmp_dir.dir.createDir(sys_io, "cache_subdir", .default_dir) catch unreachable;
+    tmp_dir.dir.createDir(sys_io, "cache_subdir/empty_bucket", .default_dir) catch unreachable;
 
     // Create a file that will be deleted
-    const file = tmp_dir.dir.createFile("cache_subdir/empty_bucket/old.rcache", .{}) catch unreachable;
-    file.close();
+    const file = tmp_dir.dir.createFile(sys_io, "cache_subdir/empty_bucket/old.rcache", .{}) catch unreachable;
+    file.close(sys_io);
 
     // Get the full path
-    const subdir_path = tmp_dir.dir.realpathAlloc(allocator, "cache_subdir") catch unreachable;
+    const subdir_path = std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "cache_subdir" }) catch unreachable;
     defer allocator.free(subdir_path);
 
     // Use future time to make file appear old
-    const now = std.time.nanoTimestamp();
-    const far_future = now + Config.PERSISTENT_MAX_AGE_NS + std.time.ns_per_s;
+    const now = std.Io.Timestamp.now(sys_io, .real);
+    const far_future: std.Io.Timestamp = .{ .nanoseconds = now.nanoseconds + Config.PERSISTENT_MAX_AGE_NS + std.time.ns_per_s };
 
     var stats = CleanupStats{};
     cleanupCacheSubdir(allocator, subdir_path, far_future, &stats);
@@ -614,7 +615,7 @@ test "cleanup removes empty bucket directories" {
     try std.testing.expectEqual(@as(u32, 1), stats.cache_files_deleted);
 
     // Empty bucket should be removed
-    tmp_dir.dir.access("cache_subdir/empty_bucket", .{}) catch |err| {
+    tmp_dir.dir.access(sys_io, "cache_subdir/empty_bucket", .{}) catch |err| {
         try std.testing.expectEqual(error.FileNotFound, err);
         return; // Success - empty bucket was removed
     };
