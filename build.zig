@@ -31,7 +31,8 @@ const glibc_cross_targets = [_]CrossTarget{
 /// Windows cross-compile targets
 const windows_cross_targets = [_]CrossTarget{
     .{ .name = "x64win", .query = .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .msvc } },
-    .{ .name = "arm64win", .query = .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .msvc } },
+    // TODO: re-enable when Zig 0.16 fixes @ptrCast alignment bug in std/debug/SelfInfo/Windows.zig:569
+    // .{ .name = "arm64win", .query = .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .msvc } },
 };
 
 /// All Linux cross-compile targets (musl + glibc)

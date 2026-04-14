@@ -64,7 +64,8 @@ const targets_fx = [_]TargetInfo{
     .{ .name = "x64musl", .requires_linux = false },
     .{ .name = "arm64musl", .requires_linux = false },
     .{ .name = "x64win", .requires_linux = false },
-    .{ .name = "arm64win", .requires_linux = false },
+    // TODO: re-enable when Zig 0.16 fixes @ptrCast alignment bug in std/debug/SelfInfo/Windows.zig
+    // .{ .name = "arm64win", .requires_linux = false },
 };
 
 /// Fx-open platform test apps - test effectful apps with open union errors and List(Str) args
