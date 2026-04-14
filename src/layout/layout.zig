@@ -784,7 +784,7 @@ test "Layout scalar data access" {
     const str_layout = Layout.str();
     try testing.expectEqual(LayoutTag.scalar, str_layout.tag);
     try testing.expectEqual(ScalarTag.str, str_layout.getScalar().tag);
-    try testing.expectEqual({}, str_layout.getScalar().data.str);
+    try testing.expectEqual(ScalarTag.str, str_layout.getScalar().tag);
 }
 
 test "Layout non-scalar types" {

@@ -163,8 +163,8 @@ pub const Store = struct {
         const tag = @intFromEnum(scalar.tag);
 
         // Get the precision bits directly from the packed representation
-        // This works because in a packed union, all fields start at bit 0
-        const scalar_bits = @as(u7, @bitCast(scalar));
+        // Extract the meaningful 7 bits (4 data + 3 tag) from the 28-bit padded scalar
+        const scalar_bits: u7 = @truncate(@as(u28, @bitCast(scalar)));
         const precision = scalar_bits & 0xF; // Lower 4 bits contain precision for numeric types
 
         // Create masks for different tag ranges

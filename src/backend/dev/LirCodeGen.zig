@@ -14598,7 +14598,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try self.codegen.emitLoadStack(.w64, ret_reg_2, stack_offset + 16);
                         },
                         .frac => {
-                            const precision = scalar.data.frac;
+                            const precision = scalar.getFrac();
                             if (precision == .dec) {
                                 // Dec is 128-bit fixed-point: 2 general registers
                                 switch (loc) {
@@ -14661,7 +14661,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
                         // Integer scalars: 1 or 2 registers depending on precision
                         .int => {
-                            const precision = scalar.data.int;
+                            const precision = scalar.getInt();
                             if (precision == .i128 or precision == .u128) {
                                 // 2 registers (16 bytes)
                                 switch (loc) {
