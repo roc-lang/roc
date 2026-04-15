@@ -411,7 +411,6 @@ pub const LowLevel = enum {
         alias_arg: usize,
         borrow_arg: usize,
         no_return,
-        requires_explicit_summary,
     };
 
     pub const ResultMaterialization = enum {
@@ -813,13 +812,11 @@ pub const LowLevel = enum {
 
             .list_get_unsafe => .{ .borrow_arg = 0 },
 
-            // These produce container results whose payload provenance needs a more
-            // precise summary than the current explicit lowering computes.
             .list_first,
             .list_last,
             .list_split_first,
             .list_split_last,
-            => .requires_explicit_summary,
+            => .fresh,
 
             else => .fresh,
         };

@@ -392,7 +392,7 @@ const ProcLowerer = struct {
     fn lowLevelResultSemantics(self: *ProcLowerer, op: base.LowLevel, args: []const LIR.LocalId) LIR.ResultSemantics {
         _ = self;
         return switch (op.procResultSemantics()) {
-            .fresh, .no_return, .requires_explicit_summary => .fresh,
+            .fresh, .no_return => .fresh,
             .alias_arg => |arg_index| blk: {
                 if (builtin.mode == .Debug and arg_index >= args.len) {
                     debugPanic("lir.from_ir low-level alias_arg summary out of bounds");

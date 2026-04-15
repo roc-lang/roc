@@ -83,7 +83,7 @@ primitive helper semantics.
    Current behavior:
    - Dev backend copies list elements into stack temporaries and conditionally `incref`s them.
    Missing earlier fact:
-   - LIR does not say whether `list_get_unsafe`, `list_first`, and `list_last` produce borrowed aliases or fresh owned values.
+   - LIR still relies on backend/helper lowering details for some element-extraction/container-result cases even though the central low-level contract now classifies them directly.
    LIR change needed:
    - `LowLevel.procResultSemantics()` / arg ownership metadata must distinguish “result aliases list element” vs “result is a copied owned value”.
    Replacement:
