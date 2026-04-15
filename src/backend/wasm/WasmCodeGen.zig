@@ -6847,7 +6847,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const elem_layout_idx = self.listElemRuntimeLayout(list_layout_idx);
             const elem_size: u32 = self.layoutStorageByteSize(elem_layout_idx);
             const elem_is_composite = self.isCompositeLayout(elem_layout_idx);
-            const elem_contains_refcounted = builtinInternalLayoutContainsRefcounted(ls, "wasm.list_get_unsafe.builtin_elem_rc", elem_layout_idx);
 
             // Generate list expression and save pointer
             try self.emitProcLocal(args[0]);
@@ -6881,17 +6880,9 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 try self.emitLocalSet(dst_local);
 
                 try self.emitMemCopy(dst_local, 0, src_local, elem_size);
-                try self.emitBuiltinInternalRcAtPtr(.incref, dst_local, elem_layout_idx, 1);
                 try self.emitLocalGet(dst_local);
             } else {
                 try self.emitLoadOpForLayout(elem_layout_idx, 0);
-                if (elem_contains_refcounted) {
-                    const elem_vt = self.resolveValType(elem_layout_idx);
-                    const elem_local = self.storage.allocAnonymousLocal(elem_vt) catch return error.OutOfMemory;
-                    try self.emitLocalSet(elem_local);
-                    try self.emitBuiltinInternalRcForValueLocal(.incref, elem_local, elem_vt, elem_layout_idx, 1);
-                    try self.emitLocalGet(elem_local);
-                }
             }
         },
 
@@ -6920,7 +6911,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const elem_layout_idx = self.listElemRuntimeLayout(list_layout_idx);
             const elem_size: u32 = self.layoutStorageByteSize(elem_layout_idx);
             const elem_is_composite = self.isCompositeLayout(elem_layout_idx);
-            const elem_contains_refcounted = builtinInternalLayoutContainsRefcounted(ls, "wasm.list_first.builtin_elem_rc", elem_layout_idx);
 
             try self.emitProcLocal(args[0]);
             const list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -6940,17 +6930,9 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 try self.emitLocalSet(dst_local);
 
                 try self.emitMemCopy(dst_local, 0, src_local, elem_size);
-                try self.emitBuiltinInternalRcAtPtr(.incref, dst_local, elem_layout_idx, 1);
                 try self.emitLocalGet(dst_local);
             } else {
                 try self.emitLoadOpForLayout(elem_layout_idx, 0);
-                if (elem_contains_refcounted) {
-                    const elem_vt = self.resolveValType(elem_layout_idx);
-                    const elem_local = self.storage.allocAnonymousLocal(elem_vt) catch return error.OutOfMemory;
-                    try self.emitLocalSet(elem_local);
-                    try self.emitBuiltinInternalRcForValueLocal(.incref, elem_local, elem_vt, elem_layout_idx, 1);
-                    try self.emitLocalGet(elem_local);
-                }
             }
         },
         .list_last => {
@@ -6959,7 +6941,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const elem_layout_idx = self.listElemRuntimeLayout(list_layout_idx);
             const elem_size: u32 = self.layoutStorageByteSize(elem_layout_idx);
             const elem_is_composite = self.isCompositeLayout(elem_layout_idx);
-            const elem_contains_refcounted = builtinInternalLayoutContainsRefcounted(ls, "wasm.list_last.builtin_elem_rc", elem_layout_idx);
 
             try self.emitProcLocal(args[0]);
             const list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -6988,17 +6969,9 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 try self.emitLocalSet(dst_local);
 
                 try self.emitMemCopy(dst_local, 0, src_local, elem_size);
-                try self.emitBuiltinInternalRcAtPtr(.incref, dst_local, elem_layout_idx, 1);
                 try self.emitLocalGet(dst_local);
             } else {
                 try self.emitLoadOpForLayout(elem_layout_idx, 0);
-                if (elem_contains_refcounted) {
-                    const elem_vt = self.resolveValType(elem_layout_idx);
-                    const elem_local = self.storage.allocAnonymousLocal(elem_vt) catch return error.OutOfMemory;
-                    try self.emitLocalSet(elem_local);
-                    try self.emitBuiltinInternalRcForValueLocal(.incref, elem_local, elem_vt, elem_layout_idx, 1);
-                    try self.emitLocalGet(elem_local);
-                }
             }
         },
         .list_drop_first => {

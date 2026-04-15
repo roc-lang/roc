@@ -1743,10 +1743,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(temp_reg);
                     self.codegen.freeGeneral(addr_reg);
 
-                    if (builtinInternalLayoutValContainsRefcounted(ls, "dev.list_get.builtin_elem_rc", elem_layout_val)) {
-                        try self.emitIncrefAtStackOffset(elem_slot, elem_layout_idx);
-                    }
-
                     var result_loc: ValueLocation = if (elem_layout_idx == .i128 or elem_layout_idx == .u128 or elem_layout_idx == .dec)
                         .{ .stack_i128 = elem_slot }
                     else if (elem_layout_idx == .str)
@@ -4164,10 +4160,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(temp_reg);
             self.codegen.freeGeneral(ptr_reg);
 
-            if (builtinInternalLayoutValContainsRefcounted(ls, "dev.list_first.builtin_ret_rc", ret_layout_val)) {
-                try self.emitIncrefAtStackOffset(elem_slot, ret_layout_idx);
-            }
-
             var result_loc: ValueLocation = if (ret_layout_idx == .i128 or ret_layout_idx == .u128 or ret_layout_idx == .dec)
                 .{ .stack_i128 = elem_slot }
             else if (ret_layout_idx == .str)
@@ -4236,10 +4228,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             self.codegen.freeGeneral(temp_reg);
             self.codegen.freeGeneral(addr_reg);
-
-            if (builtinInternalLayoutValContainsRefcounted(ls, "dev.list_last.builtin_ret_rc", ret_layout_val)) {
-                try self.emitIncrefAtStackOffset(elem_slot, ret_layout_idx);
-            }
 
             var result_loc: ValueLocation = if (ret_layout_idx == .i128 or ret_layout_idx == .u128 or ret_layout_idx == .dec)
                 .{ .stack_i128 = elem_slot }
