@@ -263,14 +263,24 @@ const ProcPass = struct {
     }
 
     fn explicitOwnerForLocal(self: *const ProcPass, local: LocalId) ?LocalId {
-        if (self.provenance_owner[@intFromEnum(local)]) |owner| return owner;
+        var current = local;
+        var hops_remaining: usize = self.local_count;
+        while (hops_remaining > 0) : (hops_remaining -= 1) {
+            if (self.provenance_owner[@intFromEnum(current)]) |owner| {
+                if (owner == current) break;
+                current = owner;
+                continue;
+            }
 
-        const local_idx = @intFromEnum(local);
-        if (!self.owned_locals.isSet(local_idx)) return null;
+            const local_idx = @intFromEnum(current);
+            if (!self.owned_locals.isSet(local_idx)) return null;
 
-        const layout_idx = self.store.getLocal(local).layout_idx;
-        if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(layout_idx))) return null;
-        return local;
+            const layout_idx = self.store.getLocal(current).layout_idx;
+            if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(layout_idx))) return null;
+            return current;
+        }
+
+        unreachable;
     }
 
     fn recordResultOwner(self: *ProcPass, target: LocalId, result: LIR.ResultSemantics) void {
@@ -822,7 +832,8 @@ const ProcPass = struct {
 
                 const raw_body = try self.rewriteStmt(for_stmt.body);
                 const body = try self.prependMaterializationRetain(for_stmt.elem, for_stmt.elem_result, for_stmt.elem_ownership, raw_body);
-                const next = try self.rewriteStmt(for_stmt.next);
+                const rewritten_next = try self.rewriteStmt(for_stmt.next);
+                const next = try self.prependEdgeDrops(stmt_id, rewritten_next, for_stmt.next);
                 const rewritten_ptr = self.store.getCFStmtPtr(rewritten_loop);
                 rewritten_ptr.for_list.body = body;
                 rewritten_ptr.for_list.next = next;
@@ -839,7 +850,24 @@ const ProcPass = struct {
                 rewritten_ptr.join.remainder = rewritten_remainder;
                 break :blk rewritten_join;
             },
-            .scope_exit, .jump, .ret, .runtime_error, .crash, .loop_continue => stmt_id,
+            .scope_exit => |scope_exit| blk: {
+                const terminal = try self.store.addCFStmt(.{ .scope_exit = .{ .id = scope_exit.id } });
+                break :blk try self.prependTerminalDrops(stmt_id, terminal);
+            },
+            .jump => stmt_id,
+            .ret => |ret_stmt| blk: {
+                const terminal = try self.store.addCFStmt(.{ .ret = .{ .value = ret_stmt.value } });
+                break :blk try self.prependTerminalDrops(stmt_id, terminal);
+            },
+            .runtime_error => blk: {
+                const terminal = try self.store.addCFStmt(.runtime_error);
+                break :blk try self.prependTerminalDrops(stmt_id, terminal);
+            },
+            .crash => |crash| blk: {
+                const terminal = try self.store.addCFStmt(.{ .crash = .{ .msg = crash.msg } });
+                break :blk try self.prependTerminalDrops(stmt_id, terminal);
+            },
+            .loop_continue => stmt_id,
         };
 
         if (!self.rewritten_stmt_ids.contains(@intFromEnum(stmt_id))) {
@@ -896,21 +924,72 @@ const ProcPass = struct {
 
         var dead = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.local_count);
         defer dead.deinit(self.allocator);
+        var defs = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.local_count);
+        defer defs.deinit(self.allocator);
+        var uses = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.local_count);
+        defer uses.deinit(self.allocator);
         var ownership_passed = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.local_count);
         defer ownership_passed.deinit(self.allocator);
 
-        try self.collectOwnershipPassed(from_stmt, &ownership_passed);
+        self.collectDefsUses(from_stmt, &defs, &uses, &ownership_passed);
+        switch (self.store.getCFStmt(from_stmt)) {
+            .for_list => |for_stmt| defs.unset(@intFromEnum(for_stmt.elem)),
+            else => {},
+        }
 
         dead.setUnion(self.live_in[from_slot]);
+        defs.setIntersection(self.owned_locals);
+        dead.setUnion(defs);
         setDifferenceInPlace(&dead, self.live_in[succ_slot]);
         dead.setIntersection(self.owned_locals);
         setDifferenceInPlace(&dead, ownership_passed);
 
-        var cursor = successor_rewritten;
-        var local_idx = self.local_count;
+        return try self.prependOwnerDrops(dead, successor_rewritten);
+    }
+
+    fn prependTerminalDrops(self: *ProcPass, stmt_id: CFStmtId, terminal_rewritten: CFStmtId) Allocator.Error!CFStmtId {
+        const slot = self.stmtSlot(stmt_id) orelse return terminal_rewritten;
+
+        var defs = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.local_count);
+        defer defs.deinit(self.allocator);
+        var uses = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.local_count);
+        defer uses.deinit(self.allocator);
+        var ownership_passed = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.local_count);
+        defer ownership_passed.deinit(self.allocator);
+
+        self.collectDefsUses(stmt_id, &defs, &uses, &ownership_passed);
+
+        var dead = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.local_count);
+        defer dead.deinit(self.allocator);
+        dead.setUnion(self.live_in[slot]);
+        dead.setIntersection(self.owned_locals);
+        setDifferenceInPlace(&dead, uses);
+        setDifferenceInPlace(&dead, ownership_passed);
+
+        return try self.prependOwnerDrops(dead, terminal_rewritten);
+    }
+
+    fn prependOwnerDrops(
+        self: *ProcPass,
+        candidate_locals: std.DynamicBitSetUnmanaged,
+        successor: CFStmtId,
+    ) Allocator.Error!CFStmtId {
+        var dead_owners = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.local_count);
+        defer dead_owners.deinit(self.allocator);
+
+        var local_idx: usize = 0;
+        while (local_idx < candidate_locals.bit_length) : (local_idx += 1) {
+            if (!candidate_locals.isSet(local_idx)) continue;
+            const local: LocalId = @enumFromInt(@as(u32, @intCast(local_idx)));
+            const owner = self.explicitOwnerForLocal(local) orelse continue;
+            dead_owners.set(@intFromEnum(owner));
+        }
+
+        var cursor = successor;
+        local_idx = self.local_count;
         while (local_idx > 0) {
             local_idx -= 1;
-            if (!dead.isSet(local_idx)) continue;
+            if (!dead_owners.isSet(local_idx)) continue;
             cursor = try self.store.addCFStmt(.{ .decref = .{
                 .value = @enumFromInt(@as(u32, @intCast(local_idx))),
                 .next = cursor,

@@ -42,7 +42,7 @@ pub fn inferProcResultContracts(
             const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
             const proc = store.getProcSpec(proc_id);
             const inferred = try inferOneProcResultContract(allocator, store, proc);
-            if (!procResultContractsEqual(proc.result_contract, inferred)) {
+            if (!procResultContractsEqual(store, proc.result_contract, inferred)) {
                 store.getProcSpecPtr(proc_id).result_contract = inferred;
                 changed = true;
             }
@@ -106,7 +106,7 @@ fn inferOneProcResultContract(
 
     const first = summaries.items[0];
     for (summaries.items[1..]) |summary| {
-        if (!procResultContractsEqual(first, summary)) return .fresh;
+        if (!procResultContractsEqual(store, first, summary)) return .fresh;
     }
     return first;
 }
@@ -459,7 +459,7 @@ fn inferJoinParamContract(
             saw_incoming = true;
             const candidate = try inferLocalContract(allocator, store, args[param_index], arg_index_by_local, active);
             if (summary) |existing| {
-                if (!procResultContractsEqual(existing, candidate)) return .fresh;
+                if (!procResultContractsEqual(store, existing, candidate)) return .fresh;
             } else {
                 summary = candidate;
             }
@@ -491,16 +491,18 @@ fn findProducer(store: *const LirStore, target: LocalId) ?CFStmt {
     return null;
 }
 
-fn procResultContractsEqual(a: ProcResultContract, b: ProcResultContract) bool {
+fn procResultContractsEqual(store: *const LirStore, a: ProcResultContract, b: ProcResultContract) bool {
     return switch (a) {
         .fresh => b == .fresh,
         .no_return => b == .no_return,
         .alias_of_param => |left| switch (b) {
-            .alias_of_param => |right| left.param_index == right.param_index and left.projections.start == right.projections.start and left.projections.len == right.projections.len,
+            .alias_of_param => |right| left.param_index == right.param_index and
+                refProjectionSpansEqual(store, left.projections, right.projections),
             else => false,
         },
         .borrow_of_param => |left| switch (b) {
-            .borrow_of_param => |right| left.param_index == right.param_index and left.projections.start == right.projections.start and left.projections.len == right.projections.len,
+            .borrow_of_param => |right| left.param_index == right.param_index and
+                refProjectionSpansEqual(store, left.projections, right.projections),
             else => false,
         },
     };
@@ -571,7 +573,7 @@ fn propagateRefResultSemantics(
                 .assign_ref => |assign| {
                     if (assign.op == .local) continue;
                     const next_semantics = try refOpResultSemantics(allocator, store, assign.op);
-                    if (resultSemanticsEqual(next_semantics, assign.result)) continue;
+                    if (resultSemanticsEqual(store, next_semantics, assign.result)) continue;
                     store.cf_stmts.items[i] = .{ .assign_ref = .{
                         .target = assign.target,
                         .result = next_semantics,
@@ -763,22 +765,48 @@ fn localResultSemantics(store: *const LirStore, local: LocalId) ?ResultSemantics
     };
 }
 
-fn resultSemanticsEqual(a: ResultSemantics, b: ResultSemantics) bool {
+fn resultSemanticsEqual(store: *const LirStore, a: ResultSemantics, b: ResultSemantics) bool {
     return switch (a) {
         .fresh => b == .fresh,
         .alias_of => |left| switch (b) {
             .alias_of => |right| left.owner == right.owner and
-                left.projections.start == right.projections.start and
-                left.projections.len == right.projections.len,
+                refProjectionSpansEqual(store, left.projections, right.projections),
             else => false,
         },
         .borrow_of => |left| switch (b) {
             .borrow_of => |right| left.owner == right.owner and
                 borrowRegionsEqual(left.region, right.region) and
-                left.projections.start == right.projections.start and
-                left.projections.len == right.projections.len,
+                refProjectionSpansEqual(store, left.projections, right.projections),
             else => false,
         },
+    };
+}
+
+fn refProjectionSpansEqual(store: *const LirStore, a: LIR.RefProjectionSpan, b: LIR.RefProjectionSpan) bool {
+    const left = store.getRefProjectionSpan(a);
+    const right = store.getRefProjectionSpan(b);
+    if (left.len != right.len) return false;
+    for (left, right) |l, r| {
+        if (!refProjectionEqual(l, r)) return false;
+    }
+    return true;
+}
+
+fn refProjectionEqual(a: LIR.RefProjection, b: LIR.RefProjection) bool {
+    return switch (a) {
+        .field => |left| switch (b) {
+            .field => |right| left == right,
+            else => false,
+        },
+        .tag_payload => |left| switch (b) {
+            .tag_payload => |right| left == right,
+            else => false,
+        },
+        .tag_payload_struct => |left| switch (b) {
+            .tag_payload_struct => |right| left == right,
+            else => false,
+        },
+        .nominal => b == .nominal,
     };
 }
 
