@@ -7458,13 +7458,10 @@ pub const Interpreter = struct {
             idx -= 1;
             traceDbg(roc_ops, "trimBindingList: decref idx={d} layout.tag={s}", .{ idx, @tagName(list.items[idx].value.layout.tag) });
             if (comptime trace_refcount and builtin.os.tag != .freestanding) {
-                const stderr_file: std.Io.File = .stderr();
-                var buf: [256]u8 = undefined;
-                const msg = std.fmt.bufPrint(&buf, "[INTERP] trimBindingList decref binding idx={} ptr=0x{x}\n", .{
+                std.debug.print("[INTERP] trimBindingList decref binding idx={} ptr=0x{x}\n", .{
                     idx,
                     @intFromPtr(list.items[idx].value.ptr),
-                }) catch "[INTERP] trimBindingList decref\n";
-                stderr_file.writeAll(msg) catch {};
+                });
             }
             list.items[idx].value.decref(&self.runtime_layout_store, roc_ops);
             traceDbg(roc_ops, "trimBindingList: decref complete", .{});
@@ -14898,21 +14895,15 @@ pub const Interpreter = struct {
                 // Pop evaluated value from stack
                 const val = value_stack.pop() orelse return error.Crash;
                 if (comptime trace_refcount and builtin.os.tag != .freestanding) {
-                    const stderr_file: std.Io.File = .stderr();
-                    var buf: [256]u8 = undefined;
-                    const msg = std.fmt.bufPrint(&buf, "[INTERP] bind_decl popped val ptr=0x{x} (will defer decref)\n", .{
+                    std.debug.print("[INTERP] bind_decl popped val ptr=0x{x} (will defer decref)\n", .{
                         @intFromPtr(val.ptr),
-                    }) catch "[INTERP] bind_decl popped val\n";
-                    stderr_file.writeAll(msg) catch {};
+                    });
                 }
                 defer {
                     if (comptime trace_refcount and builtin.os.tag != .freestanding) {
-                        const stderr_file: std.Io.File = .stderr();
-                        var buf: [256]u8 = undefined;
-                        const msg = std.fmt.bufPrint(&buf, "[INTERP] bind_decl defer decref val ptr=0x{x}\n", .{
+                        std.debug.print("[INTERP] bind_decl defer decref val ptr=0x{x}\n", .{
                             @intFromPtr(val.ptr),
-                        }) catch "[INTERP] bind_decl defer decref\n";
-                        stderr_file.writeAll(msg) catch {};
+                        });
                     }
                     val.decref(&self.runtime_layout_store, roc_ops);
                 }
@@ -14937,12 +14928,9 @@ pub const Interpreter = struct {
                 // to self.bindings, so we must NOT decref temp_binds afterwards.
                 for (temp_binds.items) |binding| {
                     if (comptime trace_refcount and builtin.os.tag != .freestanding) {
-                        const stderr_file: std.Io.File = .stderr();
-                        var buf: [256]u8 = undefined;
-                        const msg = std.fmt.bufPrint(&buf, "[INTERP] upsertBinding from temp_binds ptr=0x{x}\n", .{
+                        std.debug.print("[INTERP] upsertBinding from temp_binds ptr=0x{x}\n", .{
                             @intFromPtr(binding.value.ptr),
-                        }) catch "[INTERP] upsertBinding\n";
-                        stderr_file.writeAll(msg) catch {};
+                        });
                     }
                     try self.upsertBinding(binding, bd.bindings_start, bd.is_var_decl, roc_ops);
                 }

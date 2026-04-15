@@ -46,7 +46,7 @@ const TraceWriterState = struct {
 
     fn init() TraceWriterState {
         var state = TraceWriterState{};
-        state.writer = std.Io.File.stderr().writer(&state.buffer);
+        state.writer = std.Io.File.stderr().writer(std.testing.io, &state.buffer);
         return state;
     }
 };

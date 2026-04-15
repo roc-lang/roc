@@ -203,7 +203,7 @@ const TraceWriter = struct {
 
     fn init() TraceWriter {
         var tw = TraceWriter{};
-        tw.writer = std.Io.File.stderr().writer(&tw.buffer);
+        tw.writer = std.Io.File.stderr().writer(std.testing.io, &tw.buffer);
         return tw;
     }
 

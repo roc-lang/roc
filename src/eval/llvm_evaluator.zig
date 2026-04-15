@@ -238,7 +238,7 @@ pub const LlvmEvaluator = struct {
 
         pub fn deinit(self: *CodeResult) void {
             self.library.close();
-            std.Io.Dir.cwd().deleteFile(self.library_path) catch {};
+            std.Io.Dir.cwd().deleteFile(std.Options.debug_io,self.library_path) catch {};
             self.allocator.free(self.library_path);
             // Note: layout_store is owned by LlvmEvaluator, not cleaned up here
         }
@@ -354,7 +354,7 @@ pub const LlvmEvaluator = struct {
             .{ .function_sections = false, .opt_level = opt_level },
         ) catch return error.CompilationFailed;
         errdefer {
-            std.Io.Dir.cwd().deleteFile(library_path) catch {};
+            std.Io.Dir.cwd().deleteFile(std.Options.debug_io,library_path) catch {};
             self.allocator.free(library_path);
         }
 
