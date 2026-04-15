@@ -1316,7 +1316,7 @@ fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 
     // Collect HTML in a buffer first, then escape it for JSON
     var html_buffer: [65536]u8 = undefined;
-    var html_writer = std.io.Writer.fixed(&html_buffer);
+    var html_writer = std.Io.Writer.fixed(&html_buffer);
 
     if (data.tokenize_reports.items.len > 0) {
         for (data.tokenize_reports.items) |report| {
@@ -1833,7 +1833,7 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWr
     mutable_cir.pushTypesToSExprTree(null, &tree) catch |err| {
         const error_msg = switch (err) {
             error.OutOfMemory => "Out of memory while generating types",
-            // Add other specific error messages if pushTypesToSExprTree can return other errors
+            error.WriteFailed => "Write failed while generating types",
         };
         try writeErrorResponse(response_buffer, .ERROR, error_msg);
         return;
@@ -1848,7 +1848,7 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWr
 }
 
 /// Write a diagnostic as JSON
-fn writeDiagnosticHtml(writer: *std.io.Writer, report: reporting.Report) !void {
+fn writeDiagnosticHtml(writer: *std.Io.Writer, report: reporting.Report) !void {
     try reporting.renderReportToHtml(&report, writer, reporting.ReportingConfig.initHtml());
 }
 
@@ -1910,7 +1910,7 @@ fn writeDiagnosticJson(writer: anytype, diagnostic: Diagnostic) !void {
 }
 
 /// Write a string with JSON escaping (without surrounding quotes)
-fn writeJsonString(writer: *std.io.Writer, str: []const u8) !void {
+fn writeJsonString(writer: *std.Io.Writer, str: []const u8) !void {
     try std.json.Stringify.encodeJsonStringChars(str, .{}, writer);
 }
 
@@ -1998,10 +1998,9 @@ export fn freeWasmString(ptr: [*]u8) void {
 /// Helper to create a simple error JSON string, following the length-prefix allocation pattern.
 fn createSimpleErrorJson(error_message: []const u8) ?[*:0]u8 {
     // 1. Format the string into a temporary buffer to determine its length.
-    var temp_buffer = std.array_list.Managed(u8).init(allocator);
-    defer temp_buffer.deinit();
-    temp_buffer.writer().print("{{\"status\":\"ERROR\",\"message\":\"{s}\"}}", .{error_message}) catch return null;
-    const json_len = temp_buffer.items.len;
+    var fmt_buf: [4096]u8 = undefined;
+    const json_str = std.fmt.bufPrint(&fmt_buf, "{{\"status\":\"ERROR\",\"message\":\"{s}\"}}", .{error_message}) catch return null;
+    const json_len = json_str.len;
 
     // 2. Allocate memory for [u32: length][u8...: data][u8: null terminator]
     const total_len = @sizeOf(u32) + json_len + 1;
@@ -2012,7 +2011,7 @@ fn createSimpleErrorJson(error_message: []const u8) ?[*:0]u8 {
 
     // 4. Copy the JSON data
     const data_ptr = final_buffer.ptr + @sizeOf(u32);
-    @memcpy(final_buffer[@sizeOf(u32)..][0..json_len], temp_buffer.items);
+    @memcpy(final_buffer[@sizeOf(u32)..][0..json_len], json_str);
 
     // 5. Null-terminate
     final_buffer[@sizeOf(u32) + json_len] = 0;
