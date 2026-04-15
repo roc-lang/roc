@@ -20,7 +20,6 @@ const LirStore = lir.LirStore;
 const ownership_boundary = lir.OwnershipBoundary;
 const RcHelperKey = layout.RcHelperKey;
 const RcHelperPlan = layout.RcHelperPlan;
-const RcHelperResolver = layout.RcHelperResolver;
 const RcListPlan = layout.ListPlan;
 const RcBoxPlan = layout.BoxPlan;
 const RcStructPlan = layout.StructPlan;
@@ -833,13 +832,12 @@ fn emitRawRcHelperCallForValuePtr(
     layout_idx: layout.Idx,
     inc_count: u16,
 ) Allocator.Error!void {
-    const resolver = RcHelperResolver.init(self.getLayoutStore());
-    const helper_key = resolver.makeKey(switch (kind) {
+    const helper_key = RcHelperKey{ .op = switch (kind) {
         .incref => .incref,
         .decref => .decref,
         .free => .free,
-    }, layout_idx);
-    const helper_plan = resolver.plan(helper_key);
+    }, .layout_idx = layout_idx };
+    const helper_plan = self.getLayoutStore().rcHelperPlan(helper_key);
     if (helper_plan == .noop) return;
     if (try self.emitRawDirectRcPlan(helper_key, helper_plan, value_ptr_local, null)) return;
 
@@ -1370,8 +1368,7 @@ fn emitRawRcHelperCallByKey(
     value_ptr_local: u32,
     count_local: ?u32,
 ) Allocator.Error!void {
-    const resolver = RcHelperResolver.init(self.getLayoutStore());
-    const helper_plan = resolver.plan(helper_key);
+    const helper_plan = self.getLayoutStore().rcHelperPlan(helper_key);
     if (helper_plan == .noop) return;
     if (try self.emitRawDirectRcPlan(helper_key, helper_plan, value_ptr_local, count_local)) return;
 
@@ -1423,9 +1420,7 @@ fn generateBuiltinInternalRcHelperBody(
     value_ptr_local: u32,
     count_local: ?u32,
 ) Allocator.Error!void {
-    const resolver = RcHelperResolver.init(self.getLayoutStore());
-
-    switch (resolver.plan(helper_key)) {
+    switch (self.getLayoutStore().rcHelperPlan(helper_key)) {
         .noop => {},
         .str_incref => {
             const alloc_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -1506,11 +1501,11 @@ fn generateBuiltinInternalRcHelperBody(
             }
         },
         .tag_union => |tag_plan| {
-            const variant_count = resolver.tagUnionVariantCount(tag_plan);
+            const variant_count = self.getLayoutStore().rcHelperTagUnionVariantCount(tag_plan);
             if (variant_count == 0) return;
 
             if (variant_count == 1) {
-                if (resolver.tagUnionVariantPlan(tag_plan, 0)) |child_key| {
+                if (self.getLayoutStore().rcHelperTagUnionVariantPlan(tag_plan, 0)) |child_key| {
                     try self.emitRawRcHelperCallByKey(child_key, value_ptr_local, count_local);
                 }
                 return;
@@ -1531,7 +1526,7 @@ fn generateBuiltinInternalRcHelperBody(
 
             var variant_i: u32 = 0;
             while (variant_i < variant_count) : (variant_i += 1) {
-                const child_key = resolver.tagUnionVariantPlan(tag_plan, variant_i) orelse continue;
+                const child_key = self.getLayoutStore().rcHelperTagUnionVariantPlan(tag_plan, variant_i) orelse continue;
                 self.body.append(self.allocator, Op.block) catch return error.OutOfMemory;
                 self.body.append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
 
@@ -1563,8 +1558,7 @@ fn compileBuiltinInternalRcHelper(self: *Self, helper_key: RcHelperKey) Allocato
         return func_idx;
     }
 
-    const resolver = RcHelperResolver.init(self.getLayoutStore());
-    const helper_plan = resolver.plan(helper_key);
+    const helper_plan = self.getLayoutStore().rcHelperPlan(helper_key);
     if (helper_plan == .noop) {
         if (builtin.mode == .Debug) {
             std.debug.panic("WASM/codegen invariant violated: attempted to compile noop RC helper for layout {d}", .{@intFromEnum(helper_key.layout_idx)});

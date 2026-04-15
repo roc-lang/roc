@@ -41,8 +41,9 @@ ownership decisions. The remaining sites below show the specific gaps.
    - [`src/backend/dev/LirCodeGen.zig:3911`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig:3911)
    - [`src/backend/dev/LirCodeGen.zig:4140`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig:4140)
    - [`src/backend/dev/LirCodeGen.zig:8938`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig:8938)
+   - [`src/layout/store.zig:1791`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/layout/store.zig:1791)
    Current behavior:
-   - Dev backend now routes list helper ABI facts through one `builtinInternalListAbi` helper.
+   - Dev backend now consumes store-published RC helper plans and routes list helper ABI facts through one `builtinInternalListAbi` helper.
    Missing earlier fact:
    - The primitive helper ABI still expects backend-supplied list metadata instead of consuming a shared earlier artifact.
    LIR change needed:
@@ -57,8 +58,9 @@ ownership decisions. The remaining sites below show the specific gaps.
    - [`src/backend/wasm/WasmCodeGen.zig:7219`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/wasm/WasmCodeGen.zig:7219)
    - [`src/backend/wasm/WasmCodeGen.zig:7422`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/wasm/WasmCodeGen.zig:7422)
    - [`src/backend/wasm/WasmCodeGen.zig:11017`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/wasm/WasmCodeGen.zig:11017)
+   - [`src/layout/store.zig:1791`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/layout/store.zig:1791)
    Current behavior:
-   - Wasm now routes list helper ABI facts through one `builtinInternalListAbi` helper, but helper generation still performs backend-local traversal/drop work for list payloads.
+   - Wasm now consumes store-published RC helper plans and routes list helper ABI facts through one `builtinInternalListAbi` helper, but helper generation still performs backend-local traversal/drop work for list payloads.
    Missing earlier fact:
    - LIR/low-level metadata still does not provide a shared helper-plan artifact or equivalent explicit child-traversal summary.
    LIR change needed:

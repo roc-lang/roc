@@ -75,7 +75,6 @@ pub const RcTagUnionPlan = @import("rc_helper.zig").TagUnionPlan;
 pub const RcListPlan = @import("rc_helper.zig").ListPlan;
 pub const RcBoxPlan = @import("rc_helper.zig").BoxPlan;
 pub const RcFieldPlan = @import("rc_helper.zig").FieldPlan;
-pub const RcHelperResolver = @import("rc_helper.zig").Resolver;
 pub const RcIncrefFn = @import("rc_helper.zig").RcIncrefFn;
 pub const RcDecrefFn = @import("rc_helper.zig").RcDecrefFn;
 pub const RcFreeFn = @import("rc_helper.zig").RcFreeFn;

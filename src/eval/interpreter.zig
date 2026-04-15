@@ -2449,9 +2449,8 @@ pub const Interpreter = struct {
     /// so the interpreter's refcounting matches what the dev backend emits.
     fn performRawRc(self: *LirInterpreter, op: RcOp, val: Value, layout_idx: layout_mod.Idx, count: u16) void {
         trace.log("performRawRc: op={s} layout={any} val.ptr={*} count={d}", .{ @tagName(op), layout_idx, val.ptr, count });
-        const resolver = layout_mod.RcHelperResolver.init(self.layout_store);
-        const key = resolver.makeKey(op, layout_idx);
-        self.performRawRcPlan(resolver.plan(key), &resolver, val, count);
+        const key = layout_mod.RcHelperKey{ .op = op, .layout_idx = layout_idx };
+        self.performRawRcPlan(self.layout_store.rcHelperPlan(key), val, count);
     }
 
     fn performExplicitRcStmt(self: *LirInterpreter, op: RcOp, val: Value, layout_idx: layout_mod.Idx, count: u16) void {
@@ -2481,7 +2480,7 @@ pub const Interpreter = struct {
         return self.helper.containsRefcounted(layout_idx);
     }
 
-    fn performRawRcPlan(self: *LirInterpreter, rc_plan: layout_mod.RcHelperPlan, resolver: *const layout_mod.RcHelperResolver, val: Value, count: u16) void {
+    fn performRawRcPlan(self: *LirInterpreter, rc_plan: layout_mod.RcHelperPlan, val: Value, count: u16) void {
         trace.log("performRawRcPlan: plan={s} val.ptr={*}", .{ @tagName(rc_plan), val.ptr });
         const utils = builtins.utils;
         switch (rc_plan) {
@@ -2518,7 +2517,7 @@ pub const Interpreter = struct {
                 // Before freeing the list, decref all child elements (mirrors RocList.decref logic)
                 if (list_plan.child) |child_key| {
                     if (rl.isUnique(&self.roc_ops)) {
-                        self.decrefListElements(rl, list_plan, child_key, resolver, count);
+                        self.decrefListElements(rl, list_plan, child_key, count);
                     }
                 }
                 builtins.utils.decref(
@@ -2540,7 +2539,7 @@ pub const Interpreter = struct {
                 // Before freeing the list, decref all child elements (mirrors RocList.decref logic)
                 if (list_plan.child) |child_key| {
                     if (rl.isUnique(&self.roc_ops)) {
-                        self.decrefListElements(rl, list_plan, child_key, resolver, count);
+                        self.decrefListElements(rl, list_plan, child_key, count);
                     }
                 }
                 builtins.utils.decref(
@@ -2565,7 +2564,7 @@ pub const Interpreter = struct {
                             return;
                         };
                         const child_val = Value{ .ptr = data_ptr };
-                        self.performRawRcPlan(resolver.plan(child_key), resolver, child_val, count);
+                        self.performRawRcPlan(self.layout_store.rcHelperPlan(child_key), child_val, count);
                     }
                 }
                 utils.decrefDataPtrC(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, &self.roc_ops);
@@ -2580,22 +2579,22 @@ pub const Interpreter = struct {
                             return;
                         };
                         const child_val = Value{ .ptr = data_ptr };
-                        self.performRawRcPlan(resolver.plan(child_key), resolver, child_val, count);
+                        self.performRawRcPlan(self.layout_store.rcHelperPlan(child_key), child_val, count);
                     }
                 }
                 utils.freeDataPtrC(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, &self.roc_ops);
             },
             .struct_ => |struct_plan| {
-                const field_count = resolver.structFieldCount(struct_plan);
+                const field_count = self.layout_store.rcHelperStructFieldCount(struct_plan);
                 var i: u32 = 0;
                 while (i < field_count) : (i += 1) {
-                    const field_plan = resolver.structFieldPlan(struct_plan, i) orelse continue;
+                    const field_plan = self.layout_store.rcHelperStructFieldPlan(struct_plan, i) orelse continue;
                     const field_val = Value{ .ptr = val.ptr + field_plan.offset };
-                    self.performRawRcPlan(resolver.plan(field_plan.child), resolver, field_val, count);
+                    self.performRawRcPlan(self.layout_store.rcHelperPlan(field_plan.child), field_val, count);
                 }
             },
             .tag_union => |tag_plan| {
-                const variant_count = resolver.tagUnionVariantCount(tag_plan);
+                const variant_count = self.layout_store.rcHelperTagUnionVariantCount(tag_plan);
                 if (variant_count == 0) return;
 
                 const disc: u32 = blk: {
@@ -2610,14 +2609,14 @@ pub const Interpreter = struct {
                 trace_rc.log("tag_union rc: disc={d} variant_count={d}", .{ disc, variant_count });
 
                 if (disc < variant_count) {
-                    if (resolver.tagUnionVariantPlan(tag_plan, disc)) |child_key| {
+                    if (self.layout_store.rcHelperTagUnionVariantPlan(tag_plan, disc)) |child_key| {
                         // Payload is always at offset 0 in the tag union.
-                        self.performRawRcPlan(resolver.plan(child_key), resolver, val, count);
+                        self.performRawRcPlan(self.layout_store.rcHelperPlan(child_key), val, count);
                     }
                 }
             },
             .closure => |child_key| {
-                self.performRawRcPlan(resolver.plan(child_key), resolver, val, count);
+                self.performRawRcPlan(self.layout_store.rcHelperPlan(child_key), val, count);
             },
         }
     }
@@ -2629,17 +2628,16 @@ pub const Interpreter = struct {
         rl: builtins.list.RocList,
         list_plan: layout_mod.RcListPlan,
         child_key: layout_mod.RcHelperKey,
-        resolver: *const layout_mod.RcHelperResolver,
         count: u16,
     ) void {
         if (rl.getAllocationDataPtr(&self.roc_ops)) |source| {
             const elem_count = rl.getAllocationElementCount(true, &self.roc_ops);
-            const child_plan = resolver.plan(child_key);
+            const child_plan = self.layout_store.rcHelperPlan(child_key);
             var i: usize = 0;
             while (i < elem_count) : (i += 1) {
                 const element_ptr = source + i * list_plan.elem_width;
                 const element_val = Value{ .ptr = element_ptr };
-                self.performRawRcPlan(child_plan, resolver, element_val, count);
+                self.performRawRcPlan(child_plan, element_val, count);
             }
         }
     }

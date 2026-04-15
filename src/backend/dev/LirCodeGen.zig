@@ -91,7 +91,6 @@ const LocalSpan = lir.LocalSpan;
 // Layout store for accessing struct/tag field offsets
 const LayoutStore = layout.Store;
 const RcOp = layout.RcOp;
-const RcHelperResolver = layout.RcHelperResolver;
 const RcHelperKey = layout.RcHelperKey;
 
 // Control flow statement types (for two-pass compilation)
@@ -7989,8 +7988,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             count: u16,
         ) Allocator.Error!void {
             const helper_key = RcHelperKey{ .op = op, .layout_idx = layout_idx };
-            const resolver = RcHelperResolver.init(self.layout_store);
-            if (resolver.plan(helper_key) == .noop) return;
+            if (self.layout_store.rcHelperPlan(helper_key) == .noop) return;
 
             const ptr_slot = self.codegen.allocStackSlot(8);
             const roc_ops_slot = self.codegen.allocStackSlot(8);
@@ -8089,8 +8087,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!?GeneralReg {
             ownership_boundary.builtinRuntimeInternal("dev.emitBuiltinInternalOptionalRcHelperAddress");
             const helper_key = RcHelperKey{ .op = op, .layout_idx = layout_idx };
-            const resolver = RcHelperResolver.init(self.layout_store);
-            if (resolver.plan(helper_key) == .noop) return null;
+            if (self.layout_store.rcHelperPlan(helper_key) == .noop) return null;
 
             const callback_reg = try self.allocTempGeneral();
             const code_offset = try self.compileBuiltinInternalRcHelper(helper_key);
@@ -8362,8 +8359,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             count_slot: ?i32,
             roc_ops_slot: i32,
         ) Allocator.Error!void {
-            const resolver = RcHelperResolver.init(self.layout_store);
-            switch (resolver.plan(helper_key)) {
+            switch (self.layout_store.rcHelperPlan(helper_key)) {
                 .noop => {},
                 .str_incref => try self.emitBuiltinInternalRcHelperStrIncref(ptr_slot, count_slot.?, roc_ops_slot),
                 .str_decref => try self.emitBuiltinInternalRcHelperStrDrop(.decref_data_ptr, @intFromPtr(&decrefDataPtrC), ptr_slot, roc_ops_slot),
@@ -8399,10 +8395,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     roc_ops_slot,
                 ),
                 .struct_ => |struct_plan| {
-                    const field_count = resolver.structFieldCount(struct_plan);
+                    const field_count = self.layout_store.rcHelperStructFieldCount(struct_plan);
                     var i: u32 = 0;
                     while (i < field_count) : (i += 1) {
-                        const field_plan = resolver.structFieldPlan(struct_plan, i) orelse continue;
+                        const field_plan = self.layout_store.rcHelperStructFieldPlan(struct_plan, i) orelse continue;
                         const field_ptr_reg = try self.allocTempGeneral();
                         defer self.codegen.freeGeneral(field_ptr_reg);
 
@@ -8412,11 +8408,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                 },
                 .tag_union => |tag_plan| {
-                    const variant_count = resolver.tagUnionVariantCount(tag_plan);
+                    const variant_count = self.layout_store.rcHelperTagUnionVariantCount(tag_plan);
                     if (variant_count == 0) return;
 
                     if (variant_count == 1) {
-                        if (resolver.tagUnionVariantPlan(tag_plan, 0)) |child_key| {
+                        if (self.layout_store.rcHelperTagUnionVariantPlan(tag_plan, 0)) |child_key| {
                             const payload_reg = try self.allocTempGeneral();
                             defer self.codegen.freeGeneral(payload_reg);
                             try self.emitLoad(.w64, payload_reg, frame_ptr, ptr_slot);
@@ -8425,9 +8421,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         return;
                     }
 
-                    const disc_offset: i32 = @intCast(resolver.tagUnionDiscriminantOffset(tag_plan));
-                    const disc_size = resolver.tagUnionDiscriminantSize(tag_plan);
-                    const total_size = resolver.tagUnionTotalSize(tag_plan);
+                    const disc_offset: i32 = @intCast(self.layout_store.rcHelperTagUnionDiscriminantOffset(tag_plan));
+                    const disc_size = self.layout_store.rcHelperTagUnionDiscriminantSize(tag_plan);
+                    const total_size = self.layout_store.rcHelperTagUnionTotalSize(tag_plan);
                     const disc_use_w32 = (disc_offset + 8 > @as(i32, @intCast(total_size)));
 
                     var done_patches: std.ArrayList(usize) = .empty;
@@ -8435,7 +8431,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     var variant_i: u32 = 0;
                     while (variant_i < variant_count) : (variant_i += 1) {
-                        const child_key = resolver.tagUnionVariantPlan(tag_plan, variant_i) orelse continue;
+                        const child_key = self.layout_store.rcHelperTagUnionVariantPlan(tag_plan, variant_i) orelse continue;
 
                         const value_ptr_reg = try self.allocTempGeneral();
                         const disc_reg = try self.allocTempGeneral();
@@ -8487,8 +8483,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return code_offset;
             }
 
-            const resolver = RcHelperResolver.init(self.layout_store);
-            const helper_plan = resolver.plan(helper_key);
+            const helper_plan = self.layout_store.rcHelperPlan(helper_key);
             if (helper_plan == .noop) {
                 if (builtin.mode == .Debug) {
                     std.debug.panic("attempted to compile noop RC helper for layout {d}", .{@intFromEnum(helper_key.layout_idx)});

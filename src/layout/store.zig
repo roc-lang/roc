@@ -1788,6 +1788,46 @@ pub const Store = struct {
             @panic("layoutContainsRefcounted ran out of memory");
     }
 
+    pub fn rcHelperPlan(self: *const Self, helper_key: @import("./rc_helper.zig").HelperKey) @import("./rc_helper.zig").Plan {
+        const rc_helper = @import("./rc_helper.zig");
+        return rc_helper.Resolver.init(self).plan(helper_key);
+    }
+
+    pub fn rcHelperStructFieldCount(self: *const Self, struct_plan: @import("./rc_helper.zig").StructPlan) u32 {
+        const rc_helper = @import("./rc_helper.zig");
+        return rc_helper.Resolver.init(self).structFieldCount(struct_plan);
+    }
+
+    pub fn rcHelperStructFieldPlan(self: *const Self, struct_plan: @import("./rc_helper.zig").StructPlan, field_index: u32) ?@import("./rc_helper.zig").FieldPlan {
+        const rc_helper = @import("./rc_helper.zig");
+        return rc_helper.Resolver.init(self).structFieldPlan(struct_plan, field_index);
+    }
+
+    pub fn rcHelperTagUnionVariantCount(self: *const Self, tag_plan: @import("./rc_helper.zig").TagUnionPlan) u32 {
+        const rc_helper = @import("./rc_helper.zig");
+        return rc_helper.Resolver.init(self).tagUnionVariantCount(tag_plan);
+    }
+
+    pub fn rcHelperTagUnionDiscriminantOffset(self: *const Self, tag_plan: @import("./rc_helper.zig").TagUnionPlan) u16 {
+        const rc_helper = @import("./rc_helper.zig");
+        return rc_helper.Resolver.init(self).tagUnionDiscriminantOffset(tag_plan);
+    }
+
+    pub fn rcHelperTagUnionDiscriminantSize(self: *const Self, tag_plan: @import("./rc_helper.zig").TagUnionPlan) u8 {
+        const rc_helper = @import("./rc_helper.zig");
+        return rc_helper.Resolver.init(self).tagUnionDiscriminantSize(tag_plan);
+    }
+
+    pub fn rcHelperTagUnionTotalSize(self: *const Self, tag_plan: @import("./rc_helper.zig").TagUnionPlan) u32 {
+        const rc_helper = @import("./rc_helper.zig");
+        return rc_helper.Resolver.init(self).tagUnionTotalSize(tag_plan);
+    }
+
+    pub fn rcHelperTagUnionVariantPlan(self: *const Self, tag_plan: @import("./rc_helper.zig").TagUnionPlan, variant_index: u32) ?@import("./rc_helper.zig").HelperKey {
+        const rc_helper = @import("./rc_helper.zig");
+        return rc_helper.Resolver.init(self).tagUnionVariantPlan(tag_plan, variant_index);
+    }
+
     fn layoutContainsRefcountedInner(
         self: *const Self,
         l: Layout,
