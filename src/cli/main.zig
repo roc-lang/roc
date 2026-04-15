@@ -28,6 +28,11 @@ const std = @import("std");
 pub const std_options: std.Options = .{
     .log_level = .warn,
 };
+/// Override the default debug IO so that `std.Options.debug_io` uses a properly
+/// initialized Threaded instance with a real allocator. Without this, the default
+/// `global_single_threaded` has `.allocator = .failing` and process spawning fails.
+var debug_threaded_io_instance: std.Io.Threaded = .init_single_threaded;
+pub const std_options_debug_threaded_io: *std.Io.Threaded = &debug_threaded_io_instance;
 const build_options = @import("build_options");
 const builtin = @import("builtin");
 const base = @import("base");
@@ -528,7 +533,7 @@ pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, exe_dis
         const dir_name_with_txt = try std.fmt.allocPrint(allocs.arena, "{s}.txt", .{temp_dir_path});
 
         // Try to create the directory
-        std.Io.Dir.cwd().makeDir(temp_dir_path) catch |err| switch (err) {
+        std.Io.Dir.cwd().createDir(std.Options.debug_io, temp_dir_path, .default_dir) catch |err| switch (err) {
             error.PathAlreadyExists => {
                 // Directory already exists, try again with a new random suffix
                 continue;
@@ -586,6 +591,14 @@ var debug_allocator: std.heap.DebugAllocator(.{}) = .{
 
 /// The CLI entrypoint for the Roc compiler.
 pub fn main(init: std.process.Init) !void {
+    // Initialize the debug IO with a real allocator so std.Options.debug_io
+    // can spawn processes, create directories, etc.
+    debug_threaded_io_instance = .init(init.gpa, .{
+        .argv0 = .init(init.minimal.args),
+        .environ = init.minimal.environ,
+    });
+    defer debug_threaded_io_instance.deinit();
+
     // Install stack overflow handler early, before any significant work.
     // This gives us a helpful error message instead of a generic segfault
     // if the compiler blows the stack (e.g., due to infinite recursion in type translation).
@@ -1649,8 +1662,8 @@ fn extractDevShimLibrary(output_path: []const u8, target: ?roc_target.RocTarget)
 const NativeRunTermination = union(enum) {
     success,
     exit_code: u8,
-    signal: u32,
-    stopped: u32,
+    signal: std.posix.SIG,
+    stopped: std.posix.SIG,
     unknown: u32,
 };
 
@@ -7216,5 +7229,5 @@ test "classifyNativeRunTermination preserves signal termination" {
     const result = classifyNativeRunTermination(.{ .signal = @enumFromInt(11) }, 0);
 
     try testing.expect(result == .signal);
-    try testing.expectEqual(@as(u32, 11), result.signal);
+    try testing.expectEqual(@as(std.posix.SIG, @enumFromInt(11)), result.signal);
 }

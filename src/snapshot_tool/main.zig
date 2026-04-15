@@ -734,7 +734,7 @@ pub fn main() !void {
     builtin_modules_ptr.* = try eval_mod.BuiltinModules.init(gpa);
     defer builtin_modules_ptr.deinit();
 
-    const cwd = try std.process.getCwdAlloc(gpa);
+    const cwd = try std.process.currentPathAlloc(std.Options.debug_io, gpa);
     defer gpa.free(cwd);
 
     const config = Config{
@@ -791,7 +791,7 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
     builtin_modules_ptr.* = try eval_mod.BuiltinModules.init(gpa);
     defer builtin_modules_ptr.deinit();
 
-    const cwd = try std.process.getCwdAlloc(gpa);
+    const cwd = try std.process.currentPathAlloc(std.Options.debug_io, gpa);
     defer gpa.free(cwd);
 
     const config = Config{
@@ -4926,7 +4926,7 @@ fn searchDirectoryForBuiltin(
     files_with_builtin: *std.array_list.Managed([]const u8),
 ) !void {
     var iter = dir.iterate();
-    while (try iter.next()) |entry| {
+    while (try iter.next(std.testing.io)) |entry| {
         const full_path = if (relative_path.len > 0)
             try std.fmt.allocPrint(allocator, "{s}/{s}", .{ relative_path, entry.name })
         else

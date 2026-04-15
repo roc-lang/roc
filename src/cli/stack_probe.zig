@@ -155,7 +155,7 @@ pub fn writeStackProbeObject(allocator: std.mem.Allocator, path: []const u8) !vo
     const obj_bytes = try generateStackProbeObject(allocator);
     defer allocator.free(obj_bytes);
 
-    try std.Io.Dir.cwd().writeFile(.{
+    try std.Io.Dir.cwd().writeFile(std.Options.debug_io, .{
         .sub_path = path,
         .data = obj_bytes,
     });

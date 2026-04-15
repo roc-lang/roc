@@ -24,13 +24,13 @@ fn frame(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
 }
 
 fn collectResponses(allocator: std.mem.Allocator, bytes: []const u8) ![][]u8 {
-    var reader = std.io.fixedBufferStream(bytes);
+    const reader: std.Io.Reader = .fixed(bytes);
     var sink_storage: [1]u8 = undefined;
-    var sink = std.io.fixedBufferStream(&sink_storage);
+    const sink: std.Io.Writer = .fixed(&sink_storage);
 
-    const ReaderType = @TypeOf(reader.reader());
-    const WriterType = @TypeOf(sink.writer());
-    var transport = transport_module.Transport(ReaderType, WriterType).init(allocator, reader.reader(), sink.writer(), null);
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var transport = transport_module.Transport(ReaderType, WriterType).init(allocator, reader, sink, null);
 
     var responses : std.ArrayList([]u8) = .empty;
     errdefer {
@@ -129,20 +129,20 @@ test "formatting handler formats simple expression" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     // Module-member completion responses can exceed 16 KiB depending on
     // builtin surface area and metadata included in items.
     var writer_buffer: [65536]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -237,18 +237,18 @@ test "document symbol handler extracts function declarations" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -336,18 +336,18 @@ test "document symbol handler returns empty for empty document" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -432,18 +432,18 @@ test "folding range handler finds bracket ranges" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -532,18 +532,18 @@ test "selection range handler returns range hierarchy" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -644,18 +644,18 @@ test "document highlight handler finds variable occurrences" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -742,18 +742,18 @@ test "document highlight handler returns empty for non-identifier" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -840,18 +840,18 @@ test "definition handler finds local variable definition" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -949,18 +949,18 @@ test "definition handler returns null for undefined symbol" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -1047,18 +1047,18 @@ test "hover handler returns type info for type annotation" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -1149,18 +1149,18 @@ test "definition handler navigates to builtin type from type annotation" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -1268,18 +1268,18 @@ test "document symbols works after goto definition (regression test)" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [32768]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -1395,18 +1395,18 @@ test "multiple goto definition calls don't break document symbols" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [32768]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -1535,18 +1535,18 @@ test "document symbol handler returns symbols with correct names" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [32768]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -1680,18 +1680,18 @@ test "document symbol handler works independently of check" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [32768]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -1787,17 +1787,17 @@ test "completion handler returns module definitions" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -1897,18 +1897,18 @@ test "completion handler returns module members after dot" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     // Module completions can be very large depending on builtins and docs.
     var writer_buffer: [1024 * 1024]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -2008,17 +2008,17 @@ test "completion handler returns module names in expression context" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -2125,17 +2125,17 @@ test "completion handler returns types after colon" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -2246,17 +2246,17 @@ test "completion handler returns List module members after List dot" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -2363,17 +2363,17 @@ test "completion handler returns local variables in block scope" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -2465,17 +2465,17 @@ test "completion handler returns lambda parameters" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -2566,17 +2566,17 @@ test "completion handler returns top-level definitions" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -2667,17 +2667,17 @@ test "completion handler returns record fields after dot" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);

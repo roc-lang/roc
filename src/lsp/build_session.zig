@@ -26,7 +26,7 @@ pub const BuildSession = struct {
     /// Borrowed pointer to the BuildEnv for this build. Ownership stays with the
     /// caller (typically SyntaxChecker via BuildEnvHandle); deinit does NOT free it.
     env: *BuildEnv,
-    absolute_path: []const u8,
+    absolute_path: [:0]const u8,
     build_succeeded: bool,
     drained_reports: ?[]BuildEnv.DrainedModuleReports = null,
 
@@ -52,8 +52,8 @@ pub const BuildSession = struct {
         const path = try uri_util.uriToPath(allocator, uri);
         defer allocator.free(path);
 
-        const absolute_path = std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, path, allocator) catch
-            try allocator.dupe(u8, path);
+        const absolute_path: [:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, path, allocator) catch
+            try allocator.dupeZ(u8, path);
         errdefer allocator.free(absolute_path);
 
         // Set up file override if override text provided.

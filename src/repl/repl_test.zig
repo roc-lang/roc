@@ -5,7 +5,6 @@ const Repl = @import("eval.zig").Repl;
 const TestEnv = @import("repl_test_env.zig").TestEnv;
 
 const testing = std.testing;
-const posix = std.posix;
 
 const alloc = std.testing.allocator;
 const Backend = enum { interpreter, dev, wasm, llvm };
@@ -307,7 +306,9 @@ fn expectStepsFinal(backend: Backend, steps: []const []const u8, expected: []con
 fn expectStepsFinalInChild(backend: Backend, steps: []const []const u8, expected: []const u8) !void {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    const pid = try posix.fork();
+    const raw_pid = std.c.fork();
+    if (raw_pid < 0) return error.ForkFailed;
+    const pid: std.c.pid_t = @intCast(raw_pid);
 
     if (pid == 0) {
         expectStepsFinal(backend, steps, expected) catch |err| {
@@ -318,8 +319,9 @@ fn expectStepsFinalInChild(backend: Backend, steps: []const []const u8, expected
         std.c._exit(0);
     }
 
-    const wait_result = posix.waitpid(pid, 0);
-    const status = wait_result.status;
+    var raw_status: c_int = 0;
+    _ = std.c.waitpid(pid, &raw_status, 0);
+    const status: u32 = @bitCast(raw_status);
     const termination_signal: u8 = @truncate(status & 0x7f);
 
     if (termination_signal != 0) {

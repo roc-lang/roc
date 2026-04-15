@@ -105,8 +105,8 @@ pub const SyntaxChecker = struct {
             const path = uri_util.uriToPath(self.allocator, uri) catch null;
             defer if (path) |p| self.allocator.free(p);
 
-            const abs_path = if (path) |p|
-                std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, p, self.allocator) catch self.allocator.dupe(u8, p) catch null
+            const abs_path: ?[:0]u8 = if (path) |p|
+                std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, p, self.allocator) catch null
             else
                 null;
             defer if (abs_path) |a| self.allocator.free(a);
@@ -1769,8 +1769,8 @@ pub const SyntaxChecker = struct {
         const path = uri_util.uriToPath(allocator, uri) catch return &[_]SymbolInformation{};
         defer allocator.free(path);
 
-        const absolute_path = std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, path, allocator) catch
-            allocator.dupe(u8, path) catch return &[_]SymbolInformation{};
+        const absolute_path: [:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, path, allocator) catch
+            allocator.dupeZ(u8, path) catch return &[_]SymbolInformation{};
         defer allocator.free(absolute_path);
 
         // Override readFile for the current file so in-memory source is used.

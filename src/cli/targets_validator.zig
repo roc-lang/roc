@@ -962,7 +962,7 @@ test "validateTargetFilesExist reports missing target file with valid path" {
     defer tmp_dir.cleanup();
 
     // Create a files directory but without the expected target subdirectory
-    tmp_dir.dir.makeDir("targets") catch {};
+    tmp_dir.dir.createDir(std.testing.io, "targets", .default_dir) catch {};
 
     // Create a config that references a file that doesn't exist
     const items: []const LinkItem = &.{

@@ -84,7 +84,7 @@ test "SemanticTokens serializes data array" {
         .data = &[_]u32{ 0, 0, 5, 7, 0, 0, 6, 3, 3, 0 },
     };
 
-    var writer: std.io.Writer.Allocating = .init(allocator);
+    var writer: std.Io.Writer.Allocating = .init(allocator);
     defer writer.deinit();
     std.json.Stringify.value(tokens, .{}, &writer.writer) catch return error.OutOfMemory;
     const output = try writer.toOwnedSlice();
@@ -100,7 +100,7 @@ test "empty SemanticTokens serializes correctly" {
         .data = &[_]u32{},
     };
 
-    var writer: std.io.Writer.Allocating = .init(allocator);
+    var writer: std.Io.Writer.Allocating = .init(allocator);
     defer writer.deinit();
     std.json.Stringify.value(tokens, .{}, &writer.writer) catch return error.OutOfMemory;
     const output = try writer.toOwnedSlice();

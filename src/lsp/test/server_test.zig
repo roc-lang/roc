@@ -10,13 +10,13 @@ fn frame(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
 }
 
 fn collectResponses(allocator: std.mem.Allocator, bytes: []const u8) ![][]u8 {
-    var reader = std.io.fixedBufferStream(bytes);
+    const reader: std.Io.Reader = .fixed(bytes);
     var sink_storage: [1]u8 = undefined;
-    var sink = std.io.fixedBufferStream(&sink_storage);
+    const sink: std.Io.Writer = .fixed(&sink_storage);
 
-    const ReaderType = @TypeOf(reader.reader());
-    const WriterType = @TypeOf(sink.writer());
-    var transport = transport_module.Transport(ReaderType, WriterType).init(allocator, reader.reader(), sink.writer(), null);
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var transport = transport_module.Transport(ReaderType, WriterType).init(allocator, reader, sink, null);
 
     var responses : std.ArrayList([]u8) = .empty;
     errdefer {
@@ -66,18 +66,18 @@ test "server handles initialize/shutdown/exit handshake" {
     const input_bytes = try lifecycleInput(allocator);
     defer allocator.free(input_bytes);
 
-    var reader_stream = std.io.fixedBufferStream(input_bytes);
+    const reader_stream: std.Io.Reader = .fixed(input_bytes);
     var writer_buffer: [4096]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     defer server.deinit();
 
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -129,17 +129,17 @@ test "server rejects re-initialization requests" {
     const input_bytes = try builder.toOwnedSlice(allocator);
     defer allocator.free(input_bytes);
 
-    var reader_stream = std.io.fixedBufferStream(input_bytes);
+    const reader_stream: std.Io.Reader = .fixed(input_bytes);
     var writer_buffer: [4096]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -185,13 +185,13 @@ test "server tracks documents on didOpen/didChange" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [8192]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
@@ -238,13 +238,13 @@ test "server applies sequential incremental changes in a single didChange" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [8192]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
@@ -314,13 +314,13 @@ test "server handles burst of incremental didChange messages" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [8192]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
@@ -396,17 +396,17 @@ test "server responds to semantic tokens request" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -479,17 +479,17 @@ test "server returns error for semantic tokens on unknown document" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [8192]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -572,17 +572,17 @@ test "server returns empty tokens for empty document" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
