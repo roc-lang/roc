@@ -133,7 +133,6 @@ fn writeStaticAssets(dir: std.fs.Dir) !void {
     try dir.writeFile(.{ .sub_path = "search.js", .data = embedded_js });
 }
 
-
 fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, dir: std.fs.Dir) !void {
     const file = try dir.createFile("index.html", .{});
     defer file.close();
