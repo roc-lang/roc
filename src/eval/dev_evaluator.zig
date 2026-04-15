@@ -308,7 +308,7 @@ const DevRocEnv = struct {
     /// Jump buffer for unwinding from roc_crashed back to the call site.
     jmp_buf: JmpBuf = undefined,
     /// Io context for routing [dbg] output
-    roc_ctx: RocCtx,
+    roc_ctx: ?RocCtx,
 
     const AllocInfo = struct {
         len: usize,
@@ -319,7 +319,7 @@ const DevRocEnv = struct {
         return .{
             .allocator = allocator,
             .allocations = std.AutoHashMap(usize, AllocInfo).init(allocator),
-            .roc_ctx = roc_ctx.?,
+            .roc_ctx = roc_ctx,
         };
     }
 
@@ -460,14 +460,14 @@ const DevRocEnv = struct {
         const msg = roc_dbg.utf8_bytes[0..roc_dbg.len];
         var buf: [256]u8 = undefined;
         const line = std.fmt.bufPrint(&buf, "[dbg] {s}\n", .{msg}) catch "[dbg] (message too long)\n";
-        self.roc_ctx.writeStderr(line) catch {};
+        if (self.roc_ctx) |ctx| ctx.writeStderr(line) catch {};
     }
 
     /// Expect failed function.
     fn rocExpectFailedFn(_: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
         const self: *DevRocEnv = @ptrCast(@alignCast(env));
         self.inline_expect_failed = true;
-        self.roc_ctx.writeStderr("[expect failed]\n") catch {};
+        if (self.roc_ctx) |ctx| ctx.writeStderr("[expect failed]\n") catch {};
     }
 
     /// Crash function — records the crash and longjmps back to the call site.

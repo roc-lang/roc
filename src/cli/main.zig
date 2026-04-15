@@ -1794,7 +1794,7 @@ fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: [
     // Phase 2: Compile through standard pipeline
     const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.sys_io, ".", ctx.gpa);
     defer ctx.gpa.free(cwd);
-    var build_env = try BuildEnv.init(ctx.gpa, .single_threaded, 1, target, cwd);
+    var build_env = try BuildEnv.init(ctx.gpa, .single_threaded, 1, target, cwd, ctx.io.sys_io);
     defer build_env.deinit();
 
     // Set up a custom Io that intercepts reads for synthetic echo platform files.
@@ -3548,7 +3548,7 @@ fn validateBundleWithCoordinator(
     // Create a BuildEnv to parse headers and discover modules via the Coordinator
     const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.sys_io, ".", ctx.gpa);
     defer ctx.gpa.free(cwd);
-    var build_env = try BuildEnv.init(ctx.gpa, .single_threaded, 1, RocTarget.detectNative(), cwd);
+    var build_env = try BuildEnv.init(ctx.gpa, .single_threaded, 1, RocTarget.detectNative(), cwd, ctx.io.sys_io);
     defer build_env.deinit();
 
     // Run the build — the Coordinator discovers all transitive module dependencies
@@ -3973,7 +3973,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.sys_io, ".", ctx.gpa);
     defer ctx.gpa.free(cwd);
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd);
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.sys_io);
 
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
@@ -4627,7 +4627,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.sys_io, ".", ctx.gpa);
     defer ctx.gpa.free(cwd);
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd);
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.sys_io);
 
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
@@ -5425,7 +5425,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
         return err;
     };
     defer ctx.gpa.free(cwd);
-    var build_env = BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd) catch |err| {
+    var build_env = BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.sys_io) catch |err| {
         try stderr.print("Failed to initialize build environment: {}\n", .{err});
         return err;
     };
@@ -6457,7 +6457,7 @@ fn checkFileWithBuildEnvPreserved(
 
     const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.sys_io, ".", ctx.gpa);
     defer ctx.gpa.free(cwd);
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd);
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.sys_io);
 
     build_env.compiler_version = build_options.compiler_version;
     // Note: We do NOT defer build_env.deinit() here because we're returning it
@@ -6567,7 +6567,7 @@ fn checkFileWithBuildEnv(
 
     const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.sys_io, ".", ctx.gpa);
     defer ctx.gpa.free(cwd);
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd);
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.sys_io);
 
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();

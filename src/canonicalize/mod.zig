@@ -1,7 +1,6 @@
 //! This module contains the canonicalizer and the Canonical Intermediate Representation (CIR).
 
 const std = @import("std");
-const base = @import("base");
 const parse = @import("parse");
 
 const AST = parse.AST;

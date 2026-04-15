@@ -142,8 +142,7 @@ pub const BuildEnv = struct {
     // Cache manager for compiled modules
     cache_manager: ?*CacheManager = null,
     // I/O abstraction for all OS operations (filesystem, stdio, env vars, etc.)
-    // Defaults to testing() — callers must set this to a real RocCtx before use.
-    filesystem: RocCtx = RocCtx.testing(undefined, undefined),
+    filesystem: RocCtx,
     // Explicit working directory for resolving relative paths
     cwd: []const u8,
 
@@ -171,7 +170,7 @@ pub const BuildEnv = struct {
         import_name: []const u8, // e.g., "pf.Stdout"
     };
 
-    pub fn init(gpa: Allocator, mode: Mode, max_threads: usize, target: roc_target.RocTarget, cwd: []const u8) !BuildEnv {
+    pub fn init(gpa: Allocator, mode: Mode, max_threads: usize, target: roc_target.RocTarget, cwd: []const u8, sys_io: SysIo) !BuildEnv {
         // Allocate builtin modules on heap to prevent moves that would invalidate internal pointers
         const builtin_modules = try gpa.create(BuiltinModules);
         errdefer gpa.destroy(builtin_modules);
@@ -192,6 +191,7 @@ pub const BuildEnv = struct {
             .pkg_sink_ctxs = std.array_list.Managed(*PkgSinkCtx).init(gpa),
             .schedule_ctxs = std.array_list.Managed(*ScheduleCtx).init(gpa),
             .pending_known_modules = std.array_list.Managed(PendingKnownModule).init(gpa),
+            .filesystem = RocCtx.default(gpa, gpa, sys_io),
         };
 
         // On native targets, enable HTTP downloads for URL packages.

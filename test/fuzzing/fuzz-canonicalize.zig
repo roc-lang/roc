@@ -67,22 +67,25 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     }
 
     // Write input to a temporary file
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
+    const fuzz_io = std.Io.Threaded.global_single_threaded.io();
+    const tmp_dir_path = "/tmp/roc-fuzz-canonicalize";
+    const tmp_dir = std.Io.Dir.openDirAbsolute(fuzz_io, tmp_dir_path, .{}) catch blk: {
+        std.Io.Dir.createDirAbsolute(fuzz_io, tmp_dir_path, .default_dir) catch return;
+        break :blk std.Io.Dir.openDirAbsolute(fuzz_io, tmp_dir_path, .{}) catch return;
+    };
 
     const tmp_file_path = "fuzz_input.roc";
-    tmp_dir.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = tmp_file_path, .data = input }) catch return;
+    tmp_dir.writeFile(fuzz_io, .{ .sub_path = tmp_file_path, .data = input }) catch return;
 
     // Get absolute path
-    const fuzz_io = std.Io.Threaded.global_single_threaded.io();
-    const abs_path = tmp_dir.dir.realPathFileAlloc(fuzz_io, tmp_file_path, gpa) catch return;
+    const abs_path = tmp_dir.realPathFileAlloc(fuzz_io, tmp_file_path, gpa) catch return;
     defer gpa.free(abs_path);
 
     // Process the input through BuildEnv
     // Panic on OOM so AFL++ knows it's a resource issue, not a bug in the fuzzed code
     const cwd = std.Io.Dir.cwd().realPathFileAlloc(fuzz_io, ".", gpa) catch @panic("Failed to get cwd");
     defer gpa.free(cwd);
-    var build_env = BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd) catch @panic("OOM during BuildEnv init");
+    var build_env = BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, fuzz_io) catch @panic("OOM during BuildEnv init");
     defer build_env.deinit();
 
     build_env.build(abs_path) catch |err| {

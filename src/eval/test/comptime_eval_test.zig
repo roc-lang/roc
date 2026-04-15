@@ -3382,7 +3382,7 @@ test "issue 9281: dev evaluator stack overflow with nested recursive opaque type
     const app_path = try std.fs.path.join(test_allocator, &.{ tmp_path, "app.roc" });
     defer test_allocator.free(app_path);
 
-    var build_env = try compile_build.BuildEnv.init(test_allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), tmp_path);
+    var build_env = try compile_build.BuildEnv.init(test_allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), tmp_path, std.Io.Threaded.global_single_threaded.io());
     defer build_env.deinit();
 
     try build_env.discoverDependencies(app_path);

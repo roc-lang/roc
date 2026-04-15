@@ -14,10 +14,9 @@ foo = Json.parse(data)
 FILE NOT FOUND - inline_ingested_file.md:1:1:1:34
 UNDEFINED VARIABLE - inline_ingested_file.md:4:7:4:17
 # PROBLEMS
-**FILE NOT FOUND**
-The file **users.json** was not found.
-
-Make sure the file exists relative to your source file:
+**FILE IMPORT ERROR**
+Could not read the file **users.json**.
+An IO error occurred while trying to read this file:
 **inline_ingested_file.md:1:1:1:34:**
 ```roc
 import "users.json" as data : Str
@@ -68,7 +67,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "data"))
-		(e-runtime-error (tag "file_import_not_found")))
+		(e-runtime-error (tag "file_import_io_error")))
 	(d-let
 		(p-assign (ident "foo"))
 		(e-call

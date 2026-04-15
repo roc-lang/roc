@@ -101,7 +101,7 @@ fn comptimeRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
     const msg_slice = dbg_args.utf8_bytes[0..dbg_args.len];
     var buf: [256]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "[dbg] {s}\n", .{msg_slice}) catch "[dbg] (message too long)\n";
-    evaluator.roc_ctx.writeStderr(msg) catch {};
+    if (evaluator.roc_ctx) |ctx| ctx.writeStderr(msg) catch {};
 }
 
 fn comptimeRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
@@ -170,7 +170,7 @@ pub const ComptimeEvaluator = struct {
     /// Track allocation sizes for realloc (maps ptr -> size)
     roc_alloc_sizes: std.AutoHashMap(usize, usize),
     /// Io context for routing [dbg] output
-    roc_ctx: RocCtx,
+    roc_ctx: ?RocCtx,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -198,7 +198,7 @@ pub const ComptimeEvaluator = struct {
             .current_expr_region = null,
             .roc_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
             .roc_alloc_sizes = std.AutoHashMap(usize, usize).init(allocator),
-            .roc_ctx = roc_ctx.?,
+            .roc_ctx = roc_ctx,
         };
     }
 
