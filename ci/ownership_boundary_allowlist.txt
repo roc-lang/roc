@@ -53,8 +53,8 @@ wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitBuiltinInternalBoxR
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitBuiltinInternalRcForValueLocal | builtin primitive lowering choke point
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitBuiltinInternalRcAtPtr | builtin primitive lowering choke point
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitExplicitRcForValueLocal | explicit LIR RC lowering choke point
-wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitListElementDecrefsIfUnique | wasm builtin/helper RC infrastructure
-wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitBoxChildDropIfUnique | wasm builtin/helper RC infrastructure
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitBuiltinInternalListElementDecrefsIfUnique | wasm builtin/helper RC infrastructure
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitBuiltinInternalBoxChildDropIfUnique | wasm builtin/helper RC infrastructure
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | generateBuiltinInternalRcHelperBody | wasm RC helper codegen infrastructure
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | compileBuiltinInternalRcHelper | wasm RC helper codegen infrastructure
 ordinary-layout-refcount-branch | src/backend/wasm/WasmCodeGen.zig | builtinInternalLayoutContainsRefcounted | builtin primitive layout-refcount query helper

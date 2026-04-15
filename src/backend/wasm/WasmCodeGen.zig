@@ -779,7 +779,7 @@ fn emitRawDirectRcPlan(
             try self.emitLoadOp(.i32, 0);
             try self.emitLocalSet(box_ptr_local);
             if (box_plan.child) |child_key| {
-                try self.emitBoxChildDropIfUnique(box_ptr_local, child_key);
+                try self.emitBuiltinInternalBoxChildDropIfUnique(box_ptr_local, child_key);
             }
             try self.emitDataPtrDecref(box_ptr_local, box_plan.elem_alignment, box_plan.child != null);
             return true;
@@ -790,7 +790,7 @@ fn emitRawDirectRcPlan(
             try self.emitLoadOp(.i32, 0);
             try self.emitLocalSet(box_ptr_local);
             if (box_plan.child) |child_key| {
-                try self.emitBoxChildDropIfUnique(box_ptr_local, child_key);
+                try self.emitBuiltinInternalBoxChildDropIfUnique(box_ptr_local, child_key);
             }
             try self.emitDataPtrFree(box_ptr_local, box_plan.elem_alignment, box_plan.child != null);
             return true;
@@ -1189,7 +1189,7 @@ fn emitDataPtrFree(self: *Self, data_ptr_local: u32, alignment: u32, elements_re
     self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
 }
 
-fn emitListElementDecrefsIfUnique(
+fn emitBuiltinInternalListElementDecrefsIfUnique(
     self: *Self,
     list_ptr_local: u32,
     alloc_ptr_local: u32,
@@ -1302,7 +1302,7 @@ fn emitBuiltinInternalListRc(
         },
         .decref => {
             if (elements_refcounted and elem_layout_idx != null) {
-                try self.emitListElementDecrefsIfUnique(list_ptr_local, alloc_ptr_local, is_slice_local, elem_layout_idx.?);
+                try self.emitBuiltinInternalListElementDecrefsIfUnique(list_ptr_local, alloc_ptr_local, is_slice_local, elem_layout_idx.?);
             }
             try self.emitDataPtrDecref(alloc_ptr_local, elem_alignment, elements_refcounted);
         },
@@ -1376,7 +1376,7 @@ fn emitRawRcHelperCallByKey(
     try self.emitCall(helper_func_idx);
 }
 
-fn emitBoxChildDropIfUnique(
+fn emitBuiltinInternalBoxChildDropIfUnique(
     self: *Self,
     box_ptr_local: u32,
     child_key: RcHelperKey,
@@ -1450,7 +1450,7 @@ fn generateBuiltinInternalRcHelperBody(
             try self.emitLoadOp(.i32, 0);
             try self.emitLocalSet(box_ptr_local);
             if (box_plan.child) |child_key| {
-                try self.emitBoxChildDropIfUnique(box_ptr_local, child_key);
+                try self.emitBuiltinInternalBoxChildDropIfUnique(box_ptr_local, child_key);
             }
             try self.emitDataPtrDecref(box_ptr_local, box_plan.elem_alignment, box_plan.child != null);
         },
@@ -1460,7 +1460,7 @@ fn generateBuiltinInternalRcHelperBody(
             try self.emitLoadOp(.i32, 0);
             try self.emitLocalSet(box_ptr_local);
             if (box_plan.child) |child_key| {
-                try self.emitBoxChildDropIfUnique(box_ptr_local, child_key);
+                try self.emitBuiltinInternalBoxChildDropIfUnique(box_ptr_local, child_key);
             }
             try self.emitDataPtrFree(box_ptr_local, box_plan.elem_alignment, box_plan.child != null);
         },
