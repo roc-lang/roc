@@ -11,7 +11,6 @@
 const std = @import("std");
 const can = @import("can");
 const helpers = @import("helpers.zig");
-
 const Emitter = can.RocEmitter;
 
 const testing = std.testing;
@@ -225,10 +224,23 @@ test "wasm recursive nominal dom element with text child" {
     var compiled = try helpers.compileInspectedProgram(test_allocator, .module, source, &.{});
     defer compiled.deinit(test_allocator);
 
-    const actual = try helpers.wasmEvaluatorInspectedStr(test_allocator, &compiled.lowered);
+    const actual = try helpers.wasmEvaluatorInspectedStr(test_allocator, &compiled.wasm_lowered);
     defer test_allocator.free(actual);
 
     try testing.expectEqualStrings("Element(\"p\", [Text(\"hello\")])", actual);
+}
+
+test "wasm list append composite empty list" {
+    const source =
+        \\main = List.len(List.append([], []))
+    ;
+
+    var compiled = try helpers.compileInspectedProgram(test_allocator, .module, source, &.{});
+    defer compiled.deinit(test_allocator);
+    const actual = try helpers.wasmEvaluatorInspectedStr(test_allocator, &compiled.wasm_lowered);
+    defer test_allocator.free(actual);
+
+    try testing.expectEqualStrings("1", actual);
 }
 
 // Roundtrip verification tests

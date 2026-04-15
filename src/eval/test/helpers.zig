@@ -46,8 +46,10 @@ pub const LoweredProgram = pipeline.LoweredProgram;
 pub const CompiledProgram = struct {
     resources: ParsedResources,
     lowered: LoweredProgram,
+    wasm_lowered: LoweredProgram,
 
     pub fn deinit(self: *CompiledProgram, allocator: std.mem.Allocator) void {
+        self.wasm_lowered.deinit();
         self.lowered.deinit();
         cleanupParseAndCanonical(allocator, self.resources);
     }
@@ -81,10 +83,16 @@ pub fn compileProgram(
         var lowered_mut = lowered;
         lowered_mut.deinit();
     }
+    const wasm_lowered = try lowerParsedExprToLirForTarget(allocator, &resources, .u32);
+    errdefer {
+        var lowered_mut = wasm_lowered;
+        lowered_mut.deinit();
+    }
 
     return .{
         .resources = resources,
         .lowered = lowered,
+        .wasm_lowered = wasm_lowered,
     };
 }
 
@@ -111,10 +119,16 @@ pub fn compileInspectedProgram(
         var lowered_mut = lowered;
         lowered_mut.deinit();
     }
+    const wasm_lowered = try lowerParsedExprToLirForTarget(allocator, &resources, .u32);
+    errdefer {
+        var lowered_mut = wasm_lowered;
+        lowered_mut.deinit();
+    }
 
     return .{
         .resources = resources,
         .lowered = lowered,
+        .wasm_lowered = wasm_lowered,
     };
 }
 
@@ -128,6 +142,14 @@ pub fn lowerParsedExprToLir(
     resources: *ParsedResources,
 ) !LoweredProgram {
     return pipeline.lowerParsedExprToLir(allocator, resources);
+}
+
+pub fn lowerParsedExprToLirForTarget(
+    allocator: std.mem.Allocator,
+    resources: *ParsedResources,
+    target_usize: base.target.TargetUsize,
+) !LoweredProgram {
+    return pipeline.lowerParsedExprToLirForTarget(allocator, resources, target_usize);
 }
 
 pub fn lowerTypedCIRToLir(

@@ -434,7 +434,11 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
         }
 
         var timer = Timer.start() catch unreachable;
-        const fork_result = forkAndEval(backend_spec.eval_fn, &compiled.lowered);
+        const lowered = if (backend_spec.name.len == 4 and std.mem.eql(u8, backend_spec.name, "wasm"))
+            &compiled.wasm_lowered
+        else
+            &compiled.lowered;
+        const fork_result = forkAndEval(backend_spec.eval_fn, lowered);
         const duration_ns = timer.read();
 
         switch (fork_result) {

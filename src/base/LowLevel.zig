@@ -440,7 +440,10 @@ pub const LowLevel = enum {
     /// not drop the owner before the low-level finishes reading from it.
     pub fn borrowedArgNeededForResult(self: LowLevel, arg_index: usize) bool {
         return switch (self) {
-            .list_get_unsafe => arg_index == 0,
+            .list_get_unsafe,
+            .box_box,
+            .box_unbox,
+            => arg_index == 0,
             else => false,
         };
     }
@@ -775,7 +778,8 @@ pub const LowLevel = enum {
             .dec_to_f64,
             => &.{.borrow},
 
-            .box_box, .box_unbox, .crash => &.{.consume},
+            .box_box, .box_unbox => &.{.borrow},
+            .crash => &.{.consume},
             .compare => &.{ .borrow, .borrow },
         };
     }
@@ -827,6 +831,8 @@ pub const LowLevel = enum {
             .list_get_unsafe,
             .list_first,
             .list_last,
+            .box_box,
+            .box_unbox,
             => .copy_from_borrowed_input,
 
             .list_split_first,

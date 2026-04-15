@@ -773,10 +773,12 @@ fn emitRawDirectRcPlan(
             return true;
         },
         .list_decref => |list_plan| {
+            if (list_plan.child != null) return false;
             try self.emitBuiltinInternalListRc(.decref, value_ptr_local, helper_key.layout_idx, list_plan, 1);
             return true;
         },
         .list_free => |list_plan| {
+            if (list_plan.child != null) return false;
             try self.emitBuiltinInternalListRc(.free, value_ptr_local, helper_key.layout_idx, list_plan, 1);
             return true;
         },
@@ -793,6 +795,7 @@ fn emitRawDirectRcPlan(
             return true;
         },
         .box_decref => |box_plan| {
+            if (box_plan.child != null) return false;
             const box_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalGet(value_ptr_local);
             try self.emitLoadOp(.i32, 0);
@@ -804,6 +807,7 @@ fn emitRawDirectRcPlan(
             return true;
         },
         .box_free => |box_plan| {
+            if (box_plan.child != null) return false;
             const box_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalGet(value_ptr_local);
             try self.emitLoadOp(.i32, 0);
@@ -825,6 +829,7 @@ fn emitRawRcHelperCallForValuePtr(
     layout_idx: layout.Idx,
     inc_count: u16,
 ) Allocator.Error!void {
+    const normalized_value_ptr = try self.normalizeCompositeValuePtr(value_ptr_local, layout_idx);
     const helper_key = RcHelperKey{ .op = switch (kind) {
         .incref => .incref,
         .decref => .decref,
@@ -832,10 +837,10 @@ fn emitRawRcHelperCallForValuePtr(
     }, .layout_idx = layout_idx };
     const helper_plan = self.getLayoutStore().rcHelperPlan(helper_key);
     if (helper_plan == .noop) return;
-    if (try self.emitRawDirectRcPlan(helper_key, helper_plan, value_ptr_local, null)) return;
+    if (try self.emitRawDirectRcPlan(helper_key, helper_plan, normalized_value_ptr, null)) return;
 
     const helper_func_idx = try self.compileBuiltinInternalRcHelper(helper_key);
-    try self.emitLocalGet(value_ptr_local);
+    try self.emitLocalGet(normalized_value_ptr);
     switch (kind) {
         .incref => {
             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -847,6 +852,31 @@ fn emitRawRcHelperCallForValuePtr(
         },
     }
     try self.emitCall(helper_func_idx);
+}
+
+fn normalizeCompositeValuePtr(self: *Self, value_ptr_local: u32, layout_idx: layout.Idx) Allocator.Error!u32 {
+    if (!self.isCompositeLayout(layout_idx)) return value_ptr_local;
+
+    const normalized = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalGet(value_ptr_local);
+    try self.emitLocalSet(normalized);
+    try self.emitLocalGet(normalized);
+    self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+    self.body.append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+
+    const normalized_size = self.layoutByteSize(self.runtimeRepresentationLayoutIdx(layout_idx));
+    const normalized_align = self.layoutStorageByteAlign(layout_idx);
+    const stable_offset = try self.allocStackMemory(normalized_size, normalized_align);
+    const stable_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitFpOffset(stable_offset);
+    try self.emitLocalSet(stable_ptr);
+    try self.emitZeroInit(stable_ptr, normalized_size);
+    try self.emitLocalGet(stable_ptr);
+    try self.emitLocalSet(normalized);
+
+    self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
+    return normalized;
 }
 
 /// Emit RC ops for a value addressed by `value_ptr_local`.
@@ -5764,7 +5794,31 @@ fn emitCall(self: *Self, func_idx: u32) Allocator.Error!void {
 fn emitCallArgs(self: *Self, args: ProcLocalSpan) Allocator.Error!void {
     const arg_refs = self.store.getLocalSpan(args);
     for (arg_refs) |arg| {
+        const layout_idx = self.procLocalLayoutIdx(arg);
+        if (!self.isCompositeLayout(layout_idx)) {
+            try self.emitProcLocal(arg);
+            continue;
+        }
+
         try self.emitProcLocal(arg);
+        const arg_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitLocalSet(arg_ptr);
+        try self.emitLocalGet(arg_ptr);
+        self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+        self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+        self.body.append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+        const stable_offset = try self.allocStackMemory(
+            self.layoutByteSize(self.runtimeRepresentationLayoutIdx(layout_idx)),
+            self.layoutStorageByteAlign(layout_idx),
+        );
+        const stable_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitFpOffset(stable_offset);
+        try self.emitLocalSet(stable_ptr);
+        try self.emitZeroInit(stable_ptr, self.layoutByteSize(self.runtimeRepresentationLayoutIdx(layout_idx)));
+        try self.emitLocalGet(stable_ptr);
+        try self.emitLocalSet(arg_ptr);
+        self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
+        try self.emitLocalGet(arg_ptr);
     }
 }
 
@@ -10999,6 +11053,19 @@ fn generateLLListAppend(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
     try self.emitProcLocal(args[0]);
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(list_ptr);
+    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, list_ptr) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+    self.body.append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+    const empty_list_offset = try self.allocStackMemory(12, 4);
+    const empty_list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitFpOffset(empty_list_offset);
+    try self.emitLocalSet(empty_list_ptr);
+    try self.emitZeroInit(empty_list_ptr, 12);
+    try self.emitLocalGet(empty_list_ptr);
+    try self.emitLocalSet(list_ptr);
+    self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
 
     const elem_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     if (elem_size == 0) {
@@ -11009,17 +11076,12 @@ fn generateLLListAppend(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
         const target_is_composite = self.isCompositeLayout(elem_layout_idx);
         if (target_is_composite) {
             try self.emitProcLocal(args[1]);
-
-            if (self.procLocalNeedsCompositeCallStabilization(args[1])) {
-                const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-                try self.emitLocalSet(src_local);
-                const dst_offset = try self.allocStackMemory(elem_size, elem_align);
-                try self.emitFpOffset(dst_offset);
-                try self.emitLocalSet(elem_ptr);
-                try self.emitMemCopy(elem_ptr, 0, src_local, elem_size);
-            } else {
-                try self.emitLocalSet(elem_ptr);
-            }
+            const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(src_local);
+            const dst_offset = try self.allocStackMemory(elem_size, elem_align);
+            try self.emitFpOffset(dst_offset);
+            try self.emitLocalSet(elem_ptr);
+            try self.emitMemCopy(elem_ptr, 0, src_local, elem_size);
         } else {
             const elem_vt = self.resolveValType(elem_layout_idx);
             try self.emitProcLocal(args[1]);
@@ -11533,14 +11595,46 @@ fn generateLLListReleaseExcessCapacity(self: *Self, args: anytype, ret_layout: l
     try self.buildRocList(new_data, old_len);
 }
 
+const ListElementPairLayout = struct {
+    result_size: u32,
+    result_align: u32,
+    elem_offset: u32,
+    list_offset: u32,
+    list_layout: layout.Idx,
+};
+
+fn resolveListElementPairLayout(self: *Self, ret_layout: layout.Idx) ListElementPairLayout {
+    const ls = self.getLayoutStore();
+    const ret_layout_val = ls.getLayout(ret_layout);
+    if (ret_layout_val.tag != .struct_) unreachable;
+
+    const record_idx = ret_layout_val.data.struct_.idx;
+    const record_data = ls.getStructData(record_idx);
+    const field0_layout = ls.getStructFieldLayout(record_idx, 0);
+    const field1_layout = ls.getStructFieldLayout(record_idx, 1);
+    const field0_val = ls.getLayout(field0_layout);
+    const field0_is_list = field0_val.tag == .list or field0_val.tag == .list_of_zst;
+
+    return .{
+        .result_size = record_data.size,
+        .result_align = @intCast(ret_layout_val.alignment(ls.targetUsize()).toByteUnits()),
+        .elem_offset = if (field0_is_list)
+            ls.getStructFieldOffset(record_idx, 1)
+        else
+            ls.getStructFieldOffset(record_idx, 0),
+        .list_offset = if (field0_is_list)
+            ls.getStructFieldOffset(record_idx, 0)
+        else
+            ls.getStructFieldOffset(record_idx, 1),
+        .list_layout = if (field0_is_list) field0_layout else field1_layout,
+    };
+}
+
 /// Generate list_split_first: split list into first element and rest
 fn generateLLListSplitFirst(self: *Self, args: anytype, _ret_layout: layout.Idx) Allocator.Error!void {
-    _ = _ret_layout;
-    // ret_layout is a record { first: elem, rest: list }
-    // We need to extract the element type and size
-    const list_abi = self.builtinInternalListAbi("wasm.generateLLListSplitFirst.builtin_list_abi", self.procLocalLayoutIdx(args[0]));
+    const pair = self.resolveListElementPairLayout(_ret_layout);
+    const list_abi = self.builtinInternalListAbi("wasm.generateLLListSplitFirst.builtin_list_abi", pair.list_layout);
     const elem_size = list_abi.elem_size;
-    const elem_align = list_abi.elem_align;
     // Generate list arg
     try self.emitProcLocal(args[0]);
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -11561,14 +11655,7 @@ fn generateLLListSplitFirst(self: *Self, args: anytype, _ret_layout: layout.Idx)
     WasmModule.leb128WriteU32(self.allocator, &self.body, 4) catch return error.OutOfMemory;
     try self.emitLocalSet(old_len);
 
-    // Allocate result struct: { first: elem (elem_size bytes), rest: list (12 bytes) }
-    // Alignment should be max(elem_align, 4)
-    const result_align: u32 = if (elem_align > 4) elem_align else 4;
-    const first_offset: u32 = 0;
-    const rest_offset: u32 = if (elem_size % 4 == 0) elem_size else ((elem_size / 4) + 1) * 4;
-    const result_size: u32 = rest_offset + 12;
-
-    const result_offset = try self.allocStackMemory(result_size, result_align);
+    const result_offset = try self.allocStackMemory(pair.result_size, pair.result_align);
     const result_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitFpOffset(result_offset);
     try self.emitLocalSet(result_ptr);
@@ -11582,7 +11669,7 @@ fn generateLLListSplitFirst(self: *Self, args: anytype, _ret_layout: layout.Idx)
     const first_dst = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalGet(result_ptr);
     self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(first_offset)) catch return error.OutOfMemory;
+    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(pair.elem_offset)) catch return error.OutOfMemory;
     self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
     try self.emitLocalSet(first_dst);
 
@@ -11614,7 +11701,7 @@ fn generateLLListSplitFirst(self: *Self, args: anytype, _ret_layout: layout.Idx)
     const rest_base = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalGet(result_ptr);
     self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(rest_offset)) catch return error.OutOfMemory;
+    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(pair.list_offset)) catch return error.OutOfMemory;
     self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
     try self.emitLocalSet(rest_base);
 
@@ -11634,10 +11721,9 @@ fn generateLLListSplitFirst(self: *Self, args: anytype, _ret_layout: layout.Idx)
 
 /// Generate list_split_last: split list into rest and last element
 fn generateLLListSplitLast(self: *Self, args: anytype, _ret_layout: layout.Idx) Allocator.Error!void {
-    _ = _ret_layout;
-    const list_abi = self.builtinInternalListAbi("wasm.generateLLListSplitLast.builtin_list_abi", self.procLocalLayoutIdx(args[0]));
+    const pair = self.resolveListElementPairLayout(_ret_layout);
+    const list_abi = self.builtinInternalListAbi("wasm.generateLLListSplitLast.builtin_list_abi", pair.list_layout);
     const elem_size = list_abi.elem_size;
-    const elem_align = list_abi.elem_align;
 
     // Generate list arg
     try self.emitProcLocal(args[0]);
@@ -11659,14 +11745,7 @@ fn generateLLListSplitLast(self: *Self, args: anytype, _ret_layout: layout.Idx) 
     WasmModule.leb128WriteU32(self.allocator, &self.body, 4) catch return error.OutOfMemory;
     try self.emitLocalSet(old_len);
 
-    // Allocate result struct: { rest: list (12 bytes), last: elem (elem_size bytes) }
-    const rest_offset: u32 = 0;
-    // Align last element properly
-    const aligned_last_offset: u32 = if (elem_align <= 4) 12 else ((12 + elem_align - 1) / elem_align) * elem_align;
-    const result_size: u32 = aligned_last_offset + elem_size;
-    const result_align: u32 = if (elem_align > 4) elem_align else 4;
-
-    const result_offset = try self.allocStackMemory(result_size, result_align);
+    const result_offset = try self.allocStackMemory(pair.result_size, pair.result_align);
     const result_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitFpOffset(result_offset);
     try self.emitLocalSet(result_ptr);
@@ -11683,7 +11762,7 @@ fn generateLLListSplitLast(self: *Self, args: anytype, _ret_layout: layout.Idx) 
     const rest_base = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalGet(result_ptr);
     self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(rest_offset)) catch return error.OutOfMemory;
+    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(pair.list_offset)) catch return error.OutOfMemory;
     self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
     try self.emitLocalSet(rest_base);
 
@@ -11720,7 +11799,7 @@ fn generateLLListSplitLast(self: *Self, args: anytype, _ret_layout: layout.Idx) 
     const last_dst = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalGet(result_ptr);
     self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(aligned_last_offset)) catch return error.OutOfMemory;
+    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(pair.elem_offset)) catch return error.OutOfMemory;
     self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
     try self.emitLocalSet(last_dst);
 

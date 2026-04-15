@@ -708,6 +708,36 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "1" },
     },
     .{
+        .name = "low_level - List.get composite list element",
+        .source =
+        \\{
+        \\got = List.get([[]], 0)
+        \\got
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok([])" },
+    },
+    .{
+        .name = "low_level - List.reserve composite empty list",
+        .source =
+        \\{
+        \\x = List.reserve([], 1)
+        \\List.len(x)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "0" },
+    },
+    .{
+        .name = "low_level - List.append composite empty list without get",
+        .source =
+        \\{
+        \\x = List.append([], [])
+        \\List.len(x)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1" },
+    },
+    .{
         .name = "low_level - List.append for strings",
         .source =
         \\{

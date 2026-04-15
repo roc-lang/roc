@@ -91,6 +91,7 @@ pub const ParsedResources = struct {
 pub const LoweredProgram = struct {
     lir_result: FromIr.Result,
     main_proc: lir.LIR.LirProcSpecId,
+    target_usize: base.target.TargetUsize,
 
     pub fn deinit(self: *LoweredProgram) void {
         self.lir_result.deinit();
@@ -385,13 +386,35 @@ pub fn lowerParsedExprToLir(
     allocator: std.mem.Allocator,
     resources: *ParsedResources,
 ) !LoweredProgram {
-    return lowerToLir(allocator, resources);
+    return lowerToLirForTarget(allocator, resources, base.target.TargetUsize.native);
+}
+
+pub fn lowerParsedExprToLirForTarget(
+    allocator: std.mem.Allocator,
+    resources: *ParsedResources,
+    target_usize: base.target.TargetUsize,
+) !LoweredProgram {
+    return lowerToLirForTarget(allocator, resources, target_usize);
 }
 
 pub fn lowerTypedCIRToLir(
     allocator: std.mem.Allocator,
     typed_cir_modules: *check.TypedCIR.Modules,
     module_envs: []const *const ModuleEnv,
+) !LoweredProgram {
+    return lowerTypedCIRToLirForTarget(
+        allocator,
+        typed_cir_modules,
+        module_envs,
+        base.target.TargetUsize.native,
+    );
+}
+
+pub fn lowerTypedCIRToLirForTarget(
+    allocator: std.mem.Allocator,
+    typed_cir_modules: *check.TypedCIR.Modules,
+    module_envs: []const *const ModuleEnv,
+    target_usize: base.target.TargetUsize,
 ) !LoweredProgram {
     var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, typed_cir_modules, 1, null);
     defer mono_lowerer.deinit();
@@ -406,7 +429,7 @@ pub fn lowerTypedCIRToLir(
         allocator,
         module_envs,
         null,
-        base.target.TargetUsize.native,
+        target_usize,
         lowered_ir,
     );
     errdefer lowered_lir.deinit();
@@ -416,12 +439,14 @@ pub fn lowerTypedCIRToLir(
     return .{
         .lir_result = lowered_lir,
         .main_proc = lowered_lir.root_procs.items[lowered_lir.root_procs.items.len - 1],
+        .target_usize = target_usize,
     };
 }
 
-fn lowerToLir(
+fn lowerToLirForTarget(
     allocator: std.mem.Allocator,
     resources: *ParsedResources,
+    target_usize: base.target.TargetUsize,
 ) !LoweredProgram {
     const module_envs = try allocator.alloc(*const ModuleEnv, resources.extra_modules.len + 2);
     defer allocator.free(module_envs);
@@ -430,7 +455,7 @@ fn lowerToLir(
     for (resources.extra_modules, 0..) |module, i| {
         module_envs[i + 2] = module.module_env;
     }
-    return lowerTypedCIRToLir(allocator, &resources.typed_cir_modules, module_envs);
+    return lowerTypedCIRToLirForTarget(allocator, &resources.typed_cir_modules, module_envs, target_usize);
 }
 
 pub fn cleanupCheckedModule(allocator: std.mem.Allocator, module: CheckedModule) void {

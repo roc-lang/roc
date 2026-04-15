@@ -451,7 +451,8 @@ fn runInspectTest(
 
         trace.log("starting backend {s} for inspected source {s}", .{ BACKEND_NAMES[i], src });
         var timer = Timer.start() catch unreachable;
-        const fork_result = forkAndEval(eval_fns[i], &compiled.lowered);
+        const lowered = if (i == 2) &compiled.wasm_lowered else &compiled.lowered;
+        const fork_result = forkAndEval(eval_fns[i], lowered);
         const dur = timer.read();
         trace.log("finished backend {s} for inspected source {s} in {d}ns", .{ BACKEND_NAMES[i], src, dur });
 
@@ -619,7 +620,8 @@ fn runCrashTest(
         }
 
         var timer = Timer.start() catch unreachable;
-        const fork_result = forkAndEval(eval_fns[i], &compiled.lowered);
+        const lowered = if (i == 2) &compiled.wasm_lowered else &compiled.lowered;
+        const fork_result = forkAndEval(eval_fns[i], lowered);
         const dur = timer.read();
 
         switch (fork_result) {
