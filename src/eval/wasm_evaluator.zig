@@ -186,6 +186,7 @@ pub const WasmEvaluator = struct {
         module_env: *ModuleEnv,
         expr_idx: CIR.Expr.Idx,
         all_module_envs: []const *ModuleEnv,
+        app_module_env: ?*ModuleEnv,
     ) Error!WasmCodeResult {
         // Other evaluators may have resolved imports against a different module
         // ordering. Refresh all modules here so CIR external lookups line up
@@ -202,6 +203,17 @@ pub const WasmEvaluator = struct {
             if (env == module_env) {
                 module_idx = @intCast(i);
                 break;
+            }
+        }
+
+        // Find app module index (needed to resolve platform `requires` clauses)
+        var app_module_idx: ?u32 = null;
+        if (app_module_env) |app_env| {
+            for (all_module_envs, 0..) |env, i| {
+                if (env == app_env) {
+                    app_module_idx = @intCast(i);
+                    break;
+                }
             }
         }
 
@@ -235,7 +247,7 @@ pub const WasmEvaluator = struct {
             all_module_envs,
             &module_env.types,
             module_idx,
-            null, // app_module_idx - not used for Wasm evaluation
+            app_module_idx,
         ) catch return error.OutOfMemory;
         defer mir_lower.deinit();
 
