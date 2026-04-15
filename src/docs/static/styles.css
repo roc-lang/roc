@@ -160,21 +160,10 @@ table tr td {
   visibility: visible;
 }
 
-/* Group headers for intermediate type groupings (e.g. Dec under Num) */
-.entry-group {
-    margin-top: 24px;
-    margin-bottom: 24px;
-}
-
 .entry-group-header {
-    font-family: var(--font-mono);
-    font-weight: var(--weight-semibold);
-    font-size: var(--font-lg);
     color: var(--violet);
     padding: 8px 0;
     margin-top: 0;
-    margin-bottom: 12px;
-    border-bottom: 2px solid rgb(from var(--violet) r g b / .25);
 }
 
 /* Type module badge */
@@ -318,8 +307,7 @@ main > * {
 }
 
 section {
-  padding: 0px 0px 16px 0px;
-  margin: 36px 0px;
+  padding: 0px 0px 16px 20px;
 }
 
 section blockquote {
@@ -500,32 +488,25 @@ footer p {
   font-family: var(--font-mono);
   font-weight: var(--weight-bold);
   margin-top: 36px;
-  margin-bottom: 24px;
   color: var(--violet);
 }
 
-main h2 {
-    font-size: var(--font-2xl);
-    font-weight: var(--weight-bold);
-    line-height: 1.2;
-    margin-top: 36px;
-    margin-bottom: 16px;
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-mono);
 }
 
-main h3 {
-    font-size: var(--font-xl);
-    font-weight: var(--weight-semibold);
-    line-height: 1.3;
-    margin-top: 24px;
-    margin-bottom: 12px;
+h1 {
+  margin-bottom: 30px;
 }
 
-main h4 {
-    font-size: var(--font-lg);
-    font-weight: var(--weight-semibold);
-    line-height: 1.4;
-    margin-top: 16px;
-    margin-bottom: 8px;
+h2 {
+  font-size: var(--font-xl);
+  margin-bottom: 0;
+}
+
+h3 {
+  font-size: var(--font-lg);
+  margin-bottom: 0;
 }
 
 .module-name a,
@@ -579,7 +560,7 @@ a.sidebar-module-link {
     color: rgba(from var(--text-color) r g b / .6);
     transition: all 80ms linear;
     text-decoration: none;
-    font-size: 0.6rem;
+    font-size: 0.8rem;
     cursor: pointer;
     padding: 8px 16px;
     
