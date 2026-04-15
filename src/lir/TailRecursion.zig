@@ -54,6 +54,7 @@ pub const TailRecursionPass = struct {
             .assign_ref => |assign| self.store.addCFStmt(.{ .assign_ref = .{
                 .target = assign.target,
                 .result = assign.result,
+                .ownership = assign.ownership,
                 .op = assign.op,
                 .next = next,
             } }),

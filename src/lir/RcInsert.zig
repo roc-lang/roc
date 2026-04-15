@@ -413,12 +413,7 @@ const ProcPass = struct {
             .assign_ref => |assign| {
                 defs.set(@intFromEnum(assign.target));
                 self.markRefOpUses(assign.op, uses);
-                if (assign.result == .fresh) {
-                    switch (assign.op) {
-                        .local => |source| self.markOwnershipPassedLocal(source, ownership_passed),
-                        else => {},
-                    }
-                }
+                self.markSpanOwnershipPassed(assign.ownership.consumed_owned_inputs, ownership_passed);
             },
             .assign_literal => |assign| defs.set(@intFromEnum(assign.target)),
             .assign_call => |assign| {
@@ -540,6 +535,7 @@ const ProcPass = struct {
             .assign_ref => |assign| self.store.addCFStmt(.{ .assign_ref = .{
                 .target = assign.target,
                 .result = assign.result,
+                .ownership = assign.ownership,
                 .op = assign.op,
                 .next = assign.next,
             } }),
@@ -670,6 +666,7 @@ const ProcPass = struct {
             .assign_ref => |assign| try self.rewriteLinear(stmt_id, .{ .assign_ref = .{
                 .target = assign.target,
                 .result = assign.result,
+                .ownership = assign.ownership,
                 .op = assign.op,
                 .next = undefined,
             } }, assign.next),
@@ -816,7 +813,7 @@ const ProcPass = struct {
         const with_drops = try self.prependEdgeDrops(original_stmt_id, rewritten_next, next_stmt);
         const rewritten_stmt = try switch (stmt_template) {
             .assign_symbol => |assign| self.store.addCFStmt(.{ .assign_symbol = .{ .target = assign.target, .symbol = assign.symbol, .next = with_drops } }),
-            .assign_ref => |assign| self.store.addCFStmt(.{ .assign_ref = .{ .target = assign.target, .result = assign.result, .op = assign.op, .next = with_drops } }),
+            .assign_ref => |assign| self.store.addCFStmt(.{ .assign_ref = .{ .target = assign.target, .result = assign.result, .ownership = assign.ownership, .op = assign.op, .next = with_drops } }),
             .assign_literal => |assign| self.store.addCFStmt(.{ .assign_literal = .{ .target = assign.target, .result = assign.result, .value = assign.value, .next = with_drops } }),
             .assign_call => |assign| self.store.addCFStmt(.{ .assign_call = .{ .target = assign.target, .result = assign.result, .proc = assign.proc, .args = assign.args, .next = with_drops } }),
             .assign_call_indirect => |assign| self.store.addCFStmt(.{ .assign_call_indirect = .{ .target = assign.target, .result = assign.result, .ownership = assign.ownership, .closure = assign.closure, .args = assign.args, .capture_layout = assign.capture_layout, .next = with_drops } }),
@@ -917,11 +914,7 @@ const ProcPass = struct {
     fn collectRetainedInputIncrefs(self: *ProcPass, stmt_id: CFStmtId, retained_counts: []u16) Allocator.Error!void {
         switch (self.store.getCFStmt(stmt_id)) {
             .assign_ref => |assign| {
-                if (assign.result != .fresh) return;
-                switch (assign.op) {
-                    .local => |source| self.accumulateFreshInputRetain(source, retained_counts),
-                    else => {},
-                }
+                try self.accumulateFreshInputRetains(self.store.getLocalSpan(assign.ownership.consumed_owned_inputs), retained_counts);
             },
             .assign_list => |assign| {
                 try self.accumulateFreshInputRetains(self.store.getLocalSpan(assign.ownership.consumed_owned_inputs), retained_counts);
@@ -979,12 +972,6 @@ const ProcPass = struct {
             if (retain_count == 0) continue;
             self.incrementRetainCount(local, retained_counts, retain_count);
         }
-    }
-
-    fn accumulateFreshInputRetain(self: *ProcPass, local: LocalId, retained_counts: []u16) void {
-        const retain_count = self.freshInputRetainCount(local, 1);
-        if (retain_count == 0) return;
-        self.incrementRetainCount(local, retained_counts, retain_count);
     }
 
     fn accumulateBorrowedConsumeRetain(self: *ProcPass, local: LocalId, retained_counts: []u16) void {

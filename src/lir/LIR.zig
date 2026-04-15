@@ -267,6 +267,7 @@ pub const CFStmt = union(enum) {
     assign_ref: struct {
         target: LocalId,
         result: ResultSemantics,
+        ownership: OwnershipSemantics = .{},
         op: RefOp,
         next: CFStmtId,
     },

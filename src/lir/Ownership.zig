@@ -379,6 +379,7 @@ fn propagateRefResultSemantics(
                 store.cf_stmts.items[i] = .{ .assign_ref = .{
                     .target = assign.target,
                     .result = next_semantics,
+                    .ownership = assign.ownership,
                     .op = assign.op,
                     .next = assign.next,
                 } };

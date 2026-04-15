@@ -408,6 +408,33 @@ const ProcLowerer = struct {
         };
     }
 
+    fn refOwnership(self: *ProcLowerer, result: LIR.ResultSemantics, op: LIR.RefOp) std.mem.Allocator.Error!LIR.OwnershipSemantics {
+        if (result != .fresh) return .{};
+
+        return switch (op) {
+            .local => |source| .{
+                .consumed_owned_inputs = try self.parent.store.addLocalSpan(&.{source}),
+            },
+            else => .{},
+        };
+    }
+
+    fn addAssignRef(
+        self: *ProcLowerer,
+        target: LIR.LocalId,
+        result: LIR.ResultSemantics,
+        op: LIR.RefOp,
+        next: LIR.CFStmtId,
+    ) std.mem.Allocator.Error!LIR.CFStmtId {
+        return self.parent.store.addCFStmt(.{ .assign_ref = .{
+            .target = target,
+            .result = result,
+            .ownership = try self.refOwnership(result, op),
+            .op = op,
+            .next = next,
+        } });
+    }
+
     fn freshLocalWithLayout(self: *ProcLowerer, layout_idx: layout_mod.Idx) std.mem.Allocator.Error!LIR.LocalId {
         return self.parent.store.addLocal(.{ .layout_idx = layout_idx });
     }
@@ -796,12 +823,7 @@ const ProcLowerer = struct {
         const actual = ls.getLayout(actual_layout);
         const target = ls.getLayout(target_layout);
         if (actual_layout == target_layout) {
-            return try self.parent.store.addCFStmt(.{ .assign_ref = .{
-                .target = target_local,
-                .result = .fresh,
-                .op = .{ .local = source_local },
-                .next = next,
-            } });
+            return try self.addAssignRef(target_local, .fresh, .{ .local = source_local }, next);
         }
 
         if (self.resolvedListElemLayoutRef(actual_ref)) |actual_elem_ref| {
@@ -815,12 +837,7 @@ const ProcLowerer = struct {
                     actual_elem_layout == target_elem_layout or
                     self.layoutRuntimeEquivalent(actual_elem_layout, target_elem_layout))
                 {
-                    return try self.parent.store.addCFStmt(.{ .assign_ref = .{
-                        .target = target_local,
-                        .result = .fresh,
-                        .op = .{ .list_reinterpret = .{ .backing_ref = source_local } },
-                        .next = next,
-                    } });
+                    return try self.addAssignRef(target_local, .fresh, .{ .list_reinterpret = .{ .backing_ref = source_local } }, next);
                 }
             }
         }
@@ -836,12 +853,7 @@ const ProcLowerer = struct {
             !isListLayout(actual) and
             !isListLayout(target))
         {
-            return try self.parent.store.addCFStmt(.{ .assign_ref = .{
-                .target = target_local,
-                .result = .fresh,
-                .op = .{ .nominal = .{ .backing_ref = source_local } },
-                .next = next,
-            } });
+            return try self.addAssignRef(target_local, .fresh, .{ .nominal = .{ .backing_ref = source_local } }, next);
         }
 
         if (actual.tag == .box and actual.data.box == target_layout) {
@@ -999,15 +1011,10 @@ const ProcLowerer = struct {
         var i = field_count;
         while (i > 0) {
             i -= 1;
-            cursor = try self.parent.store.addCFStmt(.{ .assign_ref = .{
-                .target = source_fields[i],
-                .result = .fresh,
-                .op = .{ .field = .{
-                    .source = source_local,
-                    .field_idx = @intCast(i),
-                } },
-                .next = cursor,
-            } });
+            cursor = try self.addAssignRef(source_fields[i], .fresh, .{ .field = .{
+                .source = source_local,
+                .field_idx = @intCast(i),
+            } }, cursor);
         }
 
         return cursor;
@@ -1072,15 +1079,10 @@ const ProcLowerer = struct {
                     .next = next,
                 } });
                 const bridged_payload = try self.bridgeValueIntoLocal(actual_payload_local, target_payload_local, assign_tag);
-                break :blk try self.parent.store.addCFStmt(.{ .assign_ref = .{
-                    .target = actual_payload_local,
-                    .result = .fresh,
-                    .op = .{ .tag_payload_struct = .{
-                        .source = source_local,
-                        .tag_discriminant = discriminant,
-                    } },
-                    .next = bridged_payload,
-                } });
+                break :blk try self.addAssignRef(actual_payload_local, .fresh, .{ .tag_payload_struct = .{
+                    .source = source_local,
+                    .tag_discriminant = discriminant,
+                } }, bridged_payload);
             };
 
             branches[i] = .{
@@ -1096,12 +1098,7 @@ const ProcLowerer = struct {
             .default_branch = default_branch,
         } });
 
-        return try self.parent.store.addCFStmt(.{ .assign_ref = .{
-            .target = cond_local,
-            .result = .fresh,
-            .op = .{ .discriminant = .{ .source = source_local } },
-            .next = switch_stmt,
-        } });
+        return try self.addAssignRef(cond_local, .fresh, .{ .discriminant = .{ .source = source_local } }, switch_stmt);
     }
 
     fn emitBridgesIntoLocals(
@@ -1376,12 +1373,7 @@ const ProcLowerer = struct {
                 const source = try self.lowerVar(value);
                 if (source == target) break :blk next;
                 if (self.localMatchesShape(source, self.localLayout(target), self.localLayoutRef(target))) {
-                    break :blk try self.parent.store.addCFStmt(.{ .assign_ref = .{
-                        .target = target,
-                        .result = .fresh,
-                        .op = .{ .local = source },
-                        .next = next,
-                    } });
+                    break :blk try self.addAssignRef(target, .fresh, .{ .local = source }, next);
                 }
                 break :blk try self.bridgeValueIntoLocal(source, target, next);
             },
@@ -1460,12 +1452,7 @@ const ProcLowerer = struct {
                         } });
                     }
                 }
-                break :blk try self.parent.store.addCFStmt(.{ .assign_ref = .{
-                    .target = target,
-                    .result = .fresh,
-                    .op = .{ .discriminant = .{ .source = source_local } },
-                    .next = next,
-                } });
+                break :blk try self.addAssignRef(target, .fresh, .{ .discriminant = .{ .source = source_local } }, next);
             },
             .get_union_struct => |payload| blk: {
                 const source = try self.lowerVar(payload.value);
@@ -1478,28 +1465,18 @@ const ProcLowerer = struct {
                     payload.tag_discriminant,
                 );
                 if (self.localMatchesShape(target, actual_payload_layout, actual_payload_ref)) {
-                    break :blk try self.parent.store.addCFStmt(.{ .assign_ref = .{
-                        .target = target,
-                        .result = .fresh,
-                        .op = .{ .tag_payload_struct = .{
-                            .source = source,
-                            .tag_discriminant = payload.tag_discriminant,
-                        } },
-                        .next = next,
-                    } });
+                    break :blk try self.addAssignRef(target, .fresh, .{ .tag_payload_struct = .{
+                        .source = source,
+                        .tag_discriminant = payload.tag_discriminant,
+                    } }, next);
                 }
 
                 const raw_target = try self.freshLocalWithLayoutAndRef(actual_payload_layout, actual_payload_ref);
                 const bridged = try self.bridgeValueIntoLocal(raw_target, target, next);
-                const access = try self.parent.store.addCFStmt(.{ .assign_ref = .{
-                    .target = raw_target,
-                    .result = .fresh,
-                    .op = .{ .tag_payload_struct = .{
-                        .source = source,
-                        .tag_discriminant = payload.tag_discriminant,
-                    } },
-                    .next = bridged,
-                } });
+                const access = try self.addAssignRef(raw_target, .fresh, .{ .tag_payload_struct = .{
+                    .source = source,
+                    .tag_discriminant = payload.tag_discriminant,
+                } }, bridged);
                 break :blk access;
             },
             .make_struct => |fields| blk: {
@@ -1551,28 +1528,18 @@ const ProcLowerer = struct {
                 const actual_field_ref = self.structFieldLayoutRef(self.localLayoutRef(source), field.field_index);
                 const actual_field_layout = self.lowerStructFieldLayout(self.localLayout(source), field.field_index);
                 if (self.localMatchesShape(target, actual_field_layout, actual_field_ref)) {
-                    break :blk try self.parent.store.addCFStmt(.{ .assign_ref = .{
-                        .target = target,
-                        .result = .fresh,
-                        .op = .{ .field = .{
-                            .source = source,
-                            .field_idx = field.field_index,
-                        } },
-                        .next = next,
-                    } });
+                    break :blk try self.addAssignRef(target, .fresh, .{ .field = .{
+                        .source = source,
+                        .field_idx = field.field_index,
+                    } }, next);
                 }
 
                 const raw_target = try self.freshLocalWithLayoutAndRef(actual_field_layout, actual_field_ref);
                 const bridged = try self.bridgeValueIntoLocal(raw_target, target, next);
-                const access = try self.parent.store.addCFStmt(.{ .assign_ref = .{
-                    .target = raw_target,
-                    .result = .fresh,
-                    .op = .{ .field = .{
-                        .source = source,
-                        .field_idx = field.field_index,
-                    } },
-                    .next = bridged,
-                } });
+                const access = try self.addAssignRef(raw_target, .fresh, .{ .field = .{
+                    .source = source,
+                    .field_idx = field.field_index,
+                } }, bridged);
                 break :blk access;
             },
             .call_direct => |call| blk: {
