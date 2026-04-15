@@ -11,7 +11,6 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
 const RocCtx = @import("ctx").RocCtx;
