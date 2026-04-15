@@ -377,11 +377,6 @@ fn wrapStrConcat(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_by
     }
 
     out.* = strConcatC(a, b, roc_ops);
-    std.debug.print("wrapStrConcat out bytes=0x{x} len={d} cap=0x{x}\n", .{
-        @intFromPtr(out.bytes),
-        out.length,
-        out.capacity_or_alloc_ptr,
-    });
 }
 
 /// Wrapper: strContains(RocStr, RocStr) -> bool
@@ -2582,7 +2577,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .str_concat => {
                     if (args.len != 2) unreachable;
-                    std.debug.print("DEV str_concat target stmt={?}\n", .{self.current_stmt_id});
                     const a_loc = try self.emitValueLocal(args[0]);
                     const b_loc = try self.emitValueLocal(args[1]);
                     if (builtin.mode == .Debug and (a_loc != .stack_str or b_loc != .stack_str)) {
@@ -4371,17 +4365,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn bindAssignedLocal(self: *Self, local: LocalId, value_loc: ValueLocation) Allocator.Error!void {
             const key = localKey(local);
             const local_layout = self.localLayout(local);
-            if (local_layout == .str) {
-                std.debug.print("DEV bindAssignedLocal local={d} stmt={?} incoming={s}\n", .{
-                    @intFromEnum(local),
-                    self.current_stmt_id,
-                    @tagName(value_loc),
-                });
-            }
             if (self.local_locations.get(key)) |stable_loc| {
-                if (local_layout == .str) {
-                    std.debug.print("  existing stable={s}\n", .{@tagName(stable_loc)});
-                }
                 try self.storeValueIntoStableLocation(stable_loc, value_loc, local_layout);
                 try self.emitDebugAssertValidBoxLocal(local, stable_loc);
                 try self.emitDebugAssertValidStrLocal(local, stable_loc);
@@ -4389,9 +4373,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             const stable_loc = try self.materializeValueToStackForLayout(value_loc, local_layout);
-            if (local_layout == .str) {
-                std.debug.print("  new stable={s}\n", .{@tagName(stable_loc)});
-            }
             try self.local_locations.put(key, stable_loc);
             try self.emitDebugAssertValidBoxLocal(local, stable_loc);
             try self.emitDebugAssertValidStrLocal(local, stable_loc);
@@ -8413,15 +8394,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 ),
                 .struct_ => |struct_plan| {
                     const field_count = self.layout_store.rcHelperStructFieldCount(struct_plan);
-                    std.debug.print("DEV struct rc helper layout={} fields={d}\n", .{ helper_key.layout_idx, field_count });
                     var i: u32 = 0;
                     while (i < field_count) : (i += 1) {
                         const field_plan = self.layout_store.rcHelperStructFieldPlan(struct_plan, i) orelse continue;
-                        std.debug.print("  field {d}: offset={d} child={}\n", .{
-                            i,
-                            field_plan.offset,
-                            field_plan.child.layout_idx,
-                        });
                         const field_ptr_reg = try self.allocTempGeneral();
                         defer self.codegen.freeGeneral(field_ptr_reg);
 
@@ -11247,13 +11222,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for decref operation.
         fn generateDecref(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
-            std.debug.print("DEV generateDecref local={d} layout={} stmt={?}\n", .{
-                @intFromEnum(rc_op.value),
-                rc_op.layout_idx,
-                self.current_stmt_id,
-            });
             const value_loc = try self.generateRcOperandValue(rc_op.value, rc_op.layout_idx);
-            std.debug.print("  value_loc={s}\n", .{@tagName(value_loc)});
             const ls = self.layout_store;
             const layout_val = ls.getLayout(rc_op.layout_idx);
             if (!explicitRcLayoutValContainsRefcounted(ls, "dev.generateDecref.layout_rc", layout_val)) return value_loc;
@@ -12554,10 +12523,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.current_stmt_id = saved_stmt_id;
 
             const stmt = self.store.getCFStmt(stmt_id);
-            const stmt_num = @intFromEnum(stmt_id);
-            if ((stmt_num >= 60 and stmt_num <= 70) or (stmt_num >= 130 and stmt_num <= 175)) {
-                std.debug.print("DEV stmt {d}: {any}\n", .{ @intFromEnum(stmt_id), stmt });
-            }
             switch (stmt) {
                 .assign_symbol => |assign| {
                     std.debug.panic(
@@ -12617,12 +12582,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
 
                 .assign_low_level => |assign| {
-                    if (assign.op == .str_concat) {
-                        std.debug.print("DEV assign_low_level str_concat target={d} stmt={?}\n", .{
-                            @intFromEnum(assign.target),
-                            self.current_stmt_id,
-                        });
-                    }
                     const value_loc = try self.generateLowLevel(.{
                         .op = assign.op,
                         .args = assign.args,

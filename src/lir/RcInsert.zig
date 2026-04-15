@@ -48,15 +48,19 @@ const ProcPass = struct {
     local_count: usize,
     reachable_stmt_ids: []CFStmtId,
     stmt_slots: std.AutoHashMap(u32, usize),
-    provenance_owner: []?LocalId,
+    live_backing: []?LocalId,
+    exact_owner: []?LocalId,
     storage_locals: std.DynamicBitSetUnmanaged,
     owned_locals: std.DynamicBitSetUnmanaged,
+    live_in_direct: []std.DynamicBitSetUnmanaged,
+    live_out_direct: []std.DynamicBitSetUnmanaged,
     live_in: []std.DynamicBitSetUnmanaged,
     live_out: []std.DynamicBitSetUnmanaged,
     rewritten_stmt_ids: std.AutoHashMap(u32, CFStmtId),
     loop_continue_targets: std.AutoHashMap(u32, CFStmtId),
     join_params_by_id: std.AutoHashMap(u32, LIR.LocalSpan),
     join_bodies_by_id: std.AutoHashMap(u32, CFStmtId),
+    join_params_by_body: std.AutoHashMap(u32, LIR.LocalSpan),
 
     fn init(
         allocator: Allocator,
@@ -79,15 +83,31 @@ const ProcPass = struct {
         }
 
         const stmt_count = reachable_stmt_ids.len;
-        const provenance_owner = try allocator.alloc(?LocalId, local_count);
-        errdefer allocator.free(provenance_owner);
-        @memset(provenance_owner, null);
+        const live_backing = try allocator.alloc(?LocalId, local_count);
+        errdefer allocator.free(live_backing);
+        @memset(live_backing, null);
 
+        const exact_owner = try allocator.alloc(?LocalId, local_count);
+        errdefer allocator.free(exact_owner);
+        @memset(exact_owner, null);
+
+        const live_in_direct = try allocator.alloc(std.DynamicBitSetUnmanaged, stmt_count);
+        errdefer allocator.free(live_in_direct);
+        const live_out_direct = try allocator.alloc(std.DynamicBitSetUnmanaged, stmt_count);
+        errdefer allocator.free(live_out_direct);
         const live_in = try allocator.alloc(std.DynamicBitSetUnmanaged, stmt_count);
         errdefer allocator.free(live_in);
         const live_out = try allocator.alloc(std.DynamicBitSetUnmanaged, stmt_count);
         errdefer allocator.free(live_out);
 
+        for (live_in_direct) |*in_direct_bits| {
+            in_direct_bits.* = try std.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+            errdefer in_direct_bits.deinit(allocator);
+        }
+        for (live_out_direct) |*out_direct_bits| {
+            out_direct_bits.* = try std.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+            errdefer out_direct_bits.deinit(allocator);
+        }
         for (live_in, live_out) |*in_bits, *out_bits| {
             in_bits.* = try std.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
             errdefer in_bits.deinit(allocator);
@@ -104,15 +124,19 @@ const ProcPass = struct {
             .local_count = local_count,
             .reachable_stmt_ids = reachable_stmt_ids,
             .stmt_slots = stmt_slots,
-            .provenance_owner = provenance_owner,
+            .live_backing = live_backing,
+            .exact_owner = exact_owner,
             .storage_locals = try std.DynamicBitSetUnmanaged.initEmpty(allocator, local_count),
             .owned_locals = try std.DynamicBitSetUnmanaged.initEmpty(allocator, local_count),
+            .live_in_direct = live_in_direct,
+            .live_out_direct = live_out_direct,
             .live_in = live_in,
             .live_out = live_out,
             .rewritten_stmt_ids = std.AutoHashMap(u32, CFStmtId).init(allocator),
             .loop_continue_targets = std.AutoHashMap(u32, CFStmtId).init(allocator),
             .join_params_by_id = std.AutoHashMap(u32, LIR.LocalSpan).init(allocator),
             .join_bodies_by_id = std.AutoHashMap(u32, CFStmtId).init(allocator),
+            .join_params_by_body = std.AutoHashMap(u32, LIR.LocalSpan).init(allocator),
         };
         errdefer pass.storage_locals.deinit(allocator);
         errdefer pass.owned_locals.deinit(allocator);
@@ -120,6 +144,7 @@ const ProcPass = struct {
         errdefer pass.loop_continue_targets.deinit();
         errdefer pass.join_params_by_id.deinit();
         errdefer pass.join_bodies_by_id.deinit();
+        errdefer pass.join_params_by_body.deinit();
 
         pass.computeOwnedLocals();
         pass.computeProvenanceOwners();
@@ -132,13 +157,23 @@ const ProcPass = struct {
     fn deinit(self: *ProcPass) void {
         self.allocator.free(self.reachable_stmt_ids);
         self.stmt_slots.deinit();
-        self.allocator.free(self.provenance_owner);
+        self.allocator.free(self.live_backing);
+        self.allocator.free(self.exact_owner);
         self.storage_locals.deinit(self.allocator);
         self.owned_locals.deinit(self.allocator);
         self.rewritten_stmt_ids.deinit();
         self.loop_continue_targets.deinit();
         self.join_params_by_id.deinit();
         self.join_bodies_by_id.deinit();
+        self.join_params_by_body.deinit();
+        for (self.live_in_direct) |*in_bits| {
+            in_bits.deinit(self.allocator);
+        }
+        self.allocator.free(self.live_in_direct);
+        for (self.live_out_direct) |*out_bits| {
+            out_bits.deinit(self.allocator);
+        }
+        self.allocator.free(self.live_out_direct);
         for (self.live_in, self.live_out) |*in_bits, *out_bits| {
             in_bits.deinit(self.allocator);
             out_bits.deinit(self.allocator);
@@ -180,6 +215,7 @@ const ProcPass = struct {
                 .join => |join| {
                     _ = self.join_params_by_id.put(@intFromEnum(join.id), join.params) catch unreachable;
                     _ = self.join_bodies_by_id.put(@intFromEnum(join.id), join.body) catch unreachable;
+                    _ = self.join_params_by_body.put(@intFromEnum(join.body), join.params) catch unreachable;
                 },
                 else => {},
             }
@@ -224,17 +260,23 @@ const ProcPass = struct {
     fn computeProvenanceOwners(self: *ProcPass) void {
         for (self.reachable_stmt_ids) |stmt_id| {
             switch (self.store.getCFStmt(stmt_id)) {
-                .assign_ref => |assign| self.recordResultOwner(assign.target, assign.result),
-                .assign_call => |assign| self.recordResultOwner(assign.target, assign.result),
-                .assign_call_indirect => |assign| self.recordResultOwner(assign.target, assign.result),
-                .assign_low_level => |assign| self.recordResultOwner(assign.target, assign.result),
-                .assign_literal => |assign| self.provenance_owner[@intFromEnum(assign.target)] = null,
-                .assign_symbol => |assign| self.provenance_owner[@intFromEnum(assign.target)] = null,
-                .assign_list => |assign| self.provenance_owner[@intFromEnum(assign.target)] = null,
-                .assign_struct => |assign| self.provenance_owner[@intFromEnum(assign.target)] = null,
-                .assign_tag => |assign| self.provenance_owner[@intFromEnum(assign.target)] = null,
-                .set_local => |assign| self.provenance_owner[@intFromEnum(assign.target)] = null,
-                .for_list => |loop_stmt| self.recordResultOwner(loop_stmt.elem, loop_stmt.elem_result),
+                .assign_ref => |assign| self.recordAssignRefOwner(assign.target, assign.op, assign.result),
+                .assign_call => |assign| self.recordWholeValueOwner(assign.target, assign.result),
+                .assign_call_indirect => |assign| self.recordWholeValueOwner(assign.target, assign.result),
+                .assign_low_level => |assign| self.recordWholeValueOwner(assign.target, assign.result),
+                .assign_literal => |assign| self.clearOwnerFacts(assign.target),
+                .assign_symbol => |assign| self.clearOwnerFacts(assign.target),
+                .assign_list => |assign| self.clearOwnerFacts(assign.target),
+                .assign_struct => |assign| self.clearOwnerFacts(assign.target),
+                .assign_tag => |assign| self.clearOwnerFacts(assign.target),
+                .set_local => |assign| self.clearOwnerFacts(assign.target),
+                .for_list => |loop_stmt| {
+                    if (loop_stmt.elem_result == .fresh) {
+                        self.clearOwnerFacts(loop_stmt.elem);
+                    } else {
+                        self.recordProjectedOwner(loop_stmt.elem, loop_stmt.elem_result);
+                    }
+                },
                 else => {},
             }
         }
@@ -254,9 +296,13 @@ const ProcPass = struct {
                 const params = self.store.getLocalSpan(join.params);
                 if (params.len == 0) continue;
 
-                var candidates = self.allocator.alloc(?LocalId, params.len) catch unreachable;
-                defer self.allocator.free(candidates);
-                @memset(candidates, null);
+                var live_candidates = self.allocator.alloc(?LocalId, params.len) catch unreachable;
+                defer self.allocator.free(live_candidates);
+                @memset(live_candidates, null);
+
+                var exact_candidates = self.allocator.alloc(?LocalId, params.len) catch unreachable;
+                defer self.allocator.free(exact_candidates);
+                @memset(exact_candidates, null);
 
                 var incoming_count: usize = 0;
                 for (self.reachable_stmt_ids) |incoming_stmt_id| {
@@ -270,11 +316,14 @@ const ProcPass = struct {
                     incoming_count += 1;
 
                     for (args, 0..) |arg_local, i| {
-                        const owner = self.explicitOwnerForLocal(arg_local);
+                        const live_owner = self.liveOwnerForLocal(arg_local);
+                        const exact_owner = self.exactOwnerForLocal(arg_local);
                         if (incoming_count == 1) {
-                            candidates[i] = owner;
-                        } else if (candidates[i] != owner) {
-                            candidates[i] = null;
+                            live_candidates[i] = live_owner;
+                            exact_candidates[i] = exact_owner;
+                        } else {
+                            if (live_candidates[i] != live_owner) live_candidates[i] = null;
+                            if (exact_candidates[i] != exact_owner) exact_candidates[i] = null;
                         }
                     }
                 }
@@ -282,46 +331,110 @@ const ProcPass = struct {
                 if (incoming_count == 0) continue;
 
                 for (params, 0..) |param, i| {
-                    if (self.localCanOwnRefcount(param)) {
-                        self.provenance_owner[@intFromEnum(param)] = null;
-                        continue;
-                    }
                     const param_idx = @intFromEnum(param);
-                    if (self.provenance_owner[param_idx] == candidates[i]) continue;
-                    self.provenance_owner[param_idx] = candidates[i];
-                    changed = true;
+                    if (self.live_backing[param_idx] != live_candidates[i]) {
+                        self.live_backing[param_idx] = live_candidates[i];
+                        changed = true;
+                    }
+                    if (self.exact_owner[param_idx] != exact_candidates[i]) {
+                        self.exact_owner[param_idx] = exact_candidates[i];
+                        changed = true;
+                    }
                 }
             }
         }
     }
 
     fn explicitOwnerForLocal(self: *const ProcPass, local: LocalId) ?LocalId {
+        return self.exactOwnerForLocal(local);
+    }
+
+    fn exactOwnerForLocal(self: *const ProcPass, local: LocalId) ?LocalId {
         var current = local;
         var hops_remaining: usize = self.local_count;
         while (hops_remaining > 0) : (hops_remaining -= 1) {
-            if (self.provenance_owner[@intFromEnum(current)]) |owner| {
+            if (self.exact_owner[@intFromEnum(current)]) |owner| {
                 if (owner == current) break;
                 current = owner;
                 continue;
             }
 
-            const local_idx = @intFromEnum(current);
-            if (!self.owned_locals.isSet(local_idx)) return null;
+            const current_idx = @intFromEnum(current);
+            if (self.owned_locals.isSet(current_idx)) {
+                const layout_idx = self.store.getLocal(current).layout_idx;
+                if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(layout_idx))) return null;
+                return current;
+            }
 
-            const layout_idx = self.store.getLocal(current).layout_idx;
-            if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(layout_idx))) return null;
-            return current;
+            return null;
         }
 
         unreachable;
     }
 
-    fn recordResultOwner(self: *ProcPass, target: LocalId, result: LIR.ResultSemantics) void {
-        self.provenance_owner[@intFromEnum(target)] = switch (result) {
+    fn liveOwnerForLocal(self: *const ProcPass, local: LocalId) ?LocalId {
+        var current = local;
+        var hops_remaining: usize = self.local_count;
+        while (hops_remaining > 0) : (hops_remaining -= 1) {
+            if (self.live_backing[@intFromEnum(current)]) |owner| {
+                if (owner == current) break;
+                current = owner;
+                continue;
+            }
+
+            return self.exactOwnerForLocal(current);
+        }
+
+        unreachable;
+    }
+
+    fn clearOwnerFacts(self: *ProcPass, target: LocalId) void {
+        self.live_backing[@intFromEnum(target)] = null;
+        self.exact_owner[@intFromEnum(target)] = null;
+    }
+
+    fn backingFromResult(result: LIR.ResultSemantics) ?LocalId {
+        return switch (result) {
             .alias_of => |alias| alias.owner,
             .borrow_of => |borrow| borrow.owner,
             .fresh => null,
         };
+    }
+
+    fn recordWholeValueOwner(self: *ProcPass, target: LocalId, result: LIR.ResultSemantics) void {
+        const owner = backingFromResult(result);
+        self.live_backing[@intFromEnum(target)] = owner;
+        self.exact_owner[@intFromEnum(target)] = owner;
+    }
+
+    fn recordProjectedOwner(self: *ProcPass, target: LocalId, result: LIR.ResultSemantics) void {
+        self.live_backing[@intFromEnum(target)] = backingFromResult(result);
+        self.exact_owner[@intFromEnum(target)] = null;
+    }
+
+    fn recordAssignRefOwner(
+        self: *ProcPass,
+        target: LocalId,
+        op: LIR.RefOp,
+        result: LIR.ResultSemantics,
+    ) void {
+        if (result == .fresh) {
+            self.clearOwnerFacts(target);
+            return;
+        }
+
+        switch (op) {
+            .local,
+            .list_reinterpret,
+            .nominal,
+            => self.recordWholeValueOwner(target, result),
+
+            .discriminant,
+            .field,
+            .tag_payload,
+            .tag_payload_struct,
+            => self.recordProjectedOwner(target, result),
+        }
     }
 
     fn computeLiveness(self: *ProcPass) Allocator.Error!void {
@@ -333,17 +446,34 @@ const ProcPass = struct {
                 stmt_idx -= 1;
                 const id = self.reachable_stmt_ids[stmt_idx];
 
+                var new_out_direct = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.local_count);
+                defer new_out_direct.deinit(self.allocator);
+                try self.computeLiveOutDirect(id, &new_out_direct);
+
                 var new_out = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.local_count);
                 defer new_out.deinit(self.allocator);
                 try self.computeLiveOut(id, &new_out);
 
+                var new_in_direct = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.local_count);
+                defer new_in_direct.deinit(self.allocator);
                 var new_in = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.local_count);
                 defer new_in.deinit(self.allocator);
-                try self.transfer(id, &new_out, &new_in);
+                try self.transfer(id, &new_out_direct, &new_in_direct, &new_in);
+
+                if (!bitsetsEqual(self.live_out_direct[stmt_idx], new_out_direct)) {
+                    self.live_out_direct[stmt_idx].unsetAll();
+                    self.live_out_direct[stmt_idx].setUnion(new_out_direct);
+                    changed = true;
+                }
 
                 if (!bitsetsEqual(self.live_out[stmt_idx], new_out)) {
                     self.live_out[stmt_idx].unsetAll();
                     self.live_out[stmt_idx].setUnion(new_out);
+                    changed = true;
+                }
+                if (!bitsetsEqual(self.live_in_direct[stmt_idx], new_in_direct)) {
+                    self.live_in_direct[stmt_idx].unsetAll();
+                    self.live_in_direct[stmt_idx].setUnion(new_in_direct);
                     changed = true;
                 }
                 if (!bitsetsEqual(self.live_in[stmt_idx], new_in)) {
@@ -352,6 +482,53 @@ const ProcPass = struct {
                     changed = true;
                 }
             }
+        }
+    }
+
+    fn computeLiveOutDirect(self: *ProcPass, stmt_id: CFStmtId, out: *std.DynamicBitSetUnmanaged) Allocator.Error!void {
+        switch (self.store.getCFStmt(stmt_id)) {
+            .assign_symbol => |assign| self.unionLiveInDirectFor(assign.next, out),
+            .assign_ref => |assign| self.unionLiveInDirectFor(assign.next, out),
+            .assign_literal => |assign| self.unionLiveInDirectFor(assign.next, out),
+            .assign_call => |assign| self.unionLiveInDirectFor(assign.next, out),
+            .assign_call_indirect => |assign| self.unionLiveInDirectFor(assign.next, out),
+            .assign_low_level => |assign| self.unionLiveInDirectFor(assign.next, out),
+            .assign_list => |assign| self.unionLiveInDirectFor(assign.next, out),
+            .assign_struct => |assign| self.unionLiveInDirectFor(assign.next, out),
+            .assign_tag => |assign| self.unionLiveInDirectFor(assign.next, out),
+            .set_local => |assign| self.unionLiveInDirectFor(assign.next, out),
+            .debug => |debug_stmt| self.unionLiveInDirectFor(debug_stmt.next, out),
+            .expect => |expect_stmt| self.unionLiveInDirectFor(expect_stmt.next, out),
+            .incref => |inc| self.unionLiveInDirectFor(inc.next, out),
+            .decref => |dec| self.unionLiveInDirectFor(dec.next, out),
+            .free => |free_stmt| self.unionLiveInDirectFor(free_stmt.next, out),
+            .switch_stmt => |sw| {
+                for (self.store.getCFSwitchBranches(sw.branches)) |branch| {
+                    self.unionLiveInDirectFor(branch.body, out);
+                }
+                self.unionLiveInDirectFor(sw.default_branch, out);
+            },
+            .borrow_scope => |scope| {
+                self.unionLiveInDirectFor(scope.body, out);
+                self.unionLiveInDirectFor(scope.remainder, out);
+            },
+            .for_list => |for_stmt| {
+                self.unionLiveInDirectFor(for_stmt.body, out);
+                self.unionLiveInDirectFor(for_stmt.next, out);
+            },
+            .join => |join| {
+                self.unionLiveInDirectFor(join.body, out);
+                self.unionLiveInDirectFor(join.remainder, out);
+            },
+            .loop_continue => {
+                const target = self.loop_continue_targets.get(@intFromEnum(stmt_id)) orelse return;
+                self.unionLiveInDirectFor(target, out);
+            },
+            .jump => |jump| {
+                const target = self.join_bodies_by_id.get(@intFromEnum(jump.target)) orelse return;
+                self.unionLiveInDirectFor(target, out);
+            },
+            .scope_exit, .ret, .runtime_error, .crash => {},
         }
     }
 
@@ -407,6 +584,11 @@ const ProcPass = struct {
         out.setUnion(self.live_in[slot]);
     }
 
+    fn unionLiveInDirectFor(self: *const ProcPass, stmt_id: CFStmtId, out: *std.DynamicBitSetUnmanaged) void {
+        const slot = self.stmtSlot(stmt_id) orelse return;
+        out.setUnion(self.live_in_direct[slot]);
+    }
+
     fn stmtSlot(self: *const ProcPass, stmt_id: CFStmtId) ?usize {
         return self.stmt_slots.get(@intFromEnum(stmt_id));
     }
@@ -414,10 +596,11 @@ const ProcPass = struct {
     fn transfer(
         self: *ProcPass,
         stmt_id: CFStmtId,
-        out: *const std.DynamicBitSetUnmanaged,
+        out_direct: *const std.DynamicBitSetUnmanaged,
+        in_direct: *std.DynamicBitSetUnmanaged,
         in: *std.DynamicBitSetUnmanaged,
     ) Allocator.Error!void {
-        in.setUnion(out.*);
+        in_direct.setUnion(out_direct.*);
 
         var defs = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.local_count);
         defer defs.deinit(self.allocator);
@@ -427,10 +610,27 @@ const ProcPass = struct {
         defer ownership_passed.deinit(self.allocator);
 
         self.collectDefsUses(stmt_id, &defs, &uses, &ownership_passed);
-        setDifferenceInPlace(in, defs);
-        setDifferenceInPlace(in, ownership_passed);
-        in.setUnion(uses);
+        setDifferenceInPlace(in_direct, defs);
+        setDifferenceInPlace(in_direct, ownership_passed);
+        in_direct.setUnion(uses);
+        self.addJoinBodyOwnedParams(stmt_id, in_direct);
+        in.setUnion(in_direct.*);
         self.expandLiveOwners(in);
+    }
+
+    fn addJoinBodyOwnedParams(
+        self: *const ProcPass,
+        stmt_id: CFStmtId,
+        bits: *std.DynamicBitSetUnmanaged,
+    ) void {
+        const params_span = self.join_params_by_body.get(@intFromEnum(stmt_id)) orelse return;
+        for (self.store.getLocalSpan(params_span)) |param| {
+            if (!self.localCanOwnRefcount(param)) continue;
+            const layout_idx = self.store.getLocal(param).layout_idx;
+            if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(layout_idx))) continue;
+            bits.set(@intFromEnum(param));
+        }
+        self.expandLiveOwners(bits);
     }
 
     fn expandLiveOwners(self: *const ProcPass, bits: *std.DynamicBitSetUnmanaged) void {
@@ -440,7 +640,7 @@ const ProcPass = struct {
             var local_idx: usize = 0;
             while (local_idx < bits.bit_length) : (local_idx += 1) {
                 if (!bits.isSet(local_idx)) continue;
-                const owner = self.provenance_owner[local_idx] orelse continue;
+                const owner = self.live_backing[local_idx] orelse continue;
                 const owner_idx = @intFromEnum(owner);
                 if (bits.isSet(owner_idx)) continue;
                 bits.set(owner_idx);
@@ -930,8 +1130,7 @@ const ProcPass = struct {
                     .target = jump.target,
                     .args = jump.args,
                 } });
-                const successor = self.join_bodies_by_id.get(@intFromEnum(jump.target)) orelse unreachable;
-                break :blk try self.prependOwnershipRetains(stmt_id, rewritten_jump, successor);
+                break :blk try self.prependJumpOwnershipRetains(stmt_id, rewritten_jump);
             },
             .ret => |ret_stmt| blk: {
                 const terminal = try self.store.addCFStmt(.{ .ret = .{ .value = ret_stmt.value } });
@@ -1039,11 +1238,23 @@ const ProcPass = struct {
         dead.setUnion(self.live_in[from_slot]);
         defs.setIntersection(self.owned_locals);
         dead.setUnion(defs);
-        setDifferenceInPlace(&dead, self.live_in[succ_slot]);
-        dead.setIntersection(self.owned_locals);
-        setDifferenceInPlace(&dead, ownership_passed);
 
-        return try self.prependOwnerDrops(dead, successor_rewritten);
+        var dead_owners = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.local_count);
+        defer dead_owners.deinit(self.allocator);
+        self.collectLiveOwnerSet(dead, &dead_owners);
+
+        var succ_live_owners = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.local_count);
+        defer succ_live_owners.deinit(self.allocator);
+        self.collectLiveOwnerSet(self.live_in[succ_slot], &succ_live_owners);
+
+        var passed_owners = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.local_count);
+        defer passed_owners.deinit(self.allocator);
+        self.collectExactOwnerSet(ownership_passed, &passed_owners);
+
+        setDifferenceInPlace(&dead_owners, succ_live_owners);
+        setDifferenceInPlace(&dead_owners, passed_owners);
+
+        return try self.emitOwnerDrops(dead_owners, successor_rewritten);
     }
 
     fn prependTerminalDrops(self: *ProcPass, stmt_id: CFStmtId, terminal_rewritten: CFStmtId) Allocator.Error!CFStmtId {
@@ -1058,34 +1269,59 @@ const ProcPass = struct {
 
         self.collectDefsUses(stmt_id, &defs, &uses, &ownership_passed);
 
-        var dead = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.local_count);
-        defer dead.deinit(self.allocator);
-        dead.setUnion(self.live_in[slot]);
-        dead.setIntersection(self.owned_locals);
-        setDifferenceInPlace(&dead, uses);
-        setDifferenceInPlace(&dead, ownership_passed);
-
-        return try self.prependOwnerDrops(dead, terminal_rewritten);
-    }
-
-    fn prependOwnerDrops(
-        self: *ProcPass,
-        candidate_locals: std.DynamicBitSetUnmanaged,
-        successor: CFStmtId,
-    ) Allocator.Error!CFStmtId {
         var dead_owners = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.local_count);
         defer dead_owners.deinit(self.allocator);
+        self.collectLiveOwnerSet(self.live_in[slot], &dead_owners);
 
+        var used_owners = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.local_count);
+        defer used_owners.deinit(self.allocator);
+        self.collectLiveOwnerSet(uses, &used_owners);
+
+        var passed_owners = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.local_count);
+        defer passed_owners.deinit(self.allocator);
+        self.collectExactOwnerSet(ownership_passed, &passed_owners);
+
+        setDifferenceInPlace(&dead_owners, used_owners);
+        setDifferenceInPlace(&dead_owners, passed_owners);
+
+        return try self.emitOwnerDrops(dead_owners, terminal_rewritten);
+    }
+
+    fn collectLiveOwnerSet(
+        self: *ProcPass,
+        locals: std.DynamicBitSetUnmanaged,
+        out: *std.DynamicBitSetUnmanaged,
+    ) void {
         var local_idx: usize = 0;
-        while (local_idx < candidate_locals.bit_length) : (local_idx += 1) {
-            if (!candidate_locals.isSet(local_idx)) continue;
+        while (local_idx < locals.bit_length) : (local_idx += 1) {
+            if (!locals.isSet(local_idx)) continue;
             const local: LocalId = @enumFromInt(@as(u32, @intCast(local_idx)));
-            const owner = self.explicitOwnerForLocal(local) orelse continue;
-            dead_owners.set(@intFromEnum(owner));
+            const owner = self.liveOwnerForLocal(local) orelse continue;
+            out.set(@intFromEnum(owner));
         }
+    }
 
+    fn collectExactOwnerSet(
+        self: *ProcPass,
+        locals: std.DynamicBitSetUnmanaged,
+        out: *std.DynamicBitSetUnmanaged,
+    ) void {
+        var local_idx: usize = 0;
+        while (local_idx < locals.bit_length) : (local_idx += 1) {
+            if (!locals.isSet(local_idx)) continue;
+            const local: LocalId = @enumFromInt(@as(u32, @intCast(local_idx)));
+            const owner = self.exactOwnerForLocal(local) orelse continue;
+            out.set(@intFromEnum(owner));
+        }
+    }
+
+    fn emitOwnerDrops(
+        self: *ProcPass,
+        dead_owners: std.DynamicBitSetUnmanaged,
+        successor: CFStmtId,
+    ) Allocator.Error!CFStmtId {
         var cursor = successor;
-        local_idx = self.local_count;
+        var local_idx = self.local_count;
         while (local_idx > 0) {
             local_idx -= 1;
             if (!dead_owners.isSet(local_idx)) continue;
@@ -1115,14 +1351,7 @@ const ProcPass = struct {
         var local_idx = self.local_count;
         while (local_idx > 0) {
             local_idx -= 1;
-            if (ownership_passed.isSet(local_idx) and self.live_in[succ_slot].isSet(local_idx)) {
-                if (builtin.mode == .Debug) {
-                    std.debug.print("RC retain ownership-passed stmt={d} local={d} succ={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        local_idx,
-                        @intFromEnum(original_successor),
-                    });
-                }
+            if (ownership_passed.isSet(local_idx) and self.live_in_direct[succ_slot].isSet(local_idx)) {
                 cursor = try self.store.addCFStmt(.{ .incref = .{
                     .value = @enumFromInt(@as(u32, @intCast(local_idx))),
                     .count = 1,
@@ -1136,14 +1365,28 @@ const ProcPass = struct {
             local_idx -= 1;
             const retain_count = retained_counts[local_idx];
             if (retain_count == 0) continue;
-            if (builtin.mode == .Debug) {
-                std.debug.print("RC retain required stmt={d} local={d} count={d} succ={d}\n", .{
-                    @intFromEnum(stmt_id),
-                    local_idx,
-                    retain_count,
-                    @intFromEnum(original_successor),
-                });
-            }
+            cursor = try self.store.addCFStmt(.{ .incref = .{
+                .value = @enumFromInt(@as(u32, @intCast(local_idx))),
+                .count = retain_count,
+                .next = cursor,
+            } });
+        }
+
+        return cursor;
+    }
+
+    fn prependJumpOwnershipRetains(self: *ProcPass, stmt_id: CFStmtId, successor: CFStmtId) Allocator.Error!CFStmtId {
+        const retained_counts = try self.allocator.alloc(u16, self.local_count);
+        defer self.allocator.free(retained_counts);
+        @memset(retained_counts, 0);
+        try self.collectRequiredOwnedInputIncrefs(stmt_id, retained_counts);
+
+        var cursor = successor;
+        var local_idx = self.local_count;
+        while (local_idx > 0) {
+            local_idx -= 1;
+            const retain_count = retained_counts[local_idx];
+            if (retain_count == 0) continue;
             cursor = try self.store.addCFStmt(.{ .incref = .{
                 .value = @enumFromInt(@as(u32, @intCast(local_idx))),
                 .count = retain_count,
@@ -1164,36 +1407,20 @@ const ProcPass = struct {
 
     fn collectRetainedInputIncrefs(self: *ProcPass, stmt_id: CFStmtId, retained_counts: []u16) Allocator.Error!void {
         switch (self.store.getCFStmt(stmt_id)) {
-            .assign_ref => |assign| {
-                if (builtin.mode == .Debug and @intFromEnum(stmt_id) == 62) {
-                    std.debug.print("RC fresh-input source stmt 62 = {any}\n", .{self.store.getCFStmt(stmt_id)});
-                }
-                try self.accumulateFreshInputRetains(self.store.getLocalSpan(assign.ownership.consumed_owned_inputs), retained_counts);
-            },
+            .assign_ref => |assign| try self.accumulateFreshInputRetains(self.store.getLocalSpan(assign.ownership.consumed_owned_inputs), retained_counts),
             .assign_list => |assign| {
-                if (builtin.mode == .Debug and @intFromEnum(stmt_id) == 62) {
-                    std.debug.print("RC fresh-input source stmt 62 = {any}\n", .{self.store.getCFStmt(stmt_id)});
-                }
                 try self.accumulateFreshInputRetains(self.store.getLocalSpan(assign.ownership.consumed_owned_inputs), retained_counts);
-            },
-            .assign_struct => |assign| {
-                if (builtin.mode == .Debug and @intFromEnum(stmt_id) == 62) {
-                    std.debug.print("RC fresh-input source stmt 62 = {any}\n", .{self.store.getCFStmt(stmt_id)});
-                }
-                try self.accumulateFreshInputRetains(self.store.getLocalSpan(assign.ownership.consumed_owned_inputs), retained_counts);
-            },
-            .assign_tag => |assign| {
-                if (builtin.mode == .Debug and @intFromEnum(stmt_id) == 62) {
-                    std.debug.print("RC fresh-input source stmt 62 = {any}\n", .{self.store.getCFStmt(stmt_id)});
-                }
-                try self.accumulateFreshInputRetains(self.store.getLocalSpan(assign.ownership.consumed_owned_inputs), retained_counts);
-            },
-            .assign_low_level => |assign| {
-                if (builtin.mode == .Debug and @intFromEnum(stmt_id) == 62) {
-                    std.debug.print("RC fresh-input source stmt 62 = {any}\n", .{self.store.getCFStmt(stmt_id)});
-                }
                 try self.accumulateRetainedBorrows(self.store.getLocalSpan(assign.ownership.retained_borrows), retained_counts);
             },
+            .assign_struct => |assign| {
+                try self.accumulateFreshInputRetains(self.store.getLocalSpan(assign.ownership.consumed_owned_inputs), retained_counts);
+                try self.accumulateRetainedBorrows(self.store.getLocalSpan(assign.ownership.retained_borrows), retained_counts);
+            },
+            .assign_tag => |assign| {
+                try self.accumulateFreshInputRetains(self.store.getLocalSpan(assign.ownership.consumed_owned_inputs), retained_counts);
+                try self.accumulateRetainedBorrows(self.store.getLocalSpan(assign.ownership.retained_borrows), retained_counts);
+            },
+            .assign_low_level => |assign| try self.accumulateRetainedBorrows(self.store.getLocalSpan(assign.ownership.retained_borrows), retained_counts),
             else => {},
         }
     }
@@ -1226,25 +1453,26 @@ const ProcPass = struct {
 
     fn collectRequiredOwnedInputIncrefs(self: *ProcPass, stmt_id: CFStmtId, retained_counts: []u16) Allocator.Error!void {
         switch (self.store.getCFStmt(stmt_id)) {
-            .assign_low_level => |assign| {
-                if (builtin.mode == .Debug and @intFromEnum(stmt_id) == 62) {
-                    std.debug.print("RC required source stmt 62 = {any}\n", .{self.store.getCFStmt(stmt_id)});
+            .assign_call => |assign| {
+                const callee = self.store.getProcSpec(assign.proc);
+                const args = self.store.getLocalSpan(assign.args);
+                const params = self.store.getLocalSpan(callee.args);
+                const owned_params = self.store.getLocalSpan(callee.owned_params);
+
+                for (owned_params) |owned_param| {
+                    const param_index = indexOfLocal(params, owned_param) orelse continue;
+                    if (param_index >= args.len) continue;
+                    self.accumulateBorrowedConsumeRetain(args[param_index], retained_counts);
                 }
+            },
+            .assign_low_level => |assign| {
                 for (self.store.getLocalSpan(assign.ownership.consumed_owned_inputs)) |local| {
                     if (resultContinuesOwnershipFromInput(assign.result, local)) continue;
                     self.accumulateBorrowedConsumeRetain(local, retained_counts);
                 }
             },
-            .set_local => |assign| {
-                if (builtin.mode == .Debug and @intFromEnum(stmt_id) == 62) {
-                    std.debug.print("RC required source stmt 62 = {any}\n", .{self.store.getCFStmt(stmt_id)});
-                }
-                self.accumulateBorrowedConsumeRetain(assign.value, retained_counts);
-            },
+            .set_local => |assign| self.accumulateBorrowedConsumeRetain(assign.value, retained_counts),
             .jump => |jump| {
-                if (builtin.mode == .Debug and @intFromEnum(stmt_id) == 62) {
-                    std.debug.print("RC required source stmt 62 = {any}\n", .{self.store.getCFStmt(stmt_id)});
-                }
                 if (self.join_params_by_id.get(@intFromEnum(jump.target))) |params_span| {
                     const params = self.store.getLocalSpan(params_span);
                     const args = self.store.getLocalSpan(jump.args);
@@ -1293,7 +1521,7 @@ const ProcPass = struct {
     fn accumulateBorrowedConsumeRetain(self: *ProcPass, local: LocalId, retained_counts: []u16) void {
         const layout_idx = self.store.getLocal(local).layout_idx;
         if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(layout_idx))) return;
-        if (self.localCanOwnRefcount(local)) return;
+        if (self.explicitOwnerForLocal(local) != null) return;
         self.incrementRetainCount(local, retained_counts, 1);
     }
 

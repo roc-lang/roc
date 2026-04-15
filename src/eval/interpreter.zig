@@ -1051,7 +1051,7 @@ pub const Interpreter = struct {
                     defer visited.deinit(self.allocator);
                     self.debugAssertValueMatchesLayout(proc_id, null, ret_local, coerced_result, proc_spec.ret_layout, &visited);
                 }
-                break :blk coerced_result;
+                break :blk try self.materializeLocalValue(coerced_result, proc_spec.ret_layout);
             },
             .scope_exit => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: proc {d} terminated via scope_exit",
@@ -1444,7 +1444,6 @@ pub const Interpreter = struct {
     }
 
     fn debugDumpProc(self: *LirInterpreter, proc_id: LirProcSpecId) void {
-        if (builtin.mode != .Debug) return;
         const proc_spec = self.store.getProcSpec(proc_id);
         const body = proc_spec.body orelse {
             std.debug.print("  proc {d} has no body\n", .{ @intFromEnum(proc_id) });
@@ -1537,10 +1536,15 @@ pub const Interpreter = struct {
                     stack.append(self.allocator, assign.next) catch return;
                 },
                 .assign_call => |assign| {
-                    std.debug.print("    {d}: assign_call proc={d} target={d} args=", .{
+                    std.debug.print("    {d}: assign_call proc={d} target={d} result={s} args=", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(assign.proc),
                         @intFromEnum(assign.target),
+                        switch (assign.result) {
+                            .fresh => "fresh",
+                            .alias_of => "alias_of",
+                            .borrow_of => "borrow_of",
+                        },
                     });
                     for (self.store.getLocalSpan(assign.args)) |arg_local| {
                         std.debug.print("{d} ", .{@intFromEnum(arg_local)});
@@ -1580,6 +1584,14 @@ pub const Interpreter = struct {
                     });
                     for (self.store.getLocalSpan(assign.fields)) |field_local| {
                         std.debug.print("{d} ", .{@intFromEnum(field_local)});
+                    }
+                    std.debug.print("consumed=", .{});
+                    for (self.store.getLocalSpan(assign.ownership.consumed_owned_inputs)) |local| {
+                        std.debug.print("{d} ", .{@intFromEnum(local)});
+                    }
+                    std.debug.print("retained=", .{});
+                    for (self.store.getLocalSpan(assign.ownership.retained_borrows)) |local| {
+                        std.debug.print("{d} ", .{@intFromEnum(local)});
                     }
                     std.debug.print("next={d}\n", .{
                         @intFromEnum(assign.next),

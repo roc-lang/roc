@@ -135,6 +135,46 @@ pub const tests = [_]TestCase{
     .{ .name = "interpreter: List.len on literal", .source = "List.len([1, 2, 3])", .expected = .{ .inspect_str = "3" } },
     .{ .name = "interpreter: List.map with U64.from_str", .source = "List.map([\"2022\", \"22\"], U64.from_str)", .expected = .{ .inspect_str = "[Ok(2022), Ok(22)]" } },
     .{
+        .name = "interpreter: map2 record builder drops intermediate concat result",
+        .source =
+        \\{
+        \\    map2 = |ca, cb, f| {
+        \\        value: f(ca.value, cb.value),
+        \\        help: Str.concat(ca.help, cb.help),
+        \\    }
+        \\    option = |name, default| {
+        \\        value: default,
+        \\        help: "  --${name} <value>",
+        \\    }
+        \\    get_help = |c| c.help
+        \\    p1 = option("a", "1")
+        \\    p2 = option("b", "2")
+        \\    get_help(map2(p1, p2, |a, b| { a, b }))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"  --a <value>  --b <value>\"" },
+    },
+    .{
+        .name = "interpreter: projecting value from owned aggregate drops sibling help",
+        .source =
+        \\{
+        \\    map2 = |ca, cb, f| {
+        \\        value: f(ca.value, cb.value),
+        \\        help: Str.concat(ca.help, cb.help),
+        \\    }
+        \\    option = |name, default| {
+        \\        value: default,
+        \\        help: "  --${name} <value>",
+        \\    }
+        \\    run = |c| c.value
+        \\    p1 = option("a", "1")
+        \\    p2 = option("b", "2")
+        \\    run(map2(p1, p2, |a, b| { a, b }))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "{ a: \"1\", b: \"2\" }" },
+    },
+    .{
         .name = "interpreter: simple for loop sum",
         .source =
         \\{

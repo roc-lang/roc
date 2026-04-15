@@ -198,18 +198,53 @@ pub const io_spec_tests = [_]TestSpec{
     },
     .{
         .roc_file = "test/fx/inspect_field_only_repro.roc",
-        .io_spec = "1>\"test\"",
+        .io_spec = "1>test",
         .description = "Repro: inspect projected string field",
     },
     .{
         .roc_file = "test/fx/inspect_field_concat_repro.roc",
-        .io_spec = "1>{ name: \"test\"",
+        .io_spec = "1>{ name: \"test",
         .description = "Repro: concat inspected projected string field",
     },
     .{
         .roc_file = "test/fx/inspect_field_concat_chain_repro.roc",
         .io_spec = "1>{ name: \"test\", count: 42.0 }",
         .description = "Repro: chained concats with inspected projected field",
+    },
+    .{
+        .roc_file = "test/fx/cli_map2_help_repro.roc",
+        .io_spec = "1>  --a <value>  --b <value>",
+        .description = "Repro: generic record map2 help projection",
+    },
+    .{
+        .roc_file = "test/fx/cli_map2_value_repro.roc",
+        .io_spec = "1>a=1, b=2",
+        .description = "Repro: generic record map2 value projection",
+    },
+    .{
+        .roc_file = "test/fx/cli_map2_static_output_repro.roc",
+        .io_spec = "1>done",
+        .description = "Repro: generic record map2 discarded before static output",
+    },
+    .{
+        .roc_file = "test/fx/drop_concat_unused_repro.roc",
+        .io_spec = "1>done",
+        .description = "Repro: dropped concat string before static output",
+    },
+    .{
+        .roc_file = "test/fx/drop_record_with_concat_unused_repro.roc",
+        .io_spec = "1>done",
+        .description = "Repro: dropped record containing concat string before static output",
+    },
+    .{
+        .roc_file = "test/fx/run_record_concat_repro.roc",
+        .io_spec = "1>done",
+        .description = "Repro: proc returns value field from record containing concat string",
+    },
+    .{
+        .roc_file = "test/fx/drop_proc_returned_record_repro.roc",
+        .io_spec = "1>done",
+        .description = "Repro: dropped proc-returned record containing concat string",
     },
     .{
         .roc_file = "test/fx/inspect_wrong_sig_test.roc",

@@ -364,11 +364,83 @@ const ProcLowerer = struct {
             debugPanic("lir.from_ir missing explicit proc return layout ref");
     }
 
-    fn freshAggregateOwnership(self: *ProcLowerer, consumed_owned_inputs: []const LIR.LocalId) std.mem.Allocator.Error!LIR.OwnershipSemantics {
+    fn freshAggregateOwnership(self: *ProcLowerer, inputs: []const LIR.LocalId) std.mem.Allocator.Error!LIR.OwnershipSemantics {
+        var consumed_count: usize = 0;
+        var retained_count: usize = 0;
+
+        for (inputs) |input| {
+            switch (self.localOwnershipRole(input)) {
+                .consume_owned => consumed_count += 1,
+                .retain_borrow => retained_count += 1,
+            }
+        }
+
+        const consumed = try self.parent.allocator.alloc(LIR.LocalId, consumed_count);
+        defer self.parent.allocator.free(consumed);
+        const retained = try self.parent.allocator.alloc(LIR.LocalId, retained_count);
+        defer self.parent.allocator.free(retained);
+
+        var consumed_index: usize = 0;
+        var retained_index: usize = 0;
+        for (inputs) |input| {
+            switch (self.localOwnershipRole(input)) {
+                .consume_owned => {
+                    consumed[consumed_index] = self.consumeOwnerForLocal(input);
+                    consumed_index += 1;
+                },
+                .retain_borrow => {
+                    retained[retained_index] = input;
+                    retained_index += 1;
+                },
+            }
+        }
+
         return .{
             .materialization = .fresh_aggregate,
-            .consumed_owned_inputs = try self.parent.store.addLocalSpan(consumed_owned_inputs),
+            .consumed_owned_inputs = try self.parent.store.addLocalSpan(consumed),
+            .retained_borrows = try self.parent.store.addLocalSpan(retained),
         };
+    }
+
+    const AggregateInputOwnershipRole = enum {
+        consume_owned,
+        retain_borrow,
+    };
+
+    fn localOwnershipRole(self: *const ProcLowerer, local: LIR.LocalId) AggregateInputOwnershipRole {
+        const semantics = self.localResultSemantics(local) orelse return .retain_borrow;
+        return switch (semantics) {
+            .fresh => .consume_owned,
+            .borrow_of => .retain_borrow,
+            .alias_of => |alias| if (alias.projections.isEmpty()) .consume_owned else .retain_borrow,
+        };
+    }
+
+    fn consumeOwnerForLocal(self: *const ProcLowerer, local: LIR.LocalId) LIR.LocalId {
+        const semantics = self.localResultSemantics(local) orelse return local;
+        return switch (semantics) {
+            .fresh, .borrow_of => local,
+            .alias_of => |alias| if (alias.projections.isEmpty()) alias.owner else local,
+        };
+    }
+
+    fn localResultSemantics(self: *const ProcLowerer, local: LIR.LocalId) ?LIR.ResultSemantics {
+        for (self.parent.store.cf_stmts.items) |stmt| {
+            switch (stmt) {
+                .assign_ref => |assign| if (assign.target == local) return assign.result,
+                .assign_literal => |assign| if (assign.target == local) return assign.result,
+                .assign_call => |assign| if (assign.target == local) return assign.result,
+                .assign_call_indirect => |assign| if (assign.target == local) return assign.result,
+                .assign_low_level => |assign| if (assign.target == local) return assign.result,
+                .assign_list => |assign| if (assign.target == local) return assign.result,
+                .assign_struct => |assign| if (assign.target == local) return assign.result,
+                .assign_tag => |assign| if (assign.target == local) return assign.result,
+                .for_list => |for_stmt| if (for_stmt.elem == local) return for_stmt.elem_result,
+                else => {},
+            }
+        }
+
+        return null;
     }
 
     fn lowLevelOwnership(self: *ProcLowerer, op: base.LowLevel, args: []const LIR.LocalId) std.mem.Allocator.Error!LIR.OwnershipSemantics {

@@ -434,6 +434,7 @@ pub fn decrefDataPtrC(
     roc_ops: *RocOps,
 ) callconv(.c) void {
     const bytes = bytes_or_null orelse return;
+    const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
 
     const data_ptr = @intFromPtr(bytes);
 
@@ -448,7 +449,6 @@ pub fn decrefDataPtrC(
         }
     }
 
-    const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
     const unmasked_ptr = data_ptr & ~tag_mask;
 
     // Verify alignment before @ptrFromInt
