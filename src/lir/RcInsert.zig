@@ -432,36 +432,25 @@ const ProcPass = struct {
             },
             .assign_low_level => |assign| {
                 defs.set(@intFromEnum(assign.target));
-                const args = self.store.getLocalSpan(assign.args);
-                for (args, 0..) |arg, i| {
-                    uses.set(@intFromEnum(arg));
-                    if (i < assign.op.getArgOwnership().len and assign.op.getArgOwnership()[i] == .consume) {
-                        self.markOwnershipPassedLocal(arg, ownership_passed);
-                    }
-                }
+                self.markSpanUses(assign.args, uses);
+                self.markSpanOwnershipPassed(assign.ownership.consumed_owned_inputs, ownership_passed);
             },
             .assign_list => |assign| {
                 defs.set(@intFromEnum(assign.target));
                 self.markSpanUses(assign.elems, uses);
-                if (assign.result == .fresh) {
-                    self.markSpanOwnershipPassed(assign.elems, ownership_passed);
-                }
+                self.markSpanOwnershipPassed(assign.ownership.consumed_owned_inputs, ownership_passed);
             },
             .assign_struct => |assign| {
                 defs.set(@intFromEnum(assign.target));
                 self.markSpanUses(assign.fields, uses);
-                if (assign.result == .fresh) {
-                    self.markSpanOwnershipPassed(assign.fields, ownership_passed);
-                }
+                self.markSpanOwnershipPassed(assign.ownership.consumed_owned_inputs, ownership_passed);
             },
             .assign_tag => |assign| {
                 defs.set(@intFromEnum(assign.target));
                 if (assign.payload) |payload| {
                     uses.set(@intFromEnum(payload));
-                    if (assign.result == .fresh) {
-                        self.markOwnershipPassedLocal(payload, ownership_passed);
-                    }
                 }
+                self.markSpanOwnershipPassed(assign.ownership.consumed_owned_inputs, ownership_passed);
             },
             .set_local => |assign| {
                 defs.set(@intFromEnum(assign.target));
@@ -935,13 +924,13 @@ const ProcPass = struct {
                 }
             },
             .assign_list => |assign| {
-                try self.accumulateRetainedBorrows(self.store.getLocalSpan(assign.ownership.retained_borrows), retained_counts);
+                try self.accumulateFreshInputRetains(self.store.getLocalSpan(assign.ownership.consumed_owned_inputs), retained_counts);
             },
             .assign_struct => |assign| {
-                try self.accumulateRetainedBorrows(self.store.getLocalSpan(assign.ownership.retained_borrows), retained_counts);
+                try self.accumulateFreshInputRetains(self.store.getLocalSpan(assign.ownership.consumed_owned_inputs), retained_counts);
             },
             .assign_tag => |assign| {
-                try self.accumulateRetainedBorrows(self.store.getLocalSpan(assign.ownership.retained_borrows), retained_counts);
+                try self.accumulateFreshInputRetains(self.store.getLocalSpan(assign.ownership.consumed_owned_inputs), retained_counts);
             },
             .assign_low_level => |assign| {
                 try self.accumulateRetainedBorrows(self.store.getLocalSpan(assign.ownership.retained_borrows), retained_counts);
@@ -959,11 +948,8 @@ const ProcPass = struct {
     fn collectRequiredOwnedInputIncrefs(self: *ProcPass, stmt_id: CFStmtId, retained_counts: []u16) Allocator.Error!void {
         switch (self.store.getCFStmt(stmt_id)) {
             .assign_low_level => |assign| {
-                const args = self.store.getLocalSpan(assign.args);
-                for (args, 0..) |arg, i| {
-                    if (i >= assign.op.getArgOwnership().len) continue;
-                    if (assign.op.getArgOwnership()[i] != .consume) continue;
-                    self.accumulateBorrowedConsumeRetain(arg, retained_counts);
+                for (self.store.getLocalSpan(assign.ownership.consumed_owned_inputs)) |local| {
+                    self.accumulateBorrowedConsumeRetain(local, retained_counts);
                 }
             },
             .set_local => |assign| self.accumulateBorrowedConsumeRetain(assign.value, retained_counts),

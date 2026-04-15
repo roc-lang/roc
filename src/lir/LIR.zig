@@ -179,6 +179,7 @@ pub const ResultMaterialization = enum {
 ///   backend/interpreter reconstruction
 pub const OwnershipSemantics = struct {
     materialization: ResultMaterialization = .direct,
+    consumed_owned_inputs: LocalSpan = .empty(),
     retained_borrows: LocalSpan = .empty(),
 };
 

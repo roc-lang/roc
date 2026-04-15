@@ -176,10 +176,7 @@ fn inferLocalContract(
         else
             try contractFromResultSemantics(allocator, store, assign.result, arg_index_by_local, active),
         .assign_call_indirect => |assign| try contractFromResultSemantics(allocator, store, assign.result, arg_index_by_local, active),
-        .assign_low_level => |assign| if (assign.result == .fresh)
-            lowLevelResultContract(store, assign, arg_index_by_local)
-        else
-            try contractFromResultSemantics(allocator, store, assign.result, arg_index_by_local, active),
+        .assign_low_level => |assign| try contractFromResultSemantics(allocator, store, assign.result, arg_index_by_local, active),
         .assign_literal,
         .assign_symbol,
         .assign_list,
@@ -292,34 +289,6 @@ fn inferJoinParamContract(
     }
 
     return null;
-}
-
-fn lowLevelResultContract(
-    store: *const LirStore,
-    assign: @FieldType(CFStmt, "assign_low_level"),
-    arg_index_by_local: *const std.AutoHashMap(u32, usize),
-) ProcResultContract {
-    return switch (assign.op.procResultSemantics()) {
-        .fresh => .fresh,
-        .no_return => .no_return,
-        .requires_explicit_summary => .fresh,
-        .alias_arg => |arg_index| {
-            const args = store.getLocalSpan(assign.args);
-            if (arg_index >= args.len) return .fresh;
-            if (arg_index_by_local.get(@intFromEnum(args[arg_index]))) |param_index| {
-                return .{ .alias_of_param = .{ .param_index = @intCast(param_index) } };
-            }
-            return .fresh;
-        },
-        .borrow_arg => |arg_index| {
-            const args = store.getLocalSpan(assign.args);
-            if (arg_index >= args.len) return .fresh;
-            if (arg_index_by_local.get(@intFromEnum(args[arg_index]))) |param_index| {
-                return .{ .borrow_of_param = .{ .param_index = @intCast(param_index) } };
-            }
-            return .fresh;
-        },
-    };
 }
 
 fn findProducer(store: *const LirStore, target: LocalId) ?CFStmt {

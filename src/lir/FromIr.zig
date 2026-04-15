@@ -343,27 +343,39 @@ const ProcLowerer = struct {
             debugPanic("lir.from_ir missing explicit proc return layout ref");
     }
 
-    fn freshAggregateOwnership(self: *ProcLowerer, retained_borrows: []const LIR.LocalId) std.mem.Allocator.Error!LIR.OwnershipSemantics {
+    fn freshAggregateOwnership(self: *ProcLowerer, consumed_owned_inputs: []const LIR.LocalId) std.mem.Allocator.Error!LIR.OwnershipSemantics {
         return .{
             .materialization = .fresh_aggregate,
-            .retained_borrows = try self.parent.store.addLocalSpan(retained_borrows),
+            .consumed_owned_inputs = try self.parent.store.addLocalSpan(consumed_owned_inputs),
         };
     }
 
     fn lowLevelOwnership(self: *ProcLowerer, op: base.LowLevel, args: []const LIR.LocalId) std.mem.Allocator.Error!LIR.OwnershipSemantics {
+        const arg_ownership = op.getArgOwnership();
         var retained_count: usize = 0;
+        var consumed_count: usize = 0;
         for (args, 0..) |_, i| {
             if (op.borrowedArgRetainedByResult(i)) retained_count += 1;
+            if (i < arg_ownership.len and arg_ownership[i] == .consume) consumed_count += 1;
         }
 
         const retained = try self.parent.allocator.alloc(LIR.LocalId, retained_count);
         defer self.parent.allocator.free(retained);
+        const consumed = try self.parent.allocator.alloc(LIR.LocalId, consumed_count);
+        defer self.parent.allocator.free(consumed);
 
         var write_index: usize = 0;
+        var consume_index: usize = 0;
         for (args, 0..) |arg, i| {
             if (!op.borrowedArgRetainedByResult(i)) continue;
             retained[write_index] = arg;
             write_index += 1;
+        }
+        for (args, 0..) |arg, i| {
+            if (i >= arg_ownership.len) continue;
+            if (arg_ownership[i] != .consume) continue;
+            consumed[consume_index] = arg;
+            consume_index += 1;
         }
 
         return .{
@@ -372,7 +384,27 @@ const ProcLowerer = struct {
                 .copy_from_borrowed_input => .copy_from_borrowed_input,
                 .fresh_aggregate => .fresh_aggregate,
             },
+            .consumed_owned_inputs = try self.parent.store.addLocalSpan(consumed),
             .retained_borrows = try self.parent.store.addLocalSpan(retained),
+        };
+    }
+
+    fn lowLevelResultSemantics(self: *ProcLowerer, op: base.LowLevel, args: []const LIR.LocalId) LIR.ResultSemantics {
+        _ = self;
+        return switch (op.procResultSemantics()) {
+            .fresh, .no_return, .requires_explicit_summary => .fresh,
+            .alias_arg => |arg_index| blk: {
+                if (builtin.mode == .Debug and arg_index >= args.len) {
+                    debugPanic("lir.from_ir low-level alias_arg summary out of bounds");
+                }
+                break :blk .{ .alias_of = .{ .owner = args[arg_index] } };
+            },
+            .borrow_arg => |arg_index| blk: {
+                if (builtin.mode == .Debug and arg_index >= args.len) {
+                    debugPanic("lir.from_ir low-level borrow_arg summary out of bounds");
+                }
+                break :blk .{ .borrow_of = .{ .owner = args[arg_index], .region = .proc } };
+            },
         };
     }
 
@@ -816,7 +848,7 @@ const ProcLowerer = struct {
             const args = try self.parent.store.addLocalSpan(&.{source_local});
             return try self.parent.store.addCFStmt(.{ .assign_low_level = .{
                 .target = target_local,
-                .result = .fresh,
+                .result = self.lowLevelResultSemantics(.box_unbox, &.{source_local}),
                 .ownership = try self.lowLevelOwnership(.box_unbox, &.{source_local}),
                 .op = .box_unbox,
                 .args = args,
@@ -828,7 +860,7 @@ const ProcLowerer = struct {
             const args = try self.parent.store.addLocalSpan(&.{source_local});
             return try self.parent.store.addCFStmt(.{ .assign_low_level = .{
                 .target = target_local,
-                .result = .fresh,
+                .result = self.lowLevelResultSemantics(.box_box, &.{source_local}),
                 .ownership = try self.lowLevelOwnership(.box_box, &.{source_local}),
                 .op = .box_box,
                 .args = args,
@@ -850,7 +882,7 @@ const ProcLowerer = struct {
             const box_args = try self.parent.store.addLocalSpan(&.{boxed_child_local});
             const box_stmt = try self.parent.store.addCFStmt(.{ .assign_low_level = .{
                 .target = target_local,
-                .result = .fresh,
+                .result = self.lowLevelResultSemantics(.box_box, &.{boxed_child_local}),
                 .ownership = try self.lowLevelOwnership(.box_box, &.{boxed_child_local}),
                 .op = .box_box,
                 .args = box_args,
@@ -866,7 +898,7 @@ const ProcLowerer = struct {
             const unbox_args = try self.parent.store.addLocalSpan(&.{source_local});
             return try self.parent.store.addCFStmt(.{ .assign_low_level = .{
                 .target = unboxed_local,
-                .result = .fresh,
+                .result = self.lowLevelResultSemantics(.box_unbox, &.{source_local}),
                 .ownership = try self.lowLevelOwnership(.box_unbox, &.{source_local}),
                 .op = .box_unbox,
                 .args = unbox_args,
@@ -1627,7 +1659,7 @@ const ProcLowerer = struct {
 
                 break :blk try self.parent.store.addCFStmt(.{ .assign_low_level = .{
                     .target = raw_target,
-                    .result = .fresh,
+                    .result = self.lowLevelResultSemantics(call.op, locals),
                     .ownership = try self.lowLevelOwnership(call.op, locals),
                     .op = call.op,
                     .args = try self.parent.store.addLocalSpan(locals),
