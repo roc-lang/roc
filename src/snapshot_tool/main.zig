@@ -199,7 +199,7 @@ fn parseProblemEntry(allocator: std.mem.Allocator, content: []const u8, start_id
 
     // Find the end of the problem type
     const type_start = idx + 2;
-    const type_end_search = std.mem.indexOfPos(u8, content, type_start, "**");
+    const type_end_search = std.mem.findPos(u8, content, type_start, "**");
     if (type_end_search == null) return null;
     const type_end = type_end_search.?;
 
@@ -222,7 +222,7 @@ fn parseProblemEntry(allocator: std.mem.Allocator, content: []const u8, start_id
 
     // Handle compound error types like "NOT IMPLEMENTED - UNDEFINED VARIABLE"
     // We only want the last part after the last " - "
-    if (std.mem.lastIndexOf(u8, problem_type, " - ")) |dash_idx| {
+    if (std.mem.findLast(u8, problem_type, " - ")) |dash_idx| {
         problem_type = std.mem.trim(u8, problem_type[dash_idx + 3 ..], " \t\r\n");
     }
 
@@ -254,7 +254,7 @@ fn parseProblemEntry(allocator: std.mem.Allocator, content: []const u8, start_id
         // Check if this line starts with ** (potential new problem or location)
         if (current_idx + 2 <= content.len and std.mem.eql(u8, content[current_idx .. current_idx + 2], "**")) {
             const inner_start = current_idx + 2;
-            const inner_end_search = std.mem.indexOfPos(u8, content, inner_start, "**");
+            const inner_end_search = std.mem.findPos(u8, content, inner_start, "**");
 
             if (inner_end_search) |inner_end| {
                 const inner_content = content[inner_start..inner_end];
@@ -274,7 +274,7 @@ fn parseProblemEntry(allocator: std.mem.Allocator, content: []const u8, start_id
                 }
 
                 // Check if this looks like a location (contains .md: pattern)
-                if (std.mem.indexOf(u8, inner_content, ".md:")) |_| {
+                if (std.mem.find(u8, inner_content, ".md:")) |_| {
                     var location = inner_content;
                     // Strip trailing colon and whitespace
                     location = std.mem.trimEnd(u8, location, ": \t");
@@ -360,7 +360,7 @@ fn parseProblemEntry(allocator: std.mem.Allocator, content: []const u8, start_id
 
         if (next_idx + 2 <= content.len and std.mem.eql(u8, content[next_idx .. next_idx + 2], "**")) {
             const check_start = next_idx + 2;
-            const check_end = std.mem.indexOfPos(u8, content, check_start, "**");
+            const check_end = std.mem.findPos(u8, content, check_start, "**");
 
             if (check_end) |end| {
                 const check_content = content[check_start..end];
@@ -609,6 +609,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const args = try init.minimal.args.toSlice(gpa);
+    defer gpa.free(args);
 
     var snapshot_paths = std.array_list.Managed([]const u8).init(gpa);
     defer snapshot_paths.deinit();
@@ -893,7 +894,7 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
 
                 // Extract EXPECTED section
                 const expected_header = "# EXPECTED\n";
-                if (std.mem.indexOf(u8, content, expected_header)) |start_idx| {
+                if (std.mem.find(u8, content, expected_header)) |start_idx| {
                     const content_start = start_idx + expected_header.len;
 
                     // Find the next section header
@@ -1026,13 +1027,13 @@ fn processSnapshotContent(
     // Extract module name from custom filename if provided, otherwise from output path
     const module_name = if (content.meta.filename) |custom_filename|
         // Strip .roc extension if present
-        if (std.mem.lastIndexOfScalar(u8, custom_filename, '.')) |dot_idx|
+        if (std.mem.findScalarLast(u8, custom_filename, '.')) |dot_idx|
             custom_filename[0..dot_idx]
         else
             custom_filename
     else blk: {
         const basename = std.fs.path.basename(output_path);
-        break :blk if (std.mem.lastIndexOfScalar(u8, basename, '.')) |dot_idx|
+        break :blk if (std.mem.findScalarLast(u8, basename, '.')) |dot_idx|
             basename[0..dot_idx]
         else
             basename;
@@ -1842,7 +1843,7 @@ const Meta = struct {
             } else if (std.mem.startsWith(u8, line, TYPE_START)) {
                 const ty = line[(TYPE_START.len)..];
                 // Check if there's a colon indicating a custom filename
-                if (std.mem.indexOfScalar(u8, ty, ':')) |colon_idx| {
+                if (std.mem.findScalar(u8, ty, ':')) |colon_idx| {
                     node_type = try NodeType.fromString(ty[0..colon_idx]);
                     filename = ty[colon_idx + 1 ..];
                 } else {
@@ -3185,7 +3186,7 @@ fn typeStringIsPolymorphic(type_str: []const u8) bool {
 fn isIdentReferencedIn(name: []const u8, text: []const u8) bool {
     if (name.len == 0) return false;
     var pos: usize = 0;
-    while (std.mem.indexOfPos(u8, text, pos, name)) |idx| {
+    while (std.mem.findPos(u8, text, pos, name)) |idx| {
         const before_ok = idx == 0 or (!std.ascii.isAlphanumeric(text[idx - 1]) and text[idx - 1] != '_');
         const after_idx = idx + name.len;
         const after_ok = after_idx >= text.len or (!std.ascii.isAlphanumeric(text[after_idx]) and text[after_idx] != '_');
@@ -3439,7 +3440,7 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, config:
         std.log.err("file '{s}' is not a valid snapshot file", .{snapshot_path});
         std.log.err("snapshot files must start with '# META'", .{});
         if (file_content.len > 0) {
-            const first_line_end = std.mem.indexOfScalar(u8, file_content, '\n') orelse @min(file_content.len, 50);
+            const first_line_end = std.mem.findScalar(u8, file_content, '\n') orelse @min(file_content.len, 50);
             const first_line = file_content[0..first_line_end];
             std.log.err("file starts with: '{s}'", .{first_line});
         }
@@ -3842,16 +3843,16 @@ fn parseMultiFileSource(allocator: Allocator, source_text: []const u8) ![]Source
         {
             // Extract filename (rest of line)
             const name_start = idx + 3;
-            const name_end = std.mem.indexOfScalarPos(u8, source_text, name_start, '\n') orelse source_text.len;
+            const name_end = std.mem.findScalarPos(u8, source_text, name_start, '\n') orelse source_text.len;
             const filename = std.mem.trim(u8, source_text[name_start..name_end], " \t\r");
             idx = name_end;
 
             // Find ~~~roc block
             const roc_marker = "~~~roc\n";
-            if (std.mem.indexOfPos(u8, source_text, idx, roc_marker)) |roc_start| {
+            if (std.mem.findPos(u8, source_text, idx, roc_marker)) |roc_start| {
                 const content_start = roc_start + roc_marker.len;
                 // Find closing ~~~
-                if (std.mem.indexOfPos(u8, source_text, content_start, "~~~")) |content_end| {
+                if (std.mem.findPos(u8, source_text, content_start, "~~~")) |content_end| {
                     try files.append(allocator, .{
                         .filename = filename,
                         .content = source_text[content_start..content_end],
@@ -3892,7 +3893,7 @@ fn printHashMismatchTable(existing: []const u8, new: []const u8) void {
     var existing_lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, existing, " \t\r\n"), '\n');
 
     while (new_lines.next()) |new_line| {
-        const new_eq = std.mem.indexOfScalar(u8, new_line, '=') orelse continue;
+        const new_eq = std.mem.findScalar(u8, new_line, '=') orelse continue;
         const target = new_line[0..new_eq];
         const new_hash = new_line[new_eq + 1 ..];
 
@@ -3900,7 +3901,7 @@ fn printHashMismatchTable(existing: []const u8, new: []const u8) void {
         existing_lines.reset();
         var old_hash: ?[]const u8 = null;
         while (existing_lines.next()) |existing_line| {
-            const ex_eq = std.mem.indexOfScalar(u8, existing_line, '=') orelse continue;
+            const ex_eq = std.mem.findScalar(u8, existing_line, '=') orelse continue;
             if (std.mem.eql(u8, existing_line[0..ex_eq], target)) {
                 old_hash = existing_line[ex_eq + 1 ..];
                 break;
@@ -4944,7 +4945,7 @@ fn searchDirectoryForBuiltin(
                     defer allocator.free(content);
 
                     // Search for "Builtin" (case-sensitive)
-                    if (std.mem.indexOf(u8, content, "Builtin")) |_| {
+                    if (std.mem.find(u8, content, "Builtin")) |_| {
                         try files_with_builtin.append(try allocator.dupe(u8, full_path));
                     }
                 }
