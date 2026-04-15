@@ -18,25 +18,26 @@ const TermColor = struct {
     pub const reset = "\x1b[0m";
 };
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
 
     var stdout_buffer: [4096]u8 = undefined;
-    var stdout_state = std.Io.File.stdout().writer(&stdout_buffer);
+    var stdout_state = std.Io.File.stdout().writer(io, &stdout_buffer);
     const stdout = &stdout_state.interface;
 
     try stdout.print("Checking test wiring in src/ directory...\n\n", .{});
 
     try stdout.print("Step 1: Finding all potential test files...\n", .{});
-    var test_files = PathList{};
+    var test_files : PathList = .empty;
     defer freePathList(&test_files, gpa);
 
-    var mod_files = PathList{};
+    var mod_files : PathList = .empty;
     defer freePathList(&mod_files, gpa);
 
-    try walkTree(gpa, "src", &test_files, &mod_files);
+    try walkTree(gpa, io, "src", &test_files, &mod_files);
     try stdout.print("Found {d} potential test files\n\n", .{test_files.items.len});
 
     // Some tests are wired through build.zig rather than mod.zig files.
@@ -94,7 +95,7 @@ pub fn main() !void {
     );
 
     try stdout.print("Step 3: Checking if all test files are properly wired...\n\n", .{});
-    var unwired = PathList{};
+    var unwired : PathList = .empty;
     defer freePathList(&unwired, gpa);
 
     for (test_files.items) |test_path| {
@@ -155,15 +156,16 @@ fn normalizePath(allocator: Allocator, path: []u8) ![]u8 {
 
 fn walkTree(
     allocator: Allocator,
+    io: std.Io,
     dir_path: []const u8,
     test_files: *PathList,
     mod_files: *PathList,
 ) !void {
-    var dir = try std.Io.Dir.cwd().openDir(dir_path, .{ .iterate = true });
-    defer dir.close();
+    var dir = try std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true });
+    defer dir.close(io);
 
     var it = dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(io)) |entry| {
         if (entry.kind == .sym_link) continue;
 
         const joined_path = try std.fs.path.join(allocator, &.{ dir_path, entry.name });
@@ -172,7 +174,7 @@ fn walkTree(
         switch (entry.kind) {
             .directory => {
                 defer allocator.free(next_path);
-                try walkTree(allocator, next_path, test_files, mod_files);
+                try walkTree(allocator, io, next_path, test_files, mod_files);
             },
             .file => {
                 try handleFile(allocator, next_path, entry.name, test_files, mod_files);
@@ -237,10 +239,10 @@ fn fileHasTestDecl(allocator: Allocator, path: []const u8) !bool {
 
 fn readSourceFile(allocator: Allocator, path: []const u8) ![:0]u8 {
     return try std.Io.Dir.cwd().readFileAllocOptions(
-        allocator,
+        std.Options.debug_io,
         path,
-        max_file_bytes,
-        null,
+        allocator,
+        .limited(max_file_bytes),
         std.mem.Alignment.of(u8),
         0,
     );
@@ -373,7 +375,7 @@ fn printSuggestion(
         defer allocator.free(mod_path);
 
         const mod_dir = std.fs.path.dirname(mod_path) orelse ".";
-        const relative = try std.fs.path.relativePosix(allocator, mod_dir, test_path);
+        const relative = try std.fs.path.relativePosix(allocator, ".", mod_dir, test_path);
         defer allocator.free(relative);
 
         try writer.print("    {s}[HINT]{s} Should be added to {s}\n", .{
@@ -408,7 +410,7 @@ fn findNearestMod(allocator: Allocator, file_path: []const u8) !?[]u8 {
 }
 
 fn fileExists(path: []const u8) bool {
-    _ = std.Io.Dir.cwd().statFile(path) catch return false;
+    _ = std.Io.Dir.cwd().statFile(std.Options.debug_io, path, .{}) catch return false;
     return true;
 }
 
