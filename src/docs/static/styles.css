@@ -699,7 +699,6 @@ pre>samp {
   position: relative;
   box-sizing: border-box;
   width: 100%;
-  max-width: 600px;
   font-size: var(--font-base);
   line-height: 18px;
   color: var(--faded-color);
@@ -733,13 +732,10 @@ pre>samp {
   left: 50%;
   transform: translateX(-50%);
   width: 100%;
-  max-width: 600px;
   box-sizing: border-box;
   z-index: 100;
   background-color: var(--body-bg-color);
-  border-width: 1px;
-  border-style: solid;
-  border-color: var(--border-color);
+  border: 2px solid var(--violet);
   list-style-type: none;
   margin: 0;
   padding: 0;
@@ -755,16 +751,10 @@ pre>samp {
   height: 100%;
   padding: 4px 8px;
 
-  max-height: 6em;
+  display: block;
+  white-space: nowrap;
   text-overflow: ellipsis;
   overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-
-  /* if it wraps, indent after the first line */
-  padding-left: calc(2em + 8px);
-  text-indent: -2em;
 
 
   span {

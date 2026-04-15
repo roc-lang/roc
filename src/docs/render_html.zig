@@ -61,6 +61,9 @@ const RenderContext = struct {
     /// When true, the single module's page is rendered at the root (index.html),
     /// so links to the module should point to the root instead of a subdirectory.
     single_module_at_root: bool = false,
+    /// When true, renderDocTypeHtml emits plain <span> instead of <a> for type
+    /// references. Used inside search entries to avoid invalid nested <a> tags.
+    suppress_type_links: bool = false,
 
     fn init(package_docs: *const DocModel.PackageDocs, gpa: Allocator) RenderContext {
         var known = std.StringHashMapUnmanaged(void){};
@@ -803,22 +806,58 @@ fn renderSearchTree(
         }
         try writeHtmlEscaped(w, node.full_path);
         try w.writeAll("\">");
-        try w.writeAll("<span class=\"type-ahead-module-name\">");
-        try writeHtmlEscaped(w, module_name);
-        try w.writeAll("</span>");
-        try w.writeAll(".<span class=\"type-ahead-def-name\">");
+
+        // Build the display prefix from full_path minus the last component (node.name).
+        // The full_path may still contain the module name prefix from before tree
+        // collapse (e.g. "Builtin.Str.is_empty" → prefix "Builtin.Str"). Strip the
+        // module name so we display "Str" instead of "Builtin.Str" (or avoid
+        // "Pipeline.Pipeline" duplication in multi-module packages).
+        const full_path_prefix = if (node.full_path.len > node.name.len)
+            node.full_path[0 .. node.full_path.len - node.name.len - 1] // strip ".defName"
+        else
+            ""; // full_path == node.name, no intermediate path
+
+        const display_prefix = if (std.mem.startsWith(u8, full_path_prefix, module_name) and
+            full_path_prefix.len > module_name.len and
+            full_path_prefix[module_name.len] == '.')
+            full_path_prefix[module_name.len + 1 ..]
+        else if (std.mem.eql(u8, full_path_prefix, module_name))
+            "" // entire prefix is just the module name
+        else
+            full_path_prefix;
+
+        const has_prefix = !ctx.single_module_at_root or display_prefix.len > 0;
+        if (has_prefix) {
+            try w.writeAll("<span class=\"type-ahead-module-name\">");
+            if (!ctx.single_module_at_root) {
+                try writeHtmlEscaped(w, module_name);
+                if (display_prefix.len > 0) {
+                    try w.writeAll(".");
+                }
+            }
+            try writeHtmlEscaped(w, display_prefix);
+            try w.writeAll("</span>");
+            try w.writeAll(".");
+        }
+        try w.writeAll("<span class=\"type-ahead-def-name\">");
         try writeHtmlEscaped(w, node.name);
         try w.writeAll("</span>");
         if (entry.type_signature) |sig| {
+            // Suppress type links inside search entries to avoid invalid
+            // nested <a> tags (the entire entry is already wrapped in <a>).
+            var no_links_ctx = ctx.*;
+            no_links_ctx.suppress_type_links = true;
+            const sig_ctx: *const RenderContext = &no_links_ctx;
+
             try w.writeAll(" <span class=\"type-ahead-signature\">");
             switch (entry.kind) {
                 .value, .alias => {
                     try w.writeAll(": ");
-                    try renderDocTypeHtml(w, ctx, sig, false);
+                    try renderDocTypeHtml(w, sig_ctx, sig, false);
                 },
                 .nominal => {
                     try w.writeAll(":= ");
-                    try renderDocTypeHtml(w, ctx, sig, false);
+                    try renderDocTypeHtml(w, sig_ctx, sig, false);
                 },
                 .@"opaque" => {},
             }
@@ -1002,7 +1041,7 @@ fn writeDocText(w: Writer, text: []const u8) !void {
 fn renderDocTypeHtml(w: Writer, ctx: *const RenderContext, doc_type: *const DocType, needs_parens: bool) !void {
     switch (doc_type.*) {
         .type_ref => |ref| {
-            if (resolveTypeLink(ctx, ref.module_path)) {
+            if (!ctx.suppress_type_links and resolveTypeLink(ctx, ref.module_path)) {
                 try w.writeAll("<a href=\"");
                 try writeTypeLink(w, ctx, ref.module_path, ref.type_name);
                 try w.writeAll("\">");
