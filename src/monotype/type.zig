@@ -3,6 +3,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
+const symbol_mod = @import("symbol");
+
+const Symbol = symbol_mod.Symbol;
 
 pub const TypeId = enum(u32) { _ };
 pub const TypeSpan = extern struct {
@@ -47,6 +50,7 @@ pub const Nominal = struct {
     module_idx: u32,
     ident: base.Ident.Idx,
     is_opaque: bool,
+    to_inspect_symbol: Symbol,
     args: TypeSpan,
     backing: TypeId,
 };
@@ -125,6 +129,12 @@ pub const Store = struct {
         const idx: u32 = @intCast(self.types.items.len);
         try self.types.append(self.allocator, content);
         return @enumFromInt(idx);
+    }
+
+    pub fn cloneTypeGraph(self: *Store, id: TypeId) std.mem.Allocator.Error!TypeId {
+        var cloned = std.AutoHashMap(TypeId, TypeId).init(self.allocator);
+        defer cloned.deinit();
+        return try self.cloneTypeGraphInner(id, &cloned);
     }
 
     pub fn setType(self: *Store, id: TypeId, content: Content) void {
@@ -243,6 +253,12 @@ pub const Store = struct {
         return self.publishedContainsPlaceholderVisited(id, &visited) catch true;
     }
 
+    pub fn publishedContainsAbstractLeaf(self: *const Store, id: TypeId) bool {
+        var visited = std.AutoHashMap(TypeId, void).init(self.allocator);
+        defer visited.deinit();
+        return self.publishedContainsAbstractLeafVisited(id, &visited) catch true;
+    }
+
     pub fn isFullyResolved(self: *const Store, id: TypeId) bool {
         var visited = std.AutoHashMap(TypeId, void).init(self.allocator);
         defer visited.deinit();
@@ -305,6 +321,52 @@ pub const Store = struct {
         };
     }
 
+    fn publishedContainsAbstractLeafVisited(
+        self: *const Store,
+        id: TypeId,
+        visited: *std.AutoHashMap(TypeId, void),
+    ) std.mem.Allocator.Error!bool {
+        const root = self.resolveLinks(id);
+        if (visited.contains(root)) return false;
+        try visited.put(root, {});
+
+        return switch (self.types.items[@intFromEnum(root)]) {
+            .placeholder, .unbd => true,
+            .primitive => false,
+            .link => unreachable,
+            .func => |func| try self.publishedContainsAbstractLeafVisited(func.arg, visited) or
+                try self.publishedContainsAbstractLeafVisited(func.ret, visited),
+            .nominal => |nominal| {
+                for (self.sliceTypeSpan(nominal.args)) |arg| {
+                    if (try self.publishedContainsAbstractLeafVisited(arg, visited)) return true;
+                }
+                return try self.publishedContainsAbstractLeafVisited(nominal.backing, visited);
+            },
+            .list => |elem| try self.publishedContainsAbstractLeafVisited(elem, visited),
+            .box => |elem| try self.publishedContainsAbstractLeafVisited(elem, visited),
+            .tuple => |tuple| blk: {
+                for (self.sliceTypeSpan(tuple)) |elem| {
+                    if (try self.publishedContainsAbstractLeafVisited(elem, visited)) break :blk true;
+                }
+                break :blk false;
+            },
+            .tag_union => |tag_union| blk: {
+                for (self.sliceTags(tag_union.tags)) |tag| {
+                    for (self.sliceTypeSpan(tag.args)) |arg| {
+                        if (try self.publishedContainsAbstractLeafVisited(arg, visited)) break :blk true;
+                    }
+                }
+                break :blk false;
+            },
+            .record => |record| blk: {
+                for (self.sliceFields(record.fields)) |field| {
+                    if (try self.publishedContainsAbstractLeafVisited(field.ty, visited)) break :blk true;
+                }
+                break :blk false;
+            },
+        };
+    }
+
     fn isFullyResolvedVisited(
         self: *const Store,
         id: TypeId,
@@ -360,15 +422,6 @@ pub const Store = struct {
         if (self.canonical_by_raw.get(root)) |cached| return cached;
         if (active.get(root)) |pending| return pending;
 
-        try self.buildCanonicalKey(root);
-        if (self.lookupInternedScratchKey()) |existing| {
-            if (root != existing) {
-                self.setType(root, .{ .link = existing });
-            }
-            try self.canonical_by_raw.put(root, existing);
-            return existing;
-        }
-
         const root_content = self.types.items[@intFromEnum(root)];
         switch (root_content) {
             .placeholder => debugPanic("monotype.type canonicalizeResolved encountered unresolved placeholder"),
@@ -396,6 +449,7 @@ pub const Store = struct {
                     .module_idx = nominal.module_idx,
                     .ident = nominal.ident,
                     .is_opaque = nominal.is_opaque,
+                    .to_inspect_symbol = nominal.to_inspect_symbol,
                     .args = try self.addTypeSpan(lowered_args),
                     .backing = try self.canonicalizeResolvedInner(nominal.backing, active),
                 } };
@@ -449,6 +503,19 @@ pub const Store = struct {
 
         self.setType(root, canonical_content);
         try self.buildCanonicalKey(root);
+        if (self.lookupInternedScratchKey()) |existing| {
+            if (root != existing) {
+                self.setType(root, .{ .link = existing });
+            }
+            try self.canonical_by_raw.put(root, existing);
+            const removed = active.remove(root);
+            if (comptime builtin.mode == .Debug) {
+                std.debug.assert(removed);
+            } else if (!removed) {
+                unreachable;
+            }
+            return existing;
+        }
         try self.rememberScratchInternKey(root);
         try self.canonical_by_raw.put(root, root);
         const removed = active.remove(root);
@@ -468,21 +535,20 @@ pub const Store = struct {
         const root = self.resolveLinks(raw_id);
         if (self.canonical_by_raw.get(root)) |cached| return cached;
         if (active.get(root)) |pending| return pending;
-        try self.buildCanonicalKey(root);
-        if (self.lookupInternedScratchKey()) |existing| {
-            if (root != existing) {
-                self.setType(root, .{ .link = existing });
-            }
-            try self.canonical_by_raw.put(root, existing);
-            return existing;
-        }
 
         const root_content = self.types.items[@intFromEnum(root)];
+        switch (root_content) {
+            .placeholder, .unbd => {
+                self.setType(root, .unbd);
+                try self.canonical_by_raw.put(root, root);
+                return root;
+            },
+            else => {},
+        }
 
         try active.put(root, root);
         const canonical_content: Content = switch (root_content) {
-            .placeholder => .unbd,
-            .unbd => .unbd,
+            .placeholder, .unbd => unreachable,
             .link => unreachable,
             .primitive => |prim| .{ .primitive = prim },
             .func => |func| .{ .func = .{
@@ -500,6 +566,7 @@ pub const Store = struct {
                     .module_idx = nominal.module_idx,
                     .ident = nominal.ident,
                     .is_opaque = nominal.is_opaque,
+                    .to_inspect_symbol = nominal.to_inspect_symbol,
                     .args = try self.addTypeSpan(lowered_args),
                     .backing = try self.canonicalizePublishedInner(nominal.backing, active),
                 } };
@@ -552,8 +619,18 @@ pub const Store = struct {
         };
 
         self.setType(root, canonical_content);
-        try self.buildCanonicalKey(root);
-        try self.rememberScratchInternKey(root);
+        if (!self.publishedContainsAbstractLeaf(root)) {
+            try self.buildCanonicalKey(root);
+            if (self.lookupInternedScratchKey()) |existing| {
+                if (root != existing) {
+                    self.setType(root, .{ .link = existing });
+                }
+                try self.canonical_by_raw.put(root, existing);
+                _ = active.remove(root);
+                return existing;
+            }
+            try self.rememberScratchInternKey(root);
+        }
         try self.canonical_by_raw.put(root, root);
         _ = active.remove(root);
         return root;
@@ -622,6 +699,7 @@ pub const Store = struct {
                 switch (content) {
                     .placeholder, .unbd => {
                         try self_builder.store.appendInternKeyValue(@as(u8, 18));
+                        try self_builder.store.appendInternKeyValue(self_builder.binder_ids.get(root_id).?);
                     },
                     .link => unreachable,
                     .primitive => |prim| {
@@ -638,6 +716,7 @@ pub const Store = struct {
                         try self_builder.store.appendInternKeyValue(nominal.module_idx);
                         try self_builder.store.appendInternKeyValue(@as(u32, @bitCast(nominal.ident)));
                         try self_builder.store.appendInternKeyValue(@as(u8, @intFromBool(nominal.is_opaque)));
+                        try self_builder.store.appendInternKeyValue(nominal.to_inspect_symbol.raw());
                         const args = self_builder.store.sliceTypeSpan(nominal.args);
                         try self_builder.store.appendInternKeyValue(@as(u32, @intCast(args.len)));
                         for (args) |arg| {
@@ -732,6 +811,93 @@ pub const Store = struct {
         right: TypeId,
     };
 
+    fn cloneTypeGraphInner(
+        self: *Store,
+        id: TypeId,
+        cloned: *std.AutoHashMap(TypeId, TypeId),
+    ) std.mem.Allocator.Error!TypeId {
+        const root = self.resolveLinks(id);
+        if (cloned.get(root)) |existing| return existing;
+
+        const placeholder = try self.addType(.placeholder);
+        try cloned.put(root, placeholder);
+
+        const cloned_content: Content = switch (self.types.items[@intFromEnum(root)]) {
+            .placeholder => .placeholder,
+            .unbd => .unbd,
+            .link => unreachable,
+            .primitive => |prim| .{ .primitive = prim },
+            .func => |func| .{ .func = .{
+                .arg = try self.cloneTypeGraphInner(func.arg, cloned),
+                .ret = try self.cloneTypeGraphInner(func.ret, cloned),
+            } },
+            .nominal => |nominal| blk: {
+                const args = self.sliceTypeSpan(nominal.args);
+                const cloned_args = try self.allocator.alloc(TypeId, args.len);
+                defer self.allocator.free(cloned_args);
+                for (args, 0..) |arg, i| {
+                    cloned_args[i] = try self.cloneTypeGraphInner(arg, cloned);
+                }
+                break :blk .{ .nominal = .{
+                    .module_idx = nominal.module_idx,
+                    .ident = nominal.ident,
+                    .is_opaque = nominal.is_opaque,
+                    .to_inspect_symbol = nominal.to_inspect_symbol,
+                    .args = try self.addTypeSpan(cloned_args),
+                    .backing = try self.cloneTypeGraphInner(nominal.backing, cloned),
+                } };
+            },
+            .list => |elem| .{ .list = try self.cloneTypeGraphInner(elem, cloned) },
+            .box => |elem| .{ .box = try self.cloneTypeGraphInner(elem, cloned) },
+            .tuple => |tuple| blk: {
+                const elems = self.sliceTypeSpan(tuple);
+                const cloned_elems = try self.allocator.alloc(TypeId, elems.len);
+                defer self.allocator.free(cloned_elems);
+                for (elems, 0..) |elem, i| {
+                    cloned_elems[i] = try self.cloneTypeGraphInner(elem, cloned);
+                }
+                break :blk .{ .tuple = try self.addTypeSpan(cloned_elems) };
+            },
+            .tag_union => |tag_union| blk: {
+                const tags = self.sliceTags(tag_union.tags);
+                const cloned_tags = try self.allocator.alloc(Tag, tags.len);
+                defer self.allocator.free(cloned_tags);
+                for (tags, 0..) |tag, i| {
+                    const args = self.sliceTypeSpan(tag.args);
+                    const cloned_args = try self.allocator.alloc(TypeId, args.len);
+                    defer self.allocator.free(cloned_args);
+                    for (args, 0..) |arg, j| {
+                        cloned_args[j] = try self.cloneTypeGraphInner(arg, cloned);
+                    }
+                    cloned_tags[i] = .{
+                        .name = tag.name,
+                        .args = try self.addTypeSpan(cloned_args),
+                    };
+                }
+                break :blk .{ .tag_union = .{
+                    .tags = try self.addTags(cloned_tags),
+                } };
+            },
+            .record => |record| blk: {
+                const fields = self.sliceFields(record.fields);
+                const cloned_fields = try self.allocator.alloc(Field, fields.len);
+                defer self.allocator.free(cloned_fields);
+                for (fields, 0..) |field, i| {
+                    cloned_fields[i] = .{
+                        .name = field.name,
+                        .ty = try self.cloneTypeGraphInner(field.ty, cloned),
+                    };
+                }
+                break :blk .{ .record = .{
+                    .fields = try self.addFields(cloned_fields),
+                } };
+            },
+        };
+
+        self.setType(placeholder, cloned_content);
+        return placeholder;
+    }
+
     fn equalIdsVisited(
         self: *const Store,
         a: TypeId,
@@ -758,6 +924,7 @@ pub const Store = struct {
                 if (nominal.module_idx != right_nominal.module_idx) break :blk false;
                 if (nominal.ident != right_nominal.ident) break :blk false;
                 if (nominal.is_opaque != right_nominal.is_opaque) break :blk false;
+                if (nominal.to_inspect_symbol != right_nominal.to_inspect_symbol) break :blk false;
                 const left_args = self.sliceTypeSpan(nominal.args);
                 const right_args = self.sliceTypeSpan(right_nominal.args);
                 if (left_args.len != right_args.len) break :blk false;
@@ -832,6 +999,7 @@ test "nominal identity preserves generic arguments" {
         .module_idx = 7,
         .ident = foo_ident,
         .is_opaque = true,
+        .to_inspect_symbol = Symbol.none,
         .args = try store.addTypeSpan(&.{u8_ty}),
         .backing = bool_ty,
     } });
@@ -839,6 +1007,7 @@ test "nominal identity preserves generic arguments" {
         .module_idx = 7,
         .ident = foo_ident,
         .is_opaque = true,
+        .to_inspect_symbol = Symbol.none,
         .args = try store.addTypeSpan(&.{i64_ty}),
         .backing = bool_ty,
     } });
@@ -846,12 +1015,75 @@ test "nominal identity preserves generic arguments" {
         .module_idx = 7,
         .ident = foo_ident,
         .is_opaque = true,
+        .to_inspect_symbol = Symbol.none,
         .args = try store.addTypeSpan(&.{u8_ty}),
         .backing = bool_ty,
     } });
 
     try std.testing.expect(foo_u8 == foo_u8_again);
     try std.testing.expect(!store.equalIds(foo_u8, foo_i64));
+}
+
+test "published canonicalization preserves distinct abstract leaves" {
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const arg_ty = try store.addType(.placeholder);
+    const ret_ty = try store.addType(.placeholder);
+    const func_ty = try store.addType(.{ .func = .{
+        .arg = arg_ty,
+        .ret = ret_ty,
+    } });
+
+    const published = try store.canonicalizePublished(func_ty);
+    const published_func = store.getTypePreservingNominal(published).func;
+
+    try std.testing.expect(published_func.arg != published_func.ret);
+    try std.testing.expect(store.getTypePreservingNominal(published_func.arg) == .unbd);
+    try std.testing.expect(store.getTypePreservingNominal(published_func.ret) == .unbd);
+}
+
+test "published canonicalization does not merge standalone abstract leaves" {
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const left = try store.addType(.placeholder);
+    const right = try store.addType(.placeholder);
+
+    const published_left = try store.canonicalizePublished(left);
+    const published_right = try store.canonicalizePublished(right);
+
+    try std.testing.expect(published_left != published_right);
+    try std.testing.expect(store.getTypePreservingNominal(published_left) == .unbd);
+    try std.testing.expect(store.getTypePreservingNominal(published_right) == .unbd);
+}
+
+test "clone plus published canonicalization preserves shared function leaves" {
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const elem_ty = try store.addType(.placeholder);
+    const list_ty = try store.addType(.{ .list = elem_ty });
+    const inner_fn = try store.addType(.{ .func = .{
+        .arg = elem_ty,
+        .ret = list_ty,
+    } });
+    const outer_fn = try store.addType(.{ .func = .{
+        .arg = list_ty,
+        .ret = inner_fn,
+    } });
+
+    const cloned = try store.cloneTypeGraph(outer_fn);
+    const published = try store.canonicalizePublished(cloned);
+
+    const published_outer = store.getTypePreservingNominal(published).func;
+    const published_outer_arg = store.getTypePreservingNominal(published_outer.arg).list;
+    const published_inner = store.getTypePreservingNominal(published_outer.ret).func;
+    const published_inner_ret = store.getTypePreservingNominal(published_inner.ret).list;
+
+    try std.testing.expect(published_outer_arg == published_inner.arg);
+    try std.testing.expect(published_outer_arg == published_inner_ret);
+    try std.testing.expect(store.getTypePreservingNominal(published_outer_arg) == .unbd);
 }
 
 fn debugPanic(comptime msg: []const u8) noreturn {

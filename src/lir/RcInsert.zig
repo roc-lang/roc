@@ -154,6 +154,13 @@ const ProcPass = struct {
             }
         }
 
+        var local_idx: usize = 0;
+        while (local_idx < self.local_count) : (local_idx += 1) {
+            if (!self.storage_locals.isSet(local_idx)) continue;
+            const local: LocalId = @enumFromInt(@as(u32, @intCast(local_idx)));
+            self.markOwnedLocal(local);
+        }
+
         for (self.store.getLocalSpan(self.proc.owned_params)) |param| {
             self.markOwnedLocal(param);
         }
@@ -207,7 +214,6 @@ const ProcPass = struct {
 
     fn markOwnedLocal(self: *ProcPass, target: LocalId) void {
         const local_idx = @intFromEnum(target);
-        if (self.storage_locals.isSet(local_idx)) return;
         const layout_idx = self.store.getLocal(target).layout_idx;
         if (self.layouts.layoutContainsRefcounted(self.layouts.getLayout(layout_idx))) {
             self.owned_locals.set(local_idx);
@@ -553,7 +559,7 @@ const ProcPass = struct {
 
     fn markSpanOwnershipPassed(self: *ProcPass, span: LIR.LocalSpan, ownership_passed: *std.DynamicBitSetUnmanaged) void {
         for (self.store.getLocalSpan(span)) |local| {
-            self.markOwnershipPassedLocal(local, ownership_passed);
+            self.markOwnershipPassedValue(local, ownership_passed);
         }
     }
 
@@ -957,6 +963,7 @@ const ProcPass = struct {
             .assign_list => |assign| try self.prependMaterializationRetain(assign.target, assign.result, assign.ownership, with_drops),
             .assign_struct => |assign| try self.prependMaterializationRetain(assign.target, assign.result, assign.ownership, with_drops),
             .assign_tag => |assign| try self.prependMaterializationRetain(assign.target, assign.result, assign.ownership, with_drops),
+            .set_local => |assign| try self.prependSetLocalOverwriteDrop(original_stmt_id, assign.target, assign.value, with_drops),
             else => with_drops,
         };
         const rewritten_stmt = try switch (stmt_template) {
@@ -987,6 +994,26 @@ const ProcPass = struct {
             else => unreachable,
         };
         return try self.prependOwnershipRetains(original_stmt_id, rewritten_stmt, next_stmt);
+    }
+
+    fn prependSetLocalOverwriteDrop(
+        self: *ProcPass,
+        stmt_id: CFStmtId,
+        target: LocalId,
+        value: LocalId,
+        next: CFStmtId,
+    ) Allocator.Error!CFStmtId {
+        const slot = self.stmtSlot(stmt_id) orelse return next;
+        if (!self.live_in[slot].isSet(@intFromEnum(target))) return next;
+        if (!self.localCanOwnRefcount(target)) return next;
+
+        const incoming_owner = self.explicitOwnerForLocal(value) orelse value;
+        if (incoming_owner == target) return next;
+
+        return self.store.addCFStmt(.{ .decref = .{
+            .value = target,
+            .next = next,
+        } });
     }
 
     fn prependEdgeDrops(self: *ProcPass, from_stmt: CFStmtId, successor_rewritten: CFStmtId, original_successor: CFStmtId) Allocator.Error!CFStmtId {
@@ -1170,6 +1197,7 @@ const ProcPass = struct {
         switch (self.store.getCFStmt(stmt_id)) {
             .assign_low_level => |assign| {
                 for (self.store.getLocalSpan(assign.ownership.consumed_owned_inputs)) |local| {
+                    if (resultContinuesOwnershipFromInput(assign.result, local)) continue;
                     self.accumulateBorrowedConsumeRetain(local, retained_counts);
                 }
             },
@@ -1187,6 +1215,13 @@ const ProcPass = struct {
             },
             else => {},
         }
+    }
+
+    fn resultContinuesOwnershipFromInput(result: LIR.ResultSemantics, input: LocalId) bool {
+        return switch (result) {
+            .alias_of => |alias| alias.owner == input,
+            else => false,
+        };
     }
 
     fn accumulateFreshInputRetains(self: *ProcPass, locals: []const LocalId, retained_counts: []u16) Allocator.Error!void {
@@ -1232,8 +1267,8 @@ const ProcPass = struct {
     }
 
     fn incrementRetainCount(self: *ProcPass, local: LocalId, retained_counts: []u16, delta: u16) void {
-        _ = self;
-        const local_idx = @intFromEnum(local);
+        const canonical = self.explicitOwnerForLocal(local) orelse local;
+        const local_idx = @intFromEnum(canonical);
         const next = retained_counts[local_idx] + delta;
         std.debug.assert(next >= retained_counts[local_idx]);
         retained_counts[local_idx] = next;
@@ -1353,6 +1388,7 @@ fn collectReachableStmtIds(
 
     return ordered.toOwnedSlice(allocator);
 }
+
 
 fn bitsetsEqual(a: std.DynamicBitSetUnmanaged, b: std.DynamicBitSetUnmanaged) bool {
     if (a.bit_length != b.bit_length) return false;

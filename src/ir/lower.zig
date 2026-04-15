@@ -1,5 +1,6 @@
 //! Lower lambdamono into cor-style IR.
 
+const builtin = @import("builtin");
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
@@ -477,9 +478,10 @@ const Lowerer = struct {
         layout: ir_layout.Ref,
         comptime label: []const u8,
     ) std.mem.Allocator.Error!ast.Var {
+        const symbol = try self.freshSymbol(label);
         return .{
             .layout = layout,
-            .symbol = try self.freshSymbol(label),
+            .symbol = symbol,
         };
     }
 
@@ -619,7 +621,7 @@ const Lowerer = struct {
         record_ty: type_mod.TypeId,
     ) ?[]const type_mod.Field {
         return switch (self.input.types.getTypePreservingNominal(record_ty)) {
-            .nominal => |backing| self.recordTypeFields(backing),
+            .nominal => |nominal| self.recordTypeFields(nominal.backing),
             .record => |record| self.input.types.sliceFields(record.fields),
             else => null,
         };

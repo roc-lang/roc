@@ -409,22 +409,6 @@ const LoweredCall = struct {
     result_ty: type_mod.TypeId,
 };
 
-const CallInfo = struct {
-    fn_var: Var,
-    fn_ty: type_mod.TypeId,
-    arg_vars: []Var,
-    arg_tys: []type_mod.TypeId,
-    applied_result_tys: []type_mod.TypeId,
-    result_ty: type_mod.TypeId,
-
-    fn deinit(self: *CallInfo, allocator: std.mem.Allocator) void {
-        allocator.free(self.applied_result_tys);
-        allocator.free(self.arg_tys);
-        allocator.free(self.arg_vars);
-    }
-};
-
-
 pub const Lowerer = struct {
     allocator: std.mem.Allocator,
     ctx: Ctx,
@@ -683,6 +667,7 @@ pub const Lowerer = struct {
         active_type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
         provisional_type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
         type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
+        published_type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
         memo: Memo,
         nominal_type_cache: std.StringHashMap(type_mod.TypeId),
         scratch_nominal_key: std.ArrayList(u8),
@@ -718,6 +703,43 @@ pub const Lowerer = struct {
 
             self.initWithRankBehavior(.ignore_rank);
             if (parent) |scope| {
+                var expr_result_iter = scope.memo.expr_result_var_map.iterator();
+                while (expr_result_iter.next()) |entry| {
+                    try self.memo.expr_result_var_map.put(entry.key_ptr.*, entry.value_ptr.*);
+                }
+                var expr_type_iter = scope.memo.expr_type_cache.iterator();
+                while (expr_type_iter.next()) |entry| {
+                    try self.memo.expr_type_cache.put(entry.key_ptr.*, entry.value_ptr.*);
+                }
+                var pattern_type_iter = scope.memo.pattern_type_cache.iterator();
+                while (pattern_type_iter.next()) |entry| {
+                    try self.memo.pattern_type_cache.put(entry.key_ptr.*, entry.value_ptr.*);
+                }
+                var pattern_source_iter = scope.memo.pattern_source_type_cache.iterator();
+                while (pattern_source_iter.next()) |entry| {
+                    try self.memo.pattern_source_type_cache.put(entry.key_ptr.*, entry.value_ptr.*);
+                }
+                var pattern_tag_iter = scope.memo.pattern_tag_discriminant_cache.iterator();
+                while (pattern_tag_iter.next()) |entry| {
+                    try self.memo.pattern_tag_discriminant_cache.put(entry.key_ptr.*, entry.value_ptr.*);
+                }
+                var pattern_list_iter = scope.memo.pattern_list_elem_type_cache.iterator();
+                while (pattern_list_iter.next()) |entry| {
+                    try self.memo.pattern_list_elem_type_cache.put(entry.key_ptr.*, entry.value_ptr.*);
+                }
+                var record_destruct_iter = scope.memo.record_destruct_field_index_cache.iterator();
+                while (record_destruct_iter.next()) |entry| {
+                    try self.memo.record_destruct_field_index_cache.put(entry.key_ptr.*, entry.value_ptr.*);
+                }
+                var collected_expr_iter = scope.memo.collected_expr.iterator();
+                while (collected_expr_iter.next()) |entry| {
+                    try self.memo.collected_expr.put(entry.key_ptr.*, entry.value_ptr.*);
+                }
+                var collected_pattern_iter = scope.memo.collected_pattern.iterator();
+                while (collected_pattern_iter.next()) |entry| {
+                    try self.memo.collected_pattern.put(entry.key_ptr.*, entry.value_ptr.*);
+                }
+
                 if (!inherit_specialization_state) return;
                 var iter = scope.source_var_map.iterator();
                 while (iter.next()) |entry| {
@@ -734,6 +756,10 @@ pub const Lowerer = struct {
                 var type_iter = scope.type_cache.iterator();
                 while (type_iter.next()) |entry| {
                     try self.type_cache.put(entry.key_ptr.*, entry.value_ptr.*);
+                }
+                var published_iter = scope.published_type_cache.iterator();
+                while (published_iter.next()) |entry| {
+                    try self.published_type_cache.put(entry.key_ptr.*, entry.value_ptr.*);
                 }
                 var provisional_iter = scope.provisional_type_cache.iterator();
                 while (provisional_iter.next()) |entry| {
@@ -752,6 +778,7 @@ pub const Lowerer = struct {
             self.active_type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(self.allocator);
             self.provisional_type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(self.allocator);
             self.type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(self.allocator);
+            self.published_type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(self.allocator);
             self.memo = Memo.init(self.allocator);
             self.nominal_type_cache = std.StringHashMap(type_mod.TypeId).init(self.allocator);
             self.scratch_nominal_key = .empty;
@@ -796,6 +823,7 @@ pub const Lowerer = struct {
             self.active_type_cache.deinit();
             self.provisional_type_cache.deinit();
             self.type_cache.deinit();
+            self.published_type_cache.deinit();
             self.instantiation_var_map.deinit();
             self.copied_source_var_map.deinit();
             self.source_var_map.deinit();
@@ -803,6 +831,24 @@ pub const Lowerer = struct {
                 self.workspace.deinit(self.allocator);
                 self.allocator.destroy(self.workspace);
             }
+        }
+    };
+
+    const CallInfo = struct {
+        call_scope: *TypeCloneScope,
+        fn_var: Var,
+        fn_ty: type_mod.TypeId,
+        arg_vars: []Var,
+        arg_tys: []type_mod.TypeId,
+        applied_result_tys: []type_mod.TypeId,
+        result_ty: type_mod.TypeId,
+
+        fn deinit(self: *CallInfo, allocator: std.mem.Allocator) void {
+            allocator.free(self.applied_result_tys);
+            allocator.free(self.arg_tys);
+            allocator.free(self.arg_vars);
+            self.call_scope.deinit();
+            allocator.destroy(self.call_scope);
         }
     };
 
@@ -1820,11 +1866,11 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!ast.ExprId {
         std.debug.assert(remaining_arg_patterns.len > 0);
         const first_arg_ty = try self.requireFunctionArgType(module_idx, type_scope, source_fn_var, next_arg_index);
-        const source_result_var = self.lookupFunctionNodeRetVar(module_idx, type_scope, source_fn_var) orelse debugPanic(
-            "monotype lambda invariant violated: missing curried source function return in module {d}",
+        const source_result_var = self.lookupCurriedFunctionFinalRetVar(module_idx, type_scope, source_fn_var) orelse debugPanic(
+            "monotype lambda invariant violated: missing curried source function final return in module {d}",
             .{module_idx},
         );
-        const source_result_ty = try self.requireFunctionRetType(module_idx, type_scope, source_fn_var);
+        const source_result_ty = try self.requireCurriedFunctionFinalRetType(module_idx, type_scope, source_fn_var);
         const remaining_after_current = remaining_arg_patterns.len - 1;
         const result_ty = if (remaining_after_current == 0)
             source_result_ty
@@ -2920,29 +2966,32 @@ pub const Lowerer = struct {
         fn_var: Var,
         arg_exprs: []const CIR.Expr.Idx,
     ) std.mem.Allocator.Error!CallInfo {
-        var call_scope: TypeCloneScope = undefined;
+        const call_scope = try self.allocator.create(TypeCloneScope);
+        errdefer self.allocator.destroy(call_scope);
         try call_scope.initCloneAllFromParent(self.allocator, self.ctx.typedCirModule(module_idx), type_scope, false);
-        defer call_scope.deinit();
+        errdefer call_scope.deinit();
 
         const cloned_fn_var = try call_scope.instantiator.instantiateVar(fn_var);
-
         const arg_vars = try self.allocator.alloc(Var, arg_exprs.len);
         errdefer self.allocator.free(arg_vars);
         const arg_tys = try self.allocator.alloc(type_mod.TypeId, arg_exprs.len);
         errdefer self.allocator.free(arg_tys);
 
         for (arg_exprs, 0..) |arg_expr_idx, i| {
-            const expected_arg_var = try self.requireFunctionArgVar(module_idx, &call_scope, cloned_fn_var, i);
+            const expected_arg_var = try self.requireFunctionArgVar(module_idx, call_scope, cloned_fn_var, i);
             arg_vars[i] = expected_arg_var;
             const actual_arg_var = self.requireExprResultVar(module_idx, type_scope, arg_expr_idx);
-            try self.alignWorkspaceVarToCanonical(&call_scope, actual_arg_var, expected_arg_var);
-            arg_tys[i] = try self.instantiatePublishedVarType(module_idx, type_scope, expected_arg_var);
+            try self.alignWorkspaceVarToCanonical(call_scope, actual_arg_var, expected_arg_var);
+            arg_tys[i] = try self.instantiatePublishedVarType(module_idx, call_scope, expected_arg_var);
         }
 
-        const fn_ty = try self.instantiatePublishedVarType(module_idx, type_scope, cloned_fn_var);
+        const fn_ty = try self.instantiatePublishedVarType(module_idx, call_scope, cloned_fn_var);
+        try self.finalizeExprTypes(module_idx, call_scope);
+        try self.finalizePatternTypes(module_idx, call_scope);
+
         const applied_arg_count = blk: {
             if (arg_exprs.len != 0) break :blk arg_exprs.len;
-            const store = type_scope.typeStoreConst();
+            const store = call_scope.typeStoreConst();
             if (self.lookupFunctionArgVarInStore(store, cloned_fn_var, 0) == null) {
                 if (self.lookupFunctionRetVarInStore(store, cloned_fn_var) != null) break :blk 1;
                 debugPanic(
@@ -2960,9 +3009,10 @@ pub const Lowerer = struct {
         const result_ty = if (applied_result_tys.len == 0) fn_ty else applied_result_tys[applied_result_tys.len - 1];
 
         const call_result_var = self.requireExprResultVar(module_idx, type_scope, call_expr_idx);
-        try self.assertAppliedFunctionResultCompatible(module_idx, type_scope, call_result_var, cloned_fn_var, applied_arg_count);
+        try self.assertAppliedFunctionResultCompatible(module_idx, call_scope, call_result_var, cloned_fn_var, applied_arg_count);
 
         return .{
+            .call_scope = call_scope,
             .fn_var = cloned_fn_var,
             .fn_ty = fn_ty,
             .arg_vars = arg_vars,
@@ -6878,14 +6928,14 @@ pub const Lowerer = struct {
         var call_info = try self.prepareCallInfo(module_idx, type_scope, expr_idx, source_fn_var, arg_exprs);
         defer call_info.deinit(self.allocator);
 
-        const callee = try self.lowerResolvedTargetCallee(module_idx, type_scope, target, call_info.fn_ty, call_info.fn_var);
+        const callee = try self.lowerResolvedTargetCallee(module_idx, call_info.call_scope, target, call_info.fn_ty, call_info.fn_var);
 
         const lowered_args = try self.allocator.alloc(ast.ExprId, arg_exprs.len);
         defer self.allocator.free(lowered_args);
         for (arg_exprs, 0..) |arg_expr_idx, i| {
             lowered_args[i] = try self.lowerExprWithExpectedType(
                 module_idx,
-                type_scope,
+                call_info.call_scope,
                 env,
                 arg_expr_idx,
                 call_info.arg_tys[i],
@@ -6928,14 +6978,14 @@ pub const Lowerer = struct {
                 var call_info = try self.prepareCallInfo(module_idx, type_scope, expr_idx, source_fn_var, &arg_exprs);
                 defer call_info.deinit(self.allocator);
 
-                const callee = try self.lowerResolvedTargetCallee(module_idx, type_scope, target, call_info.fn_ty, call_info.fn_var);
+                const callee = try self.lowerResolvedTargetCallee(module_idx, call_info.call_scope, target, call_info.fn_ty, call_info.fn_var);
 
                 const lowered_args = try self.allocator.alloc(ast.ExprId, arg_exprs.len);
                 defer self.allocator.free(lowered_args);
                 for (arg_exprs, 0..) |arg_expr_idx, i| {
                     lowered_args[i] = try self.lowerExprWithExpectedType(
                         module_idx,
-                        type_scope,
+                        call_info.call_scope,
                         env,
                         arg_expr_idx,
                         call_info.arg_tys[i],
@@ -6980,7 +7030,7 @@ pub const Lowerer = struct {
 
         const callee = try self.lowerExprWithExpectedType(
             module_idx,
-            type_scope,
+            call_info.call_scope,
             env,
             func_expr_idx,
             call_info.fn_ty,
@@ -6992,7 +7042,7 @@ pub const Lowerer = struct {
         for (arg_exprs, 0..) |arg_expr_idx, i| {
             lowered_args[i] = try self.lowerExprWithExpectedType(
                 module_idx,
-                type_scope,
+                call_info.call_scope,
                 env,
                 arg_expr_idx,
                 call_info.arg_tys[i],
@@ -7737,7 +7787,18 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         var_: Var,
     ) std.mem.Allocator.Error!type_mod.TypeId {
-        return try self.publishMonotypeType(try self.lowerInstantiatedType(module_idx, type_scope, var_));
+        const resolved = type_scope.typeStoreConst().resolveVar(var_);
+        const key: TypeCloneScope.TypeKey = .{
+            .module_idx = module_idx,
+            .var_ = resolved.var_,
+        };
+        if (type_scope.published_type_cache.get(key)) |cached| return cached;
+
+        const lowered = try self.lowerInstantiatedType(module_idx, type_scope, resolved.var_);
+        const published_input = try self.ctx.types.cloneTypeGraph(lowered);
+        const published = try self.publishMonotypeType(published_input);
+        try type_scope.published_type_cache.put(key, published);
+        return published;
     }
 
     fn recordExprType(
@@ -8680,6 +8741,18 @@ pub const Lowerer = struct {
         var_: Var,
     ) std.mem.Allocator.Error!type_mod.TypeId {
         const resolved = type_scope.typeStoreConst().resolveVar(var_);
+        if (builtin.mode == .Debug and @intFromEnum(resolved.var_) == 80) {
+            const key_debug: TypeCloneScope.TypeKey = .{ .module_idx = module_idx, .var_ = resolved.var_ };
+            std.debug.print(
+                "monotype.lowerInstantiatedType var=80 module={d} active={any} provisional={any} cached={any}\n",
+                .{
+                    module_idx,
+                    type_scope.active_type_cache.get(key_debug),
+                    type_scope.provisional_type_cache.get(key_debug),
+                    type_scope.type_cache.get(key_debug),
+                },
+            );
+        }
         if (self.defaultNumeralPrimitiveForContent(type_scope, resolved.desc.content)) |prim| {
             return self.makePrimitiveType(prim);
         }
@@ -8745,6 +8818,7 @@ pub const Lowerer = struct {
         self.ctx.types.setType(placeholder, lowered);
         if (lowered == .placeholder) {
             _ = type_scope.active_type_cache.remove(key);
+            try type_scope.provisional_type_cache.put(key, placeholder);
             return placeholder;
         }
 
@@ -12378,6 +12452,23 @@ pub const Lowerer = struct {
         );
         const ret_var = self.lookupFunctionNodeRetVar(module_idx, type_scope, function_var) orelse debugPanic(
             "monotype invariant violated: missing function return var in module {d}",
+            .{module_idx},
+        );
+        return try self.instantiatePublishedVarType(module_idx, type_scope, ret_var);
+    }
+
+    fn requireCurriedFunctionFinalRetType(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        fn_var: ?Var,
+    ) std.mem.Allocator.Error!type_mod.TypeId {
+        const function_var = fn_var orelse debugPanic(
+            "monotype invariant violated: missing function var while requiring curried final return type in module {d}",
+            .{module_idx},
+        );
+        const ret_var = self.lookupCurriedFunctionFinalRetVar(module_idx, type_scope, function_var) orelse debugPanic(
+            "monotype invariant violated: missing curried function final return var in module {d}",
             .{module_idx},
         );
         return try self.instantiatePublishedVarType(module_idx, type_scope, ret_var);

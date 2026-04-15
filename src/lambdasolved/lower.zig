@@ -22,6 +22,7 @@ pub const Result = struct {
     types: type_mod.Store,
     strings: base.StringLiteral.Store,
     idents: base.Ident.Store,
+    runtime_inspect_symbols: std.AutoHashMap(Symbol, Symbol),
 
     pub fn deinit(self: *Result) void {
         self.store.deinit();
@@ -30,6 +31,7 @@ pub const Result = struct {
         self.types.deinit();
         self.strings.deinit(self.store.allocator);
         self.idents.deinit(self.store.allocator);
+        self.runtime_inspect_symbols.deinit();
     }
 };
 
@@ -98,6 +100,7 @@ const Lowerer = struct {
             .types = self.types,
             .strings = self.input.strings,
             .idents = self.input.idents,
+            .runtime_inspect_symbols = self.input.runtime_inspect_symbols,
         };
 
         self.output = ast.Store.init(self.allocator);
@@ -106,6 +109,7 @@ const Lowerer = struct {
         self.input.symbols = symbol_mod.Store.init(self.allocator);
         self.input.strings = .{};
         self.input.idents = try base.Ident.Store.initCapacity(self.allocator, 1);
+        self.input.runtime_inspect_symbols = std.AutoHashMap(Symbol, Symbol).init(self.allocator);
         return result;
     }
 
@@ -378,7 +382,22 @@ const Lowerer = struct {
             .placeholder => debugPanic("lambdasolved.instantiateTypeRec leaked monotype builder placeholder", .{}),
             .unbd => type_mod.Node.unbd,
             .link => unreachable,
-            .nominal => |nominal| type_mod.Node{ .nominal = try self.instantiateTypeRec(nominal.backing, cache) },
+            .nominal => |nominal| blk: {
+                const args = self.input.types.sliceTypeSpan(nominal.args);
+                const lowered_args = try self.allocator.alloc(TypeVarId, args.len);
+                defer self.allocator.free(lowered_args);
+                for (args, 0..) |arg, i| {
+                    lowered_args[i] = try self.instantiateTypeRec(arg, cache);
+                }
+                break :blk type_mod.Node{ .nominal = .{
+                    .module_idx = nominal.module_idx,
+                    .ident = nominal.ident,
+                    .is_opaque = nominal.is_opaque,
+                    .to_inspect_symbol = nominal.to_inspect_symbol,
+                    .args = try self.types.addTypeVarSpan(lowered_args),
+                    .backing = try self.instantiateTypeRec(nominal.backing, cache),
+                } };
+            },
             .func => |func| blk: {
                 break :blk type_mod.Node{ .content = .{ .func = .{
                     .arg = try self.instantiateTypeRec(func.arg, cache),
@@ -1092,7 +1111,7 @@ const Lowerer = struct {
     ) std.mem.Allocator.Error!void {
         const target_root = self.types.unlinkPreservingNominal(target_ty);
         return switch (self.types.getNode(target_root)) {
-            .nominal => |backing| try self.unify(backing, wanted_ty),
+            .nominal => |nominal| try self.unify(nominal.backing, wanted_ty),
             else => try self.unify(target_ty, wanted_ty),
         };
     }
@@ -1550,9 +1569,6 @@ const Lowerer = struct {
             .call => |call| {
                 try self.propagateExprErasure(call.func, venv);
                 try self.propagateExprErasure(call.arg, venv);
-                if (self.functionResultType(self.output.getExpr(call.func).ty)) |ret_ty| {
-                    expr.ty = ret_ty;
-                }
                 const func_expr = self.output.getExpr(call.func);
                 if (func_expr.data == .var_) {
                     if (self.boxBoundaryBuiltinOpForSymbol(func_expr.data.var_)) |op| {
@@ -1679,7 +1695,7 @@ const Lowerer = struct {
     fn functionResultType(self: *Lowerer, ty: TypeVarId) ?TypeVarId {
         const id = self.types.unlinkPreservingNominal(ty);
         return switch (self.types.getNode(id)) {
-            .nominal => |backing| self.functionResultType(backing),
+            .nominal => |nominal| self.functionResultType(nominal.backing),
             .content => |content| switch (content) {
                 .func => |func| func.ret,
                 else => null,
@@ -1691,10 +1707,12 @@ const Lowerer = struct {
     fn rewriteFunctionRetType(self: *Lowerer, ty: TypeVarId, new_ret: TypeVarId) std.mem.Allocator.Error!TypeVarId {
         const id = self.types.unlinkPreservingNominal(ty);
         return switch (self.types.getNode(id)) {
-            .nominal => |backing| blk: {
-                const rewritten = try self.rewriteFunctionRetType(backing, new_ret);
-                if (rewritten == backing) break :blk id;
-                break :blk try self.types.fresh(.{ .nominal = rewritten });
+            .nominal => |nominal| blk: {
+                const rewritten = try self.rewriteFunctionRetType(nominal.backing, new_ret);
+                if (rewritten == nominal.backing) break :blk id;
+                var lowered = nominal;
+                lowered.backing = rewritten;
+                break :blk try self.types.fresh(.{ .nominal = lowered });
             },
             .content => |content| switch (content) {
                 .func => |func| blk: {
@@ -1714,10 +1732,12 @@ const Lowerer = struct {
     fn rewriteFunctionLsetType(self: *Lowerer, ty: TypeVarId, new_lset: TypeVarId) std.mem.Allocator.Error!TypeVarId {
         const id = self.types.unlinkPreservingNominal(ty);
         return switch (self.types.getNode(id)) {
-            .nominal => |backing| blk: {
-                const rewritten = try self.rewriteFunctionLsetType(backing, new_lset);
-                if (rewritten == backing) break :blk id;
-                break :blk try self.types.fresh(.{ .nominal = rewritten });
+            .nominal => |nominal| blk: {
+                const rewritten = try self.rewriteFunctionLsetType(nominal.backing, new_lset);
+                if (rewritten == nominal.backing) break :blk id;
+                var lowered = nominal;
+                lowered.backing = rewritten;
+                break :blk try self.types.fresh(.{ .nominal = lowered });
             },
             .content => |content| switch (content) {
                 .func => |func| blk: {
@@ -1758,11 +1778,13 @@ const Lowerer = struct {
 
         return switch (self.types.getNode(template_id)) {
             .for_a => actual_ty,
-            .nominal => |template_backing| switch (self.types.getNode(actual_id)) {
-                .nominal => |actual_backing| blk: {
-                    const lowered_backing = try self.overlayErasureTemplateRec(template_backing, actual_backing, visited);
-                    if (lowered_backing == actual_backing) break :blk actual_ty;
-                    break :blk try self.types.fresh(.{ .nominal = lowered_backing });
+            .nominal => |template_nominal| switch (self.types.getNode(actual_id)) {
+                .nominal => |actual_nominal| blk: {
+                    const lowered_backing = try self.overlayErasureTemplateRec(template_nominal.backing, actual_nominal.backing, visited);
+                    if (lowered_backing == actual_nominal.backing) break :blk actual_ty;
+                    var lowered = actual_nominal;
+                    lowered.backing = lowered_backing;
+                    break :blk try self.types.fresh(.{ .nominal = lowered });
                 },
                 else => actual_ty,
             },
@@ -1914,7 +1936,7 @@ const Lowerer = struct {
     fn boxedPayloadType(self: *Lowerer, ty: TypeVarId) ?TypeVarId {
         const id = self.types.unlinkPreservingNominal(ty);
         return switch (self.types.getNode(id)) {
-            .nominal => |backing| self.boxedPayloadType(backing),
+            .nominal => |nominal| self.boxedPayloadType(nominal.backing),
             .content => |content| switch (content) {
                 .box => |elem| elem,
                 else => null,
@@ -2286,7 +2308,22 @@ const Lowerer = struct {
         const lowered = switch (self.types.getNode(id)) {
             .unbd, .for_a => unreachable,
             .link => unreachable,
-            .nominal => |backing| type_mod.Node{ .nominal = try self.instantiateGeneralizedRec(backing, mapping) },
+            .nominal => |nominal| blk: {
+                const args = self.types.sliceTypeVarSpan(nominal.args);
+                const lowered_args = try self.allocator.alloc(TypeVarId, args.len);
+                defer self.allocator.free(lowered_args);
+                for (args, 0..) |arg, i| {
+                    lowered_args[i] = try self.instantiateGeneralizedRec(arg, mapping);
+                }
+                break :blk type_mod.Node{ .nominal = .{
+                    .module_idx = nominal.module_idx,
+                    .ident = nominal.ident,
+                    .is_opaque = nominal.is_opaque,
+                    .to_inspect_symbol = nominal.to_inspect_symbol,
+                    .args = try self.types.addTypeVarSpan(lowered_args),
+                    .backing = try self.instantiateGeneralizedRec(nominal.backing, mapping),
+                } };
+            },
             .content => |content| switch (content) {
                 .primitive => type_mod.Node{ .content = .{ .primitive = content.primitive } },
                 .func => type_mod.Node{ .content = .{ .func = .{
@@ -2538,14 +2575,135 @@ const Lowerer = struct {
         self.types.setNode(r, .{ .link = merged });
     }
 
+    const DebugTypeText = struct {
+        text: []const u8,
+        owned: bool,
+    };
+
+    fn debugTypeText(self: *Lowerer, ty: TypeVarId) DebugTypeText {
+        if (builtin.mode != .Debug) unreachable;
+
+        var out = std.ArrayList(u8).empty;
+        self.debugWriteType(&out, ty) catch return .{ .text = "<oom>", .owned = false };
+        const text = out.toOwnedSlice(self.allocator) catch return .{ .text = "<oom>", .owned = false };
+        return .{ .text = text, .owned = true };
+    }
+
+    fn debugWriteType(self: *Lowerer, out: *std.ArrayList(u8), ty: TypeVarId) std.mem.Allocator.Error!void {
+        const id = self.types.unlinkPreservingNominal(ty);
+        switch (self.types.getNode(id)) {
+            .link => unreachable,
+            .unbd => try out.writer(self.allocator).print("?{}", .{@intFromEnum(id)}),
+            .for_a => try out.writer(self.allocator).print("forall{}", .{@intFromEnum(id)}),
+            .nominal => |nominal| {
+                const name = self.input.idents.getText(nominal.ident);
+                try out.writer(self.allocator).print("{s}", .{name});
+                const args = self.types.sliceTypeVarSpan(nominal.args);
+                if (args.len != 0) {
+                    try out.append(self.allocator, '(');
+                    for (args, 0..) |arg, i| {
+                        if (i != 0) try out.appendSlice(self.allocator, ", ");
+                        try self.debugWriteType(out, arg);
+                    }
+                    try out.append(self.allocator, ')');
+                }
+                if (!nominal.is_opaque) {
+                    try out.appendSlice(self.allocator, " := ");
+                    try self.debugWriteType(out, nominal.backing);
+                }
+            },
+            .content => |content| switch (content) {
+                .primitive => |prim| try out.appendSlice(self.allocator, @tagName(prim)),
+                .list => |elem| {
+                    try out.appendSlice(self.allocator, "List(");
+                    try self.debugWriteType(out, elem);
+                    try out.append(self.allocator, ')');
+                },
+                .box => |elem| {
+                    try out.appendSlice(self.allocator, "Box(");
+                    try self.debugWriteType(out, elem);
+                    try out.append(self.allocator, ')');
+                },
+                .tuple => |elems| {
+                    try out.append(self.allocator, '(');
+                    for (self.types.sliceTypeVarSpan(elems), 0..) |elem, i| {
+                        if (i != 0) try out.appendSlice(self.allocator, ", ");
+                        try self.debugWriteType(out, elem);
+                    }
+                    try out.append(self.allocator, ')');
+                },
+                .func => |func| {
+                    try out.append(self.allocator, '(');
+                    try self.debugWriteType(out, func.arg);
+                    try out.appendSlice(self.allocator, " -> ");
+                    try self.debugWriteType(out, func.ret);
+                    try out.append(self.allocator, ')');
+                },
+                .tag_union => |tag_union| {
+                    const tags = self.types.sliceTags(tag_union.tags);
+                    try out.append(self.allocator, '[');
+                    for (tags, 0..) |tag, i| {
+                        if (i != 0) try out.appendSlice(self.allocator, ", ");
+                        try out.appendSlice(self.allocator, self.input.idents.getText(tag.name));
+                        const args = self.types.sliceTypeVarSpan(tag.args);
+                        if (args.len != 0) {
+                            try out.append(self.allocator, '(');
+                            for (args, 0..) |arg, arg_i| {
+                                if (arg_i != 0) try out.appendSlice(self.allocator, ", ");
+                                try self.debugWriteType(out, arg);
+                            }
+                            try out.append(self.allocator, ')');
+                        }
+                    }
+                    try out.append(self.allocator, ']');
+                },
+                .record => |record| {
+                    const fields = self.types.sliceFields(record.fields);
+                    try out.append(self.allocator, '{');
+                    for (fields, 0..) |field, i| {
+                        if (i != 0) try out.appendSlice(self.allocator, ", ");
+                        try out.appendSlice(self.allocator, self.input.idents.getText(field.name));
+                        try out.appendSlice(self.allocator, ": ");
+                        try self.debugWriteType(out, field.ty);
+                    }
+                    try out.append(self.allocator, '}');
+                },
+                .lambda_set => |lset| {
+                    const lambdas = self.types.sliceLambdas(lset);
+                    try out.appendSlice(self.allocator, "LambdaSet(");
+                    for (lambdas, 0..) |lambda, i| {
+                        if (i != 0) try out.appendSlice(self.allocator, ", ");
+                        const entry = self.input.symbols.get(lambda.symbol);
+                        if (entry.name.isNone()) {
+                            try out.writer(self.allocator).print("#{}", .{lambda.symbol.raw()});
+                        } else {
+                            try out.appendSlice(self.allocator, self.input.idents.getText(entry.name));
+                        }
+                    }
+                    try out.append(self.allocator, ')');
+                },
+            },
+        }
+    }
+
     fn unifyContent(self: *Lowerer, left: type_mod.Content, right: type_mod.Content, visited: *std.ArrayList(TypePair)) std.mem.Allocator.Error!type_mod.Node {
         if (@as(std.meta.Tag(type_mod.Content), left) != @as(std.meta.Tag(type_mod.Content), right)) {
             if (builtin.mode == .Debug) {
+                const left_text = self.debugTypeText(try self.types.fresh(.{ .content = left }));
+                defer if (left_text.owned) self.allocator.free(left_text.text);
+                const right_text = self.debugTypeText(try self.types.fresh(.{ .content = right }));
+                defer if (right_text.owned) self.allocator.free(right_text.text);
+                std.debug.print(
+                    "lambdasolved.unify left={s}\nlambdasolved.unify right={s}\n",
+                    .{ left_text.text, right_text.text },
+                );
                 std.debug.panic(
-                    "lambdasolved.unify incompatible types {s} vs {s}",
+                    "lambdasolved.unify incompatible types {s} vs {s}\nleft={s}\nright={s}",
                     .{
                         @tagName(left),
                         @tagName(right),
+                        left_text.text,
+                        right_text.text,
                     },
                 );
             } else unreachable;

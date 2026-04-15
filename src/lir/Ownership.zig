@@ -245,10 +245,8 @@ fn markLocalParamOwned(
     active: *std.AutoHashMap(u32, void),
     needs_owned: []bool,
 ) Allocator.Error!void {
-    switch (try inferLocalContract(allocator, store, local, arg_index_by_local, active)) {
-        .alias_of_param => |param| needs_owned[param.param_index] = true,
-        .borrow_of_param => |param| needs_owned[param.param_index] = true,
-        else => {},
+    if (try inferOwnedParamSource(allocator, store, local, arg_index_by_local, active)) |param_index| {
+        needs_owned[param_index] = true;
     }
 }
 
@@ -313,6 +311,89 @@ fn inferReturnedLocalContract(
     var active = std.AutoHashMap(u32, void).init(allocator);
     defer active.deinit();
     return inferLocalContract(allocator, store, local, arg_index_by_local, &active);
+}
+
+fn inferOwnedParamSource(
+    allocator: Allocator,
+    store: *LirStore,
+    local: LocalId,
+    arg_index_by_local: *const std.AutoHashMap(u32, usize),
+    active: *std.AutoHashMap(u32, void),
+) Allocator.Error!?usize {
+    if (arg_index_by_local.get(@intFromEnum(local))) |param_index| {
+        return param_index;
+    }
+
+    const gop = try active.getOrPut(@intFromEnum(local));
+    if (gop.found_existing) return null;
+    defer _ = active.remove(@intFromEnum(local));
+
+    if (try inferJoinOwnedParamSource(allocator, store, local, arg_index_by_local, active)) |param_index| {
+        return param_index;
+    }
+
+    const producer = findProducer(store, local) orelse return null;
+    return switch (producer) {
+        .assign_ref => |assign| blk: {
+            switch (assign.result) {
+                .alias_of => |alias| break :blk try inferOwnedParamSource(allocator, store, alias.owner, arg_index_by_local, active),
+                .borrow_of => |borrow| break :blk try inferOwnedParamSource(allocator, store, borrow.owner, arg_index_by_local, active),
+                .fresh => {},
+            }
+
+            if (assign.ownership.materialization != .direct) break :blk null;
+            const consumed = store.getLocalSpan(assign.ownership.consumed_owned_inputs);
+            if (consumed.len != 1) break :blk null;
+            break :blk try inferOwnedParamSource(allocator, store, consumed[0], arg_index_by_local, active);
+        },
+        .set_local => |assign| try inferOwnedParamSource(allocator, store, assign.value, arg_index_by_local, active),
+        .join => null,
+        else => null,
+    };
+}
+
+fn inferJoinOwnedParamSource(
+    allocator: Allocator,
+    store: *LirStore,
+    local: LocalId,
+    arg_index_by_local: *const std.AutoHashMap(u32, usize),
+    active: *std.AutoHashMap(u32, void),
+) Allocator.Error!?usize {
+    for (store.cf_stmts.items) |stmt| {
+        const join = switch (stmt) {
+            .join => |join| join,
+            else => continue,
+        };
+
+        const params = store.getLocalSpan(join.params);
+        const param_index = indexOfLocal(params, local) orelse continue;
+
+        var saw_incoming = false;
+        var summary: ?usize = null;
+
+        for (store.cf_stmts.items) |incoming_stmt| {
+            const jump = switch (incoming_stmt) {
+                .jump => |jump| if (jump.target == join.id) jump else continue,
+                else => continue,
+            };
+
+            const args = store.getLocalSpan(jump.args);
+            if (param_index >= args.len) continue;
+
+            saw_incoming = true;
+            const candidate = try inferOwnedParamSource(allocator, store, args[param_index], arg_index_by_local, active);
+            if (summary == null) {
+                summary = candidate;
+            } else if (summary != candidate) {
+                return null;
+            }
+        }
+
+        if (!saw_incoming) return null;
+        return summary;
+    }
+
+    return null;
 }
 
 fn inferLocalContract(

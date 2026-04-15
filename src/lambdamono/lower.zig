@@ -94,6 +94,8 @@ const Lowerer = struct {
     };
 
     const TopLevelValueSource = union(enum) {
+        fn_: solved.Ast.FnDef,
+        hosted_fn: solved.Ast.HostedFnDef,
         val: solved.Ast.ExprId,
         run: solved.Ast.RunDef,
     };
@@ -296,7 +298,7 @@ const Lowerer = struct {
         defer mono_cache.deinit();
 
         for (self.entrypoints) |entry_symbol| {
-            const entry = specializations.lookupFn(self.fenv, entry_symbol) orelse continue;
+            const entry = specializations.lookupFn(self.fenv, &self.input.symbols, entry_symbol) orelse continue;
             switch (lower_type.lambdaRepr(&self.input.types, entry.fn_ty)) {
                 .erased => debugPanic("lambdamono.lower entrypoint specialization expected lambda set"),
                 .lset => {
@@ -351,8 +353,8 @@ const Lowerer = struct {
             try visited.put(current, {});
             const id = self.input.types.unlink(current);
             switch (self.input.types.getNode(id)) {
-                .nominal => |backing| {
-                    current = backing;
+                .nominal => |nominal| {
+                    current = nominal.backing;
                 },
                 .content => |content| switch (content) {
                     .func => |func| {
@@ -381,10 +383,12 @@ const Lowerer = struct {
         for (self.entrypoints, 0..) |entry_symbol, entry_idx| {
             self.entrypoint_wrappers[entry_idx] = entry_symbol;
 
-            const entry_fn_ty = if (specializations.lookupFn(self.fenv, entry_symbol)) |entry|
+            const entry_fn_ty = if (specializations.lookupFn(self.fenv, &self.input.symbols, entry_symbol)) |entry|
                 entry.fn_ty
             else if (self.top_level_values.get(entry_symbol)) |source|
                 switch (source) {
+                    .fn_ => debugPanic("lambdamono.lower.lowerProgram expected entrypoint function symbol to be specialized"),
+                    .hosted_fn => debugPanic("lambdamono.lower.lowerProgram expected entrypoint hosted function symbol to be specialized"),
                     .val => |expr_id| self.input.store.getExpr(expr_id).ty,
                     .run => |run_def| self.input.store.getExpr(run_def.body).ty,
                 }
@@ -412,7 +416,7 @@ const Lowerer = struct {
                 debugPanic("lambdamono.lower entrypoint wrapper arity mismatch");
             }
 
-            const needs_wrapper = if (specializations.lookupFn(self.fenv, entry_symbol)) |_|
+            const needs_wrapper = if (specializations.lookupFn(self.fenv, &self.input.symbols, entry_symbol)) |_|
                 arg_vars.items.len > 1
             else
                 true;
@@ -456,7 +460,7 @@ const Lowerer = struct {
             const args_span = try self.output.addTypedSymbolSpan(wrapper_args);
             var current_expr: ast.ExprId = undefined;
 
-            if (specializations.lookupFn(self.fenv, entry_symbol)) |_| {
+            if (specializations.lookupFn(self.fenv, &self.input.symbols, entry_symbol)) |_| {
                 var first_arg_buf = [_]ast.ExprId{arg_exprs[0]};
                 current_expr = try self.output.addExpr(.{
                     .ty = ret_exec_tys[0],
@@ -661,9 +665,10 @@ const Lowerer = struct {
     fn indexTopLevelValues(self: *Lowerer) std.mem.Allocator.Error!void {
         for (self.input.store.defsSlice()) |def| {
             switch (def.value) {
+                .fn_ => |fn_def| try self.top_level_values.put(def.bind.symbol, .{ .fn_ = fn_def }),
+                .hosted_fn => |hosted_fn| try self.top_level_values.put(def.bind.symbol, .{ .hosted_fn = hosted_fn }),
                 .val => |expr_id| try self.top_level_values.put(def.bind.symbol, .{ .val = expr_id }),
                 .run => |run_def| try self.top_level_values.put(def.bind.symbol, .{ .run = run_def }),
-                .fn_, .hosted_fn => {},
             }
         }
     }
@@ -793,7 +798,7 @@ const Lowerer = struct {
 
     fn boxBoundaryBuiltinOp(self: *const Lowerer, requested_name: Symbol) ?base.LowLevel {
         if (self.boxBoundaryBuiltinOpByName(requested_name)) |op| return op;
-        const entry = specializations.lookupFn(self.fenv, requested_name) orelse return null;
+        const entry = specializations.lookupFn(self.fenv, &self.input.symbols, requested_name) orelse return null;
         if (self.input.store.sliceTypedSymbolSpan(entry.fn_def.captures).len != 0) return null;
         const body = self.input.store.getExpr(entry.fn_def.body);
         return switch (body.data) {
@@ -855,6 +860,20 @@ const Lowerer = struct {
         };
     }
 
+    fn lowerSolvedNominalArgs(
+        self: *Lowerer,
+        mono_cache: *lower_type.MonoCache,
+        args_span: solved.Type.Span(TypeVarId),
+    ) std.mem.Allocator.Error!type_mod.Span(type_mod.TypeId) {
+        const args = self.input.types.sliceTypeVarSpan(args_span);
+        const lowered_args = try self.allocator.alloc(type_mod.TypeId, args.len);
+        defer self.allocator.free(lowered_args);
+        for (args, 0..) |arg, i| {
+            lowered_args[i] = try self.lowerExecutableTypeFromSolved(mono_cache, arg);
+        }
+        return try self.types.addTypeSpan(lowered_args);
+    }
+
     fn publishBoxBoundaryCallableTypeFact(
         self: *Lowerer,
         mono_cache: *lower_type.MonoCache,
@@ -862,9 +881,16 @@ const Lowerer = struct {
     ) std.mem.Allocator.Error!type_mod.TypeId {
         const id = self.input.types.unlinkPreservingNominal(ty);
         return switch (self.input.types.getNode(id)) {
-            .nominal => |backing| blk: {
-                const lowered_backing = try self.publishBoxBoundaryCallableTypeFact(mono_cache, backing);
-                break :blk try self.publishExecutableType(try self.types.internResolved(.{ .nominal = lowered_backing }));
+            .nominal => |nominal| blk: {
+                const lowered_backing = try self.publishBoxBoundaryCallableTypeFact(mono_cache, nominal.backing);
+                break :blk try self.publishExecutableType(try self.types.internResolved(.{ .nominal = .{
+                    .module_idx = nominal.module_idx,
+                    .ident = nominal.ident,
+                    .is_opaque = nominal.is_opaque,
+                    .to_inspect_symbol = nominal.to_inspect_symbol,
+                    .args = try self.lowerSolvedNominalArgs(mono_cache, nominal.args),
+                    .backing = lowered_backing,
+                } }));
             },
             .content => |content| switch (content) {
                 .func => switch (lower_type.lambdaRepr(&self.input.types, id)) {
@@ -895,9 +921,16 @@ const Lowerer = struct {
     ) std.mem.Allocator.Error!type_mod.TypeId {
         const id = self.input.types.unlinkPreservingNominal(ty);
         return switch (self.input.types.getNode(id)) {
-            .nominal => |backing| blk: {
-                const lowered_backing = try self.publishBoxedBoundaryCallableTypeFact(mono_cache, backing);
-                break :blk try self.publishExecutableType(try self.types.internResolved(.{ .nominal = lowered_backing }));
+            .nominal => |nominal| blk: {
+                const lowered_backing = try self.publishBoxedBoundaryCallableTypeFact(mono_cache, nominal.backing);
+                break :blk try self.publishExecutableType(try self.types.internResolved(.{ .nominal = .{
+                    .module_idx = nominal.module_idx,
+                    .ident = nominal.ident,
+                    .is_opaque = nominal.is_opaque,
+                    .to_inspect_symbol = nominal.to_inspect_symbol,
+                    .args = try self.lowerSolvedNominalArgs(mono_cache, nominal.args),
+                    .backing = lowered_backing,
+                } }));
             },
             .content => |content| switch (content) {
                 .box => |elem| blk: {
@@ -918,8 +951,15 @@ const Lowerer = struct {
         ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!type_mod.TypeId {
         return switch (self.types.getTypePreservingNominal(ty)) {
-            .nominal => |backing| try self.publishExecutableType(try self.types.internResolved(.{
-                .nominal = try self.eraseBoundaryExecutableType(backing),
+            .nominal => |nominal| try self.publishExecutableType(try self.types.internResolved(.{
+                .nominal = .{
+                    .module_idx = nominal.module_idx,
+                    .ident = nominal.ident,
+                    .is_opaque = nominal.is_opaque,
+                    .to_inspect_symbol = nominal.to_inspect_symbol,
+                    .args = nominal.args,
+                    .backing = try self.eraseBoundaryExecutableType(nominal.backing),
+                },
             })),
             .tag_union => |tag_union| if (self.tagUnionIsInternalLambdaSet(tag_union.tags))
                 try self.makeErasedFnType(try self.commonErasedCaptureTypeFromExecutable(tag_union.tags))
@@ -935,8 +975,15 @@ const Lowerer = struct {
         ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!type_mod.TypeId {
         return switch (self.types.getTypePreservingNominal(ty)) {
-            .nominal => |backing| try self.publishExecutableType(try self.types.internResolved(.{
-                .nominal = try self.eraseBoundaryBoxedExecutableType(backing),
+            .nominal => |nominal| try self.publishExecutableType(try self.types.internResolved(.{
+                .nominal = .{
+                    .module_idx = nominal.module_idx,
+                    .ident = nominal.ident,
+                    .is_opaque = nominal.is_opaque,
+                    .to_inspect_symbol = nominal.to_inspect_symbol,
+                    .args = nominal.args,
+                    .backing = try self.eraseBoundaryBoxedExecutableType(nominal.backing),
+                },
             })),
             .box => |elem| try self.publishExecutableType(try self.types.internResolved(.{
                 .box = try self.eraseBoundaryExecutableType(elem),
@@ -981,7 +1028,14 @@ const Lowerer = struct {
 
         const lowered: type_mod.Content = switch (self.input.types.getNode(id)) {
             .link => unreachable,
-            .nominal => |backing| .{ .nominal = try self.lowerExecutableTypeWithBoxErasureRec(mono_cache, backing) },
+            .nominal => |nominal| .{ .nominal = .{
+                .module_idx = nominal.module_idx,
+                .ident = nominal.ident,
+                .is_opaque = nominal.is_opaque,
+                .to_inspect_symbol = nominal.to_inspect_symbol,
+                .args = try self.lowerSolvedNominalArgs(mono_cache, nominal.args),
+                .backing = try self.lowerExecutableTypeWithBoxErasureRec(mono_cache, nominal.backing),
+            } },
             .for_a, .unbd => .{ .record = .{ .fields = type_mod.Span(type_mod.Field).empty() } },
             .content => |content| switch (content) {
                 .func => blk: {
@@ -1154,6 +1208,18 @@ const Lowerer = struct {
         };
     }
 
+    fn functionResultType(self: *Lowerer, ty: TypeVarId) ?TypeVarId {
+        const id = self.input.types.unlinkPreservingNominal(ty);
+        return switch (self.input.types.getNode(id)) {
+            .nominal => |nominal| self.functionResultType(nominal.backing),
+            .content => |content| switch (content) {
+                .func => |func| func.ret,
+                else => null,
+            },
+            else => null,
+        };
+    }
+
     fn lambdaSetIsErased(self: *Lowerer, lset: TypeVarId) bool {
         const id = self.input.types.unlink(lset);
         return switch (self.input.types.getNode(id)) {
@@ -1181,9 +1247,16 @@ const Lowerer = struct {
     ) std.mem.Allocator.Error!?type_mod.TypeId {
         const id = self.input.types.unlinkPreservingNominal(solved_ty);
         return switch (self.input.types.getNode(id)) {
-            .nominal => |backing| blk: {
-                const lowered_backing = try self.lowerErasedFnExecutableType(mono_cache, backing) orelse break :blk null;
-                break :blk try self.publishExecutableType(try self.types.internResolved(.{ .nominal = lowered_backing }));
+            .nominal => |nominal| blk: {
+                const lowered_backing = try self.lowerErasedFnExecutableType(mono_cache, nominal.backing) orelse break :blk null;
+                break :blk try self.publishExecutableType(try self.types.internResolved(.{ .nominal = .{
+                    .module_idx = nominal.module_idx,
+                    .ident = nominal.ident,
+                    .is_opaque = nominal.is_opaque,
+                    .to_inspect_symbol = nominal.to_inspect_symbol,
+                    .args = try self.lowerSolvedNominalArgs(mono_cache, nominal.args),
+                    .backing = lowered_backing,
+                } }));
             },
             .content => |content| switch (content) {
                 .func => switch (lower_type.lambdaRepr(&self.input.types, solved_ty)) {
@@ -1242,7 +1315,7 @@ const Lowerer = struct {
     fn boxedPayloadType(self: *Lowerer, ty: TypeVarId) ?TypeVarId {
         const id = self.input.types.unlinkPreservingNominal(ty);
         return switch (self.input.types.getNode(id)) {
-            .nominal => |backing| self.boxedPayloadType(backing),
+            .nominal => |nominal| self.boxedPayloadType(nominal.backing),
             .content => |content| switch (content) {
                 .box => |elem| elem,
                 else => null,
@@ -1276,7 +1349,7 @@ const Lowerer = struct {
         fields_span: ast.Span(ast.FieldExpr),
     ) bool {
         return switch (self.types.getTypePreservingNominal(record_ty)) {
-            .nominal => |backing| self.recordTypeMatchesFields(backing, fields_span),
+            .nominal => |nominal| self.recordTypeMatchesFields(nominal.backing, fields_span),
             .record => |record| blk: {
                 const record_fields = self.types.sliceFields(record.fields);
                 const fields = self.output.sliceFieldExprSpan(fields_span);
@@ -1398,7 +1471,7 @@ const Lowerer = struct {
         field_index: u16,
     ) ?type_mod.TypeId {
         return switch (self.types.getTypePreservingNominal(record_ty)) {
-            .nominal => |backing| self.recordFieldType(backing, field_index),
+            .nominal => |nominal| self.recordFieldType(nominal.backing, field_index),
             .record => |record| blk: {
                 const fields = self.types.sliceFields(record.fields);
                 const target_index: usize = @intCast(field_index);
@@ -1415,7 +1488,7 @@ const Lowerer = struct {
         field_name: base.Ident.Idx,
     ) ?struct { index: u16, ty: type_mod.TypeId } {
         return switch (self.types.getTypePreservingNominal(record_ty)) {
-            .nominal => |backing| self.recordFieldByName(backing, field_name),
+            .nominal => |nominal| self.recordFieldByName(nominal.backing, field_name),
             .record => |record| blk: {
                 const fields = self.types.sliceFields(record.fields);
                 for (fields, 0..) |field, i| {
@@ -1436,7 +1509,7 @@ const Lowerer = struct {
         field_ty: type_mod.TypeId,
     ) ?u16 {
         return switch (self.types.getTypePreservingNominal(record_ty)) {
-            .nominal => |backing| self.recordFieldIndexByNameAndType(backing, field_name, field_ty),
+            .nominal => |nominal| self.recordFieldIndexByNameAndType(nominal.backing, field_name, field_ty),
             .record => |record| blk: {
                 const fields = self.types.sliceFields(record.fields);
                 for (fields, 0..) |field, i| {
@@ -1456,7 +1529,7 @@ const Lowerer = struct {
         elems_span: ast.Span(ast.ExprId),
     ) bool {
         return switch (self.types.getTypePreservingNominal(tuple_ty)) {
-            .nominal => |backing| self.tupleTypeMatchesElems(backing, elems_span),
+            .nominal => |nominal| self.tupleTypeMatchesElems(nominal.backing, elems_span),
             .tuple => |tuple| blk: {
                 const tuple_elems = self.types.sliceTypeSpan(tuple);
                 const elems = self.output.sliceExprSpan(elems_span);
@@ -1486,7 +1559,7 @@ const Lowerer = struct {
     fn containsErasedFn(self: *Lowerer, ty: type_mod.TypeId) bool {
         return switch (self.types.getTypePreservingNominal(ty)) {
             .erased_fn => true,
-            .nominal => |backing| self.containsErasedFn(backing),
+            .nominal => |nominal| self.containsErasedFn(nominal.backing),
             .box => |elem| self.containsErasedFn(elem),
             else => false,
         };
@@ -1502,7 +1575,7 @@ const Lowerer = struct {
         return switch (expected_content) {
             .tag_union => |tag_union| self.tagUnionIsInternalLambdaSet(tag_union.tags) and actual_content == .erased_fn,
             .erased_fn => self.erasedFnCaptureType(expected_ty) == null and self.erasedFnCaptureType(actual_ty) != null,
-            .nominal => |backing| if (self.types.getTypePreservingNominal(backing) == .erased_fn)
+            .nominal => |nominal| if (self.types.getTypePreservingNominal(nominal.backing) == .erased_fn)
                 self.erasedFnCaptureType(expected_ty) == null and self.erasedFnCaptureType(actual_ty) != null
             else
                 false,
@@ -1514,7 +1587,7 @@ const Lowerer = struct {
         var current = ty;
         while (true) {
             switch (self.types.getTypePreservingNominal(current)) {
-                .nominal => |backing| current = backing,
+                .nominal => |nominal| current = nominal.backing,
                 .link => unreachable,
                 else => return current,
             }
@@ -1523,7 +1596,7 @@ const Lowerer = struct {
 
     fn erasedFnCaptureType(self: *Lowerer, ty: type_mod.TypeId) ?type_mod.TypeId {
         return switch (self.types.getTypePreservingNominal(ty)) {
-            .nominal => |backing| self.erasedFnCaptureType(backing),
+            .nominal => |nominal| self.erasedFnCaptureType(nominal.backing),
             .erased_fn => |capture_ty| capture_ty,
             else => null,
         };
@@ -1535,7 +1608,7 @@ const Lowerer = struct {
         symbol: Symbol,
     ) type_mod.TypeId {
         return switch (self.types.getTypePreservingNominal(capture_record_ty)) {
-            .nominal => |backing| self.requireCaptureFieldExecutableType(backing, symbol),
+            .nominal => |nominal| self.requireCaptureFieldExecutableType(nominal.backing, symbol),
             .record => |record| blk: {
                 const capture_name = self.input.symbols.get(symbol).name;
                 for (self.types.sliceFields(record.fields)) |field| {
@@ -1550,10 +1623,12 @@ const Lowerer = struct {
     fn ensureTopLevelValueLowered(self: *Lowerer, symbol: Symbol) std.mem.Allocator.Error!type_mod.TypeId {
         if (self.top_level_value_types.get(symbol)) |existing| return existing;
 
-        const source = self.top_level_values.get(symbol) orelse
+        const source = self.lookupTopLevelValueSource(symbol) orelse
             debugPanic("lambdamono.lower.ensureTopLevelValueLowered missing top-level value");
 
         const expr_id: solved.Ast.ExprId = switch (source) {
+            .fn_ => debugPanic("lambdamono.lower.ensureTopLevelValueLowered expected value source, found function"),
+            .hosted_fn => debugPanic("lambdamono.lower.ensureTopLevelValueLowered expected value source, found hosted function"),
             .val => |value_expr| value_expr,
             .run => |run_def| run_def.body,
         };
@@ -1563,6 +1638,8 @@ const Lowerer = struct {
         try self.top_level_value_types.put(symbol, result_ty);
 
         switch (source) {
+            .fn_ => debugPanic("lambdamono.lower.ensureTopLevelValueLowered expected value source, found function"),
+            .hosted_fn => debugPanic("lambdamono.lower.ensureTopLevelValueLowered expected value source, found hosted function"),
             .val => {
                 try self.pending_values.append(self.allocator, .{
                     .bind = specialized.symbol,
@@ -1583,6 +1660,55 @@ const Lowerer = struct {
         }
 
         return result_ty;
+    }
+
+    fn lookupTopLevelValueSource(self: *Lowerer, symbol: Symbol) ?TopLevelValueSource {
+        if (self.top_level_values.get(symbol)) |source| return source;
+
+        const target_origin = self.input.symbols.get(symbol).origin;
+        for (self.input.root_defs.items) |def_id| {
+            const def = self.input.store.getDef(def_id);
+            if (def.bind.symbol != symbol) {
+                const def_origin = self.input.symbols.get(def.bind.symbol).origin;
+                const matches_origin = switch (target_origin) {
+                    .top_level_def => |target| switch (def_origin) {
+                        .top_level_def => |candidate| candidate.module_idx == target.module_idx and candidate.def_idx == target.def_idx,
+                        else => false,
+                    },
+                    else => false,
+                };
+                if (!matches_origin) continue;
+            }
+            return switch (def.value) {
+                .fn_ => |fn_def| .{ .fn_ = fn_def },
+                .hosted_fn => |hosted_fn| .{ .hosted_fn = hosted_fn },
+                .val => |expr_id| .{ .val = expr_id },
+                .run => |run_def| .{ .run = run_def },
+            };
+        }
+
+        return switch (self.input.symbols.get(symbol).origin) {
+            .specialized_top_level_def => |data| self.lookupTopLevelValueSource(@enumFromInt(data.source_symbol)),
+            .specialized_local_fn => |data| self.lookupTopLevelValueSource(@enumFromInt(data.source_symbol)),
+            .lifted_local_fn => |data| self.lookupTopLevelValueSource(@enumFromInt(data.source_symbol)),
+            .lifted_local_fn_alias => |data| self.lookupTopLevelValueSource(@enumFromInt(data.source_symbol)),
+            .top_level_def => {
+                for (self.input.symbols.entries.items, 0..) |entry, i| {
+                    switch (entry.origin) {
+                        .specialized_top_level_def => |data| {
+                            if (data.source_symbol == symbol.raw()) {
+                                if (self.lookupTopLevelValueSource(@enumFromInt(@as(u32, @intCast(i))))) |source| {
+                                    return source;
+                                }
+                            }
+                        },
+                        else => {},
+                    }
+                }
+                return null;
+            },
+            else => null,
+        };
     }
 
     fn specializeStandaloneExpr(self: *Lowerer, expr_id: solved.Ast.ExprId) std.mem.Allocator.Error!ast.ExprId {
@@ -2170,11 +2296,12 @@ const Lowerer = struct {
         result_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.ExprId {
         const value_expr = try self.specializeExpr(inst, mono_cache, venv, value_expr_id);
-        return try self.specializeInspectValueExpr(value_expr, result_ty);
+        return try self.specializeInspectValueExpr(mono_cache, value_expr, result_ty);
     }
 
     fn ensureInspectHelper(
         self: *Lowerer,
+        mono_cache: *lower_type.MonoCache,
         value_ty: type_mod.TypeId,
         result_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!Symbol {
@@ -2189,7 +2316,7 @@ const Lowerer = struct {
 
         const arg_symbol = try self.input.symbols.add(base.Ident.Idx.NONE, .synthetic);
         const arg_expr = try self.makeVarExpr(value_ty, arg_symbol);
-        const body = try self.buildInlineInspectValueExpr(arg_expr, result_ty);
+        const body = try self.buildInlineInspectValueExpr(mono_cache, arg_expr, result_ty);
 
         try self.inspect_defs.append(self.allocator, .{
             .bind = symbol,
@@ -2206,13 +2333,93 @@ const Lowerer = struct {
         return symbol;
     }
 
+    const SpecializedInspectMethod = struct {
+        proc: Symbol,
+        ret_ty: type_mod.TypeId,
+    };
+
+    fn specializeInspectMethod(
+        self: *Lowerer,
+        mono_cache: *lower_type.MonoCache,
+        symbol: Symbol,
+        arg_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!SpecializedInspectMethod {
+        const fn_ty = self.lookupTopLevelBindType(symbol) orelse
+            debugPanic("lambdamono.lower.specializeInspectMethod missing top-level bind type for inspect method");
+        const ret_var = self.functionResultType(fn_ty) orelse
+            debugPanic("lambdamono.lower.specializeInspectMethod inspect method must be a function");
+        const ret_ty = try self.lowerExecutableTypeFromSolved(mono_cache, ret_var);
+        const sig = try self.buildLsetSpecializationSig(
+            mono_cache,
+            null,
+            symbol,
+            fn_ty,
+            arg_ty,
+            null,
+        );
+        return .{
+            .proc = try specializations.specializeFnLset(
+            &self.queue,
+            self.fenv,
+            &self.input.symbols,
+            symbol,
+            fn_ty,
+            sig,
+            ),
+            .ret_ty = ret_ty,
+        };
+    }
+
+    fn lookupTopLevelBindType(self: *const Lowerer, symbol: Symbol) ?TypeVarId {
+        for (self.input.store.defsSlice()) |def| {
+            if (def.bind.symbol == symbol) return def.bind.ty;
+        }
+
+        const target_origin = self.input.symbols.get(symbol).origin;
+        for (self.input.store.defsSlice()) |def| {
+            const def_origin = self.input.symbols.get(def.bind.symbol).origin;
+            const matches_origin = switch (target_origin) {
+                .top_level_def => |target| switch (def_origin) {
+                    .top_level_def => |candidate| candidate.module_idx == target.module_idx and candidate.def_idx == target.def_idx,
+                    else => false,
+                },
+                else => false,
+            };
+            if (matches_origin) return def.bind.ty;
+        }
+
+        return switch (target_origin) {
+            .specialized_top_level_def => |data| self.lookupTopLevelBindType(@enumFromInt(data.source_symbol)),
+            .specialized_local_fn => |data| self.lookupTopLevelBindType(@enumFromInt(data.source_symbol)),
+            .lifted_local_fn => |data| self.lookupTopLevelBindType(@enumFromInt(data.source_symbol)),
+            .lifted_local_fn_alias => |data| self.lookupTopLevelBindType(@enumFromInt(data.source_symbol)),
+            .top_level_def => {
+                for (self.input.symbols.entries.items, 0..) |entry, i| {
+                    switch (entry.origin) {
+                        .specialized_top_level_def => |data| {
+                            if (data.source_symbol == symbol.raw()) {
+                                if (self.lookupTopLevelBindType(@enumFromInt(@as(u32, @intCast(i))))) |ty| {
+                                    return ty;
+                                }
+                            }
+                        },
+                        else => {},
+                    }
+                }
+                return null;
+            },
+            else => null,
+        };
+    }
+
     fn makeInspectHelperCall(
         self: *Lowerer,
+        mono_cache: *lower_type.MonoCache,
         value_expr: ast.ExprId,
         result_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.ExprId {
         const value_ty = self.output.getExpr(value_expr).ty;
-        const helper = try self.ensureInspectHelper(value_ty, result_ty);
+        const helper = try self.ensureInspectHelper(mono_cache, value_ty, result_ty);
         return try self.output.addExpr(.{
             .ty = result_ty,
             .data = .{ .call = .{
@@ -2224,6 +2431,7 @@ const Lowerer = struct {
 
     fn buildInlineInspectValueExpr(
         self: *Lowerer,
+        mono_cache: *lower_type.MonoCache,
         value_expr: ast.ExprId,
         result_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.ExprId {
@@ -2251,11 +2459,27 @@ const Lowerer = struct {
                 .erased => self.makeStringLiteralExpr(result_ty, "<opaque>"),
             },
             .erased_fn => self.makeStringLiteralExpr(result_ty, "<fn>"),
-            .nominal => |backing| blk: {
-                const backing_expr = try self.retypeExpr(value_expr, backing);
-                break :blk try self.buildInlineInspectValueExpr(backing_expr, result_ty);
+            .nominal => |nominal| blk: {
+                if (!nominal.to_inspect_symbol.isNone()) {
+                    const inspect_method = try self.specializeInspectMethod(
+                        mono_cache,
+                        nominal.to_inspect_symbol,
+                        value_ty,
+                    );
+                    const inspect_expr = try self.output.addExpr(.{
+                        .ty = inspect_method.ret_ty,
+                        .data = .{ .call = .{
+                            .proc = inspect_method.proc,
+                            .args = try self.output.addExprSpan(&.{value_expr}),
+                        } },
+                    });
+                    if (inspect_method.ret_ty == result_ty) break :blk inspect_expr;
+                    break :blk try self.specializeInspectValueExpr(mono_cache, inspect_expr, result_ty);
+                }
+                const backing_expr = try self.retypeExpr(value_expr, nominal.backing);
+                break :blk try self.buildInlineInspectValueExpr(mono_cache, backing_expr, result_ty);
             },
-            .list => |elem_ty| self.makeListInspectExpr(elem_ty, value_expr, result_ty),
+            .list => |elem_ty| self.makeListInspectExpr(mono_cache, elem_ty, value_expr, result_ty),
             .box => |elem_ty| blk: {
                 switch (self.types.getTypePreservingNominal(elem_ty)) {
                     .erased_fn => break :blk self.makeStringLiteralExpr(result_ty, "<fn>"),
@@ -2265,14 +2489,14 @@ const Lowerer = struct {
                     else => {},
                 }
                 const unboxed_expr = try self.makeLowLevelExpr(elem_ty, .box_unbox, &.{value_expr});
-                break :blk try self.specializeInspectValueExpr(unboxed_expr, result_ty);
+                break :blk try self.specializeInspectValueExpr(mono_cache, unboxed_expr, result_ty);
             },
-            .tuple => |elems| self.makeTupleInspectExpr(value_expr, elems, result_ty),
-            .record => |record| self.makeRecordInspectExpr(value_expr, record.fields, result_ty),
+            .tuple => |elems| self.makeTupleInspectExpr(mono_cache, value_expr, elems, result_ty),
+            .record => |record| self.makeRecordInspectExpr(mono_cache, value_expr, record.fields, result_ty),
             .tag_union => |tag_union| if (self.tagUnionIsInternalLambdaSet(tag_union.tags))
                 self.makeStringLiteralExpr(result_ty, "<fn>")
             else
-                self.makeTagUnionInspectExpr(value_expr, tag_union.tags, result_ty),
+                self.makeTagUnionInspectExpr(mono_cache, value_expr, tag_union.tags, result_ty),
         };
     }
 
@@ -2314,6 +2538,7 @@ const Lowerer = struct {
 
     fn makeListInspectExpr(
         self: *Lowerer,
+        mono_cache: *lower_type.MonoCache,
         elem_ty: type_mod.TypeId,
         list_expr: ast.ExprId,
         result_ty: type_mod.TypeId,
@@ -2346,7 +2571,7 @@ const Lowerer = struct {
 
         const out_before_cmp = try self.makeVarExpr(result_ty, out_bind.symbol);
         const is_first_expr = try self.makeLowLevelExpr(bool_ty, .str_is_eq, &.{ out_before_cmp, prefix_expr });
-        const inspected_item = try self.specializeInspectValueExpr(item_expr, result_ty);
+        const inspected_item = try self.specializeInspectValueExpr(mono_cache, item_expr, result_ty);
 
         const out_then_expr = try self.makeVarExpr(result_ty, out_bind.symbol);
         const appended_first = try self.makeStringConcatExpr(result_ty, out_then_expr, inspected_item);
@@ -2420,6 +2645,7 @@ const Lowerer = struct {
 
     fn makeRecordInspectExpr(
         self: *Lowerer,
+        mono_cache: *lower_type.MonoCache,
         record_expr: ast.ExprId,
         fields_span: type_mod.Span(type_mod.Field),
         result_ty: type_mod.TypeId,
@@ -2472,7 +2698,7 @@ const Lowerer = struct {
             current = try self.makeStringConcatExpr(
                 result_ty,
                 current,
-                try self.specializeInspectValueExpr(field_expr, result_ty),
+                try self.specializeInspectValueExpr(mono_cache, field_expr, result_ty),
             );
         }
 
@@ -2492,6 +2718,7 @@ const Lowerer = struct {
 
     fn makeTupleInspectExpr(
         self: *Lowerer,
+        mono_cache: *lower_type.MonoCache,
         tuple_expr: ast.ExprId,
         elems_span: type_mod.Span(type_mod.TypeId),
         result_ty: type_mod.TypeId,
@@ -2532,7 +2759,7 @@ const Lowerer = struct {
             current = try self.makeStringConcatExpr(
                 result_ty,
                 current,
-                try self.specializeInspectValueExpr(elem_expr, result_ty),
+                try self.specializeInspectValueExpr(mono_cache, elem_expr, result_ty),
             );
         }
 
@@ -2552,6 +2779,7 @@ const Lowerer = struct {
 
     fn makeTagUnionInspectExpr(
         self: *Lowerer,
+        mono_cache: *lower_type.MonoCache,
         value_expr: ast.ExprId,
         tags_span: type_mod.Span(type_mod.Tag),
         result_ty: type_mod.TypeId,
@@ -2592,7 +2820,7 @@ const Lowerer = struct {
                 current = try self.makeStringConcatExpr(
                     result_ty,
                     current,
-                    try self.specializeInspectValueExpr(arg_expr, result_ty),
+                    try self.specializeInspectValueExpr(mono_cache, arg_expr, result_ty),
                 );
             }
 
@@ -2643,6 +2871,7 @@ const Lowerer = struct {
 
     fn specializeInspectValueExpr(
         self: *Lowerer,
+        mono_cache: *lower_type.MonoCache,
         value_expr: ast.ExprId,
         result_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.ExprId {
@@ -2674,16 +2903,16 @@ const Lowerer = struct {
                 .erased => self.makeStringLiteralExpr(result_ty, "<opaque>"),
             },
             .erased_fn => self.makeStringLiteralExpr(result_ty, "<fn>"),
-            .nominal => self.makeInspectHelperCall(value_expr, result_ty),
+            .nominal => self.makeInspectHelperCall(mono_cache, value_expr, result_ty),
             .list,
             .box,
             .tuple,
             .record,
-            => self.makeInspectHelperCall(value_expr, result_ty),
+            => self.makeInspectHelperCall(mono_cache, value_expr, result_ty),
             .tag_union => |tag_union| if (self.tagUnionIsInternalLambdaSet(tag_union.tags))
                 self.makeStringLiteralExpr(result_ty, "<fn>")
             else
-                self.makeInspectHelperCall(value_expr, result_ty),
+                self.makeInspectHelperCall(mono_cache, value_expr, result_ty),
         };
     }
 
@@ -2697,7 +2926,7 @@ const Lowerer = struct {
 
     fn isEmptyRecordType(self: *Lowerer, ty: type_mod.TypeId) bool {
         return switch (self.types.getTypePreservingNominal(ty)) {
-            .nominal => |backing| self.isEmptyRecordType(backing),
+            .nominal => |nominal| self.isEmptyRecordType(nominal.backing),
             .record => |record| self.types.sliceFields(record.fields).len == 0,
             else => false,
         };
@@ -2797,7 +3026,7 @@ const Lowerer = struct {
     fn maybeLambdaRepr(self: *Lowerer, ty: TypeVarId) ?lower_type.LambdaRepr {
         const id = self.input.types.unlinkPreservingNominal(ty);
         return switch (self.input.types.getNode(id)) {
-            .nominal => |backing| self.maybeLambdaRepr(backing),
+            .nominal => |nominal| self.maybeLambdaRepr(nominal.backing),
             .content => |content| switch (content) {
                 .func => lower_type.lambdaRepr(&self.input.types, id),
                 .lambda_set => lower_type.lambdaRepr(&self.input.types, id),
@@ -2953,6 +3182,34 @@ const Lowerer = struct {
 
         const expected_content = self.types.getTypePreservingNominal(expected_ty);
         switch (expected_content) {
+            .tag_union => |expected_tag_union| {
+                if (self.tagUnionIsInternalLambdaSet(expected_tag_union.tags)) {
+                    switch (expr.data) {
+                        .tag => |tag| switch (tag.name) {
+                            .lambda => |lambda_symbol| {
+                                const expected_members = try self.freezeLsetLambdaMembersFromExecutable(expected_tag_union);
+                                defer self.allocator.free(expected_members);
+
+                                for (expected_members) |member| {
+                                    if (member.symbol != lambda_symbol) continue;
+                                    return try self.output.addExpr(.{
+                                        .ty = expected_ty,
+                                        .data = .{ .tag = .{
+                                            .name = lower_type.lambdaTagKey(lambda_symbol),
+                                            .discriminant = member.discriminant,
+                                            .args = tag.args,
+                                        } },
+                                    });
+                                }
+
+                                debugPanic("lambdamono.lower.bridgeExprToExpectedType missing expected lambda member");
+                            },
+                            .ctor => {},
+                        },
+                        else => {},
+                    }
+                }
+            },
             .box => |expected_elem| switch (self.types.getTypePreservingNominal(expected_elem)) {
                 .erased_fn => {
                     const expr_box = self.types.getTypePreservingNominal(expr.ty);
@@ -2972,7 +3229,7 @@ const Lowerer = struct {
                     );
                     return try self.makeLowLevelExpr(expected_ty, .box_box, &.{bridged});
                 },
-                .nominal => |backing| switch (self.types.getTypePreservingNominal(backing)) {
+                .nominal => |nominal| switch (self.types.getTypePreservingNominal(nominal.backing)) {
                     .erased_fn => {
                         const expr_box = self.types.getTypePreservingNominal(expr.ty);
                         const actual_elem = switch (expr_box) {
@@ -3065,8 +3322,8 @@ const Lowerer = struct {
                     },
                 };
             },
-            .nominal => |backing| {
-                if (self.types.getTypePreservingNominal(backing) == .erased_fn) {
+            .nominal => |nominal| {
+                if (self.types.getTypePreservingNominal(nominal.backing) == .erased_fn) {
                     const bridged = blk: {
                         const source_repr = self.maybeLambdaRepr(source_ty) orelse
                             debugPanic("lambdamono.lower.bridgeExprToExpectedType erased_fn nominal missing function source type");
@@ -3096,10 +3353,10 @@ const Lowerer = struct {
                     };
                     return try self.retypeExpr(bridged, expected_ty);
                 }
-                const bridged = if (self.types.equalIds(expr.ty, backing))
+                const bridged = if (self.types.equalIds(expr.ty, nominal.backing))
                     expr_id
                 else
-                    try self.bridgeExprToExpectedType(inst, mono_cache, source_ty, expr_id, backing);
+                    try self.bridgeExprToExpectedType(inst, mono_cache, source_ty, expr_id, nominal.backing);
                 return try self.retypeExpr(bridged, expected_ty);
             },
             else => {},
@@ -3360,12 +3617,13 @@ const Lowerer = struct {
         venv: []const EnvEntry,
         symbol: Symbol,
         instantiated_ty: TypeVarId,
-        default_ty: type_mod.TypeId,
+        _: type_mod.TypeId,
     ) std.mem.Allocator.Error!SpecializedExprLowering {
         if (self.isHostedFunctionSymbol(symbol)) {
             return switch (lower_type.lambdaRepr(&self.input.types, instantiated_ty)) {
                 .lset => |lambdas| blk: {
                     const lambda_discriminant = self.requireLambdaDiscriminant(lambdas, symbol);
+                    const precise_ty = try self.makeSingletonExecutableLambdaType(symbol, null);
 
                     switch (try lower_type.extractLsetFn(
                         &self.input.types,
@@ -3376,7 +3634,7 @@ const Lowerer = struct {
                         &self.input.symbols,
                     )) {
                         .toplevel => break :blk .{
-                            .ty = default_ty,
+                            .ty = precise_ty,
                             .data = .{ .tag = .{
                                 .name = lower_type.lambdaTagKey(symbol),
                                 .discriminant = lambda_discriminant,
@@ -3390,10 +3648,11 @@ const Lowerer = struct {
             };
         }
 
-        if (specializations.lookupFn(self.fenv, symbol)) |fn_entry| {
+        if (specializations.lookupFn(self.fenv, &self.input.symbols, symbol)) |fn_entry| {
             return switch (lower_type.lambdaRepr(&self.input.types, instantiated_ty)) {
                 .lset => |lambdas| blk: {
                     const lambda_discriminant = self.requireLambdaDiscriminant(lambdas, symbol);
+                    const precise_toplevel_ty = try self.makeSingletonExecutableLambdaType(symbol, null);
 
                     switch (try lower_type.extractLsetFn(
                         &self.input.types,
@@ -3404,7 +3663,7 @@ const Lowerer = struct {
                         &self.input.symbols
                     )) {
                         .toplevel => break :blk .{
-                            .ty = default_ty,
+                            .ty = precise_toplevel_ty,
                             .data = .{ .tag = .{
                                 .name = lower_type.lambdaTagKey(symbol),
                                 .discriminant = lambda_discriminant,
@@ -3412,6 +3671,7 @@ const Lowerer = struct {
                             } },
                         },
                         .lset => |capture_info| {
+                            const precise_ty = try self.makeSingletonExecutableLambdaType(symbol, try self.publishExecutableType(capture_info.ty));
                             const capture_span = self.input.store.sliceTypedSymbolSpan(fn_entry.fn_def.captures);
                             const capture_bindings = if (capture_span.len != 0)
                                 try self.captureBindingsFromTypedSymbolsAtType(
@@ -3427,7 +3687,7 @@ const Lowerer = struct {
                             defer self.allocator.free(args);
                             args[0] = capture_record;
                             break :blk .{
-                                .ty = default_ty,
+                                .ty = precise_ty,
                                 .data = .{ .tag = .{
                                     .name = lower_type.lambdaTagKey(symbol),
                                     .discriminant = lambda_discriminant,
@@ -3513,7 +3773,7 @@ const Lowerer = struct {
         capture_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.ExprId {
         const capture_fields = switch (self.types.getTypePreservingNominal(capture_ty)) {
-            .nominal => |backing| switch (self.types.getTypePreservingNominal(backing)) {
+            .nominal => |nominal| switch (self.types.getTypePreservingNominal(nominal.backing)) {
                 .record => |record| self.types.sliceFields(record.fields),
                 else => debugPanic("lambdamono.lower.specializeCaptureRecord expected capture record"),
             },
@@ -3616,6 +3876,24 @@ const Lowerer = struct {
         return out;
     }
 
+    fn makeSingletonExecutableLambdaType(
+        self: *Lowerer,
+        symbol: Symbol,
+        capture_ty: ?type_mod.TypeId,
+    ) std.mem.Allocator.Error!type_mod.TypeId {
+        const args = if (capture_ty) |ty|
+            try self.types.addTypeSpan(&.{ty})
+        else
+            type_mod.Span(type_mod.TypeId).empty();
+        const tags = try self.types.addTags(&.{.{
+            .name = lower_type.lambdaTagKey(symbol),
+            .args = args,
+        }});
+        return try self.types.canonicalizeResolved(try self.types.internResolved(.{
+            .tag_union = .{ .tags = tags },
+        }));
+    }
+
     fn commonErasedCaptureTypeFromFrozen(
         _: *const Lowerer,
         members: []const FrozenLambdaMemberFact,
@@ -3702,7 +3980,7 @@ const Lowerer = struct {
     ) std.mem.Allocator.Error![]lower_type.CaptureBinding {
         const captures = self.input.store.sliceTypedSymbolSpan(captures_span);
         const fields = switch (self.types.getTypePreservingNominal(capture_record_ty)) {
-            .nominal => |backing| switch (self.types.getTypePreservingNominal(backing)) {
+            .nominal => |nominal| switch (self.types.getTypePreservingNominal(nominal.backing)) {
                 .record => |record| self.types.sliceFields(record.fields),
                 else => debugPanic("lambdamono.lower.captureBindingsFromTypedSymbolsAtType expected capture record"),
             },
@@ -4334,10 +4612,23 @@ const Lowerer = struct {
             .link => unreachable,
             .for_a => try self.input.types.freshUnbd(),
             .unbd => try self.input.types.freshUnbd(),
-            .nominal => |backing| blk: {
+            .nominal => |nominal| blk: {
                 const placeholder = try self.input.types.freshUnbd();
                 try inst.mapping.put(id, placeholder);
-                const node = solved.Type.Node{ .nominal = try self.cloneInstType(inst, backing) };
+                const args = self.input.types.sliceTypeVarSpan(nominal.args);
+                const cloned_args = try self.allocator.alloc(TypeVarId, args.len);
+                defer self.allocator.free(cloned_args);
+                for (args, 0..) |arg, i| {
+                    cloned_args[i] = try self.cloneInstType(inst, arg);
+                }
+                const node = solved.Type.Node{ .nominal = .{
+                    .module_idx = nominal.module_idx,
+                    .ident = nominal.ident,
+                    .is_opaque = nominal.is_opaque,
+                    .to_inspect_symbol = nominal.to_inspect_symbol,
+                    .args = try self.input.types.addTypeVarSpan(cloned_args),
+                    .backing = try self.cloneInstType(inst, nominal.backing),
+                } };
                 self.input.types.setNode(placeholder, node);
                 break :blk placeholder;
             },
