@@ -121,6 +121,10 @@ const Lowerer = struct {
                 .name = lirSymbol(def.name),
                 .args = try self.store.addLocalSpan(arg_locals),
                 .ret_layout = try self.lowerLayoutId(def.ret_layout),
+                .owned_params = if (def.hosted != null)
+                    try self.hostedOwnedParams(arg_locals)
+                else
+                    .empty(),
                 .hosted = if (def.hosted) |hosted| .{
                     .symbol_name = hosted.symbol_name,
                     .index = hosted.index,
@@ -174,12 +178,29 @@ const Lowerer = struct {
             .args = arg_span,
             .body = body,
             .ret_layout = ret_layout,
+            .owned_params = if (def.hosted != null)
+                try self.hostedOwnedParams(arg_locals)
+            else
+                .empty(),
             .hosted = if (def.hosted) |hosted| .{
                 .symbol_name = hosted.symbol_name,
                 .index = hosted.index,
             } else null,
             .result_contract = .fresh,
         };
+    }
+
+    fn hostedOwnedParams(self: *Lowerer, args: []const LIR.LocalId) std.mem.Allocator.Error!LIR.LocalSpan {
+        var owned = std.ArrayList(LIR.LocalId).empty;
+        defer owned.deinit(self.allocator);
+
+        for (args) |arg_local| {
+            const layout_idx = self.store.getLocal(arg_local).layout_idx;
+            if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(layout_idx))) continue;
+            try owned.append(self.allocator, arg_local);
+        }
+
+        return try self.store.addLocalSpan(owned.items);
     }
 
     fn lowerLayoutId(self: *Lowerer, ref: ir.Layout.Ref) std.mem.Allocator.Error!layout_mod.Idx {

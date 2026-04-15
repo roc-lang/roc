@@ -117,7 +117,8 @@ fn inferOneProcOwnedParams(
     proc: LIR.LirProcSpec,
 ) Allocator.Error!LIR.LocalSpan {
     const args = store.getLocalSpan(proc.args);
-    if (proc.body == null or args.len == 0) return .empty();
+    if (args.len == 0) return .empty();
+    if (proc.body == null) return proc.owned_params;
 
     var arg_index_by_local = std.AutoHashMap(u32, usize).init(allocator);
     defer arg_index_by_local.deinit();
@@ -508,30 +509,14 @@ fn propagateCallResultSemantics(
     allocator: Allocator,
     store: *LirStore,
 ) Allocator.Error!void {
-    _ = allocator;
     for (store.cf_stmts.items, 0..) |stmt, i| {
         switch (stmt) {
             .assign_call => |assign| {
                 const summary = store.getProcSpec(assign.proc).result_contract;
                 const next_semantics: ResultSemantics = switch (summary) {
                     .fresh, .no_return => .fresh,
-                    .alias_of_param => |contract| blk: {
-                        const args = store.getLocalSpan(assign.args);
-                        if (contract.param_index >= args.len) break :blk .fresh;
-                        break :blk .{ .alias_of = .{
-                            .owner = args[contract.param_index],
-                            .projections = contract.projections,
-                        } };
-                    },
-                    .borrow_of_param => |contract| blk: {
-                        const args = store.getLocalSpan(assign.args);
-                        if (contract.param_index >= args.len) break :blk .fresh;
-                        break :blk .{ .borrow_of = .{
-                            .owner = args[contract.param_index],
-                            .projections = contract.projections,
-                            .region = .proc,
-                        } };
-                    },
+                    .alias_of_param => |contract| try contractResultSemantics(allocator, store, assign.args, contract, false),
+                    .borrow_of_param => |contract| try contractResultSemantics(allocator, store, assign.args, contract, true),
                 };
                 store.cf_stmts.items[i] = .{ .assign_call = .{
                     .target = assign.target,
@@ -558,11 +543,13 @@ fn propagateRefResultSemantics(
                 .assign_ref => |assign| {
                     if (assign.op == .local) continue;
                     const next_semantics = try refOpResultSemantics(allocator, store, assign.op);
-                    if (resultSemanticsEqual(store, next_semantics, assign.result)) continue;
+                    const next_ownership = try refOpOwnership(store, next_semantics, assign.op);
+                    if (resultSemanticsEqual(store, next_semantics, assign.result) and
+                        ownershipSemanticsEqual(store, assign.ownership, next_ownership)) continue;
                     store.cf_stmts.items[i] = .{ .assign_ref = .{
                         .target = assign.target,
                         .result = next_semantics,
-                        .ownership = assign.ownership,
+                        .ownership = next_ownership,
                         .op = assign.op,
                         .next = assign.next,
                     } };
@@ -647,6 +634,25 @@ fn refOpResultSemantics(allocator: Allocator, store: *LirStore, op: LIR.RefOp) A
     };
 }
 
+fn refOpOwnership(store: *LirStore, result: ResultSemantics, op: LIR.RefOp) Allocator.Error!LIR.OwnershipSemantics {
+    if (result != .fresh) return .{};
+
+    return switch (op) {
+        .local => |source| .{
+            .consumed_owned_inputs = try store.addLocalSpan(&.{source}),
+        },
+        .field,
+        .tag_payload,
+        .tag_payload_struct,
+        .list_reinterpret,
+        .nominal,
+        => .{
+            .materialization = .copy_from_borrowed_input,
+        },
+        .discriminant => .{},
+    };
+}
+
 fn projectedResultSemantics(
     allocator: Allocator,
     store: *LirStore,
@@ -684,6 +690,62 @@ fn projectedResultSemanticsWithoutProjection(store: *const LirStore, source: Loc
         .borrow_of => |borrow| .{ .borrow_of = borrow },
         .fresh => .{ .alias_of = .{ .owner = source } },
     };
+}
+
+fn contractResultSemantics(
+    allocator: Allocator,
+    store: *LirStore,
+    args_span: LIR.LocalSpan,
+    contract: LIR.ParamRefContract,
+    borrowed: bool,
+) Allocator.Error!ResultSemantics {
+    const args = store.getLocalSpan(args_span);
+    if (contract.param_index >= args.len) return .fresh;
+
+    const source = args[contract.param_index];
+    if (localResultSemantics(store, source)) |semantics| {
+        return switch (semantics) {
+            .alias_of => |alias| if (borrowed)
+                .{ .borrow_of = .{
+                    .owner = alias.owner,
+                    .projections = try appendProjectionSpan(allocator, store, alias.projections, contract.projections),
+                    .region = .proc,
+                } }
+            else
+                .{ .alias_of = .{
+                    .owner = alias.owner,
+                    .projections = try appendProjectionSpan(allocator, store, alias.projections, contract.projections),
+                } },
+            .borrow_of => |borrow| .{ .borrow_of = .{
+                .owner = borrow.owner,
+                .projections = try appendProjectionSpan(allocator, store, borrow.projections, contract.projections),
+                .region = borrow.region,
+            } },
+            .fresh => if (borrowed)
+                .{ .borrow_of = .{
+                    .owner = source,
+                    .projections = contract.projections,
+                    .region = .proc,
+                } }
+            else
+                .{ .alias_of = .{
+                    .owner = source,
+                    .projections = contract.projections,
+                } },
+        };
+    }
+
+    return if (borrowed)
+        .{ .borrow_of = .{
+            .owner = source,
+            .projections = contract.projections,
+            .region = .proc,
+        } }
+    else
+        .{ .alias_of = .{
+            .owner = source,
+            .projections = contract.projections,
+        } };
 }
 
 fn appendProjection(

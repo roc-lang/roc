@@ -931,19 +931,16 @@ fn hostedBuilderPrintValue(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: 
     // Create temporary RocStr instances for each line
     var empty_ret: u8 = 0;
     var line1 = RocStr.fromSlice("SUCCESS: Builder.print_value! called via static dispatch!", ops);
-    defer line1.decref(ops);
     hostedStdoutLine(ops, @ptrCast(&empty_ret), @ptrCast(&line1));
 
     var line2_buf: [256]u8 = undefined;
     const line2_str = std.fmt.bufPrint(&line2_buf, "  value: {s}", .{value_slice}) catch "  value: ?";
     var line2 = RocStr.fromSlice(line2_str, ops);
-    defer line2.decref(ops);
     hostedStdoutLine(ops, @ptrCast(&empty_ret), @ptrCast(&line2));
 
     var line3_buf: [256]u8 = undefined;
     const line3_str = std.fmt.bufPrint(&line3_buf, "  count: {s}", .{count_str}) catch "  count: ?";
     var line3 = RocStr.fromSlice(line3_str, ops);
-    defer line3.decref(ops);
     hostedStdoutLine(ops, @ptrCast(&empty_ret), @ptrCast(&line3));
 }
 
@@ -1070,10 +1067,11 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
         },
     };
 
-    // Call the app's main! entrypoint
-    // For zero-sized return/arg types, the generated code does not dereference
-    // these pointers, so null is safe.
-    roc__main(&roc_ops, null, null);
+    // Call the app's main! entrypoint with concrete storage even for ZST
+    // arg/ret positions so every backend sees valid ABI pointers.
+    var dummy_ret: u8 = 0;
+    var dummy_arg: u8 = 0;
+    roc__main(&roc_ops, @ptrCast(&dummy_ret), @ptrCast(&dummy_arg));
 
     // Check test results if in test mode
     if (host_env.test_state.enabled) {

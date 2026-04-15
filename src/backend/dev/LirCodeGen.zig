@@ -361,6 +361,10 @@ fn wrapStrConcat(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_by
                 if (s.isSmallStr()) return;
                 if (s.bytes != null) return;
 
+                std.debug.print(
+                    "wrapStrConcat invalid RocStr {s}: len={d} cap=0x{x} raw_bytes=0x{x}\n",
+                    .{ label, s.len(), s.capacity_or_alloc_ptr, @intFromPtr(s.bytes) },
+                );
                 std.debug.panic(
                     "LIR/codegen invariant violated: wrapStrConcat received invalid RocStr {s} (len={d}, cap=0x{x})",
                     .{ label, s.len(), s.capacity_or_alloc_ptr },
@@ -9464,8 +9468,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             const hosted_fns_offset: i32 = @intCast(@offsetOf(RocOps, "hosted_fns"));
+            const hosted_fns_count_offset: i32 = hosted_fns_offset + @as(i32, @intCast(@offsetOf(HostedFunctions, "count")));
             const hosted_fns_ptr_offset: i32 = hosted_fns_offset + @as(i32, @intCast(@offsetOf(HostedFunctions, "fns")));
             const hosted_entry_offset: i32 = @intCast(@as(usize, hosted.index) * @sizeOf(builtins.host_abi.HostedFn));
+
+            if (builtin.mode == .Debug) {
+                const hosted_count_reg = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(hosted_count_reg);
+                try self.emitLoad(.w32, hosted_count_reg, roc_ops_reg, hosted_fns_count_offset);
+                try self.emitCmpImm(hosted_count_reg, @intCast(hosted.index));
+                const count_ok_patch = try self.codegen.emitCondJump(condAbove());
+                const msg = try std.fmt.allocPrint(
+                    self.allocator,
+                    "Dev/codegen invariant violated: hosted call index {d} out of bounds for proc {d}",
+                    .{ hosted.index, if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64) },
+                );
+                defer self.allocator.free(msg);
+                try self.emitRocCrash(msg);
+                try self.emitTrap();
+                self.codegen.patchJump(count_ok_patch, self.codegen.currentOffset());
+            }
 
             try self.emitLoad(.w64, hosted_table_reg, roc_ops_reg, hosted_fns_ptr_offset);
             try self.emitLoad(.w64, hosted_target_reg, hosted_table_reg, hosted_entry_offset);
@@ -12975,69 +12997,55 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.codegen.emitLoadImm(reg, @bitCast(chunk2));
                 try self.codegen.emitStoreStack(.w64, base_offset + 2 * target_ptr_size, reg);
             } else {
-                if (self.generation_mode == .native_execution and self.static_interner != null) {
-                    const interner = self.static_interner.?;
-                    const interned = try interner.internString(str_bytes);
-                    const ptr_reg = try self.allocTempGeneral();
-                    defer self.codegen.freeGeneral(ptr_reg);
+                const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+                const fn_addr: usize = @intFromPtr(&allocateWithRefcountC);
+                const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
 
-                    try self.codegen.emitLoadImm(ptr_reg, @intCast(@intFromPtr(interned.ptr)));
-                    try self.codegen.emitStoreStack(.w64, base_offset, ptr_reg);
+                const alloc_size = std.mem.alignForward(usize, str_bytes.len, 8);
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addImmArg(@intCast(alloc_size));
+                try builder.addImmArg(1);
+                try builder.addImmArg(0);
+                try builder.addRegArg(roc_ops_reg);
+                try self.callBuiltin(&builder, fn_addr, .allocate_with_refcount);
 
-                    try self.codegen.emitLoadImm(ptr_reg, @intCast(interned.len));
-                    try self.codegen.emitStoreStack(.w64, base_offset + 8, ptr_reg);
-                    try self.codegen.emitStoreStack(.w64, base_offset + 16, ptr_reg);
-                } else {
-                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-                    const fn_addr: usize = @intFromPtr(&allocateWithRefcountC);
-                    const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
+                try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
 
-                    const alloc_size = std.mem.alignForward(usize, str_bytes.len, 8);
-                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                    try builder.addImmArg(@intCast(alloc_size));
-                    try builder.addImmArg(1);
-                    try builder.addImmArg(0);
-                    try builder.addRegArg(roc_ops_reg);
-                    try self.callBuiltin(&builder, fn_addr, .allocate_with_refcount);
+                const heap_ptr = try self.allocTempGeneral();
+                try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
 
-                    try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
+                var remaining: usize = str_bytes.len;
+                var str_offset: usize = 0;
+                const temp_reg = try self.allocTempGeneral();
 
-                    const heap_ptr = try self.allocTempGeneral();
-                    try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
-
-                    var remaining: usize = str_bytes.len;
-                    var str_offset: usize = 0;
-                    const temp_reg = try self.allocTempGeneral();
-
-                    while (remaining >= 8) {
-                        const chunk: u64 = @bitCast(str_bytes[str_offset..][0..8].*);
-                        try self.codegen.emitLoadImm(temp_reg, @bitCast(chunk));
-                        try self.emitStore(.w64, heap_ptr, @intCast(str_offset), temp_reg);
-                        str_offset += 8;
-                        remaining -= 8;
-                    }
-
-                    if (remaining > 0) {
-                        var last_chunk: u64 = 0;
-                        for (0..remaining) |j| {
-                            last_chunk |= @as(u64, str_bytes[str_offset + j]) << @intCast(j * 8);
-                        }
-                        try self.codegen.emitLoadImm(temp_reg, @bitCast(last_chunk));
-                        try self.emitStore(.w64, heap_ptr, @intCast(str_offset), temp_reg);
-                    }
-
-                    self.codegen.freeGeneral(temp_reg);
-                    self.codegen.freeGeneral(heap_ptr);
-
-                    const ptr_reg = try self.allocTempGeneral();
-                    defer self.codegen.freeGeneral(ptr_reg);
-                    try self.emitLoad(.w64, ptr_reg, frame_ptr, heap_ptr_slot);
-
-                    try self.codegen.emitStoreStack(.w64, base_offset, ptr_reg);
-                    try self.codegen.emitLoadImm(ptr_reg, @intCast(str_bytes.len));
-                    try self.codegen.emitStoreStack(.w64, base_offset + 8, ptr_reg);
-                    try self.codegen.emitStoreStack(.w64, base_offset + 16, ptr_reg);
+                while (remaining >= 8) {
+                    const chunk: u64 = @bitCast(str_bytes[str_offset..][0..8].*);
+                    try self.codegen.emitLoadImm(temp_reg, @bitCast(chunk));
+                    try self.emitStore(.w64, heap_ptr, @intCast(str_offset), temp_reg);
+                    str_offset += 8;
+                    remaining -= 8;
                 }
+
+                if (remaining > 0) {
+                    var last_chunk: u64 = 0;
+                    for (0..remaining) |j| {
+                        last_chunk |= @as(u64, str_bytes[str_offset + j]) << @intCast(j * 8);
+                    }
+                    try self.codegen.emitLoadImm(temp_reg, @bitCast(last_chunk));
+                    try self.emitStore(.w64, heap_ptr, @intCast(str_offset), temp_reg);
+                }
+
+                self.codegen.freeGeneral(temp_reg);
+                self.codegen.freeGeneral(heap_ptr);
+
+                const ptr_reg = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(ptr_reg);
+                try self.emitLoad(.w64, ptr_reg, frame_ptr, heap_ptr_slot);
+
+                try self.codegen.emitStoreStack(.w64, base_offset, ptr_reg);
+                try self.codegen.emitLoadImm(ptr_reg, @intCast(str_bytes.len));
+                try self.codegen.emitStoreStack(.w64, base_offset + 8, ptr_reg);
+                try self.codegen.emitStoreStack(.w64, base_offset + 16, ptr_reg);
             }
 
             return .{ .stack_str = base_offset };
