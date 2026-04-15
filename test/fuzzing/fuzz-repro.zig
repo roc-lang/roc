@@ -27,15 +27,20 @@ const HELP =
 ;
 
 /// CLI entrypoint for fuzzing failure reproducer.
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer {
         _ = gpa_impl.deinit();
     }
     const gpa = gpa_impl.allocator();
 
-    const args = try std.process.argsAlloc(gpa);
-    defer std.process.argsFree(gpa, args);
+    var args_list: std.ArrayList([]const u8) = .empty;
+    defer args_list.deinit(gpa);
+    var args_iter = std.process.Args.Iterator.init(init.minimal.args);
+    while (args_iter.next()) |arg| {
+        try args_list.append(gpa, arg);
+    }
+    const args = args_list.items;
 
     var data: ?[]const u8 = null;
     var base64 = false;
@@ -81,9 +86,7 @@ pub fn main() !void {
     } else {
         // Read file pointed to by arg.
         std.debug.print("Reading bytes for repro from {s}\n", .{data.?});
-        const file = try std.Io.Dir.cwd().openFile(data.?, .{});
-        defer file.close();
-        const bytes = try file.readToEndAlloc(gpa, @intCast(MAX_SIZE));
+        const bytes = try std.Io.Dir.cwd().readFileAllocOptions(init.io, data.?, gpa, .limited(@intCast(MAX_SIZE)), std.mem.Alignment.of(u8), null);
         defer gpa.free(bytes);
 
         fuzz_test.zig_fuzz_init();
