@@ -50,8 +50,8 @@ pub const WasmContext = struct {
 };
 
 /// Get a WASM filesystem implementation backed by the given context.
-pub fn wasm(wasm_ctx: *WasmContext) RocIo {
-    return .{ .ctx = @ptrCast(wasm_ctx), .vtable = wasm_vtable };
+pub fn wasm(wasm_ctx: *WasmContext, sys_io: std.Io) RocIo {
+    return .{ .ctx = @ptrCast(wasm_ctx), .vtable = wasm_vtable, .sys_io = sys_io };
 }
 
 const wasm_vtable = RocIo.VTable{
@@ -96,12 +96,12 @@ fn matchesSourceFile(self: *WasmContext, path: []const u8) bool {
     return false;
 }
 
-fn fileExistsWasm(ctx_ptr: ?*anyopaque, path: []const u8) bool {
+fn fileExistsWasm(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) bool {
     const self = getCtx(ctx_ptr);
     return matchesSourceFile(self, path);
 }
 
-fn readFileWasm(ctx_ptr: ?*anyopaque, path: []const u8, alloc: Allocator) RocIo.ReadError![]u8 {
+fn readFileWasm(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, alloc: Allocator) RocIo.ReadError![]u8 {
     const self = getCtx(ctx_ptr);
     if (matchesSourceFile(self, path)) {
         if (self.source) |source| {
@@ -113,7 +113,7 @@ fn readFileWasm(ctx_ptr: ?*anyopaque, path: []const u8, alloc: Allocator) RocIo.
     return error.FileNotFound;
 }
 
-fn readFileIntoWasm(ctx_ptr: ?*anyopaque, path: []const u8, buffer: []u8) RocIo.ReadError!usize {
+fn readFileIntoWasm(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, buffer: []u8) RocIo.ReadError!usize {
     const self = getCtx(ctx_ptr);
     if (matchesSourceFile(self, path)) {
         if (self.source) |source| {
@@ -129,11 +129,11 @@ fn readFileIntoWasm(ctx_ptr: ?*anyopaque, path: []const u8, buffer: []u8) RocIo.
     return error.FileNotFound;
 }
 
-fn writeFileWasm(_: ?*anyopaque, _: []const u8, _: []const u8) RocIo.WriteError!void {
+fn writeFileWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) RocIo.WriteError!void {
     return error.AccessDenied;
 }
 
-fn statWasm(ctx_ptr: ?*anyopaque, path: []const u8) RocIo.StatError!RocIo.FileInfo {
+fn statWasm(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) RocIo.StatError!RocIo.FileInfo {
     const self = getCtx(ctx_ptr);
     if (matchesSourceFile(self, path)) {
         if (self.source) |source| {
@@ -149,11 +149,11 @@ fn statWasm(ctx_ptr: ?*anyopaque, path: []const u8) RocIo.StatError!RocIo.FileIn
     return error.FileNotFound;
 }
 
-fn listDirWasm(_: ?*anyopaque, _: []const u8, _: Allocator) RocIo.ListError![]RocIo.FileEntry {
+fn listDirWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) RocIo.ListError![]RocIo.FileEntry {
     return error.FileNotFound;
 }
 
-fn dirNameWasm(_: ?*anyopaque, absolute_path: []const u8) ?[]const u8 {
+fn dirNameWasm(_: ?*anyopaque, _: std.Io, absolute_path: []const u8) ?[]const u8 {
     if (std.mem.lastIndexOfScalar(u8, absolute_path, '/')) |last_slash| {
         if (last_slash == 0) {
             return "/";
@@ -163,14 +163,14 @@ fn dirNameWasm(_: ?*anyopaque, absolute_path: []const u8) ?[]const u8 {
     return null;
 }
 
-fn baseNameWasm(_: ?*anyopaque, absolute_path: []const u8) []const u8 {
+fn baseNameWasm(_: ?*anyopaque, _: std.Io, absolute_path: []const u8) []const u8 {
     if (std.mem.lastIndexOfScalar(u8, absolute_path, '/')) |last_slash| {
         return absolute_path[last_slash + 1 ..];
     }
     return absolute_path;
 }
 
-fn joinPathWasm(_: ?*anyopaque, parts: []const []const u8, allocator: Allocator) Allocator.Error![]const u8 {
+fn joinPathWasm(_: ?*anyopaque, _: std.Io, parts: []const []const u8, allocator: Allocator) Allocator.Error![]const u8 {
     var total: usize = 0;
     for (parts, 0..) |part, i| {
         total += part.len;
@@ -189,38 +189,38 @@ fn joinPathWasm(_: ?*anyopaque, parts: []const []const u8, allocator: Allocator)
     return buf;
 }
 
-fn canonicalizeWasm(_: ?*anyopaque, root_relative_path: []const u8, alloc: Allocator) RocIo.CanonicalizeError![]const u8 {
+fn canonicalizeWasm(_: ?*anyopaque, _: std.Io, root_relative_path: []const u8, alloc: Allocator) RocIo.CanonicalizeError![]const u8 {
     return alloc.dupe(u8, root_relative_path) catch handleOom();
 }
 
-fn makePathWasm(_: ?*anyopaque, _: []const u8) RocIo.MakePathError!void {
+fn makePathWasm(_: ?*anyopaque, _: std.Io, _: []const u8) RocIo.MakePathError!void {
     return error.AccessDenied;
 }
 
-fn renameWasm(_: ?*anyopaque, _: []const u8, _: []const u8) RocIo.RenameError!void {
+fn renameWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) RocIo.RenameError!void {
     return error.AccessDenied;
 }
 
-fn getEnvVarWasm(_: ?*anyopaque, _: []const u8, _: Allocator) RocIo.GetEnvVarError![]u8 {
+fn getEnvVarWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) RocIo.GetEnvVarError![]u8 {
     return error.EnvironmentVariableNotFound;
 }
 
-fn fetchUrlWasm(_: ?*anyopaque, _: Allocator, _: []const u8, _: []const u8) RocIo.FetchUrlError!void {
+fn fetchUrlWasm(_: ?*anyopaque, _: std.Io, _: Allocator, _: []const u8, _: []const u8) RocIo.FetchUrlError!void {
     return error.Unsupported;
 }
 
-fn writeStdoutWasm(_: ?*anyopaque, _: []const u8) RocIo.StdioError!void {
+fn writeStdoutWasm(_: ?*anyopaque, _: std.Io, _: []const u8) RocIo.StdioError!void {
     // WASM: stdout silently dropped (JS host can intercept via import override if desired)
 }
 
-fn writeStderrWasm(_: ?*anyopaque, _: []const u8) RocIo.StdioError!void {
+fn writeStderrWasm(_: ?*anyopaque, _: std.Io, _: []const u8) RocIo.StdioError!void {
     // WASM: stderr silently dropped
 }
 
-fn readStdinWasm(_: ?*anyopaque, _: []u8) RocIo.StdioError!usize {
+fn readStdinWasm(_: ?*anyopaque, _: std.Io, _: []u8) RocIo.StdioError!usize {
     return 0;
 }
 
-fn isTtyWasm(_: ?*anyopaque) bool {
+fn isTtyWasm(_: ?*anyopaque, _: std.Io) bool {
     return false;
 }

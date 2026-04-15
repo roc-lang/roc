@@ -455,7 +455,7 @@ fn generateRandomSuffix(ctx: *CliContext) ![]u8 {
 /// Uses system temp directory to avoid race conditions when cache is cleared.
 pub fn createUniqueTempDir(ctx: *CliContext) ![]const u8 {
     // Get the version-specific temp directory: {temp}/roc/{version}
-    const version_temp_dir = try cache_config_mod.getVersionTempDir(FsIo.default(), ctx.arena);
+    const version_temp_dir = try cache_config_mod.getVersionTempDir(FsIo.default(ctx.io.sys_io), ctx.arena);
 
     // Ensure the roc/{version} directory exists
     // makePath automatically handles PathAlreadyExists internally
@@ -518,7 +518,7 @@ pub fn writeFdCoordinationFile(ctx: *CliContext, temp_exe_path: []const u8, shm_
 /// The exe_display_name is the name that will appear in `ps` output (e.g., "app.roc").
 pub fn createTempDirStructure(allocs: *Allocators, sys_io: std.Io, exe_path: []const u8, exe_display_name: []const u8, shm_handle: SharedMemoryHandle, _: ?[]const u8) ![]const u8 {
     // Get the version-specific temp directory: {temp}/roc/{version}
-    const version_temp_dir = try cache_config_mod.getVersionTempDir(FsIo.default(), allocs.arena);
+    const version_temp_dir = try cache_config_mod.getVersionTempDir(FsIo.default(sys_io), allocs.arena);
 
     // Ensure the roc/{version} directory exists
     // makePath automatically handles PathAlreadyExists internally
@@ -663,9 +663,6 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8, sys_io: std.Io) !void
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // Initialize the RocIo module's sys_io so compiler internals can use it.
-    io_mod.RocIo.initSysIo(sys_io);
-
     ensureWindowsConsoleSupportsAnsiAndUtf8();
 
     // Start background cache cleanup on a separate thread.
@@ -680,7 +677,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8, sys_io: std.Io) !void
     //
     // Uses page_allocator instead of GPA to avoid leak detection false positives
     // (the thread may still be running when the main thread's leak check fires).
-    if (compile.CacheCleanup.startBackgroundCleanup(std.heap.page_allocator, sys_io, FsIo.default())) |_| {
+    if (compile.CacheCleanup.startBackgroundCleanup(std.heap.page_allocator, sys_io, FsIo.default(sys_io))) |_| {
         // Thread started successfully, will run in background
     } else |_| {
         // Non-fatal: cleanup failure shouldn't prevent compilation
@@ -942,7 +939,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         .enabled = !args.no_cache,
         .verbose = false,
     };
-    var cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default());
+    var cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default(ctx.io.sys_io));
 
     // Create cache directory for linked interpreter executables
     const exe_cache_dir = cache_manager.config.getExeCacheDir(ctx.arena) catch |err| {
@@ -1311,7 +1308,7 @@ fn rocRunDevShim(ctx: *CliContext, args: cli_args.RunArgs) !void {
         .enabled = !args.no_cache,
         .verbose = false,
     };
-    var cache_manager = CacheManager.init(ctx.gpa, cache_config, io_mod.RocIo.default());
+    var cache_manager = CacheManager.init(ctx.gpa, cache_config, io_mod.RocIo.default(ctx.io.sys_io));
 
     const exe_cache_dir = cache_manager.config.getExeCacheDir(ctx.arena) catch |err| {
         return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
@@ -1741,7 +1738,7 @@ const CliEchoState = struct {
     echo_module_path: []const u8,
 };
 
-fn cliEchoReadFile(ctx: ?*anyopaque, path: []const u8, gpa: std.mem.Allocator) FsIo.ReadError![]u8 {
+fn cliEchoReadFile(ctx: ?*anyopaque, sys_io: std.Io, path: []const u8, gpa: std.mem.Allocator) FsIo.ReadError![]u8 {
     const self: *CliEchoState = @ptrCast(@alignCast(ctx.?));
     if (std.mem.eql(u8, path, self.app_abs_path))
         return gpa.dupe(u8, self.synthetic_app_source) catch error.OutOfMemory;
@@ -1749,15 +1746,15 @@ fn cliEchoReadFile(ctx: ?*anyopaque, path: []const u8, gpa: std.mem.Allocator) F
         return gpa.dupe(u8, echo_platform.platform_main_source) catch error.OutOfMemory;
     if (std.mem.eql(u8, path, self.echo_module_path))
         return gpa.dupe(u8, echo_platform.echo_module_source) catch error.OutOfMemory;
-    return FsIo.os().readFile(path, gpa);
+    return FsIo.os(sys_io).readFile(path, gpa);
 }
 
-fn cliEchoFileExists(ctx: ?*anyopaque, path: []const u8) bool {
+fn cliEchoFileExists(ctx: ?*anyopaque, sys_io: std.Io, path: []const u8) bool {
     const self: *CliEchoState = @ptrCast(@alignCast(ctx.?));
     if (std.mem.eql(u8, path, self.app_abs_path)) return true;
     if (std.mem.eql(u8, path, self.platform_main_path)) return true;
     if (std.mem.eql(u8, path, self.echo_module_path)) return true;
-    return FsIo.os().fileExists(path);
+    return FsIo.os(sys_io).fileExists(path);
 }
 
 /// Run a default_app (headerless file with main! and echo platform).
@@ -1812,10 +1809,10 @@ fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: [
         .platform_main_path = platform_main_path,
         .echo_module_path = echo_module_path,
     };
-    var cli_echo_vtable = FsIo.os().vtable;
+    var cli_echo_vtable = FsIo.os(ctx.io.sys_io).vtable;
     cli_echo_vtable.readFile = &cliEchoReadFile;
     cli_echo_vtable.fileExists = &cliEchoFileExists;
-    build_env.filesystem = .{ .ctx = @ptrCast(&cli_echo_state), .vtable = cli_echo_vtable };
+    build_env.filesystem = .{ .ctx = @ptrCast(&cli_echo_state), .vtable = cli_echo_vtable, .sys_io = ctx.io.sys_io };
 
     build_env.discoverDependencies(args.path) catch |err| {
         _ = build_env.renderDiagnostics(ctx.io.stderr());
@@ -3987,7 +3984,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         .enabled = true,
         .verbose = false,
     };
-    var cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default());
+    var cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default(ctx.io.sys_io));
     const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
 
@@ -4013,7 +4010,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         build_cache_manager.* = CacheManager.init(ctx.gpa, .{
             .enabled = true,
             .verbose = args.verbose,
-        }, FsIo.default());
+        }, FsIo.default(ctx.io.sys_io));
         build_env.setCacheManager(build_cache_manager);
     }
 
@@ -4641,7 +4638,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         .enabled = true,
         .verbose = false,
     };
-    var cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default());
+    var cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default(ctx.io.sys_io));
     const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
 
@@ -4667,7 +4664,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         build_cache_manager.* = CacheManager.init(ctx.gpa, .{
             .enabled = true,
             .verbose = args.verbose,
-        }, FsIo.default());
+        }, FsIo.default(ctx.io.sys_io));
         build_env.setCacheManager(build_cache_manager);
     }
 
@@ -5429,7 +5426,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
             const test_cache_dir = cache_config.getTestCacheDir(ctx.gpa) catch null;
             if (test_cache_dir) |dir| {
                 defer ctx.gpa.free(dir);
-                var test_cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default());
+                var test_cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default(ctx.io.sys_io));
                 if (test_cache_manager.loadRawBytes(cache_key, dir)) |cached_data| {
                     defer ctx.gpa.free(cached_data);
                     replayTestCache(ctx.gpa, ctx.io.sys_io, cached_data, args, stdout, stderr, src, start_time) catch |err| switch (err) {
@@ -5468,7 +5465,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
             try stderr.print("Failed to create cache manager: {}\n", .{err});
             return err;
         };
-        cache_manager.* = CacheManager.init(ctx.gpa, cache_config, FsIo.default());
+        cache_manager.* = CacheManager.init(ctx.gpa, cache_config, FsIo.default(ctx.io.sys_io));
         build_env.setCacheManager(cache_manager);
     }
 
@@ -5992,7 +5989,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                 if (cache_config.getTestCacheDir(ctx.gpa)) |dir| {
                     defer ctx.gpa.free(dir);
                     const cache_key = CacheManager.generateCacheKey(src, build_options.compiler_version);
-                    var store_cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default());
+                    var store_cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default(ctx.io.sys_io));
                     store_cache_manager.storeRawBytes(cache_key, blob, dir);
                 } else |_| {}
             } else |_| {}
@@ -6494,7 +6491,7 @@ fn checkFileWithBuildEnvPreserved(
     // Set up cache manager if caching is enabled
     if (cache_config.enabled) {
         const cache_manager = try ctx.gpa.create(CacheManager);
-        cache_manager.* = CacheManager.init(ctx.gpa, cache_config, FsIo.default());
+        cache_manager.* = CacheManager.init(ctx.gpa, cache_config, FsIo.default(ctx.io.sys_io));
         build_env.setCacheManager(cache_manager);
         // Note: BuildEnv.deinit() will clean up the cache manager when caller calls deinit
     }
@@ -6604,7 +6601,7 @@ fn checkFileWithBuildEnv(
     // Set up cache manager if caching is enabled
     if (cache_config.enabled) {
         const cache_manager = try ctx.gpa.create(CacheManager);
-        cache_manager.* = CacheManager.init(ctx.gpa, cache_config, FsIo.default());
+        cache_manager.* = CacheManager.init(ctx.gpa, cache_config, FsIo.default(ctx.io.sys_io));
         build_env.setCacheManager(cache_manager);
         // Note: BuildEnv.deinit() will clean up the cache manager
     }

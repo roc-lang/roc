@@ -308,7 +308,7 @@ const DevRocEnv = struct {
     /// Jump buffer for unwinding from roc_crashed back to the call site.
     jmp_buf: JmpBuf = undefined,
     /// Io context for routing [dbg] output
-    roc_io: RocIo = RocIo.default(),
+    roc_io: RocIo = RocIo.default(std.Io.Threaded.global_single_threaded.io()),
 
     const AllocInfo = struct {
         len: usize,
@@ -319,7 +319,7 @@ const DevRocEnv = struct {
         return .{
             .allocator = allocator,
             .allocations = std.AutoHashMap(usize, AllocInfo).init(allocator),
-            .roc_io = roc_io orelse RocIo.default(),
+            .roc_io = roc_io orelse RocIo.default(std.Io.Threaded.global_single_threaded.io()),
         };
     }
 

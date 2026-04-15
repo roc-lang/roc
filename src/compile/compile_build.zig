@@ -53,21 +53,17 @@ const is_freestanding = threading.is_freestanding;
 const Mutex = threading.Mutex;
 const ThreadCondition = threading.Condition;
 
-/// Module-level sys_io used by nativeFetchUrlImpl which cannot receive it as a parameter
-/// (its signature is fixed by the vtable). Updated when BuildEnv.initCoordinator is called.
-var build_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
-
 /// Native fetchUrl implementation that downloads a tar.zst bundle via HTTP
 /// and extracts it into the destination directory. Used by the CLI to wire up
 /// real download support through the Filesystem vtable.
-pub const nativeFetchUrl: ?*const fn (?*anyopaque, Allocator, []const u8, []const u8) RocIo.FetchUrlError!void = if (!is_freestanding)
+pub const nativeFetchUrl: ?*const fn (?*anyopaque, std.Io, Allocator, []const u8, []const u8) RocIo.FetchUrlError!void = if (!is_freestanding)
     &nativeFetchUrlImpl
 else
     null;
 
-fn nativeFetchUrlImpl(_: ?*anyopaque, allocator: Allocator, url: []const u8, dest_path: []const u8) RocIo.FetchUrlError!void {
+fn nativeFetchUrlImpl(_: ?*anyopaque, sys_io: std.Io, allocator: Allocator, url: []const u8, dest_path: []const u8) RocIo.FetchUrlError!void {
     var alloc = allocator;
-    unbundle.download.downloadAndExtract(&alloc, build_sys_io, url, dest_path) catch {
+    unbundle.download.downloadAndExtract(&alloc, sys_io, url, dest_path) catch {
         return error.DownloadFailed;
     };
 }
@@ -143,7 +139,7 @@ pub const BuildEnv = struct {
     // Cache manager for compiled modules
     cache_manager: ?*CacheManager = null,
     // I/O abstraction for all OS operations (filesystem, stdio, env vars, etc.)
-    filesystem: RocIo = RocIo.default(),
+    filesystem: RocIo = RocIo.default(std.Io.Threaded.global_single_threaded.io()),
     // System IO for std library operations (mutexes, timestamps, file ops)
     sys_io: std.Io = std.Io.Threaded.global_single_threaded.io(),
     // Explicit working directory for resolving relative paths
@@ -313,7 +309,7 @@ pub const BuildEnv = struct {
 
     /// Set the I/O implementation (or reset to OS default).
     pub fn setRocIo(self: *BuildEnv, roc_io: ?RocIo) void {
-        self.filesystem = roc_io orelse RocIo.default();
+        self.filesystem = roc_io orelse RocIo.default(self.sys_io);
     }
 
     /// Get the TargetsConfig from the platform package, if any.
@@ -376,8 +372,6 @@ pub const BuildEnv = struct {
     pub fn initCoordinator(self: *BuildEnv) !void {
         if (self.coordinator != null) return; // Already initialized
 
-        // Update module-level sys_io for nativeFetchUrlImpl (vtable signature cannot take sys_io)
-        build_sys_io = self.sys_io;
         // Propagate sys_io to the ordered sink for its mutex operations
         self.sink.sys_io = self.sys_io;
 

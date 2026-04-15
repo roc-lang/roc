@@ -58,7 +58,7 @@ test "storeRawBytes and loadRawBytes round-trip" {
     defer allocator.free(tmp_path);
 
     const config = CacheConfig{};
-    const filesystem = RocIo.default();
+    const filesystem = RocIo.default(std.Io.Threaded.global_single_threaded.io());
 
     var manager = CacheManager.init(allocator, config, filesystem);
 
@@ -89,7 +89,7 @@ test "loadRawBytes returns null on miss" {
     defer allocator.free(tmp_path);
 
     const config = CacheConfig{};
-    const filesystem = RocIo.default();
+    const filesystem = RocIo.default(std.Io.Threaded.global_single_threaded.io());
 
     var manager = CacheManager.init(allocator, config, filesystem);
 

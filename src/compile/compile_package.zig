@@ -263,7 +263,7 @@ pub const PackageEnv = struct {
     /// Builtin modules (Bool, Try, Str) for auto-importing in canonicalization (not owned)
     builtin_modules: *const BuiltinModules,
     /// I/O abstraction for reading sources and other filesystem/stdio operations.
-    roc_io: RocIo = RocIo.default(),
+    roc_io: RocIo,
     /// Zig standard library I/O, threaded through for lock/condvar/timestamp operations.
     sys_io: std.Io,
 
@@ -323,7 +323,7 @@ pub const PackageEnv = struct {
             .schedule_hook = schedule_hook,
             .compiler_version = compiler_version,
             .builtin_modules = builtin_modules,
-            .roc_io = roc_io orelse RocIo.default(),
+            .roc_io = roc_io orelse RocIo.default(sys_io),
             .sys_io = sys_io,
             .injector = std.ArrayList(Task).empty,
             .modules = modules,
@@ -364,7 +364,7 @@ pub const PackageEnv = struct {
             .schedule_hook = schedule_hook,
             .compiler_version = compiler_version,
             .builtin_modules = builtin_modules,
-            .roc_io = roc_io orelse RocIo.default(),
+            .roc_io = roc_io orelse RocIo.default(sys_io),
             .sys_io = sys_io,
             .injector = std.ArrayList(Task).empty,
             .modules = modules,
@@ -1263,6 +1263,7 @@ pub const PackageEnv = struct {
             .imported_modules = &module_envs_map,
         });
         czer.source_dir = root_dir;
+        czer.sys_io = sys_io;
         try czer.canonicalizeFile();
         try czer.validateForChecking();
         czer.deinit();

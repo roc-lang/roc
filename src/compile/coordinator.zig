@@ -503,7 +503,7 @@ pub const Coordinator = struct {
             .shutting_down = std.atomic.Value(bool).init(false),
             .total_remaining = 0,
             .builtin_modules = builtin_modules,
-            .roc_io = RocIo.default(),
+            .roc_io = RocIo.default(sys_io),
             .sys_io = sys_io,
             .compiler_version = compiler_version,
             .cache_manager = cache_manager,
@@ -589,7 +589,7 @@ pub const Coordinator = struct {
 
     /// Set the I/O implementation (or reset to OS default).
     pub fn setRocIo(self: *Coordinator, roc_io: ?RocIo) void {
-        self.roc_io = roc_io orelse RocIo.default();
+        self.roc_io = roc_io orelse RocIo.default(self.sys_io);
     }
 
     /// Set a custom allocator for module data (ModuleEnv, source).

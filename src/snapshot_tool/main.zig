@@ -593,8 +593,6 @@ var debug_allocator: std.heap.DebugAllocator(.{}) = .{
 /// cli entrypoint for snapshot tool
 pub fn main(init: std.process.Init) !void {
     app_io = init.io;
-    // Initialize the Roc IO module's system IO so file operations work
-    @import("io").RocIo.initSysIo(init.io);
 
     // Always use the debug allocator with the snapshot tool to help find allocation bugs.
     var gpa_tracy: tracy.TracyAllocator(null) = undefined;

@@ -249,7 +249,7 @@ pub const SyntaxChecker = struct {
 
         if (self.cache_config.enabled) {
             const cache_manager = try self.allocator.create(CacheManager);
-            cache_manager.* = CacheManager.init(self.allocator, self.cache_config, RocIo.default());
+            cache_manager.* = CacheManager.init(self.allocator, self.cache_config, RocIo.default(self.sys_io));
             env.setCacheManager(cache_manager);
         }
 
@@ -1776,7 +1776,7 @@ pub const SyntaxChecker = struct {
         defer allocator.free(absolute_path);
 
         // Override readFile for the current file so in-memory source is used.
-        var override = RocIo.ReadFileOverride{ .path = absolute_path, .content = source };
+        var override = RocIo.ReadFileOverride{ .path = absolute_path, .content = source, .base = env.filesystem };
         const saved_io = env.filesystem;
         env.filesystem = override.io();
         defer env.filesystem = saved_io;
