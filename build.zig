@@ -1084,6 +1084,7 @@ const CoverageSummaryStep = struct {
     /// - macOS (ARM64 and x86_64): Uses libdwarf for DWARF parsing
     /// - Linux ARM64: Uses libdw (elfutils) for DWARF parsing
     ///
+    /// TODO ZIG 16: re-check if this DWARF bug is fixed in 0.16 — may be able to enable x86_64 coverage
     /// Coverage does NOT work on Linux x86_64 due to a Zig 0.15.2 compiler bug that
     /// generates invalid DWARF .debug_line sections. libdw fails with "invalid
     /// .debug_line section" when parsing user code compilation units, while stdlib
@@ -3013,6 +3014,7 @@ pub fn build(b: *std.Build) void {
 
     // Parser code coverage with kcov
     // Only supported on Linux ARM64 and macOS (kcov doesn't work on Windows)
+    // TODO ZIG 16: re-check if DWARF bug is fixed — may be able to enable x86_64 coverage
     // Linux x86_64 is NOT supported due to Zig 0.15.2 generating invalid DWARF .debug_line
     // sections that cause kcov to fail (see CoverageSummaryStep comments for details)
     const is_linux_x86_64 = target.result.os.tag == .linux and target.result.cpu.arch == .x86_64;
@@ -3020,6 +3022,7 @@ pub fn build(b: *std.Build) void {
     if (is_coverage_supported and isNativeishOrMusl(target)) {
         // Get the kcov dependency and build it from source
         // lazyDependency returns null on first pass; Zig re-runs build() after fetching
+        // TODO ZIG 16: re-check if lazy dependency bug is fixed — may be able to restructure this block
         // ALL coverage-related code must be inside this block due to Zig 0.15.2 lazy dependency bug
         // where dependencies added to a step outside the lazy block are not executed when the step
         // also has dependencies added inside the lazy block.
@@ -3087,6 +3090,7 @@ pub fn build(b: *std.Build) void {
             summary_step.step.dependOn(&run_parse_coverage.step);
 
             // Cross-compile for Windows to verify comptime branches compile
+            // TODO ZIG 16: re-check if this lazy dependency bug is fixed
             // NOTE: This must be inside the lazy block due to Zig 0.15.2 bug where
             // dependencies added outside the lazy block prevent those inside from executing
             const windows_target = b.resolveTargetQuery(.{
@@ -3107,6 +3111,7 @@ pub fn build(b: *std.Build) void {
             coverage_step.dependOn(&windows_parse_build.step);
 
             // Add explicit dependencies on install steps to coverage_step itself
+            // TODO ZIG 16: re-check if lazy dependency issues are fixed
             // to work around Zig 0.15.2 lazy dependency issues
             coverage_step.dependOn(&install_parse_test.step);
             coverage_step.dependOn(&install_kcov.step);

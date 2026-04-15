@@ -16,7 +16,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
       - uses: mlugg/setup-zig@8d6198c65fb0feaa111df26e6b467fea8345e46f # ratchet:mlugg/setup-zig@v2.0.5
         with:
-          version: 0.15.2
+          version: 0.15.2 # TODO ZIG 16: update to 0.16.x
           use-cache: true
 
       - name: zig lints
@@ -101,7 +101,7 @@ jobs:
             target_flag: -Dtarget=x86_64-linux-musl
           - os: ubuntu-24.04-arm
             cpu_flag: ''
-            target_flag: ''  # Native build for kcov (Zig 0.15.2 x86_64 has DWARF bug)
+            target_flag: ''  # Native build for kcov (Zig 0.15.2 x86_64 has DWARF bug) # TODO ZIG 16: re-check if DWARF bug is fixed in 0.16
           - os: windows-2022
             cpu_flag: -Dcpu=x86_64_v3
             target_flag: ''
@@ -117,7 +117,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
       - uses: mlugg/setup-zig@8d6198c65fb0feaa111df26e6b467fea8345e46f # ratchet:mlugg/setup-zig@v2.0.5
         with:
-          version: 0.15.2
+          version: 0.15.2 # TODO ZIG 16: update to 0.16.x
           use-cache: true
       # temp fix, see https://roc.zulipchat.com/#narrow/channel/395097-compiler-development/topic/CI/near/542085291
       - name: delete llvm-config
@@ -241,6 +241,7 @@ jobs:
           }
 
       # Parser code coverage - run on ARM64 Linux (native build)
+      # TODO ZIG 16: re-check if DWARF bug is fixed in 0.16 — may be able to enable x86_64 coverage
       # Note: Zig 0.15.2 on x86_64 generates invalid DWARF .debug_line sections,
       # causing libdw to fail parsing user source files. ARM64 works correctly.
       - name: Install kcov dependencies
@@ -301,7 +302,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
       - uses: mlugg/setup-zig@8d6198c65fb0feaa111df26e6b467fea8345e46f # ratchet:mlugg/setup-zig@v2.0.5
         with:
-          version: 0.15.2
+          version: 0.15.2 # TODO ZIG 16: update to 0.16.x
           use-cache: true
 
       - name: cross compile with llvm

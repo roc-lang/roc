@@ -326,7 +326,7 @@ pub const CanonicalizeError = error{
 
 /// Errors that can occur when looking up an environment variable.
 pub const GetEnvVarError = error{
-    EnvironmentVariableNotFound,
+    EnvironmentVariableMissing,
     OutOfMemory,
 };
 
@@ -633,7 +633,7 @@ fn osGetEnvVar(_: ?*anyopaque, _: std.Io, key: []const u8, allocator: Allocator)
     // In Zig 0.16, environment access is via std.c.getenv (no allocator needed for lookup)
     const key_z = allocator.dupeZ(u8, key) catch return error.OutOfMemory;
     defer allocator.free(key_z);
-    const value = std.c.getenv(key_z) orelse return error.EnvironmentVariableNotFound;
+    const value = std.c.getenv(key_z) orelse return error.EnvironmentVariableMissing;
     const len = std.mem.len(value);
     return allocator.dupe(u8, value[0..len]) catch return error.OutOfMemory;
 }
@@ -749,7 +749,7 @@ fn testingRename(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) Rename
 }
 
 fn testingGetEnvVar(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) GetEnvVarError![]u8 {
-    return error.EnvironmentVariableNotFound;
+    return error.EnvironmentVariableMissing;
 }
 
 fn testingFetchUrl(_: ?*anyopaque, _: std.Io, _: Allocator, _: []const u8, _: []const u8) FetchUrlError!void {
@@ -872,7 +872,7 @@ fn freestandingRename(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) R
 }
 
 fn freestandingGetEnvVar(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) GetEnvVarError![]u8 {
-    return error.EnvironmentVariableNotFound;
+    return error.EnvironmentVariableMissing;
 }
 
 fn freestandingFetchUrl(_: ?*anyopaque, _: std.Io, _: Allocator, _: []const u8, _: []const u8) FetchUrlError!void {

@@ -208,7 +208,7 @@ fn renameWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) CoreCtx.R
 }
 
 fn getEnvVarWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) CoreCtx.GetEnvVarError![]u8 {
-    return error.EnvironmentVariableNotFound;
+    return error.EnvironmentVariableMissing;
 }
 
 fn fetchUrlWasm(_: ?*anyopaque, _: std.Io, _: Allocator, _: []const u8, _: []const u8) CoreCtx.FetchUrlError!void {

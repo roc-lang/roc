@@ -356,7 +356,7 @@ pub fn exportSqrt(comptime T: type, comptime name: []const u8) void {
 pub fn exportRound(comptime F: type, comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: F) callconv(.c) T {
-            return @as(T, @intFromFloat((math.round(input))));
+            return @as(T, @round(input));
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
@@ -366,7 +366,7 @@ pub fn exportRound(comptime F: type, comptime T: type, comptime name: []const u8
 pub fn exportFloor(comptime F: type, comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: F) callconv(.c) T {
-            return @as(T, @intFromFloat((math.floor(input))));
+            return @as(T, @floor(input));
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
@@ -376,7 +376,7 @@ pub fn exportFloor(comptime F: type, comptime T: type, comptime name: []const u8
 pub fn exportCeiling(comptime F: type, comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: F) callconv(.c) T {
-            return @as(T, @intFromFloat((math.ceil(input))));
+            return @as(T, @ceil(input));
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });

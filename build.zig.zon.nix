@@ -112,6 +112,7 @@ linkFarm name [
       hash = "sha256-EffHfTfP9uf2WsfMVbq3kB4MYgjoRaOHZDlNBO1WezA=";
     };
   }
+  # TODO ZIG 16: all roc_deps_* bootstrap URLs below need updating to zig-0.16.x releases
   {
     name = "N-V-__8AAJuttw4mNdQg3ig107ac4uyAhcFPznGHmpnmX58C";
     path = fetchZigArtifact {
