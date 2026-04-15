@@ -35,7 +35,7 @@ pub const CacheConfig = struct {
     max_size_mb: u32 = 1024, // 1GB default
     max_age_days: u32 = 30, // 30 days default
     verbose: bool = false, // Print cache statistics
-    roc_io: RocIo = RocIo.default(),
+    roc_io: RocIo = RocIo.default(std.Io.Threaded.global_single_threaded.io()),
 
     const Self = @This();
 

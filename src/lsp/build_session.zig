@@ -63,7 +63,7 @@ pub const BuildSession = struct {
         var override: RocIo.ReadFileOverride = undefined;
         const saved_io = env.filesystem;
         if (override_text) |text| {
-            override = .{ .path = absolute_path, .content = text };
+            override = .{ .path = absolute_path, .content = text, .base = env.filesystem };
             env.filesystem = override.io();
         }
 

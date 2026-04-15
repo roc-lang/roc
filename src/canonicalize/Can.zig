@@ -178,6 +178,8 @@ pattern_reused_existing_var: bool = false,
 enclosing_lambda: ?Expr.Idx = null,
 /// Directory containing the source file, used to resolve file imports.
 source_dir: ?[]const u8 = null,
+/// System I/O for file operations (e.g., file imports).
+sys_io: std.Io = std.Io.Threaded.global_single_threaded.io(),
 const Ident = base.Ident;
 const Region = base.Region;
 // ModuleEnv is already imported at the top
@@ -4275,7 +4277,7 @@ fn canonicalizeFileImport(self: *Self, fi: @TypeOf(@as(AST.Statement, undefined)
 
     // Read the file
     const file_contents: []u8 = std.Io.Dir.cwd().readFileAlloc(
-        @import("io").RocIo.getSysIo(),
+        self.sys_io,
         full_path,
         self.env.gpa,
         .unlimited,
