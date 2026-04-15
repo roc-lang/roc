@@ -11,6 +11,7 @@
 //!   mechanically rather than inferring more ownership behavior
 
 const std = @import("std");
+const builtin = @import("builtin");
 const layout = @import("layout");
 
 const LIR = @import("LIR.zig");
@@ -1115,6 +1116,13 @@ const ProcPass = struct {
         while (local_idx > 0) {
             local_idx -= 1;
             if (ownership_passed.isSet(local_idx) and self.live_in[succ_slot].isSet(local_idx)) {
+                if (builtin.mode == .Debug) {
+                    std.debug.print("RC retain ownership-passed stmt={d} local={d} succ={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        local_idx,
+                        @intFromEnum(original_successor),
+                    });
+                }
                 cursor = try self.store.addCFStmt(.{ .incref = .{
                     .value = @enumFromInt(@as(u32, @intCast(local_idx))),
                     .count = 1,
@@ -1128,6 +1136,14 @@ const ProcPass = struct {
             local_idx -= 1;
             const retain_count = retained_counts[local_idx];
             if (retain_count == 0) continue;
+            if (builtin.mode == .Debug) {
+                std.debug.print("RC retain required stmt={d} local={d} count={d} succ={d}\n", .{
+                    @intFromEnum(stmt_id),
+                    local_idx,
+                    retain_count,
+                    @intFromEnum(original_successor),
+                });
+            }
             cursor = try self.store.addCFStmt(.{ .incref = .{
                 .value = @enumFromInt(@as(u32, @intCast(local_idx))),
                 .count = retain_count,
@@ -1149,18 +1165,33 @@ const ProcPass = struct {
     fn collectRetainedInputIncrefs(self: *ProcPass, stmt_id: CFStmtId, retained_counts: []u16) Allocator.Error!void {
         switch (self.store.getCFStmt(stmt_id)) {
             .assign_ref => |assign| {
+                if (builtin.mode == .Debug and @intFromEnum(stmt_id) == 62) {
+                    std.debug.print("RC fresh-input source stmt 62 = {any}\n", .{self.store.getCFStmt(stmt_id)});
+                }
                 try self.accumulateFreshInputRetains(self.store.getLocalSpan(assign.ownership.consumed_owned_inputs), retained_counts);
             },
             .assign_list => |assign| {
+                if (builtin.mode == .Debug and @intFromEnum(stmt_id) == 62) {
+                    std.debug.print("RC fresh-input source stmt 62 = {any}\n", .{self.store.getCFStmt(stmt_id)});
+                }
                 try self.accumulateFreshInputRetains(self.store.getLocalSpan(assign.ownership.consumed_owned_inputs), retained_counts);
             },
             .assign_struct => |assign| {
+                if (builtin.mode == .Debug and @intFromEnum(stmt_id) == 62) {
+                    std.debug.print("RC fresh-input source stmt 62 = {any}\n", .{self.store.getCFStmt(stmt_id)});
+                }
                 try self.accumulateFreshInputRetains(self.store.getLocalSpan(assign.ownership.consumed_owned_inputs), retained_counts);
             },
             .assign_tag => |assign| {
+                if (builtin.mode == .Debug and @intFromEnum(stmt_id) == 62) {
+                    std.debug.print("RC fresh-input source stmt 62 = {any}\n", .{self.store.getCFStmt(stmt_id)});
+                }
                 try self.accumulateFreshInputRetains(self.store.getLocalSpan(assign.ownership.consumed_owned_inputs), retained_counts);
             },
             .assign_low_level => |assign| {
+                if (builtin.mode == .Debug and @intFromEnum(stmt_id) == 62) {
+                    std.debug.print("RC fresh-input source stmt 62 = {any}\n", .{self.store.getCFStmt(stmt_id)});
+                }
                 try self.accumulateRetainedBorrows(self.store.getLocalSpan(assign.ownership.retained_borrows), retained_counts);
             },
             else => {},
@@ -1196,13 +1227,24 @@ const ProcPass = struct {
     fn collectRequiredOwnedInputIncrefs(self: *ProcPass, stmt_id: CFStmtId, retained_counts: []u16) Allocator.Error!void {
         switch (self.store.getCFStmt(stmt_id)) {
             .assign_low_level => |assign| {
+                if (builtin.mode == .Debug and @intFromEnum(stmt_id) == 62) {
+                    std.debug.print("RC required source stmt 62 = {any}\n", .{self.store.getCFStmt(stmt_id)});
+                }
                 for (self.store.getLocalSpan(assign.ownership.consumed_owned_inputs)) |local| {
                     if (resultContinuesOwnershipFromInput(assign.result, local)) continue;
                     self.accumulateBorrowedConsumeRetain(local, retained_counts);
                 }
             },
-            .set_local => |assign| self.accumulateBorrowedConsumeRetain(assign.value, retained_counts),
+            .set_local => |assign| {
+                if (builtin.mode == .Debug and @intFromEnum(stmt_id) == 62) {
+                    std.debug.print("RC required source stmt 62 = {any}\n", .{self.store.getCFStmt(stmt_id)});
+                }
+                self.accumulateBorrowedConsumeRetain(assign.value, retained_counts);
+            },
             .jump => |jump| {
+                if (builtin.mode == .Debug and @intFromEnum(stmt_id) == 62) {
+                    std.debug.print("RC required source stmt 62 = {any}\n", .{self.store.getCFStmt(stmt_id)});
+                }
                 if (self.join_params_by_id.get(@intFromEnum(jump.target))) |params_span| {
                     const params = self.store.getLocalSpan(params_span);
                     const args = self.store.getLocalSpan(jump.args);
@@ -1267,8 +1309,8 @@ const ProcPass = struct {
     }
 
     fn incrementRetainCount(self: *ProcPass, local: LocalId, retained_counts: []u16, delta: u16) void {
-        const canonical = self.explicitOwnerForLocal(local) orelse local;
-        const local_idx = @intFromEnum(canonical);
+        _ = self;
+        const local_idx = @intFromEnum(local);
         const next = retained_counts[local_idx] + delta;
         std.debug.assert(next >= retained_counts[local_idx]);
         retained_counts[local_idx] = next;

@@ -30,7 +30,7 @@ pub fn inferProcResultContracts(
 ) Allocator.Error!void {
     try propagateRefResultSemantics(allocator, store);
     try normalizeRefLocalOwnership(allocator, store, layouts);
-    try inferProcOwnedParams(allocator, store);
+    try inferProcOwnedParams(allocator, store, layouts);
 
     var changed = true;
     while (changed) {
@@ -55,6 +55,7 @@ pub fn inferProcResultContracts(
 pub fn inferProcOwnedParams(
     allocator: Allocator,
     store: *LirStore,
+    layouts: *const layout_mod.Store,
 ) Allocator.Error!void {
     var changed = true;
     while (changed) {
@@ -64,7 +65,7 @@ pub fn inferProcOwnedParams(
         while (proc_index < proc_count) : (proc_index += 1) {
             const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
             const proc = store.getProcSpec(proc_id);
-            const inferred = try inferOneProcOwnedParams(allocator, store, proc);
+            const inferred = try inferOneProcOwnedParams(allocator, store, layouts, proc);
             if (!localSpansEqual(store, proc.owned_params, inferred)) {
                 store.getProcSpecPtr(proc_id).owned_params = inferred;
                 changed = true;
@@ -81,11 +82,19 @@ fn inferOneProcResultContract(
     if (proc.body == null) return .fresh;
 
     const args = store.getLocalSpan(proc.args);
+    const owned_params = store.getLocalSpan(proc.owned_params);
     var arg_index_by_local = std.AutoHashMap(u32, usize).init(allocator);
     defer arg_index_by_local.deinit();
     try arg_index_by_local.ensureTotalCapacity(@intCast(args.len));
     for (args, 0..) |arg_local, i| {
         arg_index_by_local.putAssumeCapacity(@intFromEnum(arg_local), i);
+    }
+
+    var owned_param_locals = std.AutoHashMap(u32, void).init(allocator);
+    defer owned_param_locals.deinit();
+    try owned_param_locals.ensureTotalCapacity(@intCast(owned_params.len));
+    for (owned_params) |owned_param| {
+        owned_param_locals.putAssumeCapacity(@intFromEnum(owned_param), {});
     }
 
     var visited = std.AutoHashMap(u32, void).init(allocator);
@@ -98,6 +107,7 @@ fn inferOneProcResultContract(
         store,
         proc.body.?,
         &arg_index_by_local,
+        &owned_param_locals,
         &visited,
         &summaries,
     );
@@ -114,6 +124,7 @@ fn inferOneProcResultContract(
 fn inferOneProcOwnedParams(
     allocator: Allocator,
     store: *LirStore,
+    layouts: *const layout_mod.Store,
     proc: LIR.LirProcSpec,
 ) Allocator.Error!LIR.LocalSpan {
     const args = store.getLocalSpan(proc.args);
@@ -145,6 +156,16 @@ fn inferOneProcOwnedParams(
         &active,
         needs_owned,
     );
+    visited.clearRetainingCapacity();
+    try collectReturnedRefcountedProjectionParams(
+        allocator,
+        store,
+        layouts,
+        proc.body.?,
+        &arg_index_by_local,
+        &visited,
+        needs_owned,
+    );
 
     var owned = std.ArrayList(LocalId).empty;
     defer owned.deinit(allocator);
@@ -154,6 +175,82 @@ fn inferOneProcOwnedParams(
         }
     }
     return try store.addLocalSpan(owned.items);
+}
+
+fn collectReturnedRefcountedProjectionParams(
+    allocator: Allocator,
+    store: *LirStore,
+    layouts: *const layout_mod.Store,
+    stmt_id: CFStmtId,
+    arg_index_by_local: *const std.AutoHashMap(u32, usize),
+    visited: *std.AutoHashMap(u32, void),
+    needs_owned: []bool,
+) Allocator.Error!void {
+    const gop = try visited.getOrPut(@intFromEnum(stmt_id));
+    if (gop.found_existing) return;
+
+    switch (store.getCFStmt(stmt_id)) {
+        .assign_symbol => |assign| try collectReturnedRefcountedProjectionParams(allocator, store, layouts, assign.next, arg_index_by_local, visited, needs_owned),
+        .assign_ref => |assign| try collectReturnedRefcountedProjectionParams(allocator, store, layouts, assign.next, arg_index_by_local, visited, needs_owned),
+        .assign_literal => |assign| try collectReturnedRefcountedProjectionParams(allocator, store, layouts, assign.next, arg_index_by_local, visited, needs_owned),
+        .assign_call => |assign| try collectReturnedRefcountedProjectionParams(allocator, store, layouts, assign.next, arg_index_by_local, visited, needs_owned),
+        .assign_call_indirect => |assign| try collectReturnedRefcountedProjectionParams(allocator, store, layouts, assign.next, arg_index_by_local, visited, needs_owned),
+        .assign_low_level => |assign| try collectReturnedRefcountedProjectionParams(allocator, store, layouts, assign.next, arg_index_by_local, visited, needs_owned),
+        .assign_list => |assign| try collectReturnedRefcountedProjectionParams(allocator, store, layouts, assign.next, arg_index_by_local, visited, needs_owned),
+        .assign_struct => |assign| try collectReturnedRefcountedProjectionParams(allocator, store, layouts, assign.next, arg_index_by_local, visited, needs_owned),
+        .assign_tag => |assign| try collectReturnedRefcountedProjectionParams(allocator, store, layouts, assign.next, arg_index_by_local, visited, needs_owned),
+        .set_local => |assign| try collectReturnedRefcountedProjectionParams(allocator, store, layouts, assign.next, arg_index_by_local, visited, needs_owned),
+        .debug => |debug_stmt| try collectReturnedRefcountedProjectionParams(allocator, store, layouts, debug_stmt.next, arg_index_by_local, visited, needs_owned),
+        .expect => |expect_stmt| try collectReturnedRefcountedProjectionParams(allocator, store, layouts, expect_stmt.next, arg_index_by_local, visited, needs_owned),
+        .incref => |inc| try collectReturnedRefcountedProjectionParams(allocator, store, layouts, inc.next, arg_index_by_local, visited, needs_owned),
+        .decref => |dec| try collectReturnedRefcountedProjectionParams(allocator, store, layouts, dec.next, arg_index_by_local, visited, needs_owned),
+        .free => |free_stmt| try collectReturnedRefcountedProjectionParams(allocator, store, layouts, free_stmt.next, arg_index_by_local, visited, needs_owned),
+        .switch_stmt => |sw| {
+            for (store.getCFSwitchBranches(sw.branches)) |branch| {
+                try collectReturnedRefcountedProjectionParams(allocator, store, layouts, branch.body, arg_index_by_local, visited, needs_owned);
+            }
+            try collectReturnedRefcountedProjectionParams(allocator, store, layouts, sw.default_branch, arg_index_by_local, visited, needs_owned);
+        },
+        .borrow_scope => |scope| {
+            try collectReturnedRefcountedProjectionParams(allocator, store, layouts, scope.body, arg_index_by_local, visited, needs_owned);
+            try collectReturnedRefcountedProjectionParams(allocator, store, layouts, scope.remainder, arg_index_by_local, visited, needs_owned);
+        },
+        .for_list => |for_stmt| {
+            try collectReturnedRefcountedProjectionParams(allocator, store, layouts, for_stmt.body, arg_index_by_local, visited, needs_owned);
+            try collectReturnedRefcountedProjectionParams(allocator, store, layouts, for_stmt.next, arg_index_by_local, visited, needs_owned);
+        },
+        .join => |join| {
+            try collectReturnedRefcountedProjectionParams(allocator, store, layouts, join.body, arg_index_by_local, visited, needs_owned);
+            try collectReturnedRefcountedProjectionParams(allocator, store, layouts, join.remainder, arg_index_by_local, visited, needs_owned);
+        },
+        .jump, .runtime_error, .scope_exit, .crash, .loop_continue => {},
+        .ret => |ret_stmt| {
+            if (!layoutContainsRefcounted(store, layouts, ret_stmt.value)) return;
+
+            var active = std.AutoHashMap(u32, void).init(allocator);
+            defer active.deinit();
+            var owned_param_locals = std.AutoHashMap(u32, void).init(allocator);
+            defer owned_param_locals.deinit();
+            const contract = try inferLocalContract(
+                allocator,
+                store,
+                ret_stmt.value,
+                arg_index_by_local,
+                &owned_param_locals,
+                &active,
+            );
+
+            switch (contract) {
+                .alias_of_param => |param| {
+                    if (!param.projections.isEmpty()) needs_owned[param.param_index] = true;
+                },
+                .borrow_of_param => |param| {
+                    if (!param.projections.isEmpty()) needs_owned[param.param_index] = true;
+                },
+                else => {},
+            }
+        },
+    }
 }
 
 fn collectOwnedParams(
@@ -255,6 +352,7 @@ fn collectReturnContracts(
     store: *LirStore,
     stmt_id: CFStmtId,
     arg_index_by_local: *const std.AutoHashMap(u32, usize),
+    owned_param_locals: *const std.AutoHashMap(u32, void),
     visited: *std.AutoHashMap(u32, void),
     out: *std.ArrayList(ProcResultContract),
 ) Allocator.Error!void {
@@ -262,42 +360,42 @@ fn collectReturnContracts(
     if (gop.found_existing) return;
 
     switch (store.getCFStmt(stmt_id)) {
-        .assign_symbol => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, visited, out),
-        .assign_ref => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, visited, out),
-        .assign_literal => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, visited, out),
-        .assign_call => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, visited, out),
-        .assign_call_indirect => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, visited, out),
-        .assign_low_level => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, visited, out),
-        .assign_list => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, visited, out),
-        .assign_struct => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, visited, out),
-        .assign_tag => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, visited, out),
-        .set_local => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, visited, out),
-        .debug => |debug_stmt| try collectReturnContracts(allocator, store, debug_stmt.next, arg_index_by_local, visited, out),
-        .expect => |expect_stmt| try collectReturnContracts(allocator, store, expect_stmt.next, arg_index_by_local, visited, out),
-        .incref => |inc| try collectReturnContracts(allocator, store, inc.next, arg_index_by_local, visited, out),
-        .decref => |dec| try collectReturnContracts(allocator, store, dec.next, arg_index_by_local, visited, out),
-        .free => |free_stmt| try collectReturnContracts(allocator, store, free_stmt.next, arg_index_by_local, visited, out),
+        .assign_symbol => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, owned_param_locals, visited, out),
+        .assign_ref => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, owned_param_locals, visited, out),
+        .assign_literal => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, owned_param_locals, visited, out),
+        .assign_call => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, owned_param_locals, visited, out),
+        .assign_call_indirect => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, owned_param_locals, visited, out),
+        .assign_low_level => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, owned_param_locals, visited, out),
+        .assign_list => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, owned_param_locals, visited, out),
+        .assign_struct => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, owned_param_locals, visited, out),
+        .assign_tag => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, owned_param_locals, visited, out),
+        .set_local => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, owned_param_locals, visited, out),
+        .debug => |debug_stmt| try collectReturnContracts(allocator, store, debug_stmt.next, arg_index_by_local, owned_param_locals, visited, out),
+        .expect => |expect_stmt| try collectReturnContracts(allocator, store, expect_stmt.next, arg_index_by_local, owned_param_locals, visited, out),
+        .incref => |inc| try collectReturnContracts(allocator, store, inc.next, arg_index_by_local, owned_param_locals, visited, out),
+        .decref => |dec| try collectReturnContracts(allocator, store, dec.next, arg_index_by_local, owned_param_locals, visited, out),
+        .free => |free_stmt| try collectReturnContracts(allocator, store, free_stmt.next, arg_index_by_local, owned_param_locals, visited, out),
         .switch_stmt => |sw| {
             for (store.getCFSwitchBranches(sw.branches)) |branch| {
-                try collectReturnContracts(allocator, store, branch.body, arg_index_by_local, visited, out);
+                try collectReturnContracts(allocator, store, branch.body, arg_index_by_local, owned_param_locals, visited, out);
             }
-            try collectReturnContracts(allocator, store, sw.default_branch, arg_index_by_local, visited, out);
+            try collectReturnContracts(allocator, store, sw.default_branch, arg_index_by_local, owned_param_locals, visited, out);
         },
         .borrow_scope => |scope| {
-            try collectReturnContracts(allocator, store, scope.body, arg_index_by_local, visited, out);
-            try collectReturnContracts(allocator, store, scope.remainder, arg_index_by_local, visited, out);
+            try collectReturnContracts(allocator, store, scope.body, arg_index_by_local, owned_param_locals, visited, out);
+            try collectReturnContracts(allocator, store, scope.remainder, arg_index_by_local, owned_param_locals, visited, out);
         },
         .for_list => |for_stmt| {
-            try collectReturnContracts(allocator, store, for_stmt.body, arg_index_by_local, visited, out);
-            try collectReturnContracts(allocator, store, for_stmt.next, arg_index_by_local, visited, out);
+            try collectReturnContracts(allocator, store, for_stmt.body, arg_index_by_local, owned_param_locals, visited, out);
+            try collectReturnContracts(allocator, store, for_stmt.next, arg_index_by_local, owned_param_locals, visited, out);
         },
         .join => |join| {
-            try collectReturnContracts(allocator, store, join.body, arg_index_by_local, visited, out);
-            try collectReturnContracts(allocator, store, join.remainder, arg_index_by_local, visited, out);
+            try collectReturnContracts(allocator, store, join.body, arg_index_by_local, owned_param_locals, visited, out);
+            try collectReturnContracts(allocator, store, join.remainder, arg_index_by_local, owned_param_locals, visited, out);
         },
         .jump, .runtime_error, .scope_exit, .crash, .loop_continue => {},
         .ret => |ret_stmt| {
-            try out.append(allocator, try inferReturnedLocalContract(allocator, store, ret_stmt.value, arg_index_by_local));
+            try out.append(allocator, try inferReturnedLocalContract(allocator, store, ret_stmt.value, arg_index_by_local, owned_param_locals));
         },
     }
 }
@@ -307,10 +405,11 @@ fn inferReturnedLocalContract(
     store: *LirStore,
     local: LocalId,
     arg_index_by_local: *const std.AutoHashMap(u32, usize),
+    owned_param_locals: *const std.AutoHashMap(u32, void),
 ) Allocator.Error!ProcResultContract {
     var active = std.AutoHashMap(u32, void).init(allocator);
     defer active.deinit();
-    return inferLocalContract(allocator, store, local, arg_index_by_local, &active);
+    return inferLocalContract(allocator, store, local, arg_index_by_local, owned_param_locals, &active);
 }
 
 fn inferOwnedParamSource(
@@ -401,36 +500,40 @@ fn inferLocalContract(
     store: *LirStore,
     local: LocalId,
     arg_index_by_local: *const std.AutoHashMap(u32, usize),
+    owned_param_locals: *const std.AutoHashMap(u32, void),
     active: *std.AutoHashMap(u32, void),
 ) Allocator.Error!ProcResultContract {
     if (arg_index_by_local.get(@intFromEnum(local))) |param_index| {
-        return .{ .alias_of_param = .{ .param_index = @intCast(param_index) } };
+        return if (owned_param_locals.contains(@intFromEnum(local)))
+            .{ .alias_of_param = .{ .param_index = @intCast(param_index) } }
+        else
+            .{ .borrow_of_param = .{ .param_index = @intCast(param_index) } };
     }
 
     const gop = try active.getOrPut(@intFromEnum(local));
     if (gop.found_existing) return .fresh;
     defer _ = active.remove(@intFromEnum(local));
 
-    if (try inferJoinParamContract(allocator, store, local, arg_index_by_local, active)) |contract| {
+    if (try inferJoinParamContract(allocator, store, local, arg_index_by_local, owned_param_locals, active)) |contract| {
         return contract;
     }
 
     const producer = findProducer(store, local) orelse return .fresh;
     return switch (producer) {
-        .assign_ref => |assign| try contractFromResultSemantics(allocator, store, assign.result, arg_index_by_local, active),
+        .assign_ref => |assign| try contractFromResultSemantics(allocator, store, assign.result, arg_index_by_local, owned_param_locals, active),
         .assign_call => |assign| if (assign.result == .fresh)
             store.getProcSpec(assign.proc).result_contract
         else
-            try contractFromResultSemantics(allocator, store, assign.result, arg_index_by_local, active),
-        .assign_call_indirect => |assign| try contractFromResultSemantics(allocator, store, assign.result, arg_index_by_local, active),
-        .assign_low_level => |assign| try contractFromResultSemantics(allocator, store, assign.result, arg_index_by_local, active),
+            try contractFromResultSemantics(allocator, store, assign.result, arg_index_by_local, owned_param_locals, active),
+        .assign_call_indirect => |assign| try contractFromResultSemantics(allocator, store, assign.result, arg_index_by_local, owned_param_locals, active),
+        .assign_low_level => |assign| try contractFromResultSemantics(allocator, store, assign.result, arg_index_by_local, owned_param_locals, active),
         .assign_literal,
         .assign_symbol,
         .assign_list,
         .assign_struct,
         .assign_tag,
         => .fresh,
-        .for_list => |for_stmt| try contractFromResultSemantics(allocator, store, for_stmt.elem_result, arg_index_by_local, active),
+        .for_list => |for_stmt| try contractFromResultSemantics(allocator, store, for_stmt.elem_result, arg_index_by_local, owned_param_locals, active),
         .set_local,
         .debug,
         .expect,
@@ -455,12 +558,13 @@ fn contractFromResultSemantics(
     store: *LirStore,
     semantics: ResultSemantics,
     arg_index_by_local: *const std.AutoHashMap(u32, usize),
+    owned_param_locals: *const std.AutoHashMap(u32, void),
     active: *std.AutoHashMap(u32, void),
 ) Allocator.Error!ProcResultContract {
     return switch (semantics) {
         .fresh => .fresh,
         .alias_of => |alias| blk: {
-            var contract = try inferLocalContract(allocator, store, alias.owner, arg_index_by_local, active);
+            var contract = try inferLocalContract(allocator, store, alias.owner, arg_index_by_local, owned_param_locals, active);
             switch (contract) {
                 .alias_of_param => |*param| {
                     param.projections = try appendProjectionSpan(allocator, store, param.projections, alias.projections);
@@ -474,7 +578,7 @@ fn contractFromResultSemantics(
             }
         },
         .borrow_of => |borrow| blk: {
-            var contract = try inferLocalContract(allocator, store, borrow.owner, arg_index_by_local, active);
+            var contract = try inferLocalContract(allocator, store, borrow.owner, arg_index_by_local, owned_param_locals, active);
             switch (contract) {
                 .alias_of_param => |param| {
                     break :blk .{ .borrow_of_param = .{
@@ -497,6 +601,7 @@ fn inferJoinParamContract(
     store: *LirStore,
     local: LocalId,
     arg_index_by_local: *const std.AutoHashMap(u32, usize),
+    owned_param_locals: *const std.AutoHashMap(u32, void),
     active: *std.AutoHashMap(u32, void),
 ) Allocator.Error!?ProcResultContract {
     for (store.cf_stmts.items) |stmt| {
@@ -524,7 +629,7 @@ fn inferJoinParamContract(
             const args = store.getLocalSpan(jump.args);
             if (param_index >= args.len) return .fresh;
             saw_incoming = true;
-            const candidate = try inferLocalContract(allocator, store, args[param_index], arg_index_by_local, active);
+            const candidate = try inferLocalContract(allocator, store, args[param_index], arg_index_by_local, owned_param_locals, active);
             if (summary) |existing| {
                 if (!procResultContractsEqual(store, existing, candidate)) return .fresh;
             } else {
@@ -682,11 +787,21 @@ fn normalizeRefLocalOwnership(
                 .fresh => break :blk LIR.OwnershipSemantics{
                     .consumed_owned_inputs = try store.addLocalSpan(&.{source}),
                 },
-                .alias_of => |alias| break :blk LIR.OwnershipSemantics{
-                    .consumed_owned_inputs = try store.addLocalSpan(&.{alias.owner}),
+                .alias_of => |alias| {
+                    if (alias.projections.isEmpty()) {
+                        break :blk LIR.OwnershipSemantics{
+                            .consumed_owned_inputs = try store.addLocalSpan(&.{alias.owner}),
+                        };
+                    }
+
+                    break :blk LIR.OwnershipSemantics{
+                        .materialization = .copy_from_borrowed_input,
+                        .retained_borrows = try store.addLocalSpan(&.{source}),
+                    };
                 },
-                .borrow_of => |borrow| break :blk LIR.OwnershipSemantics{
-                    .retained_borrows = try store.addLocalSpan(&.{borrow.owner}),
+                .borrow_of => break :blk LIR.OwnershipSemantics{
+                    .materialization = .copy_from_borrowed_input,
+                    .retained_borrows = try store.addLocalSpan(&.{source}),
                 },
             }
         };
