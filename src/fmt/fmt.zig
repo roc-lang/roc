@@ -19,8 +19,6 @@ const tokenize = parse.tokenize;
 
 const is_windows = builtin.target.os.tag == .windows;
 
-var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
-
 var stderr_file_writer: std.Io.File.Writer = .{
     .io = std.Io.Threaded.global_single_threaded.io(),
     .interface = std.Io.File.Writer.initInterface(&.{}),

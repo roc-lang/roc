@@ -37,7 +37,7 @@ const TestHarness = struct {
         const allocator = std.testing.allocator;
         return .{
             .allocator = allocator,
-            .checker = SyntaxChecker.init(allocator, .{}, null),
+            .checker = SyntaxChecker.init(allocator, std.testing.io, .{}, null),
             .tmp = std.testing.tmpDir(.{}),
             .platform_path = try platformPath(allocator),
         };

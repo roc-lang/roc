@@ -2,8 +2,6 @@
 
 const std = @import("std");
 
-var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
-
 /// Builds a JSON-RPC transport to decode requests and encode response for the LSP.
 pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
     return struct {
@@ -11,6 +9,7 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
         const ReaderError = if (@hasDecl(ReaderType, "Error")) ReaderType.Error else anyerror;
 
         allocator: std.mem.Allocator,
+        sys_io: std.Io,
         reader: ReaderType,
         writer: WriterType,
         log_file: ?std.Io.File = null,
@@ -28,9 +27,10 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
         const max_header_line = 8 * 1024;
         const max_payload_size: usize = 16 * 1024 * 1024;
 
-        pub fn init(allocator: std.mem.Allocator, reader: ReaderType, writer: WriterType, log_file: ?std.Io.File) Self {
+        pub fn init(allocator: std.mem.Allocator, sys_io: std.Io, reader: ReaderType, writer: WriterType, log_file: ?std.Io.File) Self {
             return .{
                 .allocator = allocator,
+                .sys_io = sys_io,
                 .reader = reader,
                 .writer = writer,
                 .log_file = log_file,
@@ -39,7 +39,7 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
 
         pub fn deinit(self: *Self) void {
             if (self.log_file) |*file| {
-                file.close(app_sys_io);
+                file.close(self.sys_io);
                 self.log_file = null;
             }
         }
@@ -173,12 +173,12 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
             const header = std.fmt.bufPrint(
                 &header_buffer,
                 "[{d}] {s} ({d} bytes)\n",
-                .{ @divTrunc(std.Io.Timestamp.now(app_sys_io, .real).nanoseconds, 1_000_000), direction, payload.len },
+                .{ @divTrunc(std.Io.Timestamp.now(self.sys_io, .real).nanoseconds, 1_000_000), direction, payload.len },
             ) catch return;
-            log_file.writeStreamingAll(app_sys_io, header) catch return;
-            log_file.writeStreamingAll(app_sys_io, payload) catch return;
-            log_file.writeStreamingAll(app_sys_io, "\n---\n") catch return;
-            log_file.sync(app_sys_io) catch {};
+            log_file.writeStreamingAll(self.sys_io, header) catch return;
+            log_file.writeStreamingAll(self.sys_io, payload) catch return;
+            log_file.writeStreamingAll(self.sys_io, "\n---\n") catch return;
+            log_file.sync(self.sys_io) catch {};
         }
     };
 }

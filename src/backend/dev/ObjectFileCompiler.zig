@@ -26,8 +26,6 @@ const LirCodeGenMod = @import("LirCodeGen.zig");
 const StaticDataInterner = @import("StaticDataInterner.zig");
 const static_data_export = @import("StaticDataExport.zig");
 
-var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
-
 /// Information about an entrypoint to compile
 pub const Entrypoint = struct {
     /// The exported symbol name (e.g., "roc__main")
@@ -102,6 +100,7 @@ pub const ObjectFileCompiler = struct {
         proc_specs: []const LirProcSpec,
         target: RocTarget,
         output_path: []const u8,
+        sys_io: std.Io,
     ) CompilationError!void {
         var result = try self.compileToObjectFile(
             lir_store,

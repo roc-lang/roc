@@ -10,8 +10,6 @@ const semantic_tokens = @import("../semantic_tokens.zig");
 const line_info = @import("../line_info.zig");
 const uri_util = @import("../uri.zig");
 
-var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
-
 /// Returns the semantic tokens handler for the LSP.
 pub fn handler(comptime ServerType: type) type {
     return struct {
@@ -49,7 +47,7 @@ pub fn handler(comptime ServerType: type) type {
             if (uri_util.uriToPath(self.allocator, params.textDocument.uri)) |path| {
                 defer self.allocator.free(path);
                 // Get absolute path
-                if (std.Io.Dir.cwd().realPathFileAlloc(app_sys_io, path, self.allocator)) |abs_path| {
+                if (std.Io.Dir.cwd().realPathFileAlloc(self.sys_io, path, self.allocator)) |abs_path| {
                     defer self.allocator.free(abs_path);
                     // Get imported modules from the syntax checker's cached build
                     if (self.syntax_checker.getImportedModuleEnvs(abs_path)) |maybe_envs| {

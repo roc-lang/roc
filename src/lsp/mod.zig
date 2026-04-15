@@ -12,8 +12,8 @@ pub const module_lookup = @import("module_lookup.zig");
 pub const doc_comments = @import("doc_comments.zig");
 
 /// Convenience wrapper to launch the server using stdin/stdout from other modules.
-pub fn runWithStdIo(allocator: std.mem.Allocator, debug: server.DebugOptions) !void {
-    try server.runWithStdIo(allocator, debug);
+pub fn runWithStdIo(allocator: std.mem.Allocator, sys_io: std.Io, debug: server.DebugOptions) !void {
+    try server.runWithStdIo(allocator, sys_io, debug);
 }
 
 test "lsp tests" {

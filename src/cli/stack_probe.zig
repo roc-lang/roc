@@ -9,8 +9,6 @@
 
 const std = @import("std");
 
-var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
-
 /// x86_64 machine code for ___chkstk_ms (stack probe without SP adjustment)
 /// This probes stack pages in 4KB increments to ensure they are committed.
 ///
@@ -153,11 +151,11 @@ pub fn generateStackProbeObject(allocator: std.mem.Allocator) ![]u8 {
 }
 
 /// Write the stack probe object file to a path.
-pub fn writeStackProbeObject(allocator: std.mem.Allocator, path: []const u8) !void {
+pub fn writeStackProbeObject(allocator: std.mem.Allocator, sys_io: std.Io, path: []const u8) !void {
     const obj_bytes = try generateStackProbeObject(allocator);
     defer allocator.free(obj_bytes);
 
-    try std.Io.Dir.cwd().writeFile(app_sys_io, .{
+    try std.Io.Dir.cwd().writeFile(sys_io, .{
         .sub_path = path,
         .data = obj_bytes,
     });

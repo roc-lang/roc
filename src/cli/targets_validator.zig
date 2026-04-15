@@ -14,8 +14,6 @@ const base = @import("base");
 const target_mod = @import("target.zig");
 const reporting = @import("reporting");
 
-var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
-
 const Allocators = base.Allocators;
 
 const RocTarget = target_mod.RocTarget;
@@ -154,37 +152,38 @@ pub fn validatePlatformHasTargets(
 /// Validate that files declared in targets section exist on disk
 pub fn validateTargetFilesExist(
     allocator: Allocator,
+    sys_io: std.Io,
     targets_config: TargetsConfig,
     platform_dir: std.Io.Dir,
 ) !ValidationResult {
     const files_dir_path = targets_config.files_dir orelse return .{ .valid = {} };
 
     // Check if files directory exists
-    var files_dir = platform_dir.openDir(app_sys_io, files_dir_path, .{}) catch {
+    var files_dir = platform_dir.openDir(sys_io, files_dir_path, .{}) catch {
         return .{ .missing_files_directory = .{
             .platform_path = "platform",
             .files_dir = files_dir_path,
         } };
     };
-    defer files_dir.close(app_sys_io);
+    defer files_dir.close(sys_io);
 
     // Validate exe targets
     for (targets_config.exe) |spec| {
-        if (try validateTargetSpec(allocator, spec, .exe, files_dir)) |result| {
+        if (try validateTargetSpec(allocator, sys_io, spec, .exe, files_dir)) |result| {
             return result;
         }
     }
 
     // Validate static_lib targets
     for (targets_config.static_lib) |spec| {
-        if (try validateTargetSpec(allocator, spec, .static_lib, files_dir)) |result| {
+        if (try validateTargetSpec(allocator, sys_io, spec, .static_lib, files_dir)) |result| {
             return result;
         }
     }
 
     // Validate shared_lib targets
     for (targets_config.shared_lib) |spec| {
-        if (try validateTargetSpec(allocator, spec, .shared_lib, files_dir)) |result| {
+        if (try validateTargetSpec(allocator, sys_io, spec, .shared_lib, files_dir)) |result| {
             return result;
         }
     }
@@ -194,6 +193,7 @@ pub fn validateTargetFilesExist(
 
 fn validateTargetSpec(
     allocator: Allocator,
+    sys_io: std.Io,
     spec: TargetLinkSpec,
     link_type: LinkType,
     files_dir: std.Io.Dir,
@@ -202,7 +202,7 @@ fn validateTargetSpec(
     const target_subdir = @tagName(spec.target);
 
     // Open target subdirectory
-    var target_dir = files_dir.openDir(app_sys_io, target_subdir, .{}) catch {
+    var target_dir = files_dir.openDir(sys_io, target_subdir, .{}) catch {
         // Target directory doesn't exist - this might be okay if there are no file items
         var has_files = false;
         for (spec.items) |item| {
@@ -225,14 +225,14 @@ fn validateTargetSpec(
         }
         return null;
     };
-    defer target_dir.close(app_sys_io);
+    defer target_dir.close(sys_io);
 
     // Check each file item exists
     for (spec.items) |item| {
         switch (item) {
             .file_path => |path| {
                 // Check if file exists
-                target_dir.access(app_sys_io, path, .{}) catch {
+                target_dir.access(sys_io, path, .{}) catch {
                     const expected_path = try std.fmt.allocPrint(allocator, "{s}/{s}/{s}", .{ "targets", target_subdir, path });
                     return .{ .missing_target_file = .{
                         .target = spec.target,

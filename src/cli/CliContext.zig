@@ -39,8 +39,6 @@ const Allocator = std.mem.Allocator;
 const reporting = @import("reporting");
 const problem_mod = @import("CliProblem.zig");
 
-var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
-
 const CliProblem = problem_mod.CliProblem;
 const ColorPalette = reporting.ColorPalette;
 const ReportingConfig = reporting.ReportingConfig;
@@ -49,6 +47,7 @@ const ReportingConfig = reporting.ReportingConfig;
 /// Wraps stdout/stderr with buffered writers. When Zig's std.Io interface
 /// becomes available, this struct will be replaced with std.Io.
 pub const Io = struct {
+    sys_io: std.Io,
     stdout_writer: std.Io.File.Writer,
     stderr_writer: std.Io.File.Writer,
     stdout_buffer: [4096]u8,
@@ -58,8 +57,9 @@ pub const Io = struct {
 
     /// Create an uninitialized Io struct.
     /// MUST call initWriters() after placing the struct at its final location.
-    pub fn init() Self {
+    pub fn create(sys_io: std.Io) Self {
         return Self{
+            .sys_io = sys_io,
             .stdout_writer = undefined,
             .stderr_writer = undefined,
             .stdout_buffer = undefined,
@@ -75,11 +75,11 @@ pub const Io = struct {
         const stderr_file = std.Io.File.stderr();
 
         // Enable ANSI escape sequences for colored output (needed on Windows)
-        stdout_file.enableAnsiEscapeCodes(app_sys_io) catch {};
-        stderr_file.enableAnsiEscapeCodes(app_sys_io) catch {};
+        stdout_file.enableAnsiEscapeCodes(self.sys_io) catch {};
+        stderr_file.enableAnsiEscapeCodes(self.sys_io) catch {};
 
-        self.stdout_writer = stdout_file.writer(app_sys_io, &self.stdout_buffer);
-        self.stderr_writer = stderr_file.writer(app_sys_io, &self.stderr_buffer);
+        self.stdout_writer = stdout_file.writer(self.sys_io, &self.stdout_buffer);
+        self.stderr_writer = stderr_file.writer(self.sys_io, &self.stderr_buffer);
     }
 
     /// Get the stdout writer interface
