@@ -1200,8 +1200,6 @@ pub const Interpreter = struct {
                     self.debugPrintLayoutShapeLines(variant.payload_layout, indent + 2, visited);
                 }
             },
-        }
-    }
 
     fn debugIndent(indent: usize) []const u8 {
         const spaces = "                                ";
