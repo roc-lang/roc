@@ -7912,8 +7912,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 const box_abi = ls.builtinBoxAbi(ll.ret_layout);
                 const value_size = box_abi.elem_size;
                 const value_vt = self.procLocalValType(value_expr);
-                const value_layout = box_abi.elem_layout_idx orelse .zst;
-
                 if (value_size == 0) {
                     _ = try self.emitProcLocal(value_expr);
                     self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -11536,7 +11534,8 @@ fn generateLLListReleaseExcessCapacity(self: *Self, args: anytype, ret_layout: l
 }
 
 /// Generate list_split_first: split list into first element and rest
-fn generateLLListSplitFirst(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
+fn generateLLListSplitFirst(self: *Self, args: anytype, _ret_layout: layout.Idx) Allocator.Error!void {
+    _ = _ret_layout;
     // ret_layout is a record { first: elem, rest: list }
     // We need to extract the element type and size
     const list_abi = self.builtinInternalListAbi("wasm.generateLLListSplitFirst.builtin_list_abi", self.procLocalLayoutIdx(args[0]));
@@ -11634,7 +11633,8 @@ fn generateLLListSplitFirst(self: *Self, args: anytype, ret_layout: layout.Idx) 
 }
 
 /// Generate list_split_last: split list into rest and last element
-fn generateLLListSplitLast(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
+fn generateLLListSplitLast(self: *Self, args: anytype, _ret_layout: layout.Idx) Allocator.Error!void {
+    _ = _ret_layout;
     const list_abi = self.builtinInternalListAbi("wasm.generateLLListSplitLast.builtin_list_abi", self.procLocalLayoutIdx(args[0]));
     const elem_size = list_abi.elem_size;
     const elem_align = list_abi.elem_align;

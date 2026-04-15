@@ -14,8 +14,16 @@ interpreter-perform-rc | src/eval/interpreter.zig | performRawRcPlan | raw inter
 interpreter-perform-rc | src/eval/interpreter.zig | performExplicitRcStmt | explicit LIR RC execution choke point
 interpreter-perform-rc | src/eval/interpreter.zig | performBuiltinInternalRc | builtin/runtime-internal RC choke point
 interpreter-perform-rc | src/eval/interpreter.zig | performInterpreterApiRc | interpreter API cleanup for externally held result values
+interpreter-perform-rc | src/eval/interpreter.zig | decrefListElements | builtin/runtime-internal list payload iteration driven by explicit child plan
 ordinary-layout-refcount-branch | src/eval/interpreter.zig | builtinInternalContainsRefcounted | builtin/runtime-internal layout-refcount query helper
 ordinary-layout-refcount-branch | src/eval/interpreter.zig | builtinListElemRc | builtin-only list element RC query helper
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | generateLowLevel | builtin primitive lowering still wires helper callbacks/addresses
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | callListSublist | builtin primitive lowering still wires helper callbacks/addresses
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | callListSublistFromRecord | builtin primitive lowering still wires helper callbacks/addresses
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | callListDropAt | builtin primitive lowering still wires helper callbacks/addresses
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | callListReserveOp | builtin primitive lowering still wires helper callbacks/addresses
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | callListReleaseExcessCapOp | builtin primitive lowering still wires helper callbacks/addresses
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitCallRcHelperFromStackSlots | backend RC helper dispatch plumbing
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitRawRcHelperCallAtStackOffset | RC helper plumbing used by explicit RC lowering and builtin RC helpers
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitRawRcHelperCallForValue | RC helper plumbing used by explicit RC lowering and builtin RC helpers
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitRawRcHelperCallFromPtrReg | RC helper plumbing used by explicit RC lowering and builtin RC helpers

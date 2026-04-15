@@ -182,6 +182,7 @@ fn inferLocalContract(
         .assign_list,
         .assign_struct,
         .assign_tag,
+        => .fresh,
         .for_list => |for_stmt| try contractFromResultSemantics(allocator, store, for_stmt.elem_result, arg_index_by_local, active),
         .set_local,
         .debug,

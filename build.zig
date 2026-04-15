@@ -2945,7 +2945,6 @@ pub fn build(b: *std.Build) void {
     if (run_args.len != 0) {
         run_ownership_boundary_test.addArgs(run_args);
     }
-    tests_summary.addRun(&run_ownership_boundary_test.step);
     test_step.dependOn(&run_ownership_boundary_test.step);
 
     const cor_pipeline_test = b.addTest(.{

@@ -126,7 +126,7 @@ fn builtinInternalListAbi(ls: *const LayoutStore, comptime site: []const u8, lis
         .elem_layout_idx = abi.elem_layout_idx,
         .elem_layout = abi.elem_layout,
         .elem_size_align = .{
-            .size = abi.elem_size,
+            .size = @intCast(abi.elem_size),
             .alignment = layout.RocAlignment.fromByteUnits(@intCast(abi.elem_alignment)),
         },
         .alignment_bytes = abi.elem_alignment,
