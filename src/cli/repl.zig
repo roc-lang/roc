@@ -188,7 +188,7 @@ pub fn run(ctx: *CliContext, backend: Backend) !void {
         ctx.io.flush();
     }) {
         // Read line
-        const line = try repl_line.readLine(ctx.arena, "» ", std.Io.File.stdin());
+        const line = try repl_line.readLine(ctx.arena, ctx.io.sys_io, "» ", std.Io.File.stdin());
         defer ctx.arena.free(line);
         // add line to history
         try repl_line.history.append(line);

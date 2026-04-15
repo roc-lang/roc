@@ -45,8 +45,6 @@ const LoadedModule = builtin_loading.LoadedModule;
 const RocOps = builtins.host_abi.RocOps;
 const LlvmEntryFn = *const fn (*anyopaque, *anyopaque) callconv(.c) void;
 
-var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
-
 fn isBuiltinModuleEnv(env: *const ModuleEnv) bool {
     return env.display_module_name_idx.eql(env.idents.builtin_module);
 }
@@ -122,6 +120,7 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) layou
 /// - Extracts and executes native code
 pub const LlvmEvaluator = struct {
     allocator: Allocator,
+    sys_io: std.Io,
 
     /// Loaded builtin module (Bool, Result, etc.)
     builtin_module: LoadedModule,
@@ -154,7 +153,7 @@ pub const LlvmEvaluator = struct {
     };
 
     /// Initialize the evaluator with builtin modules
-    pub fn init(allocator: Allocator) Error!LlvmEvaluator {
+    pub fn init(allocator: Allocator, sys_io: std.Io) Error!LlvmEvaluator {
         const builtin_indices = builtin_loading.deserializeBuiltinIndices(
             allocator,
             compiled_builtins.builtin_indices_bin,
@@ -174,6 +173,7 @@ pub const LlvmEvaluator = struct {
 
         return LlvmEvaluator{
             .allocator = allocator,
+            .sys_io = sys_io,
             .builtin_module = builtin_module,
             .builtin_indices = builtin_indices,
             .roc_env = roc_env,
@@ -234,13 +234,14 @@ pub const LlvmEvaluator = struct {
         library_path: [:0]const u8,
         entry_fn: LlvmEntryFn,
         allocator: Allocator,
+        sys_io: std.Io,
         result_layout: LayoutIdx,
         /// Reference to the global layout store (owned by LlvmEvaluator, not this struct)
         layout_store: ?*layout.Store = null,
 
         pub fn deinit(self: *CodeResult) void {
             self.library.close();
-            std.Io.Dir.cwd().deleteFile(app_sys_io, self.library_path) catch {};
+            std.Io.Dir.cwd().deleteFile(self.sys_io, self.library_path) catch {};
             self.allocator.free(self.library_path);
             // Note: layout_store is owned by LlvmEvaluator, not cleaned up here
         }
@@ -356,7 +357,7 @@ pub const LlvmEvaluator = struct {
             .{ .function_sections = false, .opt_level = opt_level },
         ) catch return error.CompilationFailed;
         errdefer {
-            std.Io.Dir.cwd().deleteFile(app_sys_io, library_path) catch {};
+            std.Io.Dir.cwd().deleteFile(self.sys_io, library_path) catch {};
             self.allocator.free(library_path);
         }
 
@@ -372,6 +373,7 @@ pub const LlvmEvaluator = struct {
             .library_path = library_path,
             .entry_fn = entry_fn,
             .allocator = self.allocator,
+            .sys_io = self.sys_io,
             .result_layout = result_layout,
             .layout_store = layout_store_ptr,
         };
@@ -395,7 +397,7 @@ pub const LlvmEvaluator = struct {
 // Tests
 
 test "llvm evaluator initialization" {
-    var evaluator = LlvmEvaluator.init(std.testing.allocator) catch |err| {
+    var evaluator = LlvmEvaluator.init(std.testing.allocator, std.testing.io) catch |err| {
         return switch (err) {
             error.OutOfMemory => error.SkipZigTest,
             else => err,

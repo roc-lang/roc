@@ -4,8 +4,6 @@ const Allocator = std.mem.Allocator;
 const Ast = std.zig.Ast;
 const PathList = std.ArrayList([]u8);
 
-var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
-
 const max_file_bytes: usize = 16 * 1024 * 1024;
 
 const test_file_exclusions = [_][]const u8{
@@ -21,7 +19,6 @@ const TermColor = struct {
 };
 
 pub fn main(init: std.process.Init) !void {
-    app_sys_io = init.io;
     const io = init.io;
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
@@ -52,19 +49,19 @@ pub fn main(init: std.process.Init) !void {
     //   statements for wired test files.
     // - Treat src/cli/test/fx_platform_test.zig as an aggregator since it imports
     //   fx_test_specs.zig which contains shared test specifications.
-    if (fileExists("src/cli/main.zig")) {
+    if (fileExists(io, "src/cli/main.zig")) {
         try mod_files.append(gpa, try gpa.dupe(u8, "src/cli/main.zig"));
     }
-    if (fileExists("src/cli/test/fx_platform_test.zig")) {
+    if (fileExists(io, "src/cli/test/fx_platform_test.zig")) {
         try mod_files.append(gpa, try gpa.dupe(u8, "src/cli/test/fx_platform_test.zig"));
     }
-    if (fileExists("src/cli/test/test_runner.zig")) {
+    if (fileExists(io, "src/cli/test/test_runner.zig")) {
         try mod_files.append(gpa, try gpa.dupe(u8, "src/cli/test/test_runner.zig"));
     }
-    if (fileExists("src/cli/cli_error.zig")) {
+    if (fileExists(io, "src/cli/cli_error.zig")) {
         try mod_files.append(gpa, try gpa.dupe(u8, "src/cli/cli_error.zig"));
     }
-    if (fileExists("src/snapshot_tool/main.zig")) {
+    if (fileExists(io, "src/snapshot_tool/main.zig")) {
         try mod_files.append(gpa, try gpa.dupe(u8, "src/snapshot_tool/main.zig"));
     }
 
@@ -85,12 +82,12 @@ pub fn main(init: std.process.Init) !void {
     }
 
     for (mod_files.items) |mod_path| {
-        try collectModImports(gpa, mod_path, &referenced);
+        try collectModImports(gpa, io, mod_path, &referenced);
     }
     // Also treat test roots declared in build.zig (b.addTest root_source_file)
     // as valid wiring for the corresponding files (e.g. src/cli/main.zig and
     // src/cli/test/roc_subcommands.zig).
-    try markBuildTestRootsAsReferenced(gpa, &referenced);
+    try markBuildTestRootsAsReferenced(gpa, io, &referenced);
 
     try stdout.print(
         "Found {d} file references in mod.zig files and build.zig test roots\n\n",
@@ -118,7 +115,7 @@ pub fn main(init: std.process.Init) !void {
         for (unwired.items) |path| {
             const path_text: []const u8 = path;
             try stdout.print("  {s}[MISSING]{s} {s}\n", .{ TermColor.red, TermColor.reset, path_text });
-            try printSuggestion(gpa, stdout, path_text);
+            try printSuggestion(gpa, io, stdout, path_text);
             try stdout.print("\n", .{});
         }
 
@@ -180,7 +177,7 @@ fn walkTree(
                 try walkTree(allocator, io, next_path, test_files, mod_files);
             },
             .file => {
-                try handleFile(allocator, next_path, entry.name, test_files, mod_files);
+                try handleFile(allocator, io, next_path, entry.name, test_files, mod_files);
             },
             else => allocator.free(next_path),
         }
@@ -189,6 +186,7 @@ fn walkTree(
 
 fn handleFile(
     allocator: Allocator,
+    sys_io: std.Io,
     path: []u8,
     file_name: []const u8,
     test_files: *PathList,
@@ -209,7 +207,7 @@ fn handleFile(
         return;
     }
 
-    if (try fileHasTestDecl(allocator, path)) {
+    if (try fileHasTestDecl(allocator, sys_io, path)) {
         try test_files.append(allocator, path);
         return;
     }
@@ -224,8 +222,8 @@ fn shouldSkipTestFile(path: []const u8) bool {
     return false;
 }
 
-fn fileHasTestDecl(allocator: Allocator, path: []const u8) !bool {
-    const source = try readSourceFile(allocator, path);
+fn fileHasTestDecl(allocator: Allocator, sys_io: std.Io, path: []const u8) !bool {
+    const source = try readSourceFile(allocator, sys_io, path);
     defer allocator.free(source);
     var tree = try Ast.parse(allocator, source, .zig);
     defer tree.deinit(allocator);
@@ -240,9 +238,9 @@ fn fileHasTestDecl(allocator: Allocator, path: []const u8) !bool {
     return false;
 }
 
-fn readSourceFile(allocator: Allocator, path: []const u8) ![:0]u8 {
+fn readSourceFile(allocator: Allocator, sys_io: std.Io, path: []const u8) ![:0]u8 {
     return try std.Io.Dir.cwd().readFileAllocOptions(
-        app_sys_io,
+        sys_io,
         path,
         allocator,
         .limited(max_file_bytes),
@@ -253,10 +251,11 @@ fn readSourceFile(allocator: Allocator, path: []const u8) ![:0]u8 {
 
 fn collectModImports(
     allocator: Allocator,
+    sys_io: std.Io,
     mod_path: []const u8,
     referenced: *std.StringHashMap(void),
 ) !void {
-    const source = try readSourceFile(allocator, mod_path);
+    const source = try readSourceFile(allocator, sys_io, mod_path);
     defer allocator.free(source);
 
     var tree = try Ast.parse(allocator, source, .zig);
@@ -320,12 +319,13 @@ fn resolveImportPath(
 /// test configuration should not be reported as missing wiring.
 fn markBuildTestRootsAsReferenced(
     allocator: Allocator,
+    sys_io: std.Io,
     referenced: *std.StringHashMap(void),
 ) !void {
     const build_path = "build.zig";
-    if (!fileExists(build_path)) return;
+    if (!fileExists(sys_io, build_path)) return;
 
-    const source = try readSourceFile(allocator, build_path);
+    const source = try readSourceFile(allocator, sys_io, build_path);
     defer allocator.free(source);
 
     const pattern = ".root_source_file = b.path(\"";
@@ -370,10 +370,11 @@ fn lessThanPath(_: void, lhs: []u8, rhs: []u8) bool {
 
 fn printSuggestion(
     allocator: Allocator,
+    sys_io: std.Io,
     writer: anytype,
     test_path: []const u8,
 ) !void {
-    const maybe_mod = try findNearestMod(allocator, test_path);
+    const maybe_mod = try findNearestMod(allocator, sys_io, test_path);
     if (maybe_mod) |mod_path| {
         defer allocator.free(mod_path);
 
@@ -398,12 +399,12 @@ fn printSuggestion(
     }
 }
 
-fn findNearestMod(allocator: Allocator, file_path: []const u8) !?[]u8 {
+fn findNearestMod(allocator: Allocator, sys_io: std.Io, file_path: []const u8) !?[]u8 {
     var current_dir_opt = std.fs.path.dirname(file_path);
     while (current_dir_opt) |current_dir| {
         const joined = try std.fs.path.join(allocator, &.{ current_dir, "mod.zig" });
         const candidate = try normalizePath(allocator, joined);
-        if (fileExists(candidate)) {
+        if (fileExists(sys_io, candidate)) {
             return candidate;
         }
         allocator.free(candidate);
@@ -412,8 +413,8 @@ fn findNearestMod(allocator: Allocator, file_path: []const u8) !?[]u8 {
     return null;
 }
 
-fn fileExists(path: []const u8) bool {
-    _ = std.Io.Dir.cwd().statFile(app_sys_io, path, .{}) catch return false;
+fn fileExists(sys_io: std.Io, path: []const u8) bool {
+    _ = std.Io.Dir.cwd().statFile(sys_io, path, .{}) catch return false;
     return true;
 }
 

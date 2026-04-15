@@ -20,7 +20,7 @@ test "transport decodes and encodes LSP frames" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var transport = transport_module.Transport(ReaderType, WriterType).init(allocator, input, output, null);
+    var transport = transport_module.Transport(ReaderType, WriterType).init(allocator, std.testing.io, input, output, null);
 
     const payload = try transport.readMessage();
     defer allocator.free(payload);
@@ -57,7 +57,7 @@ test "transport errors when Content-Length header is missing" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var transport = transport_module.Transport(ReaderType, WriterType).init(allocator, input, output, null);
+    var transport = transport_module.Transport(ReaderType, WriterType).init(allocator, std.testing.io, input, output, null);
 
     try std.testing.expectError(error.MissingContentLength, transport.readMessage());
 }
@@ -77,6 +77,7 @@ test "transport logs traffic when debug file is provided" {
     const WriterType = std.Io.Writer;
     var transport = transport_module.Transport(ReaderType, WriterType).init(
         allocator,
+        std.testing.io,
         input,
         output,
         log_handle,
@@ -120,6 +121,7 @@ test "transport rejects oversized header lines" {
     const WriterType = std.Io.Writer;
     var transport = transport_module.Transport(ReaderType, WriterType).init(
         allocator,
+        std.testing.io,
         input,
         output,
         null,

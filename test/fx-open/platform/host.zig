@@ -5,11 +5,10 @@ const build_options = @import("build_options");
 
 const trace_refcount = build_options.trace_refcount;
 
-var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
-
 /// Host environment - contains DebugAllocator for leak detection
 const HostEnv = struct {
     gpa: std.heap.DebugAllocator(.{}),
+    sys_io: std.Io,
 };
 
 /// Roc allocation function with size-tracking metadata
@@ -189,9 +188,10 @@ fn hostedStderrLine(_: *anyopaque, _: *anyopaque, args: *const extern struct { s
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns Str and takes {} as argument
 fn hostedStdinLine(ops: *RocOps, result: *RocStr, _: *anyopaque) callconv(.c) void {
+    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     // Read a line from stdin
     var buffer: [4096]u8 = undefined;
-    const bytes_read = std.Io.File.stdin().readStreaming(app_sys_io, &.{&buffer}) catch {
+    const bytes_read = std.Io.File.stdin().readStreaming(host.sys_io, &.{&buffer}) catch {
         // Return empty string on error
         result.* = RocStr.empty();
         return;
@@ -224,10 +224,12 @@ fn hostedStdinLine(ops: *RocOps, result: *RocStr, _: *anyopaque) callconv(.c) vo
 /// Hosted function: Stdout.line! (index 2 - sorted alphabetically)
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns {} and takes Str as argument
-fn hostedStdoutLine(_: *anyopaque, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
+fn hostedStdoutLine(ops_ptr: *anyopaque, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
+    const ops: *RocOps = @ptrCast(@alignCast(ops_ptr));
+    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     const message = args.str.asSlice();
-    std.Io.File.stdout().writeStreamingAll(app_sys_io, message) catch {};
-    std.Io.File.stdout().writeStreamingAll(app_sys_io, "\n") catch {};
+    std.Io.File.stdout().writeStreamingAll(host.sys_io, message) catch {};
+    std.Io.File.stdout().writeStreamingAll(host.sys_io, "\n") catch {};
 }
 
 /// Array of hosted function pointers, sorted alphabetically by fully-qualified name
@@ -265,6 +267,7 @@ fn buildArgsList(ops: *builtins.host_abi.RocOps, argc: c_int, argv: [*][*:0]u8) 
 fn platform_main(argc: c_int, argv: [*][*:0]u8) !c_int {
     var host_env = HostEnv{
         .gpa = std.heap.DebugAllocator(.{}){},
+        .sys_io = std.Io.Threaded.global_single_threaded.io(),
     };
     defer {
         const leaked = host_env.gpa.deinit();

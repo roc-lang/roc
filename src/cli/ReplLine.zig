@@ -5,8 +5,6 @@ const control_code = std.ascii.control_code;
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 
-var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
-
 const ansi_term = @import("ansi_term.zig");
 const Unix = @import("Unix.zig");
 const Windows = @import("Windows.zig");
@@ -245,20 +243,20 @@ pub const ReadLineError =
 
 /// Reads a line of input from stdin with line editing and history support.
 /// Falls back to simple line reading when stdin is not a TTY (e.g., piped input).
-pub fn readLine(self: *ReplLine, outlive: Allocator, prompt: []const u8, stdin: std.Io.File) ReadLineError![]u8 {
+pub fn readLine(self: *ReplLine, outlive: Allocator, sys_io: std.Io, prompt: []const u8, stdin: std.Io.File) ReadLineError![]u8 {
     var stdout_buffer: [1024]u8 = undefined;
-    var stdout_writer = std.Io.File.stdout().writerStreaming(app_sys_io, &stdout_buffer);
+    var stdout_writer = std.Io.File.stdout().writerStreaming(sys_io, &stdout_buffer);
 
     // Use simple line reading for non-TTY input (pipes, redirects, tests)
-    if (!(stdin.isTty(app_sys_io) catch false)) {
-        return readLineSimple(outlive, prompt, &stdout_writer.interface, stdin);
+    if (!(stdin.isTty(sys_io) catch false)) {
+        return readLineSimple(outlive, sys_io, prompt, &stdout_writer.interface, stdin);
     }
 
-    return helper(self, outlive, prompt, &stdout_writer.interface, stdin);
+    return helper(self, outlive, sys_io, prompt, &stdout_writer.interface, stdin);
 }
 
 /// Simple line reading for non-TTY input (no raw mode, no escape sequences).
-fn readLineSimple(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.Io.File) ReadLineError![]u8 {
+fn readLineSimple(outlive: Allocator, sys_io: std.Io, prompt: []const u8, out: *std.Io.Writer, in: std.Io.File) ReadLineError![]u8 {
     // Print the prompt
     try out.writeAll(prompt);
     try out.flush();
@@ -268,7 +266,7 @@ fn readLineSimple(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, i
     var read_buffer: [1]u8 = undefined;
 
     while (true) {
-        const bytes_read = try in.readStreaming(app_sys_io, &.{&read_buffer});
+        const bytes_read = try in.readStreaming(sys_io, &.{&read_buffer});
         if (bytes_read == 0) {
             // EOF - return "exit" to signal REPL should exit
             line_buffer.deinit(outlive);
@@ -288,7 +286,7 @@ fn readLineSimple(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, i
     return try line_buffer.toOwnedSlice(outlive);
 }
 
-fn helper(self: *ReplLine, outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.Io.File) ![]u8 {
+fn helper(self: *ReplLine, outlive: Allocator, sys_io: std.Io, prompt: []const u8, out: *std.Io.Writer, in: std.Io.File) ![]u8 {
     var arena_allocator = std.heap.ArenaAllocator.init(outlive);
     defer arena_allocator.deinit();
     const temp = arena_allocator.allocator();
@@ -328,7 +326,7 @@ fn helper(self: *ReplLine, outlive: Allocator, prompt: []const u8, out: *std.Io.
     while (true) : ({
         try out.flush();
     }) {
-        const total = try in.readStreaming(app_sys_io, &.{&read_buf});
+        const total = try in.readStreaming(sys_io, &.{&read_buf});
         if (total == 0) continue;
 
         var done = false;

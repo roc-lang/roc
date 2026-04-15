@@ -5,8 +5,6 @@ const parse = @import("parse");
 const can = @import("can");
 const base = @import("base");
 
-var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
-
 const tracy = @import("tracy");
 const builtin = @import("builtin");
 
@@ -50,7 +48,7 @@ const BenchmarkResults = struct {
     total_time: u64,
 };
 
-fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u8) !void {
+fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, sys_io: std.Io, path: []const u8) !void {
     const operation_name = if (is_parse) "parse" else "tokenizer";
     std.debug.print("Benchmarking {s} on '{s}'\n", .{ operation_name, path });
 
@@ -64,7 +62,7 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
         roc_files.deinit();
     }
 
-    try collectRocFiles(gpa, path, &roc_files);
+    try collectRocFiles(gpa, sys_io, path, &roc_files);
 
     if (roc_files.items.len == 0) {
         std.debug.print("No .roc files found in '{s}'\n", .{path});
@@ -94,7 +92,7 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
 
     // Benchmark loop
     for (0..num_iterations) |_| {
-        const start_time = std.Io.Timestamp.now(app_sys_io, .real).nanoseconds;
+        const start_time = std.Io.Timestamp.now(sys_io, .real).nanoseconds;
 
         var iteration_tokens: u64 = 0;
 
@@ -132,7 +130,7 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
             }
         }
 
-        const end_time = std.Io.Timestamp.now(app_sys_io, .real).nanoseconds;
+        const end_time = std.Io.Timestamp.now(sys_io, .real).nanoseconds;
 
         total_time += @intCast(end_time - start_time);
         total_tokens = iteration_tokens;
@@ -156,31 +154,31 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
 }
 
 /// Benchmarks the parsing of Roc files.
-pub fn benchParse(gpa: Allocator, path: []const u8) !void {
-    try benchParseOrTokenize(true, gpa, path);
+pub fn benchParse(gpa: Allocator, sys_io: std.Io, path: []const u8) !void {
+    try benchParseOrTokenize(true, gpa, sys_io, path);
 }
 
 /// Benchmarks the tokenization of Roc files.
-pub fn benchTokenizer(gpa: Allocator, path: []const u8) !void {
-    try benchParseOrTokenize(false, gpa, path);
+pub fn benchTokenizer(gpa: Allocator, sys_io: std.Io, path: []const u8) !void {
+    try benchParseOrTokenize(false, gpa, sys_io, path);
 }
 
-fn collectRocFiles(gpa: Allocator, path: []const u8, roc_files: *std.array_list.Managed(RocFile)) !void {
+fn collectRocFiles(gpa: Allocator, sys_io: std.Io, path: []const u8, roc_files: *std.array_list.Managed(RocFile)) !void {
     // Check if path is a file or directory
-    const stat = std.Io.Dir.cwd().statFile(app_sys_io, path, .{}) catch |err| {
+    const stat = std.Io.Dir.cwd().statFile(sys_io, path, .{}) catch |err| {
         fatal("Failed to access '{s}': {}", .{ path, err });
     };
 
     switch (stat.kind) {
         .file => {
             if (std.mem.endsWith(u8, path, ".roc")) {
-                try addRocFile(gpa, path, roc_files);
+                try addRocFile(gpa, sys_io, path, roc_files);
             } else {
                 fatal("File '{s}' is not a .roc file", .{path});
             }
         },
         .directory => {
-            try findRocFiles(gpa, path, roc_files);
+            try findRocFiles(gpa, sys_io, path, roc_files);
         },
         else => {
             fatal("Path '{s}' is not a file or directory", .{path});
@@ -188,8 +186,8 @@ fn collectRocFiles(gpa: Allocator, path: []const u8, roc_files: *std.array_list.
     }
 }
 
-fn addRocFile(gpa: Allocator, file_path: []const u8, roc_files: *std.array_list.Managed(RocFile)) !void {
-    const content = std.Io.Dir.cwd().readFileAlloc(app_sys_io, file_path, gpa, .limited(0xffff_ffff)) catch |err| {
+fn addRocFile(gpa: Allocator, sys_io: std.Io, file_path: []const u8, roc_files: *std.array_list.Managed(RocFile)) !void {
+    const content = std.Io.Dir.cwd().readFileAlloc(sys_io, file_path, gpa, .limited(0xffff_ffff)) catch |err| {
         std.debug.print("Warning: Failed to read file '{s}': {}\n", .{ file_path, err });
         return;
     };
@@ -201,26 +199,26 @@ fn addRocFile(gpa: Allocator, file_path: []const u8, roc_files: *std.array_list.
     });
 }
 
-fn findRocFiles(gpa: Allocator, dir_path: []const u8, roc_files: *std.array_list.Managed(RocFile)) !void {
-    var dir = std.Io.Dir.cwd().openDir(app_sys_io, dir_path, .{ .iterate = true }) catch |err| {
+fn findRocFiles(gpa: Allocator, sys_io: std.Io, dir_path: []const u8, roc_files: *std.array_list.Managed(RocFile)) !void {
+    var dir = std.Io.Dir.cwd().openDir(sys_io, dir_path, .{ .iterate = true }) catch |err| {
         fatal("Failed to open directory '{s}': {}", .{ dir_path, err });
     };
-    defer dir.close(app_sys_io);
+    defer dir.close(sys_io);
 
     var iterator = dir.iterate();
-    while (try iterator.next(app_sys_io)) |entry| {
+    while (try iterator.next(sys_io)) |entry| {
         const full_path = try std.fs.path.join(gpa, &[_][]const u8{ dir_path, entry.name });
         defer gpa.free(full_path);
 
         switch (entry.kind) {
             .file => {
                 if (std.mem.endsWith(u8, entry.name, ".roc")) {
-                    try addRocFile(gpa, full_path, roc_files);
+                    try addRocFile(gpa, sys_io, full_path, roc_files);
                 }
             },
             .directory => {
                 // Recursively search subdirectories
-                try findRocFiles(gpa, full_path, roc_files);
+                try findRocFiles(gpa, sys_io, full_path, roc_files);
             },
             else => {
                 // Ignore other file types

@@ -24,8 +24,6 @@ const ObjectWriter = @import("ObjectWriter.zig");
 const LirCodeGenMod = @import("LirCodeGen.zig");
 const StaticDataInterner = @import("StaticDataInterner.zig");
 
-var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
-
 /// Information about an entrypoint to compile
 pub const Entrypoint = struct {
     /// The exported symbol name (e.g., "roc__main")
@@ -95,6 +93,7 @@ pub const ObjectFileCompiler = struct {
         proc_specs: []const LirProcSpec,
         target: RocTarget,
         output_path: []const u8,
+        sys_io: std.Io,
     ) CompilationError!void {
         var result = try self.compileToObjectFile(
             lir_store,
@@ -106,7 +105,7 @@ pub const ObjectFileCompiler = struct {
         defer result.deinit();
 
         // Write to file
-        std.Io.Dir.cwd().writeFile(app_sys_io, .{
+        std.Io.Dir.cwd().writeFile(sys_io, .{
             .sub_path = output_path,
             .data = result.object_bytes,
         }) catch |err| {

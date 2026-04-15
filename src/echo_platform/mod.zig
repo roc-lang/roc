@@ -10,8 +10,6 @@ const builtins = @import("builtins");
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
 
-var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
-
 pub const host_abi = builtins.host_abi;
 pub const RocStr = builtins.str.RocStr;
 pub const RocList = builtins.list.RocList;
@@ -21,10 +19,11 @@ pub const platform_main_source = @embedFile("platform/main.roc");
 /// Embedded source for the echo platform's Echo.roc module (hosted line! function).
 pub const echo_module_source = @embedFile("platform/Echo.roc");
 
-/// Mutable state attached to the default RocOps env pointer. Lets the host
-/// observe side effects from roc_ops callbacks (e.g. failed inline expects)
-/// after the Roc program returns.
-pub const DefaultRocOpsEnv = struct {
+/// Echo platform environment, passed as RocOps.env.
+/// On WASM the sys_io field is unused (undefined); on native it holds the
+/// std.Io obtained from the process init or the global single-threaded I/O.
+pub const EchoEnv = struct {
+    sys_io: std.Io,
     /// Set to true the first time roc_expect_failed is invoked. Allows the
     /// host to exit with a non-zero status after running the program.
     inline_expect_failed: bool = false,
@@ -32,7 +31,7 @@ pub const DefaultRocOpsEnv = struct {
 
 /// Echo host function: reads a RocStr arg and prints it + newline to stdout.
 /// Arguments are borrowed — refcounting is handled by the caller (RC insertion pass).
-pub fn echoHostedFn(_: *anyopaque, _: [*]u8, roc_str: *RocStr) callconv(.c) void {
+pub fn echoHostedFn(ops_ptr: *anyopaque, _: [*]u8, roc_str: *RocStr) callconv(.c) void {
     const message = roc_str.asSlice();
     if (comptime is_wasm) {
         const js = struct {
@@ -40,9 +39,11 @@ pub fn echoHostedFn(_: *anyopaque, _: [*]u8, roc_str: *RocStr) callconv(.c) void
         };
         js.js_echo(message.ptr, message.len);
     } else {
+        const ops: *host_abi.RocOps = @ptrCast(@alignCast(ops_ptr));
+        const env: *EchoEnv = @ptrCast(@alignCast(ops.env));
         const stdout_file: std.Io.File = .stdout();
-        stdout_file.writeStreamingAll(app_sys_io, message) catch |err| handleStdoutError(err);
-        stdout_file.writeStreamingAll(app_sys_io, "\n") catch |err| handleStdoutError(err);
+        stdout_file.writeStreamingAll(env.sys_io, message) catch |err| handleStdoutError(err);
+        stdout_file.writeStreamingAll(env.sys_io, "\n") catch |err| handleStdoutError(err);
     }
     // Returns {} (ZST) — no bytes to write to ret_bytes
 }
@@ -64,7 +65,7 @@ fn handleStdoutError(err: anyerror) noreturn {
 }
 
 /// Create a minimal RocOps struct for default_app execution.
-pub fn makeDefaultRocOps(env: *DefaultRocOpsEnv, hosted_fns: []host_abi.HostedFn) host_abi.RocOps {
+pub fn makeDefaultRocOps(env: *EchoEnv, hosted_fns: []host_abi.HostedFn) host_abi.RocOps {
     const fns = struct {
         const size_prefix = @sizeOf(usize);
 
@@ -121,39 +122,42 @@ pub fn makeDefaultRocOps(env: *DefaultRocOpsEnv, hosted_fns: []host_abi.HostedFn
             realloc_args.answer = @ptrCast(new_ptr);
         }
 
-        fn rocDbg(dbg_args: *const host_abi.RocDbg, _: *anyopaque) callconv(.c) void {
+        fn rocDbg(dbg_args: *const host_abi.RocDbg, env_ptr: *anyopaque) callconv(.c) void {
             if (comptime is_wasm) {
                 // No-op on wasm — no stderr available
             } else {
+                const echo_env: *EchoEnv = @ptrCast(@alignCast(env_ptr));
                 const msg = dbg_args.utf8_bytes[0..dbg_args.len];
                 const stderr_file: std.Io.File = .stderr();
-                stderr_file.writeStreamingAll(app_sys_io, "[dbg] ") catch {};
-                stderr_file.writeStreamingAll(app_sys_io, msg) catch {};
-                stderr_file.writeStreamingAll(app_sys_io, "\n") catch {};
+                stderr_file.writeStreamingAll(echo_env.sys_io, "[dbg] ") catch {};
+                stderr_file.writeStreamingAll(echo_env.sys_io, msg) catch {};
+                stderr_file.writeStreamingAll(echo_env.sys_io, "\n") catch {};
             }
         }
         fn rocExpectFailed(expect_args: *const host_abi.RocExpectFailed, env_ptr: *anyopaque) callconv(.c) void {
-            const default_env: *DefaultRocOpsEnv = @ptrCast(@alignCast(env_ptr));
-            default_env.inline_expect_failed = true;
+            const echo_env_for_flag: *EchoEnv = @ptrCast(@alignCast(env_ptr));
+            echo_env_for_flag.inline_expect_failed = true;
             if (comptime is_wasm) {
                 // No-op on wasm — no stderr available
             } else {
+                const echo_env: *EchoEnv = @ptrCast(@alignCast(env_ptr));
                 const msg = expect_args.utf8_bytes[0..expect_args.len];
                 const stderr_file: std.Io.File = .stderr();
-                stderr_file.writeStreamingAll(app_sys_io, "Expect failed: ") catch {};
-                stderr_file.writeStreamingAll(app_sys_io, msg) catch {};
-                stderr_file.writeStreamingAll(app_sys_io, "\n") catch {};
+                stderr_file.writeStreamingAll(echo_env.sys_io, "Expect failed: ") catch {};
+                stderr_file.writeStreamingAll(echo_env.sys_io, msg) catch {};
+                stderr_file.writeStreamingAll(echo_env.sys_io, "\n") catch {};
             }
         }
-        fn rocCrashed(crash_args: *const host_abi.RocCrashed, _: *anyopaque) callconv(.c) void {
+        fn rocCrashed(crash_args: *const host_abi.RocCrashed, env_ptr: *anyopaque) callconv(.c) void {
             if (comptime is_wasm) {
                 @trap();
             } else {
+                const echo_env: *EchoEnv = @ptrCast(@alignCast(env_ptr));
                 const msg = crash_args.utf8_bytes[0..crash_args.len];
                 const stderr_file: std.Io.File = .stderr();
-                stderr_file.writeStreamingAll(app_sys_io, "Roc crashed: ") catch {};
-                stderr_file.writeStreamingAll(app_sys_io, msg) catch {};
-                stderr_file.writeStreamingAll(app_sys_io, "\n") catch {};
+                stderr_file.writeStreamingAll(echo_env.sys_io, "Roc crashed: ") catch {};
+                stderr_file.writeStreamingAll(echo_env.sys_io, msg) catch {};
+                stderr_file.writeStreamingAll(echo_env.sys_io, "\n") catch {};
                 std.process.exit(1);
             }
         }

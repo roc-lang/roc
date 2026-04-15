@@ -33,8 +33,6 @@ const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi) std.po
 
 const trace_refcount = build_options.trace_refcount;
 
-var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
-
 pub const std_options: std.Options = .{
     .logFn = std.log.defaultLog,
     .log_level = .warn,
@@ -362,6 +360,7 @@ const RocAllocation = struct {
 const HostEnv = struct {
     gpa: std.heap.DebugAllocator(.{ .safety = true }),
     test_state: TestState,
+    sys_io: std.Io,
     /// Track Roc allocations for cleanup on test failure
     roc_allocations: std.ArrayListUnmanaged(RocAllocation) = .empty,
     /// Allocation counters for diagnostics
@@ -795,7 +794,7 @@ fn hostedStdinLine(ops: *builtins.host_abi.RocOps, result: *RocStr, _: *anyopaqu
 
     // Normal mode: Read a line from stdin
     var buffer: [4096]u8 = undefined;
-    const bytes_read = std.Io.File.stdin().readStreaming(app_sys_io, &.{&buffer}) catch {
+    const bytes_read = std.Io.File.stdin().readStreaming(host.sys_io, &.{&buffer}) catch {
         // Return empty string on error
         result.* = RocStr.empty();
         return;
@@ -898,8 +897,8 @@ fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: *const 
     }
 
     // Normal mode: write to stdout
-    std.Io.File.stdout().writeStreamingAll(app_sys_io, message) catch {};
-    std.Io.File.stdout().writeStreamingAll(app_sys_io, "\n") catch {};
+    std.Io.File.stdout().writeStreamingAll(host.sys_io, message) catch {};
+    std.Io.File.stdout().writeStreamingAll(host.sys_io, "\n") catch {};
 }
 
 /// Hosted function: Builder.print_value! (index 0 - sorted alphabetically: "Builder.print_value!" comes before "Stderr.line!")
@@ -968,6 +967,7 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
     var host_env = HostEnv{
         .gpa = std.heap.DebugAllocator(.{ .safety = true }){},
         .test_state = TestState.init(),
+        .sys_io = std.Io.Threaded.global_single_threaded.io(),
     };
 
     // Parse test spec if provided

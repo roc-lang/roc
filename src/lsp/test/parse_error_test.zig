@@ -6,7 +6,7 @@ const SyntaxChecker = @import("../syntax.zig").SyntaxChecker;
 test "parse errors are reported as diagnostics" {
     const allocator = std.testing.allocator;
 
-    var checker = SyntaxChecker.init(allocator, .{}, null);
+    var checker = SyntaxChecker.init(allocator, std.testing.io, .{}, null);
     defer checker.deinit();
 
     // File content with parse error (unclosed string)

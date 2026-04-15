@@ -19,8 +19,6 @@ const RocIo = compile.RocIo;
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 
-var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
-
 /// A single build session with automatic cleanup.
 /// Encapsulates URI conversion, BuildEnv setup, building, and module lookup.
 pub const BuildSession = struct {
@@ -46,6 +44,7 @@ pub const BuildSession = struct {
     /// - Report draining
     pub fn init(
         allocator: Allocator,
+        sys_io: std.Io,
         env: *BuildEnv,
         uri: []const u8,
         override_text: ?[]const u8,
@@ -54,7 +53,7 @@ pub const BuildSession = struct {
         const path = try uri_util.uriToPath(allocator, uri);
         defer allocator.free(path);
 
-        const absolute_path: [:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(app_sys_io, path, allocator) catch
+        const absolute_path: [:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(sys_io, path, allocator) catch
             try allocator.dupeZ(u8, path);
         errdefer allocator.free(absolute_path);
 

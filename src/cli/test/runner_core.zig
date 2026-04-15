@@ -11,8 +11,6 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 var next_cache_dir_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 
-var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
-
 /// Result of a test execution
 pub const TestResult = enum {
     passed,
@@ -39,7 +37,7 @@ pub const TestStats = struct {
     }
 };
 
-fn createIsolatedTestCacheDir(allocator: Allocator) ![]u8 {
+fn createIsolatedTestCacheDir(allocator: Allocator, sys_io: std.Io) ![]u8 {
     const cache_dir_id = next_cache_dir_id.fetchAdd(1, .monotonic);
     // Get a nanosecond timestamp for uniqueness across runs
     var ts: std.c.timespec = undefined;
@@ -51,13 +49,13 @@ fn createIsolatedTestCacheDir(allocator: Allocator) ![]u8 {
     });
     defer allocator.free(cache_leaf);
 
-    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(run_io, ".", allocator);
+    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(sys_io, ".", allocator);
     defer allocator.free(cwd_path);
 
     const cache_rel = try std.fs.path.join(allocator, &.{ ".zig-cache", "roc-test-cache", cache_leaf });
     defer allocator.free(cache_rel);
 
-    std.Io.Dir.cwd().createDirPath(run_io, cache_rel) catch |err| switch (err) {
+    std.Io.Dir.cwd().createDirPath(sys_io, cache_rel) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
@@ -65,9 +63,7 @@ fn createIsolatedTestCacheDir(allocator: Allocator) ![]u8 {
     return std.fs.path.join(allocator, &.{ cwd_path, cache_rel });
 }
 
-var run_io: std.Io = std.Io.Threaded.global_single_threaded.io();
-
-fn runRocChild(allocator: Allocator, argv: []const []const u8) !std.process.RunResult {
+fn runRocChild(allocator: Allocator, sys_io: std.Io, argv: []const []const u8) !std.process.RunResult {
     const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
     const environ: std.process.Environ = .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
     var env_map = try environ.createMap(allocator);
@@ -75,11 +71,11 @@ fn runRocChild(allocator: Allocator, argv: []const []const u8) !std.process.RunR
 
     // Give every child build/run its own persistent cache root so test runner processes
     // cannot share module/build artifacts or observe one another's cache state.
-    const cache_dir = try createIsolatedTestCacheDir(allocator);
+    const cache_dir = try createIsolatedTestCacheDir(allocator, sys_io);
     defer allocator.free(cache_dir);
     try env_map.put("ROC_CACHE_DIR", cache_dir);
 
-    return std.process.run(allocator, run_io, .{
+    return std.process.run(allocator, sys_io, .{
         .argv = argv,
         .environ_map = &env_map,
     });
@@ -89,6 +85,7 @@ fn runRocChild(allocator: Allocator, argv: []const []const u8) !std.process.RunR
 /// Returns true if compilation succeeded.
 pub fn crossCompile(
     allocator: Allocator,
+    sys_io: std.Io,
     roc_binary: []const u8,
     roc_file: []const u8,
     target: []const u8,
@@ -121,20 +118,21 @@ pub fn crossCompile(
     argv_buf[argc] = roc_file;
     argc += 1;
 
-    const result = runRocChild(allocator, argv_buf[0..argc]) catch |err| {
+    const result = runRocChild(allocator, sys_io, argv_buf[0..argc]) catch |err| {
         std.debug.print("FAIL (spawn error: {})\n", .{err});
         return .failed;
     };
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    return handleProcessResult(result, output_name);
+    return handleProcessResult(sys_io, result, output_name);
 }
 
 /// Build a Roc app natively (no cross-compilation).
 /// Does NOT clean up the output file - caller is responsible for cleanup.
 pub fn buildNative(
     allocator: Allocator,
+    sys_io: std.Io,
     roc_binary: []const u8,
     roc_file: []const u8,
     output_name: []const u8,
@@ -161,7 +159,7 @@ pub fn buildNative(
     argv_buf[argc] = roc_file;
     argc += 1;
 
-    const result = runRocChild(allocator, argv_buf[0..argc]) catch |err| {
+    const result = runRocChild(allocator, sys_io, argv_buf[0..argc]) catch |err| {
         std.debug.print("FAIL (spawn error: {})\n", .{err});
         return .failed;
     };
@@ -169,15 +167,16 @@ pub fn buildNative(
     defer allocator.free(result.stderr);
 
     // Don't cleanup - caller will run and then cleanup
-    return handleProcessResultNoCleanup(result, output_name);
+    return handleProcessResultNoCleanup(sys_io, result, output_name);
 }
 
 /// Run a native executable and check for successful execution.
 pub fn runNative(
     allocator: Allocator,
+    sys_io: std.Io,
     exe_path: []const u8,
 ) !TestResult {
-    const result = std.process.run(allocator, run_io, .{
+    const result = std.process.run(allocator, sys_io, .{
         .argv = &[_][]const u8{exe_path},
     }) catch |err| {
         std.debug.print("FAIL (spawn error: {})\n", .{err});
@@ -227,19 +226,20 @@ pub fn runNative(
 /// When backend is null, uses `roc run --test=<spec>` (interpreter).
 pub fn runWithIoSpec(
     allocator: Allocator,
+    sys_io: std.Io,
     roc_binary: []const u8,
     roc_file: []const u8,
     io_spec: []const u8,
     backend: ?[]const u8,
 ) !TestResult {
     if (backend) |b| {
-        return runWithIoSpecBuildAndExec(allocator, roc_binary, roc_file, io_spec, b);
+        return runWithIoSpecBuildAndExec(allocator, sys_io, roc_binary, roc_file, io_spec, b);
     }
 
     const test_arg = try std.fmt.allocPrint(allocator, "--test={s}", .{io_spec});
     defer allocator.free(test_arg);
 
-    const result = runRocChild(allocator, &[_][]const u8{
+    const result = runRocChild(allocator, sys_io, &[_][]const u8{
         roc_binary,
         "run",
         test_arg,
@@ -286,6 +286,7 @@ pub fn runWithIoSpec(
 /// with `--test <spec>` for IO spec verification.
 fn runWithIoSpecBuildAndExec(
     allocator: Allocator,
+    sys_io: std.Io,
     roc_binary: []const u8,
     roc_file: []const u8,
     io_spec: []const u8,
@@ -297,7 +298,7 @@ fn runWithIoSpecBuildAndExec(
     defer allocator.free(output_name);
 
     // Step 1: Build with the specified backend
-    const build_result = try buildNative(allocator, roc_binary, roc_file, output_name, backend);
+    const build_result = try buildNative(allocator, sys_io, roc_binary, roc_file, output_name, backend);
     if (build_result != .passed) {
         return .failed;
     }
@@ -306,7 +307,7 @@ fn runWithIoSpecBuildAndExec(
     const exe_path = try std.fmt.allocPrint(allocator, "./{s}", .{output_name});
     defer allocator.free(exe_path);
 
-    const result = std.process.run(allocator, run_io, .{
+    const result = std.process.run(allocator, sys_io, .{
         .argv = &[_][]const u8{
             exe_path,
             "--test",
@@ -314,14 +315,14 @@ fn runWithIoSpecBuildAndExec(
         },
     }) catch |err| {
         std.debug.print("FAIL (spawn error: {})\n", .{err});
-        cleanup(output_name);
+        cleanup(sys_io, output_name);
         return .failed;
     };
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
     // Clean up the built executable
-    cleanup(output_name);
+    cleanup(sys_io, output_name);
 
     // Check for memory errors in stderr (GPA errors or Roc runtime leak detection)
     if (hasMemoryErrors(result.stderr)) |msg| {
@@ -358,6 +359,7 @@ fn runWithIoSpecBuildAndExec(
 /// Only works on Linux x86_64.
 pub fn runWithValgrind(
     allocator: Allocator,
+    sys_io: std.Io,
     roc_binary: []const u8,
     roc_file: []const u8,
 ) !TestResult {
@@ -367,7 +369,7 @@ pub fn runWithValgrind(
         return .skipped;
     }
 
-    const result = runRocChild(allocator, &[_][]const u8{
+    const result = runRocChild(allocator, sys_io, &[_][]const u8{
         "./ci/custom_valgrind.sh",
         roc_binary,
         "--no-cache",
@@ -406,13 +408,14 @@ pub fn runWithValgrind(
 /// Verify that required platform target files exist.
 pub fn verifyPlatformFiles(
     allocator: Allocator,
+    sys_io: std.Io,
     platform_dir: []const u8,
     target: []const u8,
 ) !bool {
     const libhost_path = try std.fmt.allocPrint(allocator, "{s}/platform/targets/{s}/libhost.a", .{ platform_dir, target });
     defer allocator.free(libhost_path);
 
-    if (std.Io.Dir.cwd().access(app_sys_io, libhost_path, .{})) |_| {
+    if (std.Io.Dir.cwd().access(sys_io, libhost_path, .{})) |_| {
         return true;
     } else |_| {
         return false;
@@ -433,8 +436,8 @@ pub fn shouldSkipTarget(target: []const u8) bool {
 }
 
 /// Clean up a generated file.
-pub fn cleanup(path: []const u8) void {
-    std.Io.Dir.cwd().deleteFile(run_io, path) catch {};
+pub fn cleanup(sys_io: std.Io, path: []const u8) void {
+    std.Io.Dir.cwd().deleteFile(sys_io, path) catch {};
 }
 
 /// Print a section header.
@@ -481,12 +484,12 @@ fn hasMemoryErrors(stderr: []const u8) ?[]const u8 {
     return null;
 }
 
-fn handleProcessResult(result: std.process.RunResult, output_name: []const u8) TestResult {
+fn handleProcessResult(sys_io: std.Io, result: std.process.RunResult, output_name: []const u8) TestResult {
     // Check for memory errors in stderr (GPA errors or Roc runtime leak detection)
     if (hasMemoryErrors(result.stderr)) |msg| {
         std.debug.print("FAIL ({s})\n", .{msg});
         printTruncatedOutput(result.stderr, 10, "       ");
-        cleanup(output_name);
+        cleanup(sys_io, output_name);
         return .failed;
     }
 
@@ -494,10 +497,10 @@ fn handleProcessResult(result: std.process.RunResult, output_name: []const u8) T
         .exited => |code| {
             if (code == 0) {
                 // Verify executable was created
-                if (std.Io.Dir.cwd().access(run_io, output_name, .{})) |_| {
+                if (std.Io.Dir.cwd().access(sys_io, output_name, .{})) |_| {
                     std.debug.print("OK\n", .{});
                     // Clean up
-                    cleanup(output_name);
+                    cleanup(sys_io, output_name);
                     return .passed;
                 } else |_| {
                     std.debug.print("FAIL (executable not created)\n", .{});
@@ -522,7 +525,7 @@ fn handleProcessResult(result: std.process.RunResult, output_name: []const u8) T
     }
 }
 
-fn handleProcessResultNoCleanup(result: std.process.RunResult, output_name: []const u8) TestResult {
+fn handleProcessResultNoCleanup(sys_io: std.Io, result: std.process.RunResult, output_name: []const u8) TestResult {
     // Check for memory errors in stderr (GPA errors or Roc runtime leak detection)
     if (hasMemoryErrors(result.stderr)) |msg| {
         std.debug.print("FAIL ({s})\n", .{msg});
@@ -534,7 +537,7 @@ fn handleProcessResultNoCleanup(result: std.process.RunResult, output_name: []co
         .exited => |code| {
             if (code == 0) {
                 // Verify executable was created
-                if (std.Io.Dir.cwd().access(run_io, output_name, .{})) |_| {
+                if (std.Io.Dir.cwd().access(sys_io, output_name, .{})) |_| {
                     std.debug.print("OK\n", .{});
                     // Don't clean up - caller will handle
                     return .passed;
