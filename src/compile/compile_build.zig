@@ -18,11 +18,11 @@ const reporting = @import("reporting");
 const eval = @import("eval");
 const check = @import("check");
 const unbundle = @import("unbundle");
-const RocIo = @import("io").RocIo;
+const RocCtx = @import("ctx").RocCtx;
 
-/// The underlying system I/O type, derived from RocIo to avoid
+/// The underlying system I/O type, derived from RocCtx to avoid
 /// referencing the raw Zig I/O type directly (which is banned in core modules).
-const SysIo = @FieldType(RocIo, "sys_io");
+const SysIo = @FieldType(RocCtx, "sys_io");
 
 const Report = reporting.Report;
 const ReportBuilder = check.ReportBuilder;
@@ -30,7 +30,6 @@ const BuiltinModules = eval.BuiltinModules;
 const compile_package = @import("compile_package.zig");
 const Mode = compile_package.Mode;
 const Allocator = std.mem.Allocator;
-const Allocators = base.Allocators;
 const ModuleEnv = can.ModuleEnv;
 const Can = can.Can;
 const Check = check.Check;
@@ -60,12 +59,12 @@ const ThreadCondition = threading.Condition;
 /// Native fetchUrl implementation that downloads a tar.zst bundle via HTTP
 /// and extracts it into the destination directory. Used by the CLI to wire up
 /// real download support through the Filesystem vtable.
-pub const nativeFetchUrl: ?*const fn (?*anyopaque, SysIo, Allocator, []const u8, []const u8) RocIo.FetchUrlError!void = if (!is_freestanding)
+pub const nativeFetchUrl: ?*const fn (?*anyopaque, SysIo, Allocator, []const u8, []const u8) RocCtx.FetchUrlError!void = if (!is_freestanding)
     &nativeFetchUrlImpl
 else
     null;
 
-fn nativeFetchUrlImpl(_: ?*anyopaque, sys_io: SysIo, allocator: Allocator, url: []const u8, dest_path: []const u8) RocIo.FetchUrlError!void {
+fn nativeFetchUrlImpl(_: ?*anyopaque, sys_io: SysIo, allocator: Allocator, url: []const u8, dest_path: []const u8) RocCtx.FetchUrlError!void {
     var alloc = allocator;
     unbundle.download.downloadAndExtract(&alloc, sys_io, url, dest_path) catch {
         return error.DownloadFailed;
@@ -143,8 +142,8 @@ pub const BuildEnv = struct {
     // Cache manager for compiled modules
     cache_manager: ?*CacheManager = null,
     // I/O abstraction for all OS operations (filesystem, stdio, env vars, etc.)
-    // Defaults to testing() — callers must set this to a real RocIo before use.
-    filesystem: RocIo = RocIo.testing(),
+    // Defaults to testing() — callers must set this to a real RocCtx before use.
+    filesystem: RocCtx = RocCtx.testing(undefined, undefined),
     // Explicit working directory for resolving relative paths
     cwd: []const u8,
 
@@ -311,8 +310,8 @@ pub const BuildEnv = struct {
     }
 
     /// Set the I/O implementation (or reset to OS default).
-    pub fn setRocIo(self: *BuildEnv, roc_io: ?RocIo) void {
-        self.filesystem = roc_io orelse RocIo.default(self.filesystem.sys_io);
+    pub fn setRocCtx(self: *BuildEnv, roc_ctx: ?RocCtx) void {
+        self.filesystem = roc_ctx orelse RocCtx.default(self.filesystem.gpa, self.filesystem.arena, self.filesystem.sys_io);
         self.sink.sys_io = self.filesystem.sys_io;
     }
 
@@ -1295,11 +1294,7 @@ pub const BuildEnv = struct {
 
         try env.common.calcLineStarts(self.gpa);
 
-        var allocators: Allocators = undefined;
-        allocators.initInPlace(self.gpa);
-        defer allocators.deinit();
-
-        const ast = try parse.parse(&allocators, &env.common);
+        const ast = try parse.parse(self.gpa, &env.common);
         defer ast.deinit();
 
         // Check for parse errors - if any exist, we cannot proceed

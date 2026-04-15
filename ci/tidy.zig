@@ -229,7 +229,7 @@ fn tidyControlCharacters(file: SourceFile, errors: *Errors) void {
     }
 }
 
-/// Core compiler modules must use Roc's Io abstraction (@import("io").RocIo)
+/// Core compiler modules must use Roc's Ctx abstraction (@import("ctx").RocCtx)
 /// instead of std.Io directly, to keep compiler-core decoupled from the Zig stdlib I/O layer.
 fn tidyBannedStdIo(file: SourceFile, errors: *Errors) void {
     const core_modules: []const []const u8 = &.{
@@ -275,7 +275,7 @@ fn tidyBannedStdIo(file: SourceFile, errors: *Errors) void {
             continue;
         }
         const offset = @intFromPtr(remaining.ptr) - @intFromPtr(file.text.ptr) + index;
-        errors.addBanned(file, offset, "std.Io", "Roc's Io abstraction (@import(\"io\").RocIo)");
+        errors.addBanned(file, offset, "std.Io", "Roc's Ctx abstraction (@import(\"ctx\").RocCtx)");
         remaining = after;
     }
 }

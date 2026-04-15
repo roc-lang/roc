@@ -554,12 +554,8 @@ fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8, sys_io: std.Io
     env.module_name = module_name;
     env.common.calcLineStarts(gpa) catch return error.OutOfMemory;
 
-    var allocators: base.Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
     // Parse the source code
-    var parse_ast = parse.parse(&allocators, &env.common) catch return error.ParseFailed;
+    var parse_ast = parse.parse(gpa, &env.common) catch return error.ParseFailed;
     defer parse_ast.deinit();
 
     // Get the file header

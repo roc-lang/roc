@@ -9,7 +9,7 @@ const CIR = @import("can").CIR;
 const Can = @import("can").Can;
 const ModuleEnv = @import("can").ModuleEnv;
 const collections = @import("collections");
-const Allocators = base.Allocators;
+const RocCtx = @import("can").RocCtx;
 
 const Check = @import("check").Check;
 
@@ -137,10 +137,7 @@ pub fn initExpr(comptime source_expr: []const u8) !MirTestEnv {
 /// Full init: parse → canonicalize → type-check → init Lower
 pub fn initFull(module_name: []const u8, source: []const u8) !MirTestEnv {
     const gpa = std.testing.allocator;
-
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
+    const roc_ctx = RocCtx.testing(gpa, gpa);
 
     const module_env: *ModuleEnv = try gpa.create(ModuleEnv);
     errdefer gpa.destroy(module_env);
@@ -165,14 +162,14 @@ pub fn initFull(module_name: []const u8, source: []const u8) !MirTestEnv {
     try module_env.common.calcLineStarts(gpa);
 
     // Parse
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.parse(gpa, &module_env.common);
     errdefer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 
     // Canonicalize
     try module_env.initCIRFields(module_name);
 
-    can_ptr.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+    can_ptr.* = try Can.initModule(roc_ctx, module_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
@@ -318,9 +315,7 @@ pub fn initModule(module_name: []const u8, source: []const u8) !MirTestEnv {
 pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_env: *const MirTestEnv) !MirTestEnv {
     const gpa = std.testing.allocator;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
+    const roc_ctx = RocCtx.testing(gpa, gpa);
 
     const module_env: *ModuleEnv = try gpa.create(ModuleEnv);
     errdefer gpa.destroy(module_env);
@@ -367,14 +362,14 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     });
 
     // Parse
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.parse(gpa, &module_env.common);
     errdefer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 
     // Canonicalize
     try module_env.initCIRFields(module_name);
 
-    can_ptr.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+    can_ptr.* = try Can.initModule(roc_ctx, module_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_env,
             .builtin_indices = builtin_indices,

@@ -40,7 +40,7 @@ const base = @import("base");
 const reporting = @import("reporting");
 const parse = @import("parse");
 const tracy = @import("tracy");
-const io_mod = @import("io");
+const ctx_mod = @import("ctx");
 const compile = @import("compile");
 const can = @import("can");
 const check = @import("check");
@@ -88,7 +88,7 @@ const llvm_available = builder.isLLVMAvailable();
 const Can = can.Can;
 const Check = check.Check;
 const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
-const FsIo = io_mod.RocIo;
+const RocCtx = ctx_mod.RocCtx;
 const ModuleEnv = can.ModuleEnv;
 const BuildEnv = compile.BuildEnv;
 const Coordinator = compile.coordinator.Coordinator;
@@ -102,7 +102,6 @@ const TestRunner = eval.TestRunner;
 const backend = @import("backend");
 const layout = @import("layout");
 const docs = @import("docs");
-const Allocators = base.Allocators;
 const RocTarget = @import("target.zig").RocTarget;
 
 /// Embedded interpreter shim library for the native host target.
@@ -455,7 +454,7 @@ fn generateRandomSuffix(ctx: *CliContext) ![]u8 {
 /// Uses system temp directory to avoid race conditions when cache is cleared.
 pub fn createUniqueTempDir(ctx: *CliContext) ![]const u8 {
     // Get the version-specific temp directory: {temp}/roc/{version}
-    const version_temp_dir = try cache_config_mod.getVersionTempDir(FsIo.default(ctx.io.sys_io), ctx.arena);
+    const version_temp_dir = try cache_config_mod.getVersionTempDir(RocCtx.default(ctx.gpa, ctx.arena, ctx.io.sys_io), ctx.arena);
 
     // Ensure the roc/{version} directory exists
     // makePath automatically handles PathAlreadyExists internally
@@ -516,25 +515,25 @@ pub fn writeFdCoordinationFile(ctx: *CliContext, temp_exe_path: []const u8, shm_
 /// Returns the path to the executable in the temp directory (allocated from arena, no need to free).
 /// Uses the standard roc/{version}/{random}/ structure in the system temp directory.
 /// The exe_display_name is the name that will appear in `ps` output (e.g., "app.roc").
-pub fn createTempDirStructure(allocs: *Allocators, sys_io: std.Io, exe_path: []const u8, exe_display_name: []const u8, shm_handle: SharedMemoryHandle, _: ?[]const u8) ![]const u8 {
+pub fn createTempDirStructure(ctx: *CliContext, exe_path: []const u8, exe_display_name: []const u8, shm_handle: SharedMemoryHandle, _: ?[]const u8) ![]const u8 {
     // Get the version-specific temp directory: {temp}/roc/{version}
-    const version_temp_dir = try cache_config_mod.getVersionTempDir(FsIo.default(sys_io), allocs.arena);
+    const version_temp_dir = try cache_config_mod.getVersionTempDir(RocCtx.default(ctx.gpa, ctx.arena, ctx.io.sys_io), ctx.arena);
 
     // Ensure the roc/{version} directory exists
     // makePath automatically handles PathAlreadyExists internally
-    try std.Io.Dir.cwd().createDirPath(sys_io, version_temp_dir);
+    try std.Io.Dir.cwd().createDirPath(ctx.io.sys_io, version_temp_dir);
 
     // Try to create a unique subdirectory with random suffix
     var attempt: u8 = 0;
     while (attempt < 6) : (attempt += 1) {
-        const random_suffix = try generateRandomSuffix(allocs);
-        const temp_dir_path = try std.fs.path.join(allocs.arena, &.{ version_temp_dir, random_suffix });
+        const random_suffix = try generateRandomSuffix(ctx);
+        const temp_dir_path = try std.fs.path.join(ctx.arena, &.{ version_temp_dir, random_suffix });
 
         // The coordination file path is the directory path with .txt appended
-        const dir_name_with_txt = try std.fmt.allocPrint(allocs.arena, "{s}.txt", .{temp_dir_path});
+        const dir_name_with_txt = try std.fmt.allocPrint(ctx.arena, "{s}.txt", .{temp_dir_path});
 
         // Try to create the directory
-        std.Io.Dir.cwd().createDir(sys_io, temp_dir_path, .default_dir) catch |err| switch (err) {
+        std.Io.Dir.cwd().createDir(ctx.io.sys_io, temp_dir_path, .default_dir) catch |err| switch (err) {
             error.PathAlreadyExists => {
                 // Directory already exists, try again with a new random suffix
                 continue;
@@ -545,38 +544,38 @@ pub fn createTempDirStructure(allocs: *Allocators, sys_io: std.Io, exe_path: []c
         };
 
         // Try to create the fd file
-        const fd_file = std.Io.Dir.cwd().createFile(sys_io, dir_name_with_txt, .{ .exclusive = true }) catch |err| switch (err) {
+        const fd_file = std.Io.Dir.cwd().createFile(ctx.io.sys_io, dir_name_with_txt, .{ .exclusive = true }) catch |err| switch (err) {
             error.PathAlreadyExists => {
                 // File already exists, remove the directory and try again
-                std.Io.Dir.cwd().deleteDir(sys_io, temp_dir_path) catch {};
+                std.Io.Dir.cwd().deleteDir(ctx.io.sys_io, temp_dir_path) catch {};
                 continue;
             },
             else => {
                 // Clean up directory on other errors
-                std.Io.Dir.cwd().deleteDir(sys_io, temp_dir_path) catch {};
+                std.Io.Dir.cwd().deleteDir(ctx.io.sys_io, temp_dir_path) catch {};
                 return err;
             },
         };
         // Note: We'll close this explicitly later, before spawning the child
 
         // Write shared memory info to file (POSIX only - Windows uses command line args)
-        const fd_str = try std.fmt.allocPrint(allocs.arena, "{}\n{}", .{ shm_handle.fd, shm_handle.size });
+        const fd_str = try std.fmt.allocPrint(ctx.arena, "{}\n{}", .{ shm_handle.fd, shm_handle.size });
 
-        try fd_file.writeStreamingAll(sys_io, fd_str);
+        try fd_file.writeStreamingAll(ctx.io.sys_io, fd_str);
 
         // IMPORTANT: Flush and close the file explicitly before spawning child process
         // On Windows, having the file open can prevent child process access
-        try fd_file.sync(sys_io); // Ensure data is written to disk
-        fd_file.close(sys_io);
+        try fd_file.sync(ctx.io.sys_io); // Ensure data is written to disk
+        fd_file.close(ctx.io.sys_io);
 
         // Create hardlink to executable in temp directory with display name
-        const temp_exe_path = try std.fs.path.join(allocs.arena, &.{ temp_dir_path, exe_display_name });
+        const temp_exe_path = try std.fs.path.join(ctx.arena, &.{ temp_dir_path, exe_display_name });
 
         // Try to create a hardlink first (more efficient than copying)
-        createHardlink(allocs, exe_path, temp_exe_path) catch {
+        createHardlink(ctx, exe_path, temp_exe_path) catch {
             // If hardlinking fails for any reason, fall back to copying
             // Common reasons: cross-device link, permissions, file already exists
-            try std.Io.Dir.cwd().copyFile(exe_path, std.Io.Dir.cwd(), temp_exe_path, sys_io, .{});
+            try std.Io.Dir.cwd().copyFile(exe_path, std.Io.Dir.cwd(), temp_exe_path, ctx.io.sys_io, .{});
         };
 
         return temp_exe_path;
@@ -624,19 +623,19 @@ pub fn main(init: std.process.Init) !void {
         gpa = gpa_tracy.allocator();
     }
 
-    var allocs: Allocators = undefined;
-    allocs.initInPlace(gpa);
-    defer allocs.deinit();
+    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
 
     var args_list: std.ArrayList([]const u8) = .empty;
-    defer args_list.deinit(allocs.arena);
+    defer args_list.deinit(arena);
     var args_iter = std.process.Args.Iterator.init(init.minimal.args);
     while (args_iter.next()) |arg| {
-        try args_list.append(allocs.arena, arg);
+        try args_list.append(arena, arg);
     }
     const args = args_list.items;
 
-    mainArgs(&allocs, args, init.io) catch |err| {
+    mainArgs(gpa, arena, args, init.io) catch |err| {
         // Handle OutOfMemory specially - it may not have been printed
         switch (err) {
             error.OutOfMemory => {
@@ -659,7 +658,7 @@ pub fn main(init: std.process.Init) !void {
     }
 }
 
-fn mainArgs(allocs: *Allocators, args: []const []const u8, sys_io: std.Io) !void {
+fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, sys_io: std.Io) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -677,7 +676,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8, sys_io: std.Io) !void
     //
     // Uses page_allocator instead of GPA to avoid leak detection false positives
     // (the thread may still be running when the main thread's leak check fires).
-    if (compile.CacheCleanup.startBackgroundCleanup(std.heap.page_allocator, FsIo.default(sys_io))) |_| {
+    if (compile.CacheCleanup.startBackgroundCleanup(std.heap.page_allocator, RocCtx.default(std.heap.page_allocator, std.heap.page_allocator, sys_io))) |_| {
         // Thread started successfully, will run in background
     } else |_| {
         // Non-fatal: cleanup failure shouldn't prevent compilation
@@ -687,7 +686,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8, sys_io: std.Io) !void
     // Create I/O interface - this is passed to all command handlers via ctx
     var io = Io.create(sys_io);
 
-    const parsed_args = try cli_args.parse(allocs.arena, sys_io, args[1..]);
+    const parsed_args = try cli_args.parse(arena, sys_io, args[1..]);
 
     // Determine command for context
     const command: Command = switch (parsed_args) {
@@ -702,7 +701,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8, sys_io: std.Io) !void
     };
 
     // Create CLI context at the top level - this is passed to all command handlers
-    var ctx = CliContext.init(allocs.gpa, allocs.arena, &io, command);
+    var ctx = CliContext.init(gpa, arena, &io, command);
     ctx.initIo(); // Must be called after ctx is at its final stack location
     defer ctx.deinit(); // deinit flushes I/O
 
@@ -711,7 +710,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8, sys_io: std.Io) !void
             if (std.mem.eql(u8, run_args.path, "main.roc")) {
                 std.Io.Dir.cwd().access(ctx.io.sys_io, run_args.path, .{}) catch |err| switch (err) {
                     error.FileNotFound => {
-                        const cwd_path = std.Io.Dir.cwd().realPathFileAlloc(ctx.io.sys_io, ".", allocs.arena) catch |real_err| {
+                        const cwd_path = std.Io.Dir.cwd().realPathFileAlloc(ctx.io.sys_io, ".", arena) catch |real_err| {
                             ctx.io.stderr().print(
                                 "Error: No app file specified and default 'main.roc' was not found. Additionally, the current directory could not be resolved: {}\n",
                                 .{real_err},
@@ -760,7 +759,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8, sys_io: std.Io) !void
         .glue => |glue_args| try rocGlue(&ctx, glue_args),
         .version => ctx.io.stdout().print("Roc compiler version {s}\n", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(&ctx, docs_args),
-        .experimental_lsp => |lsp_args| try lsp.runWithStdIo(allocs.gpa, sys_io, .{
+        .experimental_lsp => |lsp_args| try lsp.runWithStdIo(gpa, sys_io, .{
             .transport = lsp_args.debug_io,
             .build = lsp_args.debug_build,
             .syntax = lsp_args.debug_syntax,
@@ -939,7 +938,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         .enabled = !args.no_cache,
         .verbose = false,
     };
-    var cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default(ctx.io.sys_io));
+    var cache_manager = CacheManager.init(ctx.gpa, cache_config, RocCtx.default(ctx.gpa, ctx.arena, ctx.io.sys_io));
 
     // Create cache directory for linked interpreter executables
     const exe_cache_dir = cache_manager.config.getExeCacheDir(ctx.arena) catch |err| {
@@ -1308,7 +1307,7 @@ fn rocRunDevShim(ctx: *CliContext, args: cli_args.RunArgs) !void {
         .enabled = !args.no_cache,
         .verbose = false,
     };
-    var cache_manager = CacheManager.init(ctx.gpa, cache_config, io_mod.RocIo.default(ctx.io.sys_io));
+    var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx_mod.RocCtx.default(ctx.gpa, ctx.arena, ctx.io.sys_io));
 
     const exe_cache_dir = cache_manager.config.getExeCacheDir(ctx.arena) catch |err| {
         return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
@@ -1702,11 +1701,7 @@ fn readDefaultAppSource(ctx: *CliContext, file_path: []const u8) ?[]const u8 {
     env.common.source = source;
     env.module_name = module_name;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(ctx.gpa);
-    defer allocators.deinit();
-
-    const ast = parse.parse(&allocators, &env.common) catch {
+    const ast = parse.parse(ctx.gpa, &env.common) catch {
         ctx.gpa.free(source);
         return null;
     };
@@ -1738,7 +1733,7 @@ const CliEchoState = struct {
     echo_module_path: []const u8,
 };
 
-fn cliEchoReadFile(ctx: ?*anyopaque, sys_io: std.Io, path: []const u8, gpa: std.mem.Allocator) FsIo.ReadError![]u8 {
+fn cliEchoReadFile(ctx: ?*anyopaque, sys_io: std.Io, path: []const u8, gpa: std.mem.Allocator) RocCtx.ReadError![]u8 {
     const self: *CliEchoState = @ptrCast(@alignCast(ctx.?));
     if (std.mem.eql(u8, path, self.app_abs_path))
         return gpa.dupe(u8, self.synthetic_app_source) catch error.OutOfMemory;
@@ -1746,7 +1741,7 @@ fn cliEchoReadFile(ctx: ?*anyopaque, sys_io: std.Io, path: []const u8, gpa: std.
         return gpa.dupe(u8, echo_platform.platform_main_source) catch error.OutOfMemory;
     if (std.mem.eql(u8, path, self.echo_module_path))
         return gpa.dupe(u8, echo_platform.echo_module_source) catch error.OutOfMemory;
-    return FsIo.os(sys_io).readFile(path, gpa);
+    return RocCtx.os(gpa, gpa, sys_io).readFile(path, gpa);
 }
 
 fn cliEchoFileExists(ctx: ?*anyopaque, sys_io: std.Io, path: []const u8) bool {
@@ -1754,7 +1749,7 @@ fn cliEchoFileExists(ctx: ?*anyopaque, sys_io: std.Io, path: []const u8) bool {
     if (std.mem.eql(u8, path, self.app_abs_path)) return true;
     if (std.mem.eql(u8, path, self.platform_main_path)) return true;
     if (std.mem.eql(u8, path, self.echo_module_path)) return true;
-    return FsIo.os(sys_io).fileExists(path);
+    return RocCtx.os(undefined, undefined, sys_io).fileExists(path);
 }
 
 /// Run a default_app (headerless file with main! and echo platform).
@@ -1809,10 +1804,10 @@ fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: [
         .platform_main_path = platform_main_path,
         .echo_module_path = echo_module_path,
     };
-    var cli_echo_vtable = FsIo.os(ctx.io.sys_io).vtable;
+    var cli_echo_vtable = RocCtx.os(ctx.gpa, ctx.arena, ctx.io.sys_io).vtable;
     cli_echo_vtable.readFile = &cliEchoReadFile;
     cli_echo_vtable.fileExists = &cliEchoFileExists;
-    build_env.filesystem = .{ .ctx = @ptrCast(&cli_echo_state), .vtable = cli_echo_vtable, .sys_io = ctx.io.sys_io };
+    build_env.filesystem = .{ .ctx = @ptrCast(&cli_echo_state), .vtable = cli_echo_vtable, .sys_io = ctx.io.sys_io, .gpa = ctx.gpa, .arena = ctx.arena };
 
     build_env.discoverDependencies(args.path) catch |err| {
         _ = build_env.renderDiagnostics(ctx.io.stderr());
@@ -2044,7 +2039,7 @@ fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_h
     // On Windows, clean up temp files after the child process exits.
     // (Unlike Unix, Windows locks files while they're being executed)
     if (std.fs.path.dirname(exe_path)) |temp_dir_path| {
-        compile.CacheCleanup.deleteTempDir(ctx.arena, FsIo.default(ctx.io.sys_io), temp_dir_path);
+        compile.CacheCleanup.deleteTempDir(ctx.arena, RocCtx.default(ctx.gpa, ctx.arena, ctx.io.sys_io), temp_dir_path);
         std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
     }
 
@@ -2166,7 +2161,7 @@ fn runWithPosixFdInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle:
     // file to find the shared memory before it can run.
     // The background cleanup thread will also clean up old temp directories.
     if (std.fs.path.dirname(exe_path)) |temp_dir_path| {
-        compile.CacheCleanup.deleteTempDir(ctx.arena, FsIo.default(ctx.io.sys_io), temp_dir_path);
+        compile.CacheCleanup.deleteTempDir(ctx.arena, RocCtx.default(ctx.gpa, ctx.arena, ctx.io.sys_io), temp_dir_path);
         std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
     }
 
@@ -2375,7 +2370,7 @@ pub fn setupSharedMemoryWithCoordinator(ctx: *CliContext, roc_file_path: []const
         &builtin_modules,
         build_options.compiler_version,
         null, // no cache for IPC
-        FsIo.default(debug_threaded_io_instance.io()),
+        RocCtx.default(ctx.gpa, ctx.arena, debug_threaded_io_instance.io()),
     );
     defer coord.deinit();
 
@@ -2651,11 +2646,7 @@ fn extractPlatformQualifier(ctx: *CliContext, roc_file_path: []const u8) !?[]con
     defer env.deinit();
     env.common.source = source;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(ctx.gpa);
-    defer allocators.deinit();
-
-    const parse_ast = parse.parse(&allocators, &env.common) catch return null;
+    const parse_ast = parse.parse(ctx.gpa, &env.common) catch return null;
     defer parse_ast.deinit();
 
     const file_node = parse_ast.store.getFile();
@@ -2703,11 +2694,7 @@ fn extractNonPlatformPackages(
     defer env.deinit();
     env.common.source = source;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(ctx.gpa);
-    defer allocators.deinit();
-
-    const parse_ast = parse.parse(&allocators, &env.common) catch return packages;
+    const parse_ast = parse.parse(ctx.gpa, &env.common) catch return packages;
     defer parse_ast.deinit();
 
     const file_node = parse_ast.store.getFile();
@@ -2980,11 +2967,7 @@ fn extractExposedModulesFromPlatform(ctx: *CliContext, roc_file_path: []const u8
     try env.common.calcLineStarts(ctx.gpa);
 
     // Parse the source code as a full module
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(ctx.gpa);
-    defer allocators.deinit();
-
-    const parse_ast = parse.parse(&allocators, &env.common) catch return error.ParseFailed;
+    const parse_ast = parse.parse(ctx.gpa, &env.common) catch return error.ParseFailed;
     defer parse_ast.deinit();
 
     // Look for platform header in the AST
@@ -3159,11 +3142,7 @@ fn extractPlatformSpecFromApp(ctx: *CliContext, app_file_path: []const u8) ![]co
     };
 
     // Parse the source
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(ctx.gpa);
-    defer allocators.deinit();
-
-    const ast = parse.parse(&allocators, &env.common) catch {
+    const ast = parse.parse(ctx.gpa, &env.common) catch {
         return ctx.fail(.{ .module_init_failed = .{
             .path = app_file_path,
             .err = error.OutOfMemory,
@@ -3415,11 +3394,7 @@ fn extractEntrypointsFromPlatform(ctx: *CliContext, roc_file_path: []const u8, e
     try env.common.calcLineStarts(ctx.gpa);
 
     // Parse the source code as a full module
-    var allocators2: Allocators = undefined;
-    allocators2.initInPlace(ctx.gpa);
-    defer allocators2.deinit();
-
-    const parse_ast = parse.parse(&allocators2, &env.common) catch return error.ParseFailed;
+    const parse_ast = parse.parse(ctx.gpa, &env.common) catch return error.ParseFailed;
     defer parse_ast.deinit();
 
     // Look for platform header in the AST
@@ -3983,7 +3958,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         .enabled = true,
         .verbose = false,
     };
-    var cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default(ctx.io.sys_io));
+    var cache_manager = CacheManager.init(ctx.gpa, cache_config, RocCtx.default(ctx.gpa, ctx.arena, ctx.io.sys_io));
     const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
 
@@ -4009,7 +3984,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         build_cache_manager.* = CacheManager.init(ctx.gpa, .{
             .enabled = true,
             .verbose = args.verbose,
-        }, FsIo.default(ctx.io.sys_io));
+        }, RocCtx.default(ctx.gpa, ctx.arena, ctx.io.sys_io));
         build_env.setCacheManager(build_cache_manager);
     }
 
@@ -4470,7 +4445,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         procs,
         target,
         obj_path,
-        io_mod.RocIo.default(ctx.io.sys_io),
+        ctx_mod.RocCtx.default(ctx.gpa, ctx.arena, ctx.io.sys_io),
     ) catch |err| {
         std.log.err("Native compilation failed: {}", .{err});
         return error.NativeCompilationFailed;
@@ -4637,7 +4612,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         .enabled = true,
         .verbose = false,
     };
-    var cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default(ctx.io.sys_io));
+    var cache_manager = CacheManager.init(ctx.gpa, cache_config, RocCtx.default(ctx.gpa, ctx.arena, ctx.io.sys_io));
     const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
 
@@ -4663,7 +4638,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         build_cache_manager.* = CacheManager.init(ctx.gpa, .{
             .enabled = true,
             .verbose = args.verbose,
-        }, FsIo.default(ctx.io.sys_io));
+        }, RocCtx.default(ctx.gpa, ctx.arena, ctx.io.sys_io));
         build_env.setCacheManager(build_cache_manager);
     }
 
@@ -5425,7 +5400,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
             const test_cache_dir = cache_config.getTestCacheDir(ctx.gpa) catch null;
             if (test_cache_dir) |dir| {
                 defer ctx.gpa.free(dir);
-                var test_cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default(ctx.io.sys_io));
+                var test_cache_manager = CacheManager.init(ctx.gpa, cache_config, RocCtx.default(ctx.gpa, ctx.arena, ctx.io.sys_io));
                 if (test_cache_manager.loadRawBytes(cache_key, dir)) |cached_data| {
                     defer ctx.gpa.free(cached_data);
                     replayTestCache(ctx.gpa, ctx.io.sys_io, cached_data, args, stdout, stderr, src, start_time) catch |err| switch (err) {
@@ -5464,7 +5439,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
             try stderr.print("Failed to create cache manager: {}\n", .{err});
             return err;
         };
-        cache_manager.* = CacheManager.init(ctx.gpa, cache_config, FsIo.default(ctx.io.sys_io));
+        cache_manager.* = CacheManager.init(ctx.gpa, cache_config, RocCtx.default(ctx.gpa, ctx.arena, ctx.io.sys_io));
         build_env.setCacheManager(cache_manager);
     }
 
@@ -5988,7 +5963,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                 if (cache_config.getTestCacheDir(ctx.gpa)) |dir| {
                     defer ctx.gpa.free(dir);
                     const cache_key = CacheManager.generateCacheKey(src, build_options.compiler_version);
-                    var store_cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default(ctx.io.sys_io));
+                    var store_cache_manager = CacheManager.init(ctx.gpa, cache_config, RocCtx.default(ctx.gpa, ctx.arena, ctx.io.sys_io));
                     store_cache_manager.storeRawBytes(cache_key, blob, dir);
                 } else |_| {}
             } else |_| {}
@@ -6490,7 +6465,7 @@ fn checkFileWithBuildEnvPreserved(
     // Set up cache manager if caching is enabled
     if (cache_config.enabled) {
         const cache_manager = try ctx.gpa.create(CacheManager);
-        cache_manager.* = CacheManager.init(ctx.gpa, cache_config, FsIo.default(ctx.io.sys_io));
+        cache_manager.* = CacheManager.init(ctx.gpa, cache_config, RocCtx.default(ctx.gpa, ctx.arena, ctx.io.sys_io));
         build_env.setCacheManager(cache_manager);
         // Note: BuildEnv.deinit() will clean up the cache manager when caller calls deinit
     }
@@ -6600,7 +6575,7 @@ fn checkFileWithBuildEnv(
     // Set up cache manager if caching is enabled
     if (cache_config.enabled) {
         const cache_manager = try ctx.gpa.create(CacheManager);
-        cache_manager.* = CacheManager.init(ctx.gpa, cache_config, FsIo.default(ctx.io.sys_io));
+        cache_manager.* = CacheManager.init(ctx.gpa, cache_config, RocCtx.default(ctx.gpa, ctx.arena, ctx.io.sys_io));
         build_env.setCacheManager(cache_manager);
         // Note: BuildEnv.deinit() will clean up the cache manager
     }

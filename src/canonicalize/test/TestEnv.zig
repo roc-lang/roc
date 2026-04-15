@@ -7,7 +7,7 @@ const CIR = @import("../CIR.zig");
 const Can = @import("../Can.zig");
 const ModuleEnv = @import("../ModuleEnv.zig");
 const BuiltinTestContext = @import("./BuiltinTestContext.zig").BuiltinTestContext;
-const Allocators = base.Allocators;
+const RocCtx = @import("ctx").RocCtx;
 
 gpa: std.mem.Allocator,
 module_env: *ModuleEnv,
@@ -21,9 +21,7 @@ pub const TestEnv = @This();
 pub fn init(source: []const u8) !TestEnv {
     const gpa = std.testing.allocator;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
+    const roc_ctx = RocCtx.testing(gpa, gpa);
 
     // Allocate our ModuleEnv and Can on the heap
     // so we can keep them around for testing purposes...
@@ -38,7 +36,7 @@ pub fn init(source: []const u8) !TestEnv {
     module_env.* = try ModuleEnv.init(gpa, source);
     errdefer module_env.deinit();
 
-    const parse_ast = try parse.parseExpr(&allocators, &module_env.common);
+    const parse_ast = try parse.parseExpr(gpa, &module_env.common);
     errdefer parse_ast.deinit();
 
     // Phase 4: AST Structure Validation
@@ -54,7 +52,7 @@ pub fn init(source: []const u8) !TestEnv {
     var builtin_ctx = try BuiltinTestContext.init(gpa);
     errdefer builtin_ctx.deinit();
 
-    can.* = try Can.initModule(&allocators, module_env, parse_ast, builtin_ctx.canInitContext());
+    can.* = try Can.initModule(roc_ctx, module_env, parse_ast, builtin_ctx.canInitContext());
 
     return TestEnv{
         .gpa = gpa,

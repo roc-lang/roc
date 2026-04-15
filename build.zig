@@ -2516,7 +2516,7 @@ pub fn build(b: *std.Build) void {
     });
     llvm_codegen_module.addImport("layout", roc_modules.layout);
     llvm_codegen_module.addImport("lir", roc_modules.lir);
-    llvm_codegen_module.addImport("io", roc_modules.io);
+    llvm_codegen_module.addImport("ctx", roc_modules.ctx);
 
     roc_modules.eval.addAnonymousImport("llvm_compile", .{
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
@@ -2663,7 +2663,7 @@ pub fn build(b: *std.Build) void {
         echo_wasm.root_module.addImport("WasmFilesystem.zig", b.createModule(.{
             .root_source_file = b.path("src/playground_wasm/WasmFilesystem.zig"),
             .target = echo_wasm_target,
-            .imports = &.{.{ .name = "io", .module = roc_modules.io }},
+            .imports = &.{.{ .name = "ctx", .module = roc_modules.ctx }},
         }));
         echo_wasm.step.dependOn(&write_compiled_builtins.step);
 
@@ -2814,7 +2814,7 @@ pub fn build(b: *std.Build) void {
             });
             compile_build_module.addImport("tracy", roc_modules.tracy);
             compile_build_module.addImport("build_options", roc_modules.build_options);
-            compile_build_module.addImport("io", roc_modules.io);
+            compile_build_module.addImport("ctx", roc_modules.ctx);
             compile_build_module.addImport("builtins", roc_modules.builtins);
             compile_build_module.addImport("collections", roc_modules.collections);
             compile_build_module.addImport("base", roc_modules.base);

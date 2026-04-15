@@ -4,14 +4,12 @@ const std = @import("std");
 const parse = @import("parse");
 const collections = @import("collections");
 const can = @import("can");
-const base = @import("base");
 
 const tracy = @import("tracy");
 const builtin = @import("builtin");
 
-const RocIo = @import("io").RocIo;
+const RocCtx = @import("ctx").RocCtx;
 
-const Allocators = base.Allocators;
 const ModuleEnv = can.ModuleEnv;
 const Token = tokenize.Token;
 const AST = parse.AST;
@@ -21,9 +19,9 @@ const tokenize = parse.tokenize;
 
 const is_windows = builtin.target.os.tag == .windows;
 
-// Derive low-level I/O types from RocIo so core modules access sys_io
+// Derive low-level I/O types from RocCtx so core modules access sys_io
 // capabilities without referencing the banned stdlib Io type directly.
-const SysIo = @TypeOf(@as(RocIo, undefined).sys_io);
+const SysIo = @TypeOf(@as(RocCtx, undefined).sys_io);
 
 var stderr_file_writer: SysIo.File.Writer = .{
     .io = SysIo.Threaded.global_single_threaded.io(),
@@ -191,14 +189,10 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: SysIo.Dir, path: []const
     };
     defer gpa.free(contents);
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
     var module_env = try ModuleEnv.init(gpa, contents);
     defer module_env.deinit();
 
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.parse(gpa, &module_env.common);
     defer parse_ast.deinit();
 
     // If there are any parsing problems, print them to stderr
@@ -245,14 +239,10 @@ pub fn formatStdin(gpa: std.mem.Allocator, io: SysIo) !void {
     defer gpa.free(contents);
 
     // ModuleEnv retains a reference to contents for diagnostics
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
     var module_env = try ModuleEnv.init(gpa, contents);
     defer module_env.deinit();
 
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.parse(gpa, &module_env.common);
     defer parse_ast.deinit();
 
     // If there are any parsing problems, print them to stderr
@@ -2984,14 +2974,10 @@ pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) 
 }
 
 fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
     var module_env = try ModuleEnv.init(gpa, input);
     defer module_env.deinit();
 
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.parse(gpa, &module_env.common);
     defer parse_ast.deinit();
 
     // Currently disabled cause SExpr are missing a lot of IR coverage resulting in panics.

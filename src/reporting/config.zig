@@ -3,7 +3,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
-const RocIo = @import("io").RocIo;
+const RocCtx = @import("ctx").RocCtx;
 
 /// Color preference for reporting output
 pub const ColorPreference = enum {
@@ -55,7 +55,7 @@ pub const ReportingConfig = struct {
     /// Maximum bytes for truncating error messages
     max_message_bytes: usize,
 
-    pub fn initFromEnv(allocator: Allocator, roc_io: RocIo) !ReportingConfig {
+    pub fn initFromEnv(allocator: Allocator, roc_ctx: RocCtx) !ReportingConfig {
         var config = ReportingConfig{
             .color_preference = .auto,
             .is_tty = false,
@@ -68,7 +68,7 @@ pub const ReportingConfig = struct {
         };
 
         // Check if output is TTY
-        config.is_tty = roc_io.isTty();
+        config.is_tty = roc_ctx.isTty();
 
         // Environment variable checks only available on non-freestanding targets
         if (comptime builtin.target.os.tag != .freestanding) {

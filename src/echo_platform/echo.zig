@@ -19,7 +19,7 @@ const reporting = @import("reporting");
 const WasmFilesystem = @import("WasmFilesystem.zig");
 
 const BuildEnv = compile.BuildEnv;
-const RocIo = compile.RocIo;
+const RocCtx = compile.RocCtx;
 const RocTarget = roc_target.RocTarget;
 const HostedFn = echo_platform.host_abi.HostedFn;
 const ReportingConfig = reporting.ReportingConfig;
@@ -100,10 +100,10 @@ const EchoCtx = struct {
     synthetic_app_source: []const u8,
     platform_main_path: []const u8,
     echo_module_path: []const u8,
-    fallback: RocIo,
+    fallback: RocCtx,
 
-    fn io(self: *@This(), sys_io: std.Io) RocIo {
-        return .{ .ctx = @ptrCast(self), .vtable = echo_vtable, .sys_io = sys_io };
+    fn io(self: *@This(), sys_io: std.Io) RocCtx {
+        return .{ .ctx = @ptrCast(self), .vtable = echo_vtable, .sys_io = sys_io, .gpa = self.fallback.gpa, .arena = self.fallback.arena };
     }
 
     /// Return the content for a synthetic/embedded path, or null if not synthetic.
@@ -136,7 +136,7 @@ fn echoGetCtx(ctx_ptr: ?*anyopaque) *EchoCtx {
     return @ptrCast(@alignCast(ctx_ptr.?));
 }
 
-fn echoReadFile(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, gpa: Allocator) RocIo.ReadError![]u8 {
+fn echoReadFile(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, gpa: Allocator) RocCtx.ReadError![]u8 {
     const self = echoGetCtx(ctx_ptr);
     if (self.getSyntheticContent(path)) |content|
         return gpa.dupe(u8, content) catch return error.OutOfMemory;
@@ -149,16 +149,16 @@ fn echoFileExists(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) bool {
     return self.fallback.fileExists(path);
 }
 
-fn echoReadFileInto(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, buf: []u8) RocIo.ReadError!usize {
+fn echoReadFileInto(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, buf: []u8) RocCtx.ReadError!usize {
     return echoGetCtx(ctx_ptr).fallback.readFileInto(path, buf);
 }
-fn echoWriteFile(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, data: []const u8) RocIo.WriteError!void {
+fn echoWriteFile(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, data: []const u8) RocCtx.WriteError!void {
     return echoGetCtx(ctx_ptr).fallback.writeFile(path, data);
 }
-fn echoStat(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) RocIo.StatError!RocIo.FileInfo {
+fn echoStat(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) RocCtx.StatError!RocCtx.FileInfo {
     return echoGetCtx(ctx_ptr).fallback.stat(path);
 }
-fn echoListDir(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, gpa: Allocator) RocIo.ListError![]RocIo.FileEntry {
+fn echoListDir(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, gpa: Allocator) RocCtx.ListError![]RocCtx.FileEntry {
     return echoGetCtx(ctx_ptr).fallback.listDir(path, gpa);
 }
 fn echoDirName(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) ?[]const u8 {
@@ -170,51 +170,51 @@ fn echoBaseName(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) []const u8 {
 fn echoJoinPath(ctx_ptr: ?*anyopaque, _: std.Io, parts: []const []const u8, gpa: Allocator) Allocator.Error![]const u8 {
     return echoGetCtx(ctx_ptr).fallback.joinPath(parts, gpa);
 }
-fn echoCanonicalize(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, gpa: Allocator) RocIo.CanonicalizeError![]const u8 {
+fn echoCanonicalize(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, gpa: Allocator) RocCtx.CanonicalizeError![]const u8 {
     return echoGetCtx(ctx_ptr).fallback.canonicalize(path, gpa);
 }
-fn echoMakePath(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) RocIo.MakePathError!void {
+fn echoMakePath(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) RocCtx.MakePathError!void {
     return echoGetCtx(ctx_ptr).fallback.makePath(path);
 }
-fn echoRename(ctx_ptr: ?*anyopaque, _: std.Io, old: []const u8, new: []const u8) RocIo.RenameError!void {
+fn echoRename(ctx_ptr: ?*anyopaque, _: std.Io, old: []const u8, new: []const u8) RocCtx.RenameError!void {
     return echoGetCtx(ctx_ptr).fallback.rename(old, new);
 }
-fn echoGetEnvVar(ctx_ptr: ?*anyopaque, _: std.Io, key: []const u8, gpa: Allocator) RocIo.GetEnvVarError![]u8 {
+fn echoGetEnvVar(ctx_ptr: ?*anyopaque, _: std.Io, key: []const u8, gpa: Allocator) RocCtx.GetEnvVarError![]u8 {
     return echoGetCtx(ctx_ptr).fallback.getEnvVar(key, gpa);
 }
-fn echoFetchUrl(ctx_ptr: ?*anyopaque, _: std.Io, gpa: Allocator, url: []const u8, dest: []const u8) RocIo.FetchUrlError!void {
+fn echoFetchUrl(ctx_ptr: ?*anyopaque, _: std.Io, gpa: Allocator, url: []const u8, dest: []const u8) RocCtx.FetchUrlError!void {
     return echoGetCtx(ctx_ptr).fallback.fetchUrl(gpa, url, dest);
 }
-fn echoWriteStdout(ctx_ptr: ?*anyopaque, _: std.Io, data: []const u8) RocIo.StdioError!void {
+fn echoWriteStdout(ctx_ptr: ?*anyopaque, _: std.Io, data: []const u8) RocCtx.StdioError!void {
     return echoGetCtx(ctx_ptr).fallback.writeStdout(data);
 }
-fn echoWriteStderr(ctx_ptr: ?*anyopaque, _: std.Io, data: []const u8) RocIo.StdioError!void {
+fn echoWriteStderr(ctx_ptr: ?*anyopaque, _: std.Io, data: []const u8) RocCtx.StdioError!void {
     return echoGetCtx(ctx_ptr).fallback.writeStderr(data);
 }
-fn echoReadStdin(ctx_ptr: ?*anyopaque, _: std.Io, buf: []u8) RocIo.StdioError!usize {
+fn echoReadStdin(ctx_ptr: ?*anyopaque, _: std.Io, buf: []u8) RocCtx.StdioError!usize {
     return echoGetCtx(ctx_ptr).fallback.readStdin(buf);
 }
 fn echoIsTty(ctx_ptr: ?*anyopaque, _: std.Io) bool {
     return echoGetCtx(ctx_ptr).fallback.isTty();
 }
 
-fn echoDeleteFile(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) RocIo.DeleteError!void {
+fn echoDeleteFile(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) RocCtx.DeleteError!void {
     return echoGetCtx(ctx_ptr).fallback.deleteFile(path);
 }
 
-fn echoDeleteDir(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) RocIo.DeleteError!void {
+fn echoDeleteDir(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) RocCtx.DeleteError!void {
     return echoGetCtx(ctx_ptr).fallback.deleteDir(path);
 }
 
-fn echoDeleteTree(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) RocIo.DeleteError!void {
+fn echoDeleteTree(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) RocCtx.DeleteError!void {
     return echoGetCtx(ctx_ptr).fallback.deleteTree(path);
 }
 
-fn echoCreateDir(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) RocIo.MakePathError!void {
+fn echoCreateDir(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) RocCtx.MakePathError!void {
     return echoGetCtx(ctx_ptr).fallback.createDir(path);
 }
 
-fn echoCopyFile(ctx_ptr: ?*anyopaque, _: std.Io, src: []const u8, dst: []const u8) RocIo.CopyError!void {
+fn echoCopyFile(ctx_ptr: ?*anyopaque, _: std.Io, src: []const u8, dst: []const u8) RocCtx.CopyError!void {
     return echoGetCtx(ctx_ptr).fallback.copyFile(src, dst);
 }
 
@@ -222,7 +222,7 @@ fn echoTimestampNow(ctx_ptr: ?*anyopaque, _: std.Io) i128 {
     return echoGetCtx(ctx_ptr).fallback.timestampNow();
 }
 
-const echo_vtable = RocIo.VTable{
+const echo_vtable = RocCtx.VTable{
     .readFile = &echoReadFile,
     .readFileInto = &echoReadFileInto,
     .writeFile = &echoWriteFile,
@@ -370,7 +370,7 @@ fn compileAndRunInner(source: []const u8) !u8 {
         .synthetic_app_source = synthetic_source,
         .platform_main_path = platform_main_path,
         .echo_module_path = echo_module_path,
-        .fallback = WasmFilesystem.wasm(&wasm_ctx, undefined),
+        .fallback = WasmFilesystem.wasm(&wasm_ctx, allocator, undefined),
     };
     var build_env = try BuildEnv.init(allocator, .single_threaded, 1, target, "/app");
     defer build_env.deinit();

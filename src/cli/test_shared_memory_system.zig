@@ -4,8 +4,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const testing = std.testing;
 const main = @import("main.zig");
-const base = @import("base");
-const Allocators = base.Allocators;
 const cli_context = @import("CliContext.zig");
 const CliContext = cli_context.CliContext;
 const Io = cli_context.Io;
@@ -13,13 +11,14 @@ const Io = cli_context.Io;
 test "platform resolution - basic cli platform" {
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
-    var allocs: Allocators = undefined;
-    allocs.initInPlace(gpa_impl.allocator());
-    defer allocs.deinit();
+    const gpa = gpa_impl.allocator();
+    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
 
     // Create a CLI context for error reporting
     var io = Io.init();
-    var ctx = CliContext.init(allocs.gpa, allocs.arena, &io, .run);
+    var ctx = CliContext.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
 
@@ -40,8 +39,8 @@ test "platform resolution - basic cli platform" {
     defer roc_file.close(std.testing.io);
     roc_file.writeStreamingAll(std.testing.io, roc_content) catch unreachable;
 
-    const roc_path = try temp_dir.dir.realPathFileAlloc(std.testing.io, "test.roc", allocs.gpa);
-    defer allocs.gpa.free(roc_path);
+    const roc_path = try temp_dir.dir.realPathFileAlloc(std.testing.io, "test.roc", gpa);
+    defer gpa.free(roc_path);
 
     // This should return CliError since we don't have the actual CLI platform installed
     const result = main.resolvePlatformPaths(&ctx, roc_path);
@@ -51,13 +50,14 @@ test "platform resolution - basic cli platform" {
 test "platform resolution - no platform in file" {
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
-    var allocs: Allocators = undefined;
-    allocs.initInPlace(gpa_impl.allocator());
-    defer allocs.deinit();
+    const gpa = gpa_impl.allocator();
+    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
 
     // Create a CLI context for error reporting
     var io = Io.init();
-    var ctx = CliContext.init(allocs.gpa, allocs.arena, &io, .run);
+    var ctx = CliContext.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
 
@@ -74,8 +74,8 @@ test "platform resolution - no platform in file" {
     defer roc_file.close(std.testing.io);
     roc_file.writeStreamingAll(std.testing.io, roc_content) catch unreachable;
 
-    const roc_path = try temp_dir.dir.realPathFileAlloc(std.testing.io, "test.roc", allocs.gpa);
-    defer allocs.gpa.free(roc_path);
+    const roc_path = try temp_dir.dir.realPathFileAlloc(std.testing.io, "test.roc", gpa);
+    defer gpa.free(roc_path);
 
     const result = main.resolvePlatformPaths(&ctx, roc_path);
     try testing.expectError(error.CliError, result);
@@ -84,13 +84,14 @@ test "platform resolution - no platform in file" {
 test "platform resolution - file not found" {
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
-    var allocs: Allocators = undefined;
-    allocs.initInPlace(gpa_impl.allocator());
-    defer allocs.deinit();
+    const gpa = gpa_impl.allocator();
+    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
 
     // Create a CLI context for error reporting
     var io = Io.init();
-    var ctx = CliContext.init(allocs.gpa, allocs.arena, &io, .run);
+    var ctx = CliContext.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
 
@@ -101,13 +102,14 @@ test "platform resolution - file not found" {
 test "platform resolution - insecure HTTP URL rejected" {
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
-    var allocs: Allocators = undefined;
-    allocs.initInPlace(gpa_impl.allocator());
-    defer allocs.deinit();
+    const gpa = gpa_impl.allocator();
+    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
 
     // Create a CLI context for error reporting
     var io = Io.init();
-    var ctx = CliContext.init(allocs.gpa, allocs.arena, &io, .run);
+    var ctx = CliContext.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
 
@@ -126,8 +128,8 @@ test "platform resolution - insecure HTTP URL rejected" {
     defer roc_file.close(std.testing.io);
     roc_file.writeStreamingAll(std.testing.io, roc_content) catch unreachable;
 
-    const roc_path = try temp_dir.dir.realPathFileAlloc(std.testing.io, "test.roc", allocs.gpa);
-    defer allocs.gpa.free(roc_path);
+    const roc_path = try temp_dir.dir.realPathFileAlloc(std.testing.io, "test.roc", gpa);
+    defer gpa.free(roc_path);
 
     // Insecure HTTP URLs (not localhost) should fail validation
     const result = main.resolvePlatformPaths(&ctx, roc_path);
@@ -144,23 +146,24 @@ test "integration - shared memory setup and parsing" {
 
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
-    var allocs: Allocators = undefined;
-    allocs.initInPlace(gpa_impl.allocator());
-    defer allocs.deinit();
+    const gpa = gpa_impl.allocator();
+    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
 
     // Get absolute path from current working directory
-    const cwd_path = std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocs.gpa) catch return;
-    defer allocs.gpa.free(cwd_path);
+    const cwd_path = std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", gpa) catch return;
+    defer gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
     var io = Io.init();
-    var ctx = CliContext.init(allocs.gpa, allocs.arena, &io, .run);
+    var ctx = CliContext.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
 
     // Use the real int test platform
-    const roc_path = std.fs.path.join(allocs.gpa, &.{ cwd_path, "test/int/app.roc" }) catch return;
-    defer allocs.gpa.free(roc_path);
+    const roc_path = std.fs.path.join(gpa, &.{ cwd_path, "test/int/app.roc" }) catch return;
+    defer gpa.free(roc_path);
 
     // Test that we can set up shared memory with ModuleEnv
     const shm_result = try main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true);
@@ -195,17 +198,18 @@ test "integration - compilation pipeline for different platforms" {
 
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
-    var allocs: Allocators = undefined;
-    allocs.initInPlace(gpa_impl.allocator());
-    defer allocs.deinit();
+    const gpa = gpa_impl.allocator();
+    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
 
     // Get absolute path from current working directory
-    const cwd_path = std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocs.gpa) catch return;
-    defer allocs.gpa.free(cwd_path);
+    const cwd_path = std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", gpa) catch return;
+    defer gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
     var io = Io.init();
-    var ctx = CliContext.init(allocs.gpa, allocs.arena, &io, .run);
+    var ctx = CliContext.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
 
@@ -217,8 +221,8 @@ test "integration - compilation pipeline for different platforms" {
     };
 
     for (test_apps) |relative_path| {
-        const roc_path = std.fs.path.join(allocs.gpa, &.{ cwd_path, relative_path }) catch continue;
-        defer allocs.gpa.free(roc_path);
+        const roc_path = std.fs.path.join(gpa, &.{ cwd_path, relative_path }) catch continue;
+        defer gpa.free(roc_path);
         // Test the full compilation pipeline (parse -> canonicalize -> typecheck)
         const shm_result = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true) catch |err| {
             std.log.warn("Failed to set up shared memory for {s}: {}\n", .{ roc_path, err });
@@ -254,23 +258,24 @@ test "integration - error handling for non-existent file" {
 
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
-    var allocs: Allocators = undefined;
-    allocs.initInPlace(gpa_impl.allocator());
-    defer allocs.deinit();
+    const gpa = gpa_impl.allocator();
+    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
 
     // Get absolute path from current working directory
-    const cwd_path = std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocs.gpa) catch return;
-    defer allocs.gpa.free(cwd_path);
+    const cwd_path = std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", gpa) catch return;
+    defer gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
     var io = Io.init();
-    var ctx = CliContext.init(allocs.gpa, allocs.arena, &io, .run);
+    var ctx = CliContext.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
 
     // Test with a non-existent file path
-    const roc_path = std.fs.path.join(allocs.gpa, &.{ cwd_path, "test/nonexistent/app.roc" }) catch return;
-    defer allocs.gpa.free(roc_path);
+    const roc_path = std.fs.path.join(gpa, &.{ cwd_path, "test/nonexistent/app.roc" }) catch return;
+    defer gpa.free(roc_path);
 
     // This should fail because the file doesn't exist
     const result = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true);
@@ -318,23 +323,24 @@ test "integration - automatic module dependency ordering" {
 
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
-    var allocs: Allocators = undefined;
-    allocs.initInPlace(gpa_impl.allocator());
-    defer allocs.deinit();
+    const gpa = gpa_impl.allocator();
+    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
 
     // Get absolute path from current working directory
-    const cwd_path = std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocs.gpa) catch return;
-    defer allocs.gpa.free(cwd_path);
+    const cwd_path = std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", gpa) catch return;
+    defer gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
     var io = Io.init();
-    var ctx = CliContext.init(allocs.gpa, allocs.arena, &io, .run);
+    var ctx = CliContext.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
 
     // Test app_transitive.roc which uses the platform with wrong-order exposes
-    const roc_path = std.fs.path.join(allocs.gpa, &.{ cwd_path, "test/str/app_transitive.roc" }) catch return;
-    defer allocs.gpa.free(roc_path);
+    const roc_path = std.fs.path.join(gpa, &.{ cwd_path, "test/str/app_transitive.roc" }) catch return;
+    defer gpa.free(roc_path);
 
     // This should compile successfully because modules are automatically sorted
     const shm_result = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true) catch |err| {
@@ -376,23 +382,24 @@ test "integration - transitive module imports (module A imports module B)" {
 
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
-    var allocs: Allocators = undefined;
-    allocs.initInPlace(gpa_impl.allocator());
-    defer allocs.deinit();
+    const gpa = gpa_impl.allocator();
+    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
 
     // Get absolute path from current working directory
-    const cwd_path = std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocs.gpa) catch return;
-    defer allocs.gpa.free(cwd_path);
+    const cwd_path = std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", gpa) catch return;
+    defer gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
     var io = Io.init();
-    var ctx = CliContext.init(allocs.gpa, allocs.arena, &io, .run);
+    var ctx = CliContext.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
 
     // Test app_transitive.roc which uses Helper -> Core transitive import
-    const roc_path = std.fs.path.join(allocs.gpa, &.{ cwd_path, "test/str/app_transitive.roc" }) catch return;
-    defer allocs.gpa.free(roc_path);
+    const roc_path = std.fs.path.join(gpa, &.{ cwd_path, "test/str/app_transitive.roc" }) catch return;
+    defer gpa.free(roc_path);
 
     // This should compile successfully now that we pass sibling modules during compilation
     const shm_result = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true) catch |err| {
@@ -441,23 +448,24 @@ test "integration - diamond dependency pattern (A imports B and C, both import D
 
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
-    var allocs: Allocators = undefined;
-    allocs.initInPlace(gpa_impl.allocator());
-    defer allocs.deinit();
+    const gpa = gpa_impl.allocator();
+    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
 
     // Get absolute path from current working directory
-    const cwd_path = std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocs.gpa) catch return;
-    defer allocs.gpa.free(cwd_path);
+    const cwd_path = std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", gpa) catch return;
+    defer gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
     var io = Io.init();
-    var ctx = CliContext.init(allocs.gpa, allocs.arena, &io, .run);
+    var ctx = CliContext.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
 
     // Test app_diamond.roc which uses Helper.wrap_quoted (calls both Core and Utils)
-    const roc_path = std.fs.path.join(allocs.gpa, &.{ cwd_path, "test/str/app_diamond.roc" }) catch return;
-    defer allocs.gpa.free(roc_path);
+    const roc_path = std.fs.path.join(gpa, &.{ cwd_path, "test/str/app_diamond.roc" }) catch return;
+    defer gpa.free(roc_path);
 
     // This should compile successfully with correct dependency ordering
     const shm_result = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true) catch |err| {
@@ -496,23 +504,24 @@ test "integration - direct Core and Utils calls from app" {
 
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
-    var allocs: Allocators = undefined;
-    allocs.initInPlace(gpa_impl.allocator());
-    defer allocs.deinit();
+    const gpa = gpa_impl.allocator();
+    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
 
     // Get absolute path from current working directory
-    const cwd_path = std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocs.gpa) catch return;
-    defer allocs.gpa.free(cwd_path);
+    const cwd_path = std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", gpa) catch return;
+    defer gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
     var io = Io.init();
-    var ctx = CliContext.init(allocs.gpa, allocs.arena, &io, .run);
+    var ctx = CliContext.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
 
     // Test app_direct_core.roc which calls Core.wrap directly
-    const roc_path = std.fs.path.join(allocs.gpa, &.{ cwd_path, "test/str/app_direct_core.roc" }) catch return;
-    defer allocs.gpa.free(roc_path);
+    const roc_path = std.fs.path.join(gpa, &.{ cwd_path, "test/str/app_direct_core.roc" }) catch return;
+    defer gpa.free(roc_path);
 
     const shm_result = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true) catch |err| {
         std.log.err("Failed to compile direct Core call test: {}\n", .{err});

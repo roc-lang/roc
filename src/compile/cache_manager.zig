@@ -1,14 +1,14 @@
 //! Modern cache manager that uses BLAKE3-based keys and subdirectory splitting.
 
 const std = @import("std");
-const io_mod = @import("io");
+const ctx_mod = @import("ctx");
 const can = @import("can");
 
 const CacheReporting = @import("cache_reporting.zig").CacheReporting;
 const CacheModule = @import("cache_module.zig").CacheModule;
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
-const RocIo = io_mod.RocIo;
+const RocCtx = ctx_mod.RocCtx;
 const CacheStats = @import("cache_config.zig").CacheStats;
 const CacheConfig = @import("cache_config.zig").CacheConfig;
 
@@ -78,7 +78,7 @@ pub const CacheMetadata = struct {
 /// then uses subdirectory splitting to organize cache files efficiently.
 pub const CacheManager = struct {
     config: CacheConfig,
-    roc_io: RocIo,
+    roc_ctx: RocCtx,
     allocator: Allocator,
     stats: CacheStats,
 
@@ -89,14 +89,14 @@ pub const CacheManager = struct {
         if (!self.config.verbose) return;
         var buf: [1024]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
-        self.roc_io.writeStderr(msg) catch {};
+        self.roc_ctx.writeStderr(msg) catch {};
     }
 
     /// Initialize a new cache manager.
-    pub fn init(allocator: Allocator, config: CacheConfig, roc_io: RocIo) Self {
+    pub fn init(allocator: Allocator, config: CacheConfig, roc_ctx: RocCtx) Self {
         return Self{
             .config = config,
-            .roc_io = roc_io,
+            .roc_ctx = roc_ctx,
             .allocator = allocator,
             .stats = CacheStats{},
         };
@@ -127,7 +127,7 @@ pub const CacheManager = struct {
         defer self.allocator.free(cache_path);
 
         // Check if cache file exists
-        if (!self.roc_io.fileExists(cache_path)) {
+        if (!self.roc_ctx.fileExists(cache_path)) {
             self.stats.recordMiss();
             return CacheResult{ .miss = .{
                 .key = cache_key,
@@ -135,7 +135,7 @@ pub const CacheManager = struct {
         }
 
         // Read cache data using memory mapping for better performance
-        const mapped_cache = CacheModule.readFromFileMapped(self.allocator, cache_path, self.roc_io) catch |err| {
+        const mapped_cache = CacheModule.readFromFileMapped(self.allocator, cache_path, self.roc_ctx) catch |err| {
             self.verboseLog("Failed to read cache file {s}: {}\n", .{ cache_path, err });
             self.stats.recordMiss();
             return CacheResult{ .miss = .{
@@ -204,14 +204,14 @@ pub const CacheManager = struct {
         defer self.allocator.free(temp_path);
 
         // Write to temp file
-        self.roc_io.writeFile(temp_path, cache_data) catch |err| {
+        self.roc_ctx.writeFile(temp_path, cache_data) catch |err| {
             self.verboseLog("Failed to write cache temp file {s}: {}\n", .{ temp_path, err });
             self.stats.recordStoreFailure();
             return;
         };
 
         // Move temp file to final location (atomic operation)
-        self.roc_io.rename(temp_path, cache_path) catch |err| {
+        self.roc_ctx.rename(temp_path, cache_path) catch |err| {
             self.verboseLog("Failed to rename cache file {s} -> {s}: {}\n", .{ temp_path, cache_path, err });
             self.stats.recordStoreFailure();
             return;
@@ -274,7 +274,7 @@ pub const CacheManager = struct {
         defer self.allocator.free(full_subdir);
 
         // Create the subdirectory
-        self.roc_io.makePath(full_subdir) catch |err| return err;
+        self.roc_ctx.makePath(full_subdir) catch |err| return err;
     }
 
     /// Store raw bytes at a cache path determined by cache_key + entries_dir.
@@ -304,14 +304,14 @@ pub const CacheManager = struct {
         defer self.allocator.free(temp_path);
 
         // Write to temp file
-        self.roc_io.writeFile(temp_path, data) catch |err| {
+        self.roc_ctx.writeFile(temp_path, data) catch |err| {
             self.verboseLog("Failed to write cache temp file {s}: {}\n", .{ temp_path, err });
             self.stats.recordStoreFailure();
             return;
         };
 
         // Move temp file to final location (atomic operation)
-        self.roc_io.rename(temp_path, cache_path) catch |err| {
+        self.roc_ctx.rename(temp_path, cache_path) catch |err| {
             self.verboseLog("Failed to rename cache file {s} -> {s}: {}\n", .{ temp_path, cache_path, err });
             self.stats.recordStoreFailure();
             return;
@@ -331,13 +331,13 @@ pub const CacheManager = struct {
         defer self.allocator.free(cache_path);
 
         // Check if cache file exists
-        if (!self.roc_io.fileExists(cache_path)) {
+        if (!self.roc_ctx.fileExists(cache_path)) {
             self.stats.recordMiss();
             return null;
         }
 
         // Read cache data
-        const data = self.roc_io.readFile(cache_path, self.allocator) catch |err| {
+        const data = self.roc_ctx.readFile(cache_path, self.allocator) catch |err| {
             self.verboseLog("Failed to read cache file {s}: {}\n", .{ cache_path, err });
             self.stats.recordMiss();
             return null;
@@ -359,7 +359,7 @@ pub const CacheManager = struct {
         var buf: [8192]u8 = undefined;
         var fbs = std.io.fixedBufferStream(&buf);
         CacheReporting.renderCacheStatsToTerminal(allocator, self.stats, fbs.writer()) catch return;
-        self.roc_io.writeStderr(fbs.getWritten()) catch {};
+        self.roc_ctx.writeStderr(fbs.getWritten()) catch {};
     }
 
     /// Restore a ProcessResult from cache data with diagnostic counts.
@@ -429,12 +429,12 @@ pub const CacheManager = struct {
         defer self.allocator.free(meta_path);
 
         // Check if metadata file exists
-        if (!self.roc_io.fileExists(meta_path)) {
+        if (!self.roc_ctx.fileExists(meta_path)) {
             return null;
         }
 
         // Read metadata file
-        const data = self.roc_io.readFile(meta_path, self.allocator) catch return null;
+        const data = self.roc_ctx.readFile(meta_path, self.allocator) catch return null;
         defer self.allocator.free(data);
 
         // Parse metadata
@@ -626,8 +626,8 @@ pub const CacheManager = struct {
         const temp_path = std.fmt.allocPrint(self.allocator, "{s}.tmp", .{meta_path}) catch return;
         defer self.allocator.free(temp_path);
 
-        self.roc_io.writeFile(temp_path, buffer) catch return;
-        self.roc_io.rename(temp_path, meta_path) catch return;
+        self.roc_ctx.writeFile(temp_path, buffer) catch return;
+        self.roc_ctx.rename(temp_path, meta_path) catch return;
     }
 
     /// Load from cache using a pre-computed cache key (for fast path).
@@ -648,13 +648,13 @@ pub const CacheManager = struct {
         defer self.allocator.free(cache_path);
 
         // Check if cache file exists
-        if (!self.roc_io.fileExists(cache_path)) {
+        if (!self.roc_ctx.fileExists(cache_path)) {
             self.stats.recordMiss();
             return CacheResult{ .miss = .{ .key = cache_key } };
         }
 
         // Read cache data
-        var mapped_cache = CacheModule.readFromFileMapped(self.allocator, cache_path, self.roc_io) catch {
+        var mapped_cache = CacheModule.readFromFileMapped(self.allocator, cache_path, self.roc_ctx) catch {
             self.stats.recordMiss();
             return CacheResult{ .miss = .{ .key = cache_key } };
         };

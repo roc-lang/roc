@@ -9,7 +9,7 @@ const builtins = @import("builtins");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 const roc_target = @import("roc_target");
-const RocIo = @import("io").RocIo;
+const RocCtx = @import("ctx").RocCtx;
 
 const helpers = @import("helpers.zig");
 const builtin_loading = @import("../builtin_loading.zig");
@@ -20,7 +20,6 @@ const BuiltinTypes = @import("../builtins.zig").BuiltinTypes;
 const Can = can.Can;
 const Check = check.Check;
 const ModuleEnv = can.ModuleEnv;
-const Allocators = base.Allocators;
 const CompactWriter = collections.CompactWriter;
 const testing = std.testing;
 // Use interpreter_allocator for interpreter tests (doesn't track leaks)
@@ -41,7 +40,7 @@ const runExpectProblem = helpers.runExpectProblem;
 const ExpectedField = helpers.ExpectedField;
 const runDevOnlyExpectStr = helpers.runDevOnlyExpectStr;
 
-const SysIo = @FieldType(RocIo, "sys_io");
+const SysIo = @FieldType(RocCtx, "sys_io");
 
 const TraceWriterState = struct {
     buffer: [256]u8 = undefined,
@@ -813,11 +812,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     try original_env.common.calcLineStarts(original_env.gpa);
 
     // Parse the source code
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
-    const parse_ast = try parse.parseExpr(&allocators, &original_env.common);
+    const parse_ast = try parse.parseExpr(gpa, &original_env.common);
     defer parse_ast.deinit();
 
     // Empty scratch space (required before canonicalization)
@@ -840,7 +835,8 @@ test "ModuleEnv serialization and interpreter evaluation" {
         .builtin_indices = builtin_indices,
     };
 
-    var czer = try Can.initModule(&allocators, &original_env, parse_ast, .{
+    const roc_ctx = RocCtx.testing(gpa, gpa);
+    var czer = try Can.initModule(roc_ctx, &original_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,

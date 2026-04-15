@@ -15,6 +15,7 @@ const wasm_runner = @import("wasm_runner.zig");
 const roc_target = @import("roc_target");
 const compile = @import("compile");
 const single_module = compile.single_module;
+const RocCtx = can.RocCtx;
 const CrashContext = eval_mod.CrashContext;
 const BuiltinTypes = eval_mod.BuiltinTypes;
 const builtin_loading = eval_mod.builtin_loading;
@@ -441,13 +442,9 @@ pub const Repl = struct {
         var module_env = try ModuleEnv.init(self.allocator, input);
         defer module_env.deinit();
 
-        var allocators: single_module.Allocators = undefined;
-        allocators.initInPlace(self.allocator);
-        defer allocators.deinit();
-
         // Try statement parsing using the unified compile_module interface
         const stmt_ast = single_module.parseSingleModule(
-            &allocators,
+            self.allocator,
             &module_env,
             .statement,
             .{ .module_name = "REPL", .init_cir_fields = false },
@@ -493,12 +490,8 @@ pub const Repl = struct {
         var module_env = try ModuleEnv.init(self.allocator, input);
         defer module_env.deinit();
 
-        var allocators: single_module.Allocators = undefined;
-        allocators.initInPlace(self.allocator);
-        defer allocators.deinit();
-
         const expr_ast = single_module.parseSingleModule(
-            &allocators,
+            self.allocator,
             &module_env,
             .expr,
             .{ .module_name = "REPL", .init_cir_fields = false },
@@ -554,14 +547,10 @@ pub const Repl = struct {
 
     /// Evaluate a program (which may contain definitions) - returns structured result
     fn evaluatePureExpressionStructured(self: *Repl, module_env: *ModuleEnv) !StepResult {
-        var allocators: single_module.Allocators = undefined;
-        allocators.initInPlace(self.allocator);
-        defer allocators.deinit();
-
         // Parse using the unified compile_module interface
         // Note: init_cir_fields=false because we call initCIRFields after parsing
         const parse_ast = single_module.parseSingleModule(
-            &allocators,
+            self.allocator,
             module_env,
             .expr,
             .{ .module_name = "repl", .init_cir_fields = false },
@@ -602,7 +591,8 @@ pub const Repl = struct {
         const cir = module_env;
         try cir.initCIRFields("repl");
 
-        var czer = Can.initModule(&allocators, cir, parse_ast, .{
+        const roc_ctx = RocCtx.testing(self.allocator, self.allocator);
+        var czer = Can.initModule(roc_ctx, cir, parse_ast, .{
             .builtin_types = .{
                 .builtin_module_env = self.builtin_module.env,
                 .builtin_indices = self.builtin_indices,

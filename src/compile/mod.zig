@@ -35,11 +35,11 @@ pub const cleanup = if (!threading_mod.is_freestanding) @import("cache_cleanup.z
 
     pub const CleanupThread = struct {};
 
-    pub fn startBackgroundCleanup(_: std.mem.Allocator, _: RocIo) !?CleanupThread {
+    pub fn startBackgroundCleanup(_: std.mem.Allocator, _: RocCtx) !?CleanupThread {
         return null;
     }
 
-    pub fn deleteTempDir(_: std.mem.Allocator, _: RocIo, _: []const u8) void {}
+    pub fn deleteTempDir(_: std.mem.Allocator, _: RocCtx, _: []const u8) void {}
 };
 
 pub const Header = module.Header;
@@ -54,7 +54,7 @@ pub const CacheCleanup = cleanup;
 pub const CleanupStats = cleanup.CleanupStats;
 pub const PackageEnv = package.PackageEnv;
 pub const BuildEnv = build.BuildEnv;
-pub const RocIo = @import("io").RocIo;
+pub const RocCtx = @import("ctx").RocCtx;
 
 // /// Global cache statistics (optional, for debugging)
 // var global_stats: Stats = .{};
@@ -71,7 +71,7 @@ pub const RocIo = @import("io").RocIo;
 
 // /// Print global stats to stderr
 // pub fn printGlobalStats() !void {
-//     // TODO: Use RocIo abstraction for stderr output
+//     // TODO: Use RocCtx abstraction for stderr output
 //     // try global_stats.print(stderr);
 // }
 

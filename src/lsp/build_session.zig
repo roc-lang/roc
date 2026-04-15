@@ -15,7 +15,7 @@ const can = @import("can");
 const uri_util = @import("uri.zig");
 
 const BuildEnv = compile.BuildEnv;
-const RocIo = compile.RocIo;
+const RocCtx = compile.RocCtx;
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 
@@ -60,7 +60,7 @@ pub const BuildSession = struct {
         // Set up file override if override text provided.
         // SAFETY: override lives on the stack and its address is stored in env.filesystem.
         // This is safe because env.build() is synchronous and we restore the Io before returning.
-        var override: RocIo.ReadFileOverride = undefined;
+        var override: RocCtx.ReadFileOverride = undefined;
         const saved_io = env.filesystem;
         if (override_text) |text| {
             override = .{ .path = absolute_path, .content = text, .base = env.filesystem };

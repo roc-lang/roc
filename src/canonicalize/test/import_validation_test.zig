@@ -14,7 +14,7 @@ const ModuleEnv = @import("../ModuleEnv.zig");
 const CIR = @import("../CIR.zig");
 const BuiltinTestContext = @import("./BuiltinTestContext.zig").BuiltinTestContext;
 
-const Allocators = base.Allocators;
+const RocCtx = @import("ctx").RocCtx;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
 
@@ -29,16 +29,14 @@ fn parseAndCanonicalizeSource(
     can: *Can,
     builtin_ctx: BuiltinTestContext,
 } {
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
+    const roc_ctx = RocCtx.testing(allocator, allocator);
 
     const parse_env = try allocator.create(ModuleEnv);
     // Note: We pass allocator for both gpa and arena since the ModuleEnv
     // will be cleaned up by the caller
     parse_env.* = try ModuleEnv.init(allocator, source);
 
-    const ast = try parse.parse(&allocators, &parse_env.common);
+    const ast = try parse.parse(allocator, &parse_env.common);
 
     // Initialize CIR fields
     try parse_env.initCIRFields("Test");
@@ -47,7 +45,7 @@ fn parseAndCanonicalizeSource(
     errdefer builtin_ctx.deinit();
 
     const can = try allocator.create(Can);
-    can.* = try Can.initModule(&allocators, parse_env, ast, .{
+    can.* = try Can.initModule(roc_ctx, parse_env, ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_ctx.builtin_module.env,
             .builtin_indices = builtin_ctx.builtin_indices,
@@ -120,9 +118,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
         \\main = "test"
     ;
     // Parse the source
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
+    const roc_ctx = RocCtx.testing(allocator, allocator);
 
     const parse_env = try allocator.create(ModuleEnv);
     parse_env.* = try ModuleEnv.init(allocator, source);
@@ -130,7 +126,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
         parse_env.deinit();
         allocator.destroy(parse_env);
     }
-    const ast = try parse.parse(&allocators, &parse_env.common);
+    const ast = try parse.parse(allocator, &parse_env.common);
     defer ast.deinit();
     // Initialize CIR fields
     try parse_env.initCIRFields("Test");
@@ -149,7 +145,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     var builtin_ctx = try BuiltinTestContext.init(allocator);
     defer builtin_ctx.deinit();
 
-    var can = try Can.initModule(&allocators, parse_env, ast, .{
+    var can = try Can.initModule(roc_ctx, parse_env, ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_ctx.builtin_module.env,
             .builtin_indices = builtin_ctx.builtin_indices,
@@ -218,9 +214,7 @@ test "import validation - no module_envs provided" {
         \\main = "test"
     ;
     // Let's do it manually instead of using the helper to isolate the issue
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
+    const roc_ctx = RocCtx.testing(allocator, allocator);
 
     const parse_env = try allocator.create(ModuleEnv);
     parse_env.* = try ModuleEnv.init(allocator, source);
@@ -228,7 +222,7 @@ test "import validation - no module_envs provided" {
         parse_env.deinit();
         allocator.destroy(parse_env);
     }
-    const ast = try parse.parse(&allocators, &parse_env.common);
+    const ast = try parse.parse(allocator, &parse_env.common);
     defer ast.deinit();
     // Initialize CIR fields
     try parse_env.initCIRFields("Test");
@@ -236,7 +230,7 @@ test "import validation - no module_envs provided" {
     defer builtin_ctx.deinit();
 
     // Create czer without any explicit import envs
-    var can = try Can.initModule(&allocators, parse_env, ast, builtin_ctx.canInitContext());
+    var can = try Can.initModule(roc_ctx, parse_env, ast, builtin_ctx.canInitContext());
     defer can.deinit();
     _ = try can.canonicalizeFile();
     const diagnostics = try parse_env.getDiagnostics();

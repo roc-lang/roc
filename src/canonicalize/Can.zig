@@ -11,10 +11,10 @@ const base = @import("base");
 const parse = @import("parse");
 const types = @import("types");
 const builtins = @import("builtins");
-const io = @import("io");
+const ctx_mod = @import("ctx");
 const tracy = @import("tracy");
 
-const RocIo = io.RocIo;
+const RocCtx = ctx_mod.RocCtx;
 
 const trace_modules = if (builtin.cpu.arch == .wasm32) false else if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
 
@@ -64,7 +64,6 @@ const PlaceholderInfo = struct {
     item_name_idx: Ident.Idx, // The unqualified item name (e.g., "baz")
 };
 
-allocators: *base.Allocators,
 env: *ModuleEnv,
 parse_ir: *AST,
 /// Track whether we're in statement position (true) or expression position (false)
@@ -158,8 +157,8 @@ enclosing_lambda: ?Expr.Idx = null,
 /// Directory containing the source file, used to resolve file imports.
 source_dir: ?[]const u8 = null,
 /// I/O for file operations (e.g., file imports).
-/// Defaults to testing() which panics if used — callers that need file imports must provide a real RocIo.
-roc_io: RocIo = RocIo.testing(),
+/// Defaults to undefined — callers that need file imports must provide a real RocCtx.
+roc_ctx: RocCtx = undefined,
 const Ident = base.Ident;
 const Region = base.Region;
 // ModuleEnv is already imported at the top
@@ -267,30 +266,26 @@ pub fn deinit(
     self.scratch_local_type_decls.deinit(gpa);
 }
 
-/// Initialize the canonicalizer.
-/// NOTE: The allocators parameter is stored for future arena support but not currently used.
-/// All allocations use env.gpa for consistency with internal methods that use self.env.gpa.
-/// TODO: Future optimization - use allocators.arena for temporary allocations
-/// (scratch buffers, intermediate data) during canonicalization.
+/// Initialize the canonicalizer for a module.
 pub fn initModule(
-    allocators: *base.Allocators,
+    roc_ctx: RocCtx,
     env: *ModuleEnv,
     parse_ir: *AST,
     context: ModuleInitContext,
 ) std.mem.Allocator.Error!Self {
-    return try initInternal(allocators, env, parse_ir, context);
+    return try initInternal(roc_ctx, env, parse_ir, context);
 }
 
 pub fn initBuiltin(
-    allocators: *base.Allocators,
+    roc_ctx: RocCtx,
     env: *ModuleEnv,
     parse_ir: *AST,
 ) std.mem.Allocator.Error!Self {
-    return try initInternal(allocators, env, parse_ir, null);
+    return try initInternal(roc_ctx, env, parse_ir, null);
 }
 
 fn initInternal(
-    allocators: *base.Allocators,
+    roc_ctx: RocCtx,
     env: *ModuleEnv,
     parse_ir: *AST,
     maybe_context: ?ModuleInitContext,
@@ -300,7 +295,7 @@ fn initInternal(
 
     // Create the canonicalizer with scopes
     var result = Self{
-        .allocators = allocators,
+        .roc_ctx = roc_ctx,
         .env = env,
         .parse_ir = parse_ir,
         .scopes = .empty,
@@ -3794,7 +3789,7 @@ fn canonicalizeFileImport(self: *Self, fi: @TypeOf(@as(AST.Statement, undefined)
     defer self.env.gpa.free(full_path);
 
     // Read the file
-    const file_contents: []u8 = self.roc_io.readFile(
+    const file_contents: []u8 = self.roc_ctx.readFile(
         full_path,
         self.env.gpa,
     ) catch |err| {

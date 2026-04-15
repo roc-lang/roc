@@ -8,7 +8,7 @@ const can = @import("can");
 const check = @import("check");
 const builtins = @import("builtins");
 const compiled_builtins = @import("compiled_builtins");
-const RocIo = @import("io").RocIo;
+const RocCtx = @import("ctx").RocCtx;
 
 const layout = @import("layout");
 const interpreter_layout = @import("interpreter_layout");
@@ -69,7 +69,6 @@ fn mirProcIdFromCallableExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?
         else => mirProcIdFromExpr(mir_store, expr_id),
     };
 }
-const Allocators = base.Allocators;
 const MIR = mir.MIR;
 const LambdaSet = mir.LambdaSet;
 const LirExprStore = lir.LirExprStore;
@@ -198,7 +197,7 @@ fn assertNoTypeProblems(allocator: std.mem.Allocator, module_env: *ModuleEnv, ch
     }
 }
 
-const SysIo = @FieldType(RocIo, "sys_io");
+const SysIo = @FieldType(RocCtx, "sys_io");
 
 const TraceWriter = struct {
     buffer: [256]u8 = undefined,
@@ -3331,10 +3330,7 @@ fn parseAndCanonicalizeExprInternal(
     try module_env.common.calcLineStarts(module_env.gpa);
 
     // Parse the source code as an expression (following REPL pattern)
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    // NOTE: allocators is not freed here - caller handles cleanup via cleanupTestResources
-    const parse_ast = try parse.parseExpr(&allocators, &module_env.common);
+    const parse_ast = try parse.parseExpr(allocator, &module_env.common);
 
     if (enforce_no_reports) {
         try assertNoParseDiagnostics(allocator, module_env, parse_ast);
@@ -3371,8 +3367,9 @@ fn parseAndCanonicalizeExprInternal(
         .builtin_indices = builtin_indices,
     };
 
+    const roc_ctx = RocCtx.testing(allocator, allocator);
     const czer = try allocator.create(Can);
-    czer.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+    czer.* = try Can.initModule(roc_ctx, module_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
@@ -7464,11 +7461,7 @@ test "parse diagnostic reporting crashes if module name is uninitialized" {
     module_env.common.source = source;
     try module_env.common.calcLineStarts(module_env.gpa);
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(test_allocator);
-    defer allocators.deinit();
-
-    const parse_ast = try parse.parseExpr(&allocators, &module_env.common);
+    const parse_ast = try parse.parseExpr(test_allocator, &module_env.common);
     defer parse_ast.deinit();
 
     try std.testing.expect(parse_ast.parse_diagnostics.items.len > 0);

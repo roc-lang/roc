@@ -18,7 +18,7 @@ const ModuleEnv = can.ModuleEnv;
 const Can = can.Can;
 const Check = check.Check;
 const Allocator = std.mem.Allocator;
-const Allocators = base.Allocators;
+const RocCtx = can.RocCtx;
 const CIR = can.CIR;
 
 const max_builtin_bytes = 1024 * 1024;
@@ -1557,11 +1557,7 @@ fn compileModule(
     };
 
     // 3. Parse
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.parse(gpa, &module_env.common);
     defer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 
@@ -1608,7 +1604,8 @@ fn compileModule(
         gpa.destroy(can_result);
     }
 
-    can_result.* = try Can.initBuiltin(&allocators, module_env, parse_ast);
+    const roc_ctx = RocCtx.os(gpa, gpa, global_io);
+    can_result.* = try Can.initBuiltin(roc_ctx, module_env, parse_ast);
 
     try can_result.canonicalizeFile();
     try can_result.validateForChecking();

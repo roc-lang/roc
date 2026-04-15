@@ -112,7 +112,7 @@ fn installCrashSignalHandlers() void {
 const Repl = repl.Repl;
 const CrashContext = eval_mod.CrashContext;
 const roc_target = @import("roc_target");
-const Allocators = base.Allocators;
+const RocCtx = compile.RocCtx;
 const CommonEnv = base.CommonEnv;
 const Check = check.Check;
 const CIR = can.CIR;
@@ -1052,14 +1052,9 @@ fn processSnapshotContent(
     defer module_env.deinit();
     var can_ir = &module_env;
 
-    // Create allocators for parsing
-    var allocators: single_module.Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
     // Parse using the unified compile_module interface
     const parse_ast = try single_module.parseSingleModule(
-        &allocators,
+        allocator,
         can_ir,
         parse_mode,
         .{ .module_name = module_name },
@@ -1085,7 +1080,8 @@ fn processSnapshotContent(
             // Snippet and mono tests are full modules
             const builtin_env = config.builtin_module orelse return error.MissingBuiltinModule;
 
-            var czer = try Can.initModule(&allocators, can_ir, parse_ast, .{
+            const roc_ctx = RocCtx.testing(allocator, allocator);
+            var czer = try Can.initModule(roc_ctx, can_ir, parse_ast, .{
                 .builtin_types = .{
                     .builtin_module_env = builtin_env,
                     .builtin_indices = config.builtin_indices,
@@ -1101,7 +1097,8 @@ fn processSnapshotContent(
             // Expr and statement tests use different canonicalization methods
             const builtin_env = config.builtin_module orelse return error.MissingBuiltinModule;
 
-            var czer = try Can.initModule(&allocators, can_ir, parse_ast, .{
+            const roc_ctx = RocCtx.testing(allocator, allocator);
+            var czer = try Can.initModule(roc_ctx, can_ir, parse_ast, .{
                 .builtin_types = .{
                     .builtin_module_env = builtin_env,
                     .builtin_indices = config.builtin_indices,
@@ -1226,8 +1223,9 @@ fn processSnapshotContent(
             // This way it stays alive until the defer at line 1249
             module_envs_for_file = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
 
+            const roc_ctx_for_check = RocCtx.testing(allocator, allocator);
             var checker = try compile.PackageEnv.canonicalizeAndTypeCheckModule(
-                &allocators,
+                roc_ctx_for_check,
                 allocator,
                 can_ir,
                 parse_ast,
@@ -2962,11 +2960,7 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     };
 
     // Parse the MONO output as a headerless type module
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    const validation_ast = parse.parse(&allocators, &validation_env.common) catch |err| {
+    const validation_ast = parse.parse(allocator, &validation_env.common) catch |err| {
         std.log.err("MONO VALIDATION ERROR in {s}: Parse failed: {}", .{ source_path, err });
         return false;
     };
@@ -3001,7 +2995,8 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     };
 
     // Canonicalize the parsed MONO output
-    var czer = Can.initModule(&allocators, &validation_env, validation_ast, .{
+    const mono_roc_ctx = RocCtx.testing(allocator, allocator);
+    var czer = Can.initModule(mono_roc_ctx, &validation_env, validation_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_env,
             .builtin_indices = config.builtin_indices,
@@ -3152,11 +3147,7 @@ fn parseAndFormat(gpa: std.mem.Allocator, input: []const u8) ![]const u8 {
     var module_env = try ModuleEnv.init(gpa, input);
     defer module_env.deinit();
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.parse(gpa, &module_env.common);
     defer parse_ast.deinit();
 
     // Check for parse errors - if there are any, we can't format

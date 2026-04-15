@@ -6,8 +6,8 @@
 const std = @import("std");
 const can = @import("can");
 const collections = @import("collections");
-const RocIo = @import("io").RocIo;
-const SysIo = @FieldType(RocIo, "sys_io");
+const RocCtx = @import("ctx").RocCtx;
+const SysIo = @FieldType(RocCtx, "sys_io");
 
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;

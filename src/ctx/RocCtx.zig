@@ -1,12 +1,12 @@
-//! Unified I/O abstraction for the Roc compiler.
+//! Unified context for the Roc compiler.
 //!
-//! Provides a VTable-based abstraction over filesystem and stdio operations
+//! Bundles allocators (gpa + arena) with a VTable-based I/O abstraction
 //! so compiler-core code is decoupled from `std.fs`/`std.io`/`std.posix`.
 //! Consumers (CLI, WASM playground, tests) inject a concrete implementation.
 //!
 //! Pre-built implementations:
-//!   - `Io.default()` — delegates to the real OS (or stubs on wasm32)
-//!   - `Io.testing()` — panics on every call (override fields for mocks)
+//!   - `RocCtx.default(...)` — delegates to the real OS (or stubs on wasm32)
+//!   - `RocCtx.testing(...)` — panics on every I/O call (override fields for mocks)
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -17,6 +17,14 @@ const Self = @This();
 ctx: ?*anyopaque,
 vtable: VTable,
 sys_io: std.Io,
+
+/// General purpose allocator. Anything allocated with gpa must be freed.
+/// Use for large allocations and things that might get reallocated.
+gpa: Allocator,
+
+/// Arena allocator that lives for the duration of a compilation phase.
+/// Use for small and miscellaneous allocations that are never freed individually.
+arena: Allocator,
 
 /// Function pointer table for I/O operations.
 /// Implementations provide concrete functions; `ctx` is passed through as
@@ -386,7 +394,7 @@ pub const ReadFileOverride = struct {
     pub fn io(self: *@This()) Self {
         var v = self.base.vtable;
         v.readFile = &readFileOverrideFn;
-        return .{ .ctx = @ptrCast(self), .vtable = v, .sys_io = self.base.sys_io };
+        return .{ .ctx = @ptrCast(self), .vtable = v, .sys_io = self.base.sys_io, .gpa = self.base.gpa, .arena = self.base.arena };
     }
 };
 
@@ -484,22 +492,22 @@ const freestanding_vtable = VTable{
 
 /// Get the default implementation for the current target.
 /// On wasm32-freestanding returns stubs; callers may override via `WasmFilesystem`.
-pub fn default(sys_io_arg: std.Io) Self {
+pub fn default(gpa: Allocator, arena: Allocator, sys_io_arg: std.Io) Self {
     if (comptime is_freestanding) {
-        return .{ .ctx = null, .vtable = freestanding_vtable, .sys_io = sys_io_arg };
+        return .{ .ctx = null, .vtable = freestanding_vtable, .sys_io = sys_io_arg, .gpa = gpa, .arena = arena };
     }
-    return .{ .ctx = null, .vtable = os_vtable, .sys_io = sys_io_arg };
+    return .{ .ctx = null, .vtable = os_vtable, .sys_io = sys_io_arg, .gpa = gpa, .arena = arena };
 }
 
 /// Get a real OS implementation (never returns freestanding stubs).
-pub fn os(sys_io_arg: std.Io) Self {
-    return .{ .ctx = null, .vtable = os_vtable, .sys_io = sys_io_arg };
+pub fn os(gpa: Allocator, arena: Allocator, sys_io_arg: std.Io) Self {
+    return .{ .ctx = null, .vtable = os_vtable, .sys_io = sys_io_arg, .gpa = gpa, .arena = arena };
 }
 
-/// Get a test implementation where every call panics.
+/// Get a test implementation where every I/O call panics.
 /// Override individual vtable fields in your test to provide mock behavior.
-pub fn testing() Self {
-    return .{ .ctx = null, .vtable = testing_vtable, .sys_io = undefined };
+pub fn testing(gpa: Allocator, arena: Allocator) Self {
+    return .{ .ctx = null, .vtable = testing_vtable, .sys_io = undefined, .gpa = gpa, .arena = arena };
 }
 
 // --- OS implementations ---
@@ -914,25 +922,25 @@ fn freestandingTimestampNow(_: ?*anyopaque, _: std.Io) i128 {
 // --- Tests ---
 
 test "os() creates an Io that can call dirName and baseName" {
-    const fs = os(std.Io.Threaded.global_single_threaded.io());
+    const fs = os(std.testing.allocator, std.testing.allocator, std.Io.Threaded.global_single_threaded.io());
     try std.testing.expectEqualStrings("foo", fs.dirName("foo/bar").?);
     try std.testing.expectEqualStrings("bar", fs.baseName("foo/bar"));
 }
 
 test "default() returns an Io" {
-    const fs = default(std.Io.Threaded.global_single_threaded.io());
+    const fs = default(std.testing.allocator, std.testing.allocator, std.Io.Threaded.global_single_threaded.io());
     try std.testing.expect(fs.dirName("a/b") != null);
     try std.testing.expectEqualStrings("b", fs.baseName("a/b"));
 }
 
 test "testing() has safe pure methods" {
-    const fs = testing();
+    const fs = testing(std.testing.allocator, std.testing.allocator);
     try std.testing.expectEqualStrings("b", fs.baseName("a/b"));
     try std.testing.expect(!fs.isTty());
 }
 
 test "freestanding stubs return expected errors" {
-    const fs = Self{ .ctx = null, .vtable = freestanding_vtable, .sys_io = undefined };
+    const fs = Self{ .ctx = null, .vtable = freestanding_vtable, .sys_io = undefined, .gpa = std.testing.allocator, .arena = std.testing.allocator };
     try std.testing.expectError(error.FileNotFound, fs.readFile("x", std.testing.allocator));
     try std.testing.expectError(error.AccessDenied, fs.writeFile("x", "y"));
     try std.testing.expect(!fs.fileExists("x"));
@@ -946,7 +954,7 @@ test "freestanding stubs return expected errors" {
 }
 
 test "freestanding dirName and baseName" {
-    const fs = Self{ .ctx = null, .vtable = freestanding_vtable, .sys_io = undefined };
+    const fs = Self{ .ctx = null, .vtable = freestanding_vtable, .sys_io = undefined, .gpa = std.testing.allocator, .arena = std.testing.allocator };
     try std.testing.expectEqualStrings("/usr", fs.dirName("/usr/bin").?);
     try std.testing.expectEqualStrings("bin", fs.baseName("/usr/bin"));
     try std.testing.expectEqualStrings("/", fs.dirName("/bin").?);
@@ -955,21 +963,21 @@ test "freestanding dirName and baseName" {
 }
 
 test "freestanding joinPath" {
-    const fs = Self{ .ctx = null, .vtable = freestanding_vtable, .sys_io = undefined };
+    const fs = Self{ .ctx = null, .vtable = freestanding_vtable, .sys_io = undefined, .gpa = std.testing.allocator, .arena = std.testing.allocator };
     const joined = try fs.joinPath(&.{ "a", "b", "c" }, std.testing.allocator);
     defer std.testing.allocator.free(joined);
     try std.testing.expectEqualStrings("a/b/c", joined);
 }
 
 test "freestanding readStdin returns 0" {
-    const fs = Self{ .ctx = null, .vtable = freestanding_vtable, .sys_io = undefined };
+    const fs = Self{ .ctx = null, .vtable = freestanding_vtable, .sys_io = undefined, .gpa = std.testing.allocator, .arena = std.testing.allocator };
     var buf: [16]u8 = undefined;
     const n = try fs.readStdin(&buf);
     try std.testing.expectEqual(@as(usize, 0), n);
 }
 
 test "freestanding canonicalize returns copy of input" {
-    const fs = Self{ .ctx = null, .vtable = freestanding_vtable, .sys_io = undefined };
+    const fs = Self{ .ctx = null, .vtable = freestanding_vtable, .sys_io = undefined, .gpa = std.testing.allocator, .arena = std.testing.allocator };
     const result = try fs.canonicalize("/some/path", std.testing.allocator);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("/some/path", result);

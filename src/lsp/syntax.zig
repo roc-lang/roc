@@ -5,7 +5,7 @@ const std = @import("std");
 const compile = @import("compile");
 const reporting = @import("reporting");
 const build_options = @import("build_options");
-const RocIo = @import("io").RocIo;
+const RocCtx = @import("ctx").RocCtx;
 const Allocator = std.mem.Allocator;
 const base = @import("base");
 const can = @import("can");
@@ -249,7 +249,7 @@ pub const SyntaxChecker = struct {
 
         if (self.cache_config.enabled) {
             const cache_manager = try self.allocator.create(CacheManager);
-            cache_manager.* = CacheManager.init(self.allocator, self.cache_config, RocIo.default(self.sys_io));
+            cache_manager.* = CacheManager.init(self.allocator, self.cache_config, RocCtx.default(self.allocator, self.allocator, self.sys_io));
             env.setCacheManager(cache_manager);
         }
 
@@ -1776,7 +1776,7 @@ pub const SyntaxChecker = struct {
         defer allocator.free(absolute_path);
 
         // Override readFile for the current file so in-memory source is used.
-        var override = RocIo.ReadFileOverride{ .path = absolute_path, .content = source, .base = env.filesystem };
+        var override = RocCtx.ReadFileOverride{ .path = absolute_path, .content = source, .base = env.filesystem };
         const saved_io = env.filesystem;
         env.filesystem = override.io();
         defer env.filesystem = saved_io;

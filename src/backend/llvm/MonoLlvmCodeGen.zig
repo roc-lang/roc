@@ -17,12 +17,12 @@ const std = @import("std");
 const builtin = @import("builtin");
 const layout = @import("layout");
 const lir = @import("lir");
-const RocIo = @import("io").RocIo;
+const RocCtx = @import("ctx").RocCtx;
 
 const LlvmBuilder = @import("Builder.zig");
 
-/// Alias for the underlying system I/O type carried by RocIo.
-const SysIo = @FieldType(RocIo, "sys_io");
+/// Alias for the underlying system I/O type carried by RocCtx.
+const SysIo = @FieldType(RocCtx, "sys_io");
 
 const LirExprStore = lir.LirExprStore;
 const LirExprId = lir.LirExprId;
