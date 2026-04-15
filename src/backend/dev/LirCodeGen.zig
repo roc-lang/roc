@@ -97,6 +97,21 @@ const RcHelperKey = layout.RcHelperKey;
 // Control flow statement types (for two-pass compilation)
 const CFStmtId = lir.CFStmtId;
 
+fn builtinInternalLayoutContainsRefcounted(ls: *const LayoutStore, comptime site: []const u8, layout_idx: layout.Idx) bool {
+    ownership_boundary.builtinRuntimeInternal(site);
+    return ls.layoutContainsRefcounted(ls.getLayout(layout_idx));
+}
+
+fn builtinInternalLayoutValContainsRefcounted(ls: *const LayoutStore, comptime site: []const u8, layout_val: layout.Layout) bool {
+    ownership_boundary.builtinRuntimeInternal(site);
+    return ls.layoutContainsRefcounted(layout_val);
+}
+
+fn explicitRcLayoutValContainsRefcounted(ls: *const LayoutStore, comptime site: []const u8, layout_val: layout.Layout) bool {
+    ownership_boundary.explicitLirRcExecution(site);
+    return ls.layoutContainsRefcounted(layout_val);
+}
+
 /// Generation mode determines how builtin function calls are emitted.
 /// This is important because the dev backend can be used in two ways:
 /// 1. In-process execution (dev evaluator): Direct function pointers work
@@ -1728,7 +1743,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(temp_reg);
                     self.codegen.freeGeneral(addr_reg);
 
-                    if (ls.layoutContainsRefcounted(elem_layout_val)) {
+                    if (builtinInternalLayoutValContainsRefcounted(ls, "dev.list_get.builtin_elem_rc", elem_layout_val)) {
                         try self.emitIncrefAtStackOffset(elem_slot, elem_layout_idx);
                     }
 
@@ -4042,7 +4057,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.freeGeneral(temp_reg);
                 self.codegen.freeGeneral(ptr_reg);
 
-                if (ls.layoutContainsRefcounted(elem_layout)) {
+                if (builtinInternalLayoutContainsRefcounted(ls, "dev.list_split_first_last.builtin_elem_rc", if (field0_is_list) field1_layout_idx else field0_layout_idx)) {
                     try self.emitIncrefAtStackOffset(elem_dst, if (field0_is_list) field1_layout_idx else field0_layout_idx);
                 }
             }
@@ -4149,7 +4164,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(temp_reg);
             self.codegen.freeGeneral(ptr_reg);
 
-            if (ls.layoutContainsRefcounted(ret_layout_val)) {
+            if (builtinInternalLayoutValContainsRefcounted(ls, "dev.list_first.builtin_ret_rc", ret_layout_val)) {
                 try self.emitIncrefAtStackOffset(elem_slot, ret_layout_idx);
             }
 
@@ -4222,7 +4237,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(temp_reg);
             self.codegen.freeGeneral(addr_reg);
 
-            if (ls.layoutContainsRefcounted(ret_layout_val)) {
+            if (builtinInternalLayoutValContainsRefcounted(ls, "dev.list_last.builtin_ret_rc", ret_layout_val)) {
                 try self.emitIncrefAtStackOffset(elem_slot, ret_layout_idx);
             }
 
@@ -8182,7 +8197,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             count: u16,
         ) Allocator.Error!void {
             const l = self.layout_store.getLayout(layout_idx);
-            if (!self.layout_store.layoutContainsRefcounted(l)) return;
+            if (!explicitRcLayoutValContainsRefcounted(self.layout_store, "dev.emitRcHelperCallForValue.layout_rc", l)) return;
 
             const value_size = self.layout_store.layoutSizeAlign(l).size;
             if (value_size == 0) return;
@@ -11356,7 +11371,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const value_loc = try self.generateRcOperandValue(rc_op.value, rc_op.layout_idx);
             const ls = self.layout_store;
             const layout_val = ls.getLayout(rc_op.layout_idx);
-            if (!ls.layoutContainsRefcounted(layout_val)) return value_loc;
+            if (!explicitRcLayoutValContainsRefcounted(ls, "dev.generateIncref.layout_rc", layout_val)) return value_loc;
 
             switch (layout_val.tag) {
                 .closure => {
@@ -11375,7 +11390,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const value_loc = try self.generateRcOperandValue(rc_op.value, rc_op.layout_idx);
             const ls = self.layout_store;
             const layout_val = ls.getLayout(rc_op.layout_idx);
-            if (!ls.layoutContainsRefcounted(layout_val)) return value_loc;
+            if (!explicitRcLayoutValContainsRefcounted(ls, "dev.generateDecref.layout_rc", layout_val)) return value_loc;
 
             if (layout_val.tag == .closure) {
                 try self.emitExplicitRcHelperCallForValue(.decref, value_loc, layout_val.data.closure.captures_layout_idx, 1);
@@ -11414,7 +11429,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn emitIncrefAtStackOffset(self: *Self, base_offset: i32, layout_idx: layout.Idx) Allocator.Error!void {
             const ls = self.layout_store;
             const layout_val = ls.getLayout(layout_idx);
-            if (!ls.layoutContainsRefcounted(layout_val)) return;
+            if (!explicitRcLayoutValContainsRefcounted(ls, "dev.emitIncrefAtStackOffset.layout_rc", layout_val)) return;
 
             switch (layout_val.tag) {
                 .closure => {
@@ -11429,7 +11444,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn emitDecrefAtStackOffset(self: *Self, base_offset: i32, layout_idx: layout.Idx) Allocator.Error!void {
             const ls = self.layout_store;
             const layout_val = ls.getLayout(layout_idx);
-            if (!ls.layoutContainsRefcounted(layout_val)) return;
+            if (!explicitRcLayoutValContainsRefcounted(ls, "dev.emitDecrefAtStackOffset.layout_rc", layout_val)) return;
 
             switch (layout_val.tag) {
                 .closure => {
@@ -11446,7 +11461,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const value_loc = try self.generateRcOperandValue(rc_op.value, rc_op.layout_idx);
             const ls = self.layout_store;
             const layout_val = ls.getLayout(rc_op.layout_idx);
-            if (!ls.layoutContainsRefcounted(layout_val)) return value_loc;
+            if (!explicitRcLayoutValContainsRefcounted(ls, "dev.generateFree.layout_rc", layout_val)) return value_loc;
 
             switch (layout_val.tag) {
                 .closure => try self.emitExplicitRcHelperCallForValue(.decref, value_loc, layout_val.data.closure.captures_layout_idx, 1),

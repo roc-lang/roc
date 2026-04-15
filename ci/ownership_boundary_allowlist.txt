@@ -13,12 +13,17 @@ interpreter-perform-rc | src/eval/interpreter.zig | performRc | layout-driven in
 interpreter-perform-rc | src/eval/interpreter.zig | performExplicitRcStmt | explicit LIR RC execution choke point
 interpreter-perform-rc | src/eval/interpreter.zig | performBuiltinInternalRc | builtin/runtime-internal RC choke point
 interpreter-perform-rc | src/eval/interpreter.zig | performInterpreterApiRc | interpreter API cleanup for externally held result values
+ordinary-layout-refcount-branch | src/eval/interpreter.zig | builtinInternalContainsRefcounted | builtin/runtime-internal layout-refcount query helper
+ordinary-layout-refcount-branch | src/eval/interpreter.zig | forbiddenOrdinaryContainsRefcounted | forbidden ordinary-path layout-refcount query marker
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitRcHelperCallAtStackOffset | RC helper plumbing used by explicit RC lowering and builtin RC helpers
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitRcHelperCallForValue | RC helper plumbing used by explicit RC lowering and builtin RC helpers
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitRcHelperCallFromPtrReg | RC helper plumbing used by explicit RC lowering and builtin RC helpers
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitBuiltinInternalRcHelperCallForValue | builtin primitive lowering choke point
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitExplicitRcHelperCallAtStackOffset | explicit LIR RC lowering choke point
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitExplicitRcHelperCallForValue | explicit LIR RC lowering choke point
+ordinary-layout-refcount-branch | src/backend/dev/LirCodeGen.zig | builtinInternalLayoutContainsRefcounted | builtin primitive layout-refcount query helper
+ordinary-layout-refcount-branch | src/backend/dev/LirCodeGen.zig | builtinInternalLayoutValContainsRefcounted | builtin primitive layout-refcount query helper
+ordinary-layout-refcount-branch | src/backend/dev/LirCodeGen.zig | explicitRcLayoutValContainsRefcounted | explicit RC layout-refcount query helper
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | generateRcStmt | explicit LIR RC lowering choke point
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitRcForValueLocal | RC helper plumbing used by explicit RC lowering and builtin RC helpers
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitRcHelperCallForValuePtr | RC helper plumbing used by explicit RC lowering and builtin RC helpers
@@ -27,3 +32,5 @@ wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitRcHelperCallByKey |
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitBuiltinInternalRcForValueLocal | builtin primitive lowering choke point
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitBuiltinInternalRcAtPtr | builtin primitive lowering choke point
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitExplicitRcForValueLocal | explicit LIR RC lowering choke point
+ordinary-layout-refcount-branch | src/backend/wasm/WasmCodeGen.zig | builtinInternalLayoutContainsRefcounted | builtin primitive layout-refcount query helper
+ordinary-layout-refcount-branch | src/backend/wasm/WasmCodeGen.zig | explicitRcLayoutContainsRefcounted | explicit RC layout-refcount query helper

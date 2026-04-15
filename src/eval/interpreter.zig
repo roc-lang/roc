@@ -1371,7 +1371,7 @@ pub const Interpreter = struct {
                                 actual_elem_layout,
                                 elem_layout,
                             );
-                        if (self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(elem_layout))) {
+                        if (self.forbiddenOrdinaryContainsRefcounted("interpreter.for_list.elem_layout_rc_check", elem_layout)) {
                             self.performForbiddenOrdinaryRc("interpreter.for_list.elem_incref", .incref, normalized_elem, elem_layout, 1);
                         }
                         const elem_value = try self.materializeLocalValue(normalized_elem, elem_layout);
@@ -2244,7 +2244,7 @@ pub const Interpreter = struct {
             const sj = crash_boundary.set();
             if (sj != 0) return error.Crash;
             const sa = self.helper.sizeAlignOf(elem_layout);
-            const elems_rc = self.helper.containsRefcounted(elem_layout);
+            const elems_rc = self.builtinInternalContainsRefcounted("interpreter.assign_list.zst_elem_rc", elem_layout);
             const list = builtins.list.RocList.list_allocate(
                 @intCast(sa.alignment.toByteUnits()),
                 elem_locals.len,
@@ -2258,7 +2258,7 @@ pub const Interpreter = struct {
         const total_elem_bytes = elem_size * elem_locals.len;
         const sa = self.helper.sizeAlignOf(elem_layout);
         const elem_alignment: u32 = @intCast(sa.alignment.toByteUnits());
-        const elems_rc = self.helper.containsRefcounted(elem_layout);
+        const elems_rc = self.builtinInternalContainsRefcounted("interpreter.assign_list.elem_rc", elem_layout);
         const elem_data = try self.allocRocDataWithRc(total_elem_bytes, elem_alignment, elems_rc);
         const elem_layout_val = self.layout_store.getLayout(elem_layout);
         for (elem_locals, 0..) |elem_local, i| {
@@ -2489,6 +2489,16 @@ pub const Interpreter = struct {
     ) void {
         ownership_boundary.forbiddenInterpreterOrdinaryRc(site);
         self.performRc(op, val, layout_idx, count);
+    }
+
+    fn builtinInternalContainsRefcounted(self: *LirInterpreter, comptime site: []const u8, layout_idx: layout_mod.Idx) bool {
+        ownership_boundary.builtinRuntimeInternal(site);
+        return self.helper.containsRefcounted(layout_idx);
+    }
+
+    fn forbiddenOrdinaryContainsRefcounted(self: *LirInterpreter, comptime site: []const u8, layout_idx: layout_mod.Idx) bool {
+        ownership_boundary.forbiddenOrdinaryOwnershipDecision(site);
+        return self.helper.containsRefcounted(layout_idx);
     }
 
     fn performRcPlan(self: *LirInterpreter, rc_plan: layout_mod.RcHelperPlan, resolver: *const layout_mod.RcHelperResolver, val: Value, count: u16) void {
@@ -3104,7 +3114,7 @@ pub const Interpreter = struct {
                 const elem_ptr = rl.bytes.? + @as(usize, @intCast(idx)) * info.width;
                 const val = try self.allocBytes(info.width);
                 @memcpy(val.ptr[0..info.width], elem_ptr[0..info.width]);
-                if (self.helper.containsRefcounted(ll.ret_layout)) {
+                if (self.builtinInternalContainsRefcounted("interpreter.list_get_unsafe.ret_rc", ll.ret_layout)) {
                     self.performBuiltinInternalRc("interpreter.list_get_unsafe.ret_incref", .incref, val, ll.ret_layout, 1);
                 }
                 break :blk val;
@@ -3287,7 +3297,7 @@ pub const Interpreter = struct {
             .list_with_capacity => blk: {
                 const elem_layout = self.listElemLayout(ll.ret_layout);
                 const sa = self.helper.sizeAlignOf(elem_layout);
-                const elems_rc = self.helper.containsRefcounted(elem_layout);
+                const elems_rc = self.builtinInternalContainsRefcounted("interpreter.list_with_capacity.elem_rc", elem_layout);
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
@@ -4562,7 +4572,7 @@ pub const Interpreter = struct {
                 first_elem,
                 elem_layout,
             );
-            if (self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(elem_layout))) {
+            if (self.builtinInternalContainsRefcounted("interpreter.list_split_first.elem_rc", elem_layout)) {
                 self.performBuiltinInternalRc("interpreter.list_split_first.elem_incref", .incref, first_elem, elem_layout, 1);
             }
             // Rest list starts at offset info.width
@@ -4607,7 +4617,7 @@ pub const Interpreter = struct {
                 last_elem,
                 elem_layout,
             );
-            if (self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(elem_layout))) {
+            if (self.builtinInternalContainsRefcounted("interpreter.list_split_last.elem_rc", elem_layout)) {
                 self.performBuiltinInternalRc("interpreter.list_split_last.elem_incref", .incref, last_elem, elem_layout, 1);
             }
             var crash_boundary = self.enterCrashBoundary();
@@ -5006,7 +5016,7 @@ pub const Interpreter = struct {
                 );
                 if (box_info.elem_size > 0) {
                     (Value{ .ptr = data_ptr }).copyFrom(inner_value, box_info.elem_size);
-                    if (self.helper.containsRefcounted(inner_layout)) {
+                    if (self.forbiddenOrdinaryContainsRefcounted("interpreter.coerceValueIntoBox.inner_rc", inner_layout)) {
                         self.performForbiddenOrdinaryRc("interpreter.coerceValueIntoBox.inner_incref", .incref, .{ .ptr = data_ptr }, inner_layout, 1);
                     }
                     if (builtin.mode == .Debug and @intFromEnum(expected_box_layout) == 29) {
@@ -5108,7 +5118,7 @@ pub const Interpreter = struct {
             expected_alloc.base.offset(expected_field_offset).copyFrom(coerced_field, expected_field_size);
         }
 
-        if (self.helper.containsRefcounted(expected_alloc.base_layout)) {
+        if (self.forbiddenOrdinaryContainsRefcounted("interpreter.coerceStructValue.result_rc", expected_alloc.base_layout)) {
             self.performForbiddenOrdinaryRc("interpreter.coerceStructValue.result_incref", .incref, expected_alloc.base, expected_alloc.base_layout, 1);
         }
 
@@ -5163,7 +5173,7 @@ pub const Interpreter = struct {
             std.debug.print("\n", .{});
         }
 
-        if (self.helper.containsRefcounted(allocated.base_layout)) {
+        if (self.forbiddenOrdinaryContainsRefcounted("interpreter.coerceTagUnionValue.result_rc", allocated.base_layout)) {
             self.performForbiddenOrdinaryRc("interpreter.coerceTagUnionValue.result_incref", .incref, allocated.base, allocated.base_layout, 1);
         }
 
@@ -5186,7 +5196,7 @@ pub const Interpreter = struct {
                 if (elem_size > 0) {
                     @memcpy(data_ptr[0..elem_size], arg.ptr[0..elem_size]);
                 }
-                if (self.helper.containsRefcounted(box_info.elem_layout_idx)) {
+                if (self.builtinInternalContainsRefcounted("interpreter.evalBoxBox.arg_rc", box_info.elem_layout_idx)) {
                     self.performBuiltinInternalRc("interpreter.evalBoxBox.arg_incref", .incref, arg, box_info.elem_layout_idx, 1);
                 }
                 const boxed = try self.alloc(ret_layout);
@@ -5211,7 +5221,7 @@ pub const Interpreter = struct {
         if (size > 0) {
             result.copyFrom(.{ .ptr = data_ptr }, size);
         }
-        if (self.helper.containsRefcounted(ret_layout)) {
+        if (self.builtinInternalContainsRefcounted("interpreter.evalBoxUnbox.result_rc", ret_layout)) {
             self.performBuiltinInternalRc("interpreter.evalBoxUnbox.result_incref", .incref, result, ret_layout, 1);
         }
 

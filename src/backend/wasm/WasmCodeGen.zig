@@ -47,6 +47,16 @@ const wasm_roc_ops_crashed_offset: u32 = 24;
 
 const Self = @This();
 
+fn builtinInternalLayoutContainsRefcounted(ls: *const LayoutStore, comptime site: []const u8, layout_idx: layout.Idx) bool {
+    ownership_boundary.builtinRuntimeInternal(site);
+    return ls.layoutContainsRefcounted(ls.getLayout(layout_idx));
+}
+
+fn explicitRcLayoutContainsRefcounted(ls: *const LayoutStore, comptime site: []const u8, layout_idx: layout.Idx) bool {
+    ownership_boundary.explicitLirRcExecution(site);
+    return ls.layoutContainsRefcounted(ls.getLayout(layout_idx));
+}
+
 allocator: Allocator,
 store: *const LirStore,
 layout_store: *const LayoutStore,
@@ -650,7 +660,7 @@ fn emitRcForValueLocal(
 ) Allocator.Error!void {
     const ls = self.getLayoutStore();
     const l = ls.getLayout(layout_idx);
-    if (!ls.layoutContainsRefcounted(l)) return;
+    if (!explicitRcLayoutContainsRefcounted(ls, "wasm.emitRcForValueLocal.layout_rc", layout_idx)) return;
     if (value_vt != .i32) return;
 
     if (self.isCompositeLayout(layout_idx)) {
@@ -5060,7 +5070,7 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
 
             const elem_layout = for_stmt.iterable_elem_layout;
             const elem_size = self.layoutStorageByteSize(elem_layout);
-            const elem_contains_refcounted = self.getLayoutStore().layoutContainsRefcounted(self.getLayoutStore().getLayout(elem_layout));
+            const elem_contains_refcounted = builtinInternalLayoutContainsRefcounted(self.getLayoutStore(), "wasm.for_list.builtin_elem_rc", elem_layout);
             if (elem_size == 0) {
                 self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                 WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
@@ -6846,7 +6856,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const elem_layout_idx = self.listElemRuntimeLayout(list_layout_idx);
             const elem_size: u32 = self.layoutStorageByteSize(elem_layout_idx);
             const elem_is_composite = self.isCompositeLayout(elem_layout_idx);
-            const elem_contains_refcounted = ls.layoutContainsRefcounted(ls.getLayout(elem_layout_idx));
+            const elem_contains_refcounted = builtinInternalLayoutContainsRefcounted(ls, "wasm.list_get_unsafe.builtin_elem_rc", elem_layout_idx);
 
             // Generate list expression and save pointer
             try self.emitProcLocal(args[0]);
@@ -6919,7 +6929,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const elem_layout_idx = self.listElemRuntimeLayout(list_layout_idx);
             const elem_size: u32 = self.layoutStorageByteSize(elem_layout_idx);
             const elem_is_composite = self.isCompositeLayout(elem_layout_idx);
-            const elem_contains_refcounted = ls.layoutContainsRefcounted(ls.getLayout(elem_layout_idx));
+            const elem_contains_refcounted = builtinInternalLayoutContainsRefcounted(ls, "wasm.list_first.builtin_elem_rc", elem_layout_idx);
 
             try self.emitProcLocal(args[0]);
             const list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -6958,7 +6968,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const elem_layout_idx = self.listElemRuntimeLayout(list_layout_idx);
             const elem_size: u32 = self.layoutStorageByteSize(elem_layout_idx);
             const elem_is_composite = self.isCompositeLayout(elem_layout_idx);
-            const elem_contains_refcounted = ls.layoutContainsRefcounted(ls.getLayout(elem_layout_idx));
+            const elem_contains_refcounted = builtinInternalLayoutContainsRefcounted(ls, "wasm.list_last.builtin_elem_rc", elem_layout_idx);
 
             try self.emitProcLocal(args[0]);
             const list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -8088,7 +8098,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
                     const result_vt = self.resolveValType(ll.ret_layout);
                     const result_size = self.layoutByteSize(ll.ret_layout);
-                    const result_has_rc = self.getLayoutStore().layoutContainsRefcounted(self.getLayoutStore().getLayout(ll.ret_layout));
+                    const result_has_rc = builtinInternalLayoutContainsRefcounted(self.getLayoutStore(), "wasm.box_unbox.builtin_ret_rc", ll.ret_layout);
 
                     if (result_vt == .i32 and result_size > 4) {
                         const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
