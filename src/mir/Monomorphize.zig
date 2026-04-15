@@ -3902,8 +3902,12 @@ pub const Pass = struct {
                         callable_mono,
                         skip_fully_bound_params,
                     );
+                    continue;
                 }
-                continue;
+                // When callable inference fails (e.g. the caller parameter
+                // is an unconstrained flex variable), fall through to the
+                // regular monotype resolution path so the parameter can
+                // still be bound from the argument's resolved type.
             }
 
             const exact_arg_mono = try self.resolveExprMonotypeIfExactResolved(result, actual_module_idx, arg_expr_idx);
@@ -4852,6 +4856,23 @@ pub const Pass = struct {
             // In that case, keep the existing (more informed) monotype rather
             // than treating the conflict as a compiler bug.
             if (self.scratch_context_expr_monotypes_depth != 0) {
+                return;
+            }
+
+            // When one side of the conflict is unit (the default for
+            // unconstrained type variables), keep the more specific
+            // monotype. Same rationale as the scratch-context case above.
+            if (result.monotype_store.getMonotype(resolved.idx) == .unit) {
+                return;
+            }
+            if (result.monotype_store.getMonotype(existing.idx) == .unit) {
+                if (self.active_iteration_expr_monotypes) |iteration_map| {
+                    try iteration_map.put(self.allocator, key, resolved);
+                } else if (self.scratch_context_expr_monotypes_depth != 0) {
+                    try result.context_expr_monotypes.put(self.allocator, key, resolved);
+                } else {
+                    try self.mergeTrackedContextExprMonotype(result, key, resolved);
+                }
                 return;
             }
 
@@ -9525,6 +9546,18 @@ pub const Pass = struct {
             if (existing.module_idx != resolved_mono.module_idx or
                 !try self.monotypesStructurallyEqual(result, existing.idx, resolved_mono.idx))
             {
+                // When one side of the conflict is unit (the default for
+                // unconstrained type variables), keep the more specific
+                // binding. This occurs when a dispatch template's
+                // internal expressions have types that default to unit
+                // in a particular instantiation context.
+                if (result.monotype_store.getMonotype(resolved_mono.idx) == .unit) {
+                    return;
+                }
+                if (result.monotype_store.getMonotype(existing.idx) == .unit) {
+                    bindings.putAssumeCapacity(resolved_key, resolved_mono);
+                    return;
+                }
                 if (std.debug.runtime_safety) {
                     const context_template: ?ProcTemplate = if (!self.active_proc_inst_context.isNone())
                         result.getProcTemplate(result.getProcInst(self.active_proc_inst_context).template).*

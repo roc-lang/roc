@@ -4486,3 +4486,16 @@ test "Set.map - deduplicates after transform" {
         \\Set.from_list([1.I64, 2, 3, 4]).map(|x| x / 2).len()
     , 3, .no_trace);
 }
+
+test "issue 9342: passing lambda to function ignoring its parameter should not panic" {
+    // Regression test for GitHub issue #9342
+    // Passing a lambda to a function that ignores its parameter caused a
+    // panic in monomorphization: "bindFlatTypeMonotypes mismatch:
+    // flat_type=fn_unbound mono=unit"
+    try runExpectI64(
+        \\{
+        \\    foo = |_f| 42.I64
+        \\    foo(|a| a)
+        \\}
+    , 42, .no_trace);
+}
