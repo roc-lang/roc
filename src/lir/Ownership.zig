@@ -11,6 +11,7 @@
 //! - backends and the interpreter are not allowed to reconstruct these facts
 
 const std = @import("std");
+const layout_mod = @import("layout");
 const LIR = @import("LIR.zig");
 const LirStore = @import("LirStore.zig");
 
@@ -25,9 +26,10 @@ const ResultSemantics = LIR.ResultSemantics;
 pub fn inferProcResultContracts(
     allocator: Allocator,
     store: *LirStore,
+    layouts: *const layout_mod.Store,
 ) Allocator.Error!void {
     try propagateRefResultSemantics(allocator, store);
-    try normalizeRefLocalOwnership(allocator, store);
+    try normalizeRefLocalOwnership(allocator, store, layouts);
     try inferProcOwnedParams(allocator, store);
 
     var changed = true;
@@ -561,21 +563,26 @@ fn propagateRefResultSemantics(
     allocator: Allocator,
     store: *LirStore,
 ) Allocator.Error!void {
-    for (store.cf_stmts.items, 0..) |stmt, i| {
-        switch (stmt) {
-            .assign_ref => |assign| {
-                if (assign.op == .local) continue;
-                const next_semantics = try refOpResultSemantics(allocator, store, assign.op);
-                if (resultSemanticsEqual(next_semantics, assign.result)) continue;
-                store.cf_stmts.items[i] = .{ .assign_ref = .{
-                    .target = assign.target,
-                    .result = next_semantics,
-                    .ownership = assign.ownership,
-                    .op = assign.op,
-                    .next = assign.next,
-                } };
-            },
-            else => {},
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (store.cf_stmts.items, 0..) |stmt, i| {
+            switch (stmt) {
+                .assign_ref => |assign| {
+                    if (assign.op == .local) continue;
+                    const next_semantics = try refOpResultSemantics(allocator, store, assign.op);
+                    if (resultSemanticsEqual(next_semantics, assign.result)) continue;
+                    store.cf_stmts.items[i] = .{ .assign_ref = .{
+                        .target = assign.target,
+                        .result = next_semantics,
+                        .ownership = assign.ownership,
+                        .op = assign.op,
+                        .next = assign.next,
+                    } };
+                    changed = true;
+                },
+                else => {},
+            }
         }
     }
 }
@@ -583,6 +590,7 @@ fn propagateRefResultSemantics(
 fn normalizeRefLocalOwnership(
     allocator: Allocator,
     store: *LirStore,
+    layouts: *const layout_mod.Store,
 ) Allocator.Error!void {
     _ = allocator;
     for (store.cf_stmts.items, 0..) |stmt, i| {
@@ -597,6 +605,18 @@ fn normalizeRefLocalOwnership(
         };
 
         if (assign.result != .fresh) continue;
+        if (!layoutContainsRefcounted(store, layouts, assign.target)) {
+            const empty = LIR.OwnershipSemantics{};
+            if (ownershipSemanticsEqual(store, assign.ownership, empty)) continue;
+            store.cf_stmts.items[i] = .{ .assign_ref = .{
+                .target = assign.target,
+                .result = assign.result,
+                .ownership = empty,
+                .op = assign.op,
+                .next = assign.next,
+            } };
+            continue;
+        }
 
         const rewritten_ownership = blk: {
             const semantics = localResultSemantics(store, source) orelse break :blk LIR.OwnershipSemantics{
@@ -776,4 +796,9 @@ fn ownershipSemanticsEqual(store: *const LirStore, a: LIR.OwnershipSemantics, b:
     return a.materialization == b.materialization and
         std.mem.eql(LocalId, store.getLocalSpan(a.consumed_owned_inputs), store.getLocalSpan(b.consumed_owned_inputs)) and
         std.mem.eql(LocalId, store.getLocalSpan(a.retained_borrows), store.getLocalSpan(b.retained_borrows));
+}
+
+fn layoutContainsRefcounted(store: *const LirStore, layouts: *const layout_mod.Store, local: LocalId) bool {
+    const local_layout = store.getLocal(local).layout_idx;
+    return layouts.layoutContainsRefcounted(layouts.getLayout(local_layout));
 }

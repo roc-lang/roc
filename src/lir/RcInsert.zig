@@ -456,7 +456,7 @@ const ProcPass = struct {
             .set_local => |assign| {
                 defs.set(@intFromEnum(assign.target));
                 uses.set(@intFromEnum(assign.value));
-                self.markOwnershipPassedLocal(assign.value, ownership_passed);
+                self.markOwnershipPassedValue(assign.value, ownership_passed);
             },
             .debug => |debug_stmt| uses.set(@intFromEnum(debug_stmt.message)),
             .expect => |expect_stmt| uses.set(@intFromEnum(expect_stmt.condition)),
@@ -480,7 +480,7 @@ const ProcPass = struct {
                     if (params.len == args.len) {
                         for (args, params) |arg, param| {
                             if (self.localCanOwnRefcount(param)) {
-                                self.markOwnershipPassedLocal(arg, ownership_passed);
+                                self.markOwnershipPassedValue(arg, ownership_passed);
                             }
                         }
                     }
@@ -521,6 +521,11 @@ const ProcPass = struct {
         ownership_passed.set(@intFromEnum(local));
     }
 
+    fn markOwnershipPassedValue(self: *ProcPass, local: LocalId, ownership_passed: *std.DynamicBitSetUnmanaged) void {
+        const owner = self.explicitOwnerForLocal(local) orelse local;
+        self.markOwnershipPassedLocal(owner, ownership_passed);
+    }
+
     fn markOwnedCallArgsPassed(
         self: *ProcPass,
         proc_id: LIR.LirProcSpecId,
@@ -535,7 +540,7 @@ const ProcPass = struct {
         for (owned_params) |owned_param| {
             const param_index = indexOfLocal(params, owned_param) orelse continue;
             if (param_index >= args.len) continue;
-            self.markOwnershipPassedLocal(args[param_index], ownership_passed);
+            self.markOwnershipPassedValue(args[param_index], ownership_passed);
         }
     }
 

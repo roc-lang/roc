@@ -132,7 +132,7 @@ pub const DevEvaluator = struct {
             lowered_ir,
         );
         defer lir_result.deinit();
-        try lir.Ownership.inferProcResultContracts(self.allocator, &lir_result.store);
+        try lir.Ownership.inferProcResultContracts(self.allocator, &lir_result.store, &lir_result.layouts);
         try lir.RcInsert.run(self.allocator, &lir_result.store, &lir_result.layouts);
         if (lir_result.root_procs.items.len == 0) return error.CompilationFailed;
 
