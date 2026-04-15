@@ -677,7 +677,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8, sys_io: std.Io) !void
     //
     // Uses page_allocator instead of GPA to avoid leak detection false positives
     // (the thread may still be running when the main thread's leak check fires).
-    if (compile.CacheCleanup.startBackgroundCleanup(std.heap.page_allocator, sys_io, FsIo.default(sys_io))) |_| {
+    if (compile.CacheCleanup.startBackgroundCleanup(std.heap.page_allocator, FsIo.default(sys_io))) |_| {
         // Thread started successfully, will run in background
     } else |_| {
         // Non-fatal: cleanup failure shouldn't prevent compilation
@@ -2044,7 +2044,7 @@ fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_h
     // On Windows, clean up temp files after the child process exits.
     // (Unlike Unix, Windows locks files while they're being executed)
     if (std.fs.path.dirname(exe_path)) |temp_dir_path| {
-        compile.CacheCleanup.deleteTempDir(ctx.arena, ctx.io.sys_io, temp_dir_path);
+        compile.CacheCleanup.deleteTempDir(ctx.arena, FsIo.default(ctx.io.sys_io), temp_dir_path);
         std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
     }
 
@@ -2166,7 +2166,7 @@ fn runWithPosixFdInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle:
     // file to find the shared memory before it can run.
     // The background cleanup thread will also clean up old temp directories.
     if (std.fs.path.dirname(exe_path)) |temp_dir_path| {
-        compile.CacheCleanup.deleteTempDir(ctx.arena, ctx.io.sys_io, temp_dir_path);
+        compile.CacheCleanup.deleteTempDir(ctx.arena, FsIo.default(ctx.io.sys_io), temp_dir_path);
         std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
     }
 
@@ -2375,7 +2375,7 @@ pub fn setupSharedMemoryWithCoordinator(ctx: *CliContext, roc_file_path: []const
         &builtin_modules,
         build_options.compiler_version,
         null, // no cache for IPC
-        debug_threaded_io_instance.io(),
+        FsIo.default(debug_threaded_io_instance.io()),
     );
     defer coord.deinit();
 
@@ -3480,7 +3480,6 @@ fn extractEntrypointsFromPlatform(ctx: *CliContext, roc_file_path: []const u8, e
 /// For native builds and roc run, use the native shim (pass null or native target).
 /// For cross-compilation, pass the target to get the appropriate shim.
 pub fn extractReadRocFilePathShimLibrary(ctx: *CliContext, output_path: []const u8, target: ?RocTarget) !void {
-
     if (builtin.is_test) {
         // In test mode, create an empty file to avoid embedding issues
         const shim_file = try std.Io.Dir.cwd().createFile(ctx.io.sys_io, output_path, .{});
@@ -4471,7 +4470,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         procs,
         target,
         obj_path,
-        ctx.io.sys_io,
+        io_mod.RocIo.default(ctx.io.sys_io),
     ) catch |err| {
         std.log.err("Native compilation failed: {}", .{err});
         return error.NativeCompilationFailed;

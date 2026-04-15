@@ -8,6 +8,7 @@ const can = @import("can");
 const check = @import("check");
 const builtins = @import("builtins");
 const compiled_builtins = @import("compiled_builtins");
+const RocIo = @import("io").RocIo;
 
 const layout = @import("layout");
 const interpreter_layout = @import("interpreter_layout");
@@ -197,13 +198,15 @@ fn assertNoTypeProblems(allocator: std.mem.Allocator, module_env: *ModuleEnv, ch
     }
 }
 
+const SysIo = @FieldType(RocIo, "sys_io");
+
 const TraceWriter = struct {
     buffer: [256]u8 = undefined,
-    writer: std.Io.File.Writer = undefined,
+    writer: SysIo.File.Writer = undefined,
 
     fn init() TraceWriter {
         var tw = TraceWriter{};
-        tw.writer = std.Io.File.stderr().writer(std.testing.io, &tw.buffer);
+        tw.writer = SysIo.File.stderr().writer(std.testing.io, &tw.buffer);
         return tw;
     }
 

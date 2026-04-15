@@ -174,7 +174,7 @@ fn echoCanonicalize(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, gpa: Allo
     return echoGetCtx(ctx_ptr).fallback.canonicalize(path, gpa);
 }
 fn echoMakePath(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) RocIo.MakePathError!void {
-    return echoGetCtx(ctx_ptr).fallback.createDirPath(path);
+    return echoGetCtx(ctx_ptr).fallback.makePath(path);
 }
 fn echoRename(ctx_ptr: ?*anyopaque, _: std.Io, old: []const u8, new: []const u8) RocIo.RenameError!void {
     return echoGetCtx(ctx_ptr).fallback.rename(old, new);
@@ -198,6 +198,30 @@ fn echoIsTty(ctx_ptr: ?*anyopaque, _: std.Io) bool {
     return echoGetCtx(ctx_ptr).fallback.isTty();
 }
 
+fn echoDeleteFile(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) RocIo.DeleteError!void {
+    return echoGetCtx(ctx_ptr).fallback.deleteFile(path);
+}
+
+fn echoDeleteDir(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) RocIo.DeleteError!void {
+    return echoGetCtx(ctx_ptr).fallback.deleteDir(path);
+}
+
+fn echoDeleteTree(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) RocIo.DeleteError!void {
+    return echoGetCtx(ctx_ptr).fallback.deleteTree(path);
+}
+
+fn echoCreateDir(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) RocIo.MakePathError!void {
+    return echoGetCtx(ctx_ptr).fallback.createDir(path);
+}
+
+fn echoCopyFile(ctx_ptr: ?*anyopaque, _: std.Io, src: []const u8, dst: []const u8) RocIo.CopyError!void {
+    return echoGetCtx(ctx_ptr).fallback.copyFile(src, dst);
+}
+
+fn echoTimestampNow(ctx_ptr: ?*anyopaque, _: std.Io) i128 {
+    return echoGetCtx(ctx_ptr).fallback.timestampNow();
+}
+
 const echo_vtable = RocIo.VTable{
     .readFile = &echoReadFile,
     .readFileInto = &echoReadFileInto,
@@ -213,6 +237,12 @@ const echo_vtable = RocIo.VTable{
     .rename = &echoRename,
     .getEnvVar = &echoGetEnvVar,
     .fetchUrl = &echoFetchUrl,
+    .deleteFile = &echoDeleteFile,
+    .deleteDir = &echoDeleteDir,
+    .deleteTree = &echoDeleteTree,
+    .createDir = &echoCreateDir,
+    .copyFile = &echoCopyFile,
+    .timestampNow = &echoTimestampNow,
     .writeStdout = &echoWriteStdout,
     .writeStderr = &echoWriteStderr,
     .readStdin = &echoReadStdin,

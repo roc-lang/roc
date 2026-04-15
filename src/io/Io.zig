@@ -23,24 +23,88 @@ sys_io: std.Io,
 /// the first argument, allowing implementations to carry state.
 pub const VTable = struct {
     // --- Filesystem operations ---
+
+    /// Read the entire contents of `path` into a newly-allocated slice.
+    /// Caller owns the returned memory.
     readFile: *const fn (?*anyopaque, std.Io, []const u8, Allocator) ReadError![]u8,
+
+    /// Read `path` into a caller-provided `buffer`. Returns the number of bytes read.
     readFileInto: *const fn (?*anyopaque, std.Io, []const u8, []u8) ReadError!usize,
+
+    /// Write `data` to `path`, creating the file if it doesn't exist or
+    /// truncating it if it does.
     writeFile: *const fn (?*anyopaque, std.Io, []const u8, []const u8) WriteError!void,
+
+    /// Return `true` if a file or directory exists at `path`.
     fileExists: *const fn (?*anyopaque, std.Io, []const u8) bool,
+
+    /// Query metadata (kind, size, mtime) for `path`.
     stat: *const fn (?*anyopaque, std.Io, []const u8) StatError!FileInfo,
+
+    /// Recursively list all entries under `path`.
+    /// Caller owns the returned slice and every `.path` string in it.
     listDir: *const fn (?*anyopaque, std.Io, []const u8, Allocator) ListError![]FileEntry,
+
+    /// Return the directory portion of a path, or `null` if there is none.
+    /// No allocation — returns a slice into the input.
     dirName: *const fn (?*anyopaque, std.Io, []const u8) ?[]const u8,
+
+    /// Return the final component (filename) of a path.
+    /// No allocation — returns a slice into the input.
     baseName: *const fn (?*anyopaque, std.Io, []const u8) []const u8,
+
+    /// Join path segments with the platform separator. Caller owns the result.
     joinPath: *const fn (?*anyopaque, std.Io, []const []const u8, Allocator) Allocator.Error![]const u8,
+
+    /// Resolve `path` to a canonical absolute path. Caller owns the result.
     canonicalize: *const fn (?*anyopaque, std.Io, []const u8, Allocator) CanonicalizeError![]const u8,
+
+    /// Create all directories in `path` recursively (like `mkdir -p`).
     makePath: *const fn (?*anyopaque, std.Io, []const u8) MakePathError!void,
+
+    /// Atomically rename `old_path` to `new_path`.
     rename: *const fn (?*anyopaque, std.Io, []const u8, []const u8) RenameError!void,
+
+    /// Look up environment variable `key`. Caller owns the returned slice.
     getEnvVar: *const fn (?*anyopaque, std.Io, []const u8, Allocator) GetEnvVarError![]u8,
+
+    /// Download `url` and extract its contents into `dest_path`.
     fetchUrl: *const fn (?*anyopaque, std.Io, Allocator, []const u8, []const u8) FetchUrlError!void,
+
+    // --- Directory operations ---
+
+    /// Delete a single file at `path`.
+    deleteFile: *const fn (?*anyopaque, std.Io, []const u8) DeleteError!void,
+
+    /// Delete an empty directory at `path`.
+    deleteDir: *const fn (?*anyopaque, std.Io, []const u8) DeleteError!void,
+
+    /// Recursively delete a directory tree at `path`.
+    deleteTree: *const fn (?*anyopaque, std.Io, []const u8) DeleteError!void,
+
+    /// Create a single directory at `path` (parent must exist).
+    createDir: *const fn (?*anyopaque, std.Io, []const u8) MakePathError!void,
+
+    /// Copy a file from `src_path` to `dst_path`.
+    copyFile: *const fn (?*anyopaque, std.Io, []const u8, []const u8) CopyError!void,
+
+    // --- Timing operations ---
+
+    /// Return the current wall-clock time in nanoseconds since the Unix epoch.
+    timestampNow: *const fn (?*anyopaque, std.Io) i128,
+
     // --- Stdio operations ---
+
+    /// Write `data` to stdout.
     writeStdout: *const fn (?*anyopaque, std.Io, []const u8) StdioError!void,
+
+    /// Write `data` to stderr.
     writeStderr: *const fn (?*anyopaque, std.Io, []const u8) StdioError!void,
+
+    /// Read from stdin into `buf`. Returns the number of bytes read.
     readStdin: *const fn (?*anyopaque, std.Io, []u8) StdioError!usize,
+
+    /// Return `true` if stdout is connected to a TTY.
     isTty: *const fn (?*anyopaque, std.Io) bool,
 };
 
@@ -122,6 +186,40 @@ pub fn fetchUrl(self: Self, allocator: Allocator, url: []const u8, dest_path: []
     return self.vtable.fetchUrl(self.ctx, self.sys_io, allocator, url, dest_path);
 }
 
+// --- Directory wrapper methods ---
+
+/// Delete a single file at `path`.
+pub fn deleteFile(self: Self, path: []const u8) DeleteError!void {
+    return self.vtable.deleteFile(self.ctx, self.sys_io, path);
+}
+
+/// Delete an empty directory at `path`.
+pub fn deleteDir(self: Self, path: []const u8) DeleteError!void {
+    return self.vtable.deleteDir(self.ctx, self.sys_io, path);
+}
+
+/// Recursively delete a directory tree at `path`.
+pub fn deleteTree(self: Self, path: []const u8) DeleteError!void {
+    return self.vtable.deleteTree(self.ctx, self.sys_io, path);
+}
+
+/// Create a single directory at `path` (parent must exist).
+pub fn createDir(self: Self, path: []const u8) MakePathError!void {
+    return self.vtable.createDir(self.ctx, self.sys_io, path);
+}
+
+/// Copy a file from `src_path` to `dst_path`.
+pub fn copyFile(self: Self, src_path: []const u8, dst_path: []const u8) CopyError!void {
+    return self.vtable.copyFile(self.ctx, self.sys_io, src_path, dst_path);
+}
+
+// --- Timing wrapper methods ---
+
+/// Return the current wall-clock time in nanoseconds since the Unix epoch.
+pub fn timestampNow(self: Self) i128 {
+    return self.vtable.timestampNow(self.ctx, self.sys_io);
+}
+
 // --- Stdio wrapper methods ---
 
 /// Write `data` to stdout.
@@ -191,6 +289,20 @@ pub const MakePathError = error{
 
 /// Errors that can occur when renaming a file.
 pub const RenameError = error{
+    FileNotFound,
+    AccessDenied,
+    IoError,
+};
+
+/// Errors that can occur when deleting a file or directory.
+pub const DeleteError = error{
+    FileNotFound,
+    AccessDenied,
+    IoError,
+};
+
+/// Errors that can occur when copying a file.
+pub const CopyError = error{
     FileNotFound,
     AccessDenied,
     IoError,
@@ -304,6 +416,12 @@ const os_vtable = VTable{
     .rename = &osRename,
     .getEnvVar = &osGetEnvVar,
     .fetchUrl = &osFetchUrl,
+    .deleteFile = &osDeleteFile,
+    .deleteDir = &osDeleteDir,
+    .deleteTree = &osDeleteTree,
+    .createDir = &osCreateDir,
+    .copyFile = &osCopyFile,
+    .timestampNow = &osTimestampNow,
     .writeStdout = &osWriteStdout,
     .writeStderr = &osWriteStderr,
     .readStdin = &osReadStdin,
@@ -325,6 +443,12 @@ const testing_vtable = VTable{
     .rename = &testingRename,
     .getEnvVar = &testingGetEnvVar,
     .fetchUrl = &testingFetchUrl,
+    .deleteFile = &testingDeleteFile,
+    .deleteDir = &testingDeleteDir,
+    .deleteTree = &testingDeleteTree,
+    .createDir = &testingCreateDir,
+    .copyFile = &testingCopyFile,
+    .timestampNow = &testingTimestampNow,
     .writeStdout = &testingWriteStdout,
     .writeStderr = &testingWriteStderr,
     .readStdin = &testingReadStdin,
@@ -346,6 +470,12 @@ const freestanding_vtable = VTable{
     .rename = &freestandingRename,
     .getEnvVar = &freestandingGetEnvVar,
     .fetchUrl = &freestandingFetchUrl,
+    .deleteFile = &freestandingDeleteFile,
+    .deleteDir = &freestandingDeleteDir,
+    .deleteTree = &freestandingDeleteTree,
+    .createDir = &freestandingCreateDir,
+    .copyFile = &freestandingCopyFile,
+    .timestampNow = &freestandingTimestampNow,
     .writeStdout = &freestandingWriteStdout,
     .writeStderr = &freestandingWriteStderr,
     .readStdin = &freestandingReadStdin,
@@ -530,6 +660,48 @@ fn osIsTty(_: ?*anyopaque, sys_io: std.Io) bool {
     return std.Io.File.stdout().isTty(sys_io) catch false;
 }
 
+fn osDeleteFile(_: ?*anyopaque, sys_io: std.Io, path: []const u8) DeleteError!void {
+    std.Io.Dir.cwd().deleteFile(sys_io, path) catch |err| return switch (err) {
+        error.FileNotFound => error.FileNotFound,
+        error.AccessDenied => error.AccessDenied,
+        else => error.IoError,
+    };
+}
+
+fn osDeleteDir(_: ?*anyopaque, sys_io: std.Io, path: []const u8) DeleteError!void {
+    std.Io.Dir.cwd().deleteDir(sys_io, path) catch |err| return switch (err) {
+        error.FileNotFound => error.FileNotFound,
+        error.AccessDenied => error.AccessDenied,
+        else => error.IoError,
+    };
+}
+
+fn osDeleteTree(_: ?*anyopaque, sys_io: std.Io, path: []const u8) DeleteError!void {
+    std.Io.Dir.cwd().deleteTree(sys_io, path) catch |err| return switch (err) {
+        error.AccessDenied => error.AccessDenied,
+        else => error.IoError,
+    };
+}
+
+fn osCreateDir(_: ?*anyopaque, sys_io: std.Io, path: []const u8) MakePathError!void {
+    std.Io.Dir.cwd().createDir(sys_io, path, .default_dir) catch |err| return switch (err) {
+        error.AccessDenied => error.AccessDenied,
+        else => error.IoError,
+    };
+}
+
+fn osCopyFile(_: ?*anyopaque, sys_io: std.Io, src_path: []const u8, dst_path: []const u8) CopyError!void {
+    std.Io.Dir.cwd().copyFile(src_path, std.Io.Dir.cwd(), dst_path, sys_io, .{}) catch |err| return switch (err) {
+        error.FileNotFound => error.FileNotFound,
+        error.AccessDenied => error.AccessDenied,
+        else => error.IoError,
+    };
+}
+
+fn osTimestampNow(_: ?*anyopaque, sys_io: std.Io) i128 {
+    return std.Io.Timestamp.now(sys_io, .real).nanoseconds;
+}
+
 // --- Testing implementations — panic on every call ---
 
 fn testingReadFile(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) ReadError![]u8 {
@@ -590,6 +762,30 @@ fn testingReadStdin(_: ?*anyopaque, _: std.Io, _: []u8) StdioError!usize {
 
 fn testingIsTty(_: ?*anyopaque, _: std.Io) bool {
     return false;
+}
+
+fn testingDeleteFile(_: ?*anyopaque, _: std.Io, _: []const u8) DeleteError!void {
+    @panic("deleteFile should not be called in this test");
+}
+
+fn testingDeleteDir(_: ?*anyopaque, _: std.Io, _: []const u8) DeleteError!void {
+    @panic("deleteDir should not be called in this test");
+}
+
+fn testingDeleteTree(_: ?*anyopaque, _: std.Io, _: []const u8) DeleteError!void {
+    @panic("deleteTree should not be called in this test");
+}
+
+fn testingCreateDir(_: ?*anyopaque, _: std.Io, _: []const u8) MakePathError!void {
+    @panic("createDir should not be called in this test");
+}
+
+fn testingCopyFile(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) CopyError!void {
+    @panic("copyFile should not be called in this test");
+}
+
+fn testingTimestampNow(_: ?*anyopaque, _: std.Io) i128 {
+    @panic("timestampNow should not be called in this test");
 }
 
 // --- Freestanding implementations —
@@ -689,6 +885,30 @@ fn freestandingReadStdin(_: ?*anyopaque, _: std.Io, _: []u8) StdioError!usize {
 
 fn freestandingIsTty(_: ?*anyopaque, _: std.Io) bool {
     return false;
+}
+
+fn freestandingDeleteFile(_: ?*anyopaque, _: std.Io, _: []const u8) DeleteError!void {
+    return error.AccessDenied;
+}
+
+fn freestandingDeleteDir(_: ?*anyopaque, _: std.Io, _: []const u8) DeleteError!void {
+    return error.AccessDenied;
+}
+
+fn freestandingDeleteTree(_: ?*anyopaque, _: std.Io, _: []const u8) DeleteError!void {
+    return error.AccessDenied;
+}
+
+fn freestandingCreateDir(_: ?*anyopaque, _: std.Io, _: []const u8) MakePathError!void {
+    return error.AccessDenied;
+}
+
+fn freestandingCopyFile(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) CopyError!void {
+    return error.AccessDenied;
+}
+
+fn freestandingTimestampNow(_: ?*anyopaque, _: std.Io) i128 {
+    return 0;
 }
 
 // --- Tests ---

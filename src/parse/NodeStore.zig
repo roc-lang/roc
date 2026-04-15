@@ -4,7 +4,6 @@
 //! the AST.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const base = @import("base");
 
 const AST = @import("AST.zig");
@@ -139,12 +138,8 @@ pub fn emptyScratch(store: *NodeStore) void {
 }
 
 /// Prints debug information about all nodes and scratch buffers in the store.
-pub fn debug(store: *NodeStore, sys_io: std.Io) void {
-    if (comptime builtin.target.os.tag != .freestanding) {
-        var buf: [4096]u8 = undefined;
-        var stderr_writer = std.Io.File.stderr().writer(sys_io, &buf);
-        store.debugTo(&stderr_writer.interface) catch {};
-    }
+pub fn debug(store: *NodeStore, writer: *std.Io.Writer) void {
+    store.debugTo(writer) catch {};
 }
 
 /// Writes debug information about all nodes and scratch buffers to the given writer.

@@ -198,7 +198,7 @@ pub const ComptimeEvaluator = struct {
             .current_expr_region = null,
             .roc_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
             .roc_alloc_sizes = std.AutoHashMap(usize, usize).init(allocator),
-            .roc_io = roc_io orelse RocIo.default(std.Io.Threaded.global_single_threaded.io()),
+            .roc_io = roc_io.?,
         };
     }
 

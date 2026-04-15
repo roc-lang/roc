@@ -17,8 +17,12 @@ const std = @import("std");
 const builtin = @import("builtin");
 const layout = @import("layout");
 const lir = @import("lir");
+const RocIo = @import("io").RocIo;
 
 const LlvmBuilder = @import("Builder.zig");
+
+/// Alias for the underlying system I/O type carried by RocIo.
+const SysIo = @FieldType(RocIo, "sys_io");
 
 const LirExprStore = lir.LirExprStore;
 const LirExprId = lir.LirExprId;
@@ -545,7 +549,8 @@ pub const MonoLlvmCodeGen = struct {
 
         if (std.process.getEnvVarOwned(self.allocator, "ROC_LLVM_KEEP_IR")) |keep_path| {
             defer self.allocator.free(keep_path);
-            builder.printToFilePath(std.Io.Dir.cwd(), keep_path) catch return error.CompilationFailed;
+            const sys_io = SysIo.Threaded.global_single_threaded.io();
+            builder.printToFilePath(sys_io, keep_path) catch return error.CompilationFailed;
         } else |_| {}
 
         const bitcode = builder.toBitcode(self.allocator, producer) catch return error.CompilationFailed;

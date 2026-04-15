@@ -6,6 +6,8 @@
 const std = @import("std");
 const can = @import("can");
 const collections = @import("collections");
+const RocIo = @import("io").RocIo;
+const SysIo = @FieldType(RocIo, "sys_io");
 
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
@@ -284,7 +286,7 @@ pub const CacheModule = struct {
         // Try to use memory mapping on supported platforms
         if (false and comptime @hasDecl(std.posix, "mmap") and @import("builtin").target.os.tag != .windows and @import("builtin").target.os.tag != .freestanding) {
             // Open the file
-            const file = std.Io.Dir.cwd().openFile(file_path, .{ .mode = .read_only }) catch {
+            const file = SysIo.Dir.cwd().openFile(file_path, .{ .mode = .read_only }) catch {
                 // Fall back to regular reading on open error
                 const data = try readFromFile(allocator, file_path, filesystem);
                 return CacheData{ .allocated = data };

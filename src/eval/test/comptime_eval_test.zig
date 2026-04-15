@@ -8,6 +8,7 @@ const can = @import("can");
 const check = @import("check");
 const compile_build = @import("compile_build");
 const compiled_builtins = @import("compiled_builtins");
+const RocIo = @import("io").RocIo;
 const ComptimeEvaluator = @import("../comptime_evaluator.zig").ComptimeEvaluator;
 const DevEvaluator = @import("../mod.zig").DevEvaluator;
 const BuiltinTypes = @import("../builtins.zig").BuiltinTypes;
@@ -3317,7 +3318,7 @@ test "issue 9281: dev evaluator stack overflow with nested recursive opaque type
     const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", test_allocator);
     defer test_allocator.free(tmp_path);
 
-    const repo_root = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", test_allocator);
+    const repo_root = try RocIo.os(std.testing.io).canonicalize(".", test_allocator);
     defer test_allocator.free(repo_root);
 
     const platform_main_path = try std.fs.path.join(test_allocator, &.{ repo_root, "test", "fx", "platform", "main.roc" });

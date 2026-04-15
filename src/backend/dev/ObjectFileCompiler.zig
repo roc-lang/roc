@@ -16,6 +16,7 @@ const Allocator = std.mem.Allocator;
 
 const layout = @import("layout");
 const lir = @import("lir");
+const RocIo = @import("io").RocIo;
 const LirExprStore = lir.LirExprStore;
 const LirProcSpec = lir.LirProcSpec;
 const RocTarget = @import("roc_target").RocTarget;
@@ -93,7 +94,7 @@ pub const ObjectFileCompiler = struct {
         proc_specs: []const LirProcSpec,
         target: RocTarget,
         output_path: []const u8,
-        sys_io: std.Io,
+        roc_io: RocIo,
     ) CompilationError!void {
         var result = try self.compileToObjectFile(
             lir_store,
@@ -105,10 +106,7 @@ pub const ObjectFileCompiler = struct {
         defer result.deinit();
 
         // Write to file
-        std.Io.Dir.cwd().writeFile(sys_io, .{
-            .sub_path = output_path,
-            .data = result.object_bytes,
-        }) catch |err| {
+        roc_io.writeFile(output_path, result.object_bytes) catch |err| {
             std.log.err("failed to write object file {s}: {}", .{ output_path, err });
             return CompilationError.ObjectGenerationFailed;
         };

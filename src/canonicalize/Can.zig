@@ -11,7 +11,10 @@ const base = @import("base");
 const parse = @import("parse");
 const types = @import("types");
 const builtins = @import("builtins");
+const io = @import("io");
 const tracy = @import("tracy");
+
+const RocIo = io.RocIo;
 
 const trace_modules = if (builtin.cpu.arch == .wasm32) false else if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
 
@@ -154,8 +157,9 @@ defining_pattern: ?Pattern.Idx = null,
 enclosing_lambda: ?Expr.Idx = null,
 /// Directory containing the source file, used to resolve file imports.
 source_dir: ?[]const u8 = null,
-/// System I/O for file operations (e.g., file imports).
-sys_io: std.Io = std.Io.Threaded.global_single_threaded.io(),
+/// I/O for file operations (e.g., file imports).
+/// Defaults to testing() which panics if used — callers that need file imports must provide a real RocIo.
+roc_io: RocIo = RocIo.testing(),
 const Ident = base.Ident;
 const Region = base.Region;
 // ModuleEnv is already imported at the top
@@ -3790,11 +3794,9 @@ fn canonicalizeFileImport(self: *Self, fi: @TypeOf(@as(AST.Statement, undefined)
     defer self.env.gpa.free(full_path);
 
     // Read the file
-    const file_contents: []u8 = std.Io.Dir.cwd().readFileAlloc(
-        self.sys_io,
+    const file_contents: []u8 = self.roc_io.readFile(
         full_path,
         self.env.gpa,
-        .unlimited,
     ) catch |err| {
         const path_string = try self.env.insertString(path_text);
         const diag: Diagnostic = switch (err) {

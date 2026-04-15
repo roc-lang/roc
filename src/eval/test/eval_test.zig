@@ -9,6 +9,7 @@ const builtins = @import("builtins");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 const roc_target = @import("roc_target");
+const RocIo = @import("io").RocIo;
 
 const helpers = @import("helpers.zig");
 const builtin_loading = @import("../builtin_loading.zig");
@@ -40,13 +41,15 @@ const runExpectProblem = helpers.runExpectProblem;
 const ExpectedField = helpers.ExpectedField;
 const runDevOnlyExpectStr = helpers.runDevOnlyExpectStr;
 
+const SysIo = @FieldType(RocIo, "sys_io");
+
 const TraceWriterState = struct {
     buffer: [256]u8 = undefined,
-    writer: std.Io.File.Writer = undefined,
+    writer: SysIo.File.Writer = undefined,
 
     fn init() TraceWriterState {
         var state = TraceWriterState{};
-        state.writer = std.Io.File.stderr().writer(std.testing.io, &state.buffer);
+        state.writer = SysIo.File.stderr().writer(std.testing.io, &state.buffer);
         return state;
     }
 };

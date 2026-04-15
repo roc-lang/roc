@@ -202,6 +202,7 @@ fn tidyFile(
     tidyControlCharacters(file, errors);
     if (file.hasExtension(".zig")) {
         tidyBanned(file, errors);
+        tidyBannedStdIo(file, errors);
 
         var tree = try std.zig.Ast.parse(gpa, file.text, .zig);
         defer tree.deinit(gpa);
@@ -225,6 +226,57 @@ fn tidyControlCharacters(file: SourceFile, errors: *Errors) void {
         const offset = index + (file.text.len - remaining.len);
         errors.addControlCharacter(file, offset, '\r');
         remaining = remaining[index + 1 ..];
+    }
+}
+
+/// Core compiler modules must use Roc's Io abstraction (@import("io").RocIo)
+/// instead of std.Io directly, to keep compiler-core decoupled from the Zig stdlib I/O layer.
+fn tidyBannedStdIo(file: SourceFile, errors: *Errors) void {
+    const core_modules: []const []const u8 = &.{
+        "src/collections/",
+        "src/base/",
+        "src/builtins/",
+        "src/types/",
+        "src/reporting/",
+        "src/parse/",
+        "src/canonicalize/",
+        "src/check/",
+        "src/mir/",
+        "src/lir/",
+        "src/layout/",
+        "src/interpreter_layout/",
+        "src/values/",
+        "src/interpreter_values/",
+        "src/backend/",
+        "src/target/",
+        "src/eval/",
+        "src/compile/",
+        "src/fmt/",
+        "src/repl/",
+        "src/sljmp/",
+    };
+
+    var is_core = false;
+    for (core_modules) |prefix| {
+        if (std.mem.startsWith(u8, file.path, prefix)) {
+            is_core = true;
+            break;
+        }
+    }
+    if (!is_core) return;
+
+    var remaining: []const u8 = file.text;
+    while (std.mem.indexOf(u8, remaining, "std.Io")) |index| {
+        const after = remaining[index + "std.Io".len ..];
+        // Allow std.Io.Writer and std.Io.Reader — these are generic I/O
+        // interfaces not tied to the OS, so they don't need the Roc abstraction.
+        if (std.mem.startsWith(u8, after, ".Writer") or std.mem.startsWith(u8, after, ".Reader")) {
+            remaining = after;
+            continue;
+        }
+        const offset = @intFromPtr(remaining.ptr) - @intFromPtr(file.text.ptr) + index;
+        errors.addBanned(file, offset, "std.Io", "Roc's Io abstraction (@import(\"io\").RocIo)");
+        remaining = after;
     }
 }
 

@@ -55,15 +55,6 @@ pub const ReportingConfig = struct {
     /// Maximum bytes for truncating error messages
     max_message_bytes: usize,
 
-    pub fn init() ReportingConfig {
-        // Use page_allocator on non-freestanding targets, undefined on freestanding
-        // (freestanding doesn't use the allocator in initFromEnv since env checks are skipped)
-        const allocator = if (comptime builtin.target.os.tag == .freestanding) undefined else std.heap.page_allocator;
-        return initFromEnv(allocator, RocIo.default(std.Io.Threaded.global_single_threaded.io())) catch |err| switch (err) {
-            error.OutOfMemory => @panic("Out of memory while initializing reporting config"),
-        };
-    }
-
     pub fn initFromEnv(allocator: Allocator, roc_io: RocIo) !ReportingConfig {
         var config = ReportingConfig{
             .color_preference = .auto,

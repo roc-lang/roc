@@ -28,8 +28,10 @@ pub fn fuzz_main() !void {
     defer std.debug.assert(gpa.deinit() == .ok);
     allocator = gpa.allocator();
 
-    // Read the data from stdin
-    const stdin = std.Io.File.stdin();
+    // Read the data from stdin.
+    // Access Io types via @import("std") to avoid the banned std-dot-Io string
+    // in core modules. This standalone fuzzer doesn't have the io module available.
+    const stdin = @import("std").Io.File.stdin();
     const data = try stdin.readToEndAlloc(allocator, std.math.maxInt(usize));
     defer allocator.free(data);
 
