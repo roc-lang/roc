@@ -5,9 +5,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const unbundle = @import("unbundle.zig");
 
-// Network constants
-const HTTP_DEFAULT_PORT: u16 = 80;
-
 // Buffer size for file I/O operations (8KB is efficient for typical filesystem block sizes)
 const IO_BUFFER_SIZE: usize = 8 * 1024;
 
