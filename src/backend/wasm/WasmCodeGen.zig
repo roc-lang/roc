@@ -3,6 +3,11 @@
 //! Walks explicit `CFStmt` procedure bodies and emits wasm instructions.
 //! All value-producing work is expressed through explicit local assignments;
 //! there is no runtime expression-tree interpretation in the active code path.
+//!
+//! Ownership boundary:
+//! - explicit RC lowering happens through `generateRcStmt`
+//! - builtin/runtime helper implementations may perform primitive-internal RC
+//! - ordinary wasm lowering is forbidden from inventing ownership policy
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -12,6 +17,7 @@ const layout = @import("layout");
 const lir = @import("lir");
 const LIR = lir.LIR;
 const LirStore = lir.LirStore;
+const ownership_boundary = lir.OwnershipBoundary;
 const RcHelperKey = layout.RcHelperKey;
 const RcHelperPlan = layout.RcHelperPlan;
 const RcHelperResolver = layout.RcHelperResolver;
@@ -665,6 +671,18 @@ fn emitRcForValueLocal(
     try self.emitStoreOpSized(.i32, @intCast(size_align.size), 0);
 
     try self.emitRcHelperCallForValuePtr(kind, ptr_local, layout_idx, inc_count);
+}
+
+fn emitExplicitRcForValueLocal(
+    self: *Self,
+    comptime kind: RcOpKind,
+    value_local: u32,
+    value_vt: ValType,
+    layout_idx: layout.Idx,
+    inc_count: u16,
+) Allocator.Error!void {
+    ownership_boundary.explicitLirRcExecution("wasm.emitExplicitRcForValueLocal");
+    try self.emitRcForValueLocal(kind, value_local, value_vt, layout_idx, inc_count);
 }
 
 fn emitDirectRcPlan(
@@ -5568,7 +5586,7 @@ fn generateRcStmt(
     try self.emitProcLocal(value);
     const value_local = self.storage.allocAnonymousLocal(self.procLocalValType(value)) catch return error.OutOfMemory;
     try self.emitLocalSet(value_local);
-    try self.emitRcForValueLocal(kind, value_local, self.procLocalValType(value), self.procLocalLayoutIdx(value), inc_count);
+    try self.emitExplicitRcForValueLocal(kind, value_local, self.procLocalValType(value), self.procLocalLayoutIdx(value), inc_count);
 }
 
 fn listElemLayout(self: *Self, list_layout_idx: layout.Idx) layout.Idx {

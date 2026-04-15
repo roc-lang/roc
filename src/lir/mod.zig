@@ -12,6 +12,8 @@ pub const TailRecursion = @import("TailRecursion.zig");
 pub const Ownership = @import("Ownership.zig");
 /// Explicit RC statement insertion for statement-only LIR.
 pub const RcInsert = @import("RcInsert.zig");
+/// Ownership-boundary markers and invariant traps for non-builtin RC sites.
+pub const OwnershipBoundary = @import("OwnershipBoundary.zig");
 /// Lower cor-style IR into statement-only LIR.
 pub const FromIr = @import("FromIr.zig");
 
@@ -71,5 +73,6 @@ test "lir tests" {
     std.testing.refAllDecls(TailRecursion);
     std.testing.refAllDecls(Ownership);
     std.testing.refAllDecls(RcInsert);
+    std.testing.refAllDecls(OwnershipBoundary);
     std.testing.refAllDecls(FromIr);
 }

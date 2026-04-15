@@ -1,0 +1,24 @@
+# category | path | function | reason
+#
+# This allowlist must stay narrow. Every entry is a deliberately permitted
+# ownership-sensitive site until the migration fully centralizes non-builtin
+# ownership semantics in LIR.
+
+interpreter-perform-rc | src/eval/interpreter.zig | rocAllocFn | builtin/runtime forwarding lives in interpreter RocOps shim
+interpreter-perform-rc | src/eval/interpreter.zig | rocDeallocFn | builtin/runtime forwarding lives in interpreter RocOps shim
+interpreter-perform-rc | src/eval/interpreter.zig | rocReallocFn | builtin/runtime forwarding lives in interpreter RocOps shim
+interpreter-perform-rc | src/eval/interpreter.zig | listElementIncref | list builtin callback currently owns builtin-internal RC
+interpreter-perform-rc | src/eval/interpreter.zig | listElementDecref | list builtin callback currently owns builtin-internal RC
+interpreter-perform-rc | src/eval/interpreter.zig | performExplicitRcStmt | explicit LIR RC execution choke point
+interpreter-perform-rc | src/eval/interpreter.zig | performBuiltinInternalRc | builtin/runtime-internal RC choke point
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitRcHelperCallAtStackOffset | RC helper plumbing used by explicit RC lowering and builtin RC helpers
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitRcHelperCallForValue | RC helper plumbing used by explicit RC lowering and builtin RC helpers
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitRcHelperCallFromPtrReg | RC helper plumbing used by explicit RC lowering and builtin RC helpers
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitExplicitRcHelperCallAtStackOffset | explicit LIR RC lowering choke point
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitExplicitRcHelperCallForValue | explicit LIR RC lowering choke point
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | generateRcStmt | explicit LIR RC lowering choke point
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitRcForValueLocal | RC helper plumbing used by explicit RC lowering and builtin RC helpers
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitRcHelperCallForValuePtr | RC helper plumbing used by explicit RC lowering and builtin RC helpers
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitRcAtPtr | RC helper plumbing used by explicit RC lowering and builtin RC helpers
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitRcHelperCallByKey | RC helper plumbing used by explicit RC lowering and builtin RC helpers
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitExplicitRcForValueLocal | explicit LIR RC lowering choke point

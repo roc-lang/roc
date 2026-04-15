@@ -15,12 +15,18 @@
 //! - Handles System V ABI (x86_64/aarch64) calling convention
 //! - Generates position-independent code with relocations
 //! - Supports x86_64 and aarch64 architectures
+//!
+//! Ownership boundary:
+//! - this backend may lower explicit LIR RC statements
+//! - builtin helper implementations may perform primitive-internal RC
+//! - ordinary codegen paths are forbidden from inventing RC policy
 
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
 const layout = @import("layout");
 const lir = @import("lir");
+const ownership_boundary = lir.OwnershipBoundary;
 const builtins = @import("builtins");
 const dev_wrappers = builtins.dev_wrappers;
 
@@ -8185,6 +8191,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitRcHelperCallAtStackOffset(op, base_offset, layout_idx, count);
         }
 
+        fn emitExplicitRcHelperCallForValue(
+            self: *Self,
+            op: RcOp,
+            value_loc: ValueLocation,
+            layout_idx: layout.Idx,
+            count: u16,
+        ) Allocator.Error!void {
+            ownership_boundary.explicitLirRcExecution("dev.emitExplicitRcHelperCallForValue");
+            try self.emitRcHelperCallForValue(op, value_loc, layout_idx, count);
+        }
+
+        fn emitExplicitRcHelperCallAtStackOffset(
+            self: *Self,
+            op: RcOp,
+            base_offset: i32,
+            layout_idx: layout.Idx,
+            count: u16,
+        ) Allocator.Error!void {
+            ownership_boundary.explicitLirRcExecution("dev.emitExplicitRcHelperCallAtStackOffset");
+            try self.emitRcHelperCallAtStackOffset(op, base_offset, layout_idx, count);
+        }
+
         fn emitRcHelperCallFromPtrReg(
             self: *Self,
             helper_key: RcHelperKey,
@@ -11321,10 +11349,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             switch (layout_val.tag) {
                 .closure => {
-                    try self.emitRcHelperCallForValue(.incref, value_loc, layout_val.data.closure.captures_layout_idx, rc_op.count);
+                    try self.emitExplicitRcHelperCallForValue(.incref, value_loc, layout_val.data.closure.captures_layout_idx, rc_op.count);
                 },
                 else => {
-                    try self.emitRcHelperCallForValue(.incref, value_loc, rc_op.layout_idx, rc_op.count);
+                    try self.emitExplicitRcHelperCallForValue(.incref, value_loc, rc_op.layout_idx, rc_op.count);
                 },
             }
 
@@ -11339,9 +11367,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (!ls.layoutContainsRefcounted(layout_val)) return value_loc;
 
             if (layout_val.tag == .closure) {
-                try self.emitRcHelperCallForValue(.decref, value_loc, layout_val.data.closure.captures_layout_idx, 1);
+                try self.emitExplicitRcHelperCallForValue(.decref, value_loc, layout_val.data.closure.captures_layout_idx, 1);
             } else {
-                try self.emitRcHelperCallForValue(.decref, value_loc, rc_op.layout_idx, 1);
+                try self.emitExplicitRcHelperCallForValue(.decref, value_loc, rc_op.layout_idx, 1);
             }
 
             return value_loc;
@@ -11382,7 +11410,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitIncrefAtStackOffset(base_offset, layout_val.data.closure.captures_layout_idx);
                 },
                 else => {
-                    try self.emitRcHelperCallAtStackOffset(.incref, base_offset, layout_idx, 1);
+                    try self.emitExplicitRcHelperCallAtStackOffset(.incref, base_offset, layout_idx, 1);
                 },
             }
         }
@@ -11397,7 +11425,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitDecrefAtStackOffset(base_offset, layout_val.data.closure.captures_layout_idx);
                 },
                 else => {
-                    try self.emitRcHelperCallAtStackOffset(.decref, base_offset, layout_idx, 1);
+                    try self.emitExplicitRcHelperCallAtStackOffset(.decref, base_offset, layout_idx, 1);
                 },
             }
         }
@@ -11410,8 +11438,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (!ls.layoutContainsRefcounted(layout_val)) return value_loc;
 
             switch (layout_val.tag) {
-                .closure => try self.emitRcHelperCallForValue(.decref, value_loc, layout_val.data.closure.captures_layout_idx, 1),
-                else => try self.emitRcHelperCallForValue(.free, value_loc, rc_op.layout_idx, 1),
+                .closure => try self.emitExplicitRcHelperCallForValue(.decref, value_loc, layout_val.data.closure.captures_layout_idx, 1),
+                else => try self.emitExplicitRcHelperCallForValue(.free, value_loc, rc_op.layout_idx, 1),
             }
 
             return value_loc;

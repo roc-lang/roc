@@ -4,6 +4,11 @@
 //! ownership/provenance facts from the existing statement graph so later
 //! lowering passes can emit concrete `incref`/`decref`/`free` statements from a
 //! single source of truth.
+//!
+//! Ownership boundary:
+//! - this pass is allowed to reason about ownership because it produces the
+//!   explicit ownership facts consumed by later non-builtin stages
+//! - backends and the interpreter are not allowed to reconstruct these facts
 
 const std = @import("std");
 const LIR = @import("LIR.zig");

@@ -3,6 +3,12 @@
 //! Backends must only follow explicit `incref`/`decref`/`free` statements.
 //! This pass computes last-use drops from the existing statement graph and
 //! rewrites each proc body to include the required `decref` statements.
+//!
+//! Ownership boundary:
+//! - this pass is the only non-builtin stage allowed to turn ownership facts
+//!   into explicit RC statements
+//! - later backends/interpreters must execute the resulting statements
+//!   mechanically rather than inferring more ownership behavior
 
 const std = @import("std");
 const layout = @import("layout");
