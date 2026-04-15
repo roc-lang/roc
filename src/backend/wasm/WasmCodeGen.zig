@@ -650,7 +650,7 @@ fn emitProcLocal(self: *Self, value: ProcLocalId) Allocator.Error!void {
     try self.emitCanonicalizeScalarForLayout(self.procLocalLayoutIdx(value));
 }
 
-fn emitRcForValueLocal(
+fn emitRawRcForValueLocal(
     self: *Self,
     comptime kind: RcOpKind,
     value_local: u32,
@@ -692,7 +692,7 @@ fn emitExplicitRcForValueLocal(
     inc_count: u16,
 ) Allocator.Error!void {
     ownership_boundary.explicitLirRcExecution("wasm.emitExplicitRcForValueLocal");
-    try self.emitRcForValueLocal(kind, value_local, value_vt, layout_idx, inc_count);
+    try self.emitRawRcForValueLocal(kind, value_local, value_vt, layout_idx, inc_count);
 }
 
 fn emitBuiltinInternalRcForValueLocal(
@@ -704,7 +704,7 @@ fn emitBuiltinInternalRcForValueLocal(
     inc_count: u16,
 ) Allocator.Error!void {
     ownership_boundary.builtinRuntimeInternal("wasm.emitBuiltinInternalRcForValueLocal");
-    try self.emitRcForValueLocal(kind, value_local, value_vt, layout_idx, inc_count);
+    try self.emitRawRcForValueLocal(kind, value_local, value_vt, layout_idx, inc_count);
 }
 
 fn emitDirectRcPlan(
@@ -832,7 +832,7 @@ fn emitRcHelperCallForValuePtr(
 }
 
 /// Emit RC ops for a value addressed by `value_ptr_local`.
-fn emitRcAtPtr(
+fn emitRawRcAtPtr(
     self: *Self,
     comptime kind: RcOpKind,
     value_ptr_local: u32,
@@ -850,7 +850,7 @@ fn emitBuiltinInternalRcAtPtr(
     inc_count: u16,
 ) Allocator.Error!void {
     ownership_boundary.builtinRuntimeInternal("wasm.emitBuiltinInternalRcAtPtr");
-    try self.emitRcAtPtr(kind, value_ptr_local, layout_idx, inc_count);
+    try self.emitRawRcAtPtr(kind, value_ptr_local, layout_idx, inc_count);
 }
 
 fn emitDecodeListAllocPtr(self: *Self, list_ptr_local: u32, out_alloc_ptr: u32, out_is_slice: u32) Allocator.Error!void {
@@ -1253,7 +1253,7 @@ fn emitListElementDecrefsIfUnique(
     self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
     try self.emitLocalSet(elem_ptr_local);
 
-    try self.emitRcAtPtr(.decref, elem_ptr_local, elem_layout_idx, 1);
+    try self.emitBuiltinInternalRcAtPtr(.decref, elem_ptr_local, elem_layout_idx, 1);
 
     try self.emitLocalGet(idx_local);
     self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;

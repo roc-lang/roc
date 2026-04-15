@@ -8136,7 +8136,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitCallToOffset(code_offset);
         }
 
-        fn emitRcHelperCallAtStackOffset(
+        fn emitRawRcHelperCallAtStackOffset(
             self: *Self,
             op: RcOp,
             base_offset: i32,
@@ -8175,7 +8175,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitRcHelperCallForValue(
+        fn emitRawRcHelperCallForValue(
             self: *Self,
             op: RcOp,
             value_loc: ValueLocation,
@@ -8189,7 +8189,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (value_size == 0) return;
 
             const base_offset = try self.ensureValueOnStackForRc(value_loc, value_size);
-            try self.emitRcHelperCallAtStackOffset(op, base_offset, layout_idx, count);
+            try self.emitRawRcHelperCallAtStackOffset(op, base_offset, layout_idx, count);
         }
 
         fn emitExplicitRcHelperCallForValue(
@@ -8200,7 +8200,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             count: u16,
         ) Allocator.Error!void {
             ownership_boundary.explicitLirRcExecution("dev.emitExplicitRcHelperCallForValue");
-            try self.emitRcHelperCallForValue(op, value_loc, layout_idx, count);
+            try self.emitRawRcHelperCallForValue(op, value_loc, layout_idx, count);
         }
 
         fn emitExplicitRcHelperCallAtStackOffset(
@@ -8211,7 +8211,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             count: u16,
         ) Allocator.Error!void {
             ownership_boundary.explicitLirRcExecution("dev.emitExplicitRcHelperCallAtStackOffset");
-            try self.emitRcHelperCallAtStackOffset(op, base_offset, layout_idx, count);
+            try self.emitRawRcHelperCallAtStackOffset(op, base_offset, layout_idx, count);
         }
 
         fn emitBuiltinInternalRcHelperCallForValue(
@@ -8222,7 +8222,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             count: u16,
         ) Allocator.Error!void {
             ownership_boundary.builtinRuntimeInternal("dev.emitBuiltinInternalRcHelperCallForValue");
-            try self.emitRcHelperCallForValue(op, value_loc, layout_idx, count);
+            try self.emitRawRcHelperCallForValue(op, value_loc, layout_idx, count);
         }
 
         fn emitRcHelperCallFromPtrReg(
