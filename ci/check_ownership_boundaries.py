@@ -43,7 +43,7 @@ RULES = (
     Rule(
         category="dev-emit-rc-helper",
         path_prefixes=("src/backend/dev/LirCodeGen.zig",),
-        regex=re.compile(r"\bemit(?:Raw)?Rc(?:HelperCall(?:AtStackOffset|ForValue|FromPtrReg)?|IncrefAtStackOffset|DecrefAtStackOffset)\("),
+        regex=re.compile(r"\b(?:emit(?:Raw)?Rc(?:HelperCall(?:AtStackOffset|ForValue|FromPtrReg)?|IncrefAtStackOffset|DecrefAtStackOffset)|emitBuiltinInternalOptionalRcHelperAddress)\("),
         description="dev backend RC emission outside explicit RC lowering or builtin lowering",
     ),
     Rule(
