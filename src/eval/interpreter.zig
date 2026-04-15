@@ -4925,6 +4925,13 @@ pub const Interpreter = struct {
         return value;
     }
 
+    // Temporary forbidden helper island.
+    //
+    // These aggregate-rebuilding coercions still exist only because earlier LIR
+    // does not yet fully encode fresh aggregate ownership for all pack/rebuild
+    // paths. Ordinary execution must not reach them; explicit bridge helpers
+    // and the ownership-boundary lint keep them isolated until they are
+    // replaced by fact-driven LIR ownership.
     fn coerceValueToLayout(
         self: *LirInterpreter,
         value: Value,
