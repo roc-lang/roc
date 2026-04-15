@@ -37,7 +37,7 @@ RULES = (
     Rule(
         category="interpreter-perform-rc",
         path_prefixes=("src/eval/interpreter.zig",),
-        regex=re.compile(r"\bperform(?:Raw)?Rc\("),
+        regex=re.compile(r"\bperform(?:Raw)?Rc(?:Plan)?\("),
         description="interpreter RC outside explicit RC handlers or builtin/runtime internals",
     ),
     Rule(
