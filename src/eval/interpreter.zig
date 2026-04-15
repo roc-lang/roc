@@ -4932,13 +4932,13 @@ pub const Interpreter = struct {
     // paths. Ordinary execution must not reach them; explicit bridge helpers
     // and the ownership-boundary lint keep them isolated until they are
     // replaced by fact-driven LIR ownership.
-    fn coerceValueToLayout(
+    fn coerceForbiddenAggregateBoundaryValueToLayout(
         self: *LirInterpreter,
         value: Value,
         actual_layout: layout_mod.Idx,
         expected_layout: layout_mod.Idx,
     ) Error!Value {
-        ownership_boundary.forbiddenOrdinaryOwnershipDecision("interpreter.coerceValueToLayout");
+        ownership_boundary.forbiddenOrdinaryOwnershipDecision("interpreter.coerceForbiddenAggregateBoundaryValueToLayout");
         if (actual_layout == expected_layout) {
             return value;
         }
@@ -4947,19 +4947,19 @@ pub const Interpreter = struct {
         const expected_layout_val = self.layout_store.getLayout(expected_layout);
         switch (expected_layout_val.tag) {
             .box => {
-                return try self.coerceValueIntoBox(value, actual_layout, expected_layout);
+                return try self.coerceForbiddenAggregateValueIntoBox(value, actual_layout, expected_layout);
             },
             .box_of_zst => {
                 if (self.helper.sizeOf(actual_layout) == 0) return Value.zst;
             },
             .struct_ => {
                 if (actual_layout_val.tag == .struct_ or actual_layout_val.tag == .box) {
-                    return try self.coerceStructValue(value, actual_layout, expected_layout);
+                    return try self.coerceForbiddenAggregateStructValue(value, actual_layout, expected_layout);
                 }
             },
             .tag_union => {
                 if (actual_layout_val.tag == .tag_union or actual_layout_val.tag == .box) {
-                    return try self.coerceTagUnionValue(value, actual_layout, expected_layout);
+                    return try self.coerceForbiddenAggregateTagUnionValue(value, actual_layout, expected_layout);
                 }
             },
             else => {},
@@ -5058,19 +5058,19 @@ pub const Interpreter = struct {
         return self.normalizeValueToLayout(value, actual_layout, expected_layout);
     }
 
-    fn coerceValueIntoBox(
+    fn coerceForbiddenAggregateValueIntoBox(
         self: *LirInterpreter,
         value: Value,
         actual_layout: layout_mod.Idx,
         expected_box_layout: layout_mod.Idx,
     ) Error!Value {
-        ownership_boundary.forbiddenOrdinaryOwnershipDecision("interpreter.coerceValueIntoBox");
+        ownership_boundary.forbiddenOrdinaryOwnershipDecision("interpreter.coerceForbiddenAggregateValueIntoBox");
         const expected_layout_val = self.layout_store.getLayout(expected_box_layout);
         switch (expected_layout_val.tag) {
             .box_of_zst => return Value.zst,
             .box => {
                 const inner_layout = expected_layout_val.data.box;
-                const inner_value = try self.coerceValueToLayout(value, actual_layout, inner_layout);
+                const inner_value = try self.coerceForbiddenAggregateBoundaryValueToLayout(value, actual_layout, inner_layout);
                 const box_info = self.layout_store.getBoxInfo(expected_layout_val);
                 const data_ptr = try self.allocRocDataWithRc(
                     box_info.elem_size,
@@ -5079,8 +5079,8 @@ pub const Interpreter = struct {
                 );
                 if (box_info.elem_size > 0) {
                     (Value{ .ptr = data_ptr }).copyFrom(inner_value, box_info.elem_size);
-                    if (self.forbiddenOrdinaryContainsRefcounted("interpreter.coerceValueIntoBox.inner_rc", inner_layout)) {
-                        self.performForbiddenOrdinaryRc("interpreter.coerceValueIntoBox.inner_incref", .incref, .{ .ptr = data_ptr }, inner_layout, 1);
+                    if (self.forbiddenOrdinaryContainsRefcounted("interpreter.coerceForbiddenAggregateValueIntoBox.inner_rc", inner_layout)) {
+                        self.performForbiddenOrdinaryRc("interpreter.coerceForbiddenAggregateValueIntoBox.inner_incref", .incref, .{ .ptr = data_ptr }, inner_layout, 1);
                     }
                     if (builtin.mode == .Debug and @intFromEnum(expected_box_layout) == 29) {
                         std.debug.print(
@@ -5110,13 +5110,13 @@ pub const Interpreter = struct {
         }
     }
 
-    fn coerceStructValue(
+    fn coerceForbiddenAggregateStructValue(
         self: *LirInterpreter,
         value: Value,
         actual_layout: layout_mod.Idx,
         expected_layout: layout_mod.Idx,
     ) Error!Value {
-        ownership_boundary.forbiddenOrdinaryOwnershipDecision("interpreter.coerceStructValue");
+        ownership_boundary.forbiddenOrdinaryOwnershipDecision("interpreter.coerceForbiddenAggregateStructValue");
         const actual_base = self.resolveStructBaseValue(value, actual_layout);
         const expected_alloc = try self.allocStructValue(expected_layout);
 
@@ -5152,7 +5152,7 @@ pub const Interpreter = struct {
             const actual_field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(actual_layout_val.data.struct_.idx, expected_field.index);
             const expected_field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(expected_layout_val.data.struct_.idx, expected_field.index);
             const actual_field_value = actual_base.value.offset(actual_field_offset);
-            const coerced_field = try self.coerceValueToLayout(actual_field_value, actual_field_layout, expected_field_layout);
+            const coerced_field = try self.coerceForbiddenAggregateBoundaryValueToLayout(actual_field_value, actual_field_layout, expected_field_layout);
             if (builtin.mode == .Debug and
                 ((@intFromEnum(actual_layout) == 19 and @intFromEnum(expected_layout) == 26) or
                     (@intFromEnum(actual_layout) == 20 and @intFromEnum(expected_layout) == 30)))
@@ -5182,20 +5182,20 @@ pub const Interpreter = struct {
             expected_alloc.base.offset(expected_field_offset).copyFrom(coerced_field, expected_field_size);
         }
 
-        if (self.forbiddenOrdinaryContainsRefcounted("interpreter.coerceStructValue.result_rc", expected_alloc.base_layout)) {
-            self.performForbiddenOrdinaryRc("interpreter.coerceStructValue.result_incref", .incref, expected_alloc.base, expected_alloc.base_layout, 1);
+        if (self.forbiddenOrdinaryContainsRefcounted("interpreter.coerceForbiddenAggregateStructValue.result_rc", expected_alloc.base_layout)) {
+            self.performForbiddenOrdinaryRc("interpreter.coerceForbiddenAggregateStructValue.result_incref", .incref, expected_alloc.base, expected_alloc.base_layout, 1);
         }
 
         return expected_alloc.outer;
     }
 
-    fn coerceTagUnionValue(
+    fn coerceForbiddenAggregateTagUnionValue(
         self: *LirInterpreter,
         value: Value,
         actual_layout: layout_mod.Idx,
         expected_layout: layout_mod.Idx,
     ) Error!Value {
-        ownership_boundary.forbiddenOrdinaryOwnershipDecision("interpreter.coerceTagUnionValue");
+        ownership_boundary.forbiddenOrdinaryOwnershipDecision("interpreter.coerceForbiddenAggregateTagUnionValue");
         const actual_base = self.resolveTagUnionBaseValue(value, actual_layout);
         const actual_base_layout_val = self.layout_store.getLayout(actual_base.layout);
         const expected_layout_val = self.layout_store.getLayout(expected_layout);
@@ -5216,7 +5216,7 @@ pub const Interpreter = struct {
         const expected_payload_layout = self.tagPayloadLayout(allocated.base_layout, discriminant);
         const payload_size = self.helper.sizeOf(expected_payload_layout);
         if (payload_size > 0) {
-            const coerced_payload = try self.coerceValueToLayout(actual_base.value, actual_payload_layout, expected_payload_layout);
+            const coerced_payload = try self.coerceForbiddenAggregateBoundaryValueToLayout(actual_base.value, actual_payload_layout, expected_payload_layout);
             allocated.base.copyFrom(coerced_payload, payload_size);
         }
 
@@ -5238,8 +5238,8 @@ pub const Interpreter = struct {
             std.debug.print("\n", .{});
         }
 
-        if (self.forbiddenOrdinaryContainsRefcounted("interpreter.coerceTagUnionValue.result_rc", allocated.base_layout)) {
-            self.performForbiddenOrdinaryRc("interpreter.coerceTagUnionValue.result_incref", .incref, allocated.base, allocated.base_layout, 1);
+        if (self.forbiddenOrdinaryContainsRefcounted("interpreter.coerceForbiddenAggregateTagUnionValue.result_rc", allocated.base_layout)) {
+            self.performForbiddenOrdinaryRc("interpreter.coerceForbiddenAggregateTagUnionValue.result_incref", .incref, allocated.base, allocated.base_layout, 1);
         }
 
         return allocated.outer;

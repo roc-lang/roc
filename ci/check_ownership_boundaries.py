@@ -71,7 +71,7 @@ RULES = (
     Rule(
         category="interpreter-aggregate-coercion",
         path_prefixes=("src/eval/interpreter.zig",),
-        regex=re.compile(r"\bcoerce(?:ValueToLayout|ValueIntoBox|StructValue|TagUnionValue)\("),
+        regex=re.compile(r"\bcoerceForbiddenAggregate(?:BoundaryValueToLayout|ValueIntoBox|StructValue|TagUnionValue)\("),
         description="interpreter aggregate-rebuilding coercion outside the explicitly forbidden helper island",
     ),
 )
