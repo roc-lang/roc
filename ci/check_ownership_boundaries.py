@@ -43,13 +43,13 @@ RULES = (
     Rule(
         category="dev-emit-rc-helper",
         path_prefixes=("src/backend/dev/LirCodeGen.zig",),
-        regex=re.compile(r"\bemitRc(?:HelperCall(?:AtStackOffset|ForValue|FromPtrReg)?|IncrefAtStackOffset|DecrefAtStackOffset)\("),
+        regex=re.compile(r"\bemit(?:Raw)?Rc(?:HelperCall(?:AtStackOffset|ForValue|FromPtrReg)?|IncrefAtStackOffset|DecrefAtStackOffset)\("),
         description="dev backend RC emission outside explicit RC lowering or builtin lowering",
     ),
     Rule(
         category="wasm-emit-rc-helper",
         path_prefixes=("src/backend/wasm/WasmCodeGen.zig",),
-        regex=re.compile(r"\bemitRc(?:ForValueLocal|HelperCallForValuePtr|AtPtr|HelperCallByKey)\("),
+        regex=re.compile(r"\bemit(?:Raw)?Rc(?:ForValueLocal|HelperCallForValuePtr|AtPtr|HelperCallByKey)\("),
         description="wasm backend RC emission outside explicit RC lowering or builtin lowering",
     ),
     Rule(
