@@ -7,8 +7,6 @@ const builtin = @import("builtin");
 const bundle = @import("bundle.zig");
 
 // Network constants
-const HTTPS_DEFAULT_PORT: u16 = 443;
-const HTTP_DEFAULT_PORT: u16 = 80;
 const SERVER_HEADER_BUFFER_SIZE: usize = 16 * 1024;
 
 // IPv4 loopback address 127.0.0.1 in network byte order

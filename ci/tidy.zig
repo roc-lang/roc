@@ -32,10 +32,11 @@ const TermColor = struct {
     pub const reset = "\x1b[0m";
 };
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
+    const io = init.io;
 
     var errors: Errors = .{};
 
@@ -50,7 +51,7 @@ pub fn main() !void {
     const file_buffer = try gpa.alloc(u8, MiB + MiB / 2); // 1.5 MiB
     defer gpa.free(file_buffer);
 
-    const paths = try listFilePaths(gpa);
+    const paths = try listFilePaths(gpa, io);
     defer {
         for (paths) |path| {
             gpa.free(path);
@@ -59,7 +60,7 @@ pub fn main() !void {
     }
 
     for (paths) |file_path| {
-        const bytes_read = (std.Io.Dir.cwd().readFile(file_path, file_buffer) catch |err| {
+        const bytes_read = (std.Io.Dir.cwd().readFile(io,file_path, file_buffer) catch |err| {
             std.debug.print("Error reading {s}: {}\n", .{ file_path, err });
             continue;
         }).len;
@@ -77,7 +78,7 @@ pub fn main() !void {
         try tidyFile(gpa, &counter, source_file, &errors);
 
         if (source_file.hasExtension(".zig")) {
-            try dead_files_detector.visit(source_file);
+            try dead_files_detector.visit(gpa, source_file);
         }
     }
 
@@ -520,21 +521,21 @@ const DeadFilesDetector = struct {
 
     files: FileMap,
 
-    fn init(gpa: Allocator) DeadFilesDetector {
-        return .{ .files = FileMap.init(gpa) };
+    fn init(_: Allocator) DeadFilesDetector {
+        return .{ .files = FileMap.empty };
     }
 
-    fn deinit(detector: *DeadFilesDetector, _: Allocator) void {
-        detector.files.deinit();
+    fn deinit(detector: *DeadFilesDetector, gpa: Allocator) void {
+        detector.files.deinit(gpa);
     }
 
-    fn visit(detector: *DeadFilesDetector, file: SourceFile) Allocator.Error!void {
+    fn visit(detector: *DeadFilesDetector, gpa: Allocator, file: SourceFile) Allocator.Error!void {
         assert(file.hasExtension(".zig"));
 
         // Only track src/ files as needing to be imported somewhere
         const is_src_file = std.mem.startsWith(u8, file.path, "src/");
         if (is_src_file) {
-            (try detector.fileState(file.path)).definition_count += 1;
+            (try detector.fileState(gpa, file.path)).definition_count += 1;
         }
 
         // Only scan src/, test/, and build files for imports
@@ -552,7 +553,7 @@ const DeadFilesDetector = struct {
             const import_path = result2[0];
             rest = result2[1];
             if (std.mem.endsWith(u8, import_path, ".zig")) {
-                (try detector.fileState(import_path)).import_count += 1;
+                (try detector.fileState(gpa, import_path)).import_count += 1;
             }
         } else {
             std.debug.panic("file with more than 1024 imports: {s}", .{file.path});
@@ -572,8 +573,8 @@ const DeadFilesDetector = struct {
         }
     }
 
-    fn fileState(detector: *DeadFilesDetector, path: []const u8) !*FileState {
-        const gop = try detector.files.getOrPut(pathToName(path));
+    fn fileState(detector: *DeadFilesDetector, gpa: Allocator, path: []const u8) !*FileState {
+        const gop = try detector.files.getOrPut(gpa, pathToName(path));
         if (!gop.found_existing) gop.value_ptr.* = .{ .import_count = 0, .definition_count = 0 };
         return gop.value_ptr;
     }
@@ -613,7 +614,7 @@ const DeadFilesDetector = struct {
 };
 
 /// Lists all files in the repository using git ls-files.
-fn listFilePaths(allocator: Allocator) ![][]const u8 {
+fn listFilePaths(allocator: Allocator, io: std.Io) ![][]const u8 {
     var result : std.ArrayList([]const u8) = .empty;
     errdefer {
         for (result.items) |path| {
@@ -622,18 +623,14 @@ fn listFilePaths(allocator: Allocator) ![][]const u8 {
         result.deinit(allocator);
     }
 
-    var child = std.process.Child.init(&.{ "git", "ls-files", "-z" }, allocator);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
+    const run_result = try std.process.run(allocator, io, .{
+        .argv = &.{ "git", "ls-files", "-z" },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
 
-    _ = try child.spawn();
-
-    const stdout = child.stdout orelse return error.NoStdout;
-    const files = try stdout.readToEndAlloc(allocator, 10 * MiB);
-    defer allocator.free(files);
-
-    const term = try child.wait();
-    if (term.Exited != 0) return error.GitFailed;
+    const files = run_result.stdout;
+    if (run_result.term != .exited or run_result.term.exited != 0) return error.GitFailed;
 
     if (files.len == 0) return result.toOwnedSlice(allocator);
 

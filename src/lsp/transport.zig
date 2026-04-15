@@ -7,7 +7,6 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
     return struct {
         const Self = @This();
         const ReaderError = if (@hasDecl(ReaderType, "Error")) ReaderType.Error else anyerror;
-        const WriterError = if (@hasDecl(WriterType, "Error")) WriterType.Error else anyerror;
 
         allocator: std.mem.Allocator,
         reader: ReaderType,

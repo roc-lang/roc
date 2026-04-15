@@ -6909,63 +6909,6 @@ fn serveDocumentation(ctx: *CliContext, _: []const u8) !void {
     return error.Unexpected;
 }
 
-/// Handle a single HTTP connection
-// TODO: Zig 0.16 removed std.net — handleConnection needs migration to std.Io networking API
-
-/// Resolve the file path based on the URL path.
-/// Returns arena-allocated path (no need to free).
-fn resolveFilePath(ctx: *CliContext, docs_dir: []const u8, url_path: []const u8) ![]const u8 {
-    // Remove leading slash
-    const clean_path = if (url_path.len > 0 and url_path[0] == '/')
-        url_path[1..]
-    else
-        url_path;
-
-    // If path is empty or ends with /, serve index.html
-    if (clean_path.len == 0 or clean_path[clean_path.len - 1] == '/') {
-        return try std.fmt.allocPrint(ctx.arena, "{s}/{s}index.html", .{ docs_dir, clean_path });
-    }
-
-    // Check if the path has a file extension (contains a dot in the last component)
-    const last_slash = std.mem.lastIndexOfScalar(u8, clean_path, '/') orelse 0;
-    const last_component = clean_path[last_slash..];
-    const has_extension = std.mem.indexOfScalar(u8, last_component, '.') != null;
-
-    if (has_extension) {
-        // Path has extension, serve the file directly
-        return try std.fmt.allocPrint(ctx.arena, "{s}/{s}", .{ docs_dir, clean_path });
-    } else {
-        // No extension, serve index.html from that directory
-        return try std.fmt.allocPrint(ctx.arena, "{s}/{s}/index.html", .{ docs_dir, clean_path });
-    }
-}
-
-/// Get content type based on file extension
-fn getContentType(file_path: []const u8) []const u8 {
-    if (std.mem.endsWith(u8, file_path, ".html")) {
-        return "text/html; charset=utf-8";
-    } else if (std.mem.endsWith(u8, file_path, ".css")) {
-        return "text/css";
-    } else if (std.mem.endsWith(u8, file_path, ".js")) {
-        return "application/javascript";
-    } else if (std.mem.endsWith(u8, file_path, ".json")) {
-        return "application/json";
-    } else if (std.mem.endsWith(u8, file_path, ".png")) {
-        return "image/png";
-    } else if (std.mem.endsWith(u8, file_path, ".jpg") or std.mem.endsWith(u8, file_path, ".jpeg")) {
-        return "image/jpeg";
-    } else if (std.mem.endsWith(u8, file_path, ".svg")) {
-        return "image/svg+xml";
-    } else if (std.mem.endsWith(u8, file_path, ".woff2")) {
-        return "font/woff2";
-    } else {
-        return "text/plain";
-    }
-}
-
-/// Send an HTTP response
-// TODO: Zig 0.16 removed std.net — sendResponse needs migration to std.Io networking API
-
 fn rocDocs(ctx: *CliContext, args: cli_args.DocsArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();

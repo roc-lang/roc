@@ -9,7 +9,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const builtins = @import("builtins");
 const build_options = @import("build_options");
-const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi) std.posix else undefined;
 
 const trace_refcount = build_options.trace_refcount;
 

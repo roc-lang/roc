@@ -5,11 +5,6 @@
 //! proper deserialization of the written data.
 
 const std = @import("std");
-const builtin = @import("builtin");
-
-// POSIX I/O only available on non-freestanding targets
-const is_freestanding = builtin.os.tag == .freestanding;
-const posix = if (is_freestanding) undefined else std.posix;
 
 const CompactWriter = @This();
 
