@@ -59,6 +59,14 @@ pub const Store = struct {
         contains_refcounted: bool,
     };
 
+    pub const BuiltinBoxAbi = struct {
+        elem_layout_idx: ?Idx,
+        elem_layout: Layout,
+        elem_size: u32,
+        elem_alignment: u32,
+        contains_refcounted: bool,
+    };
+
     /// All module environments for cross-module type resolution
     all_module_envs: []const *const ModuleEnv,
 
@@ -1507,6 +1515,29 @@ pub const Store = struct {
         const runtime_elem_layout_idx = switch (list_layout.tag) {
             .list => self.runtimeRepresentationLayoutIdx(info.elem_layout_idx),
             .list_of_zst => null,
+            else => unreachable,
+        };
+        const runtime_elem_layout = if (runtime_elem_layout_idx) |idx| self.getLayout(idx) else info.elem_layout;
+
+        return .{
+            .elem_layout_idx = runtime_elem_layout_idx,
+            .elem_layout = runtime_elem_layout,
+            .elem_size = if (runtime_elem_layout_idx != null) self.layoutSize(runtime_elem_layout) else 0,
+            .elem_alignment = if (runtime_elem_layout_idx != null)
+                @intCast(runtime_elem_layout.alignment(self.targetUsize()).toByteUnits())
+            else
+                1,
+            .contains_refcounted = if (runtime_elem_layout_idx != null) self.layoutContainsRefcounted(runtime_elem_layout) else false,
+        };
+    }
+
+    pub fn builtinBoxAbi(self: *const Self, box_layout_idx: Idx) BuiltinBoxAbi {
+        const box_layout = self.getLayout(box_layout_idx);
+        std.debug.assert(box_layout.tag == .box or box_layout.tag == .box_of_zst);
+        const info = self.getBoxInfo(box_layout);
+        const runtime_elem_layout_idx = switch (box_layout.tag) {
+            .box => self.runtimeRepresentationLayoutIdx(info.elem_layout_idx),
+            .box_of_zst => null,
             else => unreachable,
         };
         const runtime_elem_layout = if (runtime_elem_layout_idx) |idx| self.getLayout(idx) else info.elem_layout;

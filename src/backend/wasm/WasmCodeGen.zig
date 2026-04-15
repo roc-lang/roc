@@ -1337,21 +1337,12 @@ fn emitBuiltinInternalStrRc(self: *Self, comptime kind: RcOpKind, str_ptr_local:
 }
 
 fn emitBuiltinInternalBoxRc(self: *Self, comptime kind: RcOpKind, box_ptr_local: u32, box_layout_idx: layout.Idx, inc_count: u16) Allocator.Error!void {
-    const ls = self.getLayoutStore();
-    const box_layout = ls.getLayout(box_layout_idx);
-
-    var elem_alignment: u32 = @intCast(ls.layoutSizeAlign(box_layout).alignment.toByteUnits());
-    var elements_refcounted = false;
-    if (box_layout.tag == .box) {
-        const info = ls.getBoxInfo(box_layout);
-        elem_alignment = info.elem_alignment;
-        elements_refcounted = info.contains_refcounted;
-    }
+    const box_abi = self.getLayoutStore().builtinBoxAbi(box_layout_idx);
 
     switch (kind) {
         .incref => try self.emitDataPtrIncref(box_ptr_local, inc_count),
-        .decref => try self.emitDataPtrDecref(box_ptr_local, elem_alignment, elements_refcounted),
-        .free => try self.emitDataPtrFree(box_ptr_local, elem_alignment, elements_refcounted),
+        .decref => try self.emitDataPtrDecref(box_ptr_local, box_abi.elem_alignment, box_abi.contains_refcounted),
+        .free => try self.emitDataPtrFree(box_ptr_local, box_abi.elem_alignment, box_abi.contains_refcounted),
     }
 }
 
@@ -7909,17 +7900,17 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                 WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
             } else {
-                const box_info = ls.getBoxInfo(ret_layout);
-                const value_size = box_info.elem_size;
+                const box_abi = ls.builtinBoxAbi(ll.ret_layout);
+                const value_size = box_abi.elem_size;
                 const value_vt = self.procLocalValType(value_expr);
-                const value_layout = box_info.elem_layout_idx;
+                const value_layout = box_abi.elem_layout_idx orelse .zst;
 
                 if (value_size == 0) {
                     _ = try self.emitProcLocal(value_expr);
                     self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                     WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
                 } else {
-                    const alignment: u32 = if (value_size >= 8) 8 else if (value_size >= 4) 4 else if (value_size >= 2) 2 else 1;
+                    const alignment: u32 = box_abi.elem_alignment;
 
                     try self.emitHeapAllocConst(value_size, alignment);
                     const box_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -8030,8 +8021,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     },
                 }
             } else {
-                const box_info = ls.getBoxInfo(box_layout);
-                if (box_info.elem_size == 0) {
+                const box_abi = ls.builtinBoxAbi(self.procLocalLayoutIdx(box_expr));
+                if (box_abi.elem_size == 0) {
                     _ = try self.emitProcLocal(box_expr);
                     const result_vt = self.resolveValType(ll.ret_layout);
                     switch (result_vt) {

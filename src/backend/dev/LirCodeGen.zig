@@ -3368,9 +3368,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         return .{ .general_reg = reg };
                     }
 
-                    const box_info = ls.getBoxInfo(ret_layout_data);
-                    const elem_size: u32 = box_info.elem_size;
-                    const elem_alignment: u32 = box_info.elem_alignment;
+                    const box_abi = ls.builtinBoxAbi(ll.ret_layout);
+                    const elem_size: u32 = box_abi.elem_size;
+                    const elem_alignment: u32 = box_abi.elem_alignment;
 
                     // Handle ZST element even when layout tag is .box (not .box_of_zst)
                     if (elem_size == 0) {
@@ -3388,7 +3388,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                         try builder.addImmArg(@intCast(elem_size));
                         try builder.addImmArg(@intCast(elem_alignment));
-                        try builder.addImmArg(if (box_info.contains_refcounted) 1 else 0);
+                        try builder.addImmArg(if (box_abi.contains_refcounted) 1 else 0);
                         try builder.addRegArg(roc_ops_reg);
                         try self.callBuiltin(&builder, @intFromPtr(&allocateWithRefcountC), .allocate_with_refcount);
                     }
@@ -3424,16 +3424,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         return .{ .immediate_i64 = 0 };
                     }
 
-                    const box_info = ls.getBoxInfo(box_layout_data);
-                    const elem_size: u32 = box_info.elem_size;
+                    const box_abi = ls.builtinBoxAbi(box_arg_layout);
+                    const elem_size: u32 = box_abi.elem_size;
 
                     // Handle ZST element even when layout tag is .box (not .box_of_zst)
                     if (elem_size == 0) {
                         _ = try self.emitValueLocal(args[0]);
                         return .{ .immediate_i64 = 0 };
                     }
-                    const elem_layout_idx = box_info.elem_layout_idx;
-                    const elem_layout_data = box_info.elem_layout;
+                    const elem_layout_idx = box_abi.elem_layout_idx orelse .zst;
+                    const elem_layout_data = box_abi.elem_layout;
 
                     // Generate the box pointer expression
                     const box_loc = try self.emitValueLocal(args[0]);
@@ -8992,8 +8992,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .zst => return .{ .immediate_i64 = 0 },
                 .box_of_zst => return .{ .immediate_i64 = 0 },
                 .box => {
-                    const box_info = ls.getBoxInfo(target_layout);
-                    const inner_layout = box_info.elem_layout;
+                    const box_abi = ls.builtinBoxAbi(s.target_layout);
+                    const inner_layout = box_abi.elem_layout;
                     if (inner_layout.tag != .struct_) {
                         if (builtin.mode == .Debug) {
                             std.debug.panic(
@@ -9008,9 +9008,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const heap_ptr_slot = self.codegen.allocStackSlot(8);
                     {
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                        try builder.addImmArg(@intCast(box_info.elem_size));
-                        try builder.addImmArg(@intCast(box_info.elem_alignment));
-                        try builder.addImmArg(if (box_info.contains_refcounted) 1 else 0);
+                        try builder.addImmArg(@intCast(box_abi.elem_size));
+                        try builder.addImmArg(@intCast(box_abi.elem_alignment));
+                        try builder.addImmArg(if (box_abi.contains_refcounted) 1 else 0);
                         try builder.addRegArg(roc_ops_reg);
                         try self.callBuiltin(&builder, @intFromPtr(&allocateWithRefcountC), .allocate_with_refcount);
                     }
@@ -9150,8 +9150,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return .{ .immediate_i64 = 0 };
             }
             if (union_layout.tag == .box) {
-                const box_info = ls.getBoxInfo(union_layout);
-                const inner_layout = box_info.elem_layout;
+                const box_abi = ls.builtinBoxAbi(tag.target_layout);
+                const inner_layout = box_abi.elem_layout;
                 if (inner_layout.tag != .tag_union) {
                     if (builtin.mode == .Debug) {
                         std.debug.panic(
@@ -9166,9 +9166,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const heap_ptr_slot = self.codegen.allocStackSlot(8);
                 {
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                    try builder.addImmArg(@intCast(box_info.elem_size));
-                    try builder.addImmArg(@intCast(box_info.elem_alignment));
-                    try builder.addImmArg(if (box_info.contains_refcounted) 1 else 0);
+                    try builder.addImmArg(@intCast(box_abi.elem_size));
+                    try builder.addImmArg(@intCast(box_abi.elem_alignment));
+                    try builder.addImmArg(if (box_abi.contains_refcounted) 1 else 0);
                     try builder.addRegArg(roc_ops_reg);
                     try self.callBuiltin(&builder, @intFromPtr(&allocateWithRefcountC), .allocate_with_refcount);
                 }

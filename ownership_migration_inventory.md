@@ -31,9 +31,9 @@ ownership decisions. The remaining sites below show the specific gaps.
 
 ## Migration Table
 
-### Backend builtin-internal list helper ABI still needs a shared source
+### Backend builtin-internal primitive helper ABI still needs its final shape
 
-1. Dev backend list construction and list-manipulation builtins
+1. Dev backend list and box primitive builtins
    Files:
    - [`src/backend/dev/LirCodeGen.zig:1498`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig:1498)
    - [`src/backend/dev/LirCodeGen.zig:1782`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig:1782)
@@ -43,15 +43,15 @@ ownership decisions. The remaining sites below show the specific gaps.
    - [`src/backend/dev/LirCodeGen.zig:8938`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig:8938)
    - [`src/layout/store.zig:1791`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/layout/store.zig:1791)
    Current behavior:
-   - Dev backend now consumes store-published RC helper plans and uses a thin compatibility wrapper over the store-published list helper ABI.
+   - Dev backend now consumes store-published RC helper plans and uses thin compatibility wrappers over store-published list and box helper ABI.
    Missing earlier fact:
-   - The primitive helper ABI still expects backend-supplied list metadata instead of consuming a shared earlier artifact.
+   - The primitive helper ABI is now published from `layout.Store`, but the backend still carries compatibility wrappers and call-site-specific marshaling instead of consuming one final normalized earlier artifact.
    LIR change needed:
-   - Decide whether builtin helper ABI facts remain primitive/runtime-internal, or whether an earlier shared helper-ABI artifact should be emitted before backend codegen.
+   - Decide whether builtin helper ABI facts remain primitive/runtime-internal store outputs, or whether a stronger earlier helper-ABI artifact should be emitted before backend codegen.
    Replacement:
    - Long-term ideal is one shared helper-ABI artifact consumed mechanically by all backends, with ownership transitions still driven only by explicit surrounding LIR.
 
-2. Wasm backend list helper ABI and list payload traversal
+2. Wasm backend primitive helper ABI and list payload traversal
    Files:
    - [`src/backend/wasm/WasmCodeGen.zig:1303`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/wasm/WasmCodeGen.zig:1303)
    - [`src/backend/wasm/WasmCodeGen.zig:7018`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/wasm/WasmCodeGen.zig:7018)
@@ -61,7 +61,7 @@ ownership decisions. The remaining sites below show the specific gaps.
    - [`src/backend/wasm/WasmCodeGen.zig:1181`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/wasm/WasmCodeGen.zig:1181)
    - [`src/layout/store.zig:1791`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/layout/store.zig:1791)
    Current behavior:
-   - Wasm now consumes store-published RC helper plans and uses a thin compatibility wrapper over the store-published list helper ABI, but list payload teardown still performs backend-local element traversal inside builtin helper internals.
+   - Wasm now consumes store-published RC helper plans and uses thin compatibility wrappers over store-published list and box helper ABI, but list payload teardown still performs backend-local element traversal inside builtin helper internals.
    Missing earlier fact:
    - LIR/low-level metadata still does not provide a shared helper-plan artifact or equivalent explicit child-traversal summary.
    LIR change needed:
