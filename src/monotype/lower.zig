@@ -58,6 +58,7 @@ pub const Result = struct {
     types: type_mod.Store,
     strings: base.StringLiteral.Store,
     idents: base.Ident.Store,
+    runtime_inspect_symbols: std.AutoHashMap(symbol_mod.Symbol, symbol_mod.Symbol),
 
     pub fn deinit(self: *Result) void {
         self.program.deinit();
@@ -65,6 +66,7 @@ pub const Result = struct {
         self.types.deinit();
         self.strings.deinit(self.program.store.allocator);
         self.idents.deinit(self.program.store.allocator);
+        self.runtime_inspect_symbols.deinit();
     }
 };
 
@@ -433,6 +435,8 @@ pub const Lowerer = struct {
     top_level_symbols_by_pattern: std.AutoHashMap(PatternKey, symbol_mod.Symbol),
     emitted_defs_by_symbol: std.AutoHashMap(symbol_mod.Symbol, ast.DefId),
     emitting_value_defs: std.AutoHashMap(symbol_mod.Symbol, void),
+    forced_runtime_symbols: std.AutoHashMap(symbol_mod.Symbol, void),
+    runtime_inspect_symbols: std.AutoHashMap(symbol_mod.Symbol, symbol_mod.Symbol),
     local_fn_groups: std.ArrayList(*LocalFnGroupState),
     required_app_module_idx: ?u32 = null,
 
@@ -818,6 +822,8 @@ pub const Lowerer = struct {
             .top_level_symbols_by_pattern = std.AutoHashMap(PatternKey, symbol_mod.Symbol).init(allocator),
             .emitted_defs_by_symbol = std.AutoHashMap(symbol_mod.Symbol, ast.DefId).init(allocator),
             .emitting_value_defs = std.AutoHashMap(symbol_mod.Symbol, void).init(allocator),
+            .forced_runtime_symbols = std.AutoHashMap(symbol_mod.Symbol, void).init(allocator),
+            .runtime_inspect_symbols = std.AutoHashMap(symbol_mod.Symbol, symbol_mod.Symbol).init(allocator),
             .local_fn_groups = .empty,
             .required_app_module_idx = app_module_idx,
         };
@@ -829,6 +835,8 @@ pub const Lowerer = struct {
             self.allocator.destroy(group);
         }
         self.local_fn_groups.deinit(self.allocator);
+        self.runtime_inspect_symbols.deinit();
+        self.forced_runtime_symbols.deinit();
         self.emitting_value_defs.deinit();
         self.emitted_defs_by_symbol.deinit();
         self.top_level_symbols_by_pattern.deinit();
@@ -842,7 +850,7 @@ pub const Lowerer = struct {
     pub fn run(self: *Lowerer, root_module_idx: u32) std.mem.Allocator.Error!Result {
         try self.registerAllTopLevelDefs();
         try self.lowerRootModule(root_module_idx);
-        try self.drainSpecializations();
+        try self.drainPendingLoweringWork();
         try self.finalizeProgramTypes();
 
         const result = Result{
@@ -851,13 +859,43 @@ pub const Lowerer = struct {
             .types = self.ctx.types,
             .strings = self.strings,
             .idents = self.ctx.idents,
+            .runtime_inspect_symbols = self.runtime_inspect_symbols,
         };
         self.program = Program.init(self.allocator);
         self.ctx.symbols = symbol_mod.Store.init(self.allocator);
         self.ctx.types = type_mod.Store.init(self.allocator);
         self.ctx.idents = try base.Ident.Store.initCapacity(self.allocator, 1);
         self.strings = .{};
+        self.runtime_inspect_symbols = std.AutoHashMap(symbol_mod.Symbol, symbol_mod.Symbol).init(self.allocator);
         return result;
+    }
+
+    fn drainPendingLoweringWork(self: *Lowerer) std.mem.Allocator.Error!void {
+        while (true) {
+            const forced_any = try self.forcePendingRuntimeSymbols();
+            const specialized_any = try self.drainSpecializations();
+            if (!forced_any and !specialized_any) break;
+        }
+    }
+
+    fn forcePendingRuntimeSymbols(self: *Lowerer) std.mem.Allocator.Error!bool {
+        var any_forced = false;
+        var iter = self.forced_runtime_symbols.iterator();
+        while (iter.next()) |entry| {
+            const symbol = entry.key_ptr.*;
+            if (self.runtime_inspect_symbols.contains(symbol)) continue;
+            const top_level = self.top_level_defs_by_symbol.get(symbol) orelse
+                debugPanic("monotype invariant violated: missing forced runtime symbol in top-level defs", .{});
+            if (top_level.is_function) {
+                const runtime_symbol = try self.specializeTopLevelDef(top_level.module_idx, top_level.def_idx);
+                try self.runtime_inspect_symbols.put(symbol, runtime_symbol);
+            } else {
+                try self.ensureTopLevelValueDefEmitted(symbol);
+                try self.runtime_inspect_symbols.put(symbol, symbol);
+            }
+            any_forced = true;
+        }
+        return any_forced;
     }
 
     /// Force specialization (or emission) of a top-level definition.
@@ -917,6 +955,46 @@ pub const Lowerer = struct {
         );
     }
 
+    fn specializeTopLevelFromCallSite(
+        self: *Lowerer,
+        type_scope: *TypeCloneScope,
+        top_level_symbol: symbol_mod.Symbol,
+        top_level: TopLevelDef,
+        expected_ty: type_mod.TypeId,
+        expected_var: ?Var,
+    ) std.mem.Allocator.Error!symbol_mod.Symbol {
+        const published_expected_ty = try self.publishMonotypeType(expected_ty);
+        const source_root_var = try self.copyTopLevelDefExprVarToScope(
+            type_scope,
+            top_level.module_idx,
+            top_level.def_idx,
+        );
+        const specialization_root_var = if (expected_var) |workspace_expected_var|
+            try self.bindSourceVarToExistingWorkspace(
+                top_level.module_idx,
+                type_scope,
+                self.ctx.typedCirModule(top_level.module_idx).defType(top_level.def_idx),
+                workspace_expected_var,
+            )
+        else
+            source_root_var;
+        const expected_checker_seed = try self.freezeCheckerVarFromScope(
+            type_scope,
+            specialization_root_var,
+        );
+        return try self.specializations.specializeFn(
+            &self.ctx.symbols,
+            &self.ctx.types,
+            top_level_symbol,
+            .{
+                .module_idx = top_level.module_idx,
+                .def_idx = top_level.def_idx,
+            },
+            published_expected_ty,
+            expected_checker_seed,
+        );
+    }
+
     /// Lower a single expression as the root entrypoint for testing/evaluation.
     /// This preserves the normal specialization pipeline while avoiding reparsing.
     pub fn runRootExpr(
@@ -927,7 +1005,7 @@ pub const Lowerer = struct {
         try self.registerAllTopLevelDefs();
         const def_id = try self.lowerRootExpr(module_idx, expr_idx);
         try self.program.root_defs.append(self.allocator, def_id);
-        try self.drainSpecializations();
+        try self.drainPendingLoweringWork();
         try self.finalizeProgramTypes();
 
         const result = Result{
@@ -936,11 +1014,13 @@ pub const Lowerer = struct {
             .types = self.ctx.types,
             .strings = self.strings,
             .idents = self.ctx.idents,
+            .runtime_inspect_symbols = self.runtime_inspect_symbols,
         };
         self.program = Program.init(self.allocator);
         self.ctx.symbols = symbol_mod.Store.init(self.allocator);
         self.ctx.types = type_mod.Store.init(self.allocator);
         self.ctx.idents = try base.Ident.Store.initCapacity(self.allocator, 1);
+        self.runtime_inspect_symbols = std.AutoHashMap(symbol_mod.Symbol, symbol_mod.Symbol).init(self.allocator);
         self.strings = .{};
         return result;
     }
@@ -1408,13 +1488,16 @@ pub const Lowerer = struct {
         return false;
     }
 
-    fn drainSpecializations(self: *Lowerer) std.mem.Allocator.Error!void {
+    fn drainSpecializations(self: *Lowerer) std.mem.Allocator.Error!bool {
+        var any_specialized = false;
         while (self.specializations.nextNeededSpecialization()) |pending_idx| {
             const pending = self.specializations.get(pending_idx);
             const def_id = try self.lowerSpecializedTopLevelFn(pending.*);
             try self.program.root_defs.append(self.allocator, def_id);
             pending.emitted = true;
+            any_specialized = true;
         }
+        return any_specialized;
     }
 
     fn lowerSpecializedTopLevelFn(
@@ -1424,7 +1507,6 @@ pub const Lowerer = struct {
         if (self.emitted_defs_by_symbol.get(pending.specialized_symbol)) |existing| return existing;
         const typed_cir_module = self.ctx.typedCirModule(pending.source.module_idx);
         const solved_def = typed_cir_module.def(pending.source.def_idx);
-
         var type_scope: TypeCloneScope = undefined;
         try type_scope.initCloneAll(self.allocator, typed_cir_module);
         defer type_scope.deinit();
@@ -1442,6 +1524,7 @@ pub const Lowerer = struct {
 
         var binding_env = BindingEnv.init(self.allocator);
         defer binding_env.deinit();
+        const recursive = isRecursiveTopLevelDef(typed_cir_module, pending.source.def_idx);
 
         const letfn = try self.lowerLambdaLikeDefWithEnv(
             pending.source.module_idx,
@@ -1449,7 +1532,7 @@ pub const Lowerer = struct {
             binding_env,
             pending.specialized_symbol,
             solved_def.expr.idx,
-            isRecursiveTopLevelDef(typed_cir_module, pending.source.def_idx),
+            recursive,
             null,
             specialized_checker_var,
         );
@@ -8918,10 +9001,23 @@ pub const Lowerer = struct {
         try type_scope.nominal_type_cache.put(owned_key, nominal_type_id);
 
         const backing_var = type_scope.typeStoreConst().getNominalBackingVar(nominal);
+        const to_inspect_symbol = blk: {
+            const target = defining.module.resolveAttachedMethodTargetByText(
+                defining.module.getIdent(defining_ident),
+                "to_inspect",
+            ) orelse break :blk symbol_mod.Symbol.none;
+            const symbol = self.lookupTopLevelDefSymbol(target.module_idx, target.def_idx) orelse debugPanic(
+                "monotype.lowerNominalType missing symbol for resolved to_inspect method",
+                .{},
+            );
+            try self.forced_runtime_symbols.put(symbol, {});
+            break :blk symbol;
+        };
         return .{ .nominal = .{
             .module_idx = defining.module_idx,
             .ident = try self.ctx.copyExecutableIdent(defining.module_idx, defining_ident),
             .is_opaque = nominal.is_opaque,
+            .to_inspect_symbol = to_inspect_symbol,
             .args = try self.ctx.types.addTypeSpan(lowered_args),
             .backing = try self.lowerInstantiatedType(module_idx, type_scope, backing_var),
         } };
@@ -10367,18 +10463,16 @@ pub const Lowerer = struct {
         if (self.top_level_defs_by_symbol.get(top_level_symbol)) |top_level| {
             self.assertNoFirstClassBuiltinStrInspect(top_level.module_idx, top_level.def_idx, "local");
             if (top_level.is_function) {
-                const published_expected_ty = try self.publishMonotypeType(expected_ty);
-                const expected_checker_seed = try self.freezeCheckerVarFromScope(
+                return try self.specializeTopLevelFromCallSite(
                     type_scope,
+                    top_level_symbol,
+                    top_level,
+                    expected_ty,
                     expected_var orelse debugPanic(
                         "monotype specialization invariant violated: missing exact checker seed for local top-level specialization {d}",
                         .{top_level_symbol.raw()},
                     ),
                 );
-                return try self.specializations.specializeFn(&self.ctx.symbols, &self.ctx.types, top_level_symbol, .{
-                    .module_idx = top_level.module_idx,
-                    .def_idx = top_level.def_idx,
-                }, published_expected_ty, expected_checker_seed);
             }
             try self.ensureTopLevelValueDefEmitted(top_level_symbol);
         }
@@ -12347,18 +12441,16 @@ pub const Lowerer = struct {
         if (self.top_level_defs_by_symbol.get(symbol)) |top_level| {
             self.assertNoFirstClassBuiltinStrInspect(top_level.module_idx, top_level.def_idx, "external");
             if (top_level.is_function) {
-                const published_expected_ty = try self.publishMonotypeType(expected_ty);
-                const expected_checker_seed = try self.freezeCheckerVarFromScope(
+                return try self.specializeTopLevelFromCallSite(
                     type_scope,
+                    symbol,
+                    top_level,
+                    expected_ty,
                     expected_var orelse debugPanic(
                         "monotype specialization invariant violated: missing exact checker seed for external top-level specialization {d}",
                         .{symbol.raw()},
                     ),
                 );
-                return try self.specializations.specializeFn(&self.ctx.symbols, &self.ctx.types, symbol, .{
-                    .module_idx = top_level.module_idx,
-                    .def_idx = top_level.def_idx,
-                }, published_expected_ty, expected_checker_seed);
             }
             try self.ensureTopLevelValueDefEmitted(symbol);
         }
@@ -12482,18 +12574,16 @@ pub const Lowerer = struct {
 
         const symbol = if (self.top_level_defs_by_symbol.get(source_symbol)) |top_level|
             if (top_level.is_function) blk: {
-                const published_expected_ty = try self.publishMonotypeType(expected_ty);
-                const expected_checker_seed = try self.freezeCheckerVarFromScope(
+                break :blk try self.specializeTopLevelFromCallSite(
                     type_scope,
+                    source_symbol,
+                    top_level,
+                    expected_ty,
                     expected_var orelse debugPanic(
                         "monotype specialization invariant violated: missing exact checker seed for resolved target specialization {d}",
                         .{source_symbol.raw()},
                     ),
                 );
-                break :blk try self.specializations.specializeFn(&self.ctx.symbols, &self.ctx.types, source_symbol, .{
-                    .module_idx = top_level.module_idx,
-                    .def_idx = top_level.def_idx,
-                }, published_expected_ty, expected_checker_seed);
             } else blk: {
                 try self.ensureTopLevelValueDefEmitted(source_symbol);
                 break :blk source_symbol;

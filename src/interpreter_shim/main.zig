@@ -12,6 +12,7 @@ const builtins = @import("builtins");
 const base = @import("base");
 const can = @import("can");
 const check = @import("check");
+const compile = @import("compile");
 const types = @import("types");
 const collections = @import("collections");
 const import_mapping_mod = types.import_mapping;
@@ -194,6 +195,12 @@ var global_app_env_ptr: ?*ModuleEnv = null; // App env for e_lookup_required res
 var global_builtin_modules: ?eval.BuiltinModules = null;
 var global_imported_envs: ?[]*const ModuleEnv = null;
 var global_full_imported_envs: ?[]*const ModuleEnv = null; // Full slice with builtin prepended (for interpreter)
+var global_full_mutable_envs: ?[]*ModuleEnv = null; // Exact lowering order consumed by later stages
+var global_full_mutable_envs_const: ?[]*const ModuleEnv = null; // Borrowed const view of global_full_mutable_envs
+var global_builtin_module_idx: ?u32 = null;
+var global_primary_module_idx: ?u32 = null;
+var global_app_module_idx: ?u32 = null;
+var global_builtin_str: ?base.Ident.Idx = null;
 var global_constant_strings_arena: ?*std.heap.ArenaAllocator = null; // Persists across interpreter calls for immortal strings
 var shm_mutex = PlatformMutex.init();
 
@@ -222,6 +229,51 @@ const Header = struct {
     platform_main_env_offset: u64, // 0 if no platform, entry points are in app
     app_env_offset: u64, // Always present, used for e_lookup_required resolution
 };
+
+fn appendModuleEnvIfMissing(
+    allocator: std.mem.Allocator,
+    module_envs: *std.ArrayList(*ModuleEnv),
+    module_env: *ModuleEnv,
+) std.mem.Allocator.Error!void {
+    for (module_envs.items) |existing_env| {
+        if (existing_env == module_env) return;
+    }
+
+    try module_envs.append(allocator, module_env);
+}
+
+fn rebuildLegacyRuntimeState(
+    roc_ops: *RocOps,
+    module_env: *ModuleEnv,
+    allocator: std.mem.Allocator,
+) ShimError!void {
+    module_env.gpa = allocator;
+    module_env.evaluation_order = null;
+    module_env.rigid_vars = .{};
+    module_env.import_mapping = types.import_mapping.ImportMapping.init(allocator);
+
+    var graph = can.DependencyGraph.buildDependencyGraph(
+        module_env,
+        module_env.all_defs,
+        allocator,
+    ) catch {
+        roc_ops.crash("Interpreter shim: failed to rebuild dependency graph for legacy module");
+        return error.ModuleEnvSetupFailed;
+    };
+    defer graph.deinit();
+
+    var eval_order = can.DependencyGraph.computeSCCs(&graph, allocator) catch {
+        roc_ops.crash("Interpreter shim: failed to rebuild evaluation order for legacy module");
+        return error.ModuleEnvSetupFailed;
+    };
+    const eval_order_ptr = allocator.create(can.DependencyGraph.EvaluationOrder) catch {
+        eval_order.deinit();
+        roc_ops.crash("Interpreter shim: failed to allocate evaluation order for legacy module");
+        return error.OutOfMemory;
+    };
+    eval_order_ptr.* = eval_order;
+    module_env.evaluation_order = eval_order_ptr;
+}
 
 // Import serialization types from the shared module
 const SERIALIZED_FORMAT_MAGIC = collections.SERIALIZED_FORMAT_MAGIC;
@@ -363,6 +415,54 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
     };
     global_full_imported_envs = full_imported_envs;
 
+    var all_lowering_envs = std.ArrayList(*ModuleEnv).empty;
+    defer all_lowering_envs.deinit(allocator);
+
+    for (full_imported_envs) |env| {
+        all_lowering_envs.append(allocator, @constCast(env)) catch {
+            roc_ops.crash("Failed to build lowering envs list");
+            return error.OutOfMemory;
+        };
+    }
+
+    appendModuleEnvIfMissing(allocator, &all_lowering_envs, setup_result.primary_env) catch {
+        roc_ops.crash("Failed to add primary env to lowering envs");
+        return error.OutOfMemory;
+    };
+    appendModuleEnvIfMissing(allocator, &all_lowering_envs, setup_result.app_env) catch {
+        roc_ops.crash("Failed to add app env to lowering envs");
+        return error.OutOfMemory;
+    };
+
+    const mutable_envs = all_lowering_envs.toOwnedSlice(allocator) catch {
+        roc_ops.crash("Failed to allocate mutable lowering envs");
+        return error.OutOfMemory;
+    };
+    global_full_mutable_envs = mutable_envs;
+
+    const mutable_envs_const = allocator.alloc(*const ModuleEnv, mutable_envs.len) catch {
+        roc_ops.crash("Failed to allocate const lowering envs");
+        return error.OutOfMemory;
+    };
+    for (mutable_envs, 0..) |module_env, i| {
+        mutable_envs_const[i] = module_env;
+    }
+    global_full_mutable_envs_const = mutable_envs_const;
+
+    global_builtin_module_idx = compile.runner.findModuleEnvIdx(mutable_envs, builtin_module_env) orelse {
+        roc_ops.crash("INTERPRETER SHIM: builtin module missing from lowering envs");
+        return error.InterpreterSetupFailed;
+    };
+    global_primary_module_idx = compile.runner.findModuleEnvIdx(mutable_envs, setup_result.primary_env) orelse {
+        roc_ops.crash("INTERPRETER SHIM: primary module missing from lowering envs");
+        return error.InterpreterSetupFailed;
+    };
+    global_app_module_idx = compile.runner.findModuleEnvIdx(mutable_envs, setup_result.app_env) orelse {
+        roc_ops.crash("INTERPRETER SHIM: app module missing from lowering envs");
+        return error.InterpreterSetupFailed;
+    };
+    global_builtin_str = builtin_module_env.idents.builtin_str;
+
     // Resolve imports for primary and app envs
     const env_ptr = setup_result.primary_env;
     const app_env = setup_result.app_env;
@@ -418,8 +518,14 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     try initializeOnce(roc_ops);
 
     const env_ptr = global_env_ptr orelse return error.ModuleEnvSetupFailed;
-    const app_env = global_app_env_ptr orelse return error.ModuleEnvSetupFailed;
-    const builtin_modules = global_builtin_modules orelse return error.ModuleEnvSetupFailed;
+    _ = global_app_env_ptr orelse return error.ModuleEnvSetupFailed;
+    _ = global_builtin_modules orelse return error.ModuleEnvSetupFailed;
+    const lowering_module_envs = global_full_mutable_envs orelse return error.ModuleEnvSetupFailed;
+    const lowering_module_envs_const = global_full_mutable_envs_const orelse return error.ModuleEnvSetupFailed;
+    const builtin_module_idx = global_builtin_module_idx orelse return error.ModuleEnvSetupFailed;
+    const primary_module_idx = global_primary_module_idx orelse return error.ModuleEnvSetupFailed;
+    const app_module_idx = global_app_module_idx orelse return error.ModuleEnvSetupFailed;
+    const builtin_str = global_builtin_str;
 
     if (entry_idx >= global_entry_count) {
         roc_ops.crash("Invalid entry index");
@@ -428,8 +534,7 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
 
     // Look up entrypoint index from shared memory
     const base_ptr = roc__serialized_base_ptr.?;
-    const def_idx_offset: usize = if (global_is_serialized_format) 0 else @as(usize, FIRST_ALLOC_OFFSET);
-    const def_indices_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(global_def_indices_offset)) + def_idx_offset;
+    const def_indices_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(global_def_indices_offset));
     const def_indices: [*]const u32 = @ptrFromInt(def_indices_addr);
     const def_idx = def_indices[entry_idx];
 
@@ -451,54 +556,20 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
         return error.EvaluationFailed;
     };
 
-    // Create interpreter instance
-    const builtin_env = builtin_modules.builtin_module.env;
-
-    var all_envs = std.ArrayList(*ModuleEnv).empty;
-    defer all_envs.deinit(wrapped_allocator);
-    try all_envs.append(wrapped_allocator, env_ptr);
-    try all_envs.append(wrapped_allocator, builtin_env);
-    if (global_imported_envs) |imported_envs| {
-        for (imported_envs) |imp_env| {
-            if (imp_env == env_ptr or imp_env == builtin_env) continue;
-            try all_envs.append(wrapped_allocator, @constCast(imp_env));
-        }
-    }
-    if (app_env != env_ptr) {
-        try all_envs.append(wrapped_allocator, app_env);
-    }
-
-    const module_envs = try wrapped_allocator.alloc(*ModuleEnv, all_envs.items.len);
-    defer wrapped_allocator.free(module_envs);
-    for (all_envs.items, 0..) |module_env, i| module_envs[i] = module_env;
-
-    var source_modules = try wrapped_allocator.alloc(check.TypedCIR.Modules.SourceModule, module_envs.len);
+    var source_modules = try wrapped_allocator.alloc(check.TypedCIR.Modules.SourceModule, lowering_module_envs.len);
     defer wrapped_allocator.free(source_modules);
-    for (module_envs, 0..) |module_env, i| {
+    for (lowering_module_envs, 0..) |module_env, i| {
         source_modules[i] = .{ .precompiled = module_env };
     }
     var typed_modules = try check.TypedCIR.Modules.publish(wrapped_allocator, source_modules);
     defer typed_modules.deinit();
 
-    const builtin_module_idx: u32 = for (module_envs, 0..) |module_env, i| {
-        if (module_env == builtin_env) break @intCast(i);
-    } else {
-        roc_ops.crash("Interpreter shim: builtin module not found");
-        return error.ModuleEnvSetupFailed;
-    };
-
-    const primary_module_idx: u32 = for (module_envs, 0..) |module_env, i| {
-        if (module_env == env_ptr) break @intCast(i);
-    } else {
-        roc_ops.crash("Interpreter shim: primary module not found");
-        return error.ModuleEnvSetupFailed;
-    };
-
-    var module_envs_const = try wrapped_allocator.alloc(*const ModuleEnv, module_envs.len);
-    defer wrapped_allocator.free(module_envs_const);
-    for (module_envs, 0..) |module_env, i| module_envs_const[i] = module_env;
-
-    var mono_lowerer = try monotype.Lower.Lowerer.init(wrapped_allocator, &typed_modules, builtin_module_idx, null);
+    var mono_lowerer = try monotype.Lower.Lowerer.init(
+        wrapped_allocator,
+        &typed_modules,
+        builtin_module_idx,
+        app_module_idx,
+    );
     defer mono_lowerer.deinit();
     const entry_symbol = try mono_lowerer.specializeTopLevelDef(primary_module_idx, entry_def_idx);
     const mono = try mono_lowerer.run(primary_module_idx);
@@ -516,8 +587,8 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
 
     var lir_result = try lir.FromIr.run(
         wrapped_allocator,
-        module_envs_const,
-        null,
+        lowering_module_envs_const,
+        builtin_str,
         base.target.TargetUsize.native,
         lowered_ir,
     );
@@ -667,6 +738,8 @@ fn setupModuleEnv(roc_ops: *RocOps) ShimError!SetupResult {
         roc_ops.crash("Failed to allocate imported envs array");
         return error.OutOfMemory;
     };
+    var unique_module_envs = std.ArrayList(*ModuleEnv).empty;
+    defer unique_module_envs.deinit(allocator);
 
     // Relocate platform modules first (indices 0 to module_count-2)
     for (0..module_count - 1) |i| {
@@ -688,7 +761,7 @@ fn setupModuleEnv(roc_ops: *RocOps) ShimError!SetupResult {
 
         const module_env_ptr: *ModuleEnv = @ptrFromInt(module_env_addr);
         module_env_ptr.relocate(@intCast(offset));
-        module_env_ptr.gpa = allocator;
+        try appendModuleEnvIfMissing(allocator, &unique_module_envs, module_env_ptr);
         imported_envs[i] = module_env_ptr;
     }
 
@@ -712,7 +785,7 @@ fn setupModuleEnv(roc_ops: *RocOps) ShimError!SetupResult {
 
     const app_env_ptr: *ModuleEnv = @ptrFromInt(app_env_addr);
     app_env_ptr.relocate(@intCast(offset));
-    app_env_ptr.gpa = allocator;
+    try appendModuleEnvIfMissing(allocator, &unique_module_envs, app_env_ptr);
 
     // Determine primary env: platform main if available, otherwise app
     const primary_env: *ModuleEnv = if (header_ptr.platform_main_env_offset != 0) blk: {
@@ -732,9 +805,13 @@ fn setupModuleEnv(roc_ops: *RocOps) ShimError!SetupResult {
 
         const platform_env_ptr: *ModuleEnv = @ptrFromInt(platform_env_addr);
         platform_env_ptr.relocate(@intCast(offset));
-        platform_env_ptr.gpa = allocator;
+        try appendModuleEnvIfMissing(allocator, &unique_module_envs, platform_env_ptr);
         break :blk platform_env_ptr;
     } else app_env_ptr;
+
+    for (unique_module_envs.items) |module_env| {
+        try rebuildLegacyRuntimeState(roc_ops, module_env, allocator);
+    }
 
     return SetupResult{
         .primary_env = primary_env,
