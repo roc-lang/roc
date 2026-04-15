@@ -294,8 +294,8 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
             var file = self.log_file orelse return;
             var buffer: [256]u8 = undefined;
             const msg = std.fmt.bufPrint(&buffer, fmt, args) catch return;
-            file.writeStreamingAll(std.Options.debug_io,msg) catch return;
-            file.writeStreamingAll(std.Options.debug_io,"\n") catch {};
+            file.writeStreamingAll(std.Options.debug_io, msg) catch return;
+            file.writeStreamingAll(std.Options.debug_io, "\n") catch {};
             file.sync(std.Options.debug_io) catch {};
         }
 
@@ -323,13 +323,13 @@ pub fn runWithStdIo(allocator: std.mem.Allocator, debug: DebugOptions) !void {
         const log_info = try createLogFile(allocator);
         log_file = log_info.file;
         const stderr_file = std.Io.File.stderr();
-        stderr_file.writeStreamingAll(std.Options.debug_io,"roc-lsp logging to ") catch {};
-        stderr_file.writeStreamingAll(std.Options.debug_io,log_info.path) catch {};
-        stderr_file.writeStreamingAll(std.Options.debug_io,"\n") catch {};
+        stderr_file.writeStreamingAll(std.Options.debug_io, "roc-lsp logging to ") catch {};
+        stderr_file.writeStreamingAll(std.Options.debug_io, log_info.path) catch {};
+        stderr_file.writeStreamingAll(std.Options.debug_io, "\n") catch {};
         allocator.free(log_info.path);
         const divider = "\n===== roc-lsp session start =====\n";
-        log_file.?.writeStreamingAll(std.Options.debug_io,divider) catch {};
-        log_file.?.writeStreamingAll(std.Options.debug_io,"\n") catch {};
+        log_file.?.writeStreamingAll(std.Options.debug_io, divider) catch {};
+        log_file.?.writeStreamingAll(std.Options.debug_io, "\n") catch {};
         log_file.?.sync(std.Options.debug_io) catch {};
     }
 

@@ -32,10 +32,10 @@ pub const std_options: std.Options = .{
     // signal-safe handler runs and we get stable exit codes (134/136/139).
     .enable_segfault_handler = builtin.os.tag != .windows and std.debug.default_enable_segfault_handler,
 };
+var debug_threaded_io_instance: std.Io.Threaded = .init_single_threaded;
 /// Override the default debug IO so that `std.Options.debug_io` uses a properly
 /// initialized Threaded instance with a real allocator. Without this, the default
 /// `global_single_threaded` has `.allocator = .failing` and process spawning fails.
-var debug_threaded_io_instance: std.Io.Threaded = .init_single_threaded;
 pub const std_options_debug_threaded_io: *std.Io.Threaded = &debug_threaded_io_instance;
 const build_options = @import("build_options");
 const base = @import("base");

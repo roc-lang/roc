@@ -39,7 +39,7 @@ pub fn handler(comptime ServerType: type) type {
             };
             if (changes.items.len == 0) return;
 
-            var parsed_changes : std.ArrayList(DocumentStore.ContentChange) = .empty;
+            var parsed_changes: std.ArrayList(DocumentStore.ContentChange) = .empty;
             defer parsed_changes.deinit(self.allocator);
 
             for (changes.items) |change_value| {

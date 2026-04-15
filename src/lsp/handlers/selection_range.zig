@@ -75,7 +75,7 @@ pub fn handler(comptime ServerType: type) type {
             };
 
             // Process each position
-            var results : std.ArrayList(?SelectionRange) = .empty;
+            var results: std.ArrayList(?SelectionRange) = .empty;
             defer {
                 // Free the linked list nodes
                 for (results.items) |maybe_range| {
@@ -168,7 +168,7 @@ fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line:
     defer ast.deinit();
 
     // Collect all containing regions
-    var containing_regions : std.ArrayList(ByteRange) = .empty;
+    var containing_regions: std.ArrayList(ByteRange) = .empty;
     defer containing_regions.deinit(allocator);
 
     // 1. Find the token at the position (innermost)
@@ -209,7 +209,7 @@ fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line:
     }.lessThan);
 
     // Remove duplicates (regions with same start and end)
-    var unique_regions : std.ArrayList(ByteRange) = .empty;
+    var unique_regions: std.ArrayList(ByteRange) = .empty;
     defer unique_regions.deinit(allocator);
 
     var prev: ?ByteRange = null;

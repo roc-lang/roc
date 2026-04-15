@@ -195,7 +195,7 @@ fn hasSeenVar(self: *const TypeWriter, var_: Var) bool {
 const Format = enum { one_line, wrap };
 
 /// Writes the current var into the the writers buffer and returns a bytes slice
-pub fn writeGet(self: *TypeWriter, var_: Var, format: Format) error{OutOfMemory, WriteFailed}![]const u8 {
+pub fn writeGet(self: *TypeWriter, var_: Var, format: Format) error{ OutOfMemory, WriteFailed }![]const u8 {
     try self.write(var_, format);
     return self.get();
 }
@@ -208,7 +208,7 @@ pub fn get(self: *const TypeWriter) []const u8 {
 
 /// Writes a type variable to the buffer, formatting it as a human-readable string.
 /// This clears any existing content in the buffer before writing.
-pub fn write(self: *TypeWriter, var_: Var, format: Format) error{OutOfMemory, WriteFailed}!void {
+pub fn write(self: *TypeWriter, var_: Var, format: Format) error{ OutOfMemory, WriteFailed }!void {
     self.reset();
 
     var aw = collections_mod.managedWriter(&self.buf);
@@ -225,7 +225,7 @@ pub fn write(self: *TypeWriter, var_: Var, format: Format) error{OutOfMemory, Wr
 /// Writes a type variable to the provided buffer, formatting it as a human-readable string.
 /// This APPENDS to the provided buffer
 /// Internal TypeWriter state will be reset before processing
-pub fn writeInto(self: *TypeWriter, into: *std.array_list.Managed(u8), var_: Var, format: Format) error{OutOfMemory, WriteFailed}!void {
+pub fn writeInto(self: *TypeWriter, into: *std.array_list.Managed(u8), var_: Var, format: Format) error{ OutOfMemory, WriteFailed }!void {
     self.reset();
 
     var aw = collections_mod.managedWriter(into);
@@ -245,7 +245,7 @@ pub fn writeInto(self: *TypeWriter, into: *std.array_list.Managed(u8), var_: Var
 /// Writes a type variable to the buffer WITHOUT the where clause.
 /// Use this for nested types (function arguments, record fields, etc.) where the
 /// where clause should only appear at the top level of the complete type.
-pub fn writeWithoutConstraints(self: *TypeWriter, var_: Var) error{OutOfMemory, WriteFailed}!void {
+pub fn writeWithoutConstraints(self: *TypeWriter, var_: Var) error{ OutOfMemory, WriteFailed }!void {
     self.reset();
 
     var aw = collections_mod.managedWriter(&self.buf);
@@ -259,7 +259,7 @@ pub fn writeWithoutConstraints(self: *TypeWriter, var_: Var) error{OutOfMemory, 
 /// 1. All on same line: "where [a.plus : a -> a, b.minus : b -> b]"
 /// 2. All on next line: "\n  where [a.plus : a -> a, b.minus : b -> b]"
 /// 3. One per line: "\n  where [\n    a.plus : a -> a,\n    b.minus : b -> b,\n  ]"
-fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_len: usize, format: Format) error{OutOfMemory, WriteFailed}!void {
+fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_len: usize, format: Format) error{ OutOfMemory, WriteFailed }!void {
     // Ensure we have enough temp storage to collect dispatch constraints
     try self.static_dispatch_constraints_tmp.ensureUnusedCapacity(
         self.static_dispatch_constraints.items.len + 2,
@@ -377,7 +377,7 @@ fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_le
 }
 
 /// Convert a var to a type string
-fn writeVarWithContext(self: *TypeWriter, writer: *ByteWrite, var_: Var, context: TypeContext, root_var: Var) error{OutOfMemory, WriteFailed}!void {
+fn writeVarWithContext(self: *TypeWriter, writer: *ByteWrite, var_: Var, context: TypeContext, root_var: Var) error{ OutOfMemory, WriteFailed }!void {
     if (@intFromEnum(var_) >= self.types.slots.backing.len()) {
         // Variable is out of bounds - this can happen with corrupted type data
         try writer.writeAll("Error");
@@ -469,12 +469,12 @@ fn writeVarWithContext(self: *TypeWriter, writer: *ByteWrite, var_: Var, context
     }
 }
 
-fn writeVar(self: *TypeWriter, writer: *ByteWrite, var_: Var, root_var: Var) error{OutOfMemory, WriteFailed}!void {
+fn writeVar(self: *TypeWriter, writer: *ByteWrite, var_: Var, root_var: Var) error{ OutOfMemory, WriteFailed }!void {
     try self.writeVarWithContext(writer, var_, .General, root_var);
 }
 
 /// Write an alias type
-fn writeAlias(self: *TypeWriter, writer: *ByteWrite, alias: Alias, root_var: Var) error{OutOfMemory, WriteFailed}!void {
+fn writeAlias(self: *TypeWriter, writer: *ByteWrite, alias: Alias, root_var: Var) error{ OutOfMemory, WriteFailed }!void {
     try writer.writeAll(self.getDisplayName(alias.ident.ident_idx));
     var args_iter = self.types.iterAliasArgs(alias);
     if (args_iter.count() > 0) {
@@ -495,7 +495,7 @@ fn writeAlias(self: *TypeWriter, writer: *ByteWrite, alias: Alias, root_var: Var
 }
 
 /// Convert a flat type to a type string
-fn writeFlatType(self: *TypeWriter, writer: *ByteWrite, flat_type: FlatType, flat_type_var: Var, root_var: Var) error{OutOfMemory, WriteFailed}!void {
+fn writeFlatType(self: *TypeWriter, writer: *ByteWrite, flat_type: FlatType, flat_type_var: Var, root_var: Var) error{ OutOfMemory, WriteFailed }!void {
     switch (flat_type) {
         .tuple => |tuple| {
             try self.writeTuple(writer, tuple, root_var);
@@ -531,7 +531,7 @@ fn writeFlatType(self: *TypeWriter, writer: *ByteWrite, flat_type: FlatType, fla
 }
 
 /// Write a tuple type
-fn writeTuple(self: *TypeWriter, writer: *ByteWrite, tuple: Tuple, root_var: Var) error{OutOfMemory, WriteFailed}!void {
+fn writeTuple(self: *TypeWriter, writer: *ByteWrite, tuple: Tuple, root_var: Var) error{ OutOfMemory, WriteFailed }!void {
     const elems = self.types.sliceVars(tuple.elems);
     try writer.writeAll("(");
     for (elems, 0..) |elem, i| {
@@ -542,7 +542,7 @@ fn writeTuple(self: *TypeWriter, writer: *ByteWrite, tuple: Tuple, root_var: Var
 }
 
 /// Write a nominal type
-fn writeNominalType(self: *TypeWriter, writer: *ByteWrite, nominal_type: NominalType, root_var: Var) error{OutOfMemory, WriteFailed}!void {
+fn writeNominalType(self: *TypeWriter, writer: *ByteWrite, nominal_type: NominalType, root_var: Var) error{ OutOfMemory, WriteFailed }!void {
     try writer.writeAll(self.getDisplayName(nominal_type.ident.ident_idx));
 
     var args_iter = self.types.iterNominalArgs(nominal_type);
@@ -563,7 +563,7 @@ fn writeNominalType(self: *TypeWriter, writer: *ByteWrite, nominal_type: Nominal
 }
 
 /// Write a function type with a specific arrow (`->` or `=>`)
-fn writeFuncWithArrow(self: *TypeWriter, writer: *ByteWrite, func: Func, arrow: []const u8, root_var: Var) error{OutOfMemory, WriteFailed}!void {
+fn writeFuncWithArrow(self: *TypeWriter, writer: *ByteWrite, func: Func, arrow: []const u8, root_var: Var) error{ OutOfMemory, WriteFailed }!void {
     const args = self.types.sliceVars(func.args);
 
     // Write arguments
@@ -584,7 +584,7 @@ fn writeFuncWithArrow(self: *TypeWriter, writer: *ByteWrite, func: Func, arrow: 
 }
 
 /// Write a record type
-fn writeRecord(self: *TypeWriter, writer: *ByteWrite, record: Record, root_var: Var) error{OutOfMemory, WriteFailed}!void {
+fn writeRecord(self: *TypeWriter, writer: *ByteWrite, record: Record, root_var: Var) error{ OutOfMemory, WriteFailed }!void {
     const scratch_fields_top = self.scratch_record_fields.items.len;
     defer self.scratch_record_fields.shrinkRetainingCapacity(scratch_fields_top);
 
@@ -795,7 +795,7 @@ fn gatherTags(self: *TypeWriter, tags: Tag.SafeMultiList.Range, initial_ext: Var
 /// `flex` extension var. Because of this, we have to count the occurrences of
 /// this unbound  record appearing in this type, to properly display the ext
 /// type.
-fn writeRecordUnbound(self: *TypeWriter, writer: *ByteWrite, fields: RecordField.SafeMultiList.Range, record_unbound_var: Var, root_var: Var) error{OutOfMemory, WriteFailed}!void {
+fn writeRecordUnbound(self: *TypeWriter, writer: *ByteWrite, fields: RecordField.SafeMultiList.Range, record_unbound_var: Var, root_var: Var) error{ OutOfMemory, WriteFailed }!void {
     var unbound_ext_occurrences: usize = 0;
     if (record_unbound_var != root_var) {
         unbound_ext_occurrences = try self.countVarOccurrences(record_unbound_var, root_var);
@@ -832,7 +832,7 @@ fn writeRecordUnbound(self: *TypeWriter, writer: *ByteWrite, fields: RecordField
 }
 
 /// Write a tag union type
-fn writeTagUnion(self: *TypeWriter, writer: *ByteWrite, tag_union: TagUnion, root_var: Var) error{OutOfMemory, WriteFailed}!void {
+fn writeTagUnion(self: *TypeWriter, writer: *ByteWrite, tag_union: TagUnion, root_var: Var) error{ OutOfMemory, WriteFailed }!void {
     // Bounds check the tags range before iterating
     const tags_start_idx = @intFromEnum(tag_union.tags.start);
     const tags_len = self.types.tags.len();
@@ -905,7 +905,7 @@ fn writeTagUnion(self: *TypeWriter, writer: *ByteWrite, tag_union: TagUnion, roo
 }
 
 /// Write a single tag
-fn writeTag(self: *TypeWriter, writer: *ByteWrite, tag: Tag, root_var: Var) error{OutOfMemory, WriteFailed}!void {
+fn writeTag(self: *TypeWriter, writer: *ByteWrite, tag: Tag, root_var: Var) error{ OutOfMemory, WriteFailed }!void {
     try writer.writeAll(self.getIdent(tag.name));
     const args = self.types.sliceVars(tag.args);
     if (args.len > 0) {
@@ -920,7 +920,7 @@ fn writeTag(self: *TypeWriter, writer: *ByteWrite, tag: Tag, root_var: Var) erro
 
 /// Format a single tag and return the result as a string slice.
 /// The returned slice is only valid until the next call to any write method.
-pub fn writeTagGet(self: *TypeWriter, tag: Tag, root_var: Var) error{OutOfMemory, WriteFailed}![]const u8 {
+pub fn writeTagGet(self: *TypeWriter, tag: Tag, root_var: Var) error{ OutOfMemory, WriteFailed }![]const u8 {
     self.reset();
     var aw = collections_mod.managedWriter(&self.buf);
     try self.writeTag(&aw.writer, tag, root_var);
@@ -929,7 +929,7 @@ pub fn writeTagGet(self: *TypeWriter, tag: Tag, root_var: Var) error{OutOfMemory
 }
 
 /// Append a constraint with its dispatcher var to the list, if it doesn't already exist
-fn appendStaticDispatchConstraint(self: *TypeWriter, dispatcher_var: Var, constraint_to_add: types_mod.StaticDispatchConstraint) error{OutOfMemory, WriteFailed}!void {
+fn appendStaticDispatchConstraint(self: *TypeWriter, dispatcher_var: Var, constraint_to_add: types_mod.StaticDispatchConstraint) error{ OutOfMemory, WriteFailed }!void {
     for (self.static_dispatch_constraints.items) |item| {
         if (item.constraint.fn_name == constraint_to_add.fn_name and item.constraint.fn_var == constraint_to_add.fn_var) {
             return;
@@ -942,7 +942,7 @@ fn appendStaticDispatchConstraint(self: *TypeWriter, dispatcher_var: Var, constr
 }
 
 /// Generate a name for a flex var that may appear multiple times in the type
-pub fn writeFlexVarName(self: *TypeWriter, writer: *ByteWrite, var_: Var, context: TypeContext, root_var: Var) error{OutOfMemory, WriteFailed}!void {
+pub fn writeFlexVarName(self: *TypeWriter, writer: *ByteWrite, var_: Var, context: TypeContext, root_var: Var) error{ OutOfMemory, WriteFailed }!void {
     const resolved_var = self.types.resolveVar(var_).var_;
 
     // If resolved var is out of bounds, it's corrupted - just write a simple name
@@ -1149,7 +1149,7 @@ fn getDisplayName(self: *const TypeWriter, idx: Ident.Idx) []const u8 {
     return name;
 }
 
-fn generateContextualName(self: *TypeWriter, writer: *ByteWrite, context: TypeContext) error{OutOfMemory, WriteFailed}!void {
+fn generateContextualName(self: *TypeWriter, writer: *ByteWrite, context: TypeContext) error{ OutOfMemory, WriteFailed }!void {
     const base_name = switch (context) {
         .NumContent => "size",
         .ListContent => "elem",
@@ -1208,7 +1208,7 @@ fn generateContextualName(self: *TypeWriter, writer: *ByteWrite, context: TypeCo
     self.name_counters.put(context, counter + 1);
 }
 
-fn generateNextName(self: *TypeWriter, writer: *ByteWrite) error{OutOfMemory, WriteFailed}!void {
+fn generateNextName(self: *TypeWriter, writer: *ByteWrite) error{ OutOfMemory, WriteFailed }!void {
     // Generate name: a, b, ..., z, aa, ab, ..., az, ba, ...
     // Skip any names that already exist in the identifier store
     // We need at most one more name than the number of existing identifiers

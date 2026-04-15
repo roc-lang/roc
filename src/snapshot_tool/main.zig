@@ -1258,7 +1258,7 @@ fn processSnapshotContent(
         };
         defer md_file.close(std.Options.debug_io);
 
-        try md_file.writeStreamingAll(std.Options.debug_io,md_buffer_unmanaged.items);
+        try md_file.writeStreamingAll(std.Options.debug_io, md_buffer_unmanaged.items);
 
         if (html_buffer_unmanaged) |*buf| {
             writeHtmlFile(allocator, output_path, buf) catch |err| {
@@ -3613,7 +3613,7 @@ fn processDocsSnapshot(
     };
     defer md_file.close(std.Options.debug_io);
 
-    try md_file.writeStreamingAll(std.Options.debug_io,md_buffer.items);
+    try md_file.writeStreamingAll(std.Options.debug_io, md_buffer.items);
     return success;
 }
 
@@ -4146,7 +4146,7 @@ fn processDevObjectSnapshot(
     };
     defer md_file.close(std.Options.debug_io);
 
-    try md_file.writeStreamingAll(std.Options.debug_io,md_buffer.items);
+    try md_file.writeStreamingAll(std.Options.debug_io, md_buffer.items);
     return success;
 }
 
@@ -4714,7 +4714,7 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
         };
         defer md_file.close(std.Options.debug_io);
 
-        try md_file.writeStreamingAll(std.Options.debug_io,md_buffer_unmanaged.items);
+        try md_file.writeStreamingAll(std.Options.debug_io, md_buffer_unmanaged.items);
 
         if (html_buffer_unmanaged) |*buf| {
             writeHtmlFile(allocator, output_path, buf) catch |err| {
