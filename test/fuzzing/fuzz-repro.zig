@@ -68,8 +68,17 @@ pub fn main(init: std.process.Init) !void {
         }
         // No input data, just read from stdin.
         std.debug.print("Reading bytes for repro from stdin\n", .{});
-        const bytes = try std.Io.File.stdin().readToEndAlloc(gpa, @intCast(MAX_SIZE));
-        defer gpa.free(bytes);
+        var read_buf: [4096]u8 = undefined;
+        var stdin_reader = std.Io.File.stdin().readerStreaming(init.io, &read_buf);
+        var contents: std.ArrayList(u8) = .empty;
+        defer contents.deinit(gpa);
+        while (true) {
+            const buf = contents.addManyAsSlice(gpa, 4096) catch return error.OutOfMemory;
+            const n = stdin_reader.interface.readSliceShort(buf) catch break;
+            if (n == 0) break;
+            contents.shrinkRetainingCapacity(contents.items.len - 4096 + n);
+        }
+        const bytes = contents.items;
 
         fuzz_test.zig_fuzz_init();
         fuzz_test.zig_fuzz_test_inner(bytes.ptr, @intCast(bytes.len), verbose);
