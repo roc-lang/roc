@@ -14,6 +14,8 @@ const Io = cli_ctx.Io;
 const fs = std.fs;
 const process = std.process;
 
+var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
+
 /// Information about the system's libc installation
 pub const LibcInfo = struct {
     /// Path to the dynamic linker (e.g., /lib64/ld-linux-x86-64.so.2)
@@ -79,12 +81,12 @@ fn findViaCompiler(arena: std.mem.Allocator) !?LibcInfo {
         // TODO: Do we need to do something with this process' stdout,
         // or is this only here to continue to the next iteration?
         // Could be that it was forgotten before I refactored it and now to intent is lost.
-        _ = process.run(arena, std.Options.debug_io, .{
+        _ = process.run(arena, app_sys_io, .{
             .argv = &[_][]const u8{ compiler, ld_cmd },
         }) catch continue;
 
         // Try to get libc path from compiler
-        const libc_result = process.run(arena, std.Options.debug_io, .{
+        const libc_result = process.run(arena, app_sys_io, .{
             .argv = &[_][]const u8{ compiler, "-print-file-name=libc.so" },
         }) catch continue;
 
@@ -95,8 +97,8 @@ fn findViaCompiler(arena: std.mem.Allocator) !?LibcInfo {
         if (!validatePath(libc_path)) continue;
 
         // Verify the file exists and close it properly
-        const libc_file = std.Io.Dir.openFileAbsolute(std.Options.debug_io, libc_path, .{}) catch continue;
-        libc_file.close(std.Options.debug_io);
+        const libc_file = std.Io.Dir.openFileAbsolute(app_sys_io, libc_path, .{}) catch continue;
+        libc_file.close(app_sys_io);
 
         const lib_dir = fs.path.dirname(libc_path) orelse continue;
 
@@ -124,8 +126,8 @@ fn findViaFilesystem(arena: std.mem.Allocator) !LibcInfo {
 
     // Search for libc in standard paths
     for (search_paths) |lib_dir| {
-        var dir = std.Io.Dir.openDirAbsolute(std.Options.debug_io, lib_dir, .{}) catch continue;
-        defer dir.close(std.Options.debug_io);
+        var dir = std.Io.Dir.openDirAbsolute(app_sys_io, lib_dir, .{}) catch continue;
+        defer dir.close(app_sys_io);
 
         // Support both glibc and musl
         const libc_names = [_][]const u8{
@@ -141,8 +143,8 @@ fn findViaFilesystem(arena: std.mem.Allocator) !LibcInfo {
             const libc_path = try fs.path.join(arena, &[_][]const u8{ lib_dir, libc_name });
 
             // Check if file exists and close it properly
-            const libc_file = std.Io.Dir.openFileAbsolute(std.Options.debug_io, libc_path, .{}) catch continue;
-            libc_file.close(std.Options.debug_io);
+            const libc_file = std.Io.Dir.openFileAbsolute(app_sys_io, libc_path, .{}) catch continue;
+            libc_file.close(app_sys_io);
 
             // Try to find dynamic linker
             const dynamic_linker = try findDynamicLinker(arena, arch, lib_dir) orelse continue;
@@ -182,8 +184,8 @@ fn findDynamicLinker(arena: std.mem.Allocator, arch: []const u8, lib_dir: []cons
     for (ld_names) |ld_name| {
         const path = try fs.path.join(arena, &[_][]const u8{ lib_dir, ld_name });
 
-        if (std.Io.Dir.openFileAbsolute(std.Options.debug_io, path, .{})) |file| {
-            file.close(std.Options.debug_io);
+        if (std.Io.Dir.openFileAbsolute(app_sys_io, path, .{})) |file| {
+            file.close(app_sys_io);
             return path;
         } else |_| {}
     }
@@ -202,8 +204,8 @@ fn findDynamicLinker(arena: std.mem.Allocator, arch: []const u8, lib_dir: []cons
         for (ld_names) |ld_name| {
             const path = try fs.path.join(arena, &[_][]const u8{ search_dir, ld_name });
 
-            if (std.Io.Dir.openFileAbsolute(std.Options.debug_io, path, .{})) |file| {
-                file.close(std.Options.debug_io);
+            if (std.Io.Dir.openFileAbsolute(app_sys_io, path, .{})) |file| {
+                file.close(app_sys_io);
                 return path;
             } else |_| {}
         }
@@ -214,7 +216,7 @@ fn findDynamicLinker(arena: std.mem.Allocator, arch: []const u8, lib_dir: []cons
 
 /// Get system architecture using uname
 fn getArchitecture(arena: std.mem.Allocator) ![]const u8 {
-    const result = try process.run(arena, std.Options.debug_io, .{
+    const result = try process.run(arena, app_sys_io, .{
         .argv = &[_][]const u8{ "uname", "-m" },
     });
 
@@ -280,7 +282,7 @@ fn getSearchPaths(arena: std.mem.Allocator, arch: []const u8) ![]const []const u
 /// Get multiarch triplet (e.g., x86_64-linux-gnu)
 fn getMultiarchTriplet(arena: std.mem.Allocator, arch: []const u8) ![]const u8 {
     // Try to get from gcc first
-    const result = process.run(arena, std.Options.debug_io, .{
+    const result = process.run(arena, app_sys_io, .{
         .argv = &[_][]const u8{ "gcc", "-dumpmachine" },
     }) catch |err| switch (err) {
         error.FileNotFound => {
@@ -329,16 +331,16 @@ test "libc detection integration test" {
     try std.testing.expect(validatePath(libc_info.libc_path));
 
     // Verify the dynamic linker file exists and is accessible
-    const ld_file = std.Io.Dir.openFileAbsolute(std.Options.debug_io, libc_info.dynamic_linker, .{}) catch |err| {
+    const ld_file = std.Io.Dir.openFileAbsolute(app_sys_io, libc_info.dynamic_linker, .{}) catch |err| {
         std.log.err("Dynamic linker not accessible at {s}: {}", .{ libc_info.dynamic_linker, err });
         return err;
     };
-    ld_file.close(std.Options.debug_io);
+    ld_file.close(app_sys_io);
 
     // Verify the libc file exists and is accessible
-    const libc_file = std.Io.Dir.openFileAbsolute(std.Options.debug_io, libc_info.libc_path, .{}) catch |err| {
+    const libc_file = std.Io.Dir.openFileAbsolute(app_sys_io, libc_info.libc_path, .{}) catch |err| {
         std.log.err("Libc not accessible at {s}: {}", .{ libc_info.libc_path, err });
         return err;
     };
-    libc_file.close(std.Options.debug_io);
+    libc_file.close(app_sys_io);
 }

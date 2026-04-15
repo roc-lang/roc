@@ -3,7 +3,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
-const Io = @import("io").Io;
+const RocIo = @import("io").RocIo;
 
 /// Color preference for reporting output
 pub const ColorPreference = enum {
@@ -59,12 +59,12 @@ pub const ReportingConfig = struct {
         // Use page_allocator on non-freestanding targets, undefined on freestanding
         // (freestanding doesn't use the allocator in initFromEnv since env checks are skipped)
         const allocator = if (comptime builtin.target.os.tag == .freestanding) undefined else std.heap.page_allocator;
-        return initFromEnv(allocator, Io.default()) catch |err| switch (err) {
+        return initFromEnv(allocator, RocIo.default()) catch |err| switch (err) {
             error.OutOfMemory => @panic("Out of memory while initializing reporting config"),
         };
     }
 
-    pub fn initFromEnv(allocator: Allocator, io: Io) !ReportingConfig {
+    pub fn initFromEnv(allocator: Allocator, roc_io: RocIo) !ReportingConfig {
         var config = ReportingConfig{
             .color_preference = .auto,
             .is_tty = false,
@@ -77,7 +77,7 @@ pub const ReportingConfig = struct {
         };
 
         // Check if output is TTY
-        config.is_tty = io.isTty();
+        config.is_tty = roc_io.isTty();
 
         // Environment variable checks only available on non-freestanding targets
         if (comptime builtin.target.os.tag != .freestanding) {

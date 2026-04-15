@@ -31,6 +31,8 @@ const selection_range_handler_mod = @import("handlers/selection_range.zig");
 const document_highlight_handler_mod = @import("handlers/document_highlight.zig");
 const completion_handler_mod = @import("handlers/completion.zig");
 
+var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
+
 const log = std.log.scoped(.roc_lsp_server);
 
 /// Factory for the Roc LSP server. Handles the state and request handlers.
@@ -294,9 +296,9 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
             var file = self.log_file orelse return;
             var buffer: [256]u8 = undefined;
             const msg = std.fmt.bufPrint(&buffer, fmt, args) catch return;
-            file.writeStreamingAll(std.Options.debug_io, msg) catch return;
-            file.writeStreamingAll(std.Options.debug_io, "\n") catch {};
-            file.sync(std.Options.debug_io) catch {};
+            file.writeStreamingAll(app_sys_io, msg) catch return;
+            file.writeStreamingAll(app_sys_io, "\n") catch {};
+            file.sync(app_sys_io) catch {};
         }
 
         /// Returns the stored document (testing helper; returns null outside tests).
@@ -314,8 +316,8 @@ pub fn runWithStdIo(allocator: std.mem.Allocator, debug: DebugOptions) !void {
 
     var stdin_buffer: [4096]u8 = undefined;
     var stdout_buffer: [4096]u8 = undefined;
-    const reader = stdin_file.readerStreaming(std.Options.debug_io, &stdin_buffer);
-    const writer = stdout_file.writerStreaming(std.Options.debug_io, &stdout_buffer);
+    const reader = stdin_file.readerStreaming(app_sys_io, &stdin_buffer);
+    const writer = stdout_file.writerStreaming(app_sys_io, &stdout_buffer);
 
     var log_file: ?std.Io.File = null;
     const enable_logging = debug.transport or debug.build or debug.syntax or debug.server;
@@ -323,14 +325,14 @@ pub fn runWithStdIo(allocator: std.mem.Allocator, debug: DebugOptions) !void {
         const log_info = try createLogFile(allocator);
         log_file = log_info.file;
         const stderr_file = std.Io.File.stderr();
-        stderr_file.writeStreamingAll(std.Options.debug_io, "roc-lsp logging to ") catch {};
-        stderr_file.writeStreamingAll(std.Options.debug_io, log_info.path) catch {};
-        stderr_file.writeStreamingAll(std.Options.debug_io, "\n") catch {};
+        stderr_file.writeStreamingAll(app_sys_io, "roc-lsp logging to ") catch {};
+        stderr_file.writeStreamingAll(app_sys_io, log_info.path) catch {};
+        stderr_file.writeStreamingAll(app_sys_io, "\n") catch {};
         allocator.free(log_info.path);
         const divider = "\n===== roc-lsp session start =====\n";
-        log_file.?.writeStreamingAll(std.Options.debug_io, divider) catch {};
-        log_file.?.writeStreamingAll(std.Options.debug_io, "\n") catch {};
-        log_file.?.sync(std.Options.debug_io) catch {};
+        log_file.?.writeStreamingAll(app_sys_io, divider) catch {};
+        log_file.?.writeStreamingAll(app_sys_io, "\n") catch {};
+        log_file.?.sync(app_sys_io) catch {};
     }
 
     const StdServer = Server(@TypeOf(reader), @TypeOf(writer));
@@ -340,7 +342,7 @@ pub fn runWithStdIo(allocator: std.mem.Allocator, debug: DebugOptions) !void {
 
     if (log_file) |file| {
         if (!debug.transport) {
-            file.close(std.Options.debug_io);
+            file.close(app_sys_io);
         }
     }
 }
@@ -356,11 +358,11 @@ fn createLogFile(allocator: std.mem.Allocator) !LogFileInfo {
     const filename = try allocator.dupe(u8, "roc-lsp-debug.log");
     defer allocator.free(filename);
     const absolute_path = try std.fs.path.resolve(allocator, &.{ dir_path, filename });
-    const file = std.Io.Dir.createFileAbsolute(std.Options.debug_io, absolute_path, .{
+    const file = std.Io.Dir.createFileAbsolute(app_sys_io, absolute_path, .{
         .truncate = false,
         .read = true,
     }) catch |err| switch (err) {
-        error.PathAlreadyExists => try std.Io.Dir.openFileAbsolute(std.Options.debug_io, absolute_path, .{
+        error.PathAlreadyExists => try std.Io.Dir.openFileAbsolute(app_sys_io, absolute_path, .{
             .mode = .read_write,
         }),
         else => return err,

@@ -4,4 +4,4 @@
 //! operations and stdio, allowing easy testing and alternative implementations
 //! (e.g. WASM playground, in-memory test mocks).
 
-pub const Io = @import("Io.zig");
+pub const RocIo = @import("Io.zig");

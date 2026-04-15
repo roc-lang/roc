@@ -78,7 +78,7 @@ const DiscoveredExternalImport = messages.DiscoveredExternalImport;
 const OwnedSemanticModuleData = messages.OwnedSemanticModuleData;
 
 const Channel = channel.Channel;
-const Io = @import("io").Io;
+const RocIo = @import("io").RocIo;
 
 const Mode = compile_package.Mode;
 
@@ -534,7 +534,10 @@ pub const Coordinator = struct {
     builtin_modules: *const BuiltinModules,
 
     /// I/O abstraction for reading sources and other filesystem/stdio operations.
-    io: Io,
+    roc_io: RocIo,
+
+    /// System IO for std library operations (mutexes, timestamps, file ops).
+    sys_io: std.Io,
 
     /// Compiler version for cache keys
     compiler_version: []const u8,
@@ -598,6 +601,7 @@ pub const Coordinator = struct {
         builtin_modules: *const BuiltinModules,
         compiler_version: []const u8,
         cache_manager: ?*CacheManager,
+        sys_io: std.Io,
     ) !Coordinator {
         // Both channels use smp_allocator in multi-threaded mode because their
         // buffers may be grown (task_channel) or accessed from worker threads.
@@ -611,14 +615,15 @@ pub const Coordinator = struct {
             .max_threads = max_threads,
             .target = target,
             .packages = std.StringHashMap(*PackageState).init(gpa),
-            .result_channel = try Channel(WorkerResult).init(channel_allocator, channel.DEFAULT_CAPACITY),
-            .task_channel = try Channel(WorkerTask).init(channel_allocator, initial_task_capacity),
+            .result_channel = try Channel(WorkerResult).init(channel_allocator, channel.DEFAULT_CAPACITY, sys_io),
+            .task_channel = try Channel(WorkerTask).init(channel_allocator, initial_task_capacity, sys_io),
             .workers = std.ArrayList(Thread).empty,
             .inflight = std.atomic.Value(usize).init(0),
             .shutting_down = std.atomic.Value(bool).init(false),
             .total_remaining = 0,
             .builtin_modules = builtin_modules,
-            .io = Io.default(),
+            .roc_io = RocIo.default(),
+            .sys_io = sys_io,
             .compiler_version = compiler_version,
             .cache_manager = cache_manager,
             .cross_package_dependents = std.StringHashMap(std.ArrayList(ModuleRef)).init(gpa),
@@ -693,8 +698,8 @@ pub const Coordinator = struct {
     }
 
     /// Set the I/O implementation (or reset to OS default).
-    pub fn setIo(self: *Coordinator, io: ?Io) void {
-        self.io = io orelse Io.default();
+    pub fn setRocIo(self: *Coordinator, roc_io: ?RocIo) void {
+        self.roc_io = roc_io orelse RocIo.default();
     }
 
     /// Get the allocator to use for module data.
@@ -1663,7 +1668,7 @@ pub const Coordinator = struct {
         if (comptime builtin.mode == .Debug) {
             var buf: [2048]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf, fmt, args) catch fmt;
-            self.io.writeStderr(msg) catch {};
+            self.roc_io.writeStderr(msg) catch {};
         }
     }
 
@@ -1939,6 +1944,108 @@ pub const Coordinator = struct {
         self.cache_misses += 1;
         self.modules_compiled += 1;
 
+        // Store to cache
+        if (self.cache_manager) |cache| {
+            if (mod.env) |env| {
+                // Compute source hash for metadata
+                const source_hash = CacheManager.computeSourceHash(env.common.source);
+
+                // Compute full cache key (source + compiler_version)
+                const full_cache_key = CacheManager.generateCacheKey(env.common.source, self.compiler_version);
+
+                // Collect import info for metadata
+                // Note: We use owned strings that we free after storing
+                var imports = std.ArrayList(ImportInfo).empty;
+                defer {
+                    for (imports.items) |*imp| {
+                        imp.deinit(self.gpa);
+                    }
+                    imports.deinit(self.gpa);
+                }
+
+                // Add local imports (dupe strings since we'll free them)
+                // Read source files directly to compute hashes (more reliable than env)
+                for (mod.imports.items) |imp_id| {
+                    if (pkg.getModule(imp_id)) |imp_mod| {
+                        // Compute source hash by reading the file
+                        var imp_source_hash: [32]u8 = std.mem.zeroes([32]u8);
+                        const imp_path = self.resolveModulePath(pkg.root_dir, imp_mod.name) catch null;
+                        if (imp_path) |path| {
+                            defer self.gpa.free(path);
+                            if (self.roc_io.readFile(path, self.gpa) catch null) |source| {
+                                defer self.gpa.free(source);
+                                imp_source_hash = CacheManager.computeSourceHash(source);
+                            }
+                        }
+
+                        const mod_name = self.gpa.dupe(u8, imp_mod.name) catch continue;
+                        imports.append(self.gpa, .{
+                            .package = "", // Local import - empty string, not owned
+                            .module = mod_name,
+                            .source_hash = imp_source_hash,
+                        }) catch {
+                            self.gpa.free(mod_name);
+                            continue;
+                        };
+                    }
+                }
+
+                // Add external imports (these have format "pkg.Module")
+                for (mod.external_imports.items) |ext_name| {
+                    if (base.module_path.parseQualifiedImport(ext_name)) |qualified| {
+                        // Resolve the external package and compute source hash by reading file
+                        var imp_source_hash: [32]u8 = std.mem.zeroes([32]u8);
+                        if (pkg.shorthands.get(qualified.qualifier)) |ext_pkg_name| {
+                            if (self.packages.get(ext_pkg_name)) |ext_pkg| {
+                                const imp_path = self.resolveModulePath(ext_pkg.root_dir, qualified.module) catch null;
+                                if (imp_path) |path| {
+                                    defer self.gpa.free(path);
+                                    if (self.roc_io.readFile(path, self.gpa) catch null) |source| {
+                                        defer self.gpa.free(source);
+                                        imp_source_hash = CacheManager.computeSourceHash(source);
+                                    }
+                                }
+                            }
+                        }
+
+                        const pkg_part = self.gpa.dupe(u8, qualified.qualifier) catch continue;
+                        const mod_part = self.gpa.dupe(u8, qualified.module) catch {
+                            self.gpa.free(pkg_part);
+                            continue;
+                        };
+                        imports.append(self.gpa, .{
+                            .package = pkg_part,
+                            .module = mod_part,
+                            .source_hash = imp_source_hash,
+                        }) catch {
+                            self.gpa.free(pkg_part);
+                            self.gpa.free(mod_part);
+                            continue;
+                        };
+                    }
+                }
+
+                // Count errors and warnings
+                var error_count: u32 = 0;
+                var warning_count: u32 = 0;
+                for (mod.reports.items) |*rep| {
+                    if (rep.severity == .fatal or rep.severity == .runtime_error) {
+                        error_count += 1;
+                    } else if (rep.severity == .warning) {
+                        warning_count += 1;
+                    }
+                }
+
+                // Store metadata for fast path lookup
+                cache.storeMetadata(source_hash, full_cache_key, imports.items, error_count, warning_count) catch {};
+
+                // Store full cache
+                cache.store(full_cache_key, env, error_count, warning_count) catch {};
+
+                // imports are freed by the defer block above
+            }
+        }
+
         // Decrement counters
         if (pkg.remaining_modules > 0) pkg.remaining_modules -= 1;
         if (self.total_remaining > 0) self.total_remaining -= 1;
@@ -2029,6 +2136,331 @@ pub const Coordinator = struct {
         // Decrement counters
         if (pkg.remaining_modules > 0) pkg.remaining_modules -= 1;
         if (self.total_remaining > 0) self.total_remaining -= 1;
+    }
+
+    /// Handle a cache hit result (fast path)
+    fn handleCacheHit(self: *Coordinator, result: *CacheHitResult) !void {
+        if (comptime trace_build) {
+            std.debug.print("[COORD] CACHE HIT (fast path): pkg={s} module={s} imports={}\n", .{
+                result.package_name,
+                result.module_name,
+                result.imports.len,
+            });
+        }
+
+        const pkg = self.packages.get(result.package_name) orelse {
+            self.bugReport("BUG: package '{s}' not found for cache_hit result (module={s}, id={})\n", .{
+                result.package_name, result.module_name, result.module_id,
+            });
+            unreachable;
+        };
+        const mod = pkg.getModule(result.module_id) orelse {
+            self.bugReport("BUG: module id={} not found in package '{s}' for cache_hit result (module={s})\n", .{
+                result.module_id, result.package_name, result.module_name,
+            });
+            unreachable;
+        };
+
+        // Store cache buffer to keep it alive for the lifetime of module_env
+        // It will be freed when the coordinator is deinitialized
+        try self.cache_buffers.append(self.gpa, result.cache_data);
+
+        // Set module from cache - mark as Done immediately since env is complete
+        mod.env = result.module_env;
+        mod.was_cache_hit = true;
+        mod.phase = .Done;
+        mod.visit_color = .black;
+
+        // Update cache stats
+        self.cache_hits += 1;
+
+        // Decrement counters for this module (it's done)
+        if (pkg.remaining_modules > 0) pkg.remaining_modules -= 1;
+        if (self.total_remaining > 0) self.total_remaining -= 1;
+
+        // Process cached imports - ensure they get loaded too for serialization
+        // This is similar to processCanonicalizedResult but uses cached import info.
+        // The cached module is already Done, we just need its imports to be present
+        // in the coordinator so they can be serialized.
+        for (result.imports) |imp| {
+            // Skip Builtin - it's always available
+            if (std.mem.eql(u8, imp.module, "Builtin")) continue;
+
+            if (imp.package.len == 0) {
+                // Local import - same package
+                const path = self.resolveModulePath(pkg.root_dir, imp.module) catch continue;
+                defer self.gpa.free(path);
+
+                const child_id = try pkg.ensureModule(self.gpa, imp.module, path);
+                const child = pkg.getModule(child_id).?;
+
+                // Queue parse for new modules (will go through their own cache check)
+                if (child.phase == .Parse) {
+                    pkg.remaining_modules += 1;
+                    self.total_remaining += 1;
+                    try self.enqueueParseTask(result.package_name, child_id);
+                }
+
+                if (comptime trace_build) {
+                    std.debug.print("[COORD] CACHE HIT queued local import: {s}\n", .{imp.module});
+                }
+            } else {
+                // External import - resolve shorthand to package
+                const import_name = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ imp.package, imp.module });
+                defer self.gpa.free(import_name);
+
+                try self.scheduleExternalImport(result.package_name, import_name);
+
+                if (comptime trace_build) {
+                    std.debug.print("[COORD] CACHE HIT queued external import: {s}.{s}\n", .{ imp.package, imp.module });
+                }
+            }
+        }
+
+        // Free the imports slice now that we've processed them
+        for (result.imports) |*imp| {
+            var import_info = imp.*;
+            import_info.deinit(self.gpa);
+        }
+        self.gpa.free(result.imports);
+
+        // Refresh mod pointer after potential resizes from ensureModule calls
+        const mod_after_imports = pkg.getModule(result.module_id) orelse {
+            self.bugReport("BUG: module id={} not found in package '{s}' after imports in cache_hit handler (module={s})\n", .{
+                result.module_id, result.package_name, result.module_name,
+            });
+            unreachable;
+        };
+
+        // Wake dependents (they may now be able to use fast path too)
+        for (mod_after_imports.dependents.items) |dep_id| {
+            try self.tryUnblock(pkg, dep_id);
+        }
+        try self.wakeCrossPackageDependents(result.package_name, result.module_id);
+    }
+
+    /// Check if all imports in the list were cache hits in this build.
+    /// This is used for the fast path - if all dependencies were cache hits,
+    /// we can skip parsing/canonicalizing/type-checking and load directly from cache.
+    fn checkAllImportsCached(
+        self: *Coordinator,
+        source_pkg_name: []const u8,
+        imports: []const ImportInfo,
+    ) bool {
+        // Skip "Builtin" since it's always available and doesn't need caching check
+        for (imports) |imp| {
+            if (std.mem.eql(u8, imp.module, "Builtin")) continue;
+
+            // Determine the target package name
+            const pkg_name = if (imp.package.len == 0)
+                // Local import - use source package
+                source_pkg_name
+            else blk: {
+                // External import - resolve shorthand to package name
+                const source_pkg = self.packages.get(source_pkg_name) orelse {
+                    if (comptime trace_build) {
+                        std.debug.print("[COORD] checkAllImportsCached: source pkg {s} not found\n", .{source_pkg_name});
+                    }
+                    return false;
+                };
+                break :blk source_pkg.shorthands.get(imp.package) orelse {
+                    if (comptime trace_build) {
+                        std.debug.print("[COORD] checkAllImportsCached: shorthand {s} not found in {s}\n", .{ imp.package, source_pkg_name });
+                    }
+                    return false;
+                };
+            };
+
+            // Look up the package to get its root directory
+            const pkg = self.packages.get(pkg_name) orelse {
+                if (comptime trace_build) {
+                    std.debug.print("[COORD] checkAllImportsCached: pkg {s} not found\n", .{pkg_name});
+                }
+                return false;
+            };
+
+            // Resolve the import's file path
+            const module_path = self.resolveModulePath(pkg.root_dir, imp.module) catch {
+                if (comptime trace_build) {
+                    std.debug.print("[COORD] checkAllImportsCached: failed to resolve path for {s}.{s}\n", .{ pkg_name, imp.module });
+                }
+                return false;
+            };
+            defer self.gpa.free(module_path);
+
+            // Read the source file and compute its current hash
+            const source = self.roc_io.readFile(module_path, self.gpa) catch |err| {
+                if (comptime trace_build) switch (err) {
+                    error.FileNotFound => std.debug.print("[COORD] checkAllImportsCached: file not found {s}\n", .{module_path}),
+                    else => std.debug.print("[COORD] checkAllImportsCached: failed to read {s}\n", .{module_path}),
+                };
+                return false;
+            };
+            defer self.gpa.free(source);
+
+            // Compute current source hash and compare with stored hash
+            const current_hash = CacheManager.computeSourceHash(source);
+            if (!std.mem.eql(u8, &current_hash, &imp.source_hash)) {
+                // Dependency has changed since we cached
+                if (comptime trace_build) {
+                    std.debug.print("[COORD] checkAllImportsCached: {s}.{s} hash mismatch (file changed)\n", .{ pkg_name, imp.module });
+                }
+                return false;
+            }
+
+            if (comptime trace_build) {
+                std.debug.print("[COORD] checkAllImportsCached: {s}.{s} hash matches\n", .{ pkg_name, imp.module });
+            }
+        }
+
+        return true;
+    }
+
+    /// Try to load a module from cache before dispatching a parse task.
+    /// Returns true if cache hit (module is now Done), false if cache miss.
+    /// This runs in the coordinator, so it can safely access self.packages.
+    fn tryCacheHit(self: *Coordinator, pkg: *PackageState, mod: *ModuleState, module_id: ModuleId) bool {
+        const cache = self.cache_manager orelse return false;
+
+        // 1. Read source file
+        // Note: We cannot use defer to free source because on cache hit,
+        // the ModuleEnv stores a reference to the source.
+        const source = self.roc_io.readFile(mod.path, self.gpa) catch return false;
+
+        // 2. Compute source hash
+        const source_hash = CacheManager.computeSourceHash(source);
+
+        // 3. Look up metadata by source hash
+        var meta = cache.getMetadata(source_hash) orelse {
+            if (comptime trace_build) {
+                std.debug.print("[COORD] tryCacheHit MISS (no metadata): pkg={s} module={s}\n", .{
+                    pkg.name,
+                    mod.name,
+                });
+            }
+            self.gpa.free(source);
+            return false;
+        };
+
+        // 4. Verify all dependencies' hashes match their current source
+        if (!self.checkAllImportsCached(pkg.name, meta.imports)) {
+            if (comptime trace_build) {
+                std.debug.print("[COORD] tryCacheHit MISS (deps changed): pkg={s} module={s}\n", .{
+                    pkg.name,
+                    mod.name,
+                });
+            }
+            meta.deinit(self.gpa);
+            self.gpa.free(source);
+            return false;
+        }
+
+        // 5. Load full cache using the key from metadata
+        const cache_result = cache.loadFromCacheByKey(
+            meta.full_cache_key,
+            source,
+            mod.name,
+        );
+
+        if (cache_result != .hit) {
+            if (comptime trace_build) {
+                std.debug.print("[COORD] tryCacheHit MISS (cache load failed): pkg={s} module={s}\n", .{
+                    pkg.name,
+                    mod.name,
+                });
+            }
+            meta.deinit(self.gpa);
+            self.gpa.free(source);
+            return false;
+        }
+
+        if (comptime trace_build) {
+            std.debug.print("[COORD] tryCacheHit HIT: pkg={s} module={s} imports={}\n", .{
+                pkg.name,
+                mod.name,
+                meta.imports.len,
+            });
+        }
+
+        // 6. Apply cache hit - set module state
+        // Note: The module_env stores a reference to source, so we do NOT free source here.
+        // The source will be freed when the module is deinitialized.
+        mod.env = cache_result.hit.module_env;
+
+        // Override qualified_module_ident for cache correctness.
+        // The cache is keyed by file content, so the serialized value may be
+        // from a different package alias (e.g., "pf.Color" vs "platform.Color").
+        if (mod.env) |env| {
+            // Enable runtime inserts on the deserialized interner so we can add the qualified name.
+            env.common.idents.interner.enableRuntimeInserts(self.gpa) catch {};
+            var qualified_buf: [256]u8 = undefined;
+            if (std.fmt.bufPrint(&qualified_buf, "{s}.{s}", .{ pkg.name, mod.name })) |qname| {
+                env.qualified_module_ident = env.insertIdent(base.Ident.for_text(qname)) catch env.display_module_name_idx;
+            } else |_| {
+                env.qualified_module_ident = env.display_module_name_idx;
+            }
+        }
+
+        mod.was_cache_hit = true;
+        mod.phase = .Done;
+        mod.visit_color = .black;
+
+        // Store cache buffer to keep it alive
+        self.cache_buffers.append(self.gpa, cache_result.hit.cache_data) catch {};
+
+        // Update stats
+        self.cache_hits += 1;
+
+        // 7. Process imports from cached metadata
+        self.processCachedImportsForHit(pkg, module_id, meta.imports) catch {};
+
+        // Free metadata (imports have been processed)
+        meta.deinit(self.gpa);
+
+        return true;
+    }
+
+    /// Process imports from cached metadata after a cache hit.
+    /// Similar to handleCacheHit but called directly during enqueueParseTask.
+    fn processCachedImportsForHit(self: *Coordinator, pkg: *PackageState, module_id: ModuleId, imports: []const ImportInfo) !void {
+        for (imports) |imp| {
+            // Skip Builtin - it's always available
+            if (std.mem.eql(u8, imp.module, "Builtin")) continue;
+
+            if (imp.package.len == 0) {
+                // Local import - same package
+                const path = self.resolveModulePath(pkg.root_dir, imp.module) catch continue;
+                defer self.gpa.free(path);
+
+                const child_id = try pkg.ensureModule(self.gpa, imp.module, path);
+                const child = pkg.getModule(child_id).?;
+
+                // Track dependency for this module
+                const mod = pkg.getModule(module_id).?;
+                try mod.imports.append(self.gpa, child_id);
+
+                // Queue parse for new modules (will go through their own cache check)
+                if (child.phase == .Parse) {
+                    pkg.remaining_modules += 1;
+                    self.total_remaining += 1;
+                    try self.enqueueParseTask(pkg.name, child_id);
+                }
+
+                if (comptime trace_build) {
+                    std.debug.print("[COORD] tryCacheHit queued local import: {s}\n", .{imp.module});
+                }
+            } else {
+                // External import - resolve shorthand to package
+                const import_name = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ imp.package, imp.module });
+                defer self.gpa.free(import_name);
+
+                try self.scheduleExternalImport(pkg.name, import_name);
+
+                if (comptime trace_build) {
+                    std.debug.print("[COORD] tryCacheHit queued external import: {s}.{s}\n", .{ imp.package, imp.module });
+                }
+            }
+        }
     }
 
     /// Handle cycle detection inline during canonicalization result processing
@@ -2431,7 +2863,7 @@ pub const Coordinator = struct {
 
     /// Execute a parse task (pure function)
     fn executeParse(self: *Coordinator, task: ParseTask) WorkerResult {
-        const start_time = if (threads_available) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
+        const start_time = if (threads_available) std.Io.Timestamp.now(self.sys_io, .real).nanoseconds else 0;
 
         // Read source
         const src = self.readModuleSource(task.path) catch |err| {
@@ -2521,7 +2953,7 @@ pub const Coordinator = struct {
         // NOTE: allocators not freed here - cleanup happens in executeCanonicalize
         const parse_ast = parse.parse(&allocators, &env.common) catch {
             // Parse failed but we still have partial env
-            const end_time = if (threads_available) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
+            const end_time = if (threads_available) std.Io.Timestamp.now(self.sys_io, .real).nanoseconds else 0;
             return .{
                 .parsed = .{
                     .package_name = task.package_name,
@@ -2614,7 +3046,7 @@ pub const Coordinator = struct {
 
     /// Execute a canonicalize task (pure function)
     fn executeCanonicalize(self: *Coordinator, task: CanonicalizeTask) WorkerResult {
-        const start_time = if (threads_available) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
+        const start_time = if (threads_available) std.Io.Timestamp.now(self.sys_io, .real).nanoseconds else 0;
 
         const env = task.module_env;
         const ast = task.cached_ast;
@@ -2633,10 +3065,10 @@ pub const Coordinator = struct {
         ) catch {};
         self.gpa.free(task.imported_modules);
 
-        const canon_end = if (threads_available) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
+        const canon_end = if (threads_available) std.Io.Timestamp.now(self.sys_io, .real).nanoseconds else 0;
 
         // Collect diagnostics
-        const diag_start = if (threads_available) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
+        const diag_start = if (threads_available) std.Io.Timestamp.now(self.sys_io, .real).nanoseconds else 0;
         // Use worker allocator (thread-safe in multi-threaded mode) for result data
         const worker_alloc = self.getWorkerAllocator();
         // Pre-allocate to reduce allocation contention in multi-threaded mode
@@ -2648,7 +3080,7 @@ pub const Coordinator = struct {
             const rep = env.diagnosticToReport(d, worker_alloc, task.path) catch continue;
             reports.append(worker_alloc, rep) catch {};
         }
-        const diag_end = if (threads_available) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
+        const diag_end = if (threads_available) std.Io.Timestamp.now(self.sys_io, .real).nanoseconds else 0;
 
         // Free AST - deinit now handles both internal cleanup and self-destruction
         ast.deinit();
@@ -2671,7 +3103,7 @@ pub const Coordinator = struct {
 
     /// Execute a type-check task (pure function)
     fn executeTypeCheck(self: *Coordinator, task: TypeCheckTask) WorkerResult {
-        const start_time = if (threads_available) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
+        const start_time = if (threads_available) std.Io.Timestamp.now(self.sys_io, .real).nanoseconds else 0;
 
         const env = task.module_env;
 
@@ -2685,7 +3117,7 @@ pub const Coordinator = struct {
             task.imported_artifacts,
             task.available_artifacts,
             self.target,
-            self.io,
+            self.roc_io,
         ) catch {
             self.gpa.free(task.imported_envs);
             self.gpa.free(task.imported_artifacts);
@@ -2705,10 +3137,10 @@ pub const Coordinator = struct {
         };
         defer typecheck_output.deinit();
 
-        const check_end = if (threads_available) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
+        const check_end = if (threads_available) std.Io.Timestamp.now(self.sys_io, .real).nanoseconds else 0;
 
         // Collect diagnostics
-        const diag_start = if (threads_available) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
+        const diag_start = if (threads_available) std.Io.Timestamp.now(self.sys_io, .real).nanoseconds else 0;
         // Use worker allocator (thread-safe in multi-threaded mode) for result data
         const worker_alloc = self.getWorkerAllocator();
         // Pre-allocate to reduce allocation contention in multi-threaded mode
@@ -2749,7 +3181,7 @@ pub const Coordinator = struct {
             reports.append(worker_alloc, rep) catch {};
         }
 
-        const diag_end = if (threads_available) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
+        const diag_end = if (threads_available) std.Io.Timestamp.now(self.sys_io, .real).nanoseconds else 0;
 
         // Free imported_envs slice (owned by coordinator)
         self.gpa.free(task.imported_envs);
@@ -2776,7 +3208,7 @@ pub const Coordinator = struct {
     /// Read module source using the Io abstraction.
     fn readModuleSource(self: *Coordinator, path: []const u8) ![]u8 {
         const module_alloc = self.getModuleAllocator();
-        const data = self.io.readFile(path, module_alloc) catch |err| switch (err) {
+        const data = self.roc_io.readFile(path, module_alloc) catch |err| switch (err) {
             error.FileNotFound => return error.FileNotFound,
             error.OutOfMemory => return error.OutOfMemory,
             else => return error.FileNotFound,
@@ -2829,6 +3261,7 @@ test "Coordinator basic initialization" {
         undefined, // builtin_modules - not used in this test
         "test",
         null, // cache_manager
+        std.Io.Threaded.global_single_threaded.io(),
     );
     defer coord.deinit();
 
@@ -2848,6 +3281,7 @@ test "Coordinator package creation" {
         undefined,
         "test",
         null, // cache_manager
+        std.Io.Threaded.global_single_threaded.io(),
     );
     defer coord.deinit();
 
@@ -2873,6 +3307,7 @@ test "Coordinator module creation" {
         undefined,
         "test",
         null, // cache_manager
+        std.Io.Threaded.global_single_threaded.io(),
     );
     defer coord.deinit();
 
@@ -2900,6 +3335,7 @@ test "Coordinator task queue" {
         undefined,
         "test",
         null, // cache_manager
+        std.Io.Threaded.global_single_threaded.io(),
     );
     defer coord.deinit();
 
@@ -2938,6 +3374,7 @@ test "Coordinator isComplete logic" {
         undefined,
         "test",
         null, // cache_manager
+        std.Io.Threaded.global_single_threaded.io(),
     );
     defer coord.deinit();
 
@@ -2985,6 +3422,7 @@ test "Coordinator isComplete with multi_threaded max_threads=0 (inline execution
         undefined,
         "test",
         null, // cache_manager
+        std.Io.Threaded.global_single_threaded.io(),
     );
     defer coord.deinit();
 
@@ -3022,6 +3460,7 @@ test "Coordinator shutdown does not drain buffered tasks" {
         undefined,
         "test",
         null, // cache_manager
+        std.Io.Threaded.global_single_threaded.io(),
     );
     defer coord.deinit();
 
@@ -3071,6 +3510,7 @@ test "Coordinator shutdown stops spawned workers promptly" {
         undefined,
         "test",
         null, // cache_manager
+        std.Io.Threaded.global_single_threaded.io(),
     );
     defer coord.deinit();
 
@@ -3117,6 +3557,7 @@ test "Channel in coordinator context" {
         undefined,
         "test",
         null, // cache_manager
+        std.Io.Threaded.global_single_threaded.io(),
     );
     defer coord.deinit();
 
@@ -3150,6 +3591,7 @@ test "Coordinator enqueueParseTask flow" {
         undefined,
         "test",
         null, // cache_manager
+        std.Io.Threaded.global_single_threaded.io(),
     );
     defer coord.deinit();
 
@@ -3188,6 +3630,7 @@ test "Coordinator single-threaded loop with mock result" {
         undefined,
         "test",
         null, // cache_manager
+        std.Io.Threaded.global_single_threaded.io(),
     );
     defer coord.deinit();
 
@@ -3233,6 +3676,7 @@ test "Coordinator CI failure scenario - app with platform cross-package imports"
         undefined,
         "test",
         null, // cache_manager
+        std.Io.Threaded.global_single_threaded.io(),
     );
     defer coord.deinit();
 
@@ -3353,6 +3797,7 @@ test "Coordinator handleParseFailed advances module to Done" {
         undefined,
         "test",
         null, // cache_manager
+        std.Io.Threaded.global_single_threaded.io(),
     );
     defer coord.deinit();
 

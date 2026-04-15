@@ -18,7 +18,7 @@ const reporting = @import("reporting");
 const eval = @import("eval");
 const check = @import("check");
 const unbundle = if (is_freestanding) struct {} else @import("unbundle");
-const Io = @import("io").Io;
+const RocIo = @import("io").RocIo;
 
 const Report = reporting.Report;
 const BuiltinModules = eval.BuiltinModules;
@@ -62,14 +62,14 @@ pub const PostCheckPublicationMode = enum {
 /// Native fetchUrl implementation that downloads a tar.zst bundle via HTTP
 /// and extracts it into the destination directory. Used by the CLI to wire up
 /// real download support through the Filesystem vtable.
-pub const nativeFetchUrl: ?*const fn (?*anyopaque, Allocator, []const u8, []const u8) Io.FetchUrlError!void = if (!is_freestanding)
+pub const nativeFetchUrl: ?*const fn (?*anyopaque, Allocator, []const u8, []const u8) RocIo.FetchUrlError!void = if (!is_freestanding)
     &nativeFetchUrlImpl
 else
     null;
 
-fn nativeFetchUrlImpl(_: ?*anyopaque, allocator: Allocator, url: []const u8, dest_path: []const u8) Io.FetchUrlError!void {
+fn nativeFetchUrlImpl(_: ?*anyopaque, allocator: Allocator, url: []const u8, dest_path: []const u8) RocIo.FetchUrlError!void {
     var alloc = allocator;
-    unbundle.download.downloadAndExtract(&alloc, std.Options.debug_io, url, dest_path) catch {
+    unbundle.download.downloadAndExtract(&alloc, build_sys_io, url, dest_path) catch {
         return error.DownloadFailed;
     };
 }
@@ -145,7 +145,9 @@ pub const BuildEnv = struct {
     // Cache manager for compiled modules
     cache_manager: ?*CacheManager = null,
     // I/O abstraction for all OS operations (filesystem, stdio, env vars, etc.)
-    filesystem: Io = Io.default(),
+    filesystem: RocIo = RocIo.default(),
+    // System IO for std library operations (mutexes, timestamps, file ops)
+    sys_io: std.Io = std.Io.Threaded.global_single_threaded.io(),
     // Explicit working directory for resolving relative paths
     cwd: []const u8,
 
@@ -322,8 +324,8 @@ pub const BuildEnv = struct {
     }
 
     /// Set the I/O implementation (or reset to OS default).
-    pub fn setIo(self: *BuildEnv, io: ?Io) void {
-        self.filesystem = io orelse Io.default();
+    pub fn setRocIo(self: *BuildEnv, roc_io: ?RocIo) void {
+        self.filesystem = roc_io orelse RocIo.default();
     }
 
     /// Get the TargetsConfig from the platform package, if any.
@@ -394,6 +396,11 @@ pub const BuildEnv = struct {
     pub fn initCoordinator(self: *BuildEnv) !void {
         if (self.coordinator != null) return; // Already initialized
 
+        // Update module-level sys_io for nativeFetchUrlImpl (vtable signature cannot take sys_io)
+        build_sys_io = self.sys_io;
+        // Propagate sys_io to the ordered sink for its mutex operations
+        self.sink.sys_io = self.sys_io;
+
         const coord = try self.gpa.create(Coordinator);
         coord.* = try Coordinator.init(
             self.gpa,
@@ -403,8 +410,9 @@ pub const BuildEnv = struct {
             self.builtin_modules,
             self.compiler_version,
             self.cache_manager,
+            self.sys_io,
         );
-        coord.setIo(self.filesystem);
+        coord.setRocIo(self.filesystem);
         // Enable hosted transform for platform modules - converts e_anno_only to e_hosted_lambda
         // This is required for roc build so that hosted functions can be called at runtime
         coord.enable_hosted_transform = true;
@@ -1377,7 +1385,7 @@ pub const BuildEnv = struct {
 
         // Check if already cached
         const already_cached = blk: {
-            var d = std.Io.Dir.cwd().openDir(std.Options.debug_io, package_dir_path, .{}) catch |err| switch (err) {
+            var d = std.Io.Dir.cwd().openDir(self.sys_io, package_dir_path, .{}) catch |err| switch (err) {
                 error.FileNotFound => break :blk false,
                 else => {
                     if (comptime !is_freestanding) {
@@ -1386,7 +1394,7 @@ pub const BuildEnv = struct {
                     return error.FileError;
                 },
             };
-            d.close(std.Options.debug_io);
+            d.close(self.sys_io);
             break :blk true;
         };
 
@@ -1397,13 +1405,13 @@ pub const BuildEnv = struct {
             }
 
             // Create cache directory structure
-            std.Io.Dir.cwd().createDirPath(std.Options.debug_io, cache_dir_path) catch |make_err| {
+            std.Io.Dir.cwd().createDirPath(self.sys_io, cache_dir_path) catch |make_err| {
                 std.log.err("Failed to create cache directory: {}", .{make_err});
                 return error.FileError;
             };
 
             // Create package directory
-            std.Io.Dir.cwd().createDir(std.Options.debug_io, package_dir_path, .default_dir) catch |make_err| switch (make_err) {
+            std.Io.Dir.cwd().createDir(self.sys_io, package_dir_path, .default_dir) catch |make_err| switch (make_err) {
                 error.PathAlreadyExists => {}, // Race condition, another process created it
                 else => {
                     if (comptime !is_freestanding) {
@@ -1415,7 +1423,7 @@ pub const BuildEnv = struct {
 
             // Download and extract via io vtable (path-based, no Dir handle needed)
             self.filesystem.fetchUrl(self.gpa, url, package_dir_path) catch |fetch_err| {
-                std.Io.Dir.cwd().deleteTree(std.Options.debug_io, package_dir_path) catch {};
+                std.Io.Dir.cwd().deleteTree(self.sys_io, package_dir_path) catch {};
                 std.log.err("Failed to download package: {} (url: {s})", .{ fetch_err, url });
                 return error.DownloadFailed;
             };
@@ -1429,7 +1437,7 @@ pub const BuildEnv = struct {
         const source_path = std.fs.path.join(self.gpa, &.{ package_dir_path, "main.roc" }) catch {
             return error.OutOfMemory;
         };
-        std.Io.Dir.cwd().access(std.Options.debug_io, source_path, .{}) catch {
+        std.Io.Dir.cwd().access(self.sys_io, source_path, .{}) catch {
             self.gpa.free(source_path);
             if (comptime !is_freestanding) {
                 std.log.err("No main.roc found in package at {s}", .{package_dir_path});
@@ -1544,6 +1552,7 @@ pub const BuildEnv = struct {
                 self.compiler_version,
                 self.builtin_modules,
                 self.filesystem,
+                self.sys_io,
             );
 
             const key = try self.gpa.dupe(u8, name);
@@ -1773,8 +1782,8 @@ pub const BuildEnv = struct {
         try self.sink.buildOrder(pkg_names.items, module_names.items, depths.items);
 
         // Now that order is built, mark ready reports as emitted so they can be drained
-        self.sink.lock.lockUncancelable(std.Options.debug_io);
-        defer self.sink.lock.unlock(std.Options.debug_io);
+        self.sink.lock.lockUncancelable(self.sys_io);
+        defer self.sink.lock.unlock(self.sys_io);
         // Mark entries without reports as emitted BEFORE calling tryEmitLocked
         // so they don't block other entries from being emitted.
         for (self.sink.entries.items) |*e| {
@@ -2413,6 +2422,7 @@ pub const OrderedSink = struct {
     };
 
     gpa: Allocator,
+    sys_io: std.Io = std.Io.Threaded.global_single_threaded.io(),
     lock: Mutex = Mutex.init,
     cond: ThreadCondition = ThreadCondition.init,
 
@@ -2534,8 +2544,8 @@ pub const OrderedSink = struct {
 
     // Emit with package and module names
     pub fn emitReport(self: *OrderedSink, pkg_name: []const u8, module_name: []const u8, report: Report) void {
-        self.lock.lockUncancelable(std.Options.debug_io);
-        defer self.lock.unlock(std.Options.debug_io);
+        self.lock.lockUncancelable(self.sys_io);
+        defer self.lock.unlock(self.sys_io);
 
         if (comptime trace_build) {
             std.debug.print("[SINK] emitReport: pkg=\"{s}\" module=\"{s}\" title=\"{s}\"\n", .{ pkg_name, module_name, report.title });
@@ -2580,8 +2590,8 @@ pub const OrderedSink = struct {
 
     // Attempt to emit entries in order prefix while next entries are ready (with locking).
     pub fn tryEmit(self: *OrderedSink) void {
-        self.lock.lockUncancelable(std.Options.debug_io);
-        defer self.lock.unlock(std.Options.debug_io);
+        self.lock.lockUncancelable(self.sys_io);
+        defer self.lock.unlock(self.sys_io);
         self.tryEmitLocked();
     }
 
@@ -2627,8 +2637,8 @@ pub const OrderedSink = struct {
     };
 
     pub fn drainEmitted(self: *OrderedSink, gpa: Allocator) ![]Drained {
-        self.lock.lockUncancelable(std.Options.debug_io);
-        defer self.lock.unlock(std.Options.debug_io);
+        self.lock.lockUncancelable(self.sys_io);
+        defer self.lock.unlock(self.sys_io);
 
         // Identify contiguous emitted prefix starting from current drain cursor
         var i: usize = self.drain_cursor;

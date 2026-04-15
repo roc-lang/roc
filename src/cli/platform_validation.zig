@@ -16,6 +16,8 @@ const reporting = @import("reporting");
 const target_mod = @import("target.zig");
 pub const targets_validator = @import("targets_validator.zig");
 
+var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
+
 const Allocators = base.Allocators;
 
 const TargetsConfig = target_mod.TargetsConfig;
@@ -25,7 +27,7 @@ const LinkType = target_mod.LinkType;
 const is_windows = builtin.target.os.tag == .windows;
 
 var stderr_file_writer: std.Io.File.Writer = .{
-    .io = std.Options.debug_io,
+    .io = std.Io.Threaded.global_single_threaded.io(),
     .interface = std.Io.File.Writer.initInterface(&.{}),
     .file = if (is_windows) undefined else std.Io.File.stderr(),
     .mode = .streaming,
@@ -72,7 +74,7 @@ pub fn validatePlatformHeader(
     platform_source_path: []const u8,
 ) ValidationError!PlatformValidation {
     // Read platform source
-    var source = std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, platform_source_path, allocator, .unlimited) catch {
+    var source = std.Io.Dir.cwd().readFileAlloc(app_sys_io, platform_source_path, allocator, .unlimited) catch {
         renderFileReadError(allocator, platform_source_path);
         return error.FileReadError;
     };
@@ -256,7 +258,7 @@ pub fn validateAllTargetFilesExist(
     config: TargetsConfig,
     platform_dir_path: []const u8,
 ) ?ValidationResult {
-    var platform_dir = std.Io.Dir.cwd().openDir(std.Options.debug_io, platform_dir_path, .{}) catch {
+    var platform_dir = std.Io.Dir.cwd().openDir(app_sys_io, platform_dir_path, .{}) catch {
         return .{
             .missing_files_directory = .{
                 .platform_path = platform_dir_path,
@@ -264,7 +266,7 @@ pub fn validateAllTargetFilesExist(
             },
         };
     };
-    defer platform_dir.close(std.Options.debug_io);
+    defer platform_dir.close(app_sys_io);
 
     const result = targets_validator.validateTargetFilesExist(allocator, config, platform_dir) catch {
         return .{

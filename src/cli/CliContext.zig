@@ -39,6 +39,8 @@ const Allocator = std.mem.Allocator;
 const reporting = @import("reporting");
 const problem_mod = @import("CliProblem.zig");
 
+var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
+
 const CliProblem = problem_mod.CliProblem;
 const ColorPalette = reporting.ColorPalette;
 const ReportingConfig = reporting.ReportingConfig;
@@ -73,11 +75,11 @@ pub const Io = struct {
         const stderr_file = std.Io.File.stderr();
 
         // Enable ANSI escape sequences for colored output (needed on Windows)
-        stdout_file.enableAnsiEscapeCodes(std.Options.debug_io) catch {};
-        stderr_file.enableAnsiEscapeCodes(std.Options.debug_io) catch {};
+        stdout_file.enableAnsiEscapeCodes(app_sys_io) catch {};
+        stderr_file.enableAnsiEscapeCodes(app_sys_io) catch {};
 
-        self.stdout_writer = stdout_file.writer(std.Options.debug_io, &self.stdout_buffer);
-        self.stderr_writer = stderr_file.writer(std.Options.debug_io, &self.stderr_buffer);
+        self.stdout_writer = stdout_file.writer(app_sys_io, &self.stdout_buffer);
+        self.stderr_writer = stderr_file.writer(app_sys_io, &self.stderr_buffer);
     }
 
     /// Get the stdout writer interface

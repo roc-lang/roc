@@ -5,6 +5,8 @@ const parse = @import("parse");
 const can = @import("can");
 const base = @import("base");
 
+var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
+
 const tracy = @import("tracy");
 const builtin = @import("builtin");
 
@@ -17,7 +19,7 @@ const Allocator = std.mem.Allocator;
 const is_windows = builtin.target.os.tag == .windows;
 
 var stderr_file_writer: std.Io.File.Writer = .{
-    .io = std.Options.debug_io,
+    .io = std.Io.Threaded.global_single_threaded.io(),
     .interface = std.Io.File.Writer.initInterface(&.{}),
     .file = if (is_windows) undefined else std.Io.File.stderr(),
     .mode = .streaming,
@@ -92,7 +94,7 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
 
     // Benchmark loop
     for (0..num_iterations) |_| {
-        const start_time = std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds;
+        const start_time = std.Io.Timestamp.now(app_sys_io, .real).nanoseconds;
 
         var iteration_tokens: u64 = 0;
 
@@ -130,7 +132,7 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
             }
         }
 
-        const end_time = std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds;
+        const end_time = std.Io.Timestamp.now(app_sys_io, .real).nanoseconds;
 
         total_time += @intCast(end_time - start_time);
         total_tokens = iteration_tokens;
@@ -165,7 +167,7 @@ pub fn benchTokenizer(gpa: Allocator, path: []const u8) !void {
 
 fn collectRocFiles(gpa: Allocator, path: []const u8, roc_files: *std.array_list.Managed(RocFile)) !void {
     // Check if path is a file or directory
-    const stat = std.Io.Dir.cwd().statFile(std.Options.debug_io, path, .{}) catch |err| {
+    const stat = std.Io.Dir.cwd().statFile(app_sys_io, path, .{}) catch |err| {
         fatal("Failed to access '{s}': {}", .{ path, err });
     };
 
@@ -187,7 +189,7 @@ fn collectRocFiles(gpa: Allocator, path: []const u8, roc_files: *std.array_list.
 }
 
 fn addRocFile(gpa: Allocator, file_path: []const u8, roc_files: *std.array_list.Managed(RocFile)) !void {
-    const content = std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, file_path, gpa, .limited(0xffff_ffff)) catch |err| {
+    const content = std.Io.Dir.cwd().readFileAlloc(app_sys_io, file_path, gpa, .limited(0xffff_ffff)) catch |err| {
         std.debug.print("Warning: Failed to read file '{s}': {}\n", .{ file_path, err });
         return;
     };
@@ -200,13 +202,13 @@ fn addRocFile(gpa: Allocator, file_path: []const u8, roc_files: *std.array_list.
 }
 
 fn findRocFiles(gpa: Allocator, dir_path: []const u8, roc_files: *std.array_list.Managed(RocFile)) !void {
-    var dir = std.Io.Dir.cwd().openDir(std.Options.debug_io, dir_path, .{ .iterate = true }) catch |err| {
+    var dir = std.Io.Dir.cwd().openDir(app_sys_io, dir_path, .{ .iterate = true }) catch |err| {
         fatal("Failed to open directory '{s}': {}", .{ dir_path, err });
     };
-    defer dir.close(std.Options.debug_io);
+    defer dir.close(app_sys_io);
 
     var iterator = dir.iterate();
-    while (try iterator.next(std.Options.debug_io)) |entry| {
+    while (try iterator.next(app_sys_io)) |entry| {
         const full_path = try std.fs.path.join(gpa, &[_][]const u8{ dir_path, entry.name });
         defer gpa.free(full_path);
 

@@ -5,6 +5,8 @@ const build_options = @import("build_options");
 
 const trace_refcount = build_options.trace_refcount;
 
+var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
+
 /// Host environment - contains DebugAllocator for leak detection
 const HostEnv = struct {
     gpa: std.heap.DebugAllocator(.{}),
@@ -189,7 +191,7 @@ fn hostedStderrLine(_: *anyopaque, _: *anyopaque, args: *const extern struct { s
 fn hostedStdinLine(ops: *RocOps, result: *RocStr, _: *anyopaque) callconv(.c) void {
     // Read a line from stdin
     var buffer: [4096]u8 = undefined;
-    const bytes_read = std.Io.File.stdin().readStreaming(std.Options.debug_io, &.{&buffer}) catch {
+    const bytes_read = std.Io.File.stdin().readStreaming(app_sys_io, &.{&buffer}) catch {
         // Return empty string on error
         result.* = RocStr.empty();
         return;
@@ -224,8 +226,8 @@ fn hostedStdinLine(ops: *RocOps, result: *RocStr, _: *anyopaque) callconv(.c) vo
 /// Returns {} and takes Str as argument
 fn hostedStdoutLine(_: *anyopaque, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
     const message = args.str.asSlice();
-    std.Io.File.stdout().writeStreamingAll(std.Options.debug_io, message) catch {};
-    std.Io.File.stdout().writeStreamingAll(std.Options.debug_io, "\n") catch {};
+    std.Io.File.stdout().writeStreamingAll(app_sys_io, message) catch {};
+    std.Io.File.stdout().writeStreamingAll(app_sys_io, "\n") catch {};
 }
 
 /// Array of hosted function pointers, sorted alphabetically by fully-qualified name
