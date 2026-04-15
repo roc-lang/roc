@@ -351,7 +351,7 @@ pub const Interpreter = struct {
     /// Decrements reference counts for any heap-allocated data (strings, lists, boxes)
     /// according to the value's layout. No-op for non-refcounted types (ints, bools, etc).
     pub fn dropValue(self: *LirInterpreter, val: Value, layout_idx: layout_mod.Idx) void {
-        self.performRc(.decref, val, layout_idx, 0);
+        self.performInterpreterApiRc(.decref, val, layout_idx, 0);
     }
 
     fn runtimeError(self: *LirInterpreter, message: []const u8) Error {
@@ -1372,7 +1372,7 @@ pub const Interpreter = struct {
                                 elem_layout,
                             );
                         if (self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(elem_layout))) {
-                            self.performRc(.incref, normalized_elem, elem_layout, 1);
+                            self.performForbiddenOrdinaryRc("interpreter.for_list.elem_incref", .incref, normalized_elem, elem_layout, 1);
                         }
                         const elem_value = try self.materializeLocalValue(normalized_elem, elem_layout);
 
@@ -2474,6 +2474,23 @@ pub const Interpreter = struct {
         self.performRc(op, val, layout_idx, count);
     }
 
+    fn performInterpreterApiRc(self: *LirInterpreter, op: RcOp, val: Value, layout_idx: layout_mod.Idx, count: u16) void {
+        ownership_boundary.explicitLirRcExecution("interpreter.performInterpreterApiRc");
+        self.performRc(op, val, layout_idx, count);
+    }
+
+    fn performForbiddenOrdinaryRc(
+        self: *LirInterpreter,
+        comptime site: []const u8,
+        op: RcOp,
+        val: Value,
+        layout_idx: layout_mod.Idx,
+        count: u16,
+    ) void {
+        ownership_boundary.forbiddenInterpreterOrdinaryRc(site);
+        self.performRc(op, val, layout_idx, count);
+    }
+
     fn performRcPlan(self: *LirInterpreter, rc_plan: layout_mod.RcHelperPlan, resolver: *const layout_mod.RcHelperResolver, val: Value, count: u16) void {
         trace.log("performRcPlan: plan={s} val.ptr={*}", .{ @tagName(rc_plan), val.ptr });
         const utils = builtins.utils;
@@ -3088,7 +3105,7 @@ pub const Interpreter = struct {
                 const val = try self.allocBytes(info.width);
                 @memcpy(val.ptr[0..info.width], elem_ptr[0..info.width]);
                 if (self.helper.containsRefcounted(ll.ret_layout)) {
-                    self.performRc(.incref, val, ll.ret_layout, 1);
+                    self.performBuiltinInternalRc("interpreter.list_get_unsafe.ret_incref", .incref, val, ll.ret_layout, 1);
                 }
                 break :blk val;
             },
@@ -4546,7 +4563,7 @@ pub const Interpreter = struct {
                 elem_layout,
             );
             if (self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(elem_layout))) {
-                self.performRc(.incref, first_elem, elem_layout, 1);
+                self.performBuiltinInternalRc("interpreter.list_split_first.elem_incref", .incref, first_elem, elem_layout, 1);
             }
             // Rest list starts at offset info.width
             var crash_boundary = self.enterCrashBoundary();
@@ -4591,7 +4608,7 @@ pub const Interpreter = struct {
                 elem_layout,
             );
             if (self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(elem_layout))) {
-                self.performRc(.incref, last_elem, elem_layout, 1);
+                self.performBuiltinInternalRc("interpreter.list_split_last.elem_incref", .incref, last_elem, elem_layout, 1);
             }
             var crash_boundary = self.enterCrashBoundary();
             defer crash_boundary.deinit();
@@ -4990,7 +5007,7 @@ pub const Interpreter = struct {
                 if (box_info.elem_size > 0) {
                     (Value{ .ptr = data_ptr }).copyFrom(inner_value, box_info.elem_size);
                     if (self.helper.containsRefcounted(inner_layout)) {
-                        self.performRc(.incref, .{ .ptr = data_ptr }, inner_layout, 1);
+                        self.performForbiddenOrdinaryRc("interpreter.coerceValueIntoBox.inner_incref", .incref, .{ .ptr = data_ptr }, inner_layout, 1);
                     }
                     if (builtin.mode == .Debug and @intFromEnum(expected_box_layout) == 29) {
                         std.debug.print(
@@ -5092,7 +5109,7 @@ pub const Interpreter = struct {
         }
 
         if (self.helper.containsRefcounted(expected_alloc.base_layout)) {
-            self.performRc(.incref, expected_alloc.base, expected_alloc.base_layout, 1);
+            self.performForbiddenOrdinaryRc("interpreter.coerceStructValue.result_incref", .incref, expected_alloc.base, expected_alloc.base_layout, 1);
         }
 
         return expected_alloc.outer;
@@ -5147,7 +5164,7 @@ pub const Interpreter = struct {
         }
 
         if (self.helper.containsRefcounted(allocated.base_layout)) {
-            self.performRc(.incref, allocated.base, allocated.base_layout, 1);
+            self.performForbiddenOrdinaryRc("interpreter.coerceTagUnionValue.result_incref", .incref, allocated.base, allocated.base_layout, 1);
         }
 
         return allocated.outer;
@@ -5170,7 +5187,7 @@ pub const Interpreter = struct {
                     @memcpy(data_ptr[0..elem_size], arg.ptr[0..elem_size]);
                 }
                 if (self.helper.containsRefcounted(box_info.elem_layout_idx)) {
-                    self.performRc(.incref, arg, box_info.elem_layout_idx, 1);
+                    self.performBuiltinInternalRc("interpreter.evalBoxBox.arg_incref", .incref, arg, box_info.elem_layout_idx, 1);
                 }
                 const boxed = try self.alloc(ret_layout);
                 const target_usize = self.layout_store.targetUsize();
@@ -5195,7 +5212,7 @@ pub const Interpreter = struct {
             result.copyFrom(.{ .ptr = data_ptr }, size);
         }
         if (self.helper.containsRefcounted(ret_layout)) {
-            self.performRc(.incref, result, ret_layout, 1);
+            self.performBuiltinInternalRc("interpreter.evalBoxUnbox.result_incref", .incref, result, ret_layout, 1);
         }
 
         return result;

@@ -685,6 +685,18 @@ fn emitExplicitRcForValueLocal(
     try self.emitRcForValueLocal(kind, value_local, value_vt, layout_idx, inc_count);
 }
 
+fn emitBuiltinInternalRcForValueLocal(
+    self: *Self,
+    comptime kind: RcOpKind,
+    value_local: u32,
+    value_vt: ValType,
+    layout_idx: layout.Idx,
+    inc_count: u16,
+) Allocator.Error!void {
+    ownership_boundary.builtinRuntimeInternal("wasm.emitBuiltinInternalRcForValueLocal");
+    try self.emitRcForValueLocal(kind, value_local, value_vt, layout_idx, inc_count);
+}
+
 fn emitDirectRcPlan(
     self: *Self,
     helper_key: RcHelperKey,
@@ -818,6 +830,17 @@ fn emitRcAtPtr(
     inc_count: u16,
 ) Allocator.Error!void {
     try self.emitRcHelperCallForValuePtr(kind, value_ptr_local, layout_idx, inc_count);
+}
+
+fn emitBuiltinInternalRcAtPtr(
+    self: *Self,
+    comptime kind: RcOpKind,
+    value_ptr_local: u32,
+    layout_idx: layout.Idx,
+    inc_count: u16,
+) Allocator.Error!void {
+    ownership_boundary.builtinRuntimeInternal("wasm.emitBuiltinInternalRcAtPtr");
+    try self.emitRcAtPtr(kind, value_ptr_local, layout_idx, inc_count);
 }
 
 fn emitDecodeListAllocPtr(self: *Self, list_ptr_local: u32, out_alloc_ptr: u32, out_is_slice: u32) Allocator.Error!void {
@@ -5063,7 +5086,7 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
                     try self.emitLocalSet(dst_local);
 
                     try self.emitMemCopy(dst_local, 0, src_local, elem_size);
-                    try self.emitRcAtPtr(.incref, dst_local, elem_layout, 1);
+                    try self.emitBuiltinInternalRcAtPtr(.incref, dst_local, elem_layout, 1);
                     try self.emitLocalGet(dst_local);
                 } else {
                     try self.emitLoadOpForLayout(elem_layout, 0);
@@ -5071,7 +5094,7 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
                         const elem_vt = self.resolveValType(elem_layout);
                         const elem_local = self.storage.allocAnonymousLocal(elem_vt) catch return error.OutOfMemory;
                         try self.emitLocalSet(elem_local);
-                        try self.emitRcForValueLocal(.incref, elem_local, elem_vt, elem_layout, 1);
+                        try self.emitBuiltinInternalRcForValueLocal(.incref, elem_local, elem_vt, elem_layout, 1);
                         try self.emitLocalGet(elem_local);
                     }
                 }
@@ -6857,7 +6880,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 try self.emitLocalSet(dst_local);
 
                 try self.emitMemCopy(dst_local, 0, src_local, elem_size);
-                try self.emitRcAtPtr(.incref, dst_local, elem_layout_idx, 1);
+                try self.emitBuiltinInternalRcAtPtr(.incref, dst_local, elem_layout_idx, 1);
                 try self.emitLocalGet(dst_local);
             } else {
                 try self.emitLoadOpForLayout(elem_layout_idx, 0);
@@ -6865,7 +6888,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     const elem_vt = self.resolveValType(elem_layout_idx);
                     const elem_local = self.storage.allocAnonymousLocal(elem_vt) catch return error.OutOfMemory;
                     try self.emitLocalSet(elem_local);
-                    try self.emitRcForValueLocal(.incref, elem_local, elem_vt, elem_layout_idx, 1);
+                    try self.emitBuiltinInternalRcForValueLocal(.incref, elem_local, elem_vt, elem_layout_idx, 1);
                     try self.emitLocalGet(elem_local);
                 }
             }
@@ -6916,7 +6939,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 try self.emitLocalSet(dst_local);
 
                 try self.emitMemCopy(dst_local, 0, src_local, elem_size);
-                try self.emitRcAtPtr(.incref, dst_local, elem_layout_idx, 1);
+                try self.emitBuiltinInternalRcAtPtr(.incref, dst_local, elem_layout_idx, 1);
                 try self.emitLocalGet(dst_local);
             } else {
                 try self.emitLoadOpForLayout(elem_layout_idx, 0);
@@ -6924,7 +6947,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     const elem_vt = self.resolveValType(elem_layout_idx);
                     const elem_local = self.storage.allocAnonymousLocal(elem_vt) catch return error.OutOfMemory;
                     try self.emitLocalSet(elem_local);
-                    try self.emitRcForValueLocal(.incref, elem_local, elem_vt, elem_layout_idx, 1);
+                    try self.emitBuiltinInternalRcForValueLocal(.incref, elem_local, elem_vt, elem_layout_idx, 1);
                     try self.emitLocalGet(elem_local);
                 }
             }
@@ -6964,7 +6987,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 try self.emitLocalSet(dst_local);
 
                 try self.emitMemCopy(dst_local, 0, src_local, elem_size);
-                try self.emitRcAtPtr(.incref, dst_local, elem_layout_idx, 1);
+                try self.emitBuiltinInternalRcAtPtr(.incref, dst_local, elem_layout_idx, 1);
                 try self.emitLocalGet(dst_local);
             } else {
                 try self.emitLoadOpForLayout(elem_layout_idx, 0);
@@ -6972,7 +6995,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     const elem_vt = self.resolveValType(elem_layout_idx);
                     const elem_local = self.storage.allocAnonymousLocal(elem_vt) catch return error.OutOfMemory;
                     try self.emitLocalSet(elem_local);
-                    try self.emitRcForValueLocal(.incref, elem_local, elem_vt, elem_layout_idx, 1);
+                    try self.emitBuiltinInternalRcForValueLocal(.incref, elem_local, elem_vt, elem_layout_idx, 1);
                     try self.emitLocalGet(elem_local);
                 }
             }
@@ -7936,7 +7959,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     if (value_vt == .i32 and value_size > 4) {
                         const src_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                         try self.emitLocalSet(src_ptr);
-                        try self.emitRcAtPtr(.incref, src_ptr, value_layout, 1);
+                        try self.emitBuiltinInternalRcAtPtr(.incref, src_ptr, value_layout, 1);
 
                         if (value_size <= 16) {
                             var offset: u32 = 0;
@@ -8000,7 +8023,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     } else {
                         const value_local = self.storage.allocAnonymousLocal(value_vt) catch return error.OutOfMemory;
                         try self.emitLocalSet(value_local);
-                        try self.emitRcForValueLocal(.incref, value_local, value_vt, value_layout, 1);
+                        try self.emitBuiltinInternalRcForValueLocal(.incref, value_local, value_vt, value_layout, 1);
                         try self.emitLocalGet(value_local);
                         try self.emitStoreToMemSized(box_ptr, 0, value_vt, value_size);
                     }
@@ -8079,7 +8102,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
                         try self.emitMemCopy(dst_local, 0, src_local, result_size);
                         if (result_has_rc) {
-                            try self.emitRcAtPtr(.incref, dst_local, ll.ret_layout, 1);
+                            try self.emitBuiltinInternalRcAtPtr(.incref, dst_local, ll.ret_layout, 1);
                         }
                         try self.emitLocalGet(dst_local);
                     } else {
@@ -8112,7 +8135,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
                             try self.emitMemCopy(temp_ptr, 0, box_ptr, result_size);
                             if (result_has_rc) {
-                                try self.emitRcAtPtr(.incref, temp_ptr, ll.ret_layout, 1);
+                                try self.emitBuiltinInternalRcAtPtr(.incref, temp_ptr, ll.ret_layout, 1);
                             }
                             try self.emitLocalGet(temp_ptr);
                             try self.emitLoadOpSized(result_vt, result_size, 0);

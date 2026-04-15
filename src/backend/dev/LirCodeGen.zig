@@ -3426,7 +3426,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     // Generate the value expression
                     const value_loc = try self.emitValueLocal(args[0]);
-                    try self.emitRcHelperCallForValue(.incref, value_loc, box_info.elem_layout_idx, 1);
+                    try self.emitBuiltinInternalRcHelperCallForValue(.incref, value_loc, box_info.elem_layout_idx, 1);
 
                     // Copy value to heap
                     const heap_ptr = try self.allocTempGeneral();
@@ -8211,6 +8211,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!void {
             ownership_boundary.explicitLirRcExecution("dev.emitExplicitRcHelperCallAtStackOffset");
             try self.emitRcHelperCallAtStackOffset(op, base_offset, layout_idx, count);
+        }
+
+        fn emitBuiltinInternalRcHelperCallForValue(
+            self: *Self,
+            op: RcOp,
+            value_loc: ValueLocation,
+            layout_idx: layout.Idx,
+            count: u16,
+        ) Allocator.Error!void {
+            ownership_boundary.builtinRuntimeInternal("dev.emitBuiltinInternalRcHelperCallForValue");
+            try self.emitRcHelperCallForValue(op, value_loc, layout_idx, count);
         }
 
         fn emitRcHelperCallFromPtrReg(
