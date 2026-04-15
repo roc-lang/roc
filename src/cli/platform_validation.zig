@@ -16,8 +16,6 @@ const reporting = @import("reporting");
 const target_mod = @import("target.zig");
 pub const targets_validator = @import("targets_validator.zig");
 
-const Allocators = base.Allocators;
-
 const TargetsConfig = target_mod.TargetsConfig;
 const RocTarget = target_mod.RocTarget;
 const LinkType = target_mod.LinkType;
@@ -88,11 +86,7 @@ pub fn validatePlatformHeader(
         return error.ParseError;
     };
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    const ast = parse.parse(&allocators, &env) catch {
+    const ast = parse.parse(allocator, &env) catch {
         renderParseError(allocator, platform_source_path);
         return error.ParseError;
     };

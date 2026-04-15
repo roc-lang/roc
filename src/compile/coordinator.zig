@@ -78,8 +78,7 @@ const DiscoveredExternalImport = messages.DiscoveredExternalImport;
 const OwnedSemanticModuleData = messages.OwnedSemanticModuleData;
 
 const Channel = channel.Channel;
-const RocIo = @import("io").RocIo;
-
+const RocCtx = @import("ctx").RocCtx;
 const Mode = compile_package.Mode;
 
 /// Threading features aren't available when targeting WebAssembly
@@ -534,7 +533,7 @@ pub const Coordinator = struct {
     builtin_modules: *const BuiltinModules,
 
     /// I/O abstraction for reading sources and other filesystem/stdio operations.
-    roc_io: RocIo,
+    roc_ctx: RocCtx,
 
     /// Compiler version for cache keys
     compiler_version: []const u8,
@@ -598,7 +597,7 @@ pub const Coordinator = struct {
         builtin_modules: *const BuiltinModules,
         compiler_version: []const u8,
         cache_manager: ?*CacheManager,
-        roc_io: RocIo,
+        roc_ctx: RocCtx,
     ) !Coordinator {
         // Both channels use smp_allocator in multi-threaded mode because their
         // buffers may be grown (task_channel) or accessed from worker threads.
@@ -612,14 +611,14 @@ pub const Coordinator = struct {
             .max_threads = max_threads,
             .target = target,
             .packages = std.StringHashMap(*PackageState).init(gpa),
-            .result_channel = try Channel(WorkerResult).init(channel_allocator, channel.DEFAULT_CAPACITY, roc_io.sys_io),
-            .task_channel = try Channel(WorkerTask).init(channel_allocator, initial_task_capacity, roc_io.sys_io),
+            .result_channel = try Channel(WorkerResult).init(channel_allocator, channel.DEFAULT_CAPACITY, roc_ctx.sys_io),
+            .task_channel = try Channel(WorkerTask).init(channel_allocator, initial_task_capacity, roc_ctx.sys_io),
             .workers = std.ArrayList(Thread).empty,
             .inflight = std.atomic.Value(usize).init(0),
             .shutting_down = std.atomic.Value(bool).init(false),
             .total_remaining = 0,
             .builtin_modules = builtin_modules,
-            .roc_io = roc_io,
+            .roc_ctx = roc_ctx,
             .compiler_version = compiler_version,
             .cache_manager = cache_manager,
             .cross_package_dependents = std.StringHashMap(std.ArrayList(ModuleRef)).init(gpa),
@@ -694,8 +693,8 @@ pub const Coordinator = struct {
     }
 
     /// Set the I/O implementation (or reset to OS default).
-    pub fn setRocIo(self: *Coordinator, roc_io: ?RocIo) void {
-        self.roc_io = roc_io orelse RocIo.default(self.roc_io.sys_io);
+    pub fn setRocCtx(self: *Coordinator, roc_ctx: ?RocCtx) void {
+        self.roc_ctx = roc_ctx orelse RocCtx.default(self.roc_ctx.gpa, self.roc_ctx.arena, self.roc_ctx.sys_io);
     }
 
     /// Get the allocator to use for module data.
@@ -1664,7 +1663,7 @@ pub const Coordinator = struct {
         if (comptime builtin.mode == .Debug) {
             var buf: [2048]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf, fmt, args) catch fmt;
-            self.roc_io.writeStderr(msg) catch {};
+            self.roc_ctx.writeStderr(msg) catch {};
         }
     }
 
@@ -1968,7 +1967,7 @@ pub const Coordinator = struct {
                         const imp_path = self.resolveModulePath(pkg.root_dir, imp_mod.name) catch null;
                         if (imp_path) |path| {
                             defer self.gpa.free(path);
-                            if (self.roc_io.readFile(path, self.gpa) catch null) |source| {
+                            if (self.roc_ctx.readFile(path, self.gpa) catch null) |source| {
                                 defer self.gpa.free(source);
                                 imp_source_hash = CacheManager.computeSourceHash(source);
                             }
@@ -1996,7 +1995,7 @@ pub const Coordinator = struct {
                                 const imp_path = self.resolveModulePath(ext_pkg.root_dir, qualified.module) catch null;
                                 if (imp_path) |path| {
                                     defer self.gpa.free(path);
-                                    if (self.roc_io.readFile(path, self.gpa) catch null) |source| {
+                                    if (self.roc_ctx.readFile(path, self.gpa) catch null) |source| {
                                         defer self.gpa.free(source);
                                         imp_source_hash = CacheManager.computeSourceHash(source);
                                     }
@@ -2285,7 +2284,7 @@ pub const Coordinator = struct {
             defer self.gpa.free(module_path);
 
             // Read the source file and compute its current hash
-            const source = self.roc_io.readFile(module_path, self.gpa) catch |err| {
+            const source = self.roc_ctx.readFile(module_path, self.gpa) catch |err| {
                 if (comptime trace_build) switch (err) {
                     error.FileNotFound => std.debug.print("[COORD] checkAllImportsCached: file not found {s}\n", .{module_path}),
                     else => std.debug.print("[COORD] checkAllImportsCached: failed to read {s}\n", .{module_path}),
@@ -2321,7 +2320,7 @@ pub const Coordinator = struct {
         // 1. Read source file
         // Note: We cannot use defer to free source because on cache hit,
         // the ModuleEnv stores a reference to the source.
-        const source = self.roc_io.readFile(mod.path, self.gpa) catch return false;
+        const source = self.roc_ctx.readFile(mod.path, self.gpa) catch return false;
 
         // 2. Compute source hash
         const source_hash = CacheManager.computeSourceHash(source);
@@ -2859,7 +2858,7 @@ pub const Coordinator = struct {
 
     /// Execute a parse task (pure function)
     fn executeParse(self: *Coordinator, task: ParseTask) WorkerResult {
-        const start_time = if (threads_available) self.roc_io.timestampNow() else 0;
+        const start_time = if (threads_available) self.roc_ctx.timestampNow() else 0;
 
         // Read source
         const src = self.readModuleSource(task.path) catch |err| {
@@ -2944,12 +2943,9 @@ pub const Coordinator = struct {
         const worker_alloc = self.getWorkerAllocator();
         // Pre-allocate reports to reduce allocation contention in multi-threaded mode
         var reports = std.ArrayList(Report).initCapacity(worker_alloc, 8) catch std.ArrayList(Report).empty;
-        var allocators: base.Allocators = undefined;
-        allocators.initInPlace(worker_alloc);
-        // NOTE: allocators not freed here - cleanup happens in executeCanonicalize
-        const parse_ast = parse.parse(&allocators, &env.common) catch {
+        const parse_ast = parse.parse(worker_alloc, &env.common) catch {
             // Parse failed but we still have partial env
-            const end_time = if (threads_available) self.roc_io.timestampNow() else 0;
+            const end_time = if (threads_available) self.roc_ctx.timestampNow() else 0;
             return .{
                 .parsed = .{
                     .package_name = task.package_name,
@@ -2979,50 +2975,7 @@ pub const Coordinator = struct {
             reports.append(worker_alloc, rep) catch {};
         }
 
-        var discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty;
-        errdefer {
-            for (discovered_local_imports.items) |imp| {
-                worker_alloc.free(imp.module_name);
-                worker_alloc.free(imp.path);
-            }
-            discovered_local_imports.deinit(worker_alloc);
-        }
-        const local_import_names = module_discovery.extractImportsFromAST(parse_ast, worker_alloc) catch &[_][]const u8{};
-        defer {
-            for (local_import_names) |name| worker_alloc.free(name);
-            worker_alloc.free(local_import_names);
-        }
-        const module_dir = std.fs.path.dirname(task.path) orelse "";
-        for (local_import_names) |module_name| {
-            const path = self.resolveModulePathWithAllocator(module_dir, module_name, worker_alloc) catch continue;
-            discovered_local_imports.append(worker_alloc, .{
-                .module_name = worker_alloc.dupe(u8, module_name) catch {
-                    worker_alloc.free(path);
-                    continue;
-                },
-                .path = path,
-            }) catch {
-                worker_alloc.free(path);
-            };
-        }
-
-        var discovered_external_imports = std.ArrayList(DiscoveredExternalImport).empty;
-        errdefer {
-            for (discovered_external_imports.items) |imp| worker_alloc.free(imp.import_name);
-            discovered_external_imports.deinit(worker_alloc);
-        }
-        const qualified_import_names = module_discovery.extractQualifiedImportsFromAST(parse_ast, worker_alloc) catch &[_][]const u8{};
-        defer {
-            for (qualified_import_names) |name| worker_alloc.free(name);
-            worker_alloc.free(qualified_import_names);
-        }
-        for (qualified_import_names) |import_name| {
-            discovered_external_imports.append(worker_alloc, .{
-                .import_name = worker_alloc.dupe(u8, import_name) catch continue,
-            }) catch {};
-        }
-
-        const end_time = if (threads_available) self.roc_io.timestampNow() else 0;
+        const end_time = if (threads_available) self.roc_ctx.timestampNow() else 0;
 
         return .{
             .parsed = .{
@@ -3042,16 +2995,32 @@ pub const Coordinator = struct {
 
     /// Execute a canonicalize task (pure function)
     fn executeCanonicalize(self: *Coordinator, task: CanonicalizeTask) WorkerResult {
-        const start_time = if (threads_available) self.roc_io.timestampNow() else 0;
+        const start_time = if (threads_available) self.roc_ctx.timestampNow() else 0;
 
         const env = task.module_env;
         const ast = task.cached_ast;
         const canon_alloc = self.getWorkerAllocator();
-        var allocators: base.Allocators = undefined;
-        allocators.initInPlace(canon_alloc);
-        defer allocators.deinit();
-        compile_package.PackageEnv.canonicalizeModuleWithImports(
-            &allocators,
+        const qualified_imports = module_discovery.extractQualifiedImportsFromAST(ast, canon_alloc) catch &[_][]const u8{};
+        defer {
+            for (qualified_imports) |qi| canon_alloc.free(qi);
+            canon_alloc.free(qualified_imports);
+        }
+
+        // Build KnownModule entries for qualified imports so they get placeholders
+        var known_modules = std.ArrayList(compile_package.PackageEnv.KnownModule).empty;
+        defer known_modules.deinit(canon_alloc);
+        for (qualified_imports) |qi| {
+            known_modules.append(canon_alloc, .{
+                .qualified_name = qi,
+                .import_name = qi,
+            }) catch {};
+        }
+
+        // Canonicalize using the PackageEnv shared function with sibling awareness
+        // This sets up placeholders for external imports that will be resolved during type-checking
+        // Use worker allocator for thread safety in multi-threaded mode
+        compile_package.PackageEnv.canonicalizeModuleWithSiblings(
+            self.roc_ctx,
             env,
             ast,
             self.builtin_modules.builtin_module.env,
@@ -3059,15 +3028,14 @@ pub const Coordinator = struct {
             task.source_dir,
             task.package_name,
             null, // Coordinator handles import resolution separately
-            &.{}, // No additional known modules from coordinator
-            self.roc_io,
+            known_modules.items,
         ) catch {};
         self.gpa.free(task.imported_modules);
 
-        const canon_end = if (threads_available) self.roc_io.timestampNow() else 0;
+        const canon_end = if (threads_available) self.roc_ctx.timestampNow() else 0;
 
         // Collect diagnostics
-        const diag_start = if (threads_available) self.roc_io.timestampNow() else 0;
+        const diag_start = if (threads_available) self.roc_ctx.timestampNow() else 0;
         // Use worker allocator (thread-safe in multi-threaded mode) for result data
         const worker_alloc = self.getWorkerAllocator();
         // Pre-allocate to reduce allocation contention in multi-threaded mode
@@ -3079,7 +3047,7 @@ pub const Coordinator = struct {
             const rep = env.diagnosticToReport(d, worker_alloc, task.path) catch continue;
             reports.append(worker_alloc, rep) catch {};
         }
-        const diag_end = if (threads_available) self.roc_io.timestampNow() else 0;
+        const diag_end = if (threads_available) self.roc_ctx.timestampNow() else 0;
 
         // Free AST - deinit now handles both internal cleanup and self-destruction
         ast.deinit();
@@ -3102,7 +3070,7 @@ pub const Coordinator = struct {
 
     /// Execute a type-check task (pure function)
     fn executeTypeCheck(self: *Coordinator, task: TypeCheckTask) WorkerResult {
-        const start_time = if (threads_available) self.roc_io.timestampNow() else 0;
+        const start_time = if (threads_available) self.roc_ctx.timestampNow() else 0;
 
         const env = task.module_env;
 
@@ -3116,7 +3084,7 @@ pub const Coordinator = struct {
             task.imported_artifacts,
             task.available_artifacts,
             self.target,
-            self.roc_io,
+            self.roc_ctx,
         ) catch {
             self.gpa.free(task.imported_envs);
             self.gpa.free(task.imported_artifacts);
@@ -3136,10 +3104,10 @@ pub const Coordinator = struct {
         };
         defer typecheck_output.deinit();
 
-        const check_end = if (threads_available) self.roc_io.timestampNow() else 0;
+        const check_end = if (threads_available) self.roc_ctx.timestampNow() else 0;
 
         // Collect diagnostics
-        const diag_start = if (threads_available) self.roc_io.timestampNow() else 0;
+        const diag_start = if (threads_available) self.roc_ctx.timestampNow() else 0;
         // Use worker allocator (thread-safe in multi-threaded mode) for result data
         const worker_alloc = self.getWorkerAllocator();
         // Pre-allocate to reduce allocation contention in multi-threaded mode
@@ -3180,7 +3148,7 @@ pub const Coordinator = struct {
             reports.append(worker_alloc, rep) catch {};
         }
 
-        const diag_end = if (threads_available) self.roc_io.timestampNow() else 0;
+        const diag_end = if (threads_available) self.roc_ctx.timestampNow() else 0;
 
         // Free imported_envs slice (owned by coordinator)
         self.gpa.free(task.imported_envs);
@@ -3207,7 +3175,7 @@ pub const Coordinator = struct {
     /// Read module source using the Io abstraction.
     fn readModuleSource(self: *Coordinator, path: []const u8) ![]u8 {
         const module_alloc = self.getModuleAllocator();
-        const data = self.roc_io.readFile(path, module_alloc) catch |err| switch (err) {
+        const data = self.roc_ctx.readFile(path, module_alloc) catch |err| switch (err) {
             error.FileNotFound => return error.FileNotFound,
             error.OutOfMemory => return error.OutOfMemory,
             else => return error.FileNotFound,
@@ -3260,7 +3228,7 @@ test "Coordinator basic initialization" {
         undefined, // builtin_modules - not used in this test
         "test",
         null, // cache_manager
-        RocIo.os(std.testing.io),
+        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 
@@ -3280,7 +3248,7 @@ test "Coordinator package creation" {
         undefined,
         "test",
         null, // cache_manager
-        RocIo.os(std.testing.io),
+        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 
@@ -3306,7 +3274,7 @@ test "Coordinator module creation" {
         undefined,
         "test",
         null, // cache_manager
-        RocIo.os(std.testing.io),
+        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 
@@ -3334,7 +3302,7 @@ test "Coordinator task queue" {
         undefined,
         "test",
         null, // cache_manager
-        RocIo.os(std.testing.io),
+        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 
@@ -3373,7 +3341,7 @@ test "Coordinator isComplete logic" {
         undefined,
         "test",
         null, // cache_manager
-        RocIo.os(std.testing.io),
+        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 
@@ -3421,7 +3389,7 @@ test "Coordinator isComplete with multi_threaded max_threads=0 (inline execution
         undefined,
         "test",
         null, // cache_manager
-        RocIo.os(std.testing.io),
+        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 
@@ -3459,7 +3427,7 @@ test "Coordinator shutdown does not drain buffered tasks" {
         undefined,
         "test",
         null, // cache_manager
-        RocIo.os(std.testing.io),
+        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 
@@ -3509,7 +3477,7 @@ test "Coordinator shutdown stops spawned workers promptly" {
         undefined,
         "test",
         null, // cache_manager
-        RocIo.os(std.testing.io),
+        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 
@@ -3556,7 +3524,7 @@ test "Channel in coordinator context" {
         undefined,
         "test",
         null, // cache_manager
-        RocIo.os(std.testing.io),
+        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 
@@ -3590,7 +3558,7 @@ test "Coordinator enqueueParseTask flow" {
         undefined,
         "test",
         null, // cache_manager
-        RocIo.os(std.testing.io),
+        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 
@@ -3629,7 +3597,7 @@ test "Coordinator single-threaded loop with mock result" {
         undefined,
         "test",
         null, // cache_manager
-        RocIo.os(std.testing.io),
+        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 
@@ -3675,7 +3643,7 @@ test "Coordinator CI failure scenario - app with platform cross-package imports"
         undefined,
         "test",
         null, // cache_manager
-        RocIo.os(std.testing.io),
+        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 
@@ -3796,7 +3764,7 @@ test "Coordinator handleParseFailed advances module to Done" {
         undefined,
         "test",
         null, // cache_manager
-        RocIo.os(std.testing.io),
+        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 

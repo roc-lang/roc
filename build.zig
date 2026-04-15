@@ -2813,7 +2813,7 @@ pub fn build(b: *std.Build) void {
     });
     llvm_codegen_module.addImport("layout", roc_modules.layout);
     llvm_codegen_module.addImport("lir", roc_modules.lir);
-    llvm_codegen_module.addImport("io", roc_modules.io);
+    llvm_codegen_module.addImport("ctx", roc_modules.ctx);
 
     roc_modules.eval.addAnonymousImport("llvm_compile", .{
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
@@ -3075,7 +3075,7 @@ pub fn build(b: *std.Build) void {
         echo_wasm.root_module.addImport("WasmFilesystem.zig", b.createModule(.{
             .root_source_file = b.path("src/playground_wasm/WasmFilesystem.zig"),
             .target = echo_wasm_target,
-            .imports = &.{.{ .name = "io", .module = roc_modules.io }},
+            .imports = &.{.{ .name = "ctx", .module = roc_modules.ctx }},
         }));
         echo_wasm.step.dependOn(&write_compiled_builtins.step);
 
@@ -3282,6 +3282,61 @@ pub fn build(b: *std.Build) void {
             module_test.test_step.root_module.addImport("compiled_builtins", compiled_builtins_module);
             module_test.test_step.step.dependOn(&write_compiled_builtins.step);
         }
+
+        if (std.mem.eql(u8, module_test.test_step.name, "repl")) {
+            module_test.test_step.root_module.addImport("bytebox", bytebox.module("bytebox"));
+        }
+
+        // Add bytebox to eval tests for wasm backend testing
+        if (std.mem.eql(u8, module_test.test_step.name, "eval")) {
+            module_test.test_step.root_module.addImport("bytebox", bytebox.module("bytebox"));
+            const compile_build_module = b.createModule(.{
+                .root_source_file = b.path("src/compile/compile_build.zig"),
+            });
+            compile_build_module.addImport("tracy", roc_modules.tracy);
+            compile_build_module.addImport("build_options", roc_modules.build_options);
+            compile_build_module.addImport("ctx", roc_modules.ctx);
+            compile_build_module.addImport("builtins", roc_modules.builtins);
+            compile_build_module.addImport("collections", roc_modules.collections);
+            compile_build_module.addImport("base", roc_modules.base);
+            compile_build_module.addImport("types", roc_modules.types);
+            compile_build_module.addImport("parse", roc_modules.parse);
+            compile_build_module.addImport("can", roc_modules.can);
+            compile_build_module.addImport("check", roc_modules.check);
+            compile_build_module.addImport("reporting", roc_modules.reporting);
+            compile_build_module.addImport("layout", roc_modules.layout);
+            compile_build_module.addImport("eval", module_test.test_step.root_module);
+            compile_build_module.addImport("unbundle", roc_modules.unbundle);
+            compile_build_module.addImport("roc_target", roc_modules.roc_target);
+            compile_build_module.addImport("compiled_builtins", compiled_builtins_module);
+            module_test.test_step.root_module.addImport("compile_build", compile_build_module);
+            try addLlvmSupportToStep(
+                b,
+                module_test.test_step,
+                target,
+                use_system_llvm,
+                user_llvm_path,
+                roc_modules,
+                llvm_codegen_module,
+                &copy_builtins_bc.step,
+                zstd,
+            );
+        }
+
+        if (std.mem.eql(u8, module_test.test_step.name, "repl")) {
+            try addLlvmSupportToStep(
+                b,
+                module_test.test_step,
+                target,
+                use_system_llvm,
+                user_llvm_path,
+                roc_modules,
+                llvm_codegen_module,
+                &copy_builtins_bc.step,
+                zstd,
+            );
+        }
+
 
         if (run_args.len != 0) {
             module_test.run_step.addArgs(run_args);

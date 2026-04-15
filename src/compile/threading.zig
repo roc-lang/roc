@@ -6,11 +6,11 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const RocIo = @import("io").RocIo;
+const RocCtx = @import("ctx").RocCtx;
 
-/// The underlying system I/O type, derived from RocIo to avoid
+/// The underlying system I/O type, derived from RocCtx to avoid
 /// referencing the raw Zig I/O type directly (which is banned in core modules).
-const SysIo = @FieldType(RocIo, "sys_io");
+const SysIo = @FieldType(RocCtx, "sys_io");
 
 /// Whether the target OS is freestanding (e.g. WASM). Used throughout
 /// the compile module to gate threading and native OS functionality.

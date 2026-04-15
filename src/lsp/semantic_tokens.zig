@@ -11,12 +11,12 @@ const std = @import("std");
 const tokenize = @import("parse").tokenize;
 const parse = @import("parse");
 const can = @import("can");
+const RocCtx = can.RocCtx;
 const base = @import("base");
 const eval_mod = @import("eval");
 const compiled_builtins = @import("compiled_builtins");
 const line_info = @import("line_info.zig");
 
-const Allocators = base.Allocators;
 const Token = tokenize.Token;
 const Tokenizer = tokenize.Tokenizer;
 const CommonEnv = base.CommonEnv;
@@ -281,10 +281,6 @@ pub fn extractSemanticTokensWithImports(
     imported_envs: ?[]*ModuleEnv,
 ) ![]SemanticToken {
     // Create ModuleEnv with source
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
     var module_env = ModuleEnv.init(allocator, source) catch {
         // Fall back to token-only extraction on error
         return extractSemanticTokens(allocator, source, info);
@@ -292,7 +288,7 @@ pub fn extractSemanticTokensWithImports(
     defer module_env.deinit();
 
     // Parse the source
-    const parse_ast = parse.parse(&allocators, &module_env.common) catch {
+    const parse_ast = parse.parse(allocator, &module_env.common) catch {
         // Fall back to token-only extraction on parse error
         return extractSemanticTokens(allocator, source, info);
     };
@@ -312,7 +308,8 @@ pub fn extractSemanticTokensWithImports(
     defer builtin_module.deinit();
 
     // Create canonicalizer and run
-    var canonicalizer = can.Can.initModule(&allocators, &module_env, parse_ast, .{
+    const roc_ctx = RocCtx.testing(allocator, allocator);
+    var canonicalizer = can.Can.initModule(roc_ctx, &module_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,

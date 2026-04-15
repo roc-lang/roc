@@ -15,7 +15,7 @@ const CIR = @import("../CIR.zig");
 const TestEnv = @import("TestEnv.zig").TestEnv;
 const BuiltinTestContext = @import("./BuiltinTestContext.zig").BuiltinTestContext;
 const ModuleEnv = @import("../ModuleEnv.zig");
-const Allocators = base.Allocators;
+const RocCtx = @import("ctx").RocCtx;
 const parseIntWithUnderscores = Can.parseIntWithUnderscores;
 const RocDec = builtins.dec.RocDec;
 
@@ -536,14 +536,12 @@ test "hexadecimal integer literals" {
 
         try env.initCIRFields("test");
 
-        var allocators: Allocators = undefined;
-        allocators.initInPlace(gpa);
-        defer allocators.deinit();
+        const roc_ctx = RocCtx.testing(gpa, gpa);
 
-        const ast = try parse.parseExpr(&allocators, &env.common);
+        const ast = try parse.parseExpr(gpa, &env.common);
         defer ast.deinit();
 
-        var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+        var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -601,14 +599,12 @@ test "binary integer literals" {
 
         try env.initCIRFields("test");
 
-        var allocators: Allocators = undefined;
-        allocators.initInPlace(gpa);
-        defer allocators.deinit();
+        const roc_ctx = RocCtx.testing(gpa, gpa);
 
-        const ast = try parse.parseExpr(&allocators, &env.common);
+        const ast = try parse.parseExpr(gpa, &env.common);
         defer ast.deinit();
 
-        var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+        var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -666,14 +662,12 @@ test "octal integer literals" {
 
         try env.initCIRFields("test");
 
-        var allocators: Allocators = undefined;
-        allocators.initInPlace(gpa);
-        defer allocators.deinit();
+        const roc_ctx = RocCtx.testing(gpa, gpa);
 
-        const ast = try parse.parseExpr(&allocators, &env.common);
+        const ast = try parse.parseExpr(gpa, &env.common);
         defer ast.deinit();
 
-        var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+        var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -731,14 +725,12 @@ test "integer literals with uppercase base prefixes" {
 
         try env.initCIRFields("test");
 
-        var allocators: Allocators = undefined;
-        allocators.initInPlace(gpa);
-        defer allocators.deinit();
+        const roc_ctx = RocCtx.testing(gpa, gpa);
 
-        const ast = try parse.parseExpr(&allocators, &env.common);
+        const ast = try parse.parseExpr(gpa, &env.common);
         defer ast.deinit();
 
-        var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+        var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);

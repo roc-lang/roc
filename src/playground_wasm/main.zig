@@ -24,6 +24,7 @@ const eval = @import("eval");
 const lir = @import("lir");
 const types = @import("types");
 const can = @import("can");
+const RocCtx = can.RocCtx;
 const check = @import("check");
 const unbundle = @import("unbundle");
 const fmt = @import("fmt");
@@ -1212,11 +1213,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
 
     // Stage 1: Parse (includes tokenization)
     logDebug("compileSource: Starting parse stage\n", .{});
-    var allocators: base.Allocators = undefined;
-    allocators.initInPlace(allocator);
-    // NOTE: allocators is not freed here - cleanup happens in CompilerStageData.deinit
-
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.parse(allocator, &module_env.common);
     result.parse_ast = parse_ast;
     logDebug("compileSource: Parse complete\n", .{});
 
@@ -1341,7 +1338,8 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
     };
 
     logDebug("compileSource: Starting canonicalization\n", .{});
-    var czer = try Can.initModule(&allocators, env, result.parse_ast.?, .{
+    const roc_ctx = RocCtx.default(allocator, allocator, @as(std.Io, undefined));
+    var czer = try Can.initModule(roc_ctx, env, result.parse_ast.?, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,

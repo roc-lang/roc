@@ -7,7 +7,7 @@ const ModuleEnv = @import("../ModuleEnv.zig");
 const Can = @import("../Can.zig");
 const BuiltinTestContext = @import("./BuiltinTestContext.zig").BuiltinTestContext;
 
-const Allocators = base.Allocators;
+const RocCtx = @import("ctx").RocCtx;
 const Ident = base.Ident;
 
 test "record literal uses record_unbound" {
@@ -24,14 +24,12 @@ test "record literal uses record_unbound" {
 
         try env.initCIRFields("test");
 
-        var allocators: Allocators = undefined;
-        allocators.initInPlace(gpa);
-        defer allocators.deinit();
+        const roc_ctx = RocCtx.testing(gpa, gpa);
 
-        const ast = try parse.parseExpr(&allocators, &env.common);
+        const ast = try parse.parseExpr(gpa, &env.common);
         defer ast.deinit();
 
-        var can = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+        var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -59,14 +57,12 @@ test "record literal uses record_unbound" {
 
         try env.initCIRFields("test");
 
-        var allocators: Allocators = undefined;
-        allocators.initInPlace(gpa);
-        defer allocators.deinit();
+        const roc_ctx = RocCtx.testing(gpa, gpa);
 
-        const ast = try parse.parseExpr(&allocators, &env.common);
+        const ast = try parse.parseExpr(gpa, &env.common);
         defer ast.deinit();
 
-        var can = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+        var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -94,14 +90,12 @@ test "record literal uses record_unbound" {
 
         try env.initCIRFields("test");
 
-        var allocators: Allocators = undefined;
-        allocators.initInPlace(gpa);
-        defer allocators.deinit();
+        const roc_ctx = RocCtx.testing(gpa, gpa);
 
-        const ast = try parse.parseExpr(&allocators, &env.common);
+        const ast = try parse.parseExpr(gpa, &env.common);
         defer ast.deinit();
 
-        var can = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+        var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -141,14 +135,12 @@ test "record_unbound basic functionality" {
 
     try env.initCIRFields("test");
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
+    const roc_ctx = RocCtx.testing(gpa, gpa);
 
-    const ast = try parse.parseExpr(&allocators, &env.common);
+    const ast = try parse.parseExpr(gpa, &env.common);
     defer ast.deinit();
 
-    var can = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+    var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -189,14 +181,12 @@ test "record_unbound with multiple fields" {
     try env.initCIRFields("test");
 
     // Create record_unbound with multiple fields
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
+    const roc_ctx = RocCtx.testing(gpa, gpa);
 
-    const ast = try parse.parseExpr(&allocators, &env.common);
+    const ast = try parse.parseExpr(gpa, &env.common);
     defer ast.deinit();
 
-    var can = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+    var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -239,14 +229,12 @@ test "record pattern destructuring" {
 
     try env.initCIRFields("test");
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
+    const roc_ctx = RocCtx.testing(gpa, gpa);
 
-    const ast = try parse.parseStatement(&allocators, &env.common);
+    const ast = try parse.parseStatement(gpa, &env.common);
     defer ast.deinit();
 
-    var can = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+    var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
     defer can.deinit();
 
     // Enter a function scope so we can have local bindings
@@ -318,14 +306,12 @@ test "record pattern with sub-patterns" {
 
     try env.initCIRFields("test");
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
+    const roc_ctx = RocCtx.testing(gpa, gpa);
 
-    const ast = try parse.parseStatement(&allocators, &env.common);
+    const ast = try parse.parseStatement(gpa, &env.common);
     defer ast.deinit();
 
-    var can = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+    var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
     defer can.deinit();
 
     // Enter a function scope so we can have local bindings

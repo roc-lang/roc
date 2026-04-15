@@ -12,13 +12,13 @@
 
 const std = @import("std");
 const threading = @import("threading.zig");
-const RocIo = @import("io").RocIo;
+const RocCtx = @import("ctx").RocCtx;
 
 const Allocator = std.mem.Allocator;
 
-/// The underlying system I/O type, derived from RocIo to avoid
+/// The underlying system I/O type, derived from RocCtx to avoid
 /// referencing the raw Zig I/O type directly (which is banned in core modules).
-const SysIo = @FieldType(RocIo, "sys_io");
+const SysIo = @FieldType(RocCtx, "sys_io");
 
 const Mutex = threading.Mutex;
 const Condition = threading.Condition;
@@ -295,7 +295,7 @@ pub fn Channel(comptime T: type) type {
 }
 
 test "Channel basic send/recv" {
-    var ch = try Channel(u32).init(std.testing.allocator, 4, RocIo.os(std.testing.io).sys_io);
+    var ch = try Channel(u32).init(std.testing.allocator, 4, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io);
     defer ch.deinit();
 
     try ch.send(1);
@@ -308,14 +308,14 @@ test "Channel basic send/recv" {
 }
 
 test "Channel tryRecv empty" {
-    var ch = try Channel(u32).init(std.testing.allocator, 4, RocIo.os(std.testing.io).sys_io);
+    var ch = try Channel(u32).init(std.testing.allocator, 4, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io);
     defer ch.deinit();
 
     try std.testing.expect(ch.tryRecv() == null);
 }
 
 test "Channel tryRecv non-empty" {
-    var ch = try Channel(u32).init(std.testing.allocator, 4, RocIo.os(std.testing.io).sys_io);
+    var ch = try Channel(u32).init(std.testing.allocator, 4, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io);
     defer ch.deinit();
 
     try ch.send(42);
@@ -324,7 +324,7 @@ test "Channel tryRecv non-empty" {
 }
 
 test "Channel close" {
-    var ch = try Channel(u32).init(std.testing.allocator, 4, RocIo.os(std.testing.io).sys_io);
+    var ch = try Channel(u32).init(std.testing.allocator, 4, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io);
     defer ch.deinit();
 
     try ch.send(1);
@@ -337,7 +337,7 @@ test "Channel close" {
 }
 
 test "Channel send after close" {
-    var ch = try Channel(u32).init(std.testing.allocator, 4, RocIo.os(std.testing.io).sys_io);
+    var ch = try Channel(u32).init(std.testing.allocator, 4, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io);
     defer ch.deinit();
 
     ch.close();
@@ -347,7 +347,7 @@ test "Channel send after close" {
 }
 
 test "Channel sendGrowable grows buffer when full" {
-    var ch = try Channel(u32).init(std.testing.allocator, 2, RocIo.os(std.testing.io).sys_io);
+    var ch = try Channel(u32).init(std.testing.allocator, 2, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io);
     defer ch.deinit();
 
     // Fill to capacity
@@ -367,7 +367,7 @@ test "Channel sendGrowable grows buffer when full" {
 }
 
 test "Channel sendGrowable with wrap-around growth" {
-    var ch = try Channel(u32).init(std.testing.allocator, 3, RocIo.os(std.testing.io).sys_io);
+    var ch = try Channel(u32).init(std.testing.allocator, 3, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io);
     defer ch.deinit();
 
     // Fill and partially drain to create wrap-around state
@@ -391,7 +391,7 @@ test "Channel sendGrowable with wrap-around growth" {
 }
 
 test "Channel len and capacity" {
-    var ch = try Channel(u32).init(std.testing.allocator, 8, RocIo.os(std.testing.io).sys_io);
+    var ch = try Channel(u32).init(std.testing.allocator, 8, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io);
     defer ch.deinit();
 
     try std.testing.expectEqual(@as(usize, 8), ch.capacity());
@@ -406,7 +406,7 @@ test "Channel len and capacity" {
 }
 
 test "Channel ring buffer wrap-around" {
-    var ch = try Channel(u32).init(std.testing.allocator, 3, RocIo.os(std.testing.io).sys_io);
+    var ch = try Channel(u32).init(std.testing.allocator, 3, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io);
     defer ch.deinit();
 
     // Fill buffer
@@ -432,7 +432,7 @@ test "Channel with struct type" {
         name: []const u8,
     };
 
-    var ch = try Channel(Item).init(std.testing.allocator, 4, RocIo.os(std.testing.io).sys_io);
+    var ch = try Channel(Item).init(std.testing.allocator, 4, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io);
     defer ch.deinit();
 
     try ch.send(.{ .id = 1, .name = "first" });
@@ -451,7 +451,7 @@ test "Channel multi-producer single-consumer" {
     // Skip on wasm where threads aren't available
     if (threading.is_freestanding) return error.SkipZigTest;
 
-    var ch = try Channel(u32).init(std.testing.allocator, 16, RocIo.os(std.testing.io).sys_io);
+    var ch = try Channel(u32).init(std.testing.allocator, 16, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io);
     defer ch.deinit();
 
     const num_producers = 4;
@@ -492,11 +492,11 @@ test "Channel blocking recv with timeout" {
     // Skip on wasm where threads aren't available
     if (threading.is_freestanding) return error.SkipZigTest;
 
-    var ch = try Channel(u32).init(std.testing.allocator, 4, RocIo.os(std.testing.io).sys_io);
+    var ch = try Channel(u32).init(std.testing.allocator, 4, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io);
     defer ch.deinit();
 
     // recvTimeout on empty channel should return null after timeout
-    const test_io = RocIo.os(std.testing.io).sys_io;
+    const test_io = RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io;
     const start = SysIo.Timestamp.now(test_io, .real).nanoseconds;
     const result = ch.recvTimeout(10_000_000); // 10ms
     const elapsed = SysIo.Timestamp.now(test_io, .real).nanoseconds - start;
@@ -509,7 +509,7 @@ test "Channel producer-consumer coordination" {
     // Skip on wasm where threads aren't available
     if (threading.is_freestanding) return error.SkipZigTest;
 
-    var ch = try Channel(u32).init(std.testing.allocator, 2, RocIo.os(std.testing.io).sys_io); // Small buffer to test blocking
+    var ch = try Channel(u32).init(std.testing.allocator, 2, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io); // Small buffer to test blocking
     defer ch.deinit();
 
     // Producer thread sends values with small delay

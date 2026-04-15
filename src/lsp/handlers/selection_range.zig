@@ -7,9 +7,6 @@ const std = @import("std");
 const protocol = @import("../protocol.zig");
 const parse = @import("parse");
 const can = @import("can");
-const base = @import("base");
-
-const Allocators = base.Allocators;
 const AST = parse.AST;
 const TokenizedRegion = AST.TokenizedRegion;
 
@@ -153,16 +150,12 @@ fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line:
     const target_offset = positionToOffset(line, character, &line_offsets) orelse return error.InvalidPosition;
 
     // Parse to get AST
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
     var module_env = can.ModuleEnv.init(allocator, source) catch {
         return error.ParseFailed;
     };
     defer module_env.deinit();
 
-    const ast = parse.parse(&allocators, &module_env.common) catch {
+    const ast = parse.parse(allocator, &module_env.common) catch {
         return error.ParseFailed;
     };
     defer ast.deinit();

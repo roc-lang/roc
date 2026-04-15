@@ -11,11 +11,11 @@ const builtin = @import("builtin");
 const DW = std.dwarf;
 const ir = @import("ir.zig");
 const log = std.log.scoped(.llvm);
-const RocIo = @import("io").RocIo;
+const RocCtx = @import("ctx").RocCtx;
 const Writer = std.Io.Writer;
 
-/// Alias for the underlying system I/O type carried by RocIo.
-const SysIo = @FieldType(RocIo, "sys_io");
+/// Alias for the underlying system I/O type carried by RocCtx.
+const SysIo = @FieldType(RocCtx, "sys_io");
 
 gpa: Allocator,
 strip: bool,
