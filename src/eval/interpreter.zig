@@ -2739,7 +2739,7 @@ pub const Interpreter = struct {
         }
     }
 
-    const ListElemInfo = struct { alignment: u32, width: usize, rc: bool };
+    const ListElemInfo = struct { alignment: u32, width: usize };
 
     const ListElementPairStruct = struct {
         list_offset: usize,
@@ -2765,10 +2765,13 @@ pub const Interpreter = struct {
             return .{
                 .alignment = @intCast(sa.alignment.toByteUnits()),
                 .width = sa.size,
-                .rc = self.helper.containsRefcounted(elem_idx),
             };
         }
-        return .{ .alignment = 1, .width = 0, .rc = false };
+        return .{ .alignment = 1, .width = 0 };
+    }
+
+    fn builtinListElemRc(self: *LirInterpreter, list_layout: layout_mod.Idx) bool {
+        return self.builtinInternalContainsRefcounted("interpreter.builtinListElemRc", self.listElemLayout(list_layout));
     }
 
     fn listElemLayout(self: *LirInterpreter, list_layout: layout_mod.Idx) layout_mod.Idx {
@@ -3129,6 +3132,7 @@ pub const Interpreter = struct {
             },
             .list_concat => blk: {
                 const info = self.listElemInfo(arg_layout);
+                const elems_rc = self.builtinListElemRc(arg_layout);
                 const list_a = self.valueToRocListForLayout(args[0], arg_layout);
                 const list_b = self.valueToRocListForLayout(args[1], arg_layout);
                 if (info.width == 0) {
@@ -3155,17 +3159,18 @@ pub const Interpreter = struct {
                     list_b,
                     info.alignment,
                     info.width,
-                    info.rc,
-                    if (info.rc) @ptrCast(&elem_rc_ctx) else null,
-                    if (info.rc) &listElementIncref else &builtins.utils.rcNone,
-                    if (info.rc) @ptrCast(&elem_rc_ctx) else null,
-                    if (info.rc) &listElementDecref else &builtins.utils.rcNone,
+                    elems_rc,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
                     &self.roc_ops,
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
             .list_prepend => blk: {
                 const info = self.listElemInfo(arg_layout);
+                const elems_rc = self.builtinListElemRc(arg_layout);
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
@@ -3182,9 +3187,9 @@ pub const Interpreter = struct {
                     info.alignment,
                     @ptrCast(args[1].ptr),
                     info.width,
-                    info.rc,
-                    if (info.rc) @ptrCast(&elem_rc_ctx) else null,
-                    if (info.rc) &listElementIncref else &builtins.utils.rcNone,
+                    elems_rc,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
                     copy_fn,
                     &self.roc_ops,
                 );
@@ -3196,6 +3201,7 @@ pub const Interpreter = struct {
                 }
 
                 const info = self.listElemInfo(arg_layout);
+                const elems_rc = self.builtinListElemRc(arg_layout);
                 const record_layout = ll.arg_layouts[1];
                 const record_layout_val = self.layout_store.getLayout(record_layout);
                 if (record_layout_val.tag != .struct_) {
@@ -3221,17 +3227,18 @@ pub const Interpreter = struct {
                     source_list,
                     info.alignment,
                     info.width,
-                    info.rc,
+                    elems_rc,
                     start,
                     len,
-                    if (info.rc) @ptrCast(&elem_rc_ctx) else null,
-                    if (info.rc) &listElementDecref else &builtins.utils.rcNone,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
                     &self.roc_ops,
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
             .list_drop_at => blk: {
                 const info = self.listElemInfo(arg_layout);
+                const elems_rc = self.builtinListElemRc(arg_layout);
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
@@ -3244,18 +3251,19 @@ pub const Interpreter = struct {
                     self.valueToRocListForLayout(args[0], arg_layout),
                     info.alignment,
                     info.width,
-                    info.rc,
+                    elems_rc,
                     args[1].read(u64),
-                    if (info.rc) @ptrCast(&elem_rc_ctx) else null,
-                    if (info.rc) &listElementIncref else &builtins.utils.rcNone,
-                    if (info.rc) @ptrCast(&elem_rc_ctx) else null,
-                    if (info.rc) &listElementDecref else &builtins.utils.rcNone,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
                     &self.roc_ops,
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
             .list_set => blk: {
                 const info = self.listElemInfo(arg_layout);
+                const elems_rc = self.builtinListElemRc(arg_layout);
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
@@ -3275,11 +3283,11 @@ pub const Interpreter = struct {
                     args[1].read(u64),
                     @ptrCast(args[2].ptr),
                     info.width,
-                    info.rc,
-                    if (info.rc) @ptrCast(&elem_rc_ctx) else null,
-                    if (info.rc) &listElementIncref else &builtins.utils.rcNone,
-                    if (info.rc) @ptrCast(&elem_rc_ctx) else null,
-                    if (info.rc) &listElementDecref else &builtins.utils.rcNone,
+                    elems_rc,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
                     @ptrCast(old_elem.ptr),
                     copy_fn,
                     &self.roc_ops,
@@ -3312,6 +3320,7 @@ pub const Interpreter = struct {
             },
             .list_reserve => blk: {
                 const info = self.listElemInfo(arg_layout);
+                const elems_rc = self.builtinListElemRc(arg_layout);
                 const list_val = self.valueToRocListForLayout(args[0], arg_layout);
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
@@ -3326,9 +3335,9 @@ pub const Interpreter = struct {
                     info.alignment,
                     args[1].read(u64),
                     info.width,
-                    info.rc,
-                    if (info.rc) @ptrCast(&elem_rc_ctx) else null,
-                    if (info.rc) &listElementIncref else &builtins.utils.rcNone,
+                    elems_rc,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
                     UpdateMode.Immutable,
                     &self.roc_ops,
                 );
@@ -3336,6 +3345,7 @@ pub const Interpreter = struct {
             },
             .list_release_excess_capacity => blk: {
                 const info = self.listElemInfo(arg_layout);
+                const elems_rc = self.builtinListElemRc(arg_layout);
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
@@ -3348,11 +3358,11 @@ pub const Interpreter = struct {
                     self.valueToRocListForLayout(args[0], arg_layout),
                     info.alignment,
                     info.width,
-                    info.rc,
-                    if (info.rc) @ptrCast(&elem_rc_ctx) else null,
-                    if (info.rc) &listElementIncref else &builtins.utils.rcNone,
-                    if (info.rc) @ptrCast(&elem_rc_ctx) else null,
-                    if (info.rc) &listElementDecref else &builtins.utils.rcNone,
+                    elems_rc,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
                     UpdateMode.Immutable,
                     &self.roc_ops,
                 );
@@ -4442,6 +4452,7 @@ pub const Interpreter = struct {
 
     fn evalListDropFirst(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
         const info = self.listElemInfo(list_layout);
+        const elems_rc = self.builtinListElemRc(list_layout);
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
         const sj = crash_boundary.set();
@@ -4450,7 +4461,7 @@ pub const Interpreter = struct {
             self.valueToRocListForLayout(list_arg, list_layout),
             info.alignment,
             info.width,
-            info.rc,
+            elems_rc,
             1,
             std.math.maxInt(u64),
             null,
@@ -4463,6 +4474,7 @@ pub const Interpreter = struct {
     fn evalListDropLast(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
         const rl = self.valueToRocListForLayout(list_arg, list_layout);
         const info = self.listElemInfo(list_layout);
+        const elems_rc = self.builtinListElemRc(list_layout);
         const len = rl.len();
         if (len == 0) return self.rocListToValue(rl, ret_layout);
         var crash_boundary = self.enterCrashBoundary();
@@ -4473,7 +4485,7 @@ pub const Interpreter = struct {
             rl,
             info.alignment,
             info.width,
-            info.rc,
+            elems_rc,
             0,
             len - 1,
             null,
@@ -4485,6 +4497,7 @@ pub const Interpreter = struct {
 
     fn evalListTakeFirst(self: *LirInterpreter, list_arg: Value, count_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
         const info = self.listElemInfo(list_layout);
+        const elems_rc = self.builtinListElemRc(list_layout);
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
         const sj = crash_boundary.set();
@@ -4493,7 +4506,7 @@ pub const Interpreter = struct {
             self.valueToRocListForLayout(list_arg, list_layout),
             info.alignment,
             info.width,
-            info.rc,
+            elems_rc,
             0,
             count_arg.read(u64),
             null,
@@ -4506,6 +4519,7 @@ pub const Interpreter = struct {
     fn evalListTakeLast(self: *LirInterpreter, list_arg: Value, count_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
         const rl = self.valueToRocListForLayout(list_arg, list_layout);
         const info = self.listElemInfo(list_layout);
+        const elems_rc = self.builtinListElemRc(list_layout);
         const len = rl.len();
         const take = count_arg.read(u64);
         const start = if (take >= len) 0 else len - @as(usize, @intCast(take));
@@ -4517,7 +4531,7 @@ pub const Interpreter = struct {
             rl,
             info.alignment,
             info.width,
-            info.rc,
+            elems_rc,
             @intCast(start),
             take,
             null,
@@ -4530,6 +4544,7 @@ pub const Interpreter = struct {
     fn evalListReverse(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
         const rl = self.valueToRocListForLayout(list_arg, list_layout);
         const info = self.listElemInfo(list_layout);
+        const elems_rc = self.builtinListElemRc(list_layout);
         if (rl.len() <= 1 or rl.bytes == null or info.width == 0)
             return self.rocListToValue(rl, ret_layout);
         // Clone and reverse in-place
@@ -4537,7 +4552,7 @@ pub const Interpreter = struct {
         defer crash_boundary.deinit();
         const sj = crash_boundary.set();
         if (sj != 0) return error.Crash;
-        const new_list = builtins.list.shallowClone(rl, rl.len(), info.width, info.alignment, info.rc, &self.roc_ops);
+        const new_list = builtins.list.shallowClone(rl, rl.len(), info.width, info.alignment, elems_rc, &self.roc_ops);
         if (new_list.bytes) |bytes| {
             var lo: usize = 0;
             var hi: usize = new_list.len() - 1;
@@ -4556,6 +4571,7 @@ pub const Interpreter = struct {
     fn evalListSplitFirst(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
         const rl = self.valueToRocListForLayout(list_arg, list_layout);
         const info = self.listElemInfo(list_layout);
+        const elems_rc = self.builtinListElemRc(list_layout);
         const elem_layout = self.listElemLayout(list_layout);
         const val = try self.alloc(ret_layout);
         if (rl.len() > 0 and rl.bytes != null and info.width > 0) {
@@ -4581,7 +4597,7 @@ pub const Interpreter = struct {
                 rl,
                 info.alignment,
                 info.width,
-                info.rc,
+                elems_rc,
                 1,
                 std.math.maxInt(u64),
                 null,
@@ -4600,6 +4616,7 @@ pub const Interpreter = struct {
     fn evalListSplitLast(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
         const rl = self.valueToRocListForLayout(list_arg, list_layout);
         const info = self.listElemInfo(list_layout);
+        const elems_rc = self.builtinListElemRc(list_layout);
         const elem_layout = self.listElemLayout(list_layout);
         const val = try self.alloc(ret_layout);
         if (rl.len() > 0 and rl.bytes != null and info.width > 0) {
@@ -4625,7 +4642,7 @@ pub const Interpreter = struct {
                 rl,
                 info.alignment,
                 info.width,
-                info.rc,
+                elems_rc,
                 0,
                 rl.len() - 1,
                 null,
