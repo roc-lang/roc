@@ -24,6 +24,7 @@ interpreter-aggregate-coercion | src/eval/interpreter.zig | coerceTagUnionValue 
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitRawRcHelperCallAtStackOffset | RC helper plumbing used by explicit RC lowering and builtin RC helpers
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitRawRcHelperCallForValue | RC helper plumbing used by explicit RC lowering and builtin RC helpers
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitRawRcHelperCallFromPtrReg | RC helper plumbing used by explicit RC lowering and builtin RC helpers
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitBuiltinInternalOptionalRcHelperAddress | builtin primitive helper-address plumbing
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitBuiltinInternalRcHelperCallForValue | builtin primitive lowering choke point
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitExplicitRcHelperCallAtStackOffset | explicit LIR RC lowering choke point
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitExplicitRcHelperCallForValue | explicit LIR RC lowering choke point

@@ -1788,9 +1788,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .list => ret_layout.data.list,
                         else => null,
                     };
-                    const elem_incref_reg = if (elem_layout_idx) |idx| try self.emitOptionalRcHelperAddress(.incref, idx) else null;
+                    const elem_incref_reg = if (elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
                     defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
-                    const elem_decref_reg = if (elem_layout_idx) |idx| try self.emitOptionalRcHelperAddress(.decref, idx) else null;
+                    const elem_decref_reg = if (elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
                     defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
 
                     {
@@ -1846,7 +1846,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .list => ret_layout.data.list,
                         else => null,
                     };
-                    const elem_incref_reg = if (elem_layout_idx) |idx| try self.emitOptionalRcHelperAddress(.incref, idx) else null;
+                    const elem_incref_reg = if (elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
                     defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
 
                     {
@@ -2944,9 +2944,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .list => ret_layout.data.list,
                         else => null,
                     };
-                    const elem_incref_reg = if (elem_layout_idx) |idx| try self.emitOptionalRcHelperAddress(.incref, idx) else null;
+                    const elem_incref_reg = if (elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
                     defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
-                    const elem_decref_reg = if (elem_layout_idx) |idx| try self.emitOptionalRcHelperAddress(.decref, idx) else null;
+                    const elem_decref_reg = if (elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
                     defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
 
                     {
@@ -3806,7 +3806,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list => ls.getLayout(ll.ret_layout).data.list,
                 else => null,
             };
-            const elem_decref_reg = if (elem_layout_idx) |idx| try self.emitOptionalRcHelperAddress(.decref, idx) else null;
+            const elem_decref_reg = if (elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
             defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
 
             {
@@ -3897,7 +3897,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list => ls.getLayout(ll.ret_layout).data.list,
                 else => null,
             };
-            const elem_decref_reg = if (elem_layout_idx) |idx| try self.emitOptionalRcHelperAddress(.decref, idx) else null;
+            const elem_decref_reg = if (elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
             defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
 
             {
@@ -3951,9 +3951,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list => ls.getLayout(ll.ret_layout).data.list,
                 else => null,
             };
-            const elem_incref_reg = if (elem_layout_idx) |idx| try self.emitOptionalRcHelperAddress(.incref, idx) else null;
+            const elem_incref_reg = if (elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
             defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
-            const elem_decref_reg = if (elem_layout_idx) |idx| try self.emitOptionalRcHelperAddress(.decref, idx) else null;
+            const elem_decref_reg = if (elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
             defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
 
             {
@@ -4412,7 +4412,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list => ret_layout.data.list,
                 else => null,
             };
-            const elem_incref_reg = if (elem_layout_idx) |idx| try self.emitOptionalRcHelperAddress(.incref, idx) else null;
+            const elem_incref_reg = if (elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
             defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
 
             {
@@ -4461,9 +4461,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list => ret_layout.data.list,
                 else => null,
             };
-            const elem_incref_reg = if (elem_layout_idx) |idx| try self.emitOptionalRcHelperAddress(.incref, idx) else null;
+            const elem_incref_reg = if (elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
             defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
-            const elem_decref_reg = if (elem_layout_idx) |idx| try self.emitOptionalRcHelperAddress(.decref, idx) else null;
+            const elem_decref_reg = if (elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
             defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
 
             {
@@ -8237,11 +8237,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitCallRcHelperFromStackSlots(helper_key, ptr_slot, count_slot, roc_ops_slot);
         }
 
-        fn emitOptionalRcHelperAddress(
+        fn emitBuiltinInternalOptionalRcHelperAddress(
             self: *Self,
             op: RcOp,
             layout_idx: layout.Idx,
         ) Allocator.Error!?GeneralReg {
+            ownership_boundary.builtinRuntimeInternal("dev.emitBuiltinInternalOptionalRcHelperAddress");
             const helper_key = RcHelperKey{ .op = op, .layout_idx = layout_idx };
             const resolver = RcHelperResolver.init(self.layout_store);
             if (resolver.plan(helper_key) == .noop) return null;
