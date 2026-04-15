@@ -4914,6 +4914,7 @@ pub const Interpreter = struct {
         actual_layout: layout_mod.Idx,
         expected_layout: layout_mod.Idx,
     ) Error!Value {
+        ownership_boundary.forbiddenOrdinaryOwnershipDecision("interpreter.coerceValueToLayout");
         if (actual_layout == expected_layout) {
             return value;
         }
@@ -5039,6 +5040,7 @@ pub const Interpreter = struct {
         actual_layout: layout_mod.Idx,
         expected_box_layout: layout_mod.Idx,
     ) Error!Value {
+        ownership_boundary.forbiddenOrdinaryOwnershipDecision("interpreter.coerceValueIntoBox");
         const expected_layout_val = self.layout_store.getLayout(expected_box_layout);
         switch (expected_layout_val.tag) {
             .box_of_zst => return Value.zst,
@@ -5090,6 +5092,7 @@ pub const Interpreter = struct {
         actual_layout: layout_mod.Idx,
         expected_layout: layout_mod.Idx,
     ) Error!Value {
+        ownership_boundary.forbiddenOrdinaryOwnershipDecision("interpreter.coerceStructValue");
         const actual_base = self.resolveStructBaseValue(value, actual_layout);
         const expected_alloc = try self.allocStructValue(expected_layout);
 
@@ -5168,6 +5171,7 @@ pub const Interpreter = struct {
         actual_layout: layout_mod.Idx,
         expected_layout: layout_mod.Idx,
     ) Error!Value {
+        ownership_boundary.forbiddenOrdinaryOwnershipDecision("interpreter.coerceTagUnionValue");
         const actual_base = self.resolveTagUnionBaseValue(value, actual_layout);
         const actual_base_layout_val = self.layout_store.getLayout(actual_base.layout);
         const expected_layout_val = self.layout_store.getLayout(expected_layout);
