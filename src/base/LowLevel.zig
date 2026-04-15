@@ -416,7 +416,11 @@ pub const LowLevel = enum {
 
     pub const ResultMaterialization = enum {
         direct,
+        // The result is materialized by copying bytes from a borrowed source,
+        // so RC insertion must retain the produced value explicitly.
         copy_from_borrowed_input,
+        // The result is a fresh aggregate/container that stores inputs as owned
+        // children, so RC insertion must retain those children explicitly.
         fresh_aggregate,
     };
 
@@ -826,12 +830,10 @@ pub const LowLevel = enum {
             .list_get_unsafe,
             .list_first,
             .list_last,
-            .box_unbox,
             => .copy_from_borrowed_input,
 
             .list_split_first,
             .list_split_last,
-            .box_box,
             => .fresh_aggregate,
 
             else => .direct,

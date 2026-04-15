@@ -39,11 +39,9 @@ ownership decisions. The remaining sites below show the specific gaps.
    Current behavior:
    - The interpreter allocates box storage, copies the payload, and then conditionally `incref`s copied refcounted children.
    Missing earlier fact:
-   - LIR does not yet represent “copy into freshly owned box payload retains children” as explicit ownership semantics.
+   - LIR still routes some box-pack paths through the forbidden aggregate-coercion island instead of a fully explicit owned-transfer/fresh-owner path.
    LIR change needed:
-   - Introduce an explicit box-pack ownership contract, either as:
-     - a dedicated `assign_box_pack`-style stmt with explicit child-retain semantics, or
-     - explicit `incref` statements emitted before/after the copy according to a low-level op ownership contract.
+   - Finish replacing aggregate coercion with explicit box-pack lowering that consumes owned payloads or retains borrowed payloads via `RcInsert`, using the central low-level contract.
    Replacement:
    - No interpreter-side retain; only explicit LIR RC.
 
