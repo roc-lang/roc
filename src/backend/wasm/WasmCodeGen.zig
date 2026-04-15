@@ -816,7 +816,7 @@ fn emitRawRcHelperCallForValuePtr(
     if (helper_plan == .noop) return;
     if (try self.emitRawDirectRcPlan(helper_key, helper_plan, value_ptr_local, null)) return;
 
-    const helper_func_idx = try self.compileRcHelper(helper_key);
+    const helper_func_idx = try self.compileBuiltinInternalRcHelper(helper_key);
     try self.emitLocalGet(value_ptr_local);
     switch (kind) {
         .incref => {
@@ -1362,7 +1362,7 @@ fn emitRawRcHelperCallByKey(
     if (helper_plan == .noop) return;
     if (try self.emitRawDirectRcPlan(helper_key, helper_plan, value_ptr_local, count_local)) return;
 
-    const helper_func_idx = try self.compileRcHelper(helper_key);
+    const helper_func_idx = try self.compileBuiltinInternalRcHelper(helper_key);
     try self.emitLocalGet(value_ptr_local);
     switch (helper_key.op) {
         .incref => {
@@ -1404,7 +1404,7 @@ fn emitBoxChildDropIfUnique(
     self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
 }
 
-fn generateRcHelperBody(
+fn generateBuiltinInternalRcHelperBody(
     self: *Self,
     helper_key: RcHelperKey,
     value_ptr_local: u32,
@@ -1544,7 +1544,7 @@ fn generateRcHelperBody(
     }
 }
 
-fn compileRcHelper(self: *Self, helper_key: RcHelperKey) Allocator.Error!u32 {
+fn compileBuiltinInternalRcHelper(self: *Self, helper_key: RcHelperKey) Allocator.Error!u32 {
     const cache_key = helper_key.encode();
     if (self.rc_helper_funcs.get(cache_key)) |func_idx| {
         return func_idx;
@@ -1596,7 +1596,7 @@ fn compileRcHelper(self: *Self, helper_key: RcHelperKey) Allocator.Error!u32 {
     self.body.append(self.allocator, Op.br_if) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
 
-    try self.generateRcHelperBody(helper_key, value_ptr_local, count_local);
+    try self.generateBuiltinInternalRcHelperBody(helper_key, value_ptr_local, count_local);
 
     self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
 

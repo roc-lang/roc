@@ -8115,7 +8115,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             count_slot: ?i32,
             roc_ops_slot: i32,
         ) Allocator.Error!void {
-            const code_offset = try self.compileRcHelper(helper_key);
+            const code_offset = try self.compileBuiltinInternalRcHelper(helper_key);
 
             const arg0 = self.getArgumentRegister(0);
             try self.emitLoad(.w64, arg0, frame_ptr, ptr_slot);
@@ -8248,7 +8248,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (resolver.plan(helper_key) == .noop) return null;
 
             const callback_reg = try self.allocTempGeneral();
-            const code_offset = try self.compileRcHelper(helper_key);
+            const code_offset = try self.compileBuiltinInternalRcHelper(helper_key);
             try self.emitInternalCodeAddress(code_offset, callback_reg);
             return callback_reg;
         }
@@ -8439,7 +8439,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitLoad(.w64, cap_reg, value_ptr_reg, 16);
 
             if (list_plan.child) |child_key| {
-                const child_offset = try self.compileRcHelper(child_key);
+                const child_offset = try self.compileBuiltinInternalRcHelper(child_key);
                 try self.emitInternalCodeAddress(child_offset, callback_reg);
             } else {
                 try self.codegen.emitLoadImm(callback_reg, 0);
@@ -8496,7 +8496,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitLoad(.w64, payload_reg, value_ptr_reg, 0);
 
             if (box_plan.child) |child_key| {
-                const child_offset = try self.compileRcHelper(child_key);
+                const child_offset = try self.compileBuiltinInternalRcHelper(child_key);
                 try self.emitInternalCodeAddress(child_offset, callback_reg);
             } else {
                 try self.codegen.emitLoadImm(callback_reg, 0);
@@ -8510,7 +8510,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.callBuiltin(&builder, fn_addr, builtin_fn);
         }
 
-        fn generateRcHelperBody(
+        fn generateBuiltinInternalRcHelperBody(
             self: *Self,
             helper_key: RcHelperKey,
             ptr_slot: i32,
@@ -8636,7 +8636,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn compileRcHelper(self: *Self, helper_key: RcHelperKey) Allocator.Error!usize {
+        fn compileBuiltinInternalRcHelper(self: *Self, helper_key: RcHelperKey) Allocator.Error!usize {
             const cache_key = helper_key.encode();
             if (self.compiled_rc_helpers.get(cache_key)) |code_offset| {
                 return code_offset;
@@ -8723,7 +8723,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(ptr_reg);
             const early_return_patch = try self.emitJumpIfEqual();
 
-            try self.generateRcHelperBody(helper_key, ptr_slot, count_slot, roc_ops_slot);
+            try self.generateBuiltinInternalRcHelperBody(helper_key, ptr_slot, count_slot, roc_ops_slot);
 
             const body_epilogue_offset = self.codegen.currentOffset();
             {

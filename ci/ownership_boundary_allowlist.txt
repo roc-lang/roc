@@ -35,7 +35,8 @@ dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitBuiltinInternalRcHelpe
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitBuiltinInternalRcHelperBoxDrop | backend RC helper-body infrastructure
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitExplicitRcHelperCallAtStackOffset | explicit LIR RC lowering choke point
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitExplicitRcHelperCallForValue | explicit LIR RC lowering choke point
-dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | generateRcHelperBody | backend RC helper codegen infrastructure
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | generateBuiltinInternalRcHelperBody | backend RC helper codegen infrastructure
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | compileBuiltinInternalRcHelper | backend RC helper compilation infrastructure
 ordinary-layout-refcount-branch | src/backend/dev/LirCodeGen.zig | builtinInternalLayoutContainsRefcounted | builtin primitive layout-refcount query helper
 ordinary-layout-refcount-branch | src/backend/dev/LirCodeGen.zig | builtinInternalLayoutValContainsRefcounted | builtin primitive layout-refcount query helper
 ordinary-layout-refcount-branch | src/backend/dev/LirCodeGen.zig | explicitRcLayoutValContainsRefcounted | explicit RC layout-refcount query helper
@@ -54,7 +55,8 @@ wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitBuiltinInternalRcAt
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitExplicitRcForValueLocal | explicit LIR RC lowering choke point
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitListElementDecrefsIfUnique | wasm builtin/helper RC infrastructure
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitBoxChildDropIfUnique | wasm builtin/helper RC infrastructure
-wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | generateRcHelperBody | wasm RC helper codegen infrastructure
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | generateBuiltinInternalRcHelperBody | wasm RC helper codegen infrastructure
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | compileBuiltinInternalRcHelper | wasm RC helper codegen infrastructure
 ordinary-layout-refcount-branch | src/backend/wasm/WasmCodeGen.zig | builtinInternalLayoutContainsRefcounted | builtin primitive layout-refcount query helper
 ordinary-layout-refcount-branch | src/backend/wasm/WasmCodeGen.zig | explicitRcLayoutContainsRefcounted | explicit RC layout-refcount query helper
 wasm-raw-rc-helper-call | src/backend/wasm/WasmCodeGen.zig | emitRawRcForValueLocal | raw wasm RC helper plumbing under explicit/builtin wrappers
