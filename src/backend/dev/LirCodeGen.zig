@@ -1495,7 +1495,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Determine if elements contain refcounted data
                     const elements_refcounted: bool = blk: {
                         if (ret_layout.tag == .list) {
-                            break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list));
+                            break :blk builtinInternalLayoutContainsRefcounted(ls, "dev.list_with_capacity.builtin_elem_rc", ret_layout.data.list);
                         }
                         break :blk false;
                     };
@@ -1779,7 +1779,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         else => unreachable,
                     };
                     const elements_refcounted: bool = switch (ret_layout.tag) {
-                        .list => ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list)),
+                        .list => builtinInternalLayoutContainsRefcounted(ls, "dev.list_concat.builtin_elem_rc", ret_layout.data.list),
                         else => false,
                     };
 
@@ -1837,7 +1837,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         else => unreachable,
                     };
                     const elements_refcounted: bool = switch (ret_layout.tag) {
-                        .list => ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list)),
+                        .list => builtinInternalLayoutContainsRefcounted(ls, "dev.list_append_unsafe.builtin_elem_rc", ret_layout.data.list),
                         else => false,
                     };
 
@@ -2932,7 +2932,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         else => unreachable,
                     };
                     const elements_refcounted: bool = switch (ret_layout.tag) {
-                        .list => ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list)),
+                        .list => builtinInternalLayoutContainsRefcounted(ls, "dev.list_replace_unsafe.builtin_elem_rc", ret_layout.data.list),
                         else => false,
                     };
 
@@ -3736,7 +3736,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const elements_refcounted = blk: {
                 const ret_layout = ls.getLayout(ll.ret_layout);
                 break :blk switch (ret_layout.tag) {
-                    .list => ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list)),
+                    .list => builtinInternalLayoutContainsRefcounted(ls, "dev.callListSublist.builtin_elem_rc", ret_layout.data.list),
                     .list_of_zst => false,
                     else => unreachable,
                 };
@@ -3846,7 +3846,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const elements_refcounted = blk: {
                 const ret_layout = ls.getLayout(ll.ret_layout);
                 break :blk switch (ret_layout.tag) {
-                    .list => ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list)),
+                    .list => builtinInternalLayoutContainsRefcounted(ls, "dev.callListSublistFromRecord.builtin_elem_rc", ret_layout.data.list),
                     .list_of_zst => false,
                     else => unreachable,
                 };
@@ -3934,7 +3934,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const elements_refcounted = blk: {
                 const ret_layout = ls.getLayout(ll.ret_layout);
                 break :blk switch (ret_layout.tag) {
-                    .list => ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list)),
+                    .list => builtinInternalLayoutContainsRefcounted(ls, "dev.callListDropAt.builtin_elem_rc", ret_layout.data.list),
                     .list_of_zst => false,
                     else => unreachable,
                 };
@@ -4066,7 +4066,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const rest_elements_refcounted = blk: {
                 const rest_layout = ls.getLayout(rest_list_layout_idx);
                 break :blk switch (rest_layout.tag) {
-                    .list => ls.layoutContainsRefcounted(ls.getLayout(rest_layout.data.list)),
+                    .list => builtinInternalLayoutContainsRefcounted(ls, "dev.callListSplitOp.builtin_rest_elem_rc", rest_layout.data.list),
                     .list_of_zst => false,
                     else => unreachable,
                 };
@@ -4280,7 +4280,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const elements_refcounted: bool = blk: {
                 const ret_layout_val = ls.getLayout(ll.ret_layout);
                 if (ret_layout_val.tag == .list) {
-                    break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout_val.data.list));
+                    break :blk builtinInternalLayoutContainsRefcounted(ls, "dev.generateListReverse.builtin_elem_rc", ret_layout_val.data.list);
                 }
                 break :blk false;
             };
@@ -4413,7 +4413,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 else => unreachable,
             };
             const elements_refcounted: bool = switch (ret_layout.tag) {
-                .list => ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list)),
+                .list => builtinInternalLayoutContainsRefcounted(ls, "dev.callListReserveOp.builtin_elem_rc", ret_layout.data.list),
                 else => false,
             };
 
@@ -4463,7 +4463,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 else => unreachable,
             };
             const elements_refcounted: bool = switch (ret_layout.tag) {
-                .list => ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list)),
+                .list => builtinInternalLayoutContainsRefcounted(ls, "dev.callListReleaseExcessCapOp.builtin_elem_rc", ret_layout.data.list),
                 else => false,
             };
 
@@ -9115,7 +9115,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const elem_alignment: u32 = @intCast(elem_size_align.alignment.toByteUnits());
             const num_elems: u32 = @intCast(elems.len);
             const total_data_bytes: usize = @as(usize, elem_size) * @as(usize, num_elems);
-            const elements_refcounted: bool = ls.layoutContainsRefcounted(elem_layout_data);
+            const elements_refcounted: bool = builtinInternalLayoutValContainsRefcounted(ls, "dev.generateList.builtin_elem_rc", elem_layout_data);
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
             const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
 

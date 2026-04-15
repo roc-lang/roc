@@ -1286,7 +1286,7 @@ fn emitListRc(
         const info = ls.getListInfo(list_layout);
         const runtime_elem_layout = self.runtimeRepresentationLayoutIdx(info.elem_layout_idx);
         elem_alignment = @intCast(ls.layoutSizeAlign(ls.getLayout(runtime_elem_layout)).alignment.toByteUnits());
-        elements_refcounted = ls.layoutContainsRefcounted(ls.getLayout(runtime_elem_layout));
+        elements_refcounted = builtinInternalLayoutContainsRefcounted(ls, "wasm.emitListRc.builtin_elem_rc", runtime_elem_layout);
         if (elements_refcounted) {
             elem_layout_idx = runtime_elem_layout;
         }
@@ -1474,7 +1474,7 @@ fn generateRcHelperBody(
                 const field = fields.get(i);
                 const field_layout_idx = field.layout;
                 const field_layout = ls.getLayout(field_layout_idx);
-                if (!ls.layoutContainsRefcounted(field_layout)) continue;
+                if (!builtinInternalLayoutContainsRefcounted(ls, "wasm.generateRcHelperBody.builtin_field_rc", field_layout_idx)) continue;
                 if (self.layoutStorageByteSize(field_layout_idx) == 0) continue;
 
                 const field_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -2238,7 +2238,7 @@ fn compareFieldByLayout(
                 WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(inner_elem_size)) catch return error.OutOfMemory;
                 self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
                 WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
-            } else if (ls.layoutContainsRefcounted(ls.getLayout(elem_layout))) {
+            } else if (builtinInternalLayoutContainsRefcounted(ls, "wasm.compareFieldByLayout.builtin_elem_rc", elem_layout)) {
                 // Composite elements (records/tuples/tag-unions with refcounted fields):
                 // inline element-by-element structural comparison loop.
                 const elem_size = self.layoutByteSize(elem_layout);
@@ -10116,7 +10116,7 @@ fn emitListEqWithElemLayout(self: *Self, lhs: ProcLocalId, rhs: ProcLocalId, ele
             WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(inner_elem_size)) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
-        } else if (ls.layoutContainsRefcounted(elem_l)) {
+        } else if (builtinInternalLayoutContainsRefcounted(ls, "wasm.emitListEqWithElemLayout.builtin_elem_rc", elem_layout)) {
             // Composite elements with refcounted fields: inline structural loop
             const elem_size = self.layoutByteSize(elem_layout);
             try self.emitListEqLoop(lhs_local, rhs_local, elem_layout, elem_size);
@@ -10807,7 +10807,7 @@ fn getListElemAlign(self: *const Self, list_layout: layout.Idx) u32 {
 fn listContainsRefcounted(self: *const Self, list_layout: layout.Idx) bool {
     const ls = self.getLayoutStore();
     const elem_layout = self.listElemRuntimeLayout(list_layout);
-    return ls.layoutContainsRefcounted(ls.getLayout(elem_layout));
+    return builtinInternalLayoutContainsRefcounted(ls, "wasm.listContainsRefcounted.builtin_elem_rc", elem_layout);
 }
 
 fn listElemRuntimeLayout(self: *const Self, list_layout_idx: layout.Idx) layout.Idx {

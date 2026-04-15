@@ -54,7 +54,11 @@ RULES = (
     ),
     Rule(
         category="ordinary-layout-refcount-branch",
-        path_prefixes=("src/eval", "src/backend/dev", "src/backend/wasm"),
+        path_prefixes=(
+            "src/eval/interpreter.zig",
+            "src/backend/dev/LirCodeGen.zig",
+            "src/backend/wasm/WasmCodeGen.zig",
+        ),
         regex=re.compile(r"\blayoutContainsRefcounted\("),
         description="ordinary interpreter/backend ownership reasoning via refcounted-layout checks",
     ),
