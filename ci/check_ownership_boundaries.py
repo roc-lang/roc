@@ -59,8 +59,14 @@ RULES = (
             "src/backend/dev/LirCodeGen.zig",
             "src/backend/wasm/WasmCodeGen.zig",
         ),
-        regex=re.compile(r"\blayoutContainsRefcounted\("),
+        regex=re.compile(r"\b(?:layoutContainsRefcounted|containsRefcounted)\("),
         description="ordinary interpreter/backend ownership reasoning via refcounted-layout checks",
+    ),
+    Rule(
+        category="wasm-raw-rc-helper-call",
+        path_prefixes=("src/backend/wasm/WasmCodeGen.zig",),
+        regex=re.compile(r"\bemitRcHelperCallForValuePtr\("),
+        description="wasm raw RC helper emission outside wrapper/builtin/helper infrastructure",
     ),
     Rule(
         category="interpreter-aggregate-coercion",

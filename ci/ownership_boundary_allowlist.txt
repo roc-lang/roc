@@ -16,6 +16,7 @@ interpreter-perform-rc | src/eval/interpreter.zig | performInterpreterApiRc | in
 interpreter-perform-rc | src/eval/interpreter.zig | performForbiddenOrdinaryRc | forbidden ordinary-path RC marker helper
 ordinary-layout-refcount-branch | src/eval/interpreter.zig | builtinInternalContainsRefcounted | builtin/runtime-internal layout-refcount query helper
 ordinary-layout-refcount-branch | src/eval/interpreter.zig | forbiddenOrdinaryContainsRefcounted | forbidden ordinary-path layout-refcount query marker
+ordinary-layout-refcount-branch | src/eval/interpreter.zig | builtinListElemRc | builtin-only list element RC query helper
 interpreter-aggregate-coercion | src/eval/interpreter.zig | coerceValueToLayout | forbidden aggregate coercion island pending full LIR replacement
 interpreter-aggregate-coercion | src/eval/interpreter.zig | coerceValueIntoBox | forbidden aggregate coercion island pending full LIR replacement
 interpreter-aggregate-coercion | src/eval/interpreter.zig | coerceStructValue | forbidden aggregate coercion island pending full LIR replacement
@@ -43,3 +44,6 @@ wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitBoxChildDropIfUniqu
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | generateRcHelperBody | wasm RC helper codegen infrastructure
 ordinary-layout-refcount-branch | src/backend/wasm/WasmCodeGen.zig | builtinInternalLayoutContainsRefcounted | builtin primitive layout-refcount query helper
 ordinary-layout-refcount-branch | src/backend/wasm/WasmCodeGen.zig | explicitRcLayoutContainsRefcounted | explicit RC layout-refcount query helper
+wasm-raw-rc-helper-call | src/backend/wasm/WasmCodeGen.zig | emitRawRcForValueLocal | raw wasm RC helper plumbing under explicit/builtin wrappers
+wasm-raw-rc-helper-call | src/backend/wasm/WasmCodeGen.zig | emitRawRcAtPtr | raw wasm RC helper plumbing under explicit/builtin wrappers
+wasm-raw-rc-helper-call | src/backend/wasm/WasmCodeGen.zig | emitRcHelperCallForValuePtr | raw wasm helper-call emitter
