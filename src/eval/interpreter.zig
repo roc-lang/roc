@@ -1364,9 +1364,9 @@ pub const Interpreter = struct {
                     var i: usize = 0;
                     while (i < rl.len()) : (i += 1) {
                         const normalized_elem = if (info.width == 0 or rl.bytes == null)
-                            try self.coerceValueToLayout(Value.zst, actual_elem_layout, elem_layout)
+                            try self.coerceExplicitRefValueToLayout(Value.zst, actual_elem_layout, elem_layout)
                         else
-                            try self.coerceValueToLayout(
+                            try self.coerceExplicitRefValueToLayout(
                                 .{ .ptr = rl.bytes.? + i * info.width },
                                 actual_elem_layout,
                                 elem_layout,
@@ -1410,7 +1410,7 @@ pub const Interpreter = struct {
                             frame,
                             current,
                             param,
-                            try self.coerceValueToLayout(
+                            try self.coerceExplicitRefValueToLayout(
                                 arg,
                                 self.store.getLocal(arg_local).layout_idx,
                                 self.store.getLocal(param).layout_idx,
@@ -3824,7 +3824,7 @@ pub const Interpreter = struct {
     ) Error!void {
         const field_size = self.helper.sizeOf(expected_layout);
         if (field_size == 0) return;
-        const coerced = try self.coerceValueToLayout(actual_value, actual_layout, expected_layout);
+        const coerced = try self.coerceExplicitRefValueToLayout(actual_value, actual_layout, expected_layout);
         struct_base.offset(field_offset).copyFrom(coerced, field_size);
     }
 
