@@ -74,7 +74,7 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
         });
 
         allocator: std.mem.Allocator,
-        sys_io: std.Io,
+        std_io: std.Io,
         transport: TransportType,
         client: protocol.ClientState = .{},
         state: State = .waiting_for_initialize,
@@ -97,7 +97,7 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
 
         pub fn init(
             allocator: std.mem.Allocator,
-            sys_io: std.Io,
+            std_io: std.Io,
             reader: ReaderType,
             writer: WriterType,
             log_file: ?std.Io.File,
@@ -110,10 +110,10 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
             };
             return .{
                 .allocator = allocator,
-                .sys_io = sys_io,
-                .transport = TransportType.init(allocator, sys_io, reader, writer, if (debug_options.transport) log_file else null),
+                .std_io = std_io,
+                .transport = TransportType.init(allocator, std_io, reader, writer, if (debug_options.transport) log_file else null),
                 .doc_store = DocumentStore.init(allocator),
-                .syntax_checker = SyntaxChecker.init(allocator, sys_io, flags, log_file),
+                .syntax_checker = SyntaxChecker.init(allocator, std_io, flags, log_file),
                 .log_file = log_file,
                 .debug = flags,
             };
@@ -297,9 +297,9 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
             var file = self.log_file orelse return;
             var buffer: [256]u8 = undefined;
             const msg = std.fmt.bufPrint(&buffer, fmt, args) catch return;
-            file.writeStreamingAll(self.sys_io, msg) catch return;
-            file.writeStreamingAll(self.sys_io, "\n") catch {};
-            file.sync(self.sys_io) catch {};
+            file.writeStreamingAll(self.std_io, msg) catch return;
+            file.writeStreamingAll(self.std_io, "\n") catch {};
+            file.sync(self.std_io) catch {};
         }
 
         /// Returns the stored document (testing helper; returns null outside tests).
@@ -311,39 +311,39 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
 }
 
 /// Launches the LSP server wired to stdin/stdout, optionally mirroring traffic to disk.
-pub fn runWithStdIo(allocator: std.mem.Allocator, sys_io: std.Io, debug: DebugOptions) !void {
+pub fn runWithStdIo(allocator: std.mem.Allocator, std_io: std.Io, debug: DebugOptions) !void {
     var stdin_file = std.Io.File.stdin();
     var stdout_file = std.Io.File.stdout();
 
     var stdin_buffer: [4096]u8 = undefined;
     var stdout_buffer: [4096]u8 = undefined;
-    const reader = stdin_file.readerStreaming(sys_io, &stdin_buffer);
-    const writer = stdout_file.writerStreaming(sys_io, &stdout_buffer);
+    const reader = stdin_file.readerStreaming(std_io, &stdin_buffer);
+    const writer = stdout_file.writerStreaming(std_io, &stdout_buffer);
 
     var log_file: ?std.Io.File = null;
     const enable_logging = debug.transport or debug.build or debug.syntax or debug.server;
     if (enable_logging) {
-        const log_info = try createLogFile(allocator, sys_io);
+        const log_info = try createLogFile(allocator, std_io);
         log_file = log_info.file;
         const stderr_file = std.Io.File.stderr();
-        stderr_file.writeStreamingAll(sys_io, "roc-lsp logging to ") catch {};
-        stderr_file.writeStreamingAll(sys_io, log_info.path) catch {};
-        stderr_file.writeStreamingAll(sys_io, "\n") catch {};
+        stderr_file.writeStreamingAll(std_io, "roc-lsp logging to ") catch {};
+        stderr_file.writeStreamingAll(std_io, log_info.path) catch {};
+        stderr_file.writeStreamingAll(std_io, "\n") catch {};
         allocator.free(log_info.path);
         const divider = "\n===== roc-lsp session start =====\n";
-        log_file.?.writeStreamingAll(sys_io, divider) catch {};
-        log_file.?.writeStreamingAll(sys_io, "\n") catch {};
-        log_file.?.sync(sys_io) catch {};
+        log_file.?.writeStreamingAll(std_io, divider) catch {};
+        log_file.?.writeStreamingAll(std_io, "\n") catch {};
+        log_file.?.sync(std_io) catch {};
     }
 
     const StdServer = Server(@TypeOf(reader), @TypeOf(writer));
-    var server = try StdServer.init(allocator, sys_io, reader, writer, log_file, debug);
+    var server = try StdServer.init(allocator, std_io, reader, writer, log_file, debug);
     defer server.deinit();
     try server.run();
 
     if (log_file) |file| {
         if (!debug.transport) {
-            file.close(sys_io);
+            file.close(std_io);
         }
     }
 }
@@ -353,17 +353,17 @@ const LogFileInfo = struct {
     path: []u8,
 };
 
-fn createLogFile(allocator: std.mem.Allocator, sys_io: std.Io) !LogFileInfo {
+fn createLogFile(allocator: std.mem.Allocator, std_io: std.Io) !LogFileInfo {
     const dir_path = try resolveTempDir(allocator);
     defer allocator.free(dir_path);
     const filename = try allocator.dupe(u8, "roc-lsp-debug.log");
     defer allocator.free(filename);
     const absolute_path = try std.fs.path.resolve(allocator, &.{ dir_path, filename });
-    const file = std.Io.Dir.createFileAbsolute(sys_io, absolute_path, .{
+    const file = std.Io.Dir.createFileAbsolute(std_io, absolute_path, .{
         .truncate = false,
         .read = true,
     }) catch |err| switch (err) {
-        error.PathAlreadyExists => try std.Io.Dir.openFileAbsolute(sys_io, absolute_path, .{
+        error.PathAlreadyExists => try std.Io.Dir.openFileAbsolute(std_io, absolute_path, .{
             .mode = .read_write,
         }),
         else => return err,

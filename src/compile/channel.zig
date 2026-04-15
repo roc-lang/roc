@@ -12,13 +12,7 @@
 
 const std = @import("std");
 const threading = @import("threading.zig");
-const RocCtx = @import("ctx").RocCtx;
-
 const Allocator = std.mem.Allocator;
-
-/// The underlying system I/O type, derived from RocCtx to avoid
-/// referencing the raw Zig I/O type directly (which is banned in core modules).
-const SysIo = @FieldType(RocCtx, "sys_io");
 
 const Mutex = threading.Mutex;
 const Condition = threading.Condition;
@@ -60,10 +54,10 @@ pub fn Channel(comptime T: type) type {
         /// Allocator used for the buffer
         gpa: Allocator,
         /// System IO for mutex/condvar/timestamp operations
-        sys_io: SysIo,
+        std_io: std.Io,
 
         /// Initialize a channel with the given capacity
-        pub fn init(gpa: Allocator, cap_size: usize, sys_io: SysIo) !Self {
+        pub fn init(gpa: Allocator, cap_size: usize, std_io: std.Io) !Self {
             const cap = if (cap_size == 0) DEFAULT_CAPACITY else cap_size;
             const buffer = try gpa.alloc(T, cap);
             return .{
@@ -76,7 +70,7 @@ pub fn Channel(comptime T: type) type {
                 .not_full = Condition.init,
                 .closed = false,
                 .gpa = gpa,
-                .sys_io = sys_io,
+                .std_io = std_io,
             };
         }
 
@@ -88,12 +82,12 @@ pub fn Channel(comptime T: type) type {
         /// Send an item to the channel, blocking if full.
         /// Returns error.Closed if the channel has been closed.
         pub fn send(self: *Self, item: T) ChannelError!void {
-            self.mutex.lockUncancelable(self.sys_io);
-            defer self.mutex.unlock(self.sys_io);
+            self.mutex.lockUncancelable(self.std_io);
+            defer self.mutex.unlock(self.std_io);
 
             // Wait while channel is full and not closed
             while (self.count >= self.buffer.len and !self.closed) {
-                self.not_full.waitUncancelable(self.sys_io, &self.mutex);
+                self.not_full.waitUncancelable(self.std_io, &self.mutex);
             }
 
             if (self.closed) {
@@ -106,15 +100,15 @@ pub fn Channel(comptime T: type) type {
             self.count += 1;
 
             // Signal that channel is non-empty
-            self.not_empty.signal(self.sys_io);
+            self.not_empty.signal(self.std_io);
         }
 
         /// Send an item, growing the buffer if full (never blocks on capacity).
         /// Use this when the sender must remain responsive and cannot afford to
         /// block — e.g. a coordinator that also needs to drain another channel.
         pub fn sendGrowable(self: *Self, item: T) error{ Closed, OutOfMemory }!void {
-            self.mutex.lockUncancelable(self.sys_io);
-            defer self.mutex.unlock(self.sys_io);
+            self.mutex.lockUncancelable(self.std_io);
+            defer self.mutex.unlock(self.std_io);
 
             if (self.closed) return error.Closed;
 
@@ -137,32 +131,32 @@ pub fn Channel(comptime T: type) type {
                 self.write_pos = self.count;
 
                 // Wake any producers blocked in send() — there is room now.
-                self.not_full.broadcast(self.sys_io);
+                self.not_full.broadcast(self.std_io);
             }
 
             self.buffer[self.write_pos] = item;
             self.write_pos = (self.write_pos + 1) % self.buffer.len;
             self.count += 1;
 
-            self.not_empty.signal(self.sys_io);
+            self.not_empty.signal(self.std_io);
         }
 
         /// Send an item with a timeout (in nanoseconds).
         /// Returns error.Timeout if the operation times out.
         /// Returns error.Closed if the channel has been closed.
         pub fn sendTimeout(self: *Self, item: T, timeout_ns: u64) ChannelError!void {
-            self.mutex.lockUncancelable(self.sys_io);
-            defer self.mutex.unlock(self.sys_io);
+            self.mutex.lockUncancelable(self.std_io);
+            defer self.mutex.unlock(self.std_io);
 
-            const deadline_ns = SysIo.Timestamp.now(self.sys_io, .real).nanoseconds + @as(i96, @intCast(timeout_ns));
+            const deadline_ns = std.Io.Timestamp.now(self.std_io, .real).nanoseconds + @as(i96, @intCast(timeout_ns));
 
             // Wait while channel is full and not closed
             while (self.count >= self.buffer.len and !self.closed) {
-                const now_ns = SysIo.Timestamp.now(self.sys_io, .real).nanoseconds;
+                const now_ns = std.Io.Timestamp.now(self.std_io, .real).nanoseconds;
                 if (now_ns >= deadline_ns) {
                     return error.Timeout;
                 }
-                self.not_full.waitUncancelable(self.sys_io, &self.mutex);
+                self.not_full.waitUncancelable(self.std_io, &self.mutex);
             }
 
             if (self.closed) {
@@ -175,18 +169,18 @@ pub fn Channel(comptime T: type) type {
             self.count += 1;
 
             // Signal that channel is non-empty
-            self.not_empty.signal(self.sys_io);
+            self.not_empty.signal(self.std_io);
         }
 
         /// Receive an item from the channel, blocking if empty.
         /// Returns null if the channel is closed and empty.
         pub fn recv(self: *Self) ?T {
-            self.mutex.lockUncancelable(self.sys_io);
-            defer self.mutex.unlock(self.sys_io);
+            self.mutex.lockUncancelable(self.std_io);
+            defer self.mutex.unlock(self.std_io);
 
             // Wait while channel is empty and not closed
             while (self.count == 0 and !self.closed) {
-                self.not_empty.waitUncancelable(self.sys_io, &self.mutex);
+                self.not_empty.waitUncancelable(self.std_io, &self.mutex);
             }
 
             // If empty and closed, return null
@@ -200,18 +194,18 @@ pub fn Channel(comptime T: type) type {
         /// Receive an item with a timeout (in nanoseconds).
         /// Returns null if the operation times out or channel is closed and empty.
         pub fn recvTimeout(self: *Self, timeout_ns: u64) ?T {
-            self.mutex.lockUncancelable(self.sys_io);
-            defer self.mutex.unlock(self.sys_io);
+            self.mutex.lockUncancelable(self.std_io);
+            defer self.mutex.unlock(self.std_io);
 
-            const deadline_ns = SysIo.Timestamp.now(self.sys_io, .real).nanoseconds + @as(i96, @intCast(timeout_ns));
+            const deadline_ns = std.Io.Timestamp.now(self.std_io, .real).nanoseconds + @as(i96, @intCast(timeout_ns));
 
             // Wait while channel is empty and not closed
             while (self.count == 0 and !self.closed) {
-                const now_ns = SysIo.Timestamp.now(self.sys_io, .real).nanoseconds;
+                const now_ns = std.Io.Timestamp.now(self.std_io, .real).nanoseconds;
                 if (now_ns >= deadline_ns) {
                     return null; // Timeout
                 }
-                self.not_empty.waitUncancelable(self.sys_io, &self.mutex);
+                self.not_empty.waitUncancelable(self.std_io, &self.mutex);
             }
 
             // If empty and closed, return null
@@ -225,8 +219,8 @@ pub fn Channel(comptime T: type) type {
         /// Try to receive an item without blocking.
         /// Returns null if the channel is empty.
         pub fn tryRecv(self: *Self) ?T {
-            self.mutex.lockUncancelable(self.sys_io);
-            defer self.mutex.unlock(self.sys_io);
+            self.mutex.lockUncancelable(self.std_io);
+            defer self.mutex.unlock(self.std_io);
 
             if (self.count == 0) {
                 return null;
@@ -242,7 +236,7 @@ pub fn Channel(comptime T: type) type {
             self.count -= 1;
 
             // Signal that channel is non-full
-            self.not_full.signal(self.sys_io);
+            self.not_full.signal(self.std_io);
 
             return item;
         }
@@ -251,27 +245,27 @@ pub fn Channel(comptime T: type) type {
         /// Any blocked senders will receive error.Closed.
         /// Any blocked receivers will be woken and return null if empty.
         pub fn close(self: *Self) void {
-            self.mutex.lockUncancelable(self.sys_io);
-            defer self.mutex.unlock(self.sys_io);
+            self.mutex.lockUncancelable(self.std_io);
+            defer self.mutex.unlock(self.std_io);
 
             self.closed = true;
 
             // Wake all waiting threads
-            self.not_empty.broadcast(self.sys_io);
-            self.not_full.broadcast(self.sys_io);
+            self.not_empty.broadcast(self.std_io);
+            self.not_full.broadcast(self.std_io);
         }
 
         /// Check if the channel is closed
         pub fn isClosed(self: *Self) bool {
-            self.mutex.lockUncancelable(self.sys_io);
-            defer self.mutex.unlock(self.sys_io);
+            self.mutex.lockUncancelable(self.std_io);
+            defer self.mutex.unlock(self.std_io);
             return self.closed;
         }
 
         /// Get the number of items currently in the channel
         pub fn len(self: *Self) usize {
-            self.mutex.lockUncancelable(self.sys_io);
-            defer self.mutex.unlock(self.sys_io);
+            self.mutex.lockUncancelable(self.std_io);
+            defer self.mutex.unlock(self.std_io);
             return self.count;
         }
 
@@ -282,8 +276,8 @@ pub fn Channel(comptime T: type) type {
 
         /// Check if the channel is full
         pub fn isFull(self: *Self) bool {
-            self.mutex.lockUncancelable(self.sys_io);
-            defer self.mutex.unlock(self.sys_io);
+            self.mutex.lockUncancelable(self.std_io);
+            defer self.mutex.unlock(self.std_io);
             return self.count >= self.buffer.len;
         }
 
@@ -295,7 +289,7 @@ pub fn Channel(comptime T: type) type {
 }
 
 test "Channel basic send/recv" {
-    var ch = try Channel(u32).init(std.testing.allocator, 4, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io);
+    var ch = try Channel(u32).init(std.testing.allocator, 4, std.testing.io);
     defer ch.deinit();
 
     try ch.send(1);
@@ -308,14 +302,14 @@ test "Channel basic send/recv" {
 }
 
 test "Channel tryRecv empty" {
-    var ch = try Channel(u32).init(std.testing.allocator, 4, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io);
+    var ch = try Channel(u32).init(std.testing.allocator, 4, std.testing.io);
     defer ch.deinit();
 
     try std.testing.expect(ch.tryRecv() == null);
 }
 
 test "Channel tryRecv non-empty" {
-    var ch = try Channel(u32).init(std.testing.allocator, 4, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io);
+    var ch = try Channel(u32).init(std.testing.allocator, 4, std.testing.io);
     defer ch.deinit();
 
     try ch.send(42);
@@ -324,7 +318,7 @@ test "Channel tryRecv non-empty" {
 }
 
 test "Channel close" {
-    var ch = try Channel(u32).init(std.testing.allocator, 4, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io);
+    var ch = try Channel(u32).init(std.testing.allocator, 4, std.testing.io);
     defer ch.deinit();
 
     try ch.send(1);
@@ -337,7 +331,7 @@ test "Channel close" {
 }
 
 test "Channel send after close" {
-    var ch = try Channel(u32).init(std.testing.allocator, 4, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io);
+    var ch = try Channel(u32).init(std.testing.allocator, 4, std.testing.io);
     defer ch.deinit();
 
     ch.close();
@@ -347,7 +341,7 @@ test "Channel send after close" {
 }
 
 test "Channel sendGrowable grows buffer when full" {
-    var ch = try Channel(u32).init(std.testing.allocator, 2, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io);
+    var ch = try Channel(u32).init(std.testing.allocator, 2, std.testing.io);
     defer ch.deinit();
 
     // Fill to capacity
@@ -367,7 +361,7 @@ test "Channel sendGrowable grows buffer when full" {
 }
 
 test "Channel sendGrowable with wrap-around growth" {
-    var ch = try Channel(u32).init(std.testing.allocator, 3, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io);
+    var ch = try Channel(u32).init(std.testing.allocator, 3, std.testing.io);
     defer ch.deinit();
 
     // Fill and partially drain to create wrap-around state
@@ -391,7 +385,7 @@ test "Channel sendGrowable with wrap-around growth" {
 }
 
 test "Channel len and capacity" {
-    var ch = try Channel(u32).init(std.testing.allocator, 8, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io);
+    var ch = try Channel(u32).init(std.testing.allocator, 8, std.testing.io);
     defer ch.deinit();
 
     try std.testing.expectEqual(@as(usize, 8), ch.capacity());
@@ -406,7 +400,7 @@ test "Channel len and capacity" {
 }
 
 test "Channel ring buffer wrap-around" {
-    var ch = try Channel(u32).init(std.testing.allocator, 3, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io);
+    var ch = try Channel(u32).init(std.testing.allocator, 3, std.testing.io);
     defer ch.deinit();
 
     // Fill buffer
@@ -432,7 +426,7 @@ test "Channel with struct type" {
         name: []const u8,
     };
 
-    var ch = try Channel(Item).init(std.testing.allocator, 4, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io);
+    var ch = try Channel(Item).init(std.testing.allocator, 4, std.testing.io);
     defer ch.deinit();
 
     try ch.send(.{ .id = 1, .name = "first" });
@@ -451,7 +445,7 @@ test "Channel multi-producer single-consumer" {
     // Skip on wasm where threads aren't available
     if (threading.is_freestanding) return error.SkipZigTest;
 
-    var ch = try Channel(u32).init(std.testing.allocator, 16, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io);
+    var ch = try Channel(u32).init(std.testing.allocator, 16, std.testing.io);
     defer ch.deinit();
 
     const num_producers = 4;
@@ -492,14 +486,14 @@ test "Channel blocking recv with timeout" {
     // Skip on wasm where threads aren't available
     if (threading.is_freestanding) return error.SkipZigTest;
 
-    var ch = try Channel(u32).init(std.testing.allocator, 4, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io);
+    var ch = try Channel(u32).init(std.testing.allocator, 4, std.testing.io);
     defer ch.deinit();
 
     // recvTimeout on empty channel should return null after timeout
-    const test_io = RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io;
-    const start = SysIo.Timestamp.now(test_io, .real).nanoseconds;
+    const test_io = std.testing.io;
+    const start = std.Io.Timestamp.now(test_io, .real).nanoseconds;
     const result = ch.recvTimeout(10_000_000); // 10ms
-    const elapsed = SysIo.Timestamp.now(test_io, .real).nanoseconds - start;
+    const elapsed = std.Io.Timestamp.now(test_io, .real).nanoseconds - start;
 
     try std.testing.expect(result == null);
     try std.testing.expect(elapsed >= 10_000_000); // Should have waited at least 10ms
@@ -509,7 +503,7 @@ test "Channel producer-consumer coordination" {
     // Skip on wasm where threads aren't available
     if (threading.is_freestanding) return error.SkipZigTest;
 
-    var ch = try Channel(u32).init(std.testing.allocator, 2, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io).sys_io); // Small buffer to test blocking
+    var ch = try Channel(u32).init(std.testing.allocator, 2, std.testing.io); // Small buffer to test blocking
     defer ch.deinit();
 
     // Producer thread sends values with small delay

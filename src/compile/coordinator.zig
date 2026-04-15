@@ -78,7 +78,7 @@ const DiscoveredExternalImport = messages.DiscoveredExternalImport;
 const OwnedSemanticModuleData = messages.OwnedSemanticModuleData;
 
 const Channel = channel.Channel;
-const RocCtx = @import("ctx").RocCtx;
+const CoreCtx = @import("ctx").CoreCtx;
 const Mode = compile_package.Mode;
 
 /// Threading features aren't available when targeting WebAssembly
@@ -533,7 +533,7 @@ pub const Coordinator = struct {
     builtin_modules: *const BuiltinModules,
 
     /// I/O abstraction for reading sources and other filesystem/stdio operations.
-    roc_ctx: RocCtx,
+    roc_ctx: CoreCtx,
 
     /// Compiler version for cache keys
     compiler_version: []const u8,
@@ -597,7 +597,7 @@ pub const Coordinator = struct {
         builtin_modules: *const BuiltinModules,
         compiler_version: []const u8,
         cache_manager: ?*CacheManager,
-        roc_ctx: RocCtx,
+        roc_ctx: CoreCtx,
     ) !Coordinator {
         // Both channels use smp_allocator in multi-threaded mode because their
         // buffers may be grown (task_channel) or accessed from worker threads.
@@ -611,8 +611,8 @@ pub const Coordinator = struct {
             .max_threads = max_threads,
             .target = target,
             .packages = std.StringHashMap(*PackageState).init(gpa),
-            .result_channel = try Channel(WorkerResult).init(channel_allocator, channel.DEFAULT_CAPACITY, roc_ctx.sys_io),
-            .task_channel = try Channel(WorkerTask).init(channel_allocator, initial_task_capacity, roc_ctx.sys_io),
+            .result_channel = try Channel(WorkerResult).init(channel_allocator, channel.DEFAULT_CAPACITY, roc_ctx.std_io),
+            .task_channel = try Channel(WorkerTask).init(channel_allocator, initial_task_capacity, roc_ctx.std_io),
             .workers = std.ArrayList(Thread).empty,
             .inflight = std.atomic.Value(usize).init(0),
             .shutting_down = std.atomic.Value(bool).init(false),
@@ -693,8 +693,8 @@ pub const Coordinator = struct {
     }
 
     /// Set the I/O implementation (or reset to OS default).
-    pub fn setRocCtx(self: *Coordinator, roc_ctx: ?RocCtx) void {
-        self.roc_ctx = roc_ctx orelse RocCtx.default(self.roc_ctx.gpa, self.roc_ctx.arena, self.roc_ctx.sys_io);
+    pub fn setCoreCtx(self: *Coordinator, roc_ctx: ?CoreCtx) void {
+        self.roc_ctx = roc_ctx orelse CoreCtx.default(self.roc_ctx.gpa, self.roc_ctx.arena, self.roc_ctx.std_io);
     }
 
     /// Get the allocator to use for module data.
@@ -3228,7 +3228,7 @@ test "Coordinator basic initialization" {
         undefined, // builtin_modules - not used in this test
         "test",
         null, // cache_manager
-        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 
@@ -3248,7 +3248,7 @@ test "Coordinator package creation" {
         undefined,
         "test",
         null, // cache_manager
-        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 
@@ -3274,7 +3274,7 @@ test "Coordinator module creation" {
         undefined,
         "test",
         null, // cache_manager
-        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 
@@ -3302,7 +3302,7 @@ test "Coordinator task queue" {
         undefined,
         "test",
         null, // cache_manager
-        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 
@@ -3341,7 +3341,7 @@ test "Coordinator isComplete logic" {
         undefined,
         "test",
         null, // cache_manager
-        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 
@@ -3389,7 +3389,7 @@ test "Coordinator isComplete with multi_threaded max_threads=0 (inline execution
         undefined,
         "test",
         null, // cache_manager
-        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 
@@ -3427,7 +3427,7 @@ test "Coordinator shutdown does not drain buffered tasks" {
         undefined,
         "test",
         null, // cache_manager
-        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 
@@ -3477,7 +3477,7 @@ test "Coordinator shutdown stops spawned workers promptly" {
         undefined,
         "test",
         null, // cache_manager
-        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 
@@ -3524,7 +3524,7 @@ test "Channel in coordinator context" {
         undefined,
         "test",
         null, // cache_manager
-        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 
@@ -3558,7 +3558,7 @@ test "Coordinator enqueueParseTask flow" {
         undefined,
         "test",
         null, // cache_manager
-        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 
@@ -3597,7 +3597,7 @@ test "Coordinator single-threaded loop with mock result" {
         undefined,
         "test",
         null, // cache_manager
-        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 
@@ -3643,7 +3643,7 @@ test "Coordinator CI failure scenario - app with platform cross-package imports"
         undefined,
         "test",
         null, // cache_manager
-        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 
@@ -3764,7 +3764,7 @@ test "Coordinator handleParseFailed advances module to Done" {
         undefined,
         "test",
         null, // cache_manager
-        RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
 

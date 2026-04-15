@@ -14,7 +14,7 @@ const ModuleEnv = @import("../ModuleEnv.zig");
 const CIR = @import("../CIR.zig");
 const BuiltinTestContext = @import("./BuiltinTestContext.zig").BuiltinTestContext;
 
-const RocCtx = @import("ctx").RocCtx;
+const CoreCtx = @import("ctx").CoreCtx;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
 
@@ -29,7 +29,7 @@ fn parseAndCanonicalizeSource(
     can: *Can,
     builtin_ctx: BuiltinTestContext,
 } {
-    const roc_ctx = RocCtx.testing(allocator, allocator);
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const parse_env = try allocator.create(ModuleEnv);
     // Note: We pass allocator for both gpa and arena since the ModuleEnv
@@ -118,7 +118,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
         \\main = "test"
     ;
     // Parse the source
-    const roc_ctx = RocCtx.testing(allocator, allocator);
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const parse_env = try allocator.create(ModuleEnv);
     parse_env.* = try ModuleEnv.init(allocator, source);
@@ -214,7 +214,7 @@ test "import validation - no module_envs provided" {
         \\main = "test"
     ;
     // Let's do it manually instead of using the helper to isolate the issue
-    const roc_ctx = RocCtx.testing(allocator, allocator);
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const parse_env = try allocator.create(ModuleEnv);
     parse_env.* = try ModuleEnv.init(allocator, source);

@@ -11,11 +11,7 @@ const builtin = @import("builtin");
 const DW = std.dwarf;
 const ir = @import("ir.zig");
 const log = std.log.scoped(.llvm);
-const RocCtx = @import("ctx").RocCtx;
 const Writer = std.Io.Writer;
-
-/// Alias for the underlying system I/O type carried by RocCtx.
-const SysIo = @FieldType(RocCtx, "sys_io");
 
 gpa: Allocator,
 strip: bool,
@@ -9694,23 +9690,24 @@ pub fn asmValue(
 }
 
 /// Dumps the LLVM IR to stderr for debugging.
-pub fn dump(b: *Builder, sys_io: SysIo) void {
+pub fn dump(b: *Builder, std_io: std.Io) void {
     var buffer: [4000]u8 = undefined;
-    const stderr: SysIo.File = .stderr();
-    b.printToFile(stderr, sys_io, &buffer) catch {};
+    const stderr: std.Io.File = .{ .handle = std.posix.STDERR_FILENO, .flags = .{ .nonblocking = false } };
+    b.printToFile(stderr, std_io, &buffer) catch {};
 }
 
 /// Prints the LLVM IR to a file at the given path.
-pub fn printToFilePath(b: *Builder, sys_io: SysIo, path: []const u8) !void {
+pub fn printToFilePath(b: *Builder, std_io: std.Io, path: []const u8) !void {
     var buffer: [4000]u8 = undefined;
-    const file = try SysIo.Dir.cwd().createFile(sys_io, path, .{});
-    defer file.close(sys_io);
-    try b.printToFile(file, sys_io, &buffer);
+    const cwd: std.Io.Dir = .cwd();
+    const file = try cwd.createFile(std_io, path, .{});
+    defer file.close(std_io);
+    try b.printToFile(file, std_io, &buffer);
 }
 
 /// Prints the LLVM IR to a file handle.
-pub fn printToFile(b: *Builder, file: SysIo.File, sys_io: SysIo, buffer: []u8) !void {
-    var fw = file.writer(sys_io, buffer);
+pub fn printToFile(b: *Builder, file: std.Io.File, std_io: std.Io, buffer: []u8) !void {
+    var fw = file.writer(std_io, buffer);
     try print(b, &fw.interface);
     try fw.interface.flush();
 }

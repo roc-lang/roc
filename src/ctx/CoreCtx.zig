@@ -5,8 +5,8 @@
 //! Consumers (CLI, WASM playground, tests) inject a concrete implementation.
 //!
 //! Pre-built implementations:
-//!   - `RocCtx.default(...)` — delegates to the real OS (or stubs on wasm32)
-//!   - `RocCtx.testing(...)` — panics on every I/O call (override fields for mocks)
+//!   - `CoreCtx.default(...)` — delegates to the real OS (or stubs on wasm32)
+//!   - `CoreCtx.testing(...)` — panics on every I/O call (override fields for mocks)
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -16,7 +16,7 @@ const Self = @This();
 
 ctx: ?*anyopaque,
 vtable: VTable,
-sys_io: std.Io,
+std_io: std.Io,
 
 /// General purpose allocator. Anything allocated with gpa must be freed.
 /// Use for large allocations and things that might get reallocated.
@@ -120,134 +120,134 @@ pub const VTable = struct {
 
 /// Read the entire contents of `path`. Caller owns returned slice.
 pub fn readFile(self: Self, path: []const u8, allocator: Allocator) ReadError![]u8 {
-    return self.vtable.readFile(self.ctx, self.sys_io, path, allocator);
+    return self.vtable.readFile(self.ctx, self.std_io, path, allocator);
 }
 
 /// Read `path` into `buffer`. Returns bytes read.
 pub fn readFileInto(self: Self, path: []const u8, buffer: []u8) ReadError!usize {
-    return self.vtable.readFileInto(self.ctx, self.sys_io, path, buffer);
+    return self.vtable.readFileInto(self.ctx, self.std_io, path, buffer);
 }
 
 /// Write `data` to `path`, creating or truncating the file.
 pub fn writeFile(self: Self, path: []const u8, data: []const u8) WriteError!void {
-    return self.vtable.writeFile(self.ctx, self.sys_io, path, data);
+    return self.vtable.writeFile(self.ctx, self.std_io, path, data);
 }
 
 /// Return `true` if a file (or directory) exists at `path`.
 pub fn fileExists(self: Self, path: []const u8) bool {
-    return self.vtable.fileExists(self.ctx, self.sys_io, path);
+    return self.vtable.fileExists(self.ctx, self.std_io, path);
 }
 
 /// Get metadata for `path`.
 pub fn stat(self: Self, path: []const u8) StatError!FileInfo {
-    return self.vtable.stat(self.ctx, self.sys_io, path);
+    return self.vtable.stat(self.ctx, self.std_io, path);
 }
 
 /// Backward-compat alias for `stat`.
 pub fn getFileInfo(self: Self, path: []const u8) StatError!FileInfo {
-    return self.vtable.stat(self.ctx, self.sys_io, path);
+    return self.vtable.stat(self.ctx, self.std_io, path);
 }
 
 /// List all entries under `path` recursively. Caller owns the returned slice
 /// and every `.path` string in it (free with `allocator`).
 pub fn listDir(self: Self, path: []const u8, allocator: Allocator) ListError![]FileEntry {
-    return self.vtable.listDir(self.ctx, self.sys_io, path, allocator);
+    return self.vtable.listDir(self.ctx, self.std_io, path, allocator);
 }
 
 /// Return the directory portion of a path (no allocation).
 pub fn dirName(self: Self, path: []const u8) ?[]const u8 {
-    return self.vtable.dirName(self.ctx, self.sys_io, path);
+    return self.vtable.dirName(self.ctx, self.std_io, path);
 }
 
 /// Return the filename portion of a path (no allocation).
 pub fn baseName(self: Self, path: []const u8) []const u8 {
-    return self.vtable.baseName(self.ctx, self.sys_io, path);
+    return self.vtable.baseName(self.ctx, self.std_io, path);
 }
 
 /// Join path segments. Caller owns the result.
 pub fn joinPath(self: Self, parts: []const []const u8, allocator: Allocator) Allocator.Error![]const u8 {
-    return self.vtable.joinPath(self.ctx, self.sys_io, parts, allocator);
+    return self.vtable.joinPath(self.ctx, self.std_io, parts, allocator);
 }
 
 /// Resolve `path` to a canonical absolute path. Caller owns the result.
 pub fn canonicalize(self: Self, path: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
-    return self.vtable.canonicalize(self.ctx, self.sys_io, path, allocator);
+    return self.vtable.canonicalize(self.ctx, self.std_io, path, allocator);
 }
 
 /// Create all directories in `path` recursively (like `mkdir -p`).
 pub fn makePath(self: Self, path: []const u8) MakePathError!void {
-    return self.vtable.makePath(self.ctx, self.sys_io, path);
+    return self.vtable.makePath(self.ctx, self.std_io, path);
 }
 
 /// Atomically rename `old_path` to `new_path`.
 pub fn rename(self: Self, old_path: []const u8, new_path: []const u8) RenameError!void {
-    return self.vtable.rename(self.ctx, self.sys_io, old_path, new_path);
+    return self.vtable.rename(self.ctx, self.std_io, old_path, new_path);
 }
 
 /// Look up environment variable `key`. Caller owns the returned slice.
 pub fn getEnvVar(self: Self, key: []const u8, allocator: Allocator) GetEnvVarError![]u8 {
-    return self.vtable.getEnvVar(self.ctx, self.sys_io, key, allocator);
+    return self.vtable.getEnvVar(self.ctx, self.std_io, key, allocator);
 }
 
 /// Download `url` and extract into `dest_path` directory.
 pub fn fetchUrl(self: Self, allocator: Allocator, url: []const u8, dest_path: []const u8) FetchUrlError!void {
-    return self.vtable.fetchUrl(self.ctx, self.sys_io, allocator, url, dest_path);
+    return self.vtable.fetchUrl(self.ctx, self.std_io, allocator, url, dest_path);
 }
 
 // --- Directory wrapper methods ---
 
 /// Delete a single file at `path`.
 pub fn deleteFile(self: Self, path: []const u8) DeleteError!void {
-    return self.vtable.deleteFile(self.ctx, self.sys_io, path);
+    return self.vtable.deleteFile(self.ctx, self.std_io, path);
 }
 
 /// Delete an empty directory at `path`.
 pub fn deleteDir(self: Self, path: []const u8) DeleteError!void {
-    return self.vtable.deleteDir(self.ctx, self.sys_io, path);
+    return self.vtable.deleteDir(self.ctx, self.std_io, path);
 }
 
 /// Recursively delete a directory tree at `path`.
 pub fn deleteTree(self: Self, path: []const u8) DeleteError!void {
-    return self.vtable.deleteTree(self.ctx, self.sys_io, path);
+    return self.vtable.deleteTree(self.ctx, self.std_io, path);
 }
 
 /// Create a single directory at `path` (parent must exist).
 pub fn createDir(self: Self, path: []const u8) MakePathError!void {
-    return self.vtable.createDir(self.ctx, self.sys_io, path);
+    return self.vtable.createDir(self.ctx, self.std_io, path);
 }
 
 /// Copy a file from `src_path` to `dst_path`.
 pub fn copyFile(self: Self, src_path: []const u8, dst_path: []const u8) CopyError!void {
-    return self.vtable.copyFile(self.ctx, self.sys_io, src_path, dst_path);
+    return self.vtable.copyFile(self.ctx, self.std_io, src_path, dst_path);
 }
 
 // --- Timing wrapper methods ---
 
 /// Return the current wall-clock time in nanoseconds since the Unix epoch.
 pub fn timestampNow(self: Self) i128 {
-    return self.vtable.timestampNow(self.ctx, self.sys_io);
+    return self.vtable.timestampNow(self.ctx, self.std_io);
 }
 
 // --- Stdio wrapper methods ---
 
 /// Write `data` to stdout.
 pub fn writeStdout(self: Self, data: []const u8) StdioError!void {
-    return self.vtable.writeStdout(self.ctx, self.sys_io, data);
+    return self.vtable.writeStdout(self.ctx, self.std_io, data);
 }
 
 /// Write `data` to stderr.
 pub fn writeStderr(self: Self, data: []const u8) StdioError!void {
-    return self.vtable.writeStderr(self.ctx, self.sys_io, data);
+    return self.vtable.writeStderr(self.ctx, self.std_io, data);
 }
 
 /// Read from stdin into `buf`. Returns bytes read.
 pub fn readStdin(self: Self, buf: []u8) StdioError!usize {
-    return self.vtable.readStdin(self.ctx, self.sys_io, buf);
+    return self.vtable.readStdin(self.ctx, self.std_io, buf);
 }
 
 /// Return true if stdout is connected to a TTY.
 pub fn isTty(self: Self) bool {
-    return self.vtable.isTty(self.ctx, self.sys_io);
+    return self.vtable.isTty(self.ctx, self.std_io);
 }
 
 // --- Error types ---
@@ -394,15 +394,15 @@ pub const ReadFileOverride = struct {
     pub fn io(self: *@This()) Self {
         var v = self.base.vtable;
         v.readFile = &readFileOverrideFn;
-        return .{ .ctx = @ptrCast(self), .vtable = v, .sys_io = self.base.sys_io, .gpa = self.base.gpa, .arena = self.base.arena };
+        return .{ .ctx = @ptrCast(self), .vtable = v, .std_io = self.base.std_io, .gpa = self.base.gpa, .arena = self.base.arena };
     }
 };
 
-fn readFileOverrideFn(ctx: ?*anyopaque, sys_io: std.Io, path: []const u8, allocator: Allocator) ReadError![]u8 {
+fn readFileOverrideFn(ctx: ?*anyopaque, std_io: std.Io, path: []const u8, allocator: Allocator) ReadError![]u8 {
     const self: *ReadFileOverride = @ptrCast(@alignCast(ctx.?));
     if (std.mem.eql(u8, path, self.path))
         return allocator.dupe(u8, self.content) catch return error.OutOfMemory;
-    return self.base.vtable.readFile(self.base.ctx, sys_io, path, allocator);
+    return self.base.vtable.readFile(self.base.ctx, std_io, path, allocator);
 }
 
 const is_freestanding = builtin.os.tag == .freestanding;
@@ -492,57 +492,57 @@ const freestanding_vtable = VTable{
 
 /// Get the default implementation for the current target.
 /// On wasm32-freestanding returns stubs; callers may override via `WasmFilesystem`.
-pub fn default(gpa: Allocator, arena: Allocator, sys_io_arg: std.Io) Self {
+pub fn default(gpa: Allocator, arena: Allocator, std_io_arg: std.Io) Self {
     if (comptime is_freestanding) {
-        return .{ .ctx = null, .vtable = freestanding_vtable, .sys_io = sys_io_arg, .gpa = gpa, .arena = arena };
+        return .{ .ctx = null, .vtable = freestanding_vtable, .std_io = std_io_arg, .gpa = gpa, .arena = arena };
     }
-    return .{ .ctx = null, .vtable = os_vtable, .sys_io = sys_io_arg, .gpa = gpa, .arena = arena };
+    return .{ .ctx = null, .vtable = os_vtable, .std_io = std_io_arg, .gpa = gpa, .arena = arena };
 }
 
 /// Get a real OS implementation (never returns freestanding stubs).
-pub fn os(gpa: Allocator, arena: Allocator, sys_io_arg: std.Io) Self {
-    return .{ .ctx = null, .vtable = os_vtable, .sys_io = sys_io_arg, .gpa = gpa, .arena = arena };
+pub fn os(gpa: Allocator, arena: Allocator, std_io_arg: std.Io) Self {
+    return .{ .ctx = null, .vtable = os_vtable, .std_io = std_io_arg, .gpa = gpa, .arena = arena };
 }
 
 /// Get a test implementation where every I/O call panics.
 /// Override individual vtable fields in your test to provide mock behavior.
 pub fn testing(gpa: Allocator, arena: Allocator) Self {
-    return .{ .ctx = null, .vtable = testing_vtable, .sys_io = undefined, .gpa = gpa, .arena = arena };
+    return .{ .ctx = null, .vtable = testing_vtable, .std_io = undefined, .gpa = gpa, .arena = arena };
 }
 
 // --- OS implementations ---
 
-fn osReadFile(_: ?*anyopaque, sys_io: std.Io, path: []const u8, allocator: Allocator) ReadError![]u8 {
-    return std.Io.Dir.cwd().readFileAlloc(sys_io, path, allocator, .limited(max_file_size)) catch |err| return switch (err) {
+fn osReadFile(_: ?*anyopaque, std_io: std.Io, path: []const u8, allocator: Allocator) ReadError![]u8 {
+    return std.Io.Dir.cwd().readFileAlloc(std_io, path, allocator, .limited(max_file_size)) catch |err| return switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         else => error.IoError,
     };
 }
 
-fn osReadFileInto(_: ?*anyopaque, sys_io: std.Io, path: []const u8, buffer: []u8) ReadError!usize {
-    const file = std.Io.Dir.cwd().openFile(sys_io, path, .{}) catch |err| return switch (err) {
+fn osReadFileInto(_: ?*anyopaque, std_io: std.Io, path: []const u8, buffer: []u8) ReadError!usize {
+    const file = std.Io.Dir.cwd().openFile(std_io, path, .{}) catch |err| return switch (err) {
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
         else => error.IoError,
     };
-    defer file.close(sys_io);
-    return file.readPositionalAll(sys_io, buffer, 0) catch return error.IoError;
+    defer file.close(std_io);
+    return file.readPositionalAll(std_io, buffer, 0) catch return error.IoError;
 }
 
-fn osWriteFile(_: ?*anyopaque, sys_io: std.Io, path: []const u8, data: []const u8) WriteError!void {
-    std.Io.Dir.cwd().writeFile(sys_io, .{ .sub_path = path, .data = data }) catch |err| return switch (err) {
+fn osWriteFile(_: ?*anyopaque, std_io: std.Io, path: []const u8, data: []const u8) WriteError!void {
+    std.Io.Dir.cwd().writeFile(std_io, .{ .sub_path = path, .data = data }) catch |err| return switch (err) {
         error.AccessDenied => error.AccessDenied,
         else => error.IoError,
     };
 }
 
-fn osFileExists(_: ?*anyopaque, sys_io: std.Io, path: []const u8) bool {
-    std.Io.Dir.cwd().access(sys_io, path, .{}) catch return false;
+fn osFileExists(_: ?*anyopaque, std_io: std.Io, path: []const u8) bool {
+    std.Io.Dir.cwd().access(std_io, path, .{}) catch return false;
     return true;
 }
 
-fn osStat(_: ?*anyopaque, sys_io: std.Io, path: []const u8) StatError!FileInfo {
-    const s = std.Io.Dir.cwd().statFile(sys_io, path, .{}) catch |err| return switch (err) {
+fn osStat(_: ?*anyopaque, std_io: std.Io, path: []const u8) StatError!FileInfo {
+    const s = std.Io.Dir.cwd().statFile(std_io, path, .{}) catch |err| return switch (err) {
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
         else => error.IoError,
@@ -558,13 +558,13 @@ fn osStat(_: ?*anyopaque, sys_io: std.Io, path: []const u8) StatError!FileInfo {
     };
 }
 
-fn osListDir(_: ?*anyopaque, sys_io: std.Io, path: []const u8, allocator: Allocator) ListError![]FileEntry {
-    var dir = std.Io.Dir.cwd().openDir(sys_io, path, .{ .iterate = true }) catch |err| return switch (err) {
+fn osListDir(_: ?*anyopaque, std_io: std.Io, path: []const u8, allocator: Allocator) ListError![]FileEntry {
+    var dir = std.Io.Dir.cwd().openDir(std_io, path, .{ .iterate = true }) catch |err| return switch (err) {
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
         else => error.IoError,
     };
-    defer dir.close(sys_io);
+    defer dir.close(std_io);
 
     var walker = dir.walk(allocator) catch return error.IoError;
     defer walker.deinit();
@@ -576,7 +576,7 @@ fn osListDir(_: ?*anyopaque, sys_io: std.Io, path: []const u8, allocator: Alloca
     }
 
     while (true) {
-        const next = walker.next(sys_io) catch return error.IoError;
+        const next = walker.next(std_io) catch return error.IoError;
         const entry = next orelse break;
         const kind: FileKind = switch (entry.kind) {
             .file => .file,
@@ -605,8 +605,8 @@ fn osJoinPath(_: ?*anyopaque, _: std.Io, parts: []const []const u8, allocator: A
     return std.fs.path.join(allocator, parts);
 }
 
-fn osCanonicalize(_: ?*anyopaque, sys_io: std.Io, path: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
-    return std.Io.Dir.cwd().realPathFileAlloc(sys_io, path, allocator) catch |err| return switch (err) {
+fn osCanonicalize(_: ?*anyopaque, std_io: std.Io, path: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
+    return std.Io.Dir.cwd().realPathFileAlloc(std_io, path, allocator) catch |err| return switch (err) {
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
         error.OutOfMemory => error.OutOfMemory,
@@ -614,15 +614,15 @@ fn osCanonicalize(_: ?*anyopaque, sys_io: std.Io, path: []const u8, allocator: A
     };
 }
 
-fn osMakePath(_: ?*anyopaque, sys_io: std.Io, path: []const u8) MakePathError!void {
-    std.Io.Dir.cwd().createDirPath(sys_io, path) catch |err| return switch (err) {
+fn osMakePath(_: ?*anyopaque, std_io: std.Io, path: []const u8) MakePathError!void {
+    std.Io.Dir.cwd().createDirPath(std_io, path) catch |err| return switch (err) {
         error.AccessDenied => error.AccessDenied,
         else => error.IoError,
     };
 }
 
-fn osRename(_: ?*anyopaque, sys_io: std.Io, old_path: []const u8, new_path: []const u8) RenameError!void {
-    std.Io.Dir.cwd().rename(old_path, std.Io.Dir.cwd(), new_path, sys_io) catch |err| return switch (err) {
+fn osRename(_: ?*anyopaque, std_io: std.Io, old_path: []const u8, new_path: []const u8) RenameError!void {
+    std.Io.Dir.cwd().rename(old_path, std.Io.Dir.cwd(), new_path, std_io) catch |err| return switch (err) {
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
         else => error.IoError,
@@ -646,68 +646,68 @@ fn osFetchUrl(_: ?*anyopaque, _: std.Io, _: Allocator, _: []const u8, _: []const
     return error.Unsupported;
 }
 
-fn osWriteStdout(_: ?*anyopaque, sys_io: std.Io, data: []const u8) StdioError!void {
-    std.Io.File.stdout().writeStreamingAll(sys_io, data) catch |err| return switch (err) {
+fn osWriteStdout(_: ?*anyopaque, std_io: std.Io, data: []const u8) StdioError!void {
+    std.Io.File.stdout().writeStreamingAll(std_io, data) catch |err| return switch (err) {
         error.BrokenPipe => error.BrokenPipe,
         else => error.IoError,
     };
 }
 
-fn osWriteStderr(_: ?*anyopaque, sys_io: std.Io, data: []const u8) StdioError!void {
-    std.Io.File.stderr().writeStreamingAll(sys_io, data) catch |err| return switch (err) {
+fn osWriteStderr(_: ?*anyopaque, std_io: std.Io, data: []const u8) StdioError!void {
+    std.Io.File.stderr().writeStreamingAll(std_io, data) catch |err| return switch (err) {
         error.BrokenPipe => error.BrokenPipe,
         else => error.IoError,
     };
 }
 
-fn osReadStdin(_: ?*anyopaque, sys_io: std.Io, buf: []u8) StdioError!usize {
-    return std.Io.File.stdin().readStreaming(sys_io, &.{buf}) catch return error.IoError;
+fn osReadStdin(_: ?*anyopaque, std_io: std.Io, buf: []u8) StdioError!usize {
+    return std.Io.File.stdin().readStreaming(std_io, &.{buf}) catch return error.IoError;
 }
 
-fn osIsTty(_: ?*anyopaque, sys_io: std.Io) bool {
-    return std.Io.File.stdout().isTty(sys_io) catch false;
+fn osIsTty(_: ?*anyopaque, std_io: std.Io) bool {
+    return std.Io.File.stdout().isTty(std_io) catch false;
 }
 
-fn osDeleteFile(_: ?*anyopaque, sys_io: std.Io, path: []const u8) DeleteError!void {
-    std.Io.Dir.cwd().deleteFile(sys_io, path) catch |err| return switch (err) {
+fn osDeleteFile(_: ?*anyopaque, std_io: std.Io, path: []const u8) DeleteError!void {
+    std.Io.Dir.cwd().deleteFile(std_io, path) catch |err| return switch (err) {
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
         else => error.IoError,
     };
 }
 
-fn osDeleteDir(_: ?*anyopaque, sys_io: std.Io, path: []const u8) DeleteError!void {
-    std.Io.Dir.cwd().deleteDir(sys_io, path) catch |err| return switch (err) {
+fn osDeleteDir(_: ?*anyopaque, std_io: std.Io, path: []const u8) DeleteError!void {
+    std.Io.Dir.cwd().deleteDir(std_io, path) catch |err| return switch (err) {
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
         else => error.IoError,
     };
 }
 
-fn osDeleteTree(_: ?*anyopaque, sys_io: std.Io, path: []const u8) DeleteError!void {
-    std.Io.Dir.cwd().deleteTree(sys_io, path) catch |err| return switch (err) {
+fn osDeleteTree(_: ?*anyopaque, std_io: std.Io, path: []const u8) DeleteError!void {
+    std.Io.Dir.cwd().deleteTree(std_io, path) catch |err| return switch (err) {
         error.AccessDenied => error.AccessDenied,
         else => error.IoError,
     };
 }
 
-fn osCreateDir(_: ?*anyopaque, sys_io: std.Io, path: []const u8) MakePathError!void {
-    std.Io.Dir.cwd().createDir(sys_io, path, .default_dir) catch |err| return switch (err) {
+fn osCreateDir(_: ?*anyopaque, std_io: std.Io, path: []const u8) MakePathError!void {
+    std.Io.Dir.cwd().createDir(std_io, path, .default_dir) catch |err| return switch (err) {
         error.AccessDenied => error.AccessDenied,
         else => error.IoError,
     };
 }
 
-fn osCopyFile(_: ?*anyopaque, sys_io: std.Io, src_path: []const u8, dst_path: []const u8) CopyError!void {
-    std.Io.Dir.cwd().copyFile(src_path, std.Io.Dir.cwd(), dst_path, sys_io, .{}) catch |err| return switch (err) {
+fn osCopyFile(_: ?*anyopaque, std_io: std.Io, src_path: []const u8, dst_path: []const u8) CopyError!void {
+    std.Io.Dir.cwd().copyFile(src_path, std.Io.Dir.cwd(), dst_path, std_io, .{}) catch |err| return switch (err) {
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
         else => error.IoError,
     };
 }
 
-fn osTimestampNow(_: ?*anyopaque, sys_io: std.Io) i128 {
-    return std.Io.Timestamp.now(sys_io, .real).nanoseconds;
+fn osTimestampNow(_: ?*anyopaque, std_io: std.Io) i128 {
+    return std.Io.Timestamp.now(std_io, .real).nanoseconds;
 }
 
 // --- Testing implementations — panic on every call ---
@@ -940,7 +940,7 @@ test "testing() has safe pure methods" {
 }
 
 test "freestanding stubs return expected errors" {
-    const fs = Self{ .ctx = null, .vtable = freestanding_vtable, .sys_io = undefined, .gpa = std.testing.allocator, .arena = std.testing.allocator };
+    const fs = Self{ .ctx = null, .vtable = freestanding_vtable, .std_io = undefined, .gpa = std.testing.allocator, .arena = std.testing.allocator };
     try std.testing.expectError(error.FileNotFound, fs.readFile("x", std.testing.allocator));
     try std.testing.expectError(error.AccessDenied, fs.writeFile("x", "y"));
     try std.testing.expect(!fs.fileExists("x"));
@@ -954,7 +954,7 @@ test "freestanding stubs return expected errors" {
 }
 
 test "freestanding dirName and baseName" {
-    const fs = Self{ .ctx = null, .vtable = freestanding_vtable, .sys_io = undefined, .gpa = std.testing.allocator, .arena = std.testing.allocator };
+    const fs = Self{ .ctx = null, .vtable = freestanding_vtable, .std_io = undefined, .gpa = std.testing.allocator, .arena = std.testing.allocator };
     try std.testing.expectEqualStrings("/usr", fs.dirName("/usr/bin").?);
     try std.testing.expectEqualStrings("bin", fs.baseName("/usr/bin"));
     try std.testing.expectEqualStrings("/", fs.dirName("/bin").?);
@@ -963,21 +963,21 @@ test "freestanding dirName and baseName" {
 }
 
 test "freestanding joinPath" {
-    const fs = Self{ .ctx = null, .vtable = freestanding_vtable, .sys_io = undefined, .gpa = std.testing.allocator, .arena = std.testing.allocator };
+    const fs = Self{ .ctx = null, .vtable = freestanding_vtable, .std_io = undefined, .gpa = std.testing.allocator, .arena = std.testing.allocator };
     const joined = try fs.joinPath(&.{ "a", "b", "c" }, std.testing.allocator);
     defer std.testing.allocator.free(joined);
     try std.testing.expectEqualStrings("a/b/c", joined);
 }
 
 test "freestanding readStdin returns 0" {
-    const fs = Self{ .ctx = null, .vtable = freestanding_vtable, .sys_io = undefined, .gpa = std.testing.allocator, .arena = std.testing.allocator };
+    const fs = Self{ .ctx = null, .vtable = freestanding_vtable, .std_io = undefined, .gpa = std.testing.allocator, .arena = std.testing.allocator };
     var buf: [16]u8 = undefined;
     const n = try fs.readStdin(&buf);
     try std.testing.expectEqual(@as(usize, 0), n);
 }
 
 test "freestanding canonicalize returns copy of input" {
-    const fs = Self{ .ctx = null, .vtable = freestanding_vtable, .sys_io = undefined, .gpa = std.testing.allocator, .arena = std.testing.allocator };
+    const fs = Self{ .ctx = null, .vtable = freestanding_vtable, .std_io = undefined, .gpa = std.testing.allocator, .arena = std.testing.allocator };
     const result = try fs.canonicalize("/some/path", std.testing.allocator);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("/some/path", result);

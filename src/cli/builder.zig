@@ -173,7 +173,7 @@ pub fn initializeLLVM() void {
 }
 
 /// Compile LLVM bitcode file to object file
-pub fn compileBitcodeToObject(gpa: Allocator, sys_io: std.Io, config: CompileConfig) !bool {
+pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileConfig) !bool {
     if (comptime !llvm_available) {
         renderLLVMNotAvailableError(gpa);
         return error.LLVMNotAvailable;
@@ -188,7 +188,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, sys_io: std.Io, config: CompileCon
     std.log.debug("CPU: '{s}', Features: '{s}'", .{ config.cpu, config.features });
 
     // Verify input file exists
-    std.Io.Dir.cwd().access(sys_io, config.input_path, .{}) catch |err| {
+    std.Io.Dir.cwd().access(std_io, config.input_path, .{}) catch |err| {
         renderFileNotAccessibleError(gpa, config.input_path, err);
         return false;
     };

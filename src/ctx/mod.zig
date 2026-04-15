@@ -4,4 +4,4 @@
 //! in a single context object, allowing easy testing and alternative
 //! implementations (e.g. WASM playground, in-memory test mocks).
 
-pub const RocCtx = @import("RocCtx.zig");
+pub const CoreCtx = @import("CoreCtx.zig");

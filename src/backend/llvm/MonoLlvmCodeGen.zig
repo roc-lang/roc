@@ -7,12 +7,7 @@
 const std = @import("std");
 const layout = @import("layout");
 const lir = @import("lir");
-const RocCtx = @import("ctx").RocCtx;
-
 const LlvmBuilder = @import("Builder.zig");
-
-/// Alias for the underlying system I/O type carried by RocCtx.
-const SysIo = @FieldType(RocCtx, "sys_io");
 
 const LirExprStore = lir.LirExprStore;
 const LirExprId = lir.LirExprId;
@@ -28,6 +23,9 @@ const Allocator = std.mem.Allocator;
 pub const MonoLlvmCodeGen = struct {
     allocator: Allocator,
     store: *const lir.LirStore,
+
+    /// Layout store for resolving composite type layouts (records, tuples).
+    /// Set by the evaluator before calling generateCode.
     layout_store: ?*const layout.Store = null,
 
     pub const Error = error{
@@ -237,8 +235,9 @@ pub const MonoLlvmCodeGen = struct {
 
         if (std.process.getEnvVarOwned(self.allocator, "ROC_LLVM_KEEP_IR")) |keep_path| {
             defer self.allocator.free(keep_path);
-            const sys_io = SysIo.Threaded.global_single_threaded.io();
-            builder.printToFilePath(sys_io, keep_path) catch return error.CompilationFailed;
+            if (self.std_io) |std_io| {
+                builder.printToFilePath(std_io, keep_path) catch return error.CompilationFailed;
+            }
         } else |_| {}
 
         const bitcode = builder.toBitcode(self.allocator, producer) catch return error.CompilationFailed;

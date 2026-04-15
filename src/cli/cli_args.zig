@@ -176,7 +176,7 @@ pub const GlueArgs = struct {
 };
 
 /// Parse a list of arguments.
-pub fn parse(alloc: mem.Allocator, sys_io: std.Io, args: []const []const u8) !CliArgs {
+pub fn parse(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) !CliArgs {
     if (args.len == 0) return try parseRun(alloc, args);
 
     // "run" is not a valid subcommand - give a helpful error
@@ -187,7 +187,7 @@ pub fn parse(alloc: mem.Allocator, sys_io: std.Io, args: []const []const u8) !Cl
     if (mem.eql(u8, args[0], "check")) return parseCheck(args[1..]);
     if (mem.eql(u8, args[0], "build")) return parseBuild(args[1..]);
     if (mem.eql(u8, args[0], "bundle")) return try parseBundle(alloc, args[1..]);
-    if (mem.eql(u8, args[0], "unbundle")) return try parseUnbundle(alloc, sys_io, args[1..]);
+    if (mem.eql(u8, args[0], "unbundle")) return try parseUnbundle(alloc, std_io, args[1..]);
     if (mem.eql(u8, args[0], "fmt")) return try parseFormat(alloc, args[1..]);
     if (mem.eql(u8, args[0], "test")) return parseTest(args[1..]);
     if (mem.eql(u8, args[0], "repl")) return parseRepl(args[1..]);
@@ -515,7 +515,7 @@ fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator
     } };
 }
 
-fn parseUnbundle(alloc: mem.Allocator, sys_io: std.Io, args: []const []const u8) !CliArgs {
+fn parseUnbundle(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) !CliArgs {
     var paths = try std.array_list.Managed([]const u8).initCapacity(alloc, 16);
 
     for (args) |arg| {
@@ -544,10 +544,10 @@ fn parseUnbundle(alloc: mem.Allocator, sys_io: std.Io, args: []const []const u8)
 
     // If no paths specified, default to all .tar.zst files in current directory
     if (paths.items.len == 0) {
-        var cwd = try std.Io.Dir.cwd().openDir(sys_io, ".", .{ .iterate = true });
-        defer cwd.close(sys_io);
+        var cwd = try std.Io.Dir.cwd().openDir(std_io, ".", .{ .iterate = true });
+        defer cwd.close(std_io);
         var iter = cwd.iterate();
-        while (try iter.next(sys_io)) |entry| {
+        while (try iter.next(std_io)) |entry| {
             if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".tar.zst")) {
                 try paths.append(try alloc.dupe(u8, entry.name));
             }

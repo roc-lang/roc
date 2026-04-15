@@ -15,7 +15,7 @@ const CIR = @import("../CIR.zig");
 const TestEnv = @import("TestEnv.zig").TestEnv;
 const BuiltinTestContext = @import("./BuiltinTestContext.zig").BuiltinTestContext;
 const ModuleEnv = @import("../ModuleEnv.zig");
-const RocCtx = @import("ctx").RocCtx;
+const CoreCtx = @import("ctx").CoreCtx;
 const parseIntWithUnderscores = Can.parseIntWithUnderscores;
 const RocDec = builtins.dec.RocDec;
 
@@ -536,7 +536,7 @@ test "hexadecimal integer literals" {
 
         try env.initCIRFields("test");
 
-        const roc_ctx = RocCtx.testing(gpa, gpa);
+        const roc_ctx = CoreCtx.testing(gpa, gpa);
 
         const ast = try parse.parseExpr(gpa, &env.common);
         defer ast.deinit();
@@ -599,7 +599,7 @@ test "binary integer literals" {
 
         try env.initCIRFields("test");
 
-        const roc_ctx = RocCtx.testing(gpa, gpa);
+        const roc_ctx = CoreCtx.testing(gpa, gpa);
 
         const ast = try parse.parseExpr(gpa, &env.common);
         defer ast.deinit();
@@ -662,7 +662,7 @@ test "octal integer literals" {
 
         try env.initCIRFields("test");
 
-        const roc_ctx = RocCtx.testing(gpa, gpa);
+        const roc_ctx = CoreCtx.testing(gpa, gpa);
 
         const ast = try parse.parseExpr(gpa, &env.common);
         defer ast.deinit();
@@ -725,7 +725,7 @@ test "integer literals with uppercase base prefixes" {
 
         try env.initCIRFields("test");
 
-        const roc_ctx = RocCtx.testing(gpa, gpa);
+        const roc_ctx = CoreCtx.testing(gpa, gpa);
 
         const ast = try parse.parseExpr(gpa, &env.common);
         defer ast.deinit();

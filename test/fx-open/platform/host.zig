@@ -8,7 +8,7 @@ const trace_refcount = build_options.trace_refcount;
 /// Host environment - contains DebugAllocator for leak detection
 const HostEnv = struct {
     gpa: std.heap.DebugAllocator(.{}),
-    sys_io: std.Io,
+    std_io: std.Io,
 };
 
 /// Roc allocation function with size-tracking metadata
@@ -191,7 +191,7 @@ fn hostedStdinLine(ops: *RocOps, result: *RocStr, _: *anyopaque) callconv(.c) vo
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     // Read a line from stdin
     var buffer: [4096]u8 = undefined;
-    const bytes_read = std.Io.File.stdin().readStreaming(host.sys_io, &.{&buffer}) catch {
+    const bytes_read = std.Io.File.stdin().readStreaming(host.std_io, &.{&buffer}) catch {
         // Return empty string on error
         result.* = RocStr.empty();
         return;
@@ -228,8 +228,8 @@ fn hostedStdoutLine(ops_ptr: *anyopaque, _: *anyopaque, args: *const extern stru
     const ops: *RocOps = @ptrCast(@alignCast(ops_ptr));
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     const message = args.str.asSlice();
-    std.Io.File.stdout().writeStreamingAll(host.sys_io, message) catch {};
-    std.Io.File.stdout().writeStreamingAll(host.sys_io, "\n") catch {};
+    std.Io.File.stdout().writeStreamingAll(host.std_io, message) catch {};
+    std.Io.File.stdout().writeStreamingAll(host.std_io, "\n") catch {};
 }
 
 /// Array of hosted function pointers, sorted alphabetically by fully-qualified name
@@ -267,7 +267,7 @@ fn buildArgsList(ops: *builtins.host_abi.RocOps, argc: c_int, argv: [*][*:0]u8) 
 fn platform_main(argc: c_int, argv: [*][*:0]u8) !c_int {
     var host_env = HostEnv{
         .gpa = std.heap.DebugAllocator(.{}){},
-        .sys_io = std.Io.Threaded.global_single_threaded.io(),
+        .std_io = std.Io.Threaded.global_single_threaded.io(),
     };
     defer {
         const leaked = host_env.gpa.deinit();

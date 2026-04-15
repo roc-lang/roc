@@ -67,11 +67,11 @@ pub const PlatformValidation = struct {
 /// Returns the TargetsConfig if valid, or an error with details.
 pub fn validatePlatformHeader(
     allocator: std.mem.Allocator,
-    sys_io: std.Io,
+    std_io: std.Io,
     platform_source_path: []const u8,
 ) ValidationError!PlatformValidation {
     // Read platform source
-    var source = std.Io.Dir.cwd().readFileAlloc(sys_io, platform_source_path, allocator, .unlimited) catch {
+    var source = std.Io.Dir.cwd().readFileAlloc(std_io, platform_source_path, allocator, .unlimited) catch {
         renderFileReadError(allocator, platform_source_path);
         return error.FileReadError;
     };
@@ -248,11 +248,11 @@ pub fn renderValidationError(
 /// Returns the ValidationResult for nice error reporting, or null if validation passed.
 pub fn validateAllTargetFilesExist(
     allocator: std.mem.Allocator,
-    sys_io: std.Io,
+    std_io: std.Io,
     config: TargetsConfig,
     platform_dir_path: []const u8,
 ) ?ValidationResult {
-    var platform_dir = std.Io.Dir.cwd().openDir(sys_io, platform_dir_path, .{}) catch {
+    var platform_dir = std.Io.Dir.cwd().openDir(std_io, platform_dir_path, .{}) catch {
         return .{
             .missing_files_directory = .{
                 .platform_path = platform_dir_path,
@@ -260,9 +260,9 @@ pub fn validateAllTargetFilesExist(
             },
         };
     };
-    defer platform_dir.close(sys_io);
+    defer platform_dir.close(std_io);
 
-    const result = targets_validator.validateTargetFilesExist(allocator, sys_io, config, platform_dir) catch {
+    const result = targets_validator.validateTargetFilesExist(allocator, std_io, config, platform_dir) catch {
         return .{
             .missing_files_directory = .{
                 .platform_path = platform_dir_path,

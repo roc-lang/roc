@@ -5,7 +5,7 @@
 
 const std = @import("std");
 const parse = @import("parse");
-const RocCtx = @import("ctx").RocCtx;
+const CoreCtx = @import("ctx").CoreCtx;
 
 const Allocator = std.mem.Allocator;
 const AST = parse.AST;
@@ -188,7 +188,7 @@ pub fn addImportedModulesToEnvMap(
     module_envs_map: *std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
     placeholder_env: *const ModuleEnv,
     gpa: Allocator,
-    roc_ctx: RocCtx,
+    roc_ctx: CoreCtx,
 ) !void {
     // Extract imports from the parsed AST
     const imports = try extractImportsFromAST(parse_ast, gpa);

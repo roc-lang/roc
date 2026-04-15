@@ -12,14 +12,14 @@ const can = @import("can");
 const CacheReporting = @import("cache_reporting.zig").CacheReporting;
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
-const RocCtx = ctx_mod.RocCtx;
+const CoreCtx = ctx_mod.CoreCtx;
 const CacheStats = @import("cache_config.zig").CacheStats;
 const CacheConfig = @import("cache_config.zig").CacheConfig;
 
 /// Public `CacheManager` declaration.
 pub const CacheManager = struct {
     config: CacheConfig,
-    roc_ctx: RocCtx,
+    roc_ctx: CoreCtx,
     allocator: Allocator,
     stats: CacheStats,
 
@@ -33,7 +33,7 @@ pub const CacheManager = struct {
     }
 
     /// Initialize a new cache manager.
-    pub fn init(allocator: Allocator, config: CacheConfig, roc_ctx: RocCtx) Self {
+    pub fn init(allocator: Allocator, config: CacheConfig, roc_ctx: CoreCtx) Self {
         return Self{
             .config = config,
             .roc_ctx = roc_ctx,

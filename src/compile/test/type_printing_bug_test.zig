@@ -9,7 +9,7 @@ const compile_package = @import("../compile_package.zig");
 const BuiltinModules = eval.BuiltinModules;
 
 const ModuleEnv = can.ModuleEnv;
-const RocCtx = @import("../mod.zig").RocCtx;
+const CoreCtx = @import("../mod.zig").CoreCtx;
 
 test "canonicalizeAndTypeCheckModule preserves Try types in type printing" {
     const testing = std.testing;
@@ -48,7 +48,7 @@ test "canonicalizeAndTypeCheckModule preserves Try types in type printing" {
     var module_envs = std.AutoHashMap(base.Ident.Idx, can.Can.AutoImportedType).init(gpa);
     defer module_envs.deinit();
 
-    const roc_ctx = RocCtx.testing(gpa, gpa);
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
     const imported_envs: []const *ModuleEnv = &[_]*ModuleEnv{builtin_env};
     var result = try compile_package.PackageEnv.canonicalizeAndTypeCheckModule(
         roc_ctx,

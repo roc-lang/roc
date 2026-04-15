@@ -13,7 +13,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const parse = @import("parse");
 const can = @import("can");
-const RocCtx = @import("ctx").RocCtx;
+const CoreCtx = @import("ctx").CoreCtx;
 
 pub const AST = parse.AST;
 pub const ModuleEnv = can.ModuleEnv;
@@ -129,7 +129,7 @@ pub fn parseSingleModule(
 /// // Results are now in module_env
 /// ```
 pub fn canonicalizeSingleModule(
-    roc_ctx: RocCtx,
+    roc_ctx: CoreCtx,
     module_env: *ModuleEnv,
     parse_ast: *AST,
     context: can.Can.ModuleInitContext,
