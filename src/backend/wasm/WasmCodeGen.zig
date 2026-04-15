@@ -730,16 +730,16 @@ fn emitRawDirectRcPlan(
                 try self.emitDataPtrIncrefByLocal(alloc_ptr_local, count);
                 self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
             } else {
-                try self.emitStrRc(.incref, value_ptr_local, 1);
+                try self.emitBuiltinInternalStrRc(.incref, value_ptr_local, 1);
             }
             return true;
         },
         .str_decref => {
-            try self.emitStrRc(.decref, value_ptr_local, 1);
+            try self.emitBuiltinInternalStrRc(.decref, value_ptr_local, 1);
             return true;
         },
         .str_free => {
-            try self.emitStrRc(.free, value_ptr_local, 1);
+            try self.emitBuiltinInternalStrRc(.free, value_ptr_local, 1);
             return true;
         },
         .list_incref => {
@@ -754,11 +754,11 @@ fn emitRawDirectRcPlan(
             return true;
         },
         .list_decref => {
-            try self.emitListRc(.decref, value_ptr_local, helper_key.layout_idx, 1);
+            try self.emitBuiltinInternalListRc(.decref, value_ptr_local, helper_key.layout_idx, 1);
             return true;
         },
         .list_free => {
-            try self.emitListRc(.free, value_ptr_local, helper_key.layout_idx, 1);
+            try self.emitBuiltinInternalListRc(.free, value_ptr_local, helper_key.layout_idx, 1);
             return true;
         },
         .box_incref => {
@@ -1010,7 +1010,7 @@ fn emitCallRocDealloc(self: *Self, ptr_local: u32, alignment: u32) Allocator.Err
     WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
 }
 
-fn emitFreeRcPtr(self: *Self, rc_ptr_local: u32, element_alignment: u32, elements_refcounted: bool) Allocator.Error!void {
+fn emitBuiltinInternalFreeRcPtr(self: *Self, rc_ptr_local: u32, element_alignment: u32, elements_refcounted: bool) Allocator.Error!void {
     const ptr_width: u32 = 4;
     const required_space: u32 = if (elements_refcounted) 2 * ptr_width else ptr_width;
     const extra_bytes: u32 = if (element_alignment > required_space) element_alignment else required_space;
@@ -1148,7 +1148,7 @@ fn emitDataPtrDecref(self: *Self, data_ptr_local: u32, alignment: u32, elements_
     self.body.append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
     self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
     self.body.append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
-    try self.emitFreeRcPtr(rc_ptr, alignment, elements_refcounted);
+    try self.emitBuiltinInternalFreeRcPtr(rc_ptr, alignment, elements_refcounted);
     self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
     try self.emitLocalGet(rc_ptr);
     try self.emitLocalGet(rc_val);
@@ -1184,7 +1184,7 @@ fn emitDataPtrFree(self: *Self, data_ptr_local: u32, alignment: u32, elements_re
     WasmModule.leb128WriteI32(self.allocator, &self.body, -4) catch return error.OutOfMemory;
     self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
     try self.emitLocalSet(rc_ptr);
-    try self.emitFreeRcPtr(rc_ptr, alignment, elements_refcounted);
+    try self.emitBuiltinInternalFreeRcPtr(rc_ptr, alignment, elements_refcounted);
 
     self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
 }
@@ -1269,7 +1269,7 @@ fn emitListElementDecrefsIfUnique(
     self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
 }
 
-fn emitListRc(
+fn emitBuiltinInternalListRc(
     self: *Self,
     comptime kind: RcOpKind,
     list_ptr_local: u32,
@@ -1312,7 +1312,7 @@ fn emitListRc(
     }
 }
 
-fn emitStrRc(self: *Self, comptime kind: RcOpKind, str_ptr_local: u32, inc_count: u16) Allocator.Error!void {
+fn emitBuiltinInternalStrRc(self: *Self, comptime kind: RcOpKind, str_ptr_local: u32, inc_count: u16) Allocator.Error!void {
     const alloc_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     const is_small_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitDecodeStrAllocPtr(str_ptr_local, alloc_ptr_local, is_small_local);
@@ -1332,7 +1332,7 @@ fn emitStrRc(self: *Self, comptime kind: RcOpKind, str_ptr_local: u32, inc_count
     self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
 }
 
-fn emitBoxRc(self: *Self, comptime kind: RcOpKind, box_ptr_local: u32, box_layout_idx: layout.Idx, inc_count: u16) Allocator.Error!void {
+fn emitBuiltinInternalBoxRc(self: *Self, comptime kind: RcOpKind, box_ptr_local: u32, box_layout_idx: layout.Idx, inc_count: u16) Allocator.Error!void {
     const ls = self.getLayoutStore();
     const box_layout = ls.getLayout(box_layout_idx);
 
@@ -1427,16 +1427,16 @@ fn generateRcHelperBody(
             try self.emitDataPtrIncrefByLocal(alloc_ptr_local, count_local.?);
             self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
         },
-        .str_decref => try self.emitStrRc(.decref, value_ptr_local, 1),
-        .str_free => try self.emitStrRc(.free, value_ptr_local, 1),
+        .str_decref => try self.emitBuiltinInternalStrRc(.decref, value_ptr_local, 1),
+        .str_free => try self.emitBuiltinInternalStrRc(.free, value_ptr_local, 1),
         .list_incref => {
             const alloc_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             const is_slice_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitDecodeListAllocPtr(value_ptr_local, alloc_ptr_local, is_slice_local);
             try self.emitDataPtrIncrefByLocal(alloc_ptr_local, count_local.?);
         },
-        .list_decref => try self.emitListRc(.decref, value_ptr_local, helper_key.layout_idx, 1),
-        .list_free => try self.emitListRc(.free, value_ptr_local, helper_key.layout_idx, 1),
+        .list_decref => try self.emitBuiltinInternalListRc(.decref, value_ptr_local, helper_key.layout_idx, 1),
+        .list_free => try self.emitBuiltinInternalListRc(.free, value_ptr_local, helper_key.layout_idx, 1),
         .box_incref => {
             const box_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalGet(value_ptr_local);
