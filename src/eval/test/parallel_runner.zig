@@ -224,6 +224,15 @@ fn forkAndEval(
         return .{ .success = result };
     }
 
+    const disable_fork =
+        (std.process.getEnvVarOwned(std.heap.page_allocator, "ROC_EVAL_NO_FORK") catch null) != null;
+    if (disable_fork) {
+        const result = eval_fn(std.heap.page_allocator, lowered) catch |err| {
+            return .{ .child_error = @errorName(err) };
+        };
+        return .{ .success = result };
+    }
+
     const pipe_fds = posix.pipe() catch {
         return .{ .fork_failed = {} };
     };
@@ -1106,7 +1115,7 @@ pub fn main() !void {
         var wall_timer = Timer.start() catch unreachable;
 
         for (tests, 0..) |tc, i| {
-            arena.reset(.retain_capacity);
+            _ = arena.reset(.retain_capacity);
 
             const outcome = runSingleTest(arena.allocator(), tc);
 

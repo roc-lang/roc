@@ -459,6 +459,8 @@ fn evaluateFromSharedMemory(entry_idx: u32, host_roc_ops: *RocOps, ret_ptr: *any
         lowered_ir,
     );
     defer lowered_lir.deinit();
+    try lir.Ownership.inferProcResultContracts(wrapped_allocator, &lowered_lir.store);
+    try lir.RcInsert.run(wrapped_allocator, &lowered_lir.store, &lowered_lir.layouts);
 
     const proc_id = lowered_lir.proc_ids_by_symbol.get(entry_symbol_for_lir.raw()) orelse {
         host_roc_ops.crash("Dev shim: entry proc not found");

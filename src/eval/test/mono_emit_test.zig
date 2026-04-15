@@ -215,6 +215,22 @@ test "emitter: can emit identity function applied to integer" {
     try testing.expect(std.mem.indexOf(u8, output, "identity(42)") != null);
 }
 
+test "wasm recursive nominal dom element with text child" {
+    const source =
+        \\Node := [Text(Str), Element(Str, List(Node))]
+        \\
+        \\main = Node.Element("p", [Node.Text("hello")])
+    ;
+
+    var compiled = try helpers.compileInspectedProgram(test_allocator, .module, source, &.{});
+    defer compiled.deinit(test_allocator);
+
+    const actual = try helpers.wasmEvaluatorInspectedStr(test_allocator, &compiled.lowered);
+    defer test_allocator.free(actual);
+
+    try testing.expectEqualStrings("Element(\"p\", [Text(\"hello\")])", actual);
+}
+
 // Roundtrip verification tests
 // These tests verify that emitted code produces the same result as the original
 

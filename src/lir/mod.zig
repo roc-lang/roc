@@ -8,6 +8,10 @@ pub const LIR = @import("LIR.zig");
 pub const LirStore = @import("LirStore.zig");
 /// Tail-recursion rewriting for statement-only LIR procs.
 pub const TailRecursion = @import("TailRecursion.zig");
+/// Ownership fact inference for statement-only LIR.
+pub const Ownership = @import("Ownership.zig");
+/// Explicit RC statement insertion for statement-only LIR.
+pub const RcInsert = @import("RcInsert.zig");
 /// Lower cor-style IR into statement-only LIR.
 pub const FromIr = @import("FromIr.zig");
 
@@ -65,5 +69,7 @@ test "lir tests" {
     std.testing.refAllDecls(LIR);
     std.testing.refAllDecls(LirStore);
     std.testing.refAllDecls(TailRecursion);
+    std.testing.refAllDecls(Ownership);
+    std.testing.refAllDecls(RcInsert);
     std.testing.refAllDecls(FromIr);
 }

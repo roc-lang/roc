@@ -46,6 +46,8 @@ const ProcPass = struct {
     live_in: []std.DynamicBitSetUnmanaged,
     live_out: []std.DynamicBitSetUnmanaged,
     rewritten_stmt_ids: std.AutoHashMap(u32, CFStmtId),
+    loop_continue_targets: std.AutoHashMap(u32, CFStmtId),
+    join_params_by_id: std.AutoHashMap(u32, LIR.LocalSpan),
 
     fn init(
         allocator: Allocator,
@@ -98,12 +100,19 @@ const ProcPass = struct {
             .live_in = live_in,
             .live_out = live_out,
             .rewritten_stmt_ids = std.AutoHashMap(u32, CFStmtId).init(allocator),
+            .loop_continue_targets = std.AutoHashMap(u32, CFStmtId).init(allocator),
+            .join_params_by_id = std.AutoHashMap(u32, LIR.LocalSpan).init(allocator),
         };
         errdefer pass.owned_locals.deinit(allocator);
         errdefer pass.rewritten_stmt_ids.deinit();
+        errdefer pass.loop_continue_targets.deinit();
+        errdefer pass.join_params_by_id.deinit();
 
         pass.computeOwnedLocals();
         pass.computeProvenanceOwners();
+        if (proc.body) |body| {
+            try pass.collectLoopContinueTargets(body, &.{});
+        }
         return pass;
     }
 
@@ -113,6 +122,8 @@ const ProcPass = struct {
         self.allocator.free(self.provenance_owner);
         self.owned_locals.deinit(self.allocator);
         self.rewritten_stmt_ids.deinit();
+        self.loop_continue_targets.deinit();
+        self.join_params_by_id.deinit();
         for (self.live_in, self.live_out) |*in_bits, *out_bits| {
             in_bits.deinit(self.allocator);
             out_bits.deinit(self.allocator);
@@ -133,6 +144,12 @@ const ProcPass = struct {
                 .assign_struct => |assign| self.markOwnedFresh(assign.target, assign.result),
                 .assign_tag => |assign| self.markOwnedFresh(assign.target, assign.result),
                 .set_local => |assign| self.markOwnedLocal(assign.target),
+                .join => |join| {
+                    _ = self.join_params_by_id.put(@intFromEnum(join.id), join.params) catch unreachable;
+                    for (self.store.getLocalSpan(join.params)) |param| {
+                        self.markOwnedLocal(param);
+                    }
+                },
                 else => {},
             }
         }
@@ -216,6 +233,10 @@ const ProcPass = struct {
                 if (incoming_count == 0) continue;
 
                 for (params, 0..) |param, i| {
+                    if (self.localCanOwnRefcount(param)) {
+                        self.provenance_owner[@intFromEnum(param)] = null;
+                        continue;
+                    }
                     const param_idx = @intFromEnum(param);
                     if (self.provenance_owner[param_idx] == candidates[i]) continue;
                     self.provenance_owner[param_idx] = candidates[i];
@@ -310,7 +331,11 @@ const ProcPass = struct {
                 self.unionLiveInFor(join.body, out);
                 self.unionLiveInFor(join.remainder, out);
             },
-            .scope_exit, .jump, .ret, .runtime_error, .crash, .loop_continue => {},
+            .loop_continue => {
+                const target = self.loop_continue_targets.get(@intFromEnum(stmt_id)) orelse return;
+                self.unionLiveInFor(target, out);
+            },
+            .scope_exit, .jump, .ret, .runtime_error, .crash => {},
         }
     }
 
@@ -373,6 +398,12 @@ const ProcPass = struct {
             .assign_ref => |assign| {
                 defs.set(@intFromEnum(assign.target));
                 self.markRefOpUses(assign.op, uses);
+                if (assign.result == .fresh) {
+                    switch (assign.op) {
+                        .local => |source| self.markOwnershipPassedLocal(source, ownership_passed),
+                        else => {},
+                    }
+                }
             },
             .assign_literal => |assign| defs.set(@intFromEnum(assign.target)),
             .assign_call => |assign| {
@@ -435,7 +466,20 @@ const ProcPass = struct {
             .join => |join| {
                 for (self.store.getLocalSpan(join.params)) |param| defs.set(@intFromEnum(param));
             },
-            .jump => |jump| self.markSpanUses(jump.args, uses),
+            .jump => |jump| {
+                const args = self.store.getLocalSpan(jump.args);
+                for (args) |arg| uses.set(@intFromEnum(arg));
+                if (self.join_params_by_id.get(@intFromEnum(jump.target))) |params_span| {
+                    const params = self.store.getLocalSpan(params_span);
+                    if (params.len == args.len) {
+                        for (args, params) |arg, param| {
+                            if (self.localCanOwnRefcount(param)) {
+                                self.markOwnershipPassedLocal(arg, ownership_passed);
+                            }
+                        }
+                    }
+                }
+            },
             .ret => |ret_stmt| uses.set(@intFromEnum(ret_stmt.value)),
             .scope_exit, .runtime_error, .crash, .loop_continue => {},
         }
@@ -958,6 +1002,57 @@ const ProcPass = struct {
         const next = retained_counts[local_idx] + delta;
         std.debug.assert(next >= retained_counts[local_idx]);
         retained_counts[local_idx] = next;
+    }
+
+    fn collectLoopContinueTargets(
+        self: *ProcPass,
+        stmt_id: CFStmtId,
+        for_stack: []const CFStmtId,
+    ) Allocator.Error!void {
+        switch (self.store.getCFStmt(stmt_id)) {
+            .assign_symbol => |assign| try self.collectLoopContinueTargets(assign.next, for_stack),
+            .assign_ref => |assign| try self.collectLoopContinueTargets(assign.next, for_stack),
+            .assign_literal => |assign| try self.collectLoopContinueTargets(assign.next, for_stack),
+            .assign_call => |assign| try self.collectLoopContinueTargets(assign.next, for_stack),
+            .assign_call_indirect => |assign| try self.collectLoopContinueTargets(assign.next, for_stack),
+            .assign_low_level => |assign| try self.collectLoopContinueTargets(assign.next, for_stack),
+            .assign_list => |assign| try self.collectLoopContinueTargets(assign.next, for_stack),
+            .assign_struct => |assign| try self.collectLoopContinueTargets(assign.next, for_stack),
+            .assign_tag => |assign| try self.collectLoopContinueTargets(assign.next, for_stack),
+            .set_local => |assign| try self.collectLoopContinueTargets(assign.next, for_stack),
+            .debug => |debug_stmt| try self.collectLoopContinueTargets(debug_stmt.next, for_stack),
+            .expect => |expect_stmt| try self.collectLoopContinueTargets(expect_stmt.next, for_stack),
+            .incref => |inc| try self.collectLoopContinueTargets(inc.next, for_stack),
+            .decref => |dec| try self.collectLoopContinueTargets(dec.next, for_stack),
+            .free => |free_stmt| try self.collectLoopContinueTargets(free_stmt.next, for_stack),
+            .switch_stmt => |sw| {
+                try self.collectLoopContinueTargets(sw.default_branch, for_stack);
+                for (self.store.getCFSwitchBranches(sw.branches)) |branch| {
+                    try self.collectLoopContinueTargets(branch.body, for_stack);
+                }
+            },
+            .borrow_scope => |scope| {
+                try self.collectLoopContinueTargets(scope.body, for_stack);
+                try self.collectLoopContinueTargets(scope.remainder, for_stack);
+            },
+            .for_list => |for_stmt| {
+                var nested = try self.allocator.alloc(CFStmtId, for_stack.len + 1);
+                defer self.allocator.free(nested);
+                @memcpy(nested[0..for_stack.len], for_stack);
+                nested[for_stack.len] = stmt_id;
+                try self.collectLoopContinueTargets(for_stmt.body, nested);
+                try self.collectLoopContinueTargets(for_stmt.next, for_stack);
+            },
+            .join => |join| {
+                try self.collectLoopContinueTargets(join.body, for_stack);
+                try self.collectLoopContinueTargets(join.remainder, for_stack);
+            },
+            .loop_continue => {
+                const target = for_stack[for_stack.len - 1];
+                try self.loop_continue_targets.put(@intFromEnum(stmt_id), target);
+            },
+            .scope_exit, .jump, .ret, .runtime_error, .crash => {},
+        }
     }
 
 };

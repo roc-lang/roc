@@ -1157,11 +1157,12 @@ pub const Interpreter = struct {
                             );
                         }
                         self.debugDumpProc(frame.proc_id);
-                        self.debugPrintStmtChain(current, 16);
-                        std.debug.print("  raw stmt 207: {any}\n", .{self.store.getCFStmt(@enumFromInt(207))});
-                        std.debug.print("  raw stmt 218: {any}\n", .{self.store.getCFStmt(@enumFromInt(218))});
-                        std.debug.print("  raw stmt 209: {any}\n", .{self.store.getCFStmt(@enumFromInt(209))});
-                        std.debug.print("  raw stmt 185: {any}\n", .{self.store.getCFStmt(@enumFromInt(185))});
+                        self.debugPrintStmtChain(current, 24);
+                        std.debug.print("  raw stmt 205: {any}\n", .{self.store.getCFStmt(@enumFromInt(205))});
+                        std.debug.print("  raw stmt 6: {any}\n", .{self.store.getCFStmt(@enumFromInt(6))});
+                        std.debug.print("  raw stmt 7: {any}\n", .{self.store.getCFStmt(@enumFromInt(7))});
+                        std.debug.print("  raw stmt 8: {any}\n", .{self.store.getCFStmt(@enumFromInt(8))});
+                        std.debug.print("  raw stmt 9: {any}\n", .{self.store.getCFStmt(@enumFromInt(9))});
                     }
                     const result = try self.evalProcById(assign.proc, arg_values, try self.localLayouts(arg_locals));
                     self.setLocalChecked(
@@ -1224,15 +1225,17 @@ pub const Interpreter = struct {
                     current = assign.next;
                 },
                 .set_local => |assign| {
+                    const target_layout = self.store.getLocal(assign.target).layout_idx;
+                    const normalized = try self.coerceValueToLayout(
+                        try self.getLocalChecked(frame, assign.value),
+                        self.store.getLocal(assign.value).layout_idx,
+                        target_layout,
+                    );
                     self.setLocalChecked(
                         frame,
                         current,
                         assign.target,
-                        try self.coerceValueToLayout(
-                            try self.getLocalChecked(frame, assign.value),
-                            self.store.getLocal(assign.value).layout_idx,
-                            self.store.getLocal(assign.target).layout_idx,
-                        ),
+                        try self.materializeLocalValue(normalized, target_layout),
                     );
                     current = assign.next;
                 },
@@ -1286,7 +1289,7 @@ pub const Interpreter = struct {
                         );
                         if (@intFromEnum(frame.proc_id) == 2 and @intFromEnum(current) == 119) {
                             self.debugDumpProc(frame.proc_id);
-                            self.debugPrintStmtChain(current, 16);
+                            self.debugPrintStmtChain(current, 20);
                         }
                     }
                     self.performRc(
@@ -1392,7 +1395,7 @@ pub const Interpreter = struct {
 
                     var i: usize = 0;
                     while (i < rl.len()) : (i += 1) {
-                        const elem_value = if (info.width == 0 or rl.bytes == null)
+                        const normalized_elem = if (info.width == 0 or rl.bytes == null)
                             try self.coerceValueToLayout(Value.zst, actual_elem_layout, elem_layout)
                         else
                             try self.coerceValueToLayout(
@@ -1400,6 +1403,10 @@ pub const Interpreter = struct {
                                 actual_elem_layout,
                                 elem_layout,
                             );
+                        if (self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(elem_layout))) {
+                            self.performRc(.incref, normalized_elem, elem_layout, 1);
+                        }
+                        const elem_value = try self.materializeLocalValue(normalized_elem, elem_layout);
 
                         self.setLocalChecked(frame, current, for_stmt.elem, elem_value);
                         const outcome = try self.execStmtChain(frame, for_stmt.body, null);
@@ -1783,6 +1790,19 @@ pub const Interpreter = struct {
         const copy = try self.alloc(target_layout);
         copy.copyFrom(value, size);
         return copy;
+    }
+
+    fn materializeLocalValue(
+        self: *LirInterpreter,
+        value: Value,
+        target_layout: layout_mod.Idx,
+    ) Error!Value {
+        const size = self.helper.sizeOf(target_layout);
+        if (size == 0 or value.isZst()) return Value.zst;
+
+        const storage = try self.alloc(target_layout);
+        storage.copyFrom(value, size);
+        return storage;
     }
 
     fn evalAssignRef(

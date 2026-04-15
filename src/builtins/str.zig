@@ -384,7 +384,7 @@ pub const RocStr = extern struct {
             const source_ptr = self.asU8ptr();
             const dest_ptr = result.asU8ptrMut();
 
-            @memcpy(dest_ptr[0..old_length], source_ptr[0..old_length]);
+            std.mem.copyForwards(u8, dest_ptr[0..old_length], source_ptr[0..old_length]);
             @memset(dest_ptr[old_length..new_length], 0);
 
             self.decref(roc_ops);
@@ -400,7 +400,7 @@ pub const RocStr = extern struct {
 
             const source_ptr = self.asU8ptr();
 
-            @memcpy(dest_ptr[0..old_length], source_ptr[0..old_length]);
+            std.mem.copyForwards(u8, dest_ptr[0..old_length], source_ptr[0..old_length]);
             @memset(dest_ptr[old_length..new_length], 0);
 
             self.decref(roc_ops);
@@ -944,7 +944,13 @@ pub fn strConcat(
         const combined_length = arg1.len() + arg2.len();
 
         var result = arg1.reallocate(combined_length, roc_ops);
-        @memcpy(result.asU8ptrMut()[arg1.len()..combined_length], arg2.asU8ptr()[0..arg2.len()]);
+        const src = arg2.asU8ptr()[0..arg2.len()];
+        const dest = result.asU8ptrMut()[arg1.len()..combined_length];
+        var i = src.len;
+        while (i > 0) {
+            i -= 1;
+            dest[i] = src[i];
+        }
 
         return result;
     }
@@ -2605,6 +2611,40 @@ test "RocStr.concat: small concat small" {
     defer result.decref(test_env.getOps());
 
     try std.testing.expect(roc_str3.eql(result));
+}
+
+test "RocStr.concat: big concat overlapping seamless suffix" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const original = RocStr.init("hello wonderful", 15, test_env.getOps());
+    const prefix = RocStr.fromSliceSmall("hello ");
+    const suffix = strDropPrefix(original, prefix, test_env.getOps());
+    defer suffix.decref(test_env.getOps());
+
+    const result = strConcat(original, suffix, test_env.getOps());
+    defer result.decref(test_env.getOps());
+
+    const expected = RocStr.init("hello wonderfulwonderful", 24, test_env.getOps());
+    defer expected.decref(test_env.getOps());
+
+    try std.testing.expect(expected.eql(result));
+}
+
+test "RocStr.concat: big concat with self alias" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var original = RocStr.init("hello wonderful", 15, test_env.getOps());
+    original.incref(1, test_env.getOps());
+
+    const result = strConcat(original, original, test_env.getOps());
+    defer result.decref(test_env.getOps());
+
+    const expected = RocStr.init("hello wonderfulhello wonderful", 30, test_env.getOps());
+    defer expected.decref(test_env.getOps());
+
+    try std.testing.expect(expected.eql(result));
 }
 
 test "RocStr.joinWith: result is big" {

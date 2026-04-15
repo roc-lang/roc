@@ -96,6 +96,8 @@ pub fn runViaInterpreter(
         lowered_ir,
     );
     defer lir_result.deinit();
+    try lir.Ownership.inferProcResultContracts(gpa, &lir_result.store);
+    try lir.RcInsert.run(gpa, &lir_result.store, &lir_result.layouts);
     const proc_id = lir_result.proc_ids_by_symbol.get(entry_symbol.raw()) orelse return error.EntrypointProcNotFound;
     const proc = lir_result.store.getProcSpec(proc_id);
 

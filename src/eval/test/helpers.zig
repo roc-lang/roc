@@ -154,7 +154,18 @@ pub fn lirInterpreterInspectedStr(
     defer interp.deinit();
 
     const result = interp.eval(.{ .proc_id = lowered.main_proc }) catch |err| switch (err) {
-        error.RuntimeError => return error.Crash,
+        error.RuntimeError => {
+            if (interp.getRuntimeErrorMessage()) |msg| {
+                std.debug.print("eval interpreter runtime error: {s}\n", .{msg});
+            }
+            return error.Crash;
+        },
+        error.Crash => {
+            if (interp.getCrashMessage()) |msg| {
+                std.debug.print("eval interpreter crash: {s}\n", .{msg});
+            }
+            return error.Crash;
+        },
         else => return err,
     };
     const ret_layout = lowered.lir_result.store.getProcSpec(lowered.main_proc).ret_layout;
@@ -206,13 +217,22 @@ pub fn devEvaluatorInspectedStr(
     var crash_boundary = runtime_env.enterCrashBoundary();
     defer crash_boundary.deinit();
     const sj = crash_boundary.set();
-    if (sj != 0) return error.Crash;
+    if (sj != 0) {
+        switch (runtime_env.crashState()) {
+            .crashed => |msg| std.debug.print("eval dev crash: {s}\n", .{msg}),
+            .did_not_crash => {},
+        }
+        return error.Crash;
+    }
 
     exec_mem.callRocABI(@ptrCast(runtime_env.get_ops()), @ptrCast(ret_buf.ptr), null);
 
     switch (runtime_env.crashState()) {
         .did_not_crash => {},
-        .crashed => |_| return error.Crash,
+        .crashed => |msg| {
+            std.debug.print("eval dev crash: {s}\n", .{msg});
+            return error.Crash;
+        },
     }
 
     return copyReturnedRocStr(

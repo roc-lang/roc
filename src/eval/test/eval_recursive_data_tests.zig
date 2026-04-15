@@ -256,6 +256,29 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "Element(\"div\", [Element(\"span\", [Text(\"Hello\")]), Element(\"p\", [Text(\"World\"), Text(\"!\")])])" },
     },
     .{
+        .name = "inspect: recursive nominal list_first child match",
+        .source_kind = .module,
+        .source =
+        \\Node := [Text(Str), Element(Str, List(Node))]
+        \\
+        \\text_node : Node
+        \\text_node = Node.Text("hello")
+        \\children : List(Node)
+        \\children = [text_node]
+        \\
+        \\main =
+        \\    match List.first(children) {
+        \\        Ok(child) =>
+        \\            match child {
+        \\                Text(_) => "Text"
+        \\                Element(_, _) => "Element"
+        \\            }
+        \\        Err(_) => "Err"
+        \\    }
+        ,
+        .expected = .{ .inspect_str = "\"Text\"" },
+    },
+    .{
         .name = "inspect: recursive nominal result ok",
         .source_kind = .module,
         .source =

@@ -625,6 +625,9 @@ inline fn decref_ptr_to_refcount(
             return;
         }
         if (refcount <= 0 and !rcConstant(refcount)) {
+            if (builtin.os.tag != .freestanding) {
+                DebugRefcountTracker.printHistory(@intFromPtr(refcount_ptr));
+            }
             roc_ops.crash("Refcount underflow: decrementing non-positive refcount");
             return;
         }

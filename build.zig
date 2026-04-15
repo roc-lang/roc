@@ -2835,6 +2835,7 @@ pub fn build(b: *std.Build) void {
     configureBackend(mono_emit_test, target);
     roc_modules.addModuleDependencies(mono_emit_test, .eval);
     mono_emit_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    mono_emit_test.root_module.addImport("bytebox", bytebox.module("bytebox"));
     mono_emit_test.step.dependOn(&write_compiled_builtins.step);
 
     const run_mono_emit_test = b.addRunArtifact(mono_emit_test);

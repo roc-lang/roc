@@ -4361,6 +4361,8 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     );
     lowered_ir_live = false;
     defer lir_result.deinit();
+    try lir.Ownership.inferProcResultContracts(ctx.gpa, &lir_result.store);
+    try lir.RcInsert.run(ctx.gpa, &lir_result.store, &lir_result.layouts);
 
     if (entrypoint_wrappers.len != 0 and
         entrypoint_wrappers.len != pending_entrypoint_symbols.items.len)

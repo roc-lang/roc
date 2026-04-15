@@ -4,6 +4,7 @@
 //! Roc expressions compiled to WebAssembly via the Bytebox runtime.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const builtins = @import("builtins");
 const bytebox = @import("bytebox");
 const i128h = builtins.compiler_rt_128;
@@ -187,9 +188,7 @@ pub fn runWasmStr(
         if (wasm_crash_state == .crashed) {
             return error.Crash;
         }
-        if (std.debug.runtime_safety) {
-            std.debug.print("wasm invoke failed: {s}\n", .{@errorName(err)});
-        }
+        std.debug.assert(err != error.TrapUnreachable);
         return error.WasmExecFailed;
     };
 
@@ -631,12 +630,37 @@ fn hostListListEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
 }
 
 fn readWasmStr(buffer: []u8, str_ptr: usize) struct { data: [*]const u8, len: usize } {
+    if (builtin.mode == .Debug and std.debug.runtime_safety) {
+        if (str_ptr + 12 > buffer.len) {
+            std.debug.panic(
+                "wasm_runner invariant violated: string header ptr={} exceeds memory len={}",
+                .{ str_ptr, buffer.len },
+            );
+        }
+    }
     const bytes = buffer[str_ptr..][0..12];
     if ((bytes[11] & 0x80) != 0) {
-        return .{ .data = bytes[0..11].ptr, .len = bytes[11] & 0x7F };
+        const len = bytes[11] & 0x7F;
+        if (builtin.mode == .Debug and std.debug.runtime_safety) {
+            if (len > 11) {
+                std.debug.panic(
+                    "wasm_runner invariant violated: invalid SSO string len={} at ptr={}",
+                    .{ len, str_ptr },
+                );
+            }
+        }
+        return .{ .data = bytes[0..11].ptr, .len = len };
     } else {
         const data_ptr: usize = @intCast(readIntLittle(u32, buffer, str_ptr));
         const len: usize = @intCast(readIntLittle(u32, buffer, str_ptr + 4));
+        if (builtin.mode == .Debug and std.debug.runtime_safety) {
+            if (data_ptr + len > buffer.len) {
+                std.debug.panic(
+                    "wasm_runner invariant violated: heap string ptr={} len={} exceeds memory len={} (header ptr={})",
+                    .{ data_ptr, len, buffer.len, str_ptr },
+                );
+            }
+        }
         return .{ .data = buffer[data_ptr..].ptr, .len = len };
     }
 }

@@ -4228,6 +4228,8 @@ fn processDevObjectSnapshot(
         lowered_ir,
     );
     defer lowered_lir.deinit();
+    try lir_mod.Ownership.inferProcResultContracts(allocator, &lowered_lir.store);
+    try lir_mod.RcInsert.run(allocator, &lowered_lir.store, &lowered_lir.layouts);
 
     var entrypoints = std.ArrayList(backend_mod.Entrypoint).empty;
     defer {

@@ -733,7 +733,7 @@ const ProcLowerer = struct {
         if (actual_layout == target_layout) {
             return try self.parent.store.addCFStmt(.{ .assign_ref = .{
                 .target = target_local,
-                .result = .{ .alias_of = .{ .owner = source_local } },
+                .result = .fresh,
                 .op = .{ .local = source_local },
                 .next = next,
             } });
@@ -1173,7 +1173,7 @@ const ProcLowerer = struct {
                 const body_elem_local = try self.lowerVar(for_stmt.elem);
                 const iterable_elem_ref = self.resolvedListElemLayoutRef(self.localLayoutRef(iterable_local)) orelse
                     debugPanic("lir.from_ir.for_list missing iterable element layout ref");
-                const iterable_elem_layout = try self.parent.lowerLayoutId(iterable_elem_ref);
+                const iterable_elem_layout = self.lowerListElemLayout(self.localLayout(iterable_local));
                 const loop_elem_local = if (self.localMatchesShape(body_elem_local, iterable_elem_layout, iterable_elem_ref))
                     body_elem_local
                 else
@@ -1306,7 +1306,7 @@ const ProcLowerer = struct {
                 if (self.localMatchesShape(source, self.localLayout(target), self.localLayoutRef(target))) {
                     break :blk try self.parent.store.addCFStmt(.{ .assign_ref = .{
                         .target = target,
-                        .result = .{ .alias_of = .{ .owner = source } },
+                        .result = .fresh,
                         .op = .{ .local = source },
                         .next = next,
                     } });
@@ -1565,12 +1565,28 @@ const ProcLowerer = struct {
             .call_low_level => |call| blk: {
                 const locals = try self.lowerVarSpan(self.parent.input.store.sliceVarSpan(call.args));
                 defer self.parent.allocator.free(locals);
+                var raw_target = target;
+                var call_next = next;
+
+                if (call.op == .list_get_unsafe or call.op == .list_first or call.op == .list_last) {
+                    if (locals.len == 0) {
+                        debugPanic("lir.from_ir list element low-level missing list argument");
+                    }
+                    const elem_ref = self.resolvedListElemLayoutRef(self.localLayoutRef(locals[0])) orelse
+                        debugPanic("lir.from_ir list element low-level missing explicit element layout ref");
+                    const elem_layout = self.lowerListElemLayout(self.localLayout(locals[0]));
+                    if (!self.localMatchesShape(target, elem_layout, elem_ref)) {
+                        raw_target = try self.freshLocalWithLayoutAndRef(elem_layout, elem_ref);
+                        call_next = try self.bridgeValueIntoLocal(raw_target, target, next);
+                    }
+                }
+
                 break :blk try self.parent.store.addCFStmt(.{ .assign_low_level = .{
-                    .target = target,
+                    .target = raw_target,
                     .result = .fresh,
                     .op = call.op,
                     .args = try self.parent.store.addLocalSpan(locals),
-                    .next = next,
+                    .next = call_next,
                 } });
             },
         };
