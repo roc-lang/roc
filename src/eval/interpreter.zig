@@ -2451,7 +2451,7 @@ pub const Interpreter = struct {
         trace.log("performRawRc: op={s} layout={any} val.ptr={*} count={d}", .{ @tagName(op), layout_idx, val.ptr, count });
         const resolver = layout_mod.RcHelperResolver.init(self.layout_store);
         const key = resolver.makeKey(op, layout_idx);
-        self.performRcPlan(resolver.plan(key), &resolver, val, count);
+        self.performRawRcPlan(resolver.plan(key), &resolver, val, count);
     }
 
     fn performExplicitRcStmt(self: *LirInterpreter, op: RcOp, val: Value, layout_idx: layout_mod.Idx, count: u16) void {
@@ -2498,8 +2498,8 @@ pub const Interpreter = struct {
         return self.helper.containsRefcounted(layout_idx);
     }
 
-    fn performRcPlan(self: *LirInterpreter, rc_plan: layout_mod.RcHelperPlan, resolver: *const layout_mod.RcHelperResolver, val: Value, count: u16) void {
-        trace.log("performRcPlan: plan={s} val.ptr={*}", .{ @tagName(rc_plan), val.ptr });
+    fn performRawRcPlan(self: *LirInterpreter, rc_plan: layout_mod.RcHelperPlan, resolver: *const layout_mod.RcHelperResolver, val: Value, count: u16) void {
+        trace.log("performRawRcPlan: plan={s} val.ptr={*}", .{ @tagName(rc_plan), val.ptr });
         const utils = builtins.utils;
         switch (rc_plan) {
             .noop => {},
@@ -2582,7 +2582,7 @@ pub const Interpreter = struct {
                             return;
                         };
                         const child_val = Value{ .ptr = data_ptr };
-                        self.performRcPlan(resolver.plan(child_key), resolver, child_val, count);
+                        self.performRawRcPlan(resolver.plan(child_key), resolver, child_val, count);
                     }
                 }
                 utils.decrefDataPtrC(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, &self.roc_ops);
@@ -2597,7 +2597,7 @@ pub const Interpreter = struct {
                             return;
                         };
                         const child_val = Value{ .ptr = data_ptr };
-                        self.performRcPlan(resolver.plan(child_key), resolver, child_val, count);
+                        self.performRawRcPlan(resolver.plan(child_key), resolver, child_val, count);
                     }
                 }
                 utils.freeDataPtrC(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, &self.roc_ops);
@@ -2608,7 +2608,7 @@ pub const Interpreter = struct {
                 while (i < field_count) : (i += 1) {
                     const field_plan = resolver.structFieldPlan(struct_plan, i) orelse continue;
                     const field_val = Value{ .ptr = val.ptr + field_plan.offset };
-                    self.performRcPlan(resolver.plan(field_plan.child), resolver, field_val, count);
+                    self.performRawRcPlan(resolver.plan(field_plan.child), resolver, field_val, count);
                 }
             },
             .tag_union => |tag_plan| {
@@ -2629,12 +2629,12 @@ pub const Interpreter = struct {
                 if (disc < variant_count) {
                     if (resolver.tagUnionVariantPlan(tag_plan, disc)) |child_key| {
                         // Payload is always at offset 0 in the tag union.
-                        self.performRcPlan(resolver.plan(child_key), resolver, val, count);
+                        self.performRawRcPlan(resolver.plan(child_key), resolver, val, count);
                     }
                 }
             },
             .closure => |child_key| {
-                self.performRcPlan(resolver.plan(child_key), resolver, val, count);
+                self.performRawRcPlan(resolver.plan(child_key), resolver, val, count);
             },
         }
     }
@@ -2656,7 +2656,7 @@ pub const Interpreter = struct {
             while (i < elem_count) : (i += 1) {
                 const element_ptr = source + i * list_plan.elem_width;
                 const element_val = Value{ .ptr = element_ptr };
-                self.performRcPlan(child_plan, resolver, element_val, count);
+                self.performRawRcPlan(child_plan, resolver, element_val, count);
             }
         }
     }
