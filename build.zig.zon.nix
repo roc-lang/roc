@@ -213,7 +213,7 @@ linkFarm name [
     };
   }
   {
-    name = "kcov-42.0.1-EuAG4aiZCwBdCw44LJMKF4n1-NuOWHnShjEumttr7C5B";
+    name = "kcov-42.0.1-EuAG4V2cCwBn2HR1B9rgCHiEk9VmUb3zb_wWC-dCww9z";
     path = fetchZigArtifact {
       name = "kcov";
       url = "git+https://github.com/roc-lang/zig-kcov.git?ref=kcov-zig#5134813cb804570603b86336050ee134c326816e";
