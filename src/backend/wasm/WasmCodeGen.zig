@@ -7028,7 +7028,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
             // Encode seamless-slice cap from the source allocation pointer.
             const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitPrepareListSliceMetadata(list_local, self.listContainsRefcounted(ll.ret_layout), encoded_cap);
+            try self.emitPrepareListSliceMetadata(list_local, self.builtinInternalListContainsRefcounted(ll.ret_layout), encoded_cap);
 
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
@@ -7227,7 +7227,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
             // Encode seamless-slice cap from the source allocation pointer.
             const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitPrepareListSliceMetadata(list_local, self.listContainsRefcounted(ll.ret_layout), encoded_cap);
+            try self.emitPrepareListSliceMetadata(list_local, self.builtinInternalListContainsRefcounted(ll.ret_layout), encoded_cap);
 
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
@@ -7426,7 +7426,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
             // Encode seamless-slice cap from the source allocation pointer.
             const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitPrepareListSliceMetadata(list_local, self.listContainsRefcounted(ll.ret_layout), encoded_cap);
+            try self.emitPrepareListSliceMetadata(list_local, self.builtinInternalListContainsRefcounted(ll.ret_layout), encoded_cap);
 
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
@@ -10758,10 +10758,10 @@ fn getListElemAlign(self: *const Self, list_layout: layout.Idx) u32 {
     return self.layoutStorageByteAlign(self.listElemRuntimeLayout(list_layout));
 }
 
-fn listContainsRefcounted(self: *const Self, list_layout: layout.Idx) bool {
+fn builtinInternalListContainsRefcounted(self: *const Self, list_layout: layout.Idx) bool {
     const ls = self.getLayoutStore();
     const elem_layout = self.listElemRuntimeLayout(list_layout);
-    return builtinInternalLayoutContainsRefcounted(ls, "wasm.listContainsRefcounted.builtin_elem_rc", elem_layout);
+    return builtinInternalLayoutContainsRefcounted(ls, "wasm.builtinInternalListContainsRefcounted.builtin_elem_rc", elem_layout);
 }
 
 fn listElemRuntimeLayout(self: *const Self, list_layout_idx: layout.Idx) layout.Idx {
@@ -11628,7 +11628,7 @@ fn generateLLListSplitFirst(self: *Self, args: anytype, ret_layout: layout.Idx) 
     try self.emitLocalSet(rest_len);
 
     const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitPrepareListSliceMetadata(list_ptr, self.listContainsRefcounted(self.procLocalLayoutIdx(args[0])), encoded_cap);
+    try self.emitPrepareListSliceMetadata(list_ptr, self.builtinInternalListContainsRefcounted(self.procLocalLayoutIdx(args[0])), encoded_cap);
 
     // Store rest list in result struct
     const rest_base = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
