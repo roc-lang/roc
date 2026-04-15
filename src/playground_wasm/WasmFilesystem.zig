@@ -69,6 +69,12 @@ const wasm_vtable = RocIo.VTable{
     .rename = &renameWasm,
     .getEnvVar = &getEnvVarWasm,
     .fetchUrl = &fetchUrlWasm,
+    .deleteFile = &deleteFileWasm,
+    .deleteDir = &deleteDirWasm,
+    .deleteTree = &deleteTreeWasm,
+    .createDir = &createDirWasm,
+    .copyFile = &copyFileWasm,
+    .timestampNow = &timestampNowWasm,
     .writeStdout = &writeStdoutWasm,
     .writeStderr = &writeStderrWasm,
     .readStdin = &readStdinWasm,
@@ -207,6 +213,30 @@ fn getEnvVarWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) RocIo.G
 
 fn fetchUrlWasm(_: ?*anyopaque, _: std.Io, _: Allocator, _: []const u8, _: []const u8) RocIo.FetchUrlError!void {
     return error.Unsupported;
+}
+
+fn deleteFileWasm(_: ?*anyopaque, _: std.Io, _: []const u8) RocIo.DeleteError!void {
+    return error.AccessDenied;
+}
+
+fn deleteDirWasm(_: ?*anyopaque, _: std.Io, _: []const u8) RocIo.DeleteError!void {
+    return error.AccessDenied;
+}
+
+fn deleteTreeWasm(_: ?*anyopaque, _: std.Io, _: []const u8) RocIo.DeleteError!void {
+    return error.AccessDenied;
+}
+
+fn createDirWasm(_: ?*anyopaque, _: std.Io, _: []const u8) RocIo.MakePathError!void {
+    return error.AccessDenied;
+}
+
+fn copyFileWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) RocIo.CopyError!void {
+    return error.AccessDenied;
+}
+
+fn timestampNowWasm(_: ?*anyopaque, _: std.Io) i128 {
+    return 0;
 }
 
 fn writeStdoutWasm(_: ?*anyopaque, _: std.Io, _: []const u8) RocIo.StdioError!void {

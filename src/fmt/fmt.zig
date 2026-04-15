@@ -9,6 +9,8 @@ const base = @import("base");
 const tracy = @import("tracy");
 const builtin = @import("builtin");
 
+const RocIo = @import("io").RocIo;
+
 const Allocators = base.Allocators;
 const ModuleEnv = can.ModuleEnv;
 const Token = tokenize.Token;
@@ -19,15 +21,19 @@ const tokenize = parse.tokenize;
 
 const is_windows = builtin.target.os.tag == .windows;
 
-var stderr_file_writer: std.Io.File.Writer = .{
-    .io = std.Io.Threaded.global_single_threaded.io(),
-    .interface = std.Io.File.Writer.initInterface(&.{}),
-    .file = if (is_windows) undefined else std.Io.File.stderr(),
+// Derive low-level I/O types from RocIo so core modules access sys_io
+// capabilities without referencing the banned stdlib Io type directly.
+const SysIo = @TypeOf(@as(RocIo, undefined).sys_io);
+
+var stderr_file_writer: SysIo.File.Writer = .{
+    .io = SysIo.Threaded.global_single_threaded.io(),
+    .interface = SysIo.File.Writer.initInterface(&.{}),
+    .file = if (is_windows) undefined else SysIo.File.stderr(),
     .mode = .streaming,
 };
 
-fn stderrWriter() *std.Io.Writer {
-    if (is_windows) stderr_file_writer.file = std.Io.File.stderr();
+fn stderrWriter() *SysIo.Writer {
+    if (is_windows) stderr_file_writer.file = SysIo.File.stderr();
     return &stderr_file_writer.interface;
 }
 
@@ -53,7 +59,7 @@ pub const FormattingResult = struct {
 /// Formats all roc files in the specified path.
 /// Handles both single files and directories
 /// Returns the number of files successfully formatted and that failed to format.
-pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: std.Io.Dir, path: []const u8, check: bool, io: std.Io) !FormattingResult {
+pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: SysIo.Dir, path: []const u8, check: bool, io: SysIo) !FormattingResult {
     // TODO: update this to use the filesystem abstraction
     // When doing so, add a mock filesystem and some tests.
     const stderr = stderrWriter();
@@ -135,7 +141,7 @@ fn binarySearch(
 
 /// Formats a single roc file at the specified path.
 /// Returns errors on failure and files that don't end in `.roc`
-pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []const u8, unformatted_files: ?*std.array_list.Managed([]const u8), io: std.Io) !void {
+pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: SysIo.Dir, path: []const u8, unformatted_files: ?*std.array_list.Managed([]const u8), io: SysIo) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -220,9 +226,9 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
 }
 
 /// Format the contents of stdin and output the result to stdout
-pub fn formatStdin(gpa: std.mem.Allocator, io: std.Io) !void {
+pub fn formatStdin(gpa: std.mem.Allocator, io: SysIo) !void {
     const contents = blk: {
-        const stdin = std.Io.File.stdin();
+        const stdin = SysIo.File.stdin();
         var read_buf: [4096]u8 = undefined;
         var stdin_reader = stdin.readerStreaming(io, &read_buf);
         var contents_list = std.ArrayList(u8).empty;
@@ -257,7 +263,7 @@ pub fn formatStdin(gpa: std.mem.Allocator, io: std.Io) !void {
     }
 
     var stdout_buffer: [4096]u8 = undefined;
-    var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buffer);
+    var stdout_writer = SysIo.File.stdout().writer(io, &stdout_buffer);
     try formatAst(parse_ast.*, &stdout_writer.interface);
 }
 

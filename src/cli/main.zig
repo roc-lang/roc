@@ -690,7 +690,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8, sys_io: std.Io) !void
     //
     // Uses page_allocator instead of GPA to avoid leak detection false positives
     // (the thread may still be running when the main thread's leak check fires).
-    if (compile.CacheCleanup.startBackgroundCleanup(std.heap.page_allocator, sys_io, FsIo.default(sys_io))) |_| {
+    if (compile.CacheCleanup.startBackgroundCleanup(std.heap.page_allocator, FsIo.default(sys_io))) |_| {
         // Thread started successfully, will run in background
     } else |_| {
         // Non-fatal: cleanup failure shouldn't prevent compilation
@@ -2065,7 +2065,7 @@ fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_h
     // On Windows, clean up temp files after the child process exits.
     // (Unlike Unix, Windows locks files while they're being executed)
     if (std.fs.path.dirname(exe_path)) |temp_dir_path| {
-        compile.CacheCleanup.deleteTempDir(ctx.arena, ctx.io.sys_io, temp_dir_path);
+        compile.CacheCleanup.deleteTempDir(ctx.arena, FsIo.default(ctx.io.sys_io), temp_dir_path);
         std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
     }
 
@@ -2187,7 +2187,7 @@ fn runWithPosixFdInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle:
     // file to find the shared memory before it can run.
     // The background cleanup thread will also clean up old temp directories.
     if (std.fs.path.dirname(exe_path)) |temp_dir_path| {
-        compile.CacheCleanup.deleteTempDir(ctx.arena, ctx.io.sys_io, temp_dir_path);
+        compile.CacheCleanup.deleteTempDir(ctx.arena, FsIo.default(ctx.io.sys_io), temp_dir_path);
         std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
     }
 
@@ -2439,7 +2439,8 @@ pub fn buildLirRuntimeImageWithCoordinator(
         RocTarget.detectNative(),
         &builtin_modules,
         build_options.compiler_version,
-        null,
+        null, // no cache for IPC
+        FsIo.default(debug_threaded_io_instance.io()),
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -3845,7 +3846,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         lowered.lir_result.store.getProcSpecs(),
         target,
         obj_path,
-        ctx.io.sys_io,
+        io_mod.RocIo.default(ctx.io.sys_io),
     ) catch |err| {
         std.log.err("Native compilation failed: {}", .{err});
         return error.NativeCompilationFailed;

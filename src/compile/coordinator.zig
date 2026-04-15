@@ -536,9 +536,6 @@ pub const Coordinator = struct {
     /// I/O abstraction for reading sources and other filesystem/stdio operations.
     roc_io: RocIo,
 
-    /// System IO for std library operations (mutexes, timestamps, file ops).
-    sys_io: std.Io,
-
     /// Compiler version for cache keys
     compiler_version: []const u8,
 
@@ -601,7 +598,7 @@ pub const Coordinator = struct {
         builtin_modules: *const BuiltinModules,
         compiler_version: []const u8,
         cache_manager: ?*CacheManager,
-        sys_io: std.Io,
+        roc_io: RocIo,
     ) !Coordinator {
         // Both channels use smp_allocator in multi-threaded mode because their
         // buffers may be grown (task_channel) or accessed from worker threads.
@@ -615,15 +612,14 @@ pub const Coordinator = struct {
             .max_threads = max_threads,
             .target = target,
             .packages = std.StringHashMap(*PackageState).init(gpa),
-            .result_channel = try Channel(WorkerResult).init(channel_allocator, channel.DEFAULT_CAPACITY, sys_io),
-            .task_channel = try Channel(WorkerTask).init(channel_allocator, initial_task_capacity, sys_io),
+            .result_channel = try Channel(WorkerResult).init(channel_allocator, channel.DEFAULT_CAPACITY, roc_io.sys_io),
+            .task_channel = try Channel(WorkerTask).init(channel_allocator, initial_task_capacity, roc_io.sys_io),
             .workers = std.ArrayList(Thread).empty,
             .inflight = std.atomic.Value(usize).init(0),
             .shutting_down = std.atomic.Value(bool).init(false),
             .total_remaining = 0,
             .builtin_modules = builtin_modules,
-            .roc_io = RocIo.default(sys_io),
-            .sys_io = sys_io,
+            .roc_io = roc_io,
             .compiler_version = compiler_version,
             .cache_manager = cache_manager,
             .cross_package_dependents = std.StringHashMap(std.ArrayList(ModuleRef)).init(gpa),
@@ -699,7 +695,7 @@ pub const Coordinator = struct {
 
     /// Set the I/O implementation (or reset to OS default).
     pub fn setRocIo(self: *Coordinator, roc_io: ?RocIo) void {
-        self.roc_io = roc_io orelse RocIo.default(self.sys_io);
+        self.roc_io = roc_io orelse RocIo.default(self.roc_io.sys_io);
     }
 
     /// Get the allocator to use for module data.
@@ -2863,7 +2859,7 @@ pub const Coordinator = struct {
 
     /// Execute a parse task (pure function)
     fn executeParse(self: *Coordinator, task: ParseTask) WorkerResult {
-        const start_time = if (threads_available) std.Io.Timestamp.now(self.sys_io, .real).nanoseconds else 0;
+        const start_time = if (threads_available) self.roc_io.timestampNow() else 0;
 
         // Read source
         const src = self.readModuleSource(task.path) catch |err| {
@@ -2953,7 +2949,7 @@ pub const Coordinator = struct {
         // NOTE: allocators not freed here - cleanup happens in executeCanonicalize
         const parse_ast = parse.parse(&allocators, &env.common) catch {
             // Parse failed but we still have partial env
-            const end_time = if (threads_available) std.Io.Timestamp.now(self.sys_io, .real).nanoseconds else 0;
+            const end_time = if (threads_available) self.roc_io.timestampNow() else 0;
             return .{
                 .parsed = .{
                     .package_name = task.package_name,
@@ -3026,7 +3022,7 @@ pub const Coordinator = struct {
             }) catch {};
         }
 
-        const end_time = if (threads_available) std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds else 0;
+        const end_time = if (threads_available) self.roc_io.timestampNow() else 0;
 
         return .{
             .parsed = .{
@@ -3046,7 +3042,7 @@ pub const Coordinator = struct {
 
     /// Execute a canonicalize task (pure function)
     fn executeCanonicalize(self: *Coordinator, task: CanonicalizeTask) WorkerResult {
-        const start_time = if (threads_available) std.Io.Timestamp.now(self.sys_io, .real).nanoseconds else 0;
+        const start_time = if (threads_available) self.roc_io.timestampNow() else 0;
 
         const env = task.module_env;
         const ast = task.cached_ast;
@@ -3060,15 +3056,18 @@ pub const Coordinator = struct {
             ast,
             self.builtin_modules.builtin_module.env,
             self.builtin_modules.builtin_indices,
-            task.imported_modules,
             task.source_dir,
+            task.package_name,
+            null, // Coordinator handles import resolution separately
+            &.{}, // No additional known modules from coordinator
+            self.roc_io,
         ) catch {};
         self.gpa.free(task.imported_modules);
 
-        const canon_end = if (threads_available) std.Io.Timestamp.now(self.sys_io, .real).nanoseconds else 0;
+        const canon_end = if (threads_available) self.roc_io.timestampNow() else 0;
 
         // Collect diagnostics
-        const diag_start = if (threads_available) std.Io.Timestamp.now(self.sys_io, .real).nanoseconds else 0;
+        const diag_start = if (threads_available) self.roc_io.timestampNow() else 0;
         // Use worker allocator (thread-safe in multi-threaded mode) for result data
         const worker_alloc = self.getWorkerAllocator();
         // Pre-allocate to reduce allocation contention in multi-threaded mode
@@ -3080,7 +3079,7 @@ pub const Coordinator = struct {
             const rep = env.diagnosticToReport(d, worker_alloc, task.path) catch continue;
             reports.append(worker_alloc, rep) catch {};
         }
-        const diag_end = if (threads_available) std.Io.Timestamp.now(self.sys_io, .real).nanoseconds else 0;
+        const diag_end = if (threads_available) self.roc_io.timestampNow() else 0;
 
         // Free AST - deinit now handles both internal cleanup and self-destruction
         ast.deinit();
@@ -3103,7 +3102,7 @@ pub const Coordinator = struct {
 
     /// Execute a type-check task (pure function)
     fn executeTypeCheck(self: *Coordinator, task: TypeCheckTask) WorkerResult {
-        const start_time = if (threads_available) std.Io.Timestamp.now(self.sys_io, .real).nanoseconds else 0;
+        const start_time = if (threads_available) self.roc_io.timestampNow() else 0;
 
         const env = task.module_env;
 
@@ -3137,10 +3136,10 @@ pub const Coordinator = struct {
         };
         defer typecheck_output.deinit();
 
-        const check_end = if (threads_available) std.Io.Timestamp.now(self.sys_io, .real).nanoseconds else 0;
+        const check_end = if (threads_available) self.roc_io.timestampNow() else 0;
 
         // Collect diagnostics
-        const diag_start = if (threads_available) std.Io.Timestamp.now(self.sys_io, .real).nanoseconds else 0;
+        const diag_start = if (threads_available) self.roc_io.timestampNow() else 0;
         // Use worker allocator (thread-safe in multi-threaded mode) for result data
         const worker_alloc = self.getWorkerAllocator();
         // Pre-allocate to reduce allocation contention in multi-threaded mode
@@ -3181,7 +3180,7 @@ pub const Coordinator = struct {
             reports.append(worker_alloc, rep) catch {};
         }
 
-        const diag_end = if (threads_available) std.Io.Timestamp.now(self.sys_io, .real).nanoseconds else 0;
+        const diag_end = if (threads_available) self.roc_io.timestampNow() else 0;
 
         // Free imported_envs slice (owned by coordinator)
         self.gpa.free(task.imported_envs);
@@ -3261,7 +3260,7 @@ test "Coordinator basic initialization" {
         undefined, // builtin_modules - not used in this test
         "test",
         null, // cache_manager
-        std.Io.Threaded.global_single_threaded.io(),
+        RocIo.os(std.testing.io),
     );
     defer coord.deinit();
 
@@ -3281,7 +3280,7 @@ test "Coordinator package creation" {
         undefined,
         "test",
         null, // cache_manager
-        std.Io.Threaded.global_single_threaded.io(),
+        RocIo.os(std.testing.io),
     );
     defer coord.deinit();
 
@@ -3307,7 +3306,7 @@ test "Coordinator module creation" {
         undefined,
         "test",
         null, // cache_manager
-        std.Io.Threaded.global_single_threaded.io(),
+        RocIo.os(std.testing.io),
     );
     defer coord.deinit();
 
@@ -3335,7 +3334,7 @@ test "Coordinator task queue" {
         undefined,
         "test",
         null, // cache_manager
-        std.Io.Threaded.global_single_threaded.io(),
+        RocIo.os(std.testing.io),
     );
     defer coord.deinit();
 
@@ -3374,7 +3373,7 @@ test "Coordinator isComplete logic" {
         undefined,
         "test",
         null, // cache_manager
-        std.Io.Threaded.global_single_threaded.io(),
+        RocIo.os(std.testing.io),
     );
     defer coord.deinit();
 
@@ -3422,7 +3421,7 @@ test "Coordinator isComplete with multi_threaded max_threads=0 (inline execution
         undefined,
         "test",
         null, // cache_manager
-        std.Io.Threaded.global_single_threaded.io(),
+        RocIo.os(std.testing.io),
     );
     defer coord.deinit();
 
@@ -3460,7 +3459,7 @@ test "Coordinator shutdown does not drain buffered tasks" {
         undefined,
         "test",
         null, // cache_manager
-        std.Io.Threaded.global_single_threaded.io(),
+        RocIo.os(std.testing.io),
     );
     defer coord.deinit();
 
@@ -3510,7 +3509,7 @@ test "Coordinator shutdown stops spawned workers promptly" {
         undefined,
         "test",
         null, // cache_manager
-        std.Io.Threaded.global_single_threaded.io(),
+        RocIo.os(std.testing.io),
     );
     defer coord.deinit();
 
@@ -3557,7 +3556,7 @@ test "Channel in coordinator context" {
         undefined,
         "test",
         null, // cache_manager
-        std.Io.Threaded.global_single_threaded.io(),
+        RocIo.os(std.testing.io),
     );
     defer coord.deinit();
 
@@ -3591,7 +3590,7 @@ test "Coordinator enqueueParseTask flow" {
         undefined,
         "test",
         null, // cache_manager
-        std.Io.Threaded.global_single_threaded.io(),
+        RocIo.os(std.testing.io),
     );
     defer coord.deinit();
 
@@ -3630,7 +3629,7 @@ test "Coordinator single-threaded loop with mock result" {
         undefined,
         "test",
         null, // cache_manager
-        std.Io.Threaded.global_single_threaded.io(),
+        RocIo.os(std.testing.io),
     );
     defer coord.deinit();
 
@@ -3676,7 +3675,7 @@ test "Coordinator CI failure scenario - app with platform cross-package imports"
         undefined,
         "test",
         null, // cache_manager
-        std.Io.Threaded.global_single_threaded.io(),
+        RocIo.os(std.testing.io),
     );
     defer coord.deinit();
 
@@ -3797,7 +3796,7 @@ test "Coordinator handleParseFailed advances module to Done" {
         undefined,
         "test",
         null, // cache_manager
-        std.Io.Threaded.global_single_threaded.io(),
+        RocIo.os(std.testing.io),
     );
     defer coord.deinit();
 

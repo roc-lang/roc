@@ -38,7 +38,7 @@ pub const cleanup = if (!threading_mod.is_freestanding) @import("cache_cleanup.z
         return null;
     }
 
-    pub fn deleteTempDir(_: std.mem.Allocator, _: []const u8) void {}
+    pub fn deleteTempDir(_: std.mem.Allocator, _: RocIo, _: []const u8) void {}
 };
 
 pub const CacheManager = manager.CacheManager;
@@ -66,10 +66,8 @@ pub const RocIo = @import("io").RocIo;
 
 // /// Print global stats to stderr
 // pub fn printGlobalStats() !void {
-//     var stderr_buffer: [1024]u8 = undefined;
-//     var stderr_writer = std.Io.File.stderr().writer(&stderr_buffer);
-//     const stderr = &stderr_writer.interface;
-//     try global_stats.print(stderr.any());
+//     // TODO: Use RocIo abstraction for stderr output
+//     // try global_stats.print(stderr);
 // }
 
 test "compile tests" {
