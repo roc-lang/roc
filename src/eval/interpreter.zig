@@ -1141,29 +1141,6 @@ pub const Interpreter = struct {
                 .assign_call => |assign| {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
-                    if (builtin.mode == .Debug and @intFromEnum(assign.proc) == 2) {
-                        std.debug.print(
-                            "interp call proc=2 from proc={d} stmt={d}\n",
-                            .{ @intFromEnum(frame.proc_id), @intFromEnum(current) },
-                        );
-                        for (arg_locals, arg_values) |arg_local, arg_value| {
-                            std.debug.print(
-                                "  arg local={d} layout={d} ptr=0x{x}\n",
-                                .{
-                                    @intFromEnum(arg_local),
-                                    @intFromEnum(self.store.getLocal(arg_local).layout_idx),
-                                    @intFromPtr(arg_value.ptr),
-                                },
-                            );
-                        }
-                        self.debugDumpProc(frame.proc_id);
-                        self.debugPrintStmtChain(current, 24);
-                        std.debug.print("  raw stmt 205: {any}\n", .{self.store.getCFStmt(@enumFromInt(205))});
-                        std.debug.print("  raw stmt 6: {any}\n", .{self.store.getCFStmt(@enumFromInt(6))});
-                        std.debug.print("  raw stmt 7: {any}\n", .{self.store.getCFStmt(@enumFromInt(7))});
-                        std.debug.print("  raw stmt 8: {any}\n", .{self.store.getCFStmt(@enumFromInt(8))});
-                        std.debug.print("  raw stmt 9: {any}\n", .{self.store.getCFStmt(@enumFromInt(9))});
-                    }
                     const result = try self.evalProcById(assign.proc, arg_values, try self.localLayouts(arg_locals));
                     self.setLocalChecked(
                         frame,
@@ -1273,24 +1250,6 @@ pub const Interpreter = struct {
                         );
                         self.debugDumpProc(frame.proc_id);
                         self.debugPrintStmtChain(current, 20);
-                    }
-                    if (builtin.mode == .Debug) {
-                        const inc_layout = self.store.getLocal(inc.value).layout_idx;
-                        const inc_value = try self.getLocalChecked(frame, inc.value);
-                        std.debug.print(
-                            "interp incref proc={d} stmt={d} local={d} layout={d} ptr=0x{x}\n",
-                            .{
-                                @intFromEnum(frame.proc_id),
-                                @intFromEnum(current),
-                                @intFromEnum(inc.value),
-                                @intFromEnum(inc_layout),
-                                @intFromPtr(inc_value.ptr),
-                            },
-                        );
-                        if (@intFromEnum(frame.proc_id) == 2 and @intFromEnum(current) == 119) {
-                            self.debugDumpProc(frame.proc_id);
-                            self.debugPrintStmtChain(current, 20);
-                        }
                     }
                     self.performRc(
                         .incref,
@@ -2739,6 +2698,11 @@ pub const Interpreter = struct {
         elem_layout: layout_mod.Idx,
     };
 
+    const ListElementRcContext = struct {
+        interp: *LirInterpreter,
+        elem_layout: layout_mod.Idx,
+    };
+
     fn listElemInfo(self: *LirInterpreter, list_layout: layout_mod.Idx) ListElemInfo {
         const resolved_layout = self.layout_store.resolvedListLayoutIdx(list_layout) orelse self.invariantFailed(
             "LIR/interpreter invariant violated: expected explicit resolved list layout for layout {d}",
@@ -2765,6 +2729,20 @@ pub const Interpreter = struct {
         const l = self.layout_store.getLayout(resolved_layout);
         if (l.tag == .list) return l.data.list;
         return .zst;
+    }
+
+    fn listElementIncref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
+        if (element == null) return;
+        const ctx_ptr = context orelse unreachable;
+        const ctx: *const ListElementRcContext = @ptrCast(@alignCast(ctx_ptr));
+        ctx.interp.performRc(.incref, .{ .ptr = element.? }, ctx.elem_layout, 1);
+    }
+
+    fn listElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
+        if (element == null) return;
+        const ctx_ptr = context orelse unreachable;
+        const ctx: *const ListElementRcContext = @ptrCast(@alignCast(ctx_ptr));
+        ctx.interp.performRc(.decref, .{ .ptr = element.? }, ctx.elem_layout, 1);
     }
 
     // ── Builtin call with crash recovery ──
@@ -3083,23 +3061,14 @@ pub const Interpreter = struct {
                 const elem_ptr = rl.bytes.? + @as(usize, @intCast(idx)) * info.width;
                 const val = try self.allocBytes(info.width);
                 @memcpy(val.ptr[0..info.width], elem_ptr[0..info.width]);
+                if (self.helper.containsRefcounted(ll.ret_layout)) {
+                    self.performRc(.incref, val, ll.ret_layout, 1);
+                }
                 break :blk val;
             },
             .list_append_unsafe => blk: {
                 const info = self.listElemInfo(arg_layout);
                 const list_val = self.valueToRocListForLayout(args[0], arg_layout);
-                if (builtin.mode == .Debug) {
-                    std.debug.print(
-                        "interp list_append_unsafe list_bytes=0x{x} len={d} cap={d} elem_ptr=0x{x} width={d}\n",
-                        .{
-                            @intFromPtr(list_val.bytes),
-                            list_val.len(),
-                            list_val.capacity_or_alloc_ptr,
-                            @intFromPtr(args[1].ptr),
-                            info.width,
-                        },
-                    );
-                }
                 const result = builtins.list.listAppendUnsafe(
                     list_val,
                     @ptrCast(args[1].ptr),
@@ -3110,7 +3079,6 @@ pub const Interpreter = struct {
             },
             .list_concat => blk: {
                 const info = self.listElemInfo(arg_layout);
-                trace.log("list_concat: elem_width={d} align={d} rc={any}", .{ info.width, info.alignment, info.rc });
                 const list_a = self.valueToRocListForLayout(args[0], arg_layout);
                 const list_b = self.valueToRocListForLayout(args[1], arg_layout);
                 if (info.width == 0) {
@@ -3128,16 +3096,20 @@ pub const Interpreter = struct {
                 if (sj != 0) {
                     return error.Crash;
                 }
+                var elem_rc_ctx = ListElementRcContext{
+                    .interp = self,
+                    .elem_layout = self.listElemLayout(arg_layout),
+                };
                 const result = builtins.list.listConcat(
                     list_a,
                     list_b,
                     info.alignment,
                     info.width,
                     info.rc,
-                    null,
-                    &builtins.utils.rcNone,
-                    null,
-                    &builtins.utils.rcNone,
+                    if (info.rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (info.rc) &listElementIncref else &builtins.utils.rcNone,
+                    if (info.rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (info.rc) &listElementDecref else &builtins.utils.rcNone,
                     &self.roc_ops,
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
@@ -3148,6 +3120,10 @@ pub const Interpreter = struct {
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
+                var elem_rc_ctx = ListElementRcContext{
+                    .interp = self,
+                    .elem_layout = self.listElemLayout(arg_layout),
+                };
                 const copy_fn: *const fn (?[*]u8, ?[*]u8) callconv(.c) void = &(struct {
                     fn f(_: ?[*]u8, _: ?[*]u8) callconv(.c) void {}
                 }).f;
@@ -3157,8 +3133,8 @@ pub const Interpreter = struct {
                     @ptrCast(args[1].ptr),
                     info.width,
                     info.rc,
-                    null,
-                    &builtins.utils.rcNone,
+                    if (info.rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (info.rc) &listElementIncref else &builtins.utils.rcNone,
                     copy_fn,
                     &self.roc_ops,
                 );
@@ -3187,6 +3163,10 @@ pub const Interpreter = struct {
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
+                var elem_rc_ctx = ListElementRcContext{
+                    .interp = self,
+                    .elem_layout = self.listElemLayout(arg_layout),
+                };
                 const result = builtins.list.listSublist(
                     source_list,
                     info.alignment,
@@ -3194,8 +3174,8 @@ pub const Interpreter = struct {
                     info.rc,
                     start,
                     len,
-                    null,
-                    &builtins.utils.rcNone,
+                    if (info.rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (info.rc) &listElementDecref else &builtins.utils.rcNone,
                     &self.roc_ops,
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
@@ -3206,16 +3186,20 @@ pub const Interpreter = struct {
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
+                var elem_rc_ctx = ListElementRcContext{
+                    .interp = self,
+                    .elem_layout = self.listElemLayout(arg_layout),
+                };
                 const result = builtins.list.listDropAt(
                     self.valueToRocListForLayout(args[0], arg_layout),
                     info.alignment,
                     info.width,
                     info.rc,
                     args[1].read(u64),
-                    null,
-                    &builtins.utils.rcNone,
-                    null,
-                    &builtins.utils.rcNone,
+                    if (info.rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (info.rc) &listElementIncref else &builtins.utils.rcNone,
+                    if (info.rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (info.rc) &listElementDecref else &builtins.utils.rcNone,
                     &self.roc_ops,
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
@@ -3226,6 +3210,10 @@ pub const Interpreter = struct {
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
+                var elem_rc_ctx = ListElementRcContext{
+                    .interp = self,
+                    .elem_layout = self.listElemLayout(arg_layout),
+                };
                 const copy_fn: *const fn (?[*]u8, ?[*]u8) callconv(.c) void = &(struct {
                     fn f(_: ?[*]u8, _: ?[*]u8) callconv(.c) void {}
                 }).f;
@@ -3238,10 +3226,10 @@ pub const Interpreter = struct {
                     @ptrCast(args[2].ptr),
                     info.width,
                     info.rc,
-                    null,
-                    &builtins.utils.rcNone,
-                    null,
-                    &builtins.utils.rcNone,
+                    if (info.rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (info.rc) &listElementIncref else &builtins.utils.rcNone,
+                    if (info.rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (info.rc) &listElementDecref else &builtins.utils.rcNone,
                     @ptrCast(old_elem.ptr),
                     copy_fn,
                     &self.roc_ops,
@@ -3279,14 +3267,18 @@ pub const Interpreter = struct {
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
+                var elem_rc_ctx = ListElementRcContext{
+                    .interp = self,
+                    .elem_layout = self.listElemLayout(arg_layout),
+                };
                 const result = builtins.list.listReserve(
                     list_val,
                     info.alignment,
                     args[1].read(u64),
                     info.width,
                     info.rc,
-                    null,
-                    &builtins.utils.rcNone,
+                    if (info.rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (info.rc) &listElementIncref else &builtins.utils.rcNone,
                     UpdateMode.Immutable,
                     &self.roc_ops,
                 );
@@ -3298,15 +3290,19 @@ pub const Interpreter = struct {
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
+                var elem_rc_ctx = ListElementRcContext{
+                    .interp = self,
+                    .elem_layout = self.listElemLayout(arg_layout),
+                };
                 const result = builtins.list.listReleaseExcessCapacity(
                     self.valueToRocListForLayout(args[0], arg_layout),
                     info.alignment,
                     info.width,
                     info.rc,
-                    null,
-                    &builtins.utils.rcNone,
-                    null,
-                    &builtins.utils.rcNone,
+                    if (info.rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (info.rc) &listElementIncref else &builtins.utils.rcNone,
+                    if (info.rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (info.rc) &listElementDecref else &builtins.utils.rcNone,
                     UpdateMode.Immutable,
                     &self.roc_ops,
                 );
@@ -5150,7 +5146,6 @@ pub const Interpreter = struct {
                 if (self.helper.containsRefcounted(box_info.elem_layout_idx)) {
                     self.performRc(.incref, arg, box_info.elem_layout_idx, 1);
                 }
-
                 const boxed = try self.alloc(ret_layout);
                 const target_usize = self.layout_store.targetUsize();
                 if (target_usize.size() == 8) {

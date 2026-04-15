@@ -48,6 +48,7 @@ const ProcPass = struct {
     rewritten_stmt_ids: std.AutoHashMap(u32, CFStmtId),
     loop_continue_targets: std.AutoHashMap(u32, CFStmtId),
     join_params_by_id: std.AutoHashMap(u32, LIR.LocalSpan),
+    join_bodies_by_id: std.AutoHashMap(u32, CFStmtId),
 
     fn init(
         allocator: Allocator,
@@ -102,11 +103,13 @@ const ProcPass = struct {
             .rewritten_stmt_ids = std.AutoHashMap(u32, CFStmtId).init(allocator),
             .loop_continue_targets = std.AutoHashMap(u32, CFStmtId).init(allocator),
             .join_params_by_id = std.AutoHashMap(u32, LIR.LocalSpan).init(allocator),
+            .join_bodies_by_id = std.AutoHashMap(u32, CFStmtId).init(allocator),
         };
         errdefer pass.owned_locals.deinit(allocator);
         errdefer pass.rewritten_stmt_ids.deinit();
         errdefer pass.loop_continue_targets.deinit();
         errdefer pass.join_params_by_id.deinit();
+        errdefer pass.join_bodies_by_id.deinit();
 
         pass.computeOwnedLocals();
         pass.computeProvenanceOwners();
@@ -124,6 +127,7 @@ const ProcPass = struct {
         self.rewritten_stmt_ids.deinit();
         self.loop_continue_targets.deinit();
         self.join_params_by_id.deinit();
+        self.join_bodies_by_id.deinit();
         for (self.live_in, self.live_out) |*in_bits, *out_bits| {
             in_bits.deinit(self.allocator);
             out_bits.deinit(self.allocator);
@@ -146,6 +150,7 @@ const ProcPass = struct {
                 .set_local => |assign| self.markOwnedLocal(assign.target),
                 .join => |join| {
                     _ = self.join_params_by_id.put(@intFromEnum(join.id), join.params) catch unreachable;
+                    _ = self.join_bodies_by_id.put(@intFromEnum(join.id), join.body) catch unreachable;
                     for (self.store.getLocalSpan(join.params)) |param| {
                         self.markOwnedLocal(param);
                     }
@@ -335,7 +340,11 @@ const ProcPass = struct {
                 const target = self.loop_continue_targets.get(@intFromEnum(stmt_id)) orelse return;
                 self.unionLiveInFor(target, out);
             },
-            .scope_exit, .jump, .ret, .runtime_error, .crash => {},
+            .jump => |jump| {
+                const target = self.join_bodies_by_id.get(@intFromEnum(jump.target)) orelse return;
+                self.unionLiveInFor(target, out);
+            },
+            .scope_exit, .ret, .runtime_error, .crash => {},
         }
     }
 

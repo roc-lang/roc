@@ -1722,6 +1722,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(temp_reg);
                     self.codegen.freeGeneral(addr_reg);
 
+                    if (ls.layoutContainsRefcounted(elem_layout_val)) {
+                        try self.emitIncrefAtStackOffset(elem_slot, elem_layout_idx);
+                    }
+
                     var result_loc: ValueLocation = if (elem_layout_idx == .i128 or elem_layout_idx == .u128 or elem_layout_idx == .dec)
                         .{ .stack_i128 = elem_slot }
                     else if (elem_layout_idx == .str)
@@ -1763,9 +1767,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
                     const alignment_bytes = elem_size_align.alignment.toByteUnits();
                     const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_concat);
+                    const elem_layout_idx: ?layout.Idx = switch (ret_layout.tag) {
+                        .list => ret_layout.data.list,
+                        else => null,
+                    };
+                    const elem_incref_reg = if (elem_layout_idx) |idx| try self.emitOptionalRcHelperAddress(.incref, idx) else null;
+                    defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
+                    const elem_decref_reg = if (elem_layout_idx) |idx| try self.emitOptionalRcHelperAddress(.decref, idx) else null;
+                    defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
 
                     {
-                        // wrapListConcat(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, alignment, element_width, elements_refcounted, roc_ops)
+                        // wrapListConcat(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, alignment, element_width, elements_refcounted, element_incref, element_decref, roc_ops)
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -1779,6 +1791,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addImmArg(@intCast(alignment_bytes));
                         try builder.addImmArg(@intCast(elem_size_align.size));
                         try builder.addImmArg(if (elements_refcounted) @as(usize, 1) else 0);
+                        if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                        if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
                         try builder.addRegArg(roc_ops_reg);
 
                         try self.callBuiltin(&builder, fn_addr, .list_concat);
@@ -1811,9 +1825,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
                     const alignment_bytes = elem_size_align.alignment.toByteUnits();
                     const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_prepend);
+                    const elem_layout_idx: ?layout.Idx = switch (ret_layout.tag) {
+                        .list => ret_layout.data.list,
+                        else => null,
+                    };
+                    const elem_incref_reg = if (elem_layout_idx) |idx| try self.emitOptionalRcHelperAddress(.incref, idx) else null;
+                    defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
 
                     {
-                        // wrapListPrepend(out, list_bytes, list_len, list_cap, alignment, element, element_width, elements_refcounted, roc_ops)
+                        // wrapListPrepend(out, list_bytes, list_len, list_cap, alignment, element, element_width, elements_refcounted, element_incref, roc_ops)
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -1825,6 +1845,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addLeaArg(base_reg, elem_off);
                         try builder.addImmArg(@intCast(elem_size_align.size));
                         try builder.addImmArg(if (elements_refcounted) @as(usize, 1) else 0);
+                        if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
                         try builder.addRegArg(roc_ops_reg);
 
                         try self.callBuiltin(&builder, fn_addr, .list_prepend);
@@ -2902,9 +2923,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const old_elem_slot = self.codegen.allocStackSlot(@intCast(if (elem_size_align.size > 0) elem_size_align.size else 8));
                     const alignment_bytes = elem_size_align.alignment.toByteUnits();
                     const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_replace);
+                    const elem_layout_idx: ?layout.Idx = switch (ret_layout.tag) {
+                        .list => ret_layout.data.list,
+                        else => null,
+                    };
+                    const elem_incref_reg = if (elem_layout_idx) |idx| try self.emitOptionalRcHelperAddress(.incref, idx) else null;
+                    defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
+                    const elem_decref_reg = if (elem_layout_idx) |idx| try self.emitOptionalRcHelperAddress(.decref, idx) else null;
+                    defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
 
                     {
-                        // wrapListReplace(out, list_bytes, list_len, list_cap, alignment, index, element, element_width, out_element, elements_refcounted, roc_ops)
+                        // wrapListReplace(out, list_bytes, list_len, list_cap, alignment, index, element, element_width, out_element, elements_refcounted, element_incref, element_decref, roc_ops)
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -2918,6 +2947,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addImmArg(@intCast(elem_size_align.size));
                         try builder.addLeaArg(base_reg, old_elem_slot);
                         try builder.addImmArg(if (elements_refcounted) @as(usize, 1) else 0);
+                        if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                        if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
                         try builder.addRegArg(roc_ops_reg);
 
                         try self.callBuiltin(&builder, fn_addr, .list_replace);
@@ -3756,10 +3787,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             const alignment_bytes = elem_size_align.alignment.toByteUnits();
             const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_sublist);
+            const elem_layout_idx: ?layout.Idx = switch (ls.getLayout(ll.ret_layout).tag) {
+                .list => ls.getLayout(ll.ret_layout).data.list,
+                else => null,
+            };
+            const elem_decref_reg = if (elem_layout_idx) |idx| try self.emitOptionalRcHelperAddress(.decref, idx) else null;
+            defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
 
             {
                 // roc_builtins_list_sublist(out, list_bytes, list_len, list_cap,
-                // alignment, element_width, start, len, elements_refcounted, roc_ops)
+                // alignment, element_width, start, len, elements_refcounted, element_decref, roc_ops)
                 const base_reg = frame_ptr;
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -3772,6 +3809,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addMemArg(base_reg, start_slot);
                 try builder.addMemArg(base_reg, len_slot);
                 try builder.addImmArg(if (elements_refcounted) 1 else 0);
+                if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
                 try builder.addRegArg(roc_ops_reg);
 
                 try self.callBuiltin(&builder, fn_addr, .list_sublist);
@@ -3840,10 +3878,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             const alignment_bytes = elem_size_align.alignment.toByteUnits();
             const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_sublist);
+            const elem_layout_idx: ?layout.Idx = switch (ls.getLayout(ll.ret_layout).tag) {
+                .list => ls.getLayout(ll.ret_layout).data.list,
+                else => null,
+            };
+            const elem_decref_reg = if (elem_layout_idx) |idx| try self.emitOptionalRcHelperAddress(.decref, idx) else null;
+            defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
 
             {
                 // roc_builtins_list_sublist(out, list_bytes, list_len, list_cap,
-                // alignment, element_width, start, len, elements_refcounted, roc_ops)
+                // alignment, element_width, start, len, elements_refcounted, element_decref, roc_ops)
                 const base_reg = frame_ptr;
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 try builder.addLeaArg(base_reg, result_offset);
@@ -3855,6 +3899,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addMemArg(base_reg, record_off + start_field_off);
                 try builder.addMemArg(base_reg, record_off + len_field_off);
                 try builder.addImmArg(if (elements_refcounted) 1 else 0);
+                if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
                 try builder.addRegArg(roc_ops_reg);
                 try self.callBuiltin(&builder, fn_addr, .list_sublist);
             }
@@ -3887,6 +3932,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             const alignment_bytes = elem_size_align.alignment.toByteUnits();
             const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_drop_at);
+            const elem_layout_idx: ?layout.Idx = switch (ls.getLayout(ll.ret_layout).tag) {
+                .list => ls.getLayout(ll.ret_layout).data.list,
+                else => null,
+            };
+            const elem_incref_reg = if (elem_layout_idx) |idx| try self.emitOptionalRcHelperAddress(.incref, idx) else null;
+            defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
+            const elem_decref_reg = if (elem_layout_idx) |idx| try self.emitOptionalRcHelperAddress(.decref, idx) else null;
+            defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
 
             {
                 const base_reg = frame_ptr;
@@ -3899,6 +3952,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(@intCast(elem_size_align.size));
                 try builder.addMemArg(base_reg, index_off);
                 try builder.addImmArg(if (elements_refcounted) 1 else 0);
+                if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
                 try builder.addRegArg(roc_ops_reg);
                 try self.callBuiltin(&builder, fn_addr, .list_drop_at);
             }
@@ -4346,9 +4401,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             const alignment_bytes = elem_size_align.alignment.toByteUnits();
             const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_reserve);
+            const elem_layout_idx: ?layout.Idx = switch (ret_layout.tag) {
+                .list => ret_layout.data.list,
+                else => null,
+            };
+            const elem_incref_reg = if (elem_layout_idx) |idx| try self.emitOptionalRcHelperAddress(.incref, idx) else null;
+            defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
 
             {
-                // wrapListReserve(out, list_bytes, list_len, list_cap, alignment, spare, element_width, elements_refcounted, roc_ops)
+                // wrapListReserve(out, list_bytes, list_len, list_cap, alignment, spare, element_width, elements_refcounted, element_incref, roc_ops)
                 const base_reg = frame_ptr;
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -4360,6 +4421,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addMemArg(base_reg, spare_off);
                 try builder.addImmArg(@intCast(elem_size_align.size));
                 try builder.addImmArg(if (elements_refcounted) @as(usize, 1) else 0);
+                if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
                 try builder.addRegArg(roc_ops_reg);
 
                 try self.callBuiltin(&builder, fn_addr, .list_reserve);
@@ -4388,9 +4450,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             const alignment_bytes = elem_size_align.alignment.toByteUnits();
             const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_release_excess_capacity);
+            const elem_layout_idx: ?layout.Idx = switch (ret_layout.tag) {
+                .list => ret_layout.data.list,
+                else => null,
+            };
+            const elem_incref_reg = if (elem_layout_idx) |idx| try self.emitOptionalRcHelperAddress(.incref, idx) else null;
+            defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
+            const elem_decref_reg = if (elem_layout_idx) |idx| try self.emitOptionalRcHelperAddress(.decref, idx) else null;
+            defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
 
             {
-                // wrapListReleaseExcessCapacity(out, list_bytes, list_len, list_cap, alignment, element_width, elements_refcounted, roc_ops)
+                // wrapListReleaseExcessCapacity(out, list_bytes, list_len, list_cap, alignment, element_width, elements_refcounted, element_incref, element_decref, roc_ops)
                 const base_reg = frame_ptr;
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -4401,6 +4471,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(@intCast(alignment_bytes));
                 try builder.addImmArg(@intCast(elem_size_align.size));
                 try builder.addImmArg(if (elements_refcounted) @as(usize, 1) else 0);
+                if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
                 try builder.addRegArg(roc_ops_reg);
 
                 try self.callBuiltin(&builder, fn_addr, .list_release_excess_capacity);
@@ -8123,6 +8195,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const ptr_slot = self.codegen.allocStackSlot(8);
             try self.emitStore(.w64, frame_ptr, ptr_slot, ptr_reg);
             try self.emitCallRcHelperFromStackSlots(helper_key, ptr_slot, count_slot, roc_ops_slot);
+        }
+
+        fn emitOptionalRcHelperAddress(
+            self: *Self,
+            op: RcOp,
+            layout_idx: layout.Idx,
+        ) Allocator.Error!?GeneralReg {
+            const helper_key = RcHelperKey{ .op = op, .layout_idx = layout_idx };
+            const resolver = RcHelperResolver.init(self.layout_store);
+            if (resolver.plan(helper_key) == .noop) return null;
+
+            const callback_reg = try self.allocTempGeneral();
+            const code_offset = try self.compileRcHelper(helper_key);
+            try self.emitInternalCodeAddress(code_offset, callback_reg);
+            return callback_reg;
         }
 
         fn loadListDataPtrForRcFromValuePtr(
@@ -12685,10 +12772,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     try self.ensureStableLocationsForStmtReads(j.body);
                     try self.generateStmt(j.remainder);
+                    const skip_join_body_patch = try self.codegen.emitJump();
                     const join_location = self.codegen.currentOffset();
                     try self.join_points.put(jp_key, join_location);
 
                     try self.generateStmt(j.body);
+                    self.codegen.patchJump(skip_join_body_patch, self.codegen.currentOffset());
 
                     if (self.join_point_jumps.get(jp_key)) |jumps| {
                         for (jumps.items) |jump_record| {

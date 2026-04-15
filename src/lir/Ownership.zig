@@ -6,8 +6,6 @@
 //! single source of truth.
 
 const std = @import("std");
-const base = @import("base");
-
 const LIR = @import("LIR.zig");
 const LirStore = @import("LirStore.zig");
 
@@ -23,8 +21,11 @@ pub fn inferProcResultContracts(
     allocator: Allocator,
     store: *LirStore,
 ) Allocator.Error!void {
+    try propagateRefResultSemantics(allocator, store);
+
     var changed = true;
     while (changed) {
+        try propagateCallResultSemantics(allocator, store);
         changed = false;
         const proc_count = store.getProcSpecs().len;
         var proc_index: usize = 0;
@@ -40,7 +41,6 @@ pub fn inferProcResultContracts(
     }
 
     try propagateCallResultSemantics(allocator, store);
-    try propagateRefResultSemantics(allocator, store);
 }
 
 fn inferOneProcResultContract(
@@ -83,7 +83,7 @@ fn inferOneProcResultContract(
 
 fn collectReturnContracts(
     allocator: Allocator,
-    store: *const LirStore,
+    store: *LirStore,
     stmt_id: CFStmtId,
     arg_index_by_local: *const std.AutoHashMap(u32, usize),
     visited: *std.AutoHashMap(u32, void),
@@ -128,73 +128,165 @@ fn collectReturnContracts(
         },
         .jump, .runtime_error, .scope_exit, .crash, .loop_continue => {},
         .ret => |ret_stmt| {
-            try out.append(allocator, inferReturnedLocalContract(store, ret_stmt.value, arg_index_by_local));
+            try out.append(allocator, try inferReturnedLocalContract(allocator, store, ret_stmt.value, arg_index_by_local));
         },
     }
 }
 
 fn inferReturnedLocalContract(
-    store: *const LirStore,
+    allocator: Allocator,
+    store: *LirStore,
     local: LocalId,
     arg_index_by_local: *const std.AutoHashMap(u32, usize),
-) ProcResultContract {
+) Allocator.Error!ProcResultContract {
+    var active = std.AutoHashMap(u32, void).init(allocator);
+    defer active.deinit();
+    return inferLocalContract(allocator, store, local, arg_index_by_local, &active);
+}
+
+fn inferLocalContract(
+    allocator: Allocator,
+    store: *LirStore,
+    local: LocalId,
+    arg_index_by_local: *const std.AutoHashMap(u32, usize),
+    active: *std.AutoHashMap(u32, void),
+) Allocator.Error!ProcResultContract {
     if (arg_index_by_local.get(@intFromEnum(local))) |param_index| {
         return .{ .alias_of_param = .{ .param_index = @intCast(param_index) } };
     }
 
-    var current = local;
-    var hops: usize = 0;
-    while (hops < 1024) : (hops += 1) {
-        const producer = findProducer(store, current) orelse return .fresh;
-        switch (producer) {
-            .assign_ref => |assign| switch (assign.result) {
-                .alias_of => |alias| {
-                    if (alias.projections.len != 0) return .fresh;
-                    if (arg_index_by_local.get(@intFromEnum(alias.owner))) |param_index| {
-                        return .{ .alias_of_param = .{ .param_index = @intCast(param_index) } };
-                    }
-                    current = alias.owner;
-                    continue;
-                },
-                .borrow_of => |borrow| {
-                    if (borrow.projections.len != 0) return .fresh;
-                    if (arg_index_by_local.get(@intFromEnum(borrow.owner))) |param_index| {
-                        return .{ .borrow_of_param = .{ .param_index = @intCast(param_index) } };
-                    }
-                    current = borrow.owner;
-                    continue;
-                },
-                .fresh => return .fresh,
-            },
-            .assign_call => |assign| return store.getProcSpec(assign.proc).result_contract,
-            .assign_low_level => |assign| return lowLevelResultContract(store, assign, arg_index_by_local),
-            .assign_call_indirect,
-            .assign_symbol,
-            .assign_literal,
-            .assign_list,
-            .assign_struct,
-            .assign_tag,
-            .set_local,
-            .debug,
-            .expect,
-            .incref,
-            .decref,
-            .free,
-            .switch_stmt,
-            .borrow_scope,
-            .for_list,
-            .join,
-            .jump,
-            .ret,
-            .runtime_error,
-            .scope_exit,
-            .crash,
-            .loop_continue,
-            => return .fresh,
-        }
+    const gop = try active.getOrPut(@intFromEnum(local));
+    if (gop.found_existing) return .fresh;
+    defer _ = active.remove(@intFromEnum(local));
+
+    if (try inferJoinParamContract(allocator, store, local, arg_index_by_local, active)) |contract| {
+        return contract;
     }
 
-    return .fresh;
+    const producer = findProducer(store, local) orelse return .fresh;
+    return switch (producer) {
+        .assign_ref => |assign| try contractFromResultSemantics(allocator, store, assign.result, arg_index_by_local, active),
+        .assign_call => |assign| if (assign.result == .fresh)
+            store.getProcSpec(assign.proc).result_contract
+        else
+            try contractFromResultSemantics(allocator, store, assign.result, arg_index_by_local, active),
+        .assign_call_indirect => |assign| try contractFromResultSemantics(allocator, store, assign.result, arg_index_by_local, active),
+        .assign_low_level => |assign| if (assign.result == .fresh)
+            lowLevelResultContract(store, assign, arg_index_by_local)
+        else
+            try contractFromResultSemantics(allocator, store, assign.result, arg_index_by_local, active),
+        .assign_literal,
+        .assign_symbol,
+        .assign_list,
+        .assign_struct,
+        .assign_tag,
+        .set_local,
+        .debug,
+        .expect,
+        .incref,
+        .decref,
+        .free,
+        .switch_stmt,
+        .borrow_scope,
+        .for_list,
+        .join,
+        .jump,
+        .ret,
+        .runtime_error,
+        .scope_exit,
+        .crash,
+        .loop_continue,
+        => .fresh,
+    };
+}
+
+fn contractFromResultSemantics(
+    allocator: Allocator,
+    store: *LirStore,
+    semantics: ResultSemantics,
+    arg_index_by_local: *const std.AutoHashMap(u32, usize),
+    active: *std.AutoHashMap(u32, void),
+) Allocator.Error!ProcResultContract {
+    return switch (semantics) {
+        .fresh => .fresh,
+        .alias_of => |alias| blk: {
+            var contract = try inferLocalContract(allocator, store, alias.owner, arg_index_by_local, active);
+            switch (contract) {
+                .alias_of_param => |*param| {
+                    param.projections = try appendProjectionSpan(allocator, store, param.projections, alias.projections);
+                    break :blk contract;
+                },
+                .borrow_of_param => |*param| {
+                    param.projections = try appendProjectionSpan(allocator, store, param.projections, alias.projections);
+                    break :blk contract;
+                },
+                else => break :blk .fresh,
+            }
+        },
+        .borrow_of => |borrow| blk: {
+            var contract = try inferLocalContract(allocator, store, borrow.owner, arg_index_by_local, active);
+            switch (contract) {
+                .alias_of_param => |param| {
+                    break :blk .{ .borrow_of_param = .{
+                        .param_index = param.param_index,
+                        .projections = try appendProjectionSpan(allocator, store, param.projections, borrow.projections),
+                    } };
+                },
+                .borrow_of_param => |*param| {
+                    param.projections = try appendProjectionSpan(allocator, store, param.projections, borrow.projections);
+                    break :blk contract;
+                },
+                else => break :blk .fresh,
+            }
+        },
+    };
+}
+
+fn inferJoinParamContract(
+    allocator: Allocator,
+    store: *LirStore,
+    local: LocalId,
+    arg_index_by_local: *const std.AutoHashMap(u32, usize),
+    active: *std.AutoHashMap(u32, void),
+) Allocator.Error!?ProcResultContract {
+    for (store.cf_stmts.items) |stmt| {
+        const join = switch (stmt) {
+            .join => |join| join,
+            else => continue,
+        };
+
+        const params = store.getLocalSpan(join.params);
+        const param_index = blk: {
+            for (params, 0..) |param, i| {
+                if (param == local) break :blk i;
+            }
+            continue;
+        };
+
+        var summary: ?ProcResultContract = null;
+        var saw_incoming = false;
+        for (store.cf_stmts.items) |incoming_stmt| {
+            const jump = switch (incoming_stmt) {
+                .jump => |jump| if (jump.target == join.id) jump else continue,
+                else => continue,
+            };
+
+            const args = store.getLocalSpan(jump.args);
+            if (param_index >= args.len) return .fresh;
+            saw_incoming = true;
+            const candidate = try inferLocalContract(allocator, store, args[param_index], arg_index_by_local, active);
+            if (summary) |existing| {
+                if (!procResultContractsEqual(existing, candidate)) return .fresh;
+            } else {
+                summary = candidate;
+            }
+        }
+
+        if (!saw_incoming) return .fresh;
+        return summary orelse .fresh;
+    }
+
+    return null;
 }
 
 fn lowLevelResultContract(
@@ -304,12 +396,11 @@ fn propagateRefResultSemantics(
     allocator: Allocator,
     store: *LirStore,
 ) Allocator.Error!void {
-    _ = allocator;
     for (store.cf_stmts.items, 0..) |stmt, i| {
         switch (stmt) {
             .assign_ref => |assign| {
                 if (assign.op == .local) continue;
-                const next_semantics = refOpResultSemantics(store, assign.op);
+                const next_semantics = try refOpResultSemantics(allocator, store, assign.op);
                 if (resultSemanticsEqual(next_semantics, assign.result)) continue;
                 store.cf_stmts.items[i] = .{ .assign_ref = .{
                     .target = assign.target,
@@ -323,31 +414,87 @@ fn propagateRefResultSemantics(
     }
 }
 
-fn refOpResultSemantics(store: *const LirStore, op: LIR.RefOp) ResultSemantics {
+fn refOpResultSemantics(allocator: Allocator, store: *LirStore, op: LIR.RefOp) Allocator.Error!ResultSemantics {
     return switch (op) {
         .local => |local| .{ .alias_of = .{ .owner = local } },
-        .field => |info| projectedResultSemantics(store, info.source),
-        .tag_payload => |info| projectedResultSemantics(store, info.source),
-        .tag_payload_struct => |info| projectedResultSemantics(store, info.source),
-        .list_reinterpret => |info| projectedResultSemantics(store, info.backing_ref),
-        .nominal => |info| projectedResultSemantics(store, info.backing_ref),
+        .field => |info| try projectedResultSemantics(allocator, store, info.source, .{ .field = info.field_idx }),
+        .tag_payload => |info| try projectedResultSemantics(allocator, store, info.source, .{ .tag_payload = info.payload_idx }),
+        .tag_payload_struct => |info| try projectedResultSemantics(allocator, store, info.source, .{ .tag_payload_struct = info.tag_discriminant }),
+        .list_reinterpret => |info| projectedResultSemanticsWithoutProjection(store, info.backing_ref),
+        .nominal => |info| try projectedResultSemantics(allocator, store, info.backing_ref, .nominal),
         .discriminant => .fresh,
     };
 }
 
-fn projectedResultSemantics(store: *const LirStore, source: LocalId) ResultSemantics {
+fn projectedResultSemantics(
+    allocator: Allocator,
+    store: *LirStore,
+    source: LocalId,
+    projection: LIR.RefProjection,
+) Allocator.Error!ResultSemantics {
     if (localResultSemantics(store, source)) |semantics| {
         return switch (semantics) {
-            .alias_of => .{ .alias_of = .{ .owner = source } },
+            .alias_of => |alias| .{ .alias_of = .{
+                .owner = alias.owner,
+                .projections = try appendProjection(allocator, store, alias.projections, projection),
+            } },
             .borrow_of => |borrow| .{ .borrow_of = .{
-                .owner = source,
+                .owner = borrow.owner,
+                .projections = try appendProjection(allocator, store, borrow.projections, projection),
                 .region = borrow.region,
             } },
-            .fresh => .{ .alias_of = .{ .owner = source } },
+            .fresh => .{ .alias_of = .{
+                .owner = source,
+                .projections = try appendProjection(allocator, store, .empty(), projection),
+            } },
         };
     }
 
-    return .{ .alias_of = .{ .owner = source } };
+    return .{ .alias_of = .{
+        .owner = source,
+        .projections = try appendProjection(allocator, store, .empty(), projection),
+    } };
+}
+
+fn projectedResultSemanticsWithoutProjection(store: *const LirStore, source: LocalId) ResultSemantics {
+    const semantics: ResultSemantics = localResultSemantics(store, source) orelse .{ .alias_of = .{ .owner = source } };
+    return switch (semantics) {
+        .alias_of => |alias| .{ .alias_of = alias },
+        .borrow_of => |borrow| .{ .borrow_of = borrow },
+        .fresh => .{ .alias_of = .{ .owner = source } },
+    };
+}
+
+fn appendProjection(
+    allocator: Allocator,
+    store: *LirStore,
+    existing_span: LIR.RefProjectionSpan,
+    projection: LIR.RefProjection,
+) Allocator.Error!LIR.RefProjectionSpan {
+    const existing = store.getRefProjectionSpan(existing_span);
+    const projections = try allocator.alloc(LIR.RefProjection, existing.len + 1);
+    defer allocator.free(projections);
+    @memcpy(projections[0..existing.len], existing);
+    projections[existing.len] = projection;
+    return try store.addRefProjectionSpan(projections);
+}
+
+fn appendProjectionSpan(
+    allocator: Allocator,
+    store: *LirStore,
+    left: LIR.RefProjectionSpan,
+    right: LIR.RefProjectionSpan,
+) Allocator.Error!LIR.RefProjectionSpan {
+    if (right.len == 0) return left;
+    if (left.len == 0) return right;
+
+    const left_items = store.getRefProjectionSpan(left);
+    const right_items = store.getRefProjectionSpan(right);
+    const projections = try allocator.alloc(LIR.RefProjection, left_items.len + right_items.len);
+    defer allocator.free(projections);
+    @memcpy(projections[0..left_items.len], left_items);
+    @memcpy(projections[left_items.len..], right_items);
+    return try store.addRefProjectionSpan(projections);
 }
 
 fn localResultSemantics(store: *const LirStore, local: LocalId) ?ResultSemantics {
