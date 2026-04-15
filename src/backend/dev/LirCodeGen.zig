@@ -8225,7 +8225,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitRawRcHelperCallForValue(op, value_loc, layout_idx, count);
         }
 
-        fn emitRcHelperCallFromPtrReg(
+        fn emitRawRcHelperCallFromPtrReg(
             self: *Self,
             helper_key: RcHelperKey,
             ptr_reg: GeneralReg,
@@ -8562,7 +8562,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                         try self.emitLoad(.w64, field_ptr_reg, frame_ptr, ptr_slot);
                         try self.emitAddPtrImmAny(field_ptr_reg, field_ptr_reg, @intCast(field_plan.offset));
-                        try self.emitRcHelperCallFromPtrReg(field_plan.child, field_ptr_reg, count_slot, roc_ops_slot);
+                        try self.emitRawRcHelperCallFromPtrReg(field_plan.child, field_ptr_reg, count_slot, roc_ops_slot);
                     }
                 },
                 .tag_union => |tag_plan| {
@@ -8574,7 +8574,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const payload_reg = try self.allocTempGeneral();
                             defer self.codegen.freeGeneral(payload_reg);
                             try self.emitLoad(.w64, payload_reg, frame_ptr, ptr_slot);
-                            try self.emitRcHelperCallFromPtrReg(child_key, payload_reg, count_slot, roc_ops_slot);
+                            try self.emitRawRcHelperCallFromPtrReg(child_key, payload_reg, count_slot, roc_ops_slot);
                         }
                         return;
                     }
@@ -8616,7 +8616,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const payload_reg = try self.allocTempGeneral();
                         defer self.codegen.freeGeneral(payload_reg);
                         try self.emitLoad(.w64, payload_reg, frame_ptr, ptr_slot);
-                        try self.emitRcHelperCallFromPtrReg(child_key, payload_reg, count_slot, roc_ops_slot);
+                        try self.emitRawRcHelperCallFromPtrReg(child_key, payload_reg, count_slot, roc_ops_slot);
                         try done_patches.append(self.allocator, try self.codegen.emitJump());
                         self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
                     }
@@ -8630,7 +8630,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const captures_reg = try self.allocTempGeneral();
                     defer self.codegen.freeGeneral(captures_reg);
                     try self.emitLoad(.w64, captures_reg, frame_ptr, ptr_slot);
-                    try self.emitRcHelperCallFromPtrReg(child_key, captures_reg, count_slot, roc_ops_slot);
+                    try self.emitRawRcHelperCallFromPtrReg(child_key, captures_reg, count_slot, roc_ops_slot);
                 },
             }
         }

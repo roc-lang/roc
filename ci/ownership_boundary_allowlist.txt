@@ -23,7 +23,7 @@ interpreter-aggregate-coercion | src/eval/interpreter.zig | coerceStructValue | 
 interpreter-aggregate-coercion | src/eval/interpreter.zig | coerceTagUnionValue | forbidden aggregate coercion island pending full LIR replacement
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitRawRcHelperCallAtStackOffset | RC helper plumbing used by explicit RC lowering and builtin RC helpers
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitRawRcHelperCallForValue | RC helper plumbing used by explicit RC lowering and builtin RC helpers
-dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitRcHelperCallFromPtrReg | RC helper plumbing used by explicit RC lowering and builtin RC helpers
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitRawRcHelperCallFromPtrReg | RC helper plumbing used by explicit RC lowering and builtin RC helpers
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitBuiltinInternalRcHelperCallForValue | builtin primitive lowering choke point
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitExplicitRcHelperCallAtStackOffset | explicit LIR RC lowering choke point
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitExplicitRcHelperCallForValue | explicit LIR RC lowering choke point
