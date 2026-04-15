@@ -216,9 +216,9 @@ linkFarm name [
     name = "kcov-42.0.1-EuAG4aiZCwBdCw44LJMKF4n1-NuOWHnShjEumttr7C5B";
     path = fetchZigArtifact {
       name = "kcov";
-      url = "git+https://github.com/roc-lang/zig-kcov.git?ref=kcov-zig#498ecb81d201b99d60197718043594b2100c1ca1";
-      hash = "sha256-T2rXnERHwY9k8sb+jFRVO/16b0o+YH+awYyEvdlz5Wo=";
-      rev = "498ecb81d201b99d60197718043594b2100c1ca1";
+      url = "git+https://github.com/roc-lang/zig-kcov.git?ref=kcov-zig#5134813cb804570603b86336050ee134c326816e";
+      hash = "sha256-VKtvFTsL+zos4mrix8ZjBiWra08y83WSPpnog0Mtp40=";
+      rev = "5134813cb804570603b86336050ee134c326816e";
     };
   }
 ]
