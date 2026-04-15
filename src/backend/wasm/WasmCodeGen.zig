@@ -664,7 +664,7 @@ fn emitRawRcForValueLocal(
     if (value_vt != .i32) return;
 
     if (self.isCompositeLayout(layout_idx)) {
-        try self.emitRcHelperCallForValuePtr(kind, value_local, layout_idx, inc_count);
+        try self.emitRawRcHelperCallForValuePtr(kind, value_local, layout_idx, inc_count);
         return;
     }
 
@@ -680,7 +680,7 @@ fn emitRawRcForValueLocal(
     try self.emitLocalGet(value_local);
     try self.emitStoreOpSized(.i32, @intCast(size_align.size), 0);
 
-    try self.emitRcHelperCallForValuePtr(kind, ptr_local, layout_idx, inc_count);
+    try self.emitRawRcHelperCallForValuePtr(kind, ptr_local, layout_idx, inc_count);
 }
 
 fn emitExplicitRcForValueLocal(
@@ -799,7 +799,7 @@ fn emitDirectRcPlan(
     }
 }
 
-fn emitRcHelperCallForValuePtr(
+fn emitRawRcHelperCallForValuePtr(
     self: *Self,
     comptime kind: RcOpKind,
     value_ptr_local: u32,
@@ -839,7 +839,7 @@ fn emitRawRcAtPtr(
     layout_idx: layout.Idx,
     inc_count: u16,
 ) Allocator.Error!void {
-    try self.emitRcHelperCallForValuePtr(kind, value_ptr_local, layout_idx, inc_count);
+    try self.emitRawRcHelperCallForValuePtr(kind, value_ptr_local, layout_idx, inc_count);
 }
 
 fn emitBuiltinInternalRcAtPtr(

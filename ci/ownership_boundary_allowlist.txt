@@ -33,7 +33,7 @@ ordinary-layout-refcount-branch | src/backend/dev/LirCodeGen.zig | builtinIntern
 ordinary-layout-refcount-branch | src/backend/dev/LirCodeGen.zig | explicitRcLayoutValContainsRefcounted | explicit RC layout-refcount query helper
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | generateRcStmt | explicit LIR RC lowering choke point
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitRawRcForValueLocal | RC helper plumbing used by explicit RC lowering and builtin RC helpers
-wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitRcHelperCallForValuePtr | RC helper plumbing used by explicit RC lowering and builtin RC helpers
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitRawRcHelperCallForValuePtr | RC helper plumbing used by explicit RC lowering and builtin RC helpers
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitRawRcAtPtr | RC helper plumbing used by explicit RC lowering and builtin RC helpers
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitRcHelperCallByKey | RC helper plumbing used by explicit RC lowering and builtin RC helpers
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitBuiltinInternalRcForValueLocal | builtin primitive lowering choke point
@@ -46,4 +46,4 @@ ordinary-layout-refcount-branch | src/backend/wasm/WasmCodeGen.zig | builtinInte
 ordinary-layout-refcount-branch | src/backend/wasm/WasmCodeGen.zig | explicitRcLayoutContainsRefcounted | explicit RC layout-refcount query helper
 wasm-raw-rc-helper-call | src/backend/wasm/WasmCodeGen.zig | emitRawRcForValueLocal | raw wasm RC helper plumbing under explicit/builtin wrappers
 wasm-raw-rc-helper-call | src/backend/wasm/WasmCodeGen.zig | emitRawRcAtPtr | raw wasm RC helper plumbing under explicit/builtin wrappers
-wasm-raw-rc-helper-call | src/backend/wasm/WasmCodeGen.zig | emitRcHelperCallForValuePtr | raw wasm helper-call emitter
+wasm-raw-rc-helper-call | src/backend/wasm/WasmCodeGen.zig | emitRawRcHelperCallForValuePtr | raw wasm helper-call emitter
