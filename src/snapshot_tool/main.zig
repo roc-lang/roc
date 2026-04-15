@@ -43,7 +43,7 @@ fn panicHandler(msg: []const u8, ret_addr: ?usize) noreturn {
             if (ret_addr) |addr| {
                 std.debug.print("  return address: 0x{x}\n", .{addr});
             }
-            std.debug.dumpCurrentStackTrace(ret_addr);
+            std.debug.dumpCurrentStackTrace(.{ .first_address = ret_addr });
         }
         panic_jmp = null; // prevent re-entry
         sljmp.longjmp(jmp, 1);
@@ -55,7 +55,7 @@ fn panicHandler(msg: []const u8, ret_addr: ?usize) noreturn {
 /// Unix signal handler for catching segfaults and illegal instructions from
 /// generated code. Uses the same panic_jmp mechanism as the panic handler.
 /// Not available on Windows (no POSIX signals).
-fn crashSignalHandler(_: i32) callconv(.c) void {
+fn crashSignalHandler(_: std.posix.SIG) callconv(.c) void {
     if (panic_jmp) |jmp| {
         panic_msg = "signal: segfault or illegal instruction in generated code";
         gpa_poisoned = true;
@@ -74,7 +74,7 @@ fn crashSignalHandler(_: i32) callconv(.c) void {
 }
 
 /// SIGALRM handler for catching infinite loops in generated code.
-fn alarmSignalHandler(_: i32) callconv(.c) void {
+fn alarmSignalHandler(_: std.posix.SIG) callconv(.c) void {
     if (panic_jmp) |jmp| {
         panic_msg = "timeout: dev backend execution exceeded time limit";
         gpa_poisoned = true;
@@ -272,7 +272,7 @@ fn parseProblemEntry(allocator: std.mem.Allocator, content: []const u8, start_id
                 if (std.mem.indexOf(u8, inner_content, ".md:")) |_| {
                     var location = inner_content;
                     // Strip trailing colon and whitespace
-                    location = std.mem.trimRight(u8, location, ": \t");
+                    location = std.mem.trimEnd(u8, location, ": \t");
 
                     // Count colons to determine format
                     var colon_count: usize = 0;
@@ -430,14 +430,14 @@ fn generateExpectedContent(allocator: std.mem.Allocator, problems: []const Probl
         return try allocator.dupe(u8, "NIL");
     }
 
-    var buffer = std.array_list.Managed(u8).init(allocator);
+    var buffer: std.Io.Writer.Allocating = .init(allocator);
     errdefer buffer.deinit();
 
     for (problems, 0..) |problem, i| {
         if (i > 0) {
-            try buffer.append('\n');
+            buffer.writer.writeAll("\n") catch return error.OutOfMemory;
         }
-        try problem.format(buffer.writer());
+        try problem.format(&buffer.writer);
     }
 
     return buffer.toOwnedSlice();
@@ -586,7 +586,7 @@ var debug_allocator: std.heap.DebugAllocator(.{}) = .{
 };
 
 /// cli entrypoint for snapshot tool
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     // Always use the debug allocator with the snapshot tool to help find allocation bugs.
     var gpa_tracy: tracy.TracyAllocator(null) = undefined;
     var gpa = debug_allocator.allocator();
@@ -601,8 +601,13 @@ pub fn main() !void {
         gpa = gpa_tracy.allocator();
     }
 
-    const args = try std.process.argsAlloc(gpa);
-    defer std.process.argsFree(gpa, args);
+    var args_list: std.ArrayList([]const u8) = .empty;
+    defer args_list.deinit(gpa);
+    var args_iter = std.process.Args.Iterator.init(init.minimal.args);
+    while (args_iter.next()) |arg| {
+        try args_list.append(gpa, arg);
+    }
+    const args = args_list.items;
 
     var snapshot_paths = std.array_list.Managed([]const u8).init(gpa);
     defer snapshot_paths.deinit();
@@ -751,7 +756,7 @@ pub fn main() !void {
 
     if (config.maybe_fuzz_corpus_path != null) {
         log("copying SOURCE from snapshots to: {s}", .{config.maybe_fuzz_corpus_path.?});
-        try std.Io.Dir.cwd().createDirPath(config.maybe_fuzz_corpus_path.?);
+        try std.Io.Dir.cwd().createDirPath(std.Options.debug_io, config.maybe_fuzz_corpus_path.?);
     }
     const snapshots_dir = "test/snapshots";
 
@@ -877,7 +882,7 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
     }
 
     var iterator = dir.iterate();
-    while (try iterator.next()) |entry| {
+    while (try iterator.next(std.Options.debug_io)) |entry| {
         if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".md")) {
             const full_path = try std.fs.path.join(allocator, &.{ dir_path, entry.name });
             defer allocator.free(full_path);
@@ -922,7 +927,7 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
             files_to_delete.deinit();
         }
 
-        while (try iterator.next()) |entry| {
+        while (try iterator.next(std.Options.debug_io)) |entry| {
             if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".md")) {
                 const file_path = try allocator.dupe(u8, entry.name);
                 try files_to_delete.append(file_path);
@@ -930,7 +935,7 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
         }
 
         for (files_to_delete.items) |file_name| {
-            dir.deleteFile(file_name) catch |err| {
+            dir.deleteFile(std.Options.debug_io, file_name) catch |err| {
                 warn("Failed to delete {s}: {}", .{ file_name, err });
             };
         }
@@ -940,7 +945,7 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
     iterator = dir.iterate();
     const snapshot_type = getMultiFileSnapshotType(dir_path);
 
-    while (try iterator.next()) |entry| {
+    while (try iterator.next(std.Options.debug_io)) |entry| {
         if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".roc")) {
             const roc_file_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir_path, entry.name });
             defer allocator.free(roc_file_path);
@@ -1282,9 +1287,10 @@ fn processSnapshotContent(
         defer original_tree.deinit();
         try ModuleEnv.pushToSExprTree(can_ir, null, &original_tree);
 
-        var original_sexpr = std.array_list.Managed(u8).init(allocator);
-        defer original_sexpr.deinit();
-        try original_tree.toStringPretty(original_sexpr.writer().any(), .skip_linecol);
+        var original_sexpr_aw: std.Io.Writer.Allocating = .init(allocator);
+        defer original_sexpr_aw.deinit();
+        try original_tree.toStringPretty(&original_sexpr_aw.writer, .skip_linecol);
+        const original_sexpr_items = original_sexpr_aw.writer.buffer[0..original_sexpr_aw.writer.end];
 
         // Create arena for serialization
         var cache_arena = std.heap.ArenaAllocator.init(allocator);
@@ -1310,17 +1316,18 @@ fn processSnapshotContent(
         defer restored_tree.deinit();
         try ModuleEnv.pushToSExprTree(restored_env, null, &restored_tree);
 
-        var restored_sexpr = std.array_list.Managed(u8).init(allocator);
-        defer restored_sexpr.deinit();
-        try restored_tree.toStringPretty(restored_sexpr.writer().any(), .skip_linecol);
+        var restored_sexpr_aw: std.Io.Writer.Allocating = .init(allocator);
+        defer restored_sexpr_aw.deinit();
+        try restored_tree.toStringPretty(&restored_sexpr_aw.writer, .skip_linecol);
+        const restored_sexpr_items = restored_sexpr_aw.writer.buffer[0..restored_sexpr_aw.writer.end];
 
         // Compare S-expressions - crash if they don't match
-        if (!std.mem.eql(u8, original_sexpr.items, restored_sexpr.items)) {
+        if (!std.mem.eql(u8, original_sexpr_items, restored_sexpr_items)) {
             std.log.err("Cache round-trip validation failed for snapshot: {s}", .{output_path});
             std.log.err("Original and restored CIR S-expressions don't match!", .{});
             std.log.err("This indicates a bug in MmapCache serialization/deserialization.", .{});
-            std.log.err("Original S-expression:\n{s}", .{original_sexpr.items});
-            std.log.err("Restored S-expression:\n{s}", .{restored_sexpr.items});
+            std.log.err("Original S-expression:\n{s}", .{original_sexpr_items});
+            std.log.err("Restored S-expression:\n{s}", .{restored_sexpr_items});
             return error.CacheRoundTripValidationFailed;
         }
     }
@@ -1622,7 +1629,7 @@ fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) !voi
             });
         } else {
             var dir_iterator = dir.iterate();
-            while (try dir_iterator.next()) |entry| {
+            while (try dir_iterator.next(std.Options.debug_io)) |entry| {
                 // Skip hidden files and special directories
                 if (entry.name[0] == '.') continue;
 
@@ -1746,7 +1753,7 @@ const Section = union(enum) {
 
         fn extract(self: Range, content: []const u8) []const u8 {
             if (self.end < self.start) @panic("invalid range");
-            return std.mem.trimRight(u8, content[self.start..self.end], "\n");
+            return std.mem.trimEnd(u8, content[self.start..self.end], "\n");
         }
     };
 };
@@ -3640,18 +3647,18 @@ fn processDocsSnapshot(
         @as(u64, @intCast(@intFromPtr(output_path.ptr))),
     }) catch return false;
 
-    std.Io.Dir.cwd().createDirPath(tmp_dir_name) catch |err| {
+    std.Io.Dir.cwd().createDirPath(std.Options.debug_io, tmp_dir_name) catch |err| {
         std.log.err("Failed to create temp directory {s}: {}", .{ tmp_dir_name, err });
         return false;
     };
-    defer std.Io.Dir.cwd().deleteTree(tmp_dir_name) catch {};
+    defer std.Io.Dir.cwd().deleteTree(std.Options.debug_io, tmp_dir_name) catch {};
 
     // Find the app file (first .roc file, or explicitly "app.roc")
     var app_filename: ?[]const u8 = null;
     for (source_files) |sf| {
         const sub_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir_name, sf.filename });
         defer allocator.free(sub_path);
-        std.Io.Dir.cwd().writeFile(.{
+        std.Io.Dir.cwd().writeFile(std.Options.debug_io, .{
             .sub_path = sub_path,
             .data = sf.content,
         }) catch |err| {
@@ -3743,8 +3750,8 @@ fn processDocsSnapshot(
         switch (config.expected_section_command) {
             .update => break :blk true,
             .check => {
-                const existing_trimmed = std.mem.trimRight(u8, content.docs_output.?, " \t\r\n");
-                const new_trimmed = std.mem.trimRight(u8, new_docs_text, " \t\r\n");
+                const existing_trimmed = std.mem.trimEnd(u8, content.docs_output.?, " \t\r\n");
+                const new_trimmed = std.mem.trimEnd(u8, new_docs_text, " \t\r\n");
                 if (!std.mem.eql(u8, existing_trimmed, new_trimmed)) {
                     std.debug.print("\nDOCS mismatch in {s}\n\n", .{output_path});
                     std.debug.print("Expected:\n{s}\n\nActual:\n{s}\n", .{ existing_trimmed, new_trimmed });
@@ -3754,8 +3761,8 @@ fn processDocsSnapshot(
                 break :blk false;
             },
             .none => {
-                const existing_trimmed = std.mem.trimRight(u8, content.docs_output.?, " \t\r\n");
-                const new_trimmed = std.mem.trimRight(u8, new_docs_text, " \t\r\n");
+                const existing_trimmed = std.mem.trimEnd(u8, content.docs_output.?, " \t\r\n");
+                const new_trimmed = std.mem.trimEnd(u8, new_docs_text, " \t\r\n");
                 if (!std.mem.eql(u8, existing_trimmed, new_trimmed)) {
                     std.debug.print("\nDOCS warning: output changed in {s}\n", .{output_path});
                     std.debug.print("Hint: use `zig build snapshot -- --check-expected` to see details, or `--update-expected` to update.\n\n", .{});
@@ -3878,8 +3885,8 @@ const TargetHashResult = struct {
 /// Compare two hash text blocks (target=hash lines) for equality,
 /// ignoring trailing whitespace differences.
 fn hashTextMatches(existing: []const u8, new: []const u8) bool {
-    const existing_trimmed = std.mem.trimRight(u8, existing, " \t\r\n");
-    const new_trimmed = std.mem.trimRight(u8, new, " \t\r\n");
+    const existing_trimmed = std.mem.trimEnd(u8, existing, " \t\r\n");
+    const new_trimmed = std.mem.trimEnd(u8, new, " \t\r\n");
     return std.mem.eql(u8, existing_trimmed, new_trimmed);
 }
 
@@ -3889,8 +3896,8 @@ fn printHashMismatchTable(existing: []const u8, new: []const u8) void {
     std.debug.print("  {s:-<18} | {s:-<64} | {s:-<64}\n", .{ "", "", "" });
 
     // Parse existing hashes into a map-like iteration
-    var new_lines = std.mem.splitScalar(u8, std.mem.trimRight(u8, new, " \t\r\n"), '\n');
-    var existing_lines = std.mem.splitScalar(u8, std.mem.trimRight(u8, existing, " \t\r\n"), '\n');
+    var new_lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, new, " \t\r\n"), '\n');
+    var existing_lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, existing, " \t\r\n"), '\n');
 
     while (new_lines.next()) |new_line| {
         const new_eq = std.mem.indexOfScalar(u8, new_line, '=') orelse continue;
@@ -3945,18 +3952,18 @@ fn processDevObjectSnapshot(
         @as(u64, @intCast(@intFromPtr(output_path.ptr))),
     }) catch return false;
 
-    std.Io.Dir.cwd().createDirPath(tmp_dir_name) catch |err| {
+    std.Io.Dir.cwd().createDirPath(std.Options.debug_io, tmp_dir_name) catch |err| {
         std.log.err("Failed to create temp directory {s}: {}", .{ tmp_dir_name, err });
         return false;
     };
-    defer std.Io.Dir.cwd().deleteTree(tmp_dir_name) catch {};
+    defer std.Io.Dir.cwd().deleteTree(std.Options.debug_io, tmp_dir_name) catch {};
 
     // Find the app file (first .roc file, or explicitly "app.roc")
     var app_filename: ?[]const u8 = null;
     for (source_files) |sf| {
         const sub_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir_name, sf.filename });
         defer allocator.free(sub_path);
-        std.Io.Dir.cwd().writeFile(.{
+        std.Io.Dir.cwd().writeFile(std.Options.debug_io, .{
             .sub_path = sub_path,
             .data = sf.content,
         }) catch |err| {
