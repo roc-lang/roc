@@ -65,14 +65,8 @@ RULES = (
     Rule(
         category="wasm-raw-rc-helper-call",
         path_prefixes=("src/backend/wasm/WasmCodeGen.zig",),
-        regex=re.compile(r"\bemitRcHelperCallForValuePtr\("),
+        regex=re.compile(r"\bemitRawRcHelperCallForValuePtr\("),
         description="wasm raw RC helper emission outside wrapper/builtin/helper infrastructure",
-    ),
-    Rule(
-        category="interpreter-aggregate-coercion",
-        path_prefixes=("src/eval/interpreter.zig",),
-        regex=re.compile(r"\bcoerceForbiddenAggregate(?:BoundaryValueToLayout|ValueIntoBox|StructValue|TagUnionValue)\("),
-        description="interpreter aggregate-rebuilding coercion outside the explicitly forbidden helper island",
     ),
 )
 

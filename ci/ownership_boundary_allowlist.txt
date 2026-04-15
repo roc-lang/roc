@@ -14,14 +14,8 @@ interpreter-perform-rc | src/eval/interpreter.zig | performRawRcPlan | raw inter
 interpreter-perform-rc | src/eval/interpreter.zig | performExplicitRcStmt | explicit LIR RC execution choke point
 interpreter-perform-rc | src/eval/interpreter.zig | performBuiltinInternalRc | builtin/runtime-internal RC choke point
 interpreter-perform-rc | src/eval/interpreter.zig | performInterpreterApiRc | interpreter API cleanup for externally held result values
-interpreter-perform-rc | src/eval/interpreter.zig | performForbiddenOrdinaryRc | forbidden ordinary-path RC marker helper
 ordinary-layout-refcount-branch | src/eval/interpreter.zig | builtinInternalContainsRefcounted | builtin/runtime-internal layout-refcount query helper
-ordinary-layout-refcount-branch | src/eval/interpreter.zig | forbiddenOrdinaryContainsRefcounted | forbidden ordinary-path layout-refcount query marker
 ordinary-layout-refcount-branch | src/eval/interpreter.zig | builtinListElemRc | builtin-only list element RC query helper
-interpreter-aggregate-coercion | src/eval/interpreter.zig | coerceForbiddenAggregateBoundaryValueToLayout | forbidden aggregate coercion island pending full LIR replacement
-interpreter-aggregate-coercion | src/eval/interpreter.zig | coerceForbiddenAggregateValueIntoBox | forbidden aggregate coercion island pending full LIR replacement
-interpreter-aggregate-coercion | src/eval/interpreter.zig | coerceForbiddenAggregateStructValue | forbidden aggregate coercion island pending full LIR replacement
-interpreter-aggregate-coercion | src/eval/interpreter.zig | coerceForbiddenAggregateTagUnionValue | forbidden aggregate coercion island pending full LIR replacement
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitRawRcHelperCallAtStackOffset | RC helper plumbing used by explicit RC lowering and builtin RC helpers
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitRawRcHelperCallForValue | RC helper plumbing used by explicit RC lowering and builtin RC helpers
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitRawRcHelperCallFromPtrReg | RC helper plumbing used by explicit RC lowering and builtin RC helpers

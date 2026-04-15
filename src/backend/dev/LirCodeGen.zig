@@ -4051,9 +4051,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.freeGeneral(temp_reg);
                 self.codegen.freeGeneral(ptr_reg);
 
-                if (builtinInternalLayoutContainsRefcounted(ls, "dev.list_split_first_last.builtin_elem_rc", if (field0_is_list) field1_layout_idx else field0_layout_idx)) {
-                    try self.emitIncrefAtStackOffset(elem_dst, if (field0_is_list) field1_layout_idx else field0_layout_idx);
-                }
             }
 
             const rest_list_layout_idx = if (field0_is_list) field0_layout_idx else field1_layout_idx;
