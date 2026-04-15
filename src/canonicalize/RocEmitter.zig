@@ -136,10 +136,10 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             try self.emitIntValue(num.value);
         },
         .e_frac_f32 => |frac| {
-            try self.output.print(self.allocator,"{d}f32", .{frac.value});
+            try self.output.print(self.allocator, "{d}f32", .{frac.value});
         },
         .e_frac_f64 => |frac| {
-            try self.output.print(self.allocator,"{d}f64", .{frac.value});
+            try self.output.print(self.allocator, "{d}f64", .{frac.value});
         },
         .e_dec => |dec| {
             // Dec is stored scaled by 10^18, need to emit as decimal
@@ -169,7 +169,7 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             const numerator = small.value.numerator;
             const power = small.value.denominator_power_of_ten;
             if (power == 0) {
-                try self.output.print(self.allocator,"{}", .{numerator});
+                try self.output.print(self.allocator, "{}", .{numerator});
             } else {
                 // Convert to decimal string
                 var divisor: i32 = 1;
@@ -178,13 +178,13 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
                 }
                 const whole = @divTrunc(numerator, @as(i16, @intCast(divisor)));
                 const frac_part = @mod(@abs(numerator), @as(u16, @intCast(divisor)));
-                try self.output.print(self.allocator,"{}.{}", .{ whole, frac_part });
+                try self.output.print(self.allocator, "{}.{}", .{ whole, frac_part });
             }
         },
         .e_typed_int => |typed| {
             try self.emitIntValue(typed.value);
             const type_name = self.module_env.getIdent(typed.type_name);
-            try self.output.print(self.allocator,".{s}", .{type_name});
+            try self.output.print(self.allocator, ".{s}", .{type_name});
         },
         .e_typed_frac => |typed| {
             // Emit as decimal and add type suffix
@@ -193,20 +193,20 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             const whole = i128h.divTrunc_i128(value, scale);
             const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
             if (frac_part == 0) {
-                try self.output.print(self.allocator,"{d}.0", .{whole});
+                try self.output.print(self.allocator, "{d}.0", .{whole});
             } else {
-                try self.output.print(self.allocator,"{d}.{d:0>18}", .{ whole, frac_part });
+                try self.output.print(self.allocator, "{d}.{d:0>18}", .{ whole, frac_part });
             }
             const type_name = self.module_env.getIdent(typed.type_name);
-            try self.output.print(self.allocator,".{s}", .{type_name});
+            try self.output.print(self.allocator, ".{s}", .{type_name});
         },
         .e_str_segment => |seg| {
             const text = self.module_env.common.getString(seg.literal);
-            try self.output.print(self.allocator,"\"{s}\"", .{text});
+            try self.output.print(self.allocator, "\"{s}\"", .{text});
         },
         .e_bytes_literal => |bytes| {
             const data = self.module_env.common.getString(bytes.literal);
-            try self.output.print(self.allocator,"<bytes:{d}>", .{data.len});
+            try self.output.print(self.allocator, "<bytes:{d}>", .{data.len});
         },
         .e_str => |str| {
             // Multi-segment string
@@ -256,7 +256,7 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
         },
         .e_tuple_access => |tuple_access| {
             try self.emitExpr(tuple_access.tuple);
-            try self.output.print(self.allocator,".{d}", .{tuple_access.elem_index});
+            try self.output.print(self.allocator, ".{d}", .{tuple_access.elem_index});
         },
         .e_if => |if_expr| {
             const branch_indices = self.module_env.store.sliceIfBranches(if_expr.branches);
@@ -308,7 +308,7 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
                 if (use_shorthand) {
                     try self.write(name);
                 } else {
-                    try self.output.print(self.allocator,"{s}: ", .{name});
+                    try self.output.print(self.allocator, "{s}: ", .{name});
                     try self.emitExpr(field.value);
                 }
             }
@@ -414,7 +414,7 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
         },
         .e_crash => |crash| {
             const msg = self.module_env.common.getString(crash.msg);
-            try self.output.print(self.allocator,"crash \"{s}\"", .{msg});
+            try self.output.print(self.allocator, "crash \"{s}\"", .{msg});
         },
         .e_dbg => |dbg| {
             try self.write("dbg ");
@@ -509,7 +509,7 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
         },
         .str_literal => |str| {
             const text = self.module_env.common.getString(str.literal);
-            try self.output.print(self.allocator,"\"{s}\"", .{text});
+            try self.output.print(self.allocator, "\"{s}\"", .{text});
         },
         .applied_tag => |tag| {
             const name = self.module_env.getIdent(tag.name);
@@ -611,7 +611,7 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
             const numerator = dec.value.numerator;
             const power = dec.value.denominator_power_of_ten;
             if (power == 0) {
-                try self.output.print(self.allocator,"{}", .{numerator});
+                try self.output.print(self.allocator, "{}", .{numerator});
             } else {
                 var divisor: i32 = 1;
                 for (0..power) |_| {
@@ -619,7 +619,7 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
                 }
                 const whole = @divTrunc(numerator, @as(i16, @intCast(divisor)));
                 const frac_part = @mod(@abs(numerator), @as(u16, @intCast(divisor)));
-                try self.output.print(self.allocator,"{}.{}", .{ whole, frac_part });
+                try self.output.print(self.allocator, "{}.{}", .{ whole, frac_part });
             }
         },
         .dec_literal => |dec| {

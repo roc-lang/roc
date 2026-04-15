@@ -178,8 +178,7 @@ extern var roc__serialized_size: usize;
 
 // Global state for shared memory - initialized once per process
 var shared_memory_initialized = InitializationFlag.init();
-var global_shm: if (is_wasm32) void else ?SharedMemoryAllocator = if (is_wasm32)
-{} else null;
+var global_shm: if (is_wasm32) void else ?SharedMemoryAllocator = if (is_wasm32) {} else null;
 var global_env_ptr: ?*ModuleEnv = null; // Primary env for entry point lookups (platform or app)
 var global_app_env_ptr: ?*ModuleEnv = null; // App env for e_lookup_required resolution
 var global_builtin_modules: ?eval.BuiltinModules = null;

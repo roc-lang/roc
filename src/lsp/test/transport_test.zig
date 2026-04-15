@@ -102,7 +102,7 @@ test "transport logs traffic when debug file is provided" {
 
 test "transport rejects oversized header lines" {
     const allocator = std.testing.allocator;
-    var frame_builder : std.ArrayList(u8) = .empty;
+    var frame_builder: std.ArrayList(u8) = .empty;
     defer frame_builder.deinit(allocator);
 
     try frame_builder.ensureTotalCapacity(allocator, 9005);

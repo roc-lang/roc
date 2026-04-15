@@ -259,7 +259,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
-            return CliArgs{ .help = 
+            return CliArgs{ .help =
             \\Check the code for problems, but don't build or run it
             \\
             \\Usage: roc check [OPTIONS] [ROC_FILE]
@@ -275,7 +275,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
             \\  -j, --jobs=<N>     Max worker threads for parallel compilation (default: auto-detect CPU count)
             \\  -h, --help         Print help
             \\
-        };
+            };
         } else if (mem.startsWith(u8, arg, "--main")) {
             if (getFlagValue(arg)) |value| {
                 main = value;
@@ -334,7 +334,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
     var z_dump_linker: bool = false;
     for (args) |arg| {
         if (isHelpFlag(arg)) {
-            return CliArgs{ .help = 
+            return CliArgs{ .help =
             \\Build a binary from the given .roc file, but don't run it
             \\
             \\Usage: roc build [OPTIONS] [ROC_FILE]
@@ -359,7 +359,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\      --z-dump-linker                Dump linker inputs to temp directory for debugging
             \\      -h, --help                     Print help
             \\
-        };
+            };
         } else if (mem.startsWith(u8, arg, "--target")) {
             if (getFlagValue(arg)) |value| {
                 target = value;
@@ -460,7 +460,7 @@ fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator
         const arg = args[i];
         if (isHelpFlag(arg)) {
             paths.deinit();
-            return CliArgs{ .help = 
+            return CliArgs{ .help =
             \\Bundle .roc files into a compressed archive
             \\
             \\Usage: roc bundle [OPTIONS] [ROC_FILES]...
@@ -473,7 +473,7 @@ fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator
             \\      --compression <N>    Compression level (1-22) [default: 3]
             \\  -h, --help               Print help
             \\
-        };
+            };
         } else if (mem.eql(u8, arg, "--output-dir")) {
             if (i + 1 >= args.len) {
                 paths.deinit();
@@ -521,7 +521,7 @@ fn parseUnbundle(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
     for (args) |arg| {
         if (isHelpFlag(arg)) {
             paths.deinit();
-            return CliArgs{ .help = 
+            return CliArgs{ .help =
             \\Extract files from compressed .tar.zst archives
             \\
             \\Usage: roc unbundle [OPTIONS] [ARCHIVE_FILES]...
@@ -533,7 +533,7 @@ fn parseUnbundle(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
             \\Options:
             \\  -h, --help  Print help
             \\
-        };
+            };
         } else if (mem.startsWith(u8, arg, "-")) {
             paths.deinit();
             return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "unbundle", .arg = arg } } };
@@ -556,7 +556,7 @@ fn parseUnbundle(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
         // If still no files found, show help
         if (paths.items.len == 0) {
             paths.deinit();
-            return CliArgs{ .help = 
+            return CliArgs{ .help =
             \\Extract files from compressed .tar.zst archives
             \\
             \\Usage: roc unbundle [OPTIONS] [ARCHIVE_FILES]...
@@ -570,7 +570,7 @@ fn parseUnbundle(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
             \\
             \\Error: No .tar.zst files found in current directory
             \\
-        };
+            };
         }
     }
 
@@ -587,7 +587,7 @@ fn parseFormat(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator
         if (isHelpFlag(arg)) {
             // We need to free the paths here because we aren't returning the .format variant
             paths.deinit();
-            return CliArgs{ .help = 
+            return CliArgs{ .help =
             \\Format a .roc file or the .roc files contained in a directory using standard Roc formatting
             \\
             \\Usage: roc fmt [OPTIONS] [DIRECTORY_OR_FILES]
@@ -603,7 +603,7 @@ fn parseFormat(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator
             \\
             \\If DIRECTORY_OR_FILES is omitted, the .roc files in the current working directory are formatted.
             \\
-        };
+            };
         } else if (mem.eql(u8, arg, "--stdin")) {
             stdin = true;
         } else if (mem.eql(u8, arg, "--check")) {
@@ -627,7 +627,7 @@ fn parseTest(args: []const []const u8) CliArgs {
     var max_threads: ?usize = null;
     for (args) |arg| {
         if (isHelpFlag(arg)) {
-            return CliArgs{ .help = 
+            return CliArgs{ .help =
             \\Run all top-level `expect`s in a main module and any modules it imports
             \\
             \\Usage: roc test [OPTIONS] [ROC_FILE]
@@ -643,7 +643,7 @@ fn parseTest(args: []const []const u8) CliArgs {
             \\  -j, --jobs=<N>                      Max worker threads for parallel compilation (default: auto-detect CPU count)
             \\  -h, --help                          Print help
             \\
-        };
+            };
         } else if (mem.startsWith(u8, arg, "--main")) {
             if (getFlagValue(arg)) |value| {
                 main = value;
@@ -696,7 +696,7 @@ fn parseRepl(args: []const []const u8) CliArgs {
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
-            return CliArgs{ .help = 
+            return CliArgs{ .help =
             \\Launch the interactive Read Eval Print Loop (REPL)
             \\
             \\Usage: roc repl [OPTIONS]
@@ -705,7 +705,7 @@ fn parseRepl(args: []const []const u8) CliArgs {
             \\      --opt=<opt>  Optimization level: dev (default, fast compilation), interpreter (legacy interpreter)
             \\  -h, --help       Print help
             \\
-        };
+            };
         } else if (mem.startsWith(u8, arg, "--opt")) {
             if (getFlagValue(arg)) |value| {
                 if (OptLevel.from_str(value)) |level| {
@@ -731,7 +731,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
-            return CliArgs{ .help = 
+            return CliArgs{ .help =
             \\Generate glue code from a platform using a glue spec
             \\
             \\Usage: roc glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
@@ -745,7 +745,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
             \\      --opt=<opt>  Optimization level: dev (default, fast compilation), interpreter (legacy interpreter)
             \\  -h, --help       Print help
             \\
-        };
+            };
         } else if (mem.startsWith(u8, arg, "--opt")) {
             if (getFlagValue(arg)) |value| {
                 if (OptLevel.from_str(value)) |level| {
@@ -771,7 +771,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
 
     // glue_spec is required
     if (glue_spec == null) {
-        return CliArgs{ .help = 
+        return CliArgs{ .help =
         \\Error: Missing required argument <GLUE_SPEC>
         \\
         \\Generate glue code from a platform using a glue spec
@@ -786,12 +786,12 @@ fn parseGlue(args: []const []const u8) CliArgs {
         \\Options:
         \\  -h, --help  Print help
         \\
-    };
+        };
     }
 
     // output_dir is required
     if (output_dir == null) {
-        return CliArgs{ .help = 
+        return CliArgs{ .help =
         \\Error: Missing required argument <GLUE_DIR>
         \\
         \\Generate glue code from a platform using a glue spec
@@ -806,7 +806,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
         \\Options:
         \\  -h, --help  Print help
         \\
-    };
+        };
     }
 
     return CliArgs{ .glue = GlueArgs{
@@ -820,7 +820,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
 fn parseVersion(args: []const []const u8) CliArgs {
     for (args) |arg| {
         if (isHelpFlag(arg)) {
-            return CliArgs{ .help = 
+            return CliArgs{ .help =
             \\Print the Roc compiler’s version
             \\
             \\Usage: roc version
@@ -828,7 +828,7 @@ fn parseVersion(args: []const []const u8) CliArgs {
             \\Options:
             \\  -h, --help  Print help
             \\
-        };
+            };
         } else {
             return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "version", .arg = arg } } };
         }
@@ -839,7 +839,7 @@ fn parseVersion(args: []const []const u8) CliArgs {
 fn parseLicenses(args: []const []const u8) CliArgs {
     for (args) |arg| {
         if (isHelpFlag(arg)) {
-            return CliArgs{ .help = 
+            return CliArgs{ .help =
             \\Prints license info for Roc as well as attributions to other projects used by Roc
             \\
             \\Usage: roc licenses
@@ -847,7 +847,7 @@ fn parseLicenses(args: []const []const u8) CliArgs {
             \\Options:
             \\  -h, --help  Print help
             \\
-        };
+            };
         } else {
             return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "licenses", .arg = arg } } };
         }
@@ -866,7 +866,7 @@ fn parseDocs(args: []const []const u8) CliArgs {
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
-            return CliArgs{ .help = 
+            return CliArgs{ .help =
             \\Generate documentation for a Roc package
             \\
             \\Usage: roc docs [OPTIONS] [ROC_FILE]
@@ -883,7 +883,7 @@ fn parseDocs(args: []const []const u8) CliArgs {
             \\      --verbose        Enable verbose output including cache statistics
             \\  -h, --help           Print help
             \\
-        };
+            };
         } else if (mem.startsWith(u8, arg, "--main")) {
             if (getFlagValue(arg)) |value| {
                 main = value;
@@ -923,7 +923,7 @@ fn parseExperimentalLsp(args: []const []const u8) CliArgs {
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
-            return CliArgs{ .help = 
+            return CliArgs{ .help =
             \\Start the experimental Roc language server (LSP)
             \\
             \\Usage: roc experimental-lsp [OPTIONS]
@@ -935,7 +935,7 @@ fn parseExperimentalLsp(args: []const []const u8) CliArgs {
             \\      --debug-server     Log server lifecycle details to the debug log
             \\  -h, --help            Print help
             \\
-        };
+            };
         } else if (mem.eql(u8, arg, "--debug-transport")) {
             debug_io = true;
         } else if (mem.eql(u8, arg, "--debug-build")) {

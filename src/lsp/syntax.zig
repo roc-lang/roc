@@ -152,7 +152,7 @@ pub const SyntaxChecker = struct {
         // Update dependency graph from successful build
         self.updateDependencyGraph(env);
 
-        var publish_list : std.ArrayList(Diagnostics.PublishDiagnostics) = .empty;
+        var publish_list: std.ArrayList(Diagnostics.PublishDiagnostics) = .empty;
         errdefer {
             for (publish_list.items) |*set| set.deinit(self.allocator);
             publish_list.deinit(self.allocator);
@@ -166,7 +166,7 @@ pub const SyntaxChecker = struct {
                 const mapped_path = if (entry.abs_path.len == 0) session.absolute_path else entry.abs_path;
                 const module_uri = try uri_util.pathToUri(self.allocator, mapped_path);
 
-                var diags : std.ArrayList(Diagnostics.Diagnostic) = .empty;
+                var diags: std.ArrayList(Diagnostics.Diagnostic) = .empty;
                 errdefer {
                     for (diags.items) |diag| {
                         self.allocator.free(diag.message);
@@ -240,7 +240,7 @@ pub const SyntaxChecker = struct {
         }
 
         // Create a fresh BuildEnv
-        const cwd = try std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, ".",self.allocator);
+        const cwd = try std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, ".", self.allocator);
         defer self.allocator.free(cwd);
         var env = try BuildEnv.init(self.allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd);
         env.compiler_version = build_options.compiler_version;
@@ -574,8 +574,8 @@ pub const SyntaxChecker = struct {
         var log_file = self.log_file orelse return;
         var buffer: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buffer, fmt, args) catch return;
-        log_file.writeStreamingAll(std.Options.debug_io,msg) catch return;
-        log_file.writeStreamingAll(std.Options.debug_io,"\n") catch {};
+        log_file.writeStreamingAll(std.Options.debug_io, msg) catch return;
+        log_file.writeStreamingAll(std.Options.debug_io, "\n") catch {};
         log_file.sync(std.Options.debug_io) catch {};
     }
 
@@ -1729,7 +1729,7 @@ pub const SyntaxChecker = struct {
         const target_pattern = cir_queries.findPatternAtOffset(module_env, target_offset) orelse return null;
 
         // Collect all references to this pattern
-        var regions : std.ArrayList(LspRange) = .empty;
+        var regions: std.ArrayList(LspRange) = .empty;
         errdefer regions.deinit(self.allocator);
 
         // Add the definition itself
@@ -1816,7 +1816,7 @@ pub const SyntaxChecker = struct {
         const line_offsets = pos.buildLineOffsets(allocator, source) catch return &[_]SymbolInformation{};
         defer line_offsets.deinit();
 
-        var symbols : std.ArrayList(SymbolInformation) = .empty;
+        var symbols: std.ArrayList(SymbolInformation) = .empty;
         errdefer {
             for (symbols.items) |*sym| {
                 allocator.free(sym.name);
@@ -2131,7 +2131,7 @@ pub const SyntaxChecker = struct {
         const cursor_offset = completion_context.computeOffset(source, line, character);
 
         // Collect completions based on context
-        var items : std.ArrayList(completion_handler.CompletionItem) = .empty;
+        var items: std.ArrayList(completion_handler.CompletionItem) = .empty;
         errdefer {
             for (items.items) |item| {
                 self.allocator.free(item.label);

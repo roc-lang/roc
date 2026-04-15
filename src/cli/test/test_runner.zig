@@ -43,9 +43,9 @@ const runner_core = @import("runner_core.zig");
 const PlatformConfig = platform_config.PlatformConfig;
 const TestStats = runner_core.TestStats;
 
+var debug_threaded_io_instance: std.Io.Threaded = .init_single_threaded;
 /// Override the default debug IO so that `std.Options.debug_io` uses a properly
 /// initialized Threaded instance with a real allocator for process spawning.
-var debug_threaded_io_instance: std.Io.Threaded = .init_single_threaded;
 pub const std_options_debug_threaded_io: *std.Io.Threaded = &debug_threaded_io_instance;
 
 /// Test mode

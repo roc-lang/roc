@@ -98,8 +98,8 @@ pub const CompletionBuilder = struct {
         var log_file = self.log_file orelse return;
         var buffer: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buffer, fmt, args) catch return;
-        log_file.writeStreamingAll(std.Options.debug_io,msg) catch return;
-        log_file.writeStreamingAll(std.Options.debug_io,"\n") catch {};
+        log_file.writeStreamingAll(std.Options.debug_io, msg) catch return;
+        log_file.writeStreamingAll(std.Options.debug_io, "\n") catch {};
         log_file.sync(std.Options.debug_io) catch {};
     }
 
@@ -1435,7 +1435,7 @@ pub const CompletionBuilder = struct {
     }
 
     fn formatTagSignatureInner(self: *CompletionBuilder, module_env: *ModuleEnv, tag_name: []const u8, args_slice: []const CIR.TypeAnno.Idx) ![]const u8 {
-        var buf : std.ArrayList(u8) = .empty;
+        var buf: std.ArrayList(u8) = .empty;
         errdefer buf.deinit(self.allocator);
         try buf.appendSlice(self.allocator, tag_name);
         try buf.append(self.allocator, '(');

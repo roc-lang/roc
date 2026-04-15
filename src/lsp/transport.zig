@@ -43,7 +43,7 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
         }
 
         pub fn readMessage(self: *Self) ReadMessageError![]u8 {
-            var line_buffer : std.ArrayList(u8) = .empty;
+            var line_buffer: std.ArrayList(u8) = .empty;
             defer line_buffer.deinit(self.allocator);
 
             var content_length: ?usize = null;

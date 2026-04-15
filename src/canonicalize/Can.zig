@@ -3790,7 +3790,10 @@ fn canonicalizeFileImport(self: *Self, fi: @TypeOf(@as(AST.Statement, undefined)
     // Read the file
     // TODO(zig-16): thread std.Io through canonicalization for file imports
     const file_contents: []u8 = std.Io.Dir.cwd().readFileAlloc(
-        @as(std.Io, undefined), full_path, self.env.gpa, .unlimited,
+        @as(std.Io, undefined),
+        full_path,
+        self.env.gpa,
+        .unlimited,
     ) catch |err| {
         const path_string = try self.env.insertString(path_text);
         const diag: Diagnostic = switch (err) {

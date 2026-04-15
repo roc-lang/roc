@@ -18,7 +18,7 @@ fn collectResponses(allocator: std.mem.Allocator, bytes: []const u8) ![][]u8 {
     const WriterType = std.Io.Writer;
     var transport = transport_module.Transport(ReaderType, WriterType).init(allocator, reader, sink, null);
 
-    var responses : std.ArrayList([]u8) = .empty;
+    var responses: std.ArrayList([]u8) = .empty;
     errdefer {
         for (responses.items) |body| allocator.free(body);
         responses.deinit(allocator);
@@ -47,7 +47,7 @@ fn lifecycleInput(allocator: std.mem.Allocator) ![]u8 {
         ,
     };
 
-    var builder : std.ArrayList(u8) = .empty;
+    var builder: std.ArrayList(u8) = .empty;
     errdefer builder.deinit(allocator);
 
     inline for (messages) |body| {
@@ -117,7 +117,7 @@ test "server rejects re-initialization requests" {
         \\{"jsonrpc":"2.0","method":"exit"}
     ;
 
-    var builder : std.ArrayList(u8) = .empty;
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
 
     for (&[_][]const u8{ init, reinit, shutdown, exit }) |body| {
@@ -177,7 +177,7 @@ test "server tracks documents on didOpen/didChange" {
     const change_msg = try frame(allocator, change_body);
     defer allocator.free(change_msg);
 
-    var builder : std.ArrayList(u8) = .empty;
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.ensureTotalCapacity(allocator, open_msg.len + change_msg.len);
     try builder.appendSlice(allocator, open_msg);
@@ -230,7 +230,7 @@ test "server applies sequential incremental changes in a single didChange" {
     const change_msg = try frame(allocator, change_body);
     defer allocator.free(change_msg);
 
-    var builder : std.ArrayList(u8) = .empty;
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.ensureTotalCapacity(allocator, open_msg.len + change_msg.len);
     try builder.appendSlice(allocator, open_msg);
@@ -304,7 +304,7 @@ test "server handles burst of incremental didChange messages" {
     const change_msg_3 = try frame(allocator, change_body_3);
     defer allocator.free(change_msg_3);
 
-    var builder : std.ArrayList(u8) = .empty;
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.ensureTotalCapacity(allocator, open_msg.len + change_msg_1.len + change_msg_2.len + change_msg_3.len);
     try builder.appendSlice(allocator, open_msg);
@@ -385,7 +385,7 @@ test "server responds to semantic tokens request" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder : std.ArrayList(u8) = .empty;
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -469,7 +469,7 @@ test "server returns error for semantic tokens on unknown document" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder : std.ArrayList(u8) = .empty;
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -561,7 +561,7 @@ test "server returns empty tokens for empty document" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder : std.ArrayList(u8) = .empty;
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
