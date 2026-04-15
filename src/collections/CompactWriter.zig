@@ -31,7 +31,7 @@ pub fn init() CompactWriter {
 
 /// Write all gathered buffers to a file sequentially using positional writes.
 /// Accepts any file/io pair where `file.writePositionalAll(io, bytes, offset)` is valid
-/// (e.g. the sys_io File and Io types). Generic to avoid depending on the io module.
+/// (e.g. the std_io File and Io types). Generic to avoid depending on the io module.
 pub fn writeGather(
     self: *@This(),
     file: anytype,

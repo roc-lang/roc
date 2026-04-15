@@ -203,6 +203,7 @@ fn tidyFile(
     if (file.hasExtension(".zig")) {
         tidyBanned(file, errors);
         tidyBannedStdIo(file, errors);
+        tidyBannedCoreCtxCreation(file, errors);
 
         var tree = try std.zig.Ast.parse(gpa, file.text, .zig);
         defer tree.deinit(gpa);
@@ -229,8 +230,10 @@ fn tidyControlCharacters(file: SourceFile, errors: *Errors) void {
     }
 }
 
-/// Core compiler modules must use Roc's Ctx abstraction (@import("ctx").RocCtx)
-/// instead of std.Io directly, to keep compiler-core decoupled from the Zig stdlib I/O layer.
+/// Core compiler modules must use Roc's Ctx abstraction (@import("ctx").CoreCtx)
+/// instead of accessing OS I/O directly, to keep compiler-core decoupled from the
+/// Zig stdlib I/O layer. Using `std.Io` as a bare type for parameters/fields is fine
+/// since those values originate from CoreCtx.
 fn tidyBannedStdIo(file: SourceFile, errors: *Errors) void {
     const core_modules: []const []const u8 = &.{
         "src/collections/",
@@ -265,18 +268,69 @@ fn tidyBannedStdIo(file: SourceFile, errors: *Errors) void {
     }
     if (!is_core) return;
 
-    var remaining: []const u8 = file.text;
-    while (std.mem.indexOf(u8, remaining, "std.Io")) |index| {
-        const after = remaining[index + "std.Io".len ..];
-        // Allow std.Io.Writer and std.Io.Reader — these are generic I/O
-        // interfaces not tied to the OS, so they don't need the Roc abstraction.
-        if (std.mem.startsWith(u8, after, ".Writer") or std.mem.startsWith(u8, after, ".Reader")) {
-            remaining = after;
-            continue;
+    // Ban specific OS entry points that bypass the CoreCtx abstraction.
+    // Using std.Io sub-types (Timestamp, File, Dir) as types for values received
+    // from CoreCtx is fine — only ban the calls that reach into the OS directly.
+    const banned_io_patterns: []const struct { []const u8, []const u8 } = &.{
+        .{ "std.Io.Dir.cwd(", "CoreCtx filesystem methods (readFile, writeFile, etc.)" },
+        .{ "std.Io.File.stdout(", "CoreCtx.writeStdout() or CliCtx I/O" },
+        .{ "std.Io.File.stderr(", "CoreCtx.writeStderr() or CliCtx I/O" },
+        .{ "std.Io.File.stdin(", "CoreCtx.readStdin()" },
+        .{ "std.Io.Threaded.global_single_threaded", "accept std.Io as a parameter from CoreCtx" },
+    };
+
+    for (banned_io_patterns) |ban_item| {
+        const banned, const replacement = ban_item;
+        var remaining: []const u8 = file.text;
+        while (std.mem.indexOf(u8, remaining, banned)) |index| {
+            const offset = @intFromPtr(remaining.ptr) - @intFromPtr(file.text.ptr) + index;
+            errors.addBanned(file, offset, banned, replacement);
+            remaining = remaining[index + banned.len ..];
         }
-        const offset = @intFromPtr(remaining.ptr) - @intFromPtr(file.text.ptr) + index;
-        errors.addBanned(file, offset, "std.Io", "Roc's Ctx abstraction (@import(\"ctx\").RocCtx)");
-        remaining = after;
+    }
+}
+
+/// CoreCtx creation (`.default(`, `.os(`) should only happen at entrypoints.
+/// All other code should accept a CoreCtx as a parameter.
+fn tidyBannedCoreCtxCreation(file: SourceFile, errors: *Errors) void {
+    const entrypoints: []const []const u8 = &.{
+        "src/cli/main.zig",
+        "src/cli/CliCtx.zig",
+        "src/build/builtin_compiler/main.zig",
+        "src/snapshot_tool/main.zig",
+        "src/playground_wasm/main.zig",
+        "src/compile/compile_build.zig",
+        "src/compile/coordinator.zig",
+        "src/lsp/syntax.zig",
+        "src/ctx/CoreCtx.zig",
+    };
+
+    // Don't ban ourselves (this file contains the banned strings as literals)
+    if (std.mem.endsWith(u8, file.path, "ci/tidy.zig")) return;
+
+    // Allow all test files
+    if (std.mem.indexOf(u8, file.path, "/test/") != null) return;
+    if (std.mem.endsWith(u8, file.path, "_test.zig")) return;
+
+    // Allow entrypoint files
+    for (entrypoints) |ep| {
+        if (std.mem.endsWith(u8, file.path, ep)) return;
+    }
+
+    // Only scan production code — skip inline test blocks at the bottom of files.
+    const scan_text = if (std.mem.indexOf(u8, file.text, "\ntest \"")) |test_start|
+        file.text[0..test_start]
+    else
+        file.text;
+
+    const banned_patterns: []const []const u8 = &.{ "CoreCtx.default(", "CoreCtx.os(" };
+    for (banned_patterns) |banned| {
+        var remaining: []const u8 = scan_text;
+        while (std.mem.indexOf(u8, remaining, banned)) |index| {
+            const offset = @intFromPtr(remaining.ptr) - @intFromPtr(file.text.ptr) + index;
+            errors.addBanned(file, offset, banned, "accept CoreCtx as a parameter instead");
+            remaining = remaining[index + banned.len ..];
+        }
     }
 }
 

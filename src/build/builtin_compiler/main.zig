@@ -18,7 +18,7 @@ const ModuleEnv = can.ModuleEnv;
 const Can = can.Can;
 const Check = check.Check;
 const Allocator = std.mem.Allocator;
-const RocCtx = can.RocCtx;
+const CoreCtx = can.CoreCtx;
 const CIR = can.CIR;
 
 const max_builtin_bytes = 1024 * 1024;
@@ -1604,7 +1604,7 @@ fn compileModule(
         gpa.destroy(can_result);
     }
 
-    const roc_ctx = RocCtx.os(gpa, gpa, global_io);
+    const roc_ctx = CoreCtx.os(gpa, gpa, global_io);
     can_result.* = try Can.initBuiltin(roc_ctx, module_env, parse_ast);
 
     try can_result.canonicalizeFile();

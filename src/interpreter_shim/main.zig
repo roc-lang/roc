@@ -55,7 +55,7 @@ const ipc = if (is_wasm32) struct {
     };
 } else @import("ipc");
 
-var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
+var app_std_io: std.Io = std.Io.Threaded.global_single_threaded.io();
 
 // Debug allocator for native platforms (not wasm32) - provides leak detection in Debug/ReleaseSafe builds
 var debug_allocator: if (is_wasm32) void else std.heap.DebugAllocator(.{}) =
@@ -163,11 +163,11 @@ const PlatformMutex = struct {
     }
 
     pub fn lock(self: *Self) void {
-        if (!is_wasm32) self.inner.lockUncancelable(app_sys_io);
+        if (!is_wasm32) self.inner.lockUncancelable(app_std_io);
     }
 
     pub fn unlock(self: *Self) void {
-        if (!is_wasm32) self.inner.unlock(app_sys_io);
+        if (!is_wasm32) self.inner.unlock(app_std_io);
     }
 };
 
@@ -295,7 +295,7 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
 
         // Create shared memory allocator from coordination info
         // Note shm last the lifetime of the program and is never freed.
-        var shm = SharedMemoryAllocator.fromCoordination(allocator, app_sys_io, page_size) catch |err| {
+        var shm = SharedMemoryAllocator.fromCoordination(allocator, app_std_io, page_size) catch |err| {
             const msg2 = std.fmt.bufPrint(&buf, "Failed to create shared memory allocator: {s}", .{@errorName(err)}) catch "Failed to create shared memory allocator";
             roc_ops.crash(msg2);
             return error.SharedMemoryError;

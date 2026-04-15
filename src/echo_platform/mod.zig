@@ -20,10 +20,10 @@ pub const platform_main_source = @embedFile("platform/main.roc");
 pub const echo_module_source = @embedFile("platform/Echo.roc");
 
 /// Echo platform environment, passed as RocOps.env.
-/// On WASM the sys_io field is unused (undefined); on native it holds the
+/// On WASM the std_io field is unused (undefined); on native it holds the
 /// std.Io obtained from the process init or the global single-threaded I/O.
 pub const EchoEnv = struct {
-    sys_io: std.Io,
+    std_io: std.Io,
     /// Set to true the first time roc_expect_failed is invoked. Allows the
     /// host to exit with a non-zero status after running the program.
     inline_expect_failed: bool = false,
@@ -42,8 +42,8 @@ pub fn echoHostedFn(ops_ptr: *anyopaque, _: [*]u8, roc_str: *RocStr) callconv(.c
         const ops: *host_abi.RocOps = @ptrCast(@alignCast(ops_ptr));
         const env: *EchoEnv = @ptrCast(@alignCast(ops.env));
         const stdout_file: std.Io.File = .stdout();
-        stdout_file.writeStreamingAll(env.sys_io, message) catch |err| handleStdoutError(err);
-        stdout_file.writeStreamingAll(env.sys_io, "\n") catch |err| handleStdoutError(err);
+        stdout_file.writeStreamingAll(env.std_io, message) catch |err| handleStdoutError(err);
+        stdout_file.writeStreamingAll(env.std_io, "\n") catch |err| handleStdoutError(err);
     }
     // Returns {} (ZST) — no bytes to write to ret_bytes
 }
@@ -129,9 +129,9 @@ pub fn makeDefaultRocOps(env: *EchoEnv, hosted_fns: []host_abi.HostedFn) host_ab
                 const echo_env: *EchoEnv = @ptrCast(@alignCast(env_ptr));
                 const msg = dbg_args.utf8_bytes[0..dbg_args.len];
                 const stderr_file: std.Io.File = .stderr();
-                stderr_file.writeStreamingAll(echo_env.sys_io, "[dbg] ") catch {};
-                stderr_file.writeStreamingAll(echo_env.sys_io, msg) catch {};
-                stderr_file.writeStreamingAll(echo_env.sys_io, "\n") catch {};
+                stderr_file.writeStreamingAll(echo_env.std_io, "[dbg] ") catch {};
+                stderr_file.writeStreamingAll(echo_env.std_io, msg) catch {};
+                stderr_file.writeStreamingAll(echo_env.std_io, "\n") catch {};
             }
         }
         fn rocExpectFailed(expect_args: *const host_abi.RocExpectFailed, env_ptr: *anyopaque) callconv(.c) void {
@@ -143,9 +143,9 @@ pub fn makeDefaultRocOps(env: *EchoEnv, hosted_fns: []host_abi.HostedFn) host_ab
                 const echo_env: *EchoEnv = @ptrCast(@alignCast(env_ptr));
                 const msg = expect_args.utf8_bytes[0..expect_args.len];
                 const stderr_file: std.Io.File = .stderr();
-                stderr_file.writeStreamingAll(echo_env.sys_io, "Expect failed: ") catch {};
-                stderr_file.writeStreamingAll(echo_env.sys_io, msg) catch {};
-                stderr_file.writeStreamingAll(echo_env.sys_io, "\n") catch {};
+                stderr_file.writeStreamingAll(echo_env.std_io, "Expect failed: ") catch {};
+                stderr_file.writeStreamingAll(echo_env.std_io, msg) catch {};
+                stderr_file.writeStreamingAll(echo_env.std_io, "\n") catch {};
             }
         }
         fn rocCrashed(crash_args: *const host_abi.RocCrashed, env_ptr: *anyopaque) callconv(.c) void {
@@ -155,9 +155,9 @@ pub fn makeDefaultRocOps(env: *EchoEnv, hosted_fns: []host_abi.HostedFn) host_ab
                 const echo_env: *EchoEnv = @ptrCast(@alignCast(env_ptr));
                 const msg = crash_args.utf8_bytes[0..crash_args.len];
                 const stderr_file: std.Io.File = .stderr();
-                stderr_file.writeStreamingAll(echo_env.sys_io, "Roc crashed: ") catch {};
-                stderr_file.writeStreamingAll(echo_env.sys_io, msg) catch {};
-                stderr_file.writeStreamingAll(echo_env.sys_io, "\n") catch {};
+                stderr_file.writeStreamingAll(echo_env.std_io, "Roc crashed: ") catch {};
+                stderr_file.writeStreamingAll(echo_env.std_io, msg) catch {};
+                stderr_file.writeStreamingAll(echo_env.std_io, "\n") catch {};
                 std.process.exit(1);
             }
         }

@@ -16,7 +16,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
-const RocCtx = @import("ctx").RocCtx;
+const CoreCtx = @import("ctx").CoreCtx;
 const can = @import("can");
 const types = @import("types");
 const layout = @import("layout");
@@ -308,14 +308,14 @@ const DevRocEnv = struct {
     /// Jump buffer for unwinding from roc_crashed back to the call site.
     jmp_buf: JmpBuf = undefined,
     /// Io context for routing [dbg] output
-    roc_ctx: ?RocCtx,
+    roc_ctx: ?CoreCtx,
 
     const AllocInfo = struct {
         len: usize,
         alignment: usize,
     };
 
-    fn init(allocator: Allocator, roc_ctx: ?RocCtx) DevRocEnv {
+    fn init(allocator: Allocator, roc_ctx: ?CoreCtx) DevRocEnv {
         return .{
             .allocator = allocator,
             .allocations = std.AutoHashMap(usize, AllocInfo).init(allocator),
@@ -542,7 +542,7 @@ pub const DevEvaluator = struct {
     };
 
     /// Initialize the evaluator with builtin modules
-    pub fn init(allocator: Allocator, roc_ctx: ?RocCtx) Error!DevEvaluator {
+    pub fn init(allocator: Allocator, roc_ctx: ?CoreCtx) Error!DevEvaluator {
         // Load compiled builtins
         const compiled_builtins = @import("compiled_builtins");
 

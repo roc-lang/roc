@@ -112,7 +112,7 @@ fn installCrashSignalHandlers() void {
 const Repl = repl.Repl;
 const CrashContext = eval_mod.CrashContext;
 const roc_target = @import("roc_target");
-const RocCtx = compile.RocCtx;
+const CoreCtx = compile.CoreCtx;
 const CommonEnv = base.CommonEnv;
 const Check = check.Check;
 const CIR = can.CIR;
@@ -1080,7 +1080,7 @@ fn processSnapshotContent(
             // Snippet and mono tests are full modules
             const builtin_env = config.builtin_module orelse return error.MissingBuiltinModule;
 
-            const roc_ctx = RocCtx.default(allocator, allocator, app_io);
+            const roc_ctx = CoreCtx.default(allocator, allocator, app_io);
             var czer = try Can.initModule(roc_ctx, can_ir, parse_ast, .{
                 .builtin_types = .{
                     .builtin_module_env = builtin_env,
@@ -1097,7 +1097,7 @@ fn processSnapshotContent(
             // Expr and statement tests use different canonicalization methods
             const builtin_env = config.builtin_module orelse return error.MissingBuiltinModule;
 
-            const roc_ctx = RocCtx.default(allocator, allocator, app_io);
+            const roc_ctx = CoreCtx.default(allocator, allocator, app_io);
             var czer = try Can.initModule(roc_ctx, can_ir, parse_ast, .{
                 .builtin_types = .{
                     .builtin_module_env = builtin_env,
@@ -1223,7 +1223,7 @@ fn processSnapshotContent(
             // This way it stays alive until the defer at line 1249
             module_envs_for_file = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
 
-            const roc_ctx_for_check = RocCtx.default(allocator, allocator, app_io);
+            const roc_ctx_for_check = CoreCtx.default(allocator, allocator, app_io);
             var checker = try compile.PackageEnv.canonicalizeAndTypeCheckModule(
                 roc_ctx_for_check,
                 allocator,
@@ -2995,7 +2995,7 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     };
 
     // Canonicalize the parsed MONO output
-    const mono_roc_ctx = RocCtx.default(allocator, allocator, app_io);
+    const mono_roc_ctx = CoreCtx.default(allocator, allocator, app_io);
     var czer = Can.initModule(mono_roc_ctx, &validation_env, validation_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_env,

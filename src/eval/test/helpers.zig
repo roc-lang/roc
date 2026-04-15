@@ -8,7 +8,7 @@ const can = @import("can");
 const check = @import("check");
 const builtins = @import("builtins");
 const compiled_builtins = @import("compiled_builtins");
-const RocCtx = @import("ctx").RocCtx;
+const CoreCtx = @import("ctx").CoreCtx;
 
 const layout = @import("layout");
 const interpreter_layout = @import("interpreter_layout");
@@ -197,15 +197,14 @@ fn assertNoTypeProblems(allocator: std.mem.Allocator, module_env: *ModuleEnv, ch
     }
 }
 
-const SysIo = @FieldType(RocCtx, "sys_io");
-
 const TraceWriter = struct {
     buffer: [256]u8 = undefined,
-    writer: SysIo.File.Writer = undefined,
+    writer: std.Io.File.Writer = undefined,
 
-    fn init() TraceWriter {
+    fn init(std_io: std.Io) TraceWriter {
+        const stderr: std.Io.File = .{ .handle = std.posix.STDERR_FILENO, .flags = .{ .nonblocking = false } };
         var tw = TraceWriter{};
-        tw.writer = SysIo.File.stderr().writer(std.testing.io, &tw.buffer);
+        tw.writer = stderr.writer(std_io, &tw.buffer);
         return tw;
     }
 
@@ -3367,7 +3366,7 @@ fn parseAndCanonicalizeExprInternal(
         .builtin_indices = builtin_indices,
     };
 
-    const roc_ctx = RocCtx.testing(allocator, allocator);
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
     const czer = try allocator.create(Can);
     czer.* = try Can.initModule(roc_ctx, module_env, parse_ast, .{
         .builtin_types = .{

@@ -186,7 +186,7 @@ fn walkTree(
 
 fn handleFile(
     allocator: Allocator,
-    sys_io: std.Io,
+    std_io: std.Io,
     path: []u8,
     file_name: []const u8,
     test_files: *PathList,
@@ -207,7 +207,7 @@ fn handleFile(
         return;
     }
 
-    if (try fileHasTestDecl(allocator, sys_io, path)) {
+    if (try fileHasTestDecl(allocator, std_io, path)) {
         try test_files.append(allocator, path);
         return;
     }
@@ -222,8 +222,8 @@ fn shouldSkipTestFile(path: []const u8) bool {
     return false;
 }
 
-fn fileHasTestDecl(allocator: Allocator, sys_io: std.Io, path: []const u8) !bool {
-    const source = try readSourceFile(allocator, sys_io, path);
+fn fileHasTestDecl(allocator: Allocator, std_io: std.Io, path: []const u8) !bool {
+    const source = try readSourceFile(allocator, std_io, path);
     defer allocator.free(source);
     var tree = try Ast.parse(allocator, source, .zig);
     defer tree.deinit(allocator);
@@ -238,9 +238,9 @@ fn fileHasTestDecl(allocator: Allocator, sys_io: std.Io, path: []const u8) !bool
     return false;
 }
 
-fn readSourceFile(allocator: Allocator, sys_io: std.Io, path: []const u8) ![:0]u8 {
+fn readSourceFile(allocator: Allocator, std_io: std.Io, path: []const u8) ![:0]u8 {
     return try std.Io.Dir.cwd().readFileAllocOptions(
-        sys_io,
+        std_io,
         path,
         allocator,
         .limited(max_file_bytes),
@@ -251,11 +251,11 @@ fn readSourceFile(allocator: Allocator, sys_io: std.Io, path: []const u8) ![:0]u
 
 fn collectModImports(
     allocator: Allocator,
-    sys_io: std.Io,
+    std_io: std.Io,
     mod_path: []const u8,
     referenced: *std.StringHashMap(void),
 ) !void {
-    const source = try readSourceFile(allocator, sys_io, mod_path);
+    const source = try readSourceFile(allocator, std_io, mod_path);
     defer allocator.free(source);
 
     var tree = try Ast.parse(allocator, source, .zig);
@@ -319,13 +319,13 @@ fn resolveImportPath(
 /// test configuration should not be reported as missing wiring.
 fn markBuildTestRootsAsReferenced(
     allocator: Allocator,
-    sys_io: std.Io,
+    std_io: std.Io,
     referenced: *std.StringHashMap(void),
 ) !void {
     const build_path = "build.zig";
-    if (!fileExists(sys_io, build_path)) return;
+    if (!fileExists(std_io, build_path)) return;
 
-    const source = try readSourceFile(allocator, sys_io, build_path);
+    const source = try readSourceFile(allocator, std_io, build_path);
     defer allocator.free(source);
 
     const pattern = ".root_source_file = b.path(\"";
@@ -370,11 +370,11 @@ fn lessThanPath(_: void, lhs: []u8, rhs: []u8) bool {
 
 fn printSuggestion(
     allocator: Allocator,
-    sys_io: std.Io,
+    std_io: std.Io,
     writer: anytype,
     test_path: []const u8,
 ) !void {
-    const maybe_mod = try findNearestMod(allocator, sys_io, test_path);
+    const maybe_mod = try findNearestMod(allocator, std_io, test_path);
     if (maybe_mod) |mod_path| {
         defer allocator.free(mod_path);
 
@@ -399,12 +399,12 @@ fn printSuggestion(
     }
 }
 
-fn findNearestMod(allocator: Allocator, sys_io: std.Io, file_path: []const u8) !?[]u8 {
+fn findNearestMod(allocator: Allocator, std_io: std.Io, file_path: []const u8) !?[]u8 {
     var current_dir_opt = std.fs.path.dirname(file_path);
     while (current_dir_opt) |current_dir| {
         const joined = try std.fs.path.join(allocator, &.{ current_dir, "mod.zig" });
         const candidate = try normalizePath(allocator, joined);
-        if (fileExists(sys_io, candidate)) {
+        if (fileExists(std_io, candidate)) {
             return candidate;
         }
         allocator.free(candidate);
@@ -413,8 +413,8 @@ fn findNearestMod(allocator: Allocator, sys_io: std.Io, file_path: []const u8) !
     return null;
 }
 
-fn fileExists(sys_io: std.Io, path: []const u8) bool {
-    _ = std.Io.Dir.cwd().statFile(sys_io, path, .{}) catch return false;
+fn fileExists(std_io: std.Io, path: []const u8) bool {
+    _ = std.Io.Dir.cwd().statFile(std_io, path, .{}) catch return false;
     return true;
 }
 

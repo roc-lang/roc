@@ -3,7 +3,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
-const RocCtx = @import("ctx").RocCtx;
+const CoreCtx = @import("ctx").CoreCtx;
 
 /// Color preference for reporting output
 pub const ColorPreference = enum {
@@ -55,7 +55,7 @@ pub const ReportingConfig = struct {
     /// Maximum bytes for truncating error messages
     max_message_bytes: usize,
 
-    pub fn initFromEnv(allocator: Allocator, roc_ctx: RocCtx) !ReportingConfig {
+    pub fn initFromEnv(allocator: Allocator, roc_ctx: CoreCtx) !ReportingConfig {
         var config = ReportingConfig{
             .color_preference = .auto,
             .is_tty = false,

@@ -50,7 +50,7 @@ pub const TimingInfo = struct {
 const Allocator = std.mem.Allocator;
 
 const threading = @import("threading.zig");
-const RocCtx = @import("ctx").RocCtx;
+const CoreCtx = @import("ctx").CoreCtx;
 
 const parallel = base.parallel;
 const AtomicUsize = std.atomic.Value(usize);
@@ -263,7 +263,7 @@ pub const PackageEnv = struct {
     /// Builtin modules (Bool, Try, Str) for auto-importing in canonicalization (not owned)
     builtin_modules: *const BuiltinModules,
     /// I/O abstraction for reading sources and other filesystem/stdio operations.
-    roc_ctx: RocCtx,
+    roc_ctx: CoreCtx,
 
     lock: Mutex = Mutex.init,
     cond: Condition = Condition.init,
@@ -304,7 +304,7 @@ pub const PackageEnv = struct {
         import_name: []const u8,
     };
 
-    pub fn init(gpa: Allocator, package_name: []const u8, root_dir: []const u8, mode: Mode, max_threads: usize, target: roc_target.RocTarget, sink: ReportSink, schedule_hook: ScheduleHook, compiler_version: []const u8, builtin_modules: *const BuiltinModules, roc_ctx: RocCtx) PackageEnv {
+    pub fn init(gpa: Allocator, package_name: []const u8, root_dir: []const u8, mode: Mode, max_threads: usize, target: roc_target.RocTarget, sink: ReportSink, schedule_hook: ScheduleHook, compiler_version: []const u8, builtin_modules: *const BuiltinModules, roc_ctx: CoreCtx) PackageEnv {
         // Pre-allocate module storage to avoid reallocation during multi-threaded processing
         var modules = std.ArrayList(ModuleState).empty;
         if (mode == .multi_threaded) {
@@ -341,7 +341,7 @@ pub const PackageEnv = struct {
         schedule_hook: ScheduleHook,
         compiler_version: []const u8,
         builtin_modules: *const BuiltinModules,
-        roc_ctx: RocCtx,
+        roc_ctx: CoreCtx,
     ) PackageEnv {
         // Pre-allocate module storage to avoid reallocation during multi-threaded processing
         var modules = std.ArrayList(ModuleState).empty;
@@ -520,10 +520,10 @@ pub const PackageEnv = struct {
             const work_len = self.injector.items.len;
             if (work_len == 0) {
                 if (self.remaining_modules == 0) break;
-                self.lock.lockUncancelable(self.roc_ctx.sys_io);
-                defer self.lock.unlock(self.roc_ctx.sys_io);
+                self.lock.lockUncancelable(self.roc_ctx.std_io);
+                defer self.lock.unlock(self.roc_ctx.std_io);
                 if (self.remaining_modules == 0 and self.injector.items.len == 0) break;
-                self.cond.waitUncancelable(self.roc_ctx.sys_io, &self.lock);
+                self.cond.waitUncancelable(self.roc_ctx.std_io, &self.lock);
                 continue;
             }
 
@@ -556,8 +556,8 @@ pub const PackageEnv = struct {
     pub fn ensureModule(self: *PackageEnv, name: []const u8, path: []const u8) !ModuleId {
         // In multi-threaded mode, lock to prevent race conditions when growing arrays
         const needs_lock = self.mode == .multi_threaded and !threading.is_freestanding;
-        if (needs_lock) self.lock.lockUncancelable(self.roc_ctx.sys_io);
-        defer if (needs_lock) self.lock.unlock(self.roc_ctx.sys_io);
+        if (needs_lock) self.lock.lockUncancelable(self.roc_ctx.std_io);
+        defer if (needs_lock) self.lock.unlock(self.roc_ctx.std_io);
 
         const module_id = try self.internModuleName(name);
 
@@ -607,14 +607,14 @@ pub const PackageEnv = struct {
         // In multi_threaded mode with a non-noop schedule_hook, forward to the global queue
         if (self.mode == .multi_threaded and !self.schedule_hook.isNoOp()) {
             // Look up the module to get its path and depth for the hook
-            self.lock.lockUncancelable(self.roc_ctx.sys_io);
-            defer self.lock.unlock(self.roc_ctx.sys_io);
+            self.lock.lockUncancelable(self.roc_ctx.std_io);
+            defer self.lock.unlock(self.roc_ctx.std_io);
 
             self.schedule_hook.onSchedule(self.schedule_hook.ctx, self.package_name, st.name, st.path, st.depth);
         } else {
             // Default behavior: use internal injector
             try self.injector.append(self.gpa, .{ .module_id = module_id });
-            if (!threading.is_freestanding) self.cond.signal(self.roc_ctx.sys_io);
+            if (!threading.is_freestanding) self.cond.signal(self.roc_ctx.std_io);
         }
     }
 
@@ -691,7 +691,7 @@ pub const PackageEnv = struct {
         // In local mode, it's invoked by the internal run* loops.
 
         // Acquire lock and atomically check/set working flag
-        if (!threading.is_freestanding) self.lock.lockUncancelable(self.roc_ctx.sys_io);
+        if (!threading.is_freestanding) self.lock.lockUncancelable(self.roc_ctx.std_io);
         const st = &self.modules.items[task.module_id];
 
         // Atomic compare-and-swap to claim work on this module
@@ -707,23 +707,23 @@ pub const PackageEnv = struct {
         };
 
         if (already_working) {
-            if (!threading.is_freestanding) self.lock.unlock(self.roc_ctx.sys_io);
+            if (!threading.is_freestanding) self.lock.unlock(self.roc_ctx.std_io);
             return; // Another worker is already processing this module
         }
 
         // Snapshot phase while holding lock
         const phase = st.phase;
-        if (!threading.is_freestanding) self.lock.unlock(self.roc_ctx.sys_io);
+        if (!threading.is_freestanding) self.lock.unlock(self.roc_ctx.std_io);
 
         // Process the module based on its phase
         defer {
             // Atomically clear working flag when done
             if (!threading.is_freestanding) {
-                self.lock.lockUncancelable(self.roc_ctx.sys_io);
+                self.lock.lockUncancelable(self.roc_ctx.std_io);
                 if (task.module_id < self.modules.items.len) {
                     _ = self.modules.items[task.module_id].working.store(0, .seq_cst);
                 }
-                self.lock.unlock(self.roc_ctx.sys_io);
+                self.lock.unlock(self.roc_ctx.std_io);
             } else {
                 // Single-threaded: simple clear
                 if (task.module_id < self.modules.items.len) {
@@ -976,7 +976,7 @@ pub const PackageEnv = struct {
                 // Wake dependents and stop
                 for (st.dependents.items) |dep| try self.enqueue(dep);
                 for (child.dependents.items) |dep| try self.enqueue(dep);
-                if (!threading.is_freestanding) self.cond.broadcast(self.roc_ctx.sys_io);
+                if (!threading.is_freestanding) self.cond.broadcast(self.roc_ctx.std_io);
                 return;
             }
 
@@ -1049,7 +1049,7 @@ pub const PackageEnv = struct {
     /// IMPORTANT: The returned checker holds a pointer to module_envs_out, so caller must keep
     /// module_envs_out alive until they're done using the checker (e.g., for type printing)
     pub fn canonicalizeAndTypeCheckModule(
-        roc_ctx: RocCtx,
+        roc_ctx: CoreCtx,
         gpa: Allocator,
         env: *ModuleEnv,
         parse_ast: *AST,
@@ -1109,7 +1109,7 @@ pub const PackageEnv = struct {
     /// and includes additional known modules (e.g., from platform exposes).
     /// This prevents premature MODULE NOT FOUND errors for modules that exist but haven't been loaded yet.
     pub fn canonicalizeModuleWithSiblings(
-        roc_ctx: RocCtx,
+        roc_ctx: CoreCtx,
         env: *ModuleEnv,
         parse_ast: *AST,
         builtin_module_env: *const ModuleEnv,
@@ -1254,7 +1254,7 @@ pub const PackageEnv = struct {
         builtin_module_env: *const ModuleEnv,
         imported_envs: []const *ModuleEnv,
         target: roc_target.RocTarget,
-        roc_ctx: ?RocCtx,
+        roc_ctx: ?CoreCtx,
     ) !Check {
         // Load builtin indices from the binary data generated at build time
         const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
@@ -1393,7 +1393,7 @@ pub const PackageEnv = struct {
 
         // Wake dependents to re-check unblock
         for (st.dependents.items) |dep| try self.enqueue(dep);
-        if (!threading.is_freestanding) self.cond.broadcast(self.roc_ctx.sys_io);
+        if (!threading.is_freestanding) self.cond.broadcast(self.roc_ctx.std_io);
     }
 
     fn resolveModulePath(self: *PackageEnv, mod_name: []const u8) ![]const u8 {

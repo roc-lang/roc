@@ -24,7 +24,7 @@ const repl = @import("repl");
 const eval = @import("eval");
 const types = @import("types");
 const can = @import("can");
-const RocCtx = can.RocCtx;
+const CoreCtx = can.CoreCtx;
 const check = @import("check");
 const unbundle = @import("unbundle");
 const fmt = @import("fmt");
@@ -1090,7 +1090,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
     };
 
     logDebug("compileSource: Starting canonicalization\n", .{});
-    const roc_ctx = RocCtx.default(allocator, allocator, @as(std.Io, undefined));
+    const roc_ctx = CoreCtx.default(allocator, allocator, @as(std.Io, undefined));
     var czer = try Can.initModule(roc_ctx, env, result.parse_ast.?, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,

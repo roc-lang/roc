@@ -3,7 +3,7 @@ const ctx_mod = @import("ctx");
 
 const CacheManager = @import("../cache_manager.zig").CacheManager;
 const CacheConfig = @import("../cache_config.zig").CacheConfig;
-const RocCtx = ctx_mod.RocCtx;
+const CoreCtx = ctx_mod.CoreCtx;
 const testing = std.testing;
 
 test "getTestCacheDir returns test subdirectory" {
@@ -26,7 +26,7 @@ test "getTestCacheDir returns test subdirectory" {
 test "computeCacheFilePath uses subdirectory splitting" {
     const allocator = testing.allocator;
     const config = CacheConfig{};
-    const filesystem = RocCtx.testing(std.testing.allocator, std.testing.allocator);
+    const filesystem = CoreCtx.testing(std.testing.allocator, std.testing.allocator);
 
     var manager = CacheManager.init(allocator, config, filesystem);
 
@@ -58,7 +58,7 @@ test "storeRawBytes and loadRawBytes round-trip" {
     defer allocator.free(tmp_path);
 
     const config = CacheConfig{};
-    const filesystem = RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io);
+    const filesystem = CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io);
 
     var manager = CacheManager.init(allocator, config, filesystem);
 
@@ -89,7 +89,7 @@ test "loadRawBytes returns null on miss" {
     defer allocator.free(tmp_path);
 
     const config = CacheConfig{};
-    const filesystem = RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io);
+    const filesystem = CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io);
 
     var manager = CacheManager.init(allocator, config, filesystem);
 

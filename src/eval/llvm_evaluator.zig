@@ -19,7 +19,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
-const RocCtx = @import("ctx").RocCtx;
+const CoreCtx = @import("ctx").CoreCtx;
 const can = @import("can");
 const layout = @import("layout");
 const mir = @import("mir");
@@ -121,7 +121,7 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) layou
 /// - Extracts and executes native code
 pub const LlvmEvaluator = struct {
     allocator: Allocator,
-    roc_ctx: RocCtx,
+    roc_ctx: CoreCtx,
 
     /// Loaded builtin module (Bool, Result, etc.)
     builtin_module: LoadedModule,
@@ -154,7 +154,7 @@ pub const LlvmEvaluator = struct {
     };
 
     /// Initialize the evaluator with builtin modules
-    pub fn init(allocator: Allocator, roc_ctx: RocCtx) Error!LlvmEvaluator {
+    pub fn init(allocator: Allocator, roc_ctx: CoreCtx) Error!LlvmEvaluator {
         const builtin_indices = builtin_loading.deserializeBuiltinIndices(
             allocator,
             compiled_builtins.builtin_indices_bin,
@@ -235,7 +235,7 @@ pub const LlvmEvaluator = struct {
         library_path: [:0]const u8,
         entry_fn: LlvmEntryFn,
         allocator: Allocator,
-        roc_ctx: RocCtx,
+        roc_ctx: CoreCtx,
         result_layout: LayoutIdx,
         /// Reference to the global layout store (owned by LlvmEvaluator, not this struct)
         layout_store: ?*layout.Store = null,
@@ -339,8 +339,9 @@ pub const LlvmEvaluator = struct {
         var codegen = MonoLlvmCodeGen.init(self.allocator, &lir_store);
         defer codegen.deinit();
 
-        // Provide layout store for composite types (records, tuples)
+        // Provide layout store and I/O for composite types and debug output
         codegen.layout_store = layout_store_ptr;
+        codegen.std_io = self.roc_ctx.std_io;
 
         var gen_result = codegen.generateCode(final_expr_id, result_layout) catch |e| switch (e) {
             error.OutOfMemory => return error.OutOfMemory,
@@ -398,7 +399,7 @@ pub const LlvmEvaluator = struct {
 // Tests
 
 test "llvm evaluator initialization" {
-    var evaluator = LlvmEvaluator.init(std.testing.allocator, RocCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io)) catch |err| {
+    var evaluator = LlvmEvaluator.init(std.testing.allocator, CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io)) catch |err| {
         return switch (err) {
             error.OutOfMemory => error.SkipZigTest,
             else => err,

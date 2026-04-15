@@ -6,7 +6,7 @@
 const std = @import("std");
 const base = @import("base");
 const builtins = @import("builtins");
-const RocCtx = @import("ctx").RocCtx;
+const CoreCtx = @import("ctx").CoreCtx;
 const i128h = builtins.compiler_rt_128;
 const can = @import("can");
 const check_mod = @import("check");
@@ -170,7 +170,7 @@ pub const ComptimeEvaluator = struct {
     /// Track allocation sizes for realloc (maps ptr -> size)
     roc_alloc_sizes: std.AutoHashMap(usize, usize),
     /// Io context for routing [dbg] output
-    roc_ctx: ?RocCtx,
+    roc_ctx: ?CoreCtx,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -181,7 +181,7 @@ pub const ComptimeEvaluator = struct {
         builtin_module_env: ?*const ModuleEnv,
         import_mapping: *const import_mapping_mod.ImportMapping,
         target: roc_target.RocTarget,
-        roc_ctx: ?RocCtx,
+        roc_ctx: ?CoreCtx,
     ) !ComptimeEvaluator {
         const interp = try Interpreter.init(allocator, cir, builtin_types, builtin_module_env, other_envs, import_mapping, null, null, target);
 

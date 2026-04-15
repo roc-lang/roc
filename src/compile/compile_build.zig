@@ -18,12 +18,10 @@ const reporting = @import("reporting");
 const eval = @import("eval");
 const check = @import("check");
 const unbundle = @import("unbundle");
-const RocCtx = @import("ctx").RocCtx;
+const CoreCtx = @import("ctx").CoreCtx;
 
-/// The underlying system I/O type, derived from RocCtx to avoid
+/// The underlying system I/O type, derived from CoreCtx to avoid
 /// referencing the raw Zig I/O type directly (which is banned in core modules).
-const SysIo = @FieldType(RocCtx, "sys_io");
-
 const Report = reporting.Report;
 const ReportBuilder = check.ReportBuilder;
 const BuiltinModules = eval.BuiltinModules;
@@ -59,14 +57,14 @@ const ThreadCondition = threading.Condition;
 /// Native fetchUrl implementation that downloads a tar.zst bundle via HTTP
 /// and extracts it into the destination directory. Used by the CLI to wire up
 /// real download support through the Filesystem vtable.
-pub const nativeFetchUrl: ?*const fn (?*anyopaque, SysIo, Allocator, []const u8, []const u8) RocCtx.FetchUrlError!void = if (!is_freestanding)
+pub const nativeFetchUrl: ?*const fn (?*anyopaque, std.Io, Allocator, []const u8, []const u8) CoreCtx.FetchUrlError!void = if (!is_freestanding)
     &nativeFetchUrlImpl
 else
     null;
 
-fn nativeFetchUrlImpl(_: ?*anyopaque, sys_io: SysIo, allocator: Allocator, url: []const u8, dest_path: []const u8) RocCtx.FetchUrlError!void {
+fn nativeFetchUrlImpl(_: ?*anyopaque, std_io: std.Io, allocator: Allocator, url: []const u8, dest_path: []const u8) CoreCtx.FetchUrlError!void {
     var alloc = allocator;
-    unbundle.download.downloadAndExtract(&alloc, sys_io, url, dest_path) catch {
+    unbundle.download.downloadAndExtract(&alloc, std_io, url, dest_path) catch {
         return error.DownloadFailed;
     };
 }
@@ -142,7 +140,7 @@ pub const BuildEnv = struct {
     // Cache manager for compiled modules
     cache_manager: ?*CacheManager = null,
     // I/O abstraction for all OS operations (filesystem, stdio, env vars, etc.)
-    filesystem: RocCtx,
+    filesystem: CoreCtx,
     // Explicit working directory for resolving relative paths
     cwd: []const u8,
 
@@ -170,7 +168,7 @@ pub const BuildEnv = struct {
         import_name: []const u8, // e.g., "pf.Stdout"
     };
 
-    pub fn init(gpa: Allocator, mode: Mode, max_threads: usize, target: roc_target.RocTarget, cwd: []const u8, sys_io: SysIo) !BuildEnv {
+    pub fn init(gpa: Allocator, mode: Mode, max_threads: usize, target: roc_target.RocTarget, cwd: []const u8, std_io: std.Io) !BuildEnv {
         // Allocate builtin modules on heap to prevent moves that would invalidate internal pointers
         const builtin_modules = try gpa.create(BuiltinModules);
         errdefer gpa.destroy(builtin_modules);
@@ -191,7 +189,7 @@ pub const BuildEnv = struct {
             .pkg_sink_ctxs = std.array_list.Managed(*PkgSinkCtx).init(gpa),
             .schedule_ctxs = std.array_list.Managed(*ScheduleCtx).init(gpa),
             .pending_known_modules = std.array_list.Managed(PendingKnownModule).init(gpa),
-            .filesystem = RocCtx.default(gpa, gpa, sys_io),
+            .filesystem = CoreCtx.default(gpa, gpa, std_io),
         };
 
         // On native targets, enable HTTP downloads for URL packages.
@@ -310,9 +308,9 @@ pub const BuildEnv = struct {
     }
 
     /// Set the I/O implementation (or reset to OS default).
-    pub fn setRocCtx(self: *BuildEnv, roc_ctx: ?RocCtx) void {
-        self.filesystem = roc_ctx orelse RocCtx.default(self.filesystem.gpa, self.filesystem.arena, self.filesystem.sys_io);
-        self.sink.sys_io = self.filesystem.sys_io;
+    pub fn setCoreCtx(self: *BuildEnv, roc_ctx: ?CoreCtx) void {
+        self.filesystem = roc_ctx orelse CoreCtx.default(self.filesystem.gpa, self.filesystem.arena, self.filesystem.std_io);
+        self.sink.std_io = self.filesystem.std_io;
     }
 
     /// Get the TargetsConfig from the platform package, if any.
@@ -375,8 +373,8 @@ pub const BuildEnv = struct {
     pub fn initCoordinator(self: *BuildEnv) !void {
         if (self.coordinator != null) return; // Already initialized
 
-        // Propagate sys_io to the ordered sink for its mutex operations
-        self.sink.sys_io = self.filesystem.sys_io;
+        // Propagate std_io to the ordered sink for its mutex operations
+        self.sink.std_io = self.filesystem.std_io;
 
         const coord = try self.gpa.create(Coordinator);
         coord.* = try Coordinator.init(
@@ -2032,8 +2030,8 @@ pub const BuildEnv = struct {
         try self.sink.buildOrder(pkg_names.items, module_names.items, depths.items);
 
         // Now that order is built, mark ready reports as emitted so they can be drained
-        self.sink.lock.lockUncancelable(self.filesystem.sys_io);
-        defer self.sink.lock.unlock(self.filesystem.sys_io);
+        self.sink.lock.lockUncancelable(self.filesystem.std_io);
+        defer self.sink.lock.unlock(self.filesystem.std_io);
         // Mark entries without reports as emitted BEFORE calling tryEmitLocked
         // so they don't block other entries from being emitted.
         for (self.sink.entries.items) |*e| {
@@ -2699,7 +2697,7 @@ pub const OrderedSink = struct {
     };
 
     gpa: Allocator,
-    sys_io: SysIo,
+    std_io: std.Io,
     lock: Mutex = Mutex.init,
     cond: ThreadCondition = ThreadCondition.init,
 
@@ -2721,7 +2719,7 @@ pub const OrderedSink = struct {
     pub fn init(gpa: Allocator) OrderedSink {
         return .{
             .gpa = gpa,
-            .sys_io = undefined,
+            .std_io = undefined,
             .entries = std.array_list.Managed(Entry).init(gpa),
             .order = std.array_list.Managed(usize).init(gpa),
             .index = std.HashMap(ModuleKey, usize, ModuleKeyContext, 80).init(gpa),
@@ -2822,8 +2820,8 @@ pub const OrderedSink = struct {
 
     // Emit with package and module names
     pub fn emitReport(self: *OrderedSink, pkg_name: []const u8, module_name: []const u8, report: Report) void {
-        self.lock.lockUncancelable(self.sys_io);
-        defer self.lock.unlock(self.sys_io);
+        self.lock.lockUncancelable(self.std_io);
+        defer self.lock.unlock(self.std_io);
 
         if (comptime trace_build) {
             std.debug.print("[SINK] emitReport: pkg=\"{s}\" module=\"{s}\" title=\"{s}\"\n", .{ pkg_name, module_name, report.title });
@@ -2868,8 +2866,8 @@ pub const OrderedSink = struct {
 
     // Attempt to emit entries in order prefix while next entries are ready (with locking).
     pub fn tryEmit(self: *OrderedSink) void {
-        self.lock.lockUncancelable(self.sys_io);
-        defer self.lock.unlock(self.sys_io);
+        self.lock.lockUncancelable(self.std_io);
+        defer self.lock.unlock(self.std_io);
         self.tryEmitLocked();
     }
 
@@ -2915,8 +2913,8 @@ pub const OrderedSink = struct {
     };
 
     pub fn drainEmitted(self: *OrderedSink, gpa: Allocator) ![]Drained {
-        self.lock.lockUncancelable(self.sys_io);
-        defer self.lock.unlock(self.sys_io);
+        self.lock.lockUncancelable(self.std_io);
+        defer self.lock.unlock(self.std_io);
 
         // Identify contiguous emitted prefix starting from current drain cursor
         var i: usize = self.drain_cursor;

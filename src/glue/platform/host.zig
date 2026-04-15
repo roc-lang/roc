@@ -140,7 +140,7 @@ const RocAllocation = struct {
 /// Host environment - contains DebugAllocator for leak detection
 const HostEnv = struct {
     gpa: std.heap.DebugAllocator(.{ .safety = true }),
-    sys_io: std.Io,
+    std_io: std.Io,
     /// Track Roc allocations for cleanup on test failure
     roc_allocations: std.ArrayListUnmanaged(RocAllocation) = .{ .items = &.{}, .capacity = 0 },
     /// Allocation counters for diagnostics
@@ -178,7 +178,7 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
             total_size,
             roc_alloc.alignment,
         }) catch "\x1b[31mHost error:\x1b[0m allocation failed, out of memory\n";
-        stderr.writeStreamingAll(host.sys_io, msg) catch {};
+        stderr.writeStreamingAll(host.std_io, msg) catch {};
         std.process.exit(1);
     };
 
@@ -273,7 +273,7 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
 
     const new_ptr = allocator.rawAlloc(new_total_size, align_enum, @returnAddress()) orelse {
         const stderr: std.Io.File = .stderr();
-        stderr.writeStreamingAll(host.sys_io, "\x1b[31mHost error:\x1b[0m reallocation failed, out of memory\n") catch {};
+        stderr.writeStreamingAll(host.std_io, "\x1b[31mHost error:\x1b[0m reallocation failed, out of memory\n") catch {};
         std.process.exit(1);
     };
 
@@ -325,7 +325,7 @@ fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaqu
     const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
     const stderr: std.Io.File = .stderr();
     var buf: [256]u8 = undefined;
-    var w = stderr.writer(host.sys_io, &buf);
+    var w = stderr.writer(host.std_io, &buf);
     w.interface.print("\n\x1b[31mRoc crashed:\x1b[0m {s}\n", .{message}) catch {};
     w.interface.flush() catch {};
     std.process.exit(1);
@@ -433,23 +433,23 @@ comptime {
 fn __main() callconv(.c) void {}
 
 fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
-    const sys_io = std.Io.Threaded.global_single_threaded.io();
+    const std_io = std.Io.Threaded.global_single_threaded.io();
     const stderr_file: std.Io.File = .stderr();
 
     // Expect platform source path as first argument
     const arg_count: usize = @intCast(argc);
     if (arg_count < 2) {
-        stderr_file.writeStreamingAll(sys_io, "HOST ERROR: Expected platform source path as argument\n") catch {};
+        stderr_file.writeStreamingAll(std_io, "HOST ERROR: Expected platform source path as argument\n") catch {};
         return 1;
     }
 
     // Convert argv to slice, skipping program name (argv[0])
     const args = argv[1..arg_count];
 
-    const exit_code = platform_main(args, sys_io) catch |err| {
-        stderr_file.writeStreamingAll(sys_io, "HOST ERROR: ") catch {};
-        stderr_file.writeStreamingAll(sys_io, @errorName(err)) catch {};
-        stderr_file.writeStreamingAll(sys_io, "\n") catch {};
+    const exit_code = platform_main(args, std_io) catch |err| {
+        stderr_file.writeStreamingAll(std_io, "HOST ERROR: ") catch {};
+        stderr_file.writeStreamingAll(std_io, @errorName(err)) catch {};
+        stderr_file.writeStreamingAll(std_io, "\n") catch {};
         return 1;
     };
     return exit_code;
@@ -535,10 +535,10 @@ fn parseTypesJson(
     // Parse the JSON
     const parsed = std.json.parseFromSlice([]const JsonModuleTypeInfo, allocator, json_str, .{}) catch |err| {
         const stderr: std.Io.File = .stderr();
-        stderr.writeStreamingAll(host.sys_io, "Error parsing types JSON: ") catch {};
+        stderr.writeStreamingAll(host.std_io, "Error parsing types JSON: ") catch {};
         var buf: [64]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "{}\n", .{err}) catch "unknown error\n";
-        stderr.writeStreamingAll(host.sys_io, msg) catch {};
+        stderr.writeStreamingAll(host.std_io, msg) catch {};
         return RocList.empty();
     };
     defer parsed.deinit();
@@ -634,7 +634,7 @@ fn parseTypesJson(
 /// Platform host entrypoint
 /// Receives args: [platform_path, --types-json=<json>, entry_point_names...]
 /// If no entry point names are provided, defaults to ["main"].
-fn platform_main(args: [][*:0]u8, sys_io: std.Io) !c_int {
+fn platform_main(args: [][*:0]u8, std_io: std.Io) !c_int {
     if (args.len < 1) {
         return error.MissingPlatformPath;
     }
@@ -662,7 +662,7 @@ fn platform_main(args: [][*:0]u8, sys_io: std.Io) !c_int {
 
     var host_env = HostEnv{
         .gpa = std.heap.DebugAllocator(.{ .safety = true }){},
-        .sys_io = sys_io,
+        .std_io = std_io,
     };
 
     defer {
@@ -677,7 +677,7 @@ fn platform_main(args: [][*:0]u8, sys_io: std.Io) !c_int {
                 \\  Cleaning up {d} allocations...
                 \\
             , .{ remaining_count, remaining_count }) catch "";
-            stderr_file.writeStreamingAll(host_env.sys_io, msg) catch {};
+            stderr_file.writeStreamingAll(host_env.std_io, msg) catch {};
         }
 
         for (host_env.roc_allocations.items) |alloc| {
@@ -689,7 +689,7 @@ fn platform_main(args: [][*:0]u8, sys_io: std.Io) !c_int {
         const leaked = host_env.gpa.deinit();
         if (leaked == .leak) {
             const stderr_file: std.Io.File = .stderr();
-            stderr_file.writeStreamingAll(host_env.sys_io,
+            stderr_file.writeStreamingAll(host_env.std_io,
                 \\
                 \\[Roc Memory Info] Additional memory leak detected by GPA.
                 \\
@@ -858,38 +858,38 @@ fn platform_main(args: [][*:0]u8, sys_io: std.Io) !c_int {
     switch (result.tag) {
         .Err => {
             const err_str = result.payload.err;
-            stderr.writeStreamingAll(host_env.sys_io, "Glue spec error: ") catch {};
-            stderr.writeStreamingAll(host_env.sys_io, err_str.asSlice()) catch {};
-            stderr.writeStreamingAll(host_env.sys_io, "\n") catch {};
+            stderr.writeStreamingAll(host_env.std_io, "Glue spec error: ") catch {};
+            stderr.writeStreamingAll(host_env.std_io, err_str.asSlice()) catch {};
+            stderr.writeStreamingAll(host_env.std_io, "\n") catch {};
             return 1;
         },
 
         .Ok => {
             const files = result.payload.ok;
             if (files.len() == 0) {
-                stdout.writeStreamingAll(host_env.sys_io, "Glue spec returned 0 files.\n") catch {};
+                stdout.writeStreamingAll(host_env.std_io, "Glue spec returned 0 files.\n") catch {};
                 return 0;
             }
 
             var buf: [256]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf, "Glue spec returned {d} file(s):\n", .{files.len()}) catch "Glue spec returned files:\n";
-            stdout.writeStreamingAll(host_env.sys_io, msg) catch {};
+            stdout.writeStreamingAll(host_env.std_io, msg) catch {};
 
             // Write files to output directory if provided
             const file_bytes = files.bytes orelse return 0;
             const file_slice: [*]const File = @ptrCast(@alignCast(file_bytes));
 
             const out_dir = output_dir orelse {
-                stderr.writeStreamingAll(host_env.sys_io, "Error: No --output-dir specified; cannot write glue files\n") catch {};
+                stderr.writeStreamingAll(host_env.std_io, "Error: No --output-dir specified; cannot write glue files\n") catch {};
                 return 1;
             };
 
             // Create output directory if needed
-            std.Io.Dir.cwd().createDirPath(host_env.sys_io, out_dir) catch |err| {
-                stderr.writeStreamingAll(host_env.sys_io, "Error: Could not create output directory: ") catch {};
+            std.Io.Dir.cwd().createDirPath(host_env.std_io, out_dir) catch |err| {
+                stderr.writeStreamingAll(host_env.std_io, "Error: Could not create output directory: ") catch {};
                 var err_buf: [256]u8 = undefined;
                 const err_msg = std.fmt.bufPrint(&err_buf, "{}\n", .{err}) catch "unknown error\n";
-                stderr.writeStreamingAll(host_env.sys_io, err_msg) catch {};
+                stderr.writeStreamingAll(host_env.std_io, err_msg) catch {};
                 return 1;
             };
 
@@ -898,27 +898,27 @@ fn platform_main(args: [][*:0]u8, sys_io: std.Io) !c_int {
                 const file = file_slice[i];
                 const file_name = file.name.asSlice();
                 const file_path = std.fs.path.join(allocator, &.{ out_dir, file_name }) catch {
-                    stderr.writeStreamingAll(host_env.sys_io, "Error: Out of memory allocating file path\n") catch {};
+                    stderr.writeStreamingAll(host_env.std_io, "Error: Out of memory allocating file path\n") catch {};
                     return 1;
                 };
                 defer allocator.free(file_path);
 
-                std.Io.Dir.cwd().writeFile(host_env.sys_io, .{
+                std.Io.Dir.cwd().writeFile(host_env.std_io, .{
                     .sub_path = file_path,
                     .data = file.content.asSlice(),
                 }) catch |err| {
-                    stderr.writeStreamingAll(host_env.sys_io, "Error: Could not write file '") catch {};
-                    stderr.writeStreamingAll(host_env.sys_io, file_path) catch {};
-                    stderr.writeStreamingAll(host_env.sys_io, "': ") catch {};
+                    stderr.writeStreamingAll(host_env.std_io, "Error: Could not write file '") catch {};
+                    stderr.writeStreamingAll(host_env.std_io, file_path) catch {};
+                    stderr.writeStreamingAll(host_env.std_io, "': ") catch {};
                     var err_buf: [256]u8 = undefined;
                     const err_msg = std.fmt.bufPrint(&err_buf, "{}\n", .{err}) catch "unknown error\n";
-                    stderr.writeStreamingAll(host_env.sys_io, err_msg) catch {};
+                    stderr.writeStreamingAll(host_env.std_io, err_msg) catch {};
                     return 1;
                 };
 
-                stdout.writeStreamingAll(host_env.sys_io, "  Wrote: ") catch {};
-                stdout.writeStreamingAll(host_env.sys_io, file_path) catch {};
-                stdout.writeStreamingAll(host_env.sys_io, "\n") catch {};
+                stdout.writeStreamingAll(host_env.std_io, "  Wrote: ") catch {};
+                stdout.writeStreamingAll(host_env.std_io, file_path) catch {};
+                stdout.writeStreamingAll(host_env.std_io, "\n") catch {};
             }
 
             return 0;

@@ -6,9 +6,6 @@ const collections = @import("collections");
 const can = @import("can");
 
 const tracy = @import("tracy");
-const builtin = @import("builtin");
-
-const RocCtx = @import("ctx").RocCtx;
 
 const ModuleEnv = can.ModuleEnv;
 const Token = tokenize.Token;
@@ -16,24 +13,6 @@ const AST = parse.AST;
 const SafeList = collections.SafeList;
 
 const tokenize = parse.tokenize;
-
-const is_windows = builtin.target.os.tag == .windows;
-
-// Derive low-level I/O types from RocCtx so core modules access sys_io
-// capabilities without referencing the banned stdlib Io type directly.
-const SysIo = @TypeOf(@as(RocCtx, undefined).sys_io);
-
-var stderr_file_writer: SysIo.File.Writer = .{
-    .io = SysIo.Threaded.global_single_threaded.io(),
-    .interface = SysIo.File.Writer.initInterface(&.{}),
-    .file = if (is_windows) undefined else SysIo.File.stderr(),
-    .mode = .streaming,
-};
-
-fn stderrWriter() *SysIo.Writer {
-    if (is_windows) stderr_file_writer.file = SysIo.File.stderr();
-    return &stderr_file_writer.interface;
-}
 
 const FormatFlags = enum {
     debug_binop,
@@ -57,10 +36,9 @@ pub const FormattingResult = struct {
 /// Formats all roc files in the specified path.
 /// Handles both single files and directories
 /// Returns the number of files successfully formatted and that failed to format.
-pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: SysIo.Dir, path: []const u8, check: bool, io: SysIo) !FormattingResult {
+pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: std.Io.Dir, path: []const u8, check: bool, io: std.Io, stderr: *std.Io.Writer) !FormattingResult {
     // TODO: update this to use the filesystem abstraction
     // When doing so, add a mock filesystem and some tests.
-    const stderr = stderrWriter();
 
     var success_count: usize = 0;
     var failed_count: usize = 0;
@@ -76,7 +54,7 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: Sy
         defer walker.deinit();
         while (try walker.next(io)) |entry| {
             if (entry.kind == .file) {
-                if (formatFilePath(gpa, entry.dir, entry.basename, if (unformatted_files) |*to_reformat| to_reformat else null, io)) |_| {
+                if (formatFilePath(gpa, entry.dir, entry.basename, if (unformatted_files) |*to_reformat| to_reformat else null, io, stderr)) |_| {
                     success_count += 1;
                 } else |err| switch (err) {
                     error.NotRocFile => {},
@@ -88,7 +66,7 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: Sy
             }
         }
     } else |_| {
-        if (formatFilePath(gpa, base_dir, path, if (unformatted_files) |*to_reformat| to_reformat else null, io)) |_| {
+        if (formatFilePath(gpa, base_dir, path, if (unformatted_files) |*to_reformat| to_reformat else null, io, stderr)) |_| {
             success_count += 1;
         } else |err| switch (err) {
             error.NotRocFile => {},
@@ -139,7 +117,7 @@ fn binarySearch(
 
 /// Formats a single roc file at the specified path.
 /// Returns errors on failure and files that don't end in `.roc`
-pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: SysIo.Dir, path: []const u8, unformatted_files: ?*std.array_list.Managed([]const u8), io: SysIo) !void {
+pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []const u8, unformatted_files: ?*std.array_list.Managed([]const u8), io: std.Io, stderr: *std.Io.Writer) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -197,8 +175,8 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: SysIo.Dir, path: []const
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(gpa, &module_env.common, stderrWriter()) catch @panic("Failed to print SExpr");
-        try printParseErrors(gpa, module_env.common.source, parse_ast.*);
+        parse_ast.toSExprStr(gpa, &module_env.common, stderr) catch @panic("Failed to print SExpr");
+        try printParseErrors(gpa, module_env.common.source, parse_ast.*, stderr);
         return error.ParsingFailed;
     }
 
@@ -220,9 +198,8 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: SysIo.Dir, path: []const
 }
 
 /// Format the contents of stdin and output the result to stdout
-pub fn formatStdin(gpa: std.mem.Allocator, io: SysIo) !void {
+pub fn formatStdin(gpa: std.mem.Allocator, io: std.Io, stdin: std.Io.File, stdout: std.Io.File, stderr: *std.Io.Writer) !void {
     const contents = blk: {
-        const stdin = SysIo.File.stdin();
         var read_buf: [4096]u8 = undefined;
         var stdin_reader = stdin.readerStreaming(io, &read_buf);
         var contents_list = std.ArrayList(u8).empty;
@@ -247,17 +224,17 @@ pub fn formatStdin(gpa: std.mem.Allocator, io: SysIo) !void {
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(gpa, &module_env.common, stderrWriter()) catch @panic("Failed to print SExpr");
-        try printParseErrors(gpa, module_env.common.source, parse_ast.*);
+        parse_ast.toSExprStr(gpa, &module_env.common, stderr) catch @panic("Failed to print SExpr");
+        try printParseErrors(gpa, module_env.common.source, parse_ast.*, stderr);
         return error.ParsingFailed;
     }
 
     var stdout_buffer: [4096]u8 = undefined;
-    var stdout_writer = SysIo.File.stdout().writer(io, &stdout_buffer);
+    var stdout_writer = stdout.writer(io, &stdout_buffer);
     try formatAst(parse_ast.*, &stdout_writer.interface);
 }
 
-fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) !void {
+fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST, stderr: *std.Io.Writer) !void {
     // compute offsets of each line, looping over bytes of the input
     var line_offsets = try SafeList(u32).initCapacity(gpa, 256);
     defer line_offsets.deinit(gpa);
@@ -268,7 +245,6 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) 
         }
     }
 
-    const stderr = stderrWriter();
     try stderr.print("Errors:\n", .{});
     for (parse_ast.parse_diagnostics.items) |err| {
         const region = parse_ast.tokens.resolve(@intCast(err.region.start));
@@ -2986,7 +2962,10 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
         parse_ast.store.emptyScratch();
 
         std.debug.print("Parsed SExpr:\n==========\n", .{});
-        parse_ast.toSExprStr(module_env, stderrWriter()) catch @panic("Failed to print SExpr");
+        var sexpr_buf: std.Io.Writer.Allocating = .init(gpa);
+        defer sexpr_buf.deinit();
+        parse_ast.toSExprStr(module_env, &sexpr_buf.writer) catch @panic("Failed to print SExpr");
+        std.debug.print("{s}", .{sexpr_buf.written()});
         std.debug.print("\n==========\n\n", .{});
     }
 

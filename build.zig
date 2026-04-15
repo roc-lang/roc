@@ -1030,7 +1030,7 @@ const CheckCliGlobalStdioStep = struct {
                 \\     and I/O. This provides a uniform interface for resources.
                 \\
                 \\WHAT TO DO INSTEAD:
-                \\  Access stdout/stderr through the CliContext:
+                \\  Access stdout/stderr through the CliCtx:
                 \\
                 \\  Example - WRONG:
                 \\    const stdout = std.io.getStdOut().writer();

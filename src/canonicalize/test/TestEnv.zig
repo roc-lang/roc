@@ -7,7 +7,7 @@ const CIR = @import("../CIR.zig");
 const Can = @import("../Can.zig");
 const ModuleEnv = @import("../ModuleEnv.zig");
 const BuiltinTestContext = @import("./BuiltinTestContext.zig").BuiltinTestContext;
-const RocCtx = @import("ctx").RocCtx;
+const CoreCtx = @import("ctx").CoreCtx;
 
 gpa: std.mem.Allocator,
 module_env: *ModuleEnv,
@@ -21,7 +21,7 @@ pub const TestEnv = @This();
 pub fn init(source: []const u8) !TestEnv {
     const gpa = std.testing.allocator;
 
-    const roc_ctx = RocCtx.testing(gpa, gpa);
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
 
     // Allocate our ModuleEnv and Can on the heap
     // so we can keep them around for testing purposes...

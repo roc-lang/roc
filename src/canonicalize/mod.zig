@@ -22,8 +22,8 @@ pub const RocEmitter = @import("RocEmitter.zig");
 /// Node storage for CIR nodes (used internally by ModuleEnv)
 pub const NodeStore = @import("NodeStore.zig");
 
-/// Re-export RocCtx for callers that need to create a canonicalizer
-pub const RocCtx = @import("ctx").RocCtx;
+/// Re-export CoreCtx for callers that need to create a canonicalizer
+pub const CoreCtx = @import("ctx").CoreCtx;
 /// Re-export AutoImportedType for callers
 pub const AutoImportedType = Can.AutoImportedType;
 
@@ -43,7 +43,7 @@ pub const AutoImportedType = Can.AutoImportedType;
 /// - parse_ast: Caller provides and manages
 /// - context: Builtin type context plus optional explicit imported module environments
 pub fn canonicalizeModule(
-    roc_ctx: RocCtx,
+    roc_ctx: CoreCtx,
     module_env: *ModuleEnv,
     parse_ast: *AST,
     context: Can.ModuleInitContext,
@@ -65,7 +65,7 @@ pub fn canonicalizeModule(
 /// - parse_ast: Caller provides (root_node_idx should point to expression)
 /// - context: Builtin type context plus optional explicit imported module environments
 pub fn canonicalizeExpr(
-    roc_ctx: RocCtx,
+    roc_ctx: CoreCtx,
     module_env: *ModuleEnv,
     parse_ast: *AST,
     context: Can.ModuleInitContext,

@@ -11,7 +11,7 @@ const Can = @import("../Can.zig");
 const ModuleEnv = @import("../ModuleEnv.zig");
 const BuiltinTestContext = @import("./BuiltinTestContext.zig").BuiltinTestContext;
 
-const RocCtx = @import("ctx").RocCtx;
+const CoreCtx = @import("ctx").CoreCtx;
 const testing = std.testing;
 
 test "exposed but not implemented - values" {
@@ -29,7 +29,7 @@ test "exposed but not implemented - values" {
     defer env.deinit();
     try env.initCIRFields("Test");
 
-    const roc_ctx = RocCtx.testing(allocator, allocator);
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const ast = try parse.parse(allocator, &env.common);
     defer ast.deinit();
@@ -72,7 +72,7 @@ test "exposed but not implemented - types" {
     defer env.deinit();
     try env.initCIRFields("Test");
 
-    const roc_ctx = RocCtx.testing(allocator, allocator);
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const ast = try parse.parse(allocator, &env.common);
     defer ast.deinit();
@@ -114,7 +114,7 @@ test "redundant exposed entries" {
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
     try env.initCIRFields("Test");
-    const roc_ctx = RocCtx.testing(allocator, allocator);
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const ast = try parse.parse(allocator, &env.common);
     defer ast.deinit();
@@ -161,7 +161,7 @@ test "shadowing with exposed items" {
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
     try env.initCIRFields("Test");
-    const roc_ctx = RocCtx.testing(allocator, allocator);
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const ast = try parse.parse(allocator, &env.common);
     defer ast.deinit();
@@ -198,7 +198,7 @@ test "shadowing non-exposed items" {
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
     try env.initCIRFields("Test");
-    const roc_ctx = RocCtx.testing(allocator, allocator);
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const ast = try parse.parse(allocator, &env.common);
     defer ast.deinit();
@@ -242,7 +242,7 @@ test "exposed items correctly tracked across shadowing" {
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
     try env.initCIRFields("Test");
-    const roc_ctx = RocCtx.testing(allocator, allocator);
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const ast = try parse.parse(allocator, &env.common);
     defer ast.deinit();
@@ -302,7 +302,7 @@ test "complex case with redundant, shadowing, and not implemented" {
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
     try env.initCIRFields("Test");
-    const roc_ctx = RocCtx.testing(allocator, allocator);
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const ast = try parse.parse(allocator, &env.common);
     defer ast.deinit();
@@ -358,7 +358,7 @@ test "exposed_items is populated correctly" {
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
     try env.initCIRFields("Test");
-    const roc_ctx = RocCtx.testing(allocator, allocator);
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const ast = try parse.parse(allocator, &env.common);
     defer ast.deinit();
@@ -394,7 +394,7 @@ test "exposed_items persists after canonicalization" {
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
     try env.initCIRFields("Test");
-    const roc_ctx = RocCtx.testing(allocator, allocator);
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const ast = try parse.parse(allocator, &env.common);
     defer ast.deinit();
@@ -428,7 +428,7 @@ test "exposed_items never has entries removed" {
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
     try env.initCIRFields("Test");
-    const roc_ctx = RocCtx.testing(allocator, allocator);
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const ast = try parse.parse(allocator, &env.common);
     defer ast.deinit();
@@ -465,7 +465,7 @@ test "exposed_items handles identifiers with different attributes" {
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
     try env.initCIRFields("Test");
-    const roc_ctx = RocCtx.testing(allocator, allocator);
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const ast = try parse.parse(allocator, &env.common);
     defer ast.deinit();
@@ -501,7 +501,7 @@ test "platform provides entries are extracted" {
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
     try env.initCIRFields("Test");
-    const roc_ctx = RocCtx.testing(allocator, allocator);
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const ast = try parse.parse(allocator, &env.common);
     defer ast.deinit();
@@ -535,7 +535,7 @@ test "platform provides entries with multiple entries" {
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
     try env.initCIRFields("Test");
-    const roc_ctx = RocCtx.testing(allocator, allocator);
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const ast = try parse.parse(allocator, &env.common);
     defer ast.deinit();

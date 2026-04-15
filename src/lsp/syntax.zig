@@ -5,7 +5,7 @@ const std = @import("std");
 const compile = @import("compile");
 const reporting = @import("reporting");
 const build_options = @import("build_options");
-const RocCtx = @import("ctx").RocCtx;
+const CoreCtx = @import("ctx").CoreCtx;
 const Allocator = std.mem.Allocator;
 const base = @import("base");
 const can = @import("can");
@@ -44,7 +44,7 @@ pub const DebugFlags = struct {
 /// Runs BuildEnv-backed syntax/type checks and converts reports to LSP diagnostics.
 pub const SyntaxChecker = struct {
     allocator: std.mem.Allocator,
-    sys_io: std.Io,
+    std_io: std.Io,
     mutex: std.Io.Mutex = std.Io.Mutex.init,
     /// Current build environment owned by the live check path.
     build_env: ?*BuildEnvHandle = null,
@@ -64,10 +64,10 @@ pub const SyntaxChecker = struct {
     const owner_previous = "previous_build_env";
     const owner_snapshot = "snapshot";
 
-    pub fn init(allocator: std.mem.Allocator, sys_io: std.Io, debug: DebugFlags, log_file: ?std.Io.File) SyntaxChecker {
+    pub fn init(allocator: std.mem.Allocator, std_io: std.Io, debug: DebugFlags, log_file: ?std.Io.File) SyntaxChecker {
         return .{
             .allocator = allocator,
-            .sys_io = sys_io,
+            .std_io = std_io,
             .dependency_graph = DependencyGraph.init(allocator),
             .debug = debug,
             .log_file = log_file,
@@ -98,8 +98,8 @@ pub const SyntaxChecker = struct {
     pub fn check(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8, workspace_root: ?[]const u8) ![]Diagnostics.PublishDiagnostics {
         _ = workspace_root; // Reserved for future use
 
-        self.mutex.lockUncancelable(self.sys_io);
-        defer self.mutex.unlock(self.sys_io);
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
 
         // Check if content has changed using hash comparison BEFORE building.
         // This avoids unnecessary rebuilds on focus/blur events.
@@ -108,7 +108,7 @@ pub const SyntaxChecker = struct {
             defer if (path) |p| self.allocator.free(p);
 
             const abs_path: ?[:0]u8 = if (path) |p|
-                std.Io.Dir.cwd().realPathFileAlloc(self.sys_io, p, self.allocator) catch null
+                std.Io.Dir.cwd().realPathFileAlloc(self.std_io, p, self.allocator) catch null
             else
                 null;
             defer if (abs_path) |a| self.allocator.free(a);
@@ -146,7 +146,7 @@ pub const SyntaxChecker = struct {
         const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();
 
-        var session = try BuildSession.init(self.allocator, self.sys_io, env, uri, override_text);
+        var session = try BuildSession.init(self.allocator, self.std_io, env, uri, override_text);
         defer session.deinit();
 
         const absolute_path = session.absolute_path;
@@ -242,14 +242,14 @@ pub const SyntaxChecker = struct {
         }
 
         // Create a fresh BuildEnv
-        const cwd = try std.Io.Dir.cwd().realPathFileAlloc(self.sys_io, ".", self.allocator);
+        const cwd = try std.Io.Dir.cwd().realPathFileAlloc(self.std_io, ".", self.allocator);
         defer self.allocator.free(cwd);
-        var env = try BuildEnv.init(self.allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, self.sys_io);
+        var env = try BuildEnv.init(self.allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, self.std_io);
         env.compiler_version = build_options.compiler_version;
 
         if (self.cache_config.enabled) {
             const cache_manager = try self.allocator.create(CacheManager);
-            cache_manager.* = CacheManager.init(self.allocator, self.cache_config, RocCtx.default(self.allocator, self.allocator, self.sys_io));
+            cache_manager.* = CacheManager.init(self.allocator, self.cache_config, CoreCtx.default(self.allocator, self.allocator, self.std_io));
             env.setCacheManager(cache_manager);
         }
 
@@ -576,9 +576,9 @@ pub const SyntaxChecker = struct {
         var log_file = self.log_file orelse return;
         var buffer: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buffer, fmt, args) catch return;
-        log_file.writeStreamingAll(self.sys_io, msg) catch return;
-        log_file.writeStreamingAll(self.sys_io, "\n") catch {};
-        log_file.sync(self.sys_io) catch {};
+        log_file.writeStreamingAll(self.std_io, msg) catch return;
+        log_file.writeStreamingAll(self.std_io, "\n") catch {};
+        log_file.sync(self.std_io) catch {};
     }
 
     /// Temporary suppression to avoid noisy undefined-variable diagnostics from BuildEnv.
@@ -680,13 +680,13 @@ pub const SyntaxChecker = struct {
         line: u32,
         character: u32,
     ) !?HoverResult {
-        self.mutex.lockUncancelable(self.sys_io);
-        defer self.mutex.unlock(self.sys_io);
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
 
         const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();
 
-        var session = try BuildSession.init(self.allocator, self.sys_io, env, uri, override_text);
+        var session = try BuildSession.init(self.allocator, self.std_io, env, uri, override_text);
         defer session.deinit();
 
         self.logDebug(.build, "hover: building {s}", .{session.absolute_path});
@@ -1111,13 +1111,13 @@ pub const SyntaxChecker = struct {
         line: u32,
         character: u32,
     ) !?DefinitionResult {
-        self.mutex.lockUncancelable(self.sys_io);
-        defer self.mutex.unlock(self.sys_io);
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
 
         const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();
 
-        var session = try BuildSession.init(self.allocator, self.sys_io, env, uri, override_text);
+        var session = try BuildSession.init(self.allocator, self.std_io, env, uri, override_text);
         defer session.deinit();
 
         self.logDebug(.build, "definition: building {s}", .{session.absolute_path});
@@ -1368,19 +1368,19 @@ pub const SyntaxChecker = struct {
             self.allocator.free(cache_dir);
 
             // Write file if it doesn't exist
-            if (std.Io.Dir.cwd().access(self.sys_io, builtin_cache_path, .{})) |_| {
+            if (std.Io.Dir.cwd().access(self.std_io, builtin_cache_path, .{})) |_| {
                 // Already exists
             } else |_| {
                 // Create parent dirs and write embedded source
                 if (std.fs.path.dirname(builtin_cache_path)) |dir| {
-                    std.Io.Dir.cwd().createDirPath(self.sys_io, dir) catch {};
+                    std.Io.Dir.cwd().createDirPath(self.std_io, dir) catch {};
                 }
-                const file = std.Io.Dir.cwd().createFile(self.sys_io, builtin_cache_path, .{}) catch {
+                const file = std.Io.Dir.cwd().createFile(self.std_io, builtin_cache_path, .{}) catch {
                     self.allocator.free(builtin_cache_path);
                     return null;
                 };
-                defer file.close(self.sys_io);
-                file.writeStreamingAll(self.sys_io, compiled_builtins.builtin_source) catch {
+                defer file.close(self.std_io);
+                file.writeStreamingAll(self.std_io, compiled_builtins.builtin_source) catch {
                     self.allocator.free(builtin_cache_path);
                     return null;
                 };
@@ -1705,13 +1705,13 @@ pub const SyntaxChecker = struct {
         line: u32,
         character: u32,
     ) !?HighlightResult {
-        self.mutex.lockUncancelable(self.sys_io);
-        defer self.mutex.unlock(self.sys_io);
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
 
         const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();
 
-        var session = try BuildSession.init(self.allocator, self.sys_io, env, uri, override_text);
+        var session = try BuildSession.init(self.allocator, self.std_io, env, uri, override_text);
         defer session.deinit();
 
         self.logDebug(.build, "highlights: building {s}", .{session.absolute_path});
@@ -1761,8 +1761,8 @@ pub const SyntaxChecker = struct {
     ) ![]document_symbol_handler.SymbolInformation {
         const SymbolInformation = document_symbol_handler.SymbolInformation;
 
-        self.mutex.lockUncancelable(self.sys_io);
-        defer self.mutex.unlock(self.sys_io);
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
 
         const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();
@@ -1771,12 +1771,12 @@ pub const SyntaxChecker = struct {
         const path = uri_util.uriToPath(allocator, uri) catch return &[_]SymbolInformation{};
         defer allocator.free(path);
 
-        const absolute_path: [:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(self.sys_io, path, allocator) catch
+        const absolute_path: [:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(self.std_io, path, allocator) catch
             allocator.dupeZ(u8, path) catch return &[_]SymbolInformation{};
         defer allocator.free(absolute_path);
 
         // Override readFile for the current file so in-memory source is used.
-        var override = RocCtx.ReadFileOverride{ .path = absolute_path, .content = source, .base = env.filesystem };
+        var override = CoreCtx.ReadFileOverride{ .path = absolute_path, .content = source, .base = env.filesystem };
         const saved_io = env.filesystem;
         env.filesystem = override.io();
         defer env.filesystem = saved_io;
@@ -2101,13 +2101,13 @@ pub const SyntaxChecker = struct {
         line: u32,
         character: u32,
     ) !?completion_handler.CompletionResult {
-        self.mutex.lockUncancelable(self.sys_io);
-        defer self.mutex.unlock(self.sys_io);
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
 
         const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();
 
-        var session = try BuildSession.init(self.allocator, self.sys_io, env, uri, override_text);
+        var session = try BuildSession.init(self.allocator, self.std_io, env, uri, override_text);
         defer session.deinit();
 
         self.logDebug(.completion, "completion: building {s}", .{session.absolute_path});
@@ -2189,7 +2189,7 @@ pub const SyntaxChecker = struct {
 
         // Initialize CompletionBuilder for deduplication and organized completion item building
         // Provide the builtin module env so completion can resolve builtin method data.
-        var builder = completion_builder.CompletionBuilder.initWithDebug(self.allocator, self.sys_io, &items, env.builtin_modules.builtin_module.env, self.debug, self.log_file);
+        var builder = completion_builder.CompletionBuilder.initWithDebug(self.allocator, self.std_io, &items, env.builtin_modules.builtin_module.env, self.debug, self.log_file);
         defer builder.deinit();
 
         switch (context) {

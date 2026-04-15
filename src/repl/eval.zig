@@ -15,7 +15,7 @@ const wasm_runner = @import("wasm_runner.zig");
 const roc_target = @import("roc_target");
 const compile = @import("compile");
 const single_module = compile.single_module;
-const RocCtx = can.RocCtx;
+const CoreCtx = can.CoreCtx;
 const CrashContext = eval_mod.CrashContext;
 const BuiltinTypes = eval_mod.BuiltinTypes;
 const builtin_loading = eval_mod.builtin_loading;
@@ -591,7 +591,7 @@ pub const Repl = struct {
         const cir = module_env;
         try cir.initCIRFields("repl");
 
-        const roc_ctx = RocCtx.testing(self.allocator, self.allocator);
+        const roc_ctx = CoreCtx.testing(self.allocator, self.allocator);
         var czer = Can.initModule(roc_ctx, cir, parse_ast, .{
             .builtin_types = .{
                 .builtin_module_env = self.builtin_module.env,

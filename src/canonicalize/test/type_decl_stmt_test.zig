@@ -12,7 +12,7 @@ const ModuleEnv = @import("../ModuleEnv.zig");
 const Can = @import("../Can.zig");
 const CIR = @import("../CIR.zig");
 
-const RocCtx = @import("ctx").RocCtx;
+const CoreCtx = @import("ctx").CoreCtx;
 const testing = std.testing;
 const Ident = base.Ident;
 const Statement = CIR.Statement;
@@ -276,7 +276,7 @@ test "scopeLookupTypeDecl API is accessible" {
 
     try env.initCIRFields("test");
 
-    const roc_ctx = RocCtx.testing(gpa, gpa);
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
 
     const ast = try parse.parseExpr(gpa, &env.common);
     defer ast.deinit();
@@ -305,7 +305,7 @@ test "introduceType API is accessible" {
 
     try env.initCIRFields("test");
 
-    const roc_ctx = RocCtx.testing(gpa, gpa);
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
 
     const ast = try parse.parseExpr(gpa, &env.common);
     defer ast.deinit();
@@ -380,7 +380,7 @@ test "local type scoping - not visible after exiting block" {
 
     try env.initCIRFields("test");
 
-    const roc_ctx = RocCtx.testing(gpa, gpa);
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
 
     const ast = try parse.parseExpr(gpa, &env.common);
     defer ast.deinit();

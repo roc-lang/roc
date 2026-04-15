@@ -11,7 +11,7 @@ const BuiltinTestContext = @import("./BuiltinTestContext.zig").BuiltinTestContex
 const Ident = base.Ident;
 const Pattern = CIR.Pattern;
 const TypeAnno = CIR.TypeAnno;
-const RocCtx = @import("ctx").RocCtx;
+const CoreCtx = @import("ctx").CoreCtx;
 
 /// Context helper for Scope tests
 const ScopeTestContext = struct {
@@ -29,7 +29,7 @@ const ScopeTestContext = struct {
         var builtin_ctx = try BuiltinTestContext.init(gpa);
         errdefer builtin_ctx.deinit();
 
-        const roc_ctx = RocCtx.testing(gpa, gpa);
+        const roc_ctx = CoreCtx.testing(gpa, gpa);
 
         return ScopeTestContext{
             .self = try Can.initModule(roc_ctx, module_env, undefined, builtin_ctx.canInitContext()),

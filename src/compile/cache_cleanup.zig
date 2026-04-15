@@ -13,14 +13,10 @@ const std = @import("std");
 const builtin = @import("builtin");
 const cache_config = @import("cache_config.zig");
 const CacheConfig = cache_config.CacheConfig;
-const RocCtx = @import("ctx").RocCtx;
+const CoreCtx = @import("ctx").CoreCtx;
 const threading = @import("threading.zig");
 
 const Allocator = std.mem.Allocator;
-
-/// Alias for the underlying system I/O type carried by RocCtx.
-/// Used only for directory iteration, which RocCtx doesn't wrap yet.
-const SysIo = @FieldType(RocCtx, "sys_io");
 
 const is_freestanding = threading.is_freestanding;
 
@@ -69,14 +65,14 @@ pub const CleanupThread = if (!is_freestanding) struct {
 /// The thread is fire-and-forget: if the main process exits before cleanup
 /// completes, the OS will automatically terminate the cleanup thread.
 /// You do not need to join the returned handle.
-pub fn startBackgroundCleanup(allocator: Allocator, roc_ctx: RocCtx) !?CleanupThread {
+pub fn startBackgroundCleanup(allocator: Allocator, roc_ctx: CoreCtx) !?CleanupThread {
     if (comptime is_freestanding) return null;
     const thread = try std.Thread.spawn(.{}, runCleanup, .{ allocator, roc_ctx });
     return CleanupThread{ .thread = thread };
 }
 
 /// Run the full cleanup process (called on background thread).
-fn runCleanup(allocator: Allocator, roc_ctx: RocCtx) void {
+fn runCleanup(allocator: Allocator, roc_ctx: CoreCtx) void {
     // TODO: REMOVE THIS FOR THE 0.1.0 RELEASE - NOT NEEDED ANYMORE
     // This is just to clean up people who have old stale Roc caches from before
     // we restructured the cache directories to use roc/{version}/ structure.
@@ -92,80 +88,73 @@ fn runCleanup(allocator: Allocator, roc_ctx: RocCtx) void {
 }
 
 /// Clean up temporary runtime directories older than 5 minutes.
-fn cleanupTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats, roc_ctx: RocCtx) void {
+fn cleanupTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats, roc_ctx: CoreCtx) void {
     const temp_base = cache_config.getTempDir(roc_ctx, allocator) catch return;
     defer allocator.free(temp_base);
 
     const now_ns = roc_ctx.timestampNow();
 
-    // Open the temp/roc directory
-    var roc_dir = SysIo.Dir.cwd().openDir(roc_ctx.sys_io, temp_base, .{ .iterate = true }) catch return;
-    defer roc_dir.close(roc_ctx.sys_io);
+    // Recursively list all entries under the temp/roc directory.
+    const entries = roc_ctx.listDir(temp_base, allocator) catch return;
+    defer {
+        for (entries) |entry| allocator.free(entry.path);
+        allocator.free(entries);
+    }
 
-    // Iterate over version directories
-    var version_iter = roc_dir.iterate();
-    while (version_iter.next(roc_ctx.sys_io) catch null) |version_entry| {
-        if (version_entry.kind != .directory) continue;
+    // We only care about entries at depth 2 (temp_base/version/random).
+    // These are the actual temp dirs and coordination files to check.
+    for (entries) |entry| {
+        const parent = std.fs.path.dirname(entry.path) orelse continue;
+        const grandparent = std.fs.path.dirname(parent) orelse continue;
 
-        const version_path = std.fs.path.join(allocator, &.{ temp_base, version_entry.name }) catch continue;
-        defer allocator.free(version_path);
+        // Only process entries whose grandparent is temp_base
+        // (i.e., entries at exactly depth 2: temp_base/version/entry)
+        if (!std.mem.eql(u8, grandparent, temp_base)) continue;
 
-        var version_dir = SysIo.Dir.cwd().openDir(roc_ctx.sys_io, version_path, .{ .iterate = true }) catch continue;
-        defer version_dir.close(roc_ctx.sys_io);
+        if (entry.kind == .directory) {
+            // Check directory age
+            const dir_info = roc_ctx.stat(entry.path) catch continue;
+            const age_ns = now_ns - (dir_info.mtime_ns orelse continue);
 
-        // Iterate over random subdirectories within this version
-        var random_iter = version_dir.iterate();
-        while (random_iter.next(roc_ctx.sys_io) catch null) |random_entry| {
-            const entry_path = std.fs.path.join(allocator, &.{ version_path, random_entry.name }) catch continue;
-            defer allocator.free(entry_path);
+            if (age_ns > Config.TEMP_MAX_AGE_NS) {
+                // Delete the directory and its contents
+                roc_ctx.deleteTree(entry.path) catch {
+                    if (maybe_stats) |stats| stats.errors += 1;
+                    continue;
+                };
+                if (maybe_stats) |stats| stats.temp_dirs_deleted += 1;
 
-            if (random_entry.kind == .directory) {
-                // Check directory age
-                const dir_info = roc_ctx.stat(entry_path) catch continue;
-                const age_ns = now_ns - (dir_info.mtime_ns orelse continue);
+                // Also try to delete the coordination file (.txt)
+                const txt_path = std.fmt.allocPrint(allocator, "{s}.txt", .{entry.path}) catch continue;
+                defer allocator.free(txt_path);
+                roc_ctx.deleteFile(txt_path) catch {};
+                if (maybe_stats) |stats| stats.temp_files_deleted += 1;
+            }
+        } else if (entry.kind == .file) {
+            // Check if it's a stale .txt coordination file
+            const basename = std.fs.path.basename(entry.path);
+            if (std.mem.endsWith(u8, basename, ".txt")) {
+                const file_info = roc_ctx.stat(entry.path) catch continue;
+                const age_ns = now_ns - (file_info.mtime_ns orelse continue);
 
                 if (age_ns > Config.TEMP_MAX_AGE_NS) {
-                    // Delete the directory and its contents
-                    roc_ctx.deleteTree(entry_path) catch {
+                    roc_ctx.deleteFile(entry.path) catch {
                         if (maybe_stats) |stats| stats.errors += 1;
                         continue;
                     };
-                    if (maybe_stats) |stats| stats.temp_dirs_deleted += 1;
-
-                    // Also try to delete the coordination file (.txt)
-                    const txt_path = std.fmt.allocPrint(allocator, "{s}.txt", .{entry_path}) catch continue;
-                    defer allocator.free(txt_path);
-                    roc_ctx.deleteFile(txt_path) catch {};
                     if (maybe_stats) |stats| stats.temp_files_deleted += 1;
-                }
-            } else if (random_entry.kind == .file) {
-                // Check if it's a stale .txt coordination file
-                if (std.mem.endsWith(u8, random_entry.name, ".txt")) {
-                    const file_info = roc_ctx.stat(entry_path) catch continue;
-                    const age_ns = now_ns - (file_info.mtime_ns orelse continue);
-
-                    if (age_ns > Config.TEMP_MAX_AGE_NS) {
-                        roc_ctx.deleteFile(entry_path) catch {
-                            if (maybe_stats) |stats| stats.errors += 1;
-                            continue;
-                        };
-                        if (maybe_stats) |stats| stats.temp_files_deleted += 1;
-                    }
                 }
             }
         }
-
-        // NOTE: We intentionally do NOT delete empty version directories here.
-        // Doing so would race with other processes that just created the version
-        // directory and are about to create a random subdirectory in it.
     }
 
-    // NOTE: We intentionally do NOT delete the empty roc temp directory.
-    // It's harmless and avoids race conditions with concurrent processes.
+    // NOTE: We intentionally do NOT delete empty version directories or
+    // the roc temp directory. It's harmless and avoids race conditions
+    // with concurrent processes.
 }
 
 /// Clean up persistent cache files older than 30 days.
-fn cleanupPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStats, roc_ctx: RocCtx) void {
+fn cleanupPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStats, roc_ctx: CoreCtx) void {
     const config = CacheConfig{ .roc_ctx = roc_ctx };
 
     // Get the base cache directory
@@ -174,30 +163,32 @@ fn cleanupPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStats, roc
 
     const now_ns = roc_ctx.timestampNow();
 
-    // Open the cache directory
-    var cache_dir = SysIo.Dir.cwd().openDir(roc_ctx.sys_io, cache_base, .{ .iterate = true }) catch return;
-    defer cache_dir.close(roc_ctx.sys_io);
+    // List immediate children of the cache directory (version directories).
+    const entries = roc_ctx.listDir(cache_base, allocator) catch return;
+    defer {
+        for (entries) |entry| allocator.free(entry.path);
+        allocator.free(entries);
+    }
 
-    // Iterate over version directories
-    var version_iter = cache_dir.iterate();
-    while (version_iter.next(roc_ctx.sys_io) catch null) |version_entry| {
-        if (version_entry.kind != .directory) continue;
+    for (entries) |entry| {
+        if (entry.kind != .directory) continue;
 
-        const version_path = std.fs.path.join(allocator, &.{ cache_base, version_entry.name }) catch continue;
-        defer allocator.free(version_path);
+        // Only process immediate children of cache_base (version directories).
+        const parent = std.fs.path.dirname(entry.path) orelse continue;
+        if (!std.mem.eql(u8, parent, cache_base)) continue;
 
         // Clean up mod/ directory
-        const mod_path = std.fs.path.join(allocator, &.{ version_path, "mod" }) catch continue;
+        const mod_path = std.fs.path.join(allocator, &.{ entry.path, "mod" }) catch continue;
         cleanupCacheSubdir(allocator, mod_path, now_ns, roc_ctx, maybe_stats);
         allocator.free(mod_path);
 
         // Clean up exe/ directory
-        const exe_path = std.fs.path.join(allocator, &.{ version_path, "exe" }) catch continue;
+        const exe_path = std.fs.path.join(allocator, &.{ entry.path, "exe" }) catch continue;
         cleanupCacheSubdir(allocator, exe_path, now_ns, roc_ctx, maybe_stats);
         allocator.free(exe_path);
 
         // Clean up test/ directory
-        const test_path = std.fs.path.join(allocator, &.{ version_path, "test" }) catch continue;
+        const test_path = std.fs.path.join(allocator, &.{ entry.path, "test" }) catch continue;
         cleanupCacheSubdir(allocator, test_path, now_ns, roc_ctx, maybe_stats);
         allocator.free(test_path);
 
@@ -209,66 +200,47 @@ fn cleanupPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStats, roc
 }
 
 /// Clean up files in a cache subdirectory (mod/ or exe/) older than 30 days.
-fn cleanupCacheSubdir(allocator: Allocator, subdir_path: []const u8, now_ns: i128, roc_ctx: RocCtx, maybe_stats: ?*CleanupStats) void {
-    var subdir = SysIo.Dir.cwd().openDir(roc_ctx.sys_io, subdir_path, .{ .iterate = true }) catch return;
-    defer subdir.close(roc_ctx.sys_io);
-
-    // Iterate over subdirectories (hash buckets like "a0", "b1", etc.)
-    var bucket_iter = subdir.iterate();
-    while (bucket_iter.next(roc_ctx.sys_io) catch null) |bucket_entry| {
-        if (bucket_entry.kind != .directory) {
-            // Direct file in the subdir - check age and delete if old
-            const file_path = std.fs.path.join(allocator, &.{ subdir_path, bucket_entry.name }) catch continue;
-            defer allocator.free(file_path);
-
-            const file_info = roc_ctx.stat(file_path) catch continue;
-            const age_ns = now_ns - (file_info.mtime_ns orelse continue);
-
-            if (age_ns > Config.PERSISTENT_MAX_AGE_NS) {
-                roc_ctx.deleteFile(file_path) catch {
-                    if (maybe_stats) |stats| stats.errors += 1;
-                    continue;
-                };
-                if (maybe_stats) |stats| stats.cache_files_deleted += 1;
-            }
-            continue;
-        }
-
-        const bucket_path = std.fs.path.join(allocator, &.{ subdir_path, bucket_entry.name }) catch continue;
-        defer allocator.free(bucket_path);
-
-        var bucket_dir = SysIo.Dir.cwd().openDir(roc_ctx.sys_io, bucket_path, .{ .iterate = true }) catch continue;
-        defer bucket_dir.close(roc_ctx.sys_io);
-
-        // Iterate over cache files in this bucket
-        var file_iter = bucket_dir.iterate();
-        while (file_iter.next(roc_ctx.sys_io) catch null) |file_entry| {
-            if (file_entry.kind != .file) continue;
-
-            const file_path = std.fs.path.join(allocator, &.{ bucket_path, file_entry.name }) catch continue;
-            defer allocator.free(file_path);
-
-            const file_info = roc_ctx.stat(file_path) catch continue;
-            const age_ns = now_ns - (file_info.mtime_ns orelse continue);
-
-            if (age_ns > Config.PERSISTENT_MAX_AGE_NS) {
-                roc_ctx.deleteFile(file_path) catch {
-                    if (maybe_stats) |stats| stats.errors += 1;
-                    continue;
-                };
-                if (maybe_stats) |stats| stats.cache_files_deleted += 1;
-            }
-        }
-
-        // NOTE: We intentionally do NOT delete empty bucket directories.
-        // Empty directories are harmless and deleting them can cause race conditions.
+fn cleanupCacheSubdir(allocator: Allocator, subdir_path: []const u8, now_ns: i128, roc_ctx: CoreCtx, maybe_stats: ?*CleanupStats) void {
+    // Recursively list all entries under the cache subdirectory.
+    const entries = roc_ctx.listDir(subdir_path, allocator) catch return;
+    defer {
+        for (entries) |entry| allocator.free(entry.path);
+        allocator.free(entries);
     }
 
-    // NOTE: We intentionally do NOT delete empty subdirs.
+    for (entries) |entry| {
+        if (entry.kind != .file) continue;
+
+        const parent = std.fs.path.dirname(entry.path) orelse continue;
+
+        // Accept files at depth 1 (direct files in subdir) or depth 2
+        // (files inside bucket directories like "a0", "b1", etc.)
+        const is_direct = std.mem.eql(u8, parent, subdir_path);
+        const is_in_bucket = if (std.fs.path.dirname(parent)) |grandparent|
+            std.mem.eql(u8, grandparent, subdir_path)
+        else
+            false;
+
+        if (!is_direct and !is_in_bucket) continue;
+
+        const file_info = roc_ctx.stat(entry.path) catch continue;
+        const age_ns = now_ns - (file_info.mtime_ns orelse continue);
+
+        if (age_ns > Config.PERSISTENT_MAX_AGE_NS) {
+            roc_ctx.deleteFile(entry.path) catch {
+                if (maybe_stats) |stats| stats.errors += 1;
+                continue;
+            };
+            if (maybe_stats) |stats| stats.cache_files_deleted += 1;
+        }
+    }
+
+    // NOTE: We intentionally do NOT delete empty bucket directories or subdirs.
+    // Empty directories are harmless and deleting them can cause race conditions.
 }
 
 /// Try to delete a directory if it's empty.
-fn tryDeleteEmptyDir(roc_ctx: RocCtx, path: []const u8) void {
+fn tryDeleteEmptyDir(roc_ctx: CoreCtx, path: []const u8) void {
     roc_ctx.deleteDir(path) catch {
         // Expected errors: directory not empty, not found, etc.
     };
@@ -276,7 +248,7 @@ fn tryDeleteEmptyDir(roc_ctx: RocCtx, path: []const u8) void {
 
 /// Delete a specific temp directory and its coordination file.
 /// Used for immediate cleanup after spawning a child process.
-pub fn deleteTempDir(allocator: Allocator, roc_ctx: RocCtx, temp_dir_path: []const u8) void {
+pub fn deleteTempDir(allocator: Allocator, roc_ctx: CoreCtx, temp_dir_path: []const u8) void {
     // Delete the directory and its contents
     roc_ctx.deleteTree(temp_dir_path) catch {};
 
@@ -293,7 +265,7 @@ pub fn deleteTempDir(allocator: Allocator, roc_ctx: RocCtx, temp_dir_path: []con
 /// Clean up legacy temp directories that used the old "roc-*" prefix pattern.
 /// Old structure: /tmp/roc-{random}/ (directly in temp, with roc- prefix)
 /// New structure: /tmp/roc/{version}/{random}/
-fn cleanupLegacyTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats, roc_ctx: RocCtx) void {
+fn cleanupLegacyTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats, roc_ctx: CoreCtx) void {
     const temp_base = switch (builtin.target.os.tag) {
         .windows => roc_ctx.getEnvVar("TEMP", allocator) catch
             roc_ctx.getEnvVar("TMP", allocator) catch
@@ -303,21 +275,26 @@ fn cleanupLegacyTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats, roc_
     };
     defer allocator.free(temp_base);
 
-    var temp_dir = SysIo.Dir.cwd().openDir(roc_ctx.sys_io, temp_base, .{ .iterate = true }) catch return;
-    defer temp_dir.close(roc_ctx.sys_io);
+    // List all entries under the temp directory.
+    const entries = roc_ctx.listDir(temp_base, allocator) catch return;
+    defer {
+        for (entries) |entry| allocator.free(entry.path);
+        allocator.free(entries);
+    }
 
     // Look for directories matching "roc-*" pattern (old naming convention)
-    var iter = temp_dir.iterate();
-    while (iter.next(roc_ctx.sys_io) catch null) |entry| {
+    for (entries) |entry| {
         if (entry.kind != .directory) continue;
 
-        // Check if it starts with "roc-" (old prefix pattern)
-        if (std.mem.startsWith(u8, entry.name, "roc-")) {
-            const entry_path = std.fs.path.join(allocator, &.{ temp_base, entry.name }) catch continue;
-            defer allocator.free(entry_path);
+        // Only process immediate children of temp_base.
+        const parent = std.fs.path.dirname(entry.path) orelse continue;
+        if (!std.mem.eql(u8, parent, temp_base)) continue;
 
+        // Check if it starts with "roc-" (old prefix pattern)
+        const basename = std.fs.path.basename(entry.path);
+        if (std.mem.startsWith(u8, basename, "roc-")) {
             // Delete the directory and its contents
-            roc_ctx.deleteTree(entry_path) catch {
+            roc_ctx.deleteTree(entry.path) catch {
                 if (maybe_stats) |stats| stats.errors += 1;
                 continue;
             };
@@ -329,25 +306,31 @@ fn cleanupLegacyTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats, roc_
 /// Clean up legacy persistent cache that used the old flat structure.
 /// Old structure: ~/.cache/roc/{hash}/ or ~/.cache/roc/*.rcache (flat)
 /// New structure: ~/.cache/roc/{version}/mod/ and ~/.cache/roc/{version}/exe/
-fn cleanupLegacyPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStats, roc_ctx: RocCtx) void {
+fn cleanupLegacyPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStats, roc_ctx: CoreCtx) void {
     const config = CacheConfig{ .roc_ctx = roc_ctx };
 
     const cache_base = config.getEffectiveCacheDir(allocator) catch return;
     defer allocator.free(cache_base);
 
-    var cache_dir = SysIo.Dir.cwd().openDir(roc_ctx.sys_io, cache_base, .{ .iterate = true }) catch return;
-    defer cache_dir.close(roc_ctx.sys_io);
+    // List all entries under the cache directory.
+    const entries = roc_ctx.listDir(cache_base, allocator) catch return;
+    defer {
+        for (entries) |entry| allocator.free(entry.path);
+        allocator.free(entries);
+    }
 
     // Look for old-style entries (hash directories or direct cache files)
-    var iter = cache_dir.iterate();
-    while (iter.next(roc_ctx.sys_io) catch null) |entry| {
-        const entry_path = std.fs.path.join(allocator, &.{ cache_base, entry.name }) catch continue;
-        defer allocator.free(entry_path);
+    for (entries) |entry| {
+        // Only process immediate children of cache_base.
+        const parent = std.fs.path.dirname(entry.path) orelse continue;
+        if (!std.mem.eql(u8, parent, cache_base)) continue;
+
+        const basename = std.fs.path.basename(entry.path);
 
         if (entry.kind == .file) {
             // Old-style: direct .rcache files in the cache root
-            if (std.mem.endsWith(u8, entry.name, ".rcache")) {
-                roc_ctx.deleteFile(entry_path) catch {
+            if (std.mem.endsWith(u8, basename, ".rcache")) {
+                roc_ctx.deleteFile(entry.path) catch {
                     if (maybe_stats) |stats| stats.errors += 1;
                     continue;
                 };
@@ -357,11 +340,11 @@ fn cleanupLegacyPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStat
             // Check if this is an old-style hash directory (not a version directory)
             // Old hash dirs were like "a0b1c2d3..." (hex chars only, typically 16+ chars)
             // New version dirs are like "debug-abcd1234" (contain hyphen)
-            const is_old_hash_dir = isLegacyHashDir(entry.name);
+            const is_old_hash_dir = isLegacyHashDir(basename);
 
             if (is_old_hash_dir) {
                 // Delete the entire old hash directory
-                roc_ctx.deleteTree(entry_path) catch {
+                roc_ctx.deleteTree(entry.path) catch {
                     if (maybe_stats) |stats| stats.errors += 1;
                     continue;
                 };
@@ -410,12 +393,12 @@ test "CleanupStats initializes to zero" {
 
 test "deleteTempDir handles non-existent directory" {
     // Should not crash when directory doesn't exist
-    deleteTempDir(std.testing.allocator, RocCtx.default(std.testing.allocator, std.testing.allocator, std.testing.io), "/nonexistent/path/that/does/not/exist");
+    deleteTempDir(std.testing.allocator, CoreCtx.default(std.testing.allocator, std.testing.allocator, std.testing.io), "/nonexistent/path/that/does/not/exist");
 }
 
 test "tryDeleteEmptyDir handles non-existent directory" {
     // Should not crash when directory doesn't exist
-    tryDeleteEmptyDir(RocCtx.default(std.testing.allocator, std.testing.allocator, std.testing.io), "/nonexistent/path");
+    tryDeleteEmptyDir(CoreCtx.default(std.testing.allocator, std.testing.allocator, std.testing.io), "/nonexistent/path");
 }
 
 test "deleteTempDir deletes directory and coordination file" {
@@ -449,7 +432,7 @@ test "deleteTempDir deletes directory and coordination file" {
     };
 
     // Delete the temp dir
-    deleteTempDir(allocator, RocCtx.default(std.testing.allocator, std.testing.allocator, std.testing.io), temp_dir_path);
+    deleteTempDir(allocator, CoreCtx.default(std.testing.allocator, std.testing.allocator, std.testing.io), temp_dir_path);
 
     // Verify directory is deleted
     tmp_dir.dir.access(std.testing.io, "test_temp_dir", .{}) catch |err| {
@@ -478,7 +461,7 @@ test "tryDeleteEmptyDir deletes empty directory" {
     defer allocator.free(empty_dir_path);
 
     // Try to delete it
-    tryDeleteEmptyDir(RocCtx.default(std.testing.allocator, std.testing.allocator, std.testing.io), empty_dir_path);
+    tryDeleteEmptyDir(CoreCtx.default(std.testing.allocator, std.testing.allocator, std.testing.io), empty_dir_path);
 
     // Verify it's deleted
     tmp_dir.dir.access(std.testing.io, "empty_dir", .{}) catch |err| {
@@ -503,7 +486,7 @@ test "tryDeleteEmptyDir does not delete non-empty directory" {
     defer allocator.free(nonempty_dir_path);
 
     // Try to delete it (should fail silently)
-    tryDeleteEmptyDir(RocCtx.default(std.testing.allocator, std.testing.allocator, std.testing.io), nonempty_dir_path);
+    tryDeleteEmptyDir(CoreCtx.default(std.testing.allocator, std.testing.allocator, std.testing.io), nonempty_dir_path);
 
     // Verify it still exists
     tmp_dir.dir.access(std.testing.io, "nonempty_dir", .{}) catch {
@@ -535,7 +518,7 @@ test "cleanupCacheSubdir deletes old files and keeps new files" {
     defer allocator.free(subdir_path);
 
     // Get current time - files will be very recent (age ~0)
-    const test_io = RocCtx.default(std.testing.allocator, std.testing.allocator, std.testing.io);
+    const test_io = CoreCtx.default(std.testing.allocator, std.testing.allocator, std.testing.io);
     const now_ns = test_io.timestampNow();
 
     // Track stats
@@ -608,7 +591,7 @@ test "cleanup removes empty bucket directories" {
     defer allocator.free(subdir_path);
 
     // Use future time to make file appear old
-    const test_io = RocCtx.default(std.testing.allocator, std.testing.allocator, std.testing.io);
+    const test_io = CoreCtx.default(std.testing.allocator, std.testing.allocator, std.testing.io);
     const now_ns = test_io.timestampNow();
     const far_future_ns: i128 = now_ns + Config.PERSISTENT_MAX_AGE_NS + std.time.ns_per_s;
 

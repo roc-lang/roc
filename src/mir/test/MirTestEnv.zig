@@ -9,7 +9,7 @@ const CIR = @import("can").CIR;
 const Can = @import("can").Can;
 const ModuleEnv = @import("can").ModuleEnv;
 const collections = @import("collections");
-const RocCtx = @import("can").RocCtx;
+const CoreCtx = @import("can").CoreCtx;
 
 const Check = @import("check").Check;
 
@@ -137,7 +137,7 @@ pub fn initExpr(comptime source_expr: []const u8) !MirTestEnv {
 /// Full init: parse → canonicalize → type-check → init Lower
 pub fn initFull(module_name: []const u8, source: []const u8) !MirTestEnv {
     const gpa = std.testing.allocator;
-    const roc_ctx = RocCtx.testing(gpa, gpa);
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
 
     const module_env: *ModuleEnv = try gpa.create(ModuleEnv);
     errdefer gpa.destroy(module_env);
@@ -315,7 +315,7 @@ pub fn initModule(module_name: []const u8, source: []const u8) !MirTestEnv {
 pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_env: *const MirTestEnv) !MirTestEnv {
     const gpa = std.testing.allocator;
 
-    const roc_ctx = RocCtx.testing(gpa, gpa);
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
 
     const module_env: *ModuleEnv = try gpa.create(ModuleEnv);
     errdefer gpa.destroy(module_env);

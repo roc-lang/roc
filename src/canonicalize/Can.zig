@@ -14,7 +14,7 @@ const builtins = @import("builtins");
 const ctx_mod = @import("ctx");
 const tracy = @import("tracy");
 
-const RocCtx = ctx_mod.RocCtx;
+const CoreCtx = ctx_mod.CoreCtx;
 
 const trace_modules = if (builtin.cpu.arch == .wasm32) false else if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
 
@@ -157,8 +157,8 @@ enclosing_lambda: ?Expr.Idx = null,
 /// Directory containing the source file, used to resolve file imports.
 source_dir: ?[]const u8 = null,
 /// I/O for file operations (e.g., file imports).
-/// Defaults to undefined — callers that need file imports must provide a real RocCtx.
-roc_ctx: RocCtx = undefined,
+/// Defaults to undefined — callers that need file imports must provide a real CoreCtx.
+roc_ctx: CoreCtx = undefined,
 const Ident = base.Ident;
 const Region = base.Region;
 // ModuleEnv is already imported at the top
@@ -268,7 +268,7 @@ pub fn deinit(
 
 /// Initialize the canonicalizer for a module.
 pub fn initModule(
-    roc_ctx: RocCtx,
+    roc_ctx: CoreCtx,
     env: *ModuleEnv,
     parse_ir: *AST,
     context: ModuleInitContext,
@@ -277,7 +277,7 @@ pub fn initModule(
 }
 
 pub fn initBuiltin(
-    roc_ctx: RocCtx,
+    roc_ctx: CoreCtx,
     env: *ModuleEnv,
     parse_ir: *AST,
 ) std.mem.Allocator.Error!Self {
@@ -285,7 +285,7 @@ pub fn initBuiltin(
 }
 
 fn initInternal(
-    roc_ctx: RocCtx,
+    roc_ctx: CoreCtx,
     env: *ModuleEnv,
     parse_ir: *AST,
     maybe_context: ?ModuleInitContext,

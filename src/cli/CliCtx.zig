@@ -13,7 +13,7 @@
 //! - The type system enforces proper error handling
 //!
 //! Usage:
-//!   fn doSomething(ctx: *CliContext, path: []const u8) CliError!void {
+//!   fn doSomething(ctx: *CliCtx, path: []const u8) CliError!void {
 //!       const source = std.Io.Dir.cwd().readFileAlloc(ctx.gpa, path, ...) catch |err| {
 //!           return ctx.fail(.{ .file_not_found = .{ .path = path } });
 //!       };
@@ -23,7 +23,7 @@
 //!
 //!   // At top level:
 //!   var io = Io.init();
-//!   var ctx = CliContext.init(gpa, arena, &io, .build);
+//!   var ctx = CliCtx.init(gpa, arena, &io, .build);
 //!   ctx.initIo();  // Initialize I/O writers after ctx is at its final location
 //!   defer ctx.deinit();
 //!
@@ -38,6 +38,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const reporting = @import("reporting");
 const problem_mod = @import("CliProblem.zig");
+const CoreCtx = @import("ctx").CoreCtx;
 
 const CliProblem = problem_mod.CliProblem;
 const ColorPalette = reporting.ColorPalette;
@@ -47,7 +48,7 @@ const ReportingConfig = reporting.ReportingConfig;
 /// Wraps stdout/stderr with buffered writers. When Zig's std.Io interface
 /// becomes available, this struct will be replaced with std.Io.
 pub const Io = struct {
-    sys_io: std.Io,
+    std_io: std.Io,
     stdout_writer: std.Io.File.Writer,
     stderr_writer: std.Io.File.Writer,
     stdout_buffer: [4096]u8,
@@ -57,9 +58,9 @@ pub const Io = struct {
 
     /// Create an uninitialized Io struct.
     /// MUST call initWriters() after placing the struct at its final location.
-    pub fn create(sys_io: std.Io) Self {
+    pub fn create(std_io: std.Io) Self {
         return Self{
-            .sys_io = sys_io,
+            .std_io = std_io,
             .stdout_writer = undefined,
             .stderr_writer = undefined,
             .stdout_buffer = undefined,
@@ -75,11 +76,11 @@ pub const Io = struct {
         const stderr_file = std.Io.File.stderr();
 
         // Enable ANSI escape sequences for colored output (needed on Windows)
-        stdout_file.enableAnsiEscapeCodes(self.sys_io) catch {};
-        stderr_file.enableAnsiEscapeCodes(self.sys_io) catch {};
+        stdout_file.enableAnsiEscapeCodes(self.std_io) catch {};
+        stderr_file.enableAnsiEscapeCodes(self.std_io) catch {};
 
-        self.stdout_writer = stdout_file.writer(self.sys_io, &self.stdout_buffer);
-        self.stderr_writer = stderr_file.writer(self.sys_io, &self.stderr_buffer);
+        self.stdout_writer = stdout_file.writer(self.std_io, &self.stdout_buffer);
+        self.stderr_writer = stderr_file.writer(self.std_io, &self.stderr_buffer);
     }
 
     /// Get the stdout writer interface
@@ -101,7 +102,7 @@ pub const Io = struct {
 
 /// The single error type for CLI operations.
 /// When a function returns this error, it means a problem has been recorded
-/// in the CliContext and will be rendered at the top level.
+/// in the CliCtx and will be rendered at the top level.
 pub const CliError = error{CliError};
 
 /// CLI commands that can generate errors
@@ -137,7 +138,7 @@ pub const Command = enum {
 
 /// Shared context for CLI operations.
 /// Contains allocators, I/O, and accumulated problems.
-pub const CliContext = struct {
+pub const CliCtx = struct {
     /// General purpose allocator for long-lived allocations
     gpa: Allocator,
     /// Arena allocator for temporary/scoped allocations
@@ -170,6 +171,11 @@ pub const CliContext = struct {
     /// final memory location (i.e., after init() returns and the result is stored).
     pub fn initIo(self: *Self) void {
         self.io.initWriters();
+    }
+
+    /// Create a CoreCtx from this CLI context's allocators and I/O.
+    pub fn coreCtx(self: *const Self) CoreCtx {
+        return CoreCtx.default(self.gpa, self.arena, self.io.std_io);
     }
 
     /// Clean up resources and flush I/O
@@ -288,9 +294,6 @@ pub const CliContext = struct {
     pub const renderAll = renderProblemsTo;
 };
 
-/// Backward compatibility alias
-pub const CliErrorContext = CliContext;
-
 // Helper Functions
 
 /// Create a context, add a single problem, render it, and return the exit code.
@@ -301,7 +304,7 @@ pub fn reportSingleProblem(
     command: Command,
     problem: CliProblem,
 ) u8 {
-    var ctx = CliContext.init(allocator, allocator, io, command);
+    var ctx = CliCtx.init(allocator, allocator, io, command);
     defer ctx.deinit();
 
     ctx.addProblemIgnoreError(problem);
@@ -326,11 +329,11 @@ pub fn renderProblem(
 
 // Tests
 
-test "CliContext accumulates problems" {
+test "CliCtx accumulates problems" {
     const allocator = std.testing.allocator;
     var io = Io.init();
 
-    var ctx = CliContext.init(allocator, allocator, &io, .build);
+    var ctx = CliCtx.init(allocator, allocator, &io, .build);
     ctx.initIo();
     defer ctx.deinit();
 
@@ -346,11 +349,11 @@ test "CliContext accumulates problems" {
     try std.testing.expectEqual(@as(u8, 1), ctx.exitCode());
 }
 
-test "CliContext counts errors vs warnings correctly" {
+test "CliCtx counts errors vs warnings correctly" {
     const allocator = std.testing.allocator;
     var io = Io.init();
 
-    var ctx = CliContext.init(allocator, allocator, &io, .build);
+    var ctx = CliCtx.init(allocator, allocator, &io, .build);
     ctx.initIo();
     defer ctx.deinit();
 
@@ -361,11 +364,11 @@ test "CliContext counts errors vs warnings correctly" {
     try std.testing.expectEqual(@as(usize, 0), ctx.warningCount());
 }
 
-test "CliContext clear resets state" {
+test "CliCtx clear resets state" {
     const allocator = std.testing.allocator;
     var io = Io.init();
 
-    var ctx = CliContext.init(allocator, allocator, &io, .build);
+    var ctx = CliCtx.init(allocator, allocator, &io, .build);
     ctx.initIo();
     defer ctx.deinit();
 

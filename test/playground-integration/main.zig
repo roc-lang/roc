@@ -427,8 +427,8 @@ fn parseWasmResponseJson(allocator: std.mem.Allocator, response_json_slice: []co
 /// - `gpa` allocator is the DebugAllocator, intended for bytebox VM.
 /// - `arena` allocator is the ArenaAllocator, used for other test harness allocations.
 /// - `wasm_path` is the path to the WASM file to load.
-fn setupWasm(sys_io: std.Io, gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []const u8) !WasmInterface {
-    const wasm_data: []const u8 = std.Io.Dir.cwd().readFileAlloc(sys_io, wasm_path, arena, .unlimited) catch |err| {
+fn setupWasm(std_io: std.Io, gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []const u8) !WasmInterface {
+    const wasm_data: []const u8 = std.Io.Dir.cwd().readFileAlloc(std_io, wasm_path, arena, .unlimited) catch |err| {
         logDebug("[ERROR] Failed to read WASM file '{s}': {}\n", .{ wasm_path, err });
         return err;
     };
@@ -841,7 +841,7 @@ fn runTestSteps(allocator: std.mem.Allocator, wasm_interface: *WasmInterface, te
 // - `arena` allocator is for test harness allocations.
 // - `gpa` allocator is for the bytebox VM.
 // - `wasm_path` is the path to the WASM file to load.
-fn runTests(sys_io: std.Io, arena: std.mem.Allocator, gpa: std.mem.Allocator, test_cases: []const TestCase, wasm_path: []const u8) !TestStats {
+fn runTests(std_io: std.Io, arena: std.mem.Allocator, gpa: std.mem.Allocator, test_cases: []const TestCase, wasm_path: []const u8) !TestStats {
     var stats = TestStats{
         .total = test_cases.len,
         .start_time = nanoTimestamp(),
@@ -855,7 +855,7 @@ fn runTests(sys_io: std.Io, arena: std.mem.Allocator, gpa: std.mem.Allocator, te
 
     for (test_cases) |case| {
         logDebug("\n[INFO] Setting up WASM interface for test case: {s}...\n", .{case.name});
-        var wasm_interface = setupWasm(sys_io, gpa, arena, wasm_path) catch |err| {
+        var wasm_interface = setupWasm(std_io, gpa, arena, wasm_path) catch |err| {
             logDebug("[ERROR] Failed to setup WASM for test case '{s}': {}\n", .{ case.name, err });
             stats.failed += 1;
             try failures.append(arena, .{
@@ -920,7 +920,7 @@ fn createSimpleTest(allocator: std.mem.Allocator, name: []const u8, code: []cons
 }
 
 pub fn main(init: std.process.Init) !void {
-    const sys_io = init.io;
+    const std_io = init.io;
     // Setup gpa allocator used for bytebox WASM VM
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -1251,7 +1251,7 @@ pub fn main(init: std.process.Init) !void {
     logDebug("[INFO] Starting Playground Integration Tests...\n", .{});
     logDebug("[INFO] Running {} test cases\n", .{test_cases.items.len});
 
-    const stats = try runTests(sys_io, allocator, gpa.allocator(), test_cases.items, playground_wasm_path);
+    const stats = try runTests(std_io, allocator, gpa.allocator(), test_cases.items, playground_wasm_path);
 
     logDebug("\nAll Playground Integration Tests Completed!\n", .{});
     logDebug("Final Results: {}/{} passed ({d:0.}%)\n", .{ stats.passed, stats.total, stats.successRate() });

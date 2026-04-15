@@ -8,7 +8,7 @@ const CIR = @import("can").CIR;
 const Can = @import("can").Can;
 const ModuleEnv = @import("can").ModuleEnv;
 const collections = @import("collections");
-const RocCtx = @import("can").RocCtx;
+const CoreCtx = @import("can").CoreCtx;
 
 const Check = @import("../Check.zig");
 const report_mod = @import("../report.zig");
@@ -131,7 +131,7 @@ const TestEnv = @This();
 pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_test_env: *const TestEnv) !TestEnv {
     const gpa = std.testing.allocator;
 
-    const roc_ctx = RocCtx.testing(gpa, gpa);
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
 
     // Allocate our ModuleEnv and Can on the heap
     // so we can keep them around for testing purposes...
@@ -280,7 +280,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
 pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     const gpa = std.testing.allocator;
 
-    const roc_ctx = RocCtx.testing(gpa, gpa);
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
 
     // Allocate our ModuleEnv and Can on the heap
     // so we can keep them around for testing purposes...

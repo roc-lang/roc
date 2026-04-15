@@ -11,7 +11,7 @@ const std = @import("std");
 const tokenize = @import("parse").tokenize;
 const parse = @import("parse");
 const can = @import("can");
-const RocCtx = can.RocCtx;
+const CoreCtx = can.CoreCtx;
 const base = @import("base");
 const eval_mod = @import("eval");
 const compiled_builtins = @import("compiled_builtins");
@@ -308,7 +308,7 @@ pub fn extractSemanticTokensWithImports(
     defer builtin_module.deinit();
 
     // Create canonicalizer and run
-    const roc_ctx = RocCtx.testing(allocator, allocator);
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
     var canonicalizer = can.Can.initModule(roc_ctx, &module_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,

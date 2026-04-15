@@ -9,7 +9,7 @@ const builtins = @import("builtins");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 const roc_target = @import("roc_target");
-const RocCtx = @import("ctx").RocCtx;
+const CoreCtx = @import("ctx").CoreCtx;
 
 const helpers = @import("helpers.zig");
 const builtin_loading = @import("../builtin_loading.zig");
@@ -40,15 +40,14 @@ const runExpectProblem = helpers.runExpectProblem;
 const ExpectedField = helpers.ExpectedField;
 const runDevOnlyExpectStr = helpers.runDevOnlyExpectStr;
 
-const SysIo = @FieldType(RocCtx, "sys_io");
-
 const TraceWriterState = struct {
     buffer: [256]u8 = undefined,
-    writer: SysIo.File.Writer = undefined,
+    writer: std.Io.File.Writer = undefined,
 
-    fn init() TraceWriterState {
+    fn init(std_io: std.Io) TraceWriterState {
+        const stderr: std.Io.File = .{ .handle = std.posix.STDERR_FILENO, .flags = .{ .nonblocking = false } };
         var state = TraceWriterState{};
-        state.writer = SysIo.File.stderr().writer(std.testing.io, &state.buffer);
+        state.writer = stderr.writer(std_io, &state.buffer);
         return state;
     }
 };
@@ -835,7 +834,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         .builtin_indices = builtin_indices,
     };
 
-    const roc_ctx = RocCtx.testing(gpa, gpa);
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
     var czer = try Can.initModule(roc_ctx, &original_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,

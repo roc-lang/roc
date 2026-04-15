@@ -15,7 +15,7 @@ const can = @import("can");
 const uri_util = @import("uri.zig");
 
 const BuildEnv = compile.BuildEnv;
-const RocCtx = compile.RocCtx;
+const CoreCtx = compile.CoreCtx;
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 
@@ -44,7 +44,7 @@ pub const BuildSession = struct {
     /// - Report draining
     pub fn init(
         allocator: Allocator,
-        sys_io: std.Io,
+        std_io: std.Io,
         env: *BuildEnv,
         uri: []const u8,
         override_text: ?[]const u8,
@@ -53,14 +53,14 @@ pub const BuildSession = struct {
         const path = try uri_util.uriToPath(allocator, uri);
         defer allocator.free(path);
 
-        const absolute_path: [:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(sys_io, path, allocator) catch
+        const absolute_path: [:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(std_io, path, allocator) catch
             try allocator.dupeZ(u8, path);
         errdefer allocator.free(absolute_path);
 
         // Set up file override if override text provided.
         // SAFETY: override lives on the stack and its address is stored in env.filesystem.
         // This is safe because env.build() is synchronous and we restore the Io before returning.
-        var override: RocCtx.ReadFileOverride = undefined;
+        var override: CoreCtx.ReadFileOverride = undefined;
         const saved_io = env.filesystem;
         if (override_text) |text| {
             override = .{ .path = absolute_path, .content = text, .base = env.filesystem };

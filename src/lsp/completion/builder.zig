@@ -33,7 +33,7 @@ const CompletionItemKind = completion_handler.CompletionItemKind;
 /// Handles deduplication and provides methods for adding different types of completions.
 pub const CompletionBuilder = struct {
     allocator: Allocator,
-    sys_io: std.Io,
+    std_io: std.Io,
     items: *std.ArrayList(CompletionItem),
     seen_labels: std.StringHashMap(void),
     builtin_module_env: ?*ModuleEnv,
@@ -47,10 +47,10 @@ pub const CompletionBuilder = struct {
     cached_scope_module_ident: base.Ident.Idx = base.Ident.Idx.NONE,
 
     /// Initialize a new CompletionBuilder.
-    pub fn init(allocator: Allocator, sys_io: std.Io, items: *std.ArrayList(CompletionItem), builtin_module_env: ?*ModuleEnv) CompletionBuilder {
+    pub fn init(allocator: Allocator, std_io: std.Io, items: *std.ArrayList(CompletionItem), builtin_module_env: ?*ModuleEnv) CompletionBuilder {
         return .{
             .allocator = allocator,
-            .sys_io = sys_io,
+            .std_io = std_io,
             .items = items,
             .seen_labels = std.StringHashMap(void).init(allocator),
             .builtin_module_env = builtin_module_env,
@@ -58,10 +58,10 @@ pub const CompletionBuilder = struct {
     }
 
     /// Initialize a new CompletionBuilder with debug logging.
-    pub fn initWithDebug(allocator: Allocator, sys_io: std.Io, items: *std.ArrayList(CompletionItem), builtin_module_env: ?*ModuleEnv, debug: DebugFlags, log_file: ?std.Io.File) CompletionBuilder {
+    pub fn initWithDebug(allocator: Allocator, std_io: std.Io, items: *std.ArrayList(CompletionItem), builtin_module_env: ?*ModuleEnv, debug: DebugFlags, log_file: ?std.Io.File) CompletionBuilder {
         return .{
             .allocator = allocator,
-            .sys_io = sys_io,
+            .std_io = std_io,
             .items = items,
             .seen_labels = std.StringHashMap(void).init(allocator),
             .builtin_module_env = builtin_module_env,
@@ -101,9 +101,9 @@ pub const CompletionBuilder = struct {
         var log_file = self.log_file orelse return;
         var buffer: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buffer, fmt, args) catch return;
-        log_file.writeStreamingAll(self.sys_io, msg) catch return;
-        log_file.writeStreamingAll(self.sys_io, "\n") catch {};
-        log_file.sync(self.sys_io) catch {};
+        log_file.writeStreamingAll(self.std_io, msg) catch return;
+        log_file.writeStreamingAll(self.std_io, "\n") catch {};
+        log_file.sync(self.std_io) catch {};
     }
 
     /// Add a completion item, returning true if it was added (not a duplicate).

@@ -3,7 +3,7 @@
 const std = @import("std");
 const ctx_mod = @import("ctx");
 
-const RocCtx = ctx_mod.RocCtx;
+const CoreCtx = ctx_mod.CoreCtx;
 const Allocator = std.mem.Allocator;
 
 /// Cache key that uniquely identifies a cached compilation result.
@@ -29,7 +29,7 @@ pub const CacheKey = struct {
     pub fn generate(
         source: []const u8,
         file_path: []const u8,
-        fs: RocCtx,
+        fs: CoreCtx,
         allocator: Allocator,
     ) !Self {
         // Hash the source content
@@ -111,7 +111,7 @@ pub const CacheKey = struct {
 /// This provides a quick validation that the file hasn't changed since caching.
 /// While the content hash is the primary validation, mtime provides an additional
 /// layer of validation and can help detect file system-level changes.
-fn getFileModTime(file_path: []const u8, fs: RocCtx) !i128 {
+fn getFileModTime(file_path: []const u8, fs: CoreCtx) !i128 {
     const file_info = fs.stat(file_path) catch |err| switch (err) {
         error.FileNotFound => return 0, // Use 0 for non-existent files (e.g., in-memory sources)
         else => return err,

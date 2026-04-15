@@ -5,7 +5,7 @@ This document outlines future work to reorganize the CLI module for better maint
 ## Design Principles
 
 1. **Flat structure** - No subdirectories, use descriptive filenames to group related code
-2. **TitleCase.zig** for files defining a single primary type (e.g., `CliContext.zig`)
+2. **TitleCase.zig** for files defining a single primary type (e.g., `CliCtx.zig`)
 3. **snake_case.zig** for namespace/function modules (e.g., `cli_args.zig`)
 4. **cli_roc_* prefix** for command implementation files to avoid conflicts
 5. Direct imports rather than re-export hubs
@@ -20,7 +20,7 @@ The CLI module is functional but `main.zig` is ~5,500 lines containing all comma
 src/cli/
 ├── main.zig                      # Slim entrypoint (~300 lines): dispatch only
 │
-├── CliContext.zig                # Main CLI context type (DONE)
+├── CliCtx.zig                # Main CLI context type (DONE)
 ├── CliProblem.zig                # Runtime error types (DONE)
 ├── cli_args.zig                  # Argument parsing (ArgProblem renamed, DONE)
 │

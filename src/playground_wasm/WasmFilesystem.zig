@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const ctx_mod = @import("ctx");
-const RocCtx = ctx_mod.RocCtx;
+const CoreCtx = ctx_mod.CoreCtx;
 
 const Allocator = std.mem.Allocator;
 
@@ -50,11 +50,11 @@ pub const WasmContext = struct {
 };
 
 /// Get a WASM filesystem implementation backed by the given context.
-pub fn wasm(wasm_ctx: *WasmContext, alloc: Allocator, sys_io: std.Io) RocCtx {
-    return .{ .ctx = @ptrCast(wasm_ctx), .vtable = wasm_vtable, .sys_io = sys_io, .gpa = alloc, .arena = alloc };
+pub fn wasm(wasm_ctx: *WasmContext, alloc: Allocator, std_io: std.Io) CoreCtx {
+    return .{ .ctx = @ptrCast(wasm_ctx), .vtable = wasm_vtable, .std_io = std_io, .gpa = alloc, .arena = alloc };
 }
 
-const wasm_vtable = RocCtx.VTable{
+const wasm_vtable = CoreCtx.VTable{
     .readFile = &readFileWasm,
     .readFileInto = &readFileIntoWasm,
     .writeFile = &writeFileWasm,
@@ -107,7 +107,7 @@ fn fileExistsWasm(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) bool {
     return matchesSourceFile(self, path);
 }
 
-fn readFileWasm(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, alloc: Allocator) RocCtx.ReadError![]u8 {
+fn readFileWasm(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, alloc: Allocator) CoreCtx.ReadError![]u8 {
     const self = getCtx(ctx_ptr);
     if (matchesSourceFile(self, path)) {
         if (self.source) |source| {
@@ -119,7 +119,7 @@ fn readFileWasm(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, alloc: Alloca
     return error.FileNotFound;
 }
 
-fn readFileIntoWasm(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, buffer: []u8) RocCtx.ReadError!usize {
+fn readFileIntoWasm(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, buffer: []u8) CoreCtx.ReadError!usize {
     const self = getCtx(ctx_ptr);
     if (matchesSourceFile(self, path)) {
         if (self.source) |source| {
@@ -135,15 +135,15 @@ fn readFileIntoWasm(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, buffer: [
     return error.FileNotFound;
 }
 
-fn writeFileWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) RocCtx.WriteError!void {
+fn writeFileWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) CoreCtx.WriteError!void {
     return error.AccessDenied;
 }
 
-fn statWasm(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) RocCtx.StatError!RocCtx.FileInfo {
+fn statWasm(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) CoreCtx.StatError!CoreCtx.FileInfo {
     const self = getCtx(ctx_ptr);
     if (matchesSourceFile(self, path)) {
         if (self.source) |source| {
-            return RocCtx.FileInfo{
+            return CoreCtx.FileInfo{
                 .kind = .file,
                 .size = source.len,
                 .mtime_ns = 0,
@@ -155,7 +155,7 @@ fn statWasm(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) RocCtx.StatError!
     return error.FileNotFound;
 }
 
-fn listDirWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) RocCtx.ListError![]RocCtx.FileEntry {
+fn listDirWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) CoreCtx.ListError![]CoreCtx.FileEntry {
     return error.FileNotFound;
 }
 
@@ -195,43 +195,43 @@ fn joinPathWasm(_: ?*anyopaque, _: std.Io, parts: []const []const u8, allocator:
     return buf;
 }
 
-fn canonicalizeWasm(_: ?*anyopaque, _: std.Io, root_relative_path: []const u8, alloc: Allocator) RocCtx.CanonicalizeError![]const u8 {
+fn canonicalizeWasm(_: ?*anyopaque, _: std.Io, root_relative_path: []const u8, alloc: Allocator) CoreCtx.CanonicalizeError![]const u8 {
     return alloc.dupe(u8, root_relative_path) catch handleOom();
 }
 
-fn makePathWasm(_: ?*anyopaque, _: std.Io, _: []const u8) RocCtx.MakePathError!void {
+fn makePathWasm(_: ?*anyopaque, _: std.Io, _: []const u8) CoreCtx.MakePathError!void {
     return error.AccessDenied;
 }
 
-fn renameWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) RocCtx.RenameError!void {
+fn renameWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) CoreCtx.RenameError!void {
     return error.AccessDenied;
 }
 
-fn getEnvVarWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) RocCtx.GetEnvVarError![]u8 {
+fn getEnvVarWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) CoreCtx.GetEnvVarError![]u8 {
     return error.EnvironmentVariableNotFound;
 }
 
-fn fetchUrlWasm(_: ?*anyopaque, _: std.Io, _: Allocator, _: []const u8, _: []const u8) RocCtx.FetchUrlError!void {
+fn fetchUrlWasm(_: ?*anyopaque, _: std.Io, _: Allocator, _: []const u8, _: []const u8) CoreCtx.FetchUrlError!void {
     return error.Unsupported;
 }
 
-fn deleteFileWasm(_: ?*anyopaque, _: std.Io, _: []const u8) RocCtx.DeleteError!void {
+fn deleteFileWasm(_: ?*anyopaque, _: std.Io, _: []const u8) CoreCtx.DeleteError!void {
     return error.AccessDenied;
 }
 
-fn deleteDirWasm(_: ?*anyopaque, _: std.Io, _: []const u8) RocCtx.DeleteError!void {
+fn deleteDirWasm(_: ?*anyopaque, _: std.Io, _: []const u8) CoreCtx.DeleteError!void {
     return error.AccessDenied;
 }
 
-fn deleteTreeWasm(_: ?*anyopaque, _: std.Io, _: []const u8) RocCtx.DeleteError!void {
+fn deleteTreeWasm(_: ?*anyopaque, _: std.Io, _: []const u8) CoreCtx.DeleteError!void {
     return error.AccessDenied;
 }
 
-fn createDirWasm(_: ?*anyopaque, _: std.Io, _: []const u8) RocCtx.MakePathError!void {
+fn createDirWasm(_: ?*anyopaque, _: std.Io, _: []const u8) CoreCtx.MakePathError!void {
     return error.AccessDenied;
 }
 
-fn copyFileWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) RocCtx.CopyError!void {
+fn copyFileWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) CoreCtx.CopyError!void {
     return error.AccessDenied;
 }
 
@@ -239,15 +239,15 @@ fn timestampNowWasm(_: ?*anyopaque, _: std.Io) i128 {
     return 0;
 }
 
-fn writeStdoutWasm(_: ?*anyopaque, _: std.Io, _: []const u8) RocCtx.StdioError!void {
+fn writeStdoutWasm(_: ?*anyopaque, _: std.Io, _: []const u8) CoreCtx.StdioError!void {
     // WASM: stdout silently dropped (JS host can intercept via import override if desired)
 }
 
-fn writeStderrWasm(_: ?*anyopaque, _: std.Io, _: []const u8) RocCtx.StdioError!void {
+fn writeStderrWasm(_: ?*anyopaque, _: std.Io, _: []const u8) CoreCtx.StdioError!void {
     // WASM: stderr silently dropped
 }
 
-fn readStdinWasm(_: ?*anyopaque, _: std.Io, _: []u8) RocCtx.StdioError!usize {
+fn readStdinWasm(_: ?*anyopaque, _: std.Io, _: []u8) CoreCtx.StdioError!usize {
     return 0;
 }
 

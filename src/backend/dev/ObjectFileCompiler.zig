@@ -16,7 +16,7 @@ const Allocator = std.mem.Allocator;
 
 const layout = @import("layout");
 const lir = @import("lir");
-const RocCtx = @import("ctx").RocCtx;
+const CoreCtx = @import("ctx").CoreCtx;
 const LirExprStore = lir.LirExprStore;
 const LirProcSpec = lir.LirProcSpec;
 const RocTarget = @import("roc_target").RocTarget;
@@ -94,7 +94,7 @@ pub const ObjectFileCompiler = struct {
         proc_specs: []const LirProcSpec,
         target: RocTarget,
         output_path: []const u8,
-        roc_ctx: RocCtx,
+        roc_ctx: CoreCtx,
     ) CompilationError!void {
         var result = try self.compileToObjectFile(
             lir_store,

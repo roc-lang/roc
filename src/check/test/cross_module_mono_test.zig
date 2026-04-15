@@ -10,7 +10,7 @@ const types = @import("types");
 const parse = @import("parse");
 const can = @import("can");
 
-const RocCtx = @import("can").RocCtx;
+const CoreCtx = @import("can").CoreCtx;
 const Can = can.Can;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
@@ -106,7 +106,7 @@ const MonoTestEnv = struct {
     /// Initialize a single module test environment
     pub fn init(module_name: []const u8, source: []const u8) !Self {
         const gpa = testing.allocator;
-        const roc_ctx = RocCtx.testing(gpa, gpa);
+        const roc_ctx = CoreCtx.testing(gpa, gpa);
 
         const module_env = try gpa.create(ModuleEnv);
         errdefer gpa.destroy(module_env);
@@ -190,7 +190,7 @@ const MonoTestEnv = struct {
     /// Initialize with an imported module
     pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_env: *const Self) !Self {
         const gpa = testing.allocator;
-        const roc_ctx = RocCtx.testing(gpa, gpa);
+        const roc_ctx = CoreCtx.testing(gpa, gpa);
 
         const module_env = try gpa.create(ModuleEnv);
         errdefer gpa.destroy(module_env);
@@ -304,7 +304,7 @@ const MonoTestEnv = struct {
     /// Initialize with multiple imported modules
     pub fn initWithImports(module_name: []const u8, source: []const u8, imports: []const ImportedModule) !Self {
         const gpa = testing.allocator;
-        const roc_ctx = RocCtx.testing(gpa, gpa);
+        const roc_ctx = CoreCtx.testing(gpa, gpa);
 
         const module_env = try gpa.create(ModuleEnv);
         errdefer gpa.destroy(module_env);
@@ -573,7 +573,7 @@ test "type checker catches polymorphic recursion (infinite type)" {
     // Initialize test environment
     const gpa = testing.allocator;
 
-    const roc_ctx = RocCtx.testing(gpa, gpa);
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
 
     const module_env = try gpa.create(ModuleEnv);
     defer gpa.destroy(module_env);

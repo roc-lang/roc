@@ -8,7 +8,7 @@ const can = @import("can");
 const check = @import("check");
 const compile_build = @import("compile_build");
 const compiled_builtins = @import("compiled_builtins");
-const RocCtx = @import("ctx").RocCtx;
+const CoreCtx = @import("ctx").CoreCtx;
 const ComptimeEvaluator = @import("../comptime_evaluator.zig").ComptimeEvaluator;
 const DevEvaluator = @import("../mod.zig").DevEvaluator;
 const BuiltinTypes = @import("../builtins.zig").BuiltinTypes;
@@ -72,7 +72,7 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
     };
 
     // Create canonicalizer
-    const roc_ctx = RocCtx.testing(gpa, gpa);
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
     var czer = try Can.initModule(roc_ctx, module_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,
@@ -170,7 +170,7 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     try module_envs.put(import_ident, .{ .env = imported_module, .qualified_type_ident = import_qualified_ident });
 
     // Create canonicalizer with imports
-    const roc_ctx = RocCtx.testing(gpa, gpa);
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
     var czer = try Can.initModule(roc_ctx, module_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,
@@ -3311,7 +3311,7 @@ test "issue 9281: dev evaluator stack overflow with nested recursive opaque type
     const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", test_allocator);
     defer test_allocator.free(tmp_path);
 
-    const repo_root = try RocCtx.os(test_allocator, test_allocator, std.testing.io).canonicalize(".", test_allocator);
+    const repo_root = try CoreCtx.os(test_allocator, test_allocator, std.testing.io).canonicalize(".", test_allocator);
     defer test_allocator.free(repo_root);
 
     const platform_main_path = try std.fs.path.join(test_allocator, &.{ repo_root, "test", "fx", "platform", "main.roc" });
@@ -3382,7 +3382,7 @@ test "issue 9281: dev evaluator stack overflow with nested recursive opaque type
     const app_path = try std.fs.path.join(test_allocator, &.{ tmp_path, "app.roc" });
     defer test_allocator.free(app_path);
 
-    var build_env = try compile_build.BuildEnv.init(test_allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), tmp_path, std.Io.Threaded.global_single_threaded.io());
+    var build_env = try compile_build.BuildEnv.init(test_allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), tmp_path, std.testing.io);
     defer build_env.deinit();
 
     try build_env.discoverDependencies(app_path);
