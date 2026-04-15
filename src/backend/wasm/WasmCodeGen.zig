@@ -7933,7 +7933,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     if (value_vt == .i32 and value_size > 4) {
                         const src_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                         try self.emitLocalSet(src_ptr);
-                        try self.emitBuiltinInternalRcAtPtr(.incref, src_ptr, value_layout, 1);
 
                         if (value_size <= 16) {
                             var offset: u32 = 0;
@@ -7997,7 +7996,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     } else {
                         const value_local = self.storage.allocAnonymousLocal(value_vt) catch return error.OutOfMemory;
                         try self.emitLocalSet(value_local);
-                        try self.emitBuiltinInternalRcForValueLocal(.incref, value_local, value_vt, value_layout, 1);
                         try self.emitLocalGet(value_local);
                         try self.emitStoreToMemSized(box_ptr, 0, value_vt, value_size);
                     }
@@ -8062,8 +8060,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
                     const result_vt = self.resolveValType(ll.ret_layout);
                     const result_size = self.layoutByteSize(ll.ret_layout);
-                    const result_has_rc = builtinInternalLayoutContainsRefcounted(self.getLayoutStore(), "wasm.box_unbox.builtin_ret_rc", ll.ret_layout);
-
                     if (result_vt == .i32 and result_size > 4) {
                         const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                         try self.emitLocalSet(src_local);
@@ -8075,9 +8071,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                         try self.emitLocalSet(dst_local);
 
                         try self.emitMemCopy(dst_local, 0, src_local, result_size);
-                        if (result_has_rc) {
-                            try self.emitBuiltinInternalRcAtPtr(.incref, dst_local, ll.ret_layout, 1);
-                        }
                         try self.emitLocalGet(dst_local);
                     } else {
                         const box_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -8108,9 +8101,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                             try self.emitLocalSet(temp_ptr);
 
                             try self.emitMemCopy(temp_ptr, 0, box_ptr, result_size);
-                            if (result_has_rc) {
-                                try self.emitBuiltinInternalRcAtPtr(.incref, temp_ptr, ll.ret_layout, 1);
-                            }
                             try self.emitLocalGet(temp_ptr);
                             try self.emitLoadOpSized(result_vt, result_size, 0);
                         }

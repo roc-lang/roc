@@ -3437,7 +3437,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     // Generate the value expression
                     const value_loc = try self.emitValueLocal(args[0]);
-                    try self.emitBuiltinInternalRcHelperCallForValue(.incref, value_loc, box_info.elem_layout_idx, 1);
 
                     // Copy value to heap
                     const heap_ptr = try self.allocTempGeneral();
@@ -3486,7 +3485,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.copyChunked(temp_reg, box_reg, 0, frame_ptr, result_offset, elem_size);
                     self.codegen.freeGeneral(temp_reg);
                     self.codegen.freeGeneral(box_reg);
-                    try self.emitIncrefAtStackOffset(result_offset, elem_layout_idx);
 
                     // Return with appropriate value location based on element type
                     if (elem_layout_idx == .i128 or elem_layout_idx == .u128 or elem_layout_idx == .dec) {
