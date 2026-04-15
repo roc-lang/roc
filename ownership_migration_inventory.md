@@ -61,11 +61,11 @@ ownership decisions. The remaining sites below show the specific gaps.
    - [`src/backend/wasm/WasmCodeGen.zig:1181`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/wasm/WasmCodeGen.zig:1181)
    - [`src/layout/store.zig:1791`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/layout/store.zig:1791)
    Current behavior:
-   - Wasm now consumes store-published RC helper plans and uses thin compatibility wrappers over store-published list and box helper ABI, but list payload teardown still performs backend-local element traversal inside builtin helper internals.
+   - Wasm now consumes store-published RC helper plans and uses thin compatibility wrappers over store-published list and box helper ABI, but list payload teardown still performs backend-local element iteration inside builtin helper internals.
    Missing earlier fact:
-   - LIR/low-level metadata still does not provide a shared helper-plan artifact or equivalent explicit child-traversal summary.
+   - The child-traversal summary is now explicit in `RcListPlan`, but the actual element-iteration control flow still lives in wasm helper code rather than a shared helper artifact.
    LIR change needed:
-   - Keep helper traversal fully builtin/runtime-internal, or move helper plans into an earlier shared artifact that wasm consumes mechanically.
+   - Keep helper traversal fully builtin/runtime-internal, or move the remaining element-iteration helper body into a shared earlier artifact that backends consume mechanically.
    Replacement:
    - If helpers remain primitive internals, keep them isolated and allowlisted.
    - If long-term ideal is stricter single-sourcing, produce shared helper plans earlier and make all backends consume them mechanically.

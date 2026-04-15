@@ -772,12 +772,12 @@ fn emitRawDirectRcPlan(
             }
             return true;
         },
-        .list_decref => {
-            try self.emitBuiltinInternalListRc(.decref, value_ptr_local, helper_key.layout_idx, 1);
+        .list_decref => |list_plan| {
+            try self.emitBuiltinInternalListRc(.decref, value_ptr_local, helper_key.layout_idx, list_plan, 1);
             return true;
         },
-        .list_free => {
-            try self.emitBuiltinInternalListRc(.free, value_ptr_local, helper_key.layout_idx, 1);
+        .list_free => |list_plan| {
+            try self.emitBuiltinInternalListRc(.free, value_ptr_local, helper_key.layout_idx, list_plan, 1);
             return true;
         },
         .box_incref => {
@@ -1212,9 +1212,10 @@ fn emitBuiltinInternalListElementDecrefsIfUnique(
     list_ptr_local: u32,
     alloc_ptr_local: u32,
     is_slice_local: u32,
-    elem_layout_idx: layout.Idx,
+    elem_width: usize,
+    child_key: RcHelperKey,
 ) Allocator.Error!void {
-    const elem_size = self.layoutByteSize(elem_layout_idx);
+    const elem_size: u32 = @intCast(elem_width);
     if (elem_size == 0) return;
 
     const rc_val = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -1271,7 +1272,7 @@ fn emitBuiltinInternalListElementDecrefsIfUnique(
     self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
     try self.emitLocalSet(elem_ptr_local);
 
-    try self.emitBuiltinInternalRcAtPtr(.decref, elem_ptr_local, elem_layout_idx, 1);
+    try self.emitRawRcHelperCallByKey(child_key, elem_ptr_local, null);
 
     try self.emitLocalGet(idx_local);
     self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -1292,6 +1293,7 @@ fn emitBuiltinInternalListRc(
     comptime kind: RcOpKind,
     list_ptr_local: u32,
     list_layout_idx: layout.Idx,
+    list_plan: ?layout.RcListPlan,
     inc_count: u16,
 ) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.emitBuiltinInternalListRc.builtin_list_abi", list_layout_idx);
@@ -1305,12 +1307,19 @@ fn emitBuiltinInternalListRc(
             try self.emitDataPtrIncref(alloc_ptr_local, inc_count);
         },
         .decref => {
-            if (list_abi.elements_refcounted and list_abi.elem_layout_idx != null) {
-                try self.emitBuiltinInternalListElementDecrefsIfUnique(list_ptr_local, alloc_ptr_local, is_slice_local, list_abi.elem_layout_idx.?);
+            if (list_plan) |plan| {
+                if (plan.child) |child_key| {
+                    try self.emitBuiltinInternalListElementDecrefsIfUnique(list_ptr_local, alloc_ptr_local, is_slice_local, plan.elem_width, child_key);
+                }
             }
             try self.emitDataPtrDecref(alloc_ptr_local, list_abi.elem_align, list_abi.elements_refcounted);
         },
         .free => {
+            if (list_plan) |plan| {
+                if (plan.child) |child_key| {
+                    try self.emitBuiltinInternalListElementDecrefsIfUnique(list_ptr_local, alloc_ptr_local, is_slice_local, plan.elem_width, child_key);
+                }
+            }
             try self.emitDataPtrFree(alloc_ptr_local, list_abi.elem_align, list_abi.elements_refcounted);
         },
     }
@@ -1427,8 +1436,8 @@ fn generateBuiltinInternalRcHelperBody(
             try self.emitDecodeListAllocPtr(value_ptr_local, alloc_ptr_local, is_slice_local);
             try self.emitDataPtrIncrefByLocal(alloc_ptr_local, count_local.?);
         },
-        .list_decref => try self.emitBuiltinInternalListRc(.decref, value_ptr_local, helper_key.layout_idx, 1),
-        .list_free => try self.emitBuiltinInternalListRc(.free, value_ptr_local, helper_key.layout_idx, 1),
+        .list_decref => |list_plan| try self.emitBuiltinInternalListRc(.decref, value_ptr_local, helper_key.layout_idx, list_plan, 1),
+        .list_free => |list_plan| try self.emitBuiltinInternalListRc(.free, value_ptr_local, helper_key.layout_idx, list_plan, 1),
         .box_incref => {
             const box_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalGet(value_ptr_local);
