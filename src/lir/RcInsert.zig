@@ -154,6 +154,7 @@ const ProcPass = struct {
                 .assign_struct => |assign| self.markOwnedFresh(assign.target, assign.result),
                 .assign_tag => |assign| self.markOwnedFresh(assign.target, assign.result),
                 .set_local => |assign| self.markOwnedLocal(assign.target),
+                .for_list => |for_stmt| self.markOwnedFresh(for_stmt.elem, for_stmt.elem_result),
                 .join => |join| {
                     _ = self.join_params_by_id.put(@intFromEnum(join.id), join.params) catch unreachable;
                     _ = self.join_bodies_by_id.put(@intFromEnum(join.id), join.body) catch unreachable;
@@ -196,7 +197,7 @@ const ProcPass = struct {
                 .assign_struct => |assign| self.provenance_owner[@intFromEnum(assign.target)] = null,
                 .assign_tag => |assign| self.provenance_owner[@intFromEnum(assign.target)] = null,
                 .set_local => |assign| self.provenance_owner[@intFromEnum(assign.target)] = null,
-                .for_list => |loop_stmt| self.provenance_owner[@intFromEnum(loop_stmt.elem)] = loop_stmt.iterable,
+                .for_list => |loop_stmt| self.recordResultOwner(loop_stmt.elem, loop_stmt.elem_result),
                 else => {},
             }
         }
@@ -460,6 +461,7 @@ const ProcPass = struct {
             .switch_stmt => |sw| uses.set(@intFromEnum(sw.cond)),
             .borrow_scope => {},
             .for_list => |for_stmt| {
+                defs.set(@intFromEnum(for_stmt.elem));
                 uses.set(@intFromEnum(for_stmt.iterable));
             },
             .join => |join| {
@@ -630,6 +632,8 @@ const ProcPass = struct {
             .scope_exit => |scope_exit| self.store.addCFStmt(.{ .scope_exit = .{ .id = scope_exit.id } }),
             .for_list => |for_stmt| self.store.addCFStmt(.{ .for_list = .{
                 .elem = for_stmt.elem,
+                .elem_result = for_stmt.elem_result,
+                .elem_ownership = for_stmt.elem_ownership,
                 .iterable = for_stmt.iterable,
                 .iterable_elem_layout = for_stmt.iterable_elem_layout,
                 .body = for_stmt.body,
@@ -781,7 +785,8 @@ const ProcPass = struct {
                 const rewritten_loop = try self.cloneStmtSkeleton(stmt_id);
                 try self.rewritten_stmt_ids.put(@intFromEnum(stmt_id), rewritten_loop);
 
-                const body = try self.rewriteStmt(for_stmt.body);
+                const raw_body = try self.rewriteStmt(for_stmt.body);
+                const body = try self.prependMaterializationRetain(for_stmt.elem, for_stmt.elem_result, for_stmt.elem_ownership, raw_body);
                 const next = try self.rewriteStmt(for_stmt.next);
                 const rewritten_ptr = self.store.getCFStmtPtr(rewritten_loop);
                 rewritten_ptr.for_list.body = body;
@@ -811,22 +816,40 @@ const ProcPass = struct {
     fn rewriteLinear(self: *ProcPass, original_stmt_id: CFStmtId, stmt_template: CFStmt, next_stmt: CFStmtId) Allocator.Error!CFStmtId {
         const rewritten_next = try self.rewriteStmt(next_stmt);
         const with_drops = try self.prependEdgeDrops(original_stmt_id, rewritten_next, next_stmt);
+        const next_for_stmt = switch (stmt_template) {
+            .assign_ref => |assign| try self.prependMaterializationRetain(assign.target, assign.result, assign.ownership, with_drops),
+            .assign_call_indirect => |assign| try self.prependMaterializationRetain(assign.target, assign.result, assign.ownership, with_drops),
+            .assign_low_level => |assign| try self.prependMaterializationRetain(assign.target, assign.result, assign.ownership, with_drops),
+            .assign_list => |assign| try self.prependMaterializationRetain(assign.target, assign.result, assign.ownership, with_drops),
+            .assign_struct => |assign| try self.prependMaterializationRetain(assign.target, assign.result, assign.ownership, with_drops),
+            .assign_tag => |assign| try self.prependMaterializationRetain(assign.target, assign.result, assign.ownership, with_drops),
+            else => with_drops,
+        };
         const rewritten_stmt = try switch (stmt_template) {
-            .assign_symbol => |assign| self.store.addCFStmt(.{ .assign_symbol = .{ .target = assign.target, .symbol = assign.symbol, .next = with_drops } }),
-            .assign_ref => |assign| self.store.addCFStmt(.{ .assign_ref = .{ .target = assign.target, .result = assign.result, .ownership = assign.ownership, .op = assign.op, .next = with_drops } }),
-            .assign_literal => |assign| self.store.addCFStmt(.{ .assign_literal = .{ .target = assign.target, .result = assign.result, .value = assign.value, .next = with_drops } }),
-            .assign_call => |assign| self.store.addCFStmt(.{ .assign_call = .{ .target = assign.target, .result = assign.result, .proc = assign.proc, .args = assign.args, .next = with_drops } }),
-            .assign_call_indirect => |assign| self.store.addCFStmt(.{ .assign_call_indirect = .{ .target = assign.target, .result = assign.result, .ownership = assign.ownership, .closure = assign.closure, .args = assign.args, .capture_layout = assign.capture_layout, .next = with_drops } }),
-            .assign_low_level => |assign| self.store.addCFStmt(.{ .assign_low_level = .{ .target = assign.target, .result = assign.result, .ownership = assign.ownership, .op = assign.op, .args = assign.args, .next = with_drops } }),
-            .assign_list => |assign| self.store.addCFStmt(.{ .assign_list = .{ .target = assign.target, .result = assign.result, .ownership = assign.ownership, .elems = assign.elems, .next = with_drops } }),
-            .assign_struct => |assign| self.store.addCFStmt(.{ .assign_struct = .{ .target = assign.target, .result = assign.result, .ownership = assign.ownership, .fields = assign.fields, .next = with_drops } }),
-            .assign_tag => |assign| self.store.addCFStmt(.{ .assign_tag = .{ .target = assign.target, .result = assign.result, .ownership = assign.ownership, .discriminant = assign.discriminant, .payload = assign.payload, .next = with_drops } }),
-            .set_local => |assign| self.store.addCFStmt(.{ .set_local = .{ .target = assign.target, .value = assign.value, .next = with_drops } }),
-            .debug => |debug_stmt| self.store.addCFStmt(.{ .debug = .{ .message = debug_stmt.message, .next = with_drops } }),
-            .expect => |expect_stmt| self.store.addCFStmt(.{ .expect = .{ .condition = expect_stmt.condition, .next = with_drops } }),
-            .incref => |inc| self.store.addCFStmt(.{ .incref = .{ .value = inc.value, .count = inc.count, .next = with_drops } }),
-            .decref => |dec| self.store.addCFStmt(.{ .decref = .{ .value = dec.value, .next = with_drops } }),
-            .free => |free_stmt| self.store.addCFStmt(.{ .free = .{ .value = free_stmt.value, .next = with_drops } }),
+            .assign_symbol => |assign| self.store.addCFStmt(.{ .assign_symbol = .{ .target = assign.target, .symbol = assign.symbol, .next = next_for_stmt } }),
+            .assign_ref => |assign| self.store.addCFStmt(.{ .assign_ref = .{ .target = assign.target, .result = assign.result, .ownership = assign.ownership, .op = assign.op, .next = next_for_stmt } }),
+            .assign_literal => |assign| self.store.addCFStmt(.{ .assign_literal = .{ .target = assign.target, .result = assign.result, .value = assign.value, .next = next_for_stmt } }),
+            .assign_call => |assign| self.store.addCFStmt(.{ .assign_call = .{ .target = assign.target, .result = assign.result, .proc = assign.proc, .args = assign.args, .next = next_for_stmt } }),
+            .assign_call_indirect => |assign| self.store.addCFStmt(.{ .assign_call_indirect = .{ .target = assign.target, .result = assign.result, .ownership = assign.ownership, .closure = assign.closure, .args = assign.args, .capture_layout = assign.capture_layout, .next = next_for_stmt } }),
+            .assign_low_level => |assign| self.store.addCFStmt(.{ .assign_low_level = .{ .target = assign.target, .result = assign.result, .ownership = assign.ownership, .op = assign.op, .args = assign.args, .next = next_for_stmt } }),
+            .assign_list => |assign| self.store.addCFStmt(.{ .assign_list = .{ .target = assign.target, .result = assign.result, .ownership = assign.ownership, .elems = assign.elems, .next = next_for_stmt } }),
+            .assign_struct => |assign| self.store.addCFStmt(.{ .assign_struct = .{ .target = assign.target, .result = assign.result, .ownership = assign.ownership, .fields = assign.fields, .next = next_for_stmt } }),
+            .assign_tag => |assign| self.store.addCFStmt(.{ .assign_tag = .{ .target = assign.target, .result = assign.result, .ownership = assign.ownership, .discriminant = assign.discriminant, .payload = assign.payload, .next = next_for_stmt } }),
+            .set_local => |assign| self.store.addCFStmt(.{ .set_local = .{ .target = assign.target, .value = assign.value, .next = next_for_stmt } }),
+            .debug => |debug_stmt| self.store.addCFStmt(.{ .debug = .{ .message = debug_stmt.message, .next = next_for_stmt } }),
+            .expect => |expect_stmt| self.store.addCFStmt(.{ .expect = .{ .condition = expect_stmt.condition, .next = next_for_stmt } }),
+            .for_list => |for_stmt| self.store.addCFStmt(.{ .for_list = .{
+                .elem = for_stmt.elem,
+                .elem_result = for_stmt.elem_result,
+                .elem_ownership = for_stmt.elem_ownership,
+                .iterable = for_stmt.iterable,
+                .iterable_elem_layout = for_stmt.iterable_elem_layout,
+                .body = for_stmt.body,
+                .next = next_for_stmt,
+            } }),
+            .incref => |inc| self.store.addCFStmt(.{ .incref = .{ .value = inc.value, .count = inc.count, .next = next_for_stmt } }),
+            .decref => |dec| self.store.addCFStmt(.{ .decref = .{ .value = dec.value, .next = next_for_stmt } }),
+            .free => |free_stmt| self.store.addCFStmt(.{ .free = .{ .value = free_stmt.value, .next = next_for_stmt } }),
             else => unreachable,
         };
         return try self.prependOwnershipRetains(original_stmt_id, rewritten_stmt, next_stmt);
@@ -930,6 +953,26 @@ const ProcPass = struct {
             },
             else => {},
         }
+    }
+
+    fn prependMaterializationRetain(
+        self: *ProcPass,
+        target: LocalId,
+        result: LIR.ResultSemantics,
+        ownership: LIR.OwnershipSemantics,
+        next: CFStmtId,
+    ) Allocator.Error!CFStmtId {
+        if (result != .fresh) return next;
+        if (ownership.materialization != .copy_from_borrowed_input) return next;
+
+        const layout_idx = self.store.getLocal(target).layout_idx;
+        if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(layout_idx))) return next;
+
+        return self.store.addCFStmt(.{ .incref = .{
+            .value = target,
+            .count = 1,
+            .next = next,
+        } });
     }
 
     fn accumulateRetainedBorrows(self: *ProcPass, retained_borrows: []const LocalId, retained_counts: []u16) Allocator.Error!void {

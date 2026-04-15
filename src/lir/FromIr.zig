@@ -1254,6 +1254,8 @@ const ProcLowerer = struct {
                     try self.bridgeValueIntoLocal(loop_elem_local, body_elem_local, body);
                 break :blk try self.parent.store.addCFStmt(.{ .for_list = .{
                     .elem = loop_elem_local,
+                    .elem_result = .fresh,
+                    .elem_ownership = .{ .materialization = .copy_from_borrowed_input },
                     .iterable = iterable_local,
                     .iterable_elem_layout = iterable_elem_layout,
                     .body = bridged_body,

@@ -366,6 +366,8 @@ pub const CFStmt = union(enum) {
     },
     for_list: struct {
         elem: LocalId,
+        elem_result: ResultSemantics,
+        elem_ownership: OwnershipSemantics = .{},
         iterable: LocalId,
         iterable_elem_layout: layout.Idx,
         body: CFStmtId,
