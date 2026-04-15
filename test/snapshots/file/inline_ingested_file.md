@@ -11,7 +11,7 @@ import Json
 foo = Json.parse(data)
 ~~~
 # EXPECTED
-FILE NOT FOUND - inline_ingested_file.md:1:1:1:34
+FILE IMPORT ERROR - inline_ingested_file.md:1:1:1:34
 UNDEFINED VARIABLE - inline_ingested_file.md:4:7:4:17
 # PROBLEMS
 **FILE IMPORT ERROR**
