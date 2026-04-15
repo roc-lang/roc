@@ -57,6 +57,33 @@ fn explicitRcLayoutContainsRefcounted(ls: *const LayoutStore, comptime site: []c
     return ls.layoutContainsRefcounted(ls.getLayout(layout_idx));
 }
 
+const BuiltinListAbi = struct {
+    elem_layout_idx: ?layout.Idx,
+    elem_layout: layout.Layout,
+    elem_size: u32,
+    elem_align: u32,
+    elements_refcounted: bool,
+};
+
+fn builtinInternalListAbi(self: *const Self, comptime site: []const u8, list_layout_idx: layout.Idx) BuiltinListAbi {
+    ownership_boundary.builtinRuntimeInternal(site);
+    const ls = self.getLayoutStore();
+    const list_layout = ls.getLayout(list_layout_idx);
+    std.debug.assert(list_layout.tag == .list or list_layout.tag == .list_of_zst);
+    const info = ls.getListInfo(list_layout);
+    return .{
+        .elem_layout_idx = switch (list_layout.tag) {
+            .list => self.runtimeRepresentationLayoutIdx(info.elem_layout_idx),
+            .list_of_zst => null,
+            else => unreachable,
+        },
+        .elem_layout = info.elem_layout,
+        .elem_size = info.elem_size,
+        .elem_align = info.elem_alignment,
+        .elements_refcounted = info.contains_refcounted,
+    };
+}
+
 allocator: Allocator,
 store: *const LirStore,
 layout_store: *const LayoutStore,
@@ -1276,21 +1303,7 @@ fn emitBuiltinInternalListRc(
     list_layout_idx: layout.Idx,
     inc_count: u16,
 ) Allocator.Error!void {
-    const ls = self.getLayoutStore();
-    const list_layout = ls.getLayout(list_layout_idx);
-
-    var elem_alignment: u32 = 1;
-    var elements_refcounted = false;
-    var elem_layout_idx: ?layout.Idx = null;
-    if (list_layout.tag == .list) {
-        const info = ls.getListInfo(list_layout);
-        const runtime_elem_layout = self.runtimeRepresentationLayoutIdx(info.elem_layout_idx);
-        elem_alignment = @intCast(ls.layoutSizeAlign(ls.getLayout(runtime_elem_layout)).alignment.toByteUnits());
-        elements_refcounted = builtinInternalLayoutContainsRefcounted(ls, "wasm.emitListRc.builtin_elem_rc", runtime_elem_layout);
-        if (elements_refcounted) {
-            elem_layout_idx = runtime_elem_layout;
-        }
-    }
+    const list_abi = self.builtinInternalListAbi("wasm.emitBuiltinInternalListRc.builtin_list_abi", list_layout_idx);
 
     const alloc_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     const is_slice_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -1301,13 +1314,13 @@ fn emitBuiltinInternalListRc(
             try self.emitDataPtrIncref(alloc_ptr_local, inc_count);
         },
         .decref => {
-            if (elements_refcounted and elem_layout_idx != null) {
-                try self.emitBuiltinInternalListElementDecrefsIfUnique(list_ptr_local, alloc_ptr_local, is_slice_local, elem_layout_idx.?);
+            if (list_abi.elements_refcounted and list_abi.elem_layout_idx != null) {
+                try self.emitBuiltinInternalListElementDecrefsIfUnique(list_ptr_local, alloc_ptr_local, is_slice_local, list_abi.elem_layout_idx.?);
             }
-            try self.emitDataPtrDecref(alloc_ptr_local, elem_alignment, elements_refcounted);
+            try self.emitDataPtrDecref(alloc_ptr_local, list_abi.elem_align, list_abi.elements_refcounted);
         },
         .free => {
-            try self.emitDataPtrFree(alloc_ptr_local, elem_alignment, elements_refcounted);
+            try self.emitDataPtrFree(alloc_ptr_local, list_abi.elem_align, list_abi.elements_refcounted);
         },
     }
 }
@@ -5614,7 +5627,13 @@ fn generateRcStmt(
 }
 
 fn listElemLayout(self: *Self, list_layout_idx: layout.Idx) layout.Idx {
-    return self.listElemRuntimeLayout(list_layout_idx);
+    const ls = self.getLayoutStore();
+    const list_layout = ls.getLayout(list_layout_idx);
+    return switch (list_layout.tag) {
+        .list => self.runtimeRepresentationLayoutIdx(list_layout.data.list),
+        .list_of_zst => list_layout_idx,
+        else => unreachable,
+    };
 }
 
 fn runtimeRepresentationLayoutIdx(self: *const Self, layout_idx: layout.Idx) layout.Idx {
@@ -6844,7 +6863,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // Returns bare element without bounds checking.
             const ls = self.getLayoutStore();
             const list_layout_idx = self.procLocalLayoutIdx(args[0]);
-            const elem_layout_idx = self.listElemRuntimeLayout(list_layout_idx);
+            const elem_layout_idx = self.listElemLayout(list_layout_idx);
             const elem_size: u32 = self.layoutStorageByteSize(elem_layout_idx);
             const elem_is_composite = self.isCompositeLayout(elem_layout_idx);
 
@@ -6908,7 +6927,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .list_first => {
             const ls = self.getLayoutStore();
             const list_layout_idx = self.procLocalLayoutIdx(args[0]);
-            const elem_layout_idx = self.listElemRuntimeLayout(list_layout_idx);
+            const elem_layout_idx = self.listElemLayout(list_layout_idx);
             const elem_size: u32 = self.layoutStorageByteSize(elem_layout_idx);
             const elem_is_composite = self.isCompositeLayout(elem_layout_idx);
 
@@ -6938,7 +6957,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .list_last => {
             const ls = self.getLayoutStore();
             const list_layout_idx = self.procLocalLayoutIdx(args[0]);
-            const elem_layout_idx = self.listElemRuntimeLayout(list_layout_idx);
+            const elem_layout_idx = self.listElemLayout(list_layout_idx);
             const elem_size: u32 = self.layoutStorageByteSize(elem_layout_idx);
             const elem_is_composite = self.isCompositeLayout(elem_layout_idx);
 
@@ -6999,7 +7018,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
 
             // Get element size from ret_layout (which is the list layout, not elem)
-            const elem_size = self.getListElemSize(ll.ret_layout);
+            const list_abi = self.builtinInternalListAbi("wasm.list_drop_first.builtin_list_abi", ll.ret_layout);
+            const elem_size = list_abi.elem_size;
 
             // new_ptr = old_ptr + count * elem_size
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
@@ -7028,7 +7048,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
             // Encode seamless-slice cap from the source allocation pointer.
             const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitPrepareListSliceMetadata(list_local, self.builtinInternalListContainsRefcounted(ll.ret_layout), encoded_cap);
+            try self.emitPrepareListSliceMetadata(list_local, list_abi.elements_refcounted, encoded_cap);
 
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
@@ -7199,7 +7219,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
 
-            const elem_size = self.getListElemSize(ll.ret_layout);
+            const list_abi = self.builtinInternalListAbi("wasm.list_take_last.builtin_list_abi", ll.ret_layout);
+            const elem_size = list_abi.elem_size;
 
             // new_ptr = old_ptr + (len - actual_count) * elem_size
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
@@ -7227,7 +7248,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
             // Encode seamless-slice cap from the source allocation pointer.
             const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitPrepareListSliceMetadata(list_local, self.builtinInternalListContainsRefcounted(ll.ret_layout), encoded_cap);
+            try self.emitPrepareListSliceMetadata(list_local, list_abi.elements_refcounted, encoded_cap);
 
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
@@ -7401,7 +7422,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
 
-            const elem_size = self.getListElemSize(ll.ret_layout);
+            const list_abi = self.builtinInternalListAbi("wasm.list_sublist.builtin_list_abi", ll.ret_layout);
+            const elem_size = list_abi.elem_size;
 
             // new_ptr = old_ptr + actual_start * elem_size
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
@@ -7426,7 +7448,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
             // Encode seamless-slice cap from the source allocation pointer.
             const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitPrepareListSliceMetadata(list_local, self.builtinInternalListContainsRefcounted(ll.ret_layout), encoded_cap);
+            try self.emitPrepareListSliceMetadata(list_local, list_abi.elements_refcounted, encoded_cap);
 
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
@@ -10032,7 +10054,7 @@ fn emitListEq(self: *Self, lhs: ProcLocalId, rhs: ProcLocalId, list_layout_idx: 
     const ls = self.getLayoutStore();
     const list_layout = ls.getLayout(list_layout_idx);
     std.debug.assert(list_layout.tag == .list);
-    const elem_layout = self.listElemRuntimeLayout(list_layout_idx);
+    const elem_layout = self.listElemLayout(list_layout_idx);
     try self.emitListEqWithElemLayout(lhs, rhs, elem_layout, negate);
 }
 
@@ -10748,32 +10770,6 @@ fn emitFloatMod(self: *Self, vt: ValType) Allocator.Error!void {
     self.body.append(self.allocator, sub_op) catch return error.OutOfMemory;
 }
 
-/// Get the element size for a list layout.
-fn getListElemSize(self: *const Self, list_layout: layout.Idx) u32 {
-    return self.layoutStorageByteSize(self.listElemRuntimeLayout(list_layout));
-}
-
-/// Get the element alignment for a list layout.
-fn getListElemAlign(self: *const Self, list_layout: layout.Idx) u32 {
-    return self.layoutStorageByteAlign(self.listElemRuntimeLayout(list_layout));
-}
-
-fn builtinInternalListContainsRefcounted(self: *const Self, list_layout: layout.Idx) bool {
-    const ls = self.getLayoutStore();
-    const elem_layout = self.listElemRuntimeLayout(list_layout);
-    return builtinInternalLayoutContainsRefcounted(ls, "wasm.builtinInternalListContainsRefcounted.builtin_elem_rc", elem_layout);
-}
-
-fn listElemRuntimeLayout(self: *const Self, list_layout_idx: layout.Idx) layout.Idx {
-    const ls = self.getLayoutStore();
-    const list_layout = ls.getLayout(list_layout_idx);
-    return switch (list_layout.tag) {
-        .list => self.runtimeRepresentationLayoutIdx(list_layout.data.list),
-        .list_of_zst => list_layout_idx,
-        else => unreachable,
-    };
-}
-
 const StrSearchMode = enum { contains, starts_with, ends_with };
 
 /// Generate LowLevel str_contains / str_starts_with / str_ends_with.
@@ -11021,9 +11017,10 @@ fn emitBytewiseCompare(self: *Self, ptr_a: u32, ptr_b: u32, len: u32, result_loc
 
 /// Generate LowLevel list_append: create new list with one element appended.
 fn generateLLListAppend(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
-    const elem_size = self.getListElemSize(ret_layout);
-    const elem_align = self.getListElemAlign(ret_layout);
-    const elem_layout_idx = self.listElemRuntimeLayout(ret_layout);
+    const list_abi = self.builtinInternalListAbi("wasm.generateLLListAppend.builtin_list_abi", ret_layout);
+    const elem_size = list_abi.elem_size;
+    const elem_align = list_abi.elem_align;
+    const elem_layout_idx = list_abi.elem_layout_idx orelse ret_layout;
     const import_idx = self.list_append_unsafe_import orelse unreachable;
 
     try self.emitProcLocal(args[0]);
@@ -11082,8 +11079,9 @@ fn generateLLListAppend(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
 
 /// Generate LowLevel list_prepend: create new list with one element prepended.
 fn generateLLListPrepend(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
-    const elem_size = self.getListElemSize(ret_layout);
-    const elem_align = self.getListElemAlign(ret_layout);
+    const list_abi = self.builtinInternalListAbi("wasm.generateLLListPrepend.builtin_list_abi", ret_layout);
+    const elem_size = list_abi.elem_size;
+    const elem_align = list_abi.elem_align;
 
     // Generate list and element
     try self.emitProcLocal(args[0]);
@@ -11172,8 +11170,9 @@ fn generateLLListPrepend(self: *Self, args: anytype, ret_layout: layout.Idx) All
 
 /// Generate LowLevel list_concat: concatenate two lists.
 fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
-    const elem_size = self.getListElemSize(ret_layout);
-    const elem_align = self.getListElemAlign(ret_layout);
+    const list_abi = self.builtinInternalListAbi("wasm.generateLLListConcat.builtin_list_abi", ret_layout);
+    const elem_size = list_abi.elem_size;
+    const elem_align = list_abi.elem_align;
     if (elem_size == 0) {
         try self.emitProcLocal(args[0]);
         const a_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -11232,8 +11231,9 @@ fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
 /// Generate LowLevel list_drop_at: remove element at index, returning new list.
 fn generateLLListDropAt(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
     const import_idx = self.list_drop_at_import orelse unreachable;
-    const elem_size = self.getListElemSize(ret_layout);
-    const elem_align = self.getListElemAlign(ret_layout);
+    const list_abi = self.builtinInternalListAbi("wasm.generateLLListDropAt.builtin_list_abi", ret_layout);
+    const elem_size = list_abi.elem_size;
+    const elem_align = list_abi.elem_align;
 
     try self.emitProcLocal(args[0]);
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -11259,14 +11259,15 @@ fn generateLLListDropAt(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
 
 /// Generate LowLevel list_reverse: create new list with elements in reverse order.
 fn generateLLListReverse(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
-    const elem_size = self.getListElemSize(ret_layout);
+    const list_abi = self.builtinInternalListAbi("wasm.generateLLListReverse.builtin_list_abi", ret_layout);
+    const elem_size = list_abi.elem_size;
     if (elem_size == 0) {
         try self.emitProcLocal(args[0]);
         return;
     }
 
     const import_idx = self.list_reverse_import orelse unreachable;
-    const elem_align = self.getListElemAlign(ret_layout);
+    const elem_align = list_abi.elem_align;
 
     try self.emitProcLocal(args[0]);
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -11332,8 +11333,9 @@ fn buildRocListWithCap(self: *Self, data_local: u32, len_local: u32, cap_local: 
 
 /// Generate list_with_capacity: create empty list with given capacity
 fn generateLLListWithCapacity(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
-    const elem_size = self.getListElemSize(ret_layout);
-    const elem_align = self.getListElemAlign(ret_layout);
+    const list_abi = self.builtinInternalListAbi("wasm.generateLLListWithCapacity.builtin_list_abi", ret_layout);
+    const elem_size = list_abi.elem_size;
+    const elem_align = list_abi.elem_align;
 
     // Generate capacity arg (may be i64 from MonoIR layout; convert to i32 for wasm32)
     try self.emitProcLocal(args[0]);
@@ -11364,8 +11366,9 @@ fn generateLLListWithCapacity(self: *Self, args: anytype, ret_layout: layout.Idx
 
 /// Generate list_set: set element at index, creating a new list
 fn generateLLListSet(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
-    const elem_size = self.getListElemSize(ret_layout);
-    const elem_align = self.getListElemAlign(ret_layout);
+    const list_abi = self.builtinInternalListAbi("wasm.generateLLListSet.builtin_list_abi", ret_layout);
+    const elem_size = list_abi.elem_size;
+    const elem_align = list_abi.elem_align;
 
     // Generate list arg
     try self.emitProcLocal(args[0]);
@@ -11443,8 +11446,9 @@ fn generateLLListSet(self: *Self, args: anytype, ret_layout: layout.Idx) Allocat
 
 /// Generate list_reserve: ensure list has at least given capacity
 fn generateLLListReserve(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
-    const elem_size = self.getListElemSize(ret_layout);
-    const elem_align = self.getListElemAlign(ret_layout);
+    const list_abi = self.builtinInternalListAbi("wasm.generateLLListReserve.builtin_list_abi", ret_layout);
+    const elem_size = list_abi.elem_size;
+    const elem_align = list_abi.elem_align;
 
     // Generate list arg
     try self.emitProcLocal(args[0]);
@@ -11510,8 +11514,9 @@ fn generateLLListReserve(self: *Self, args: anytype, ret_layout: layout.Idx) All
 
 /// Generate list_release_excess_capacity: shrink list to exact length
 fn generateLLListReleaseExcessCapacity(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
-    const elem_size = self.getListElemSize(ret_layout);
-    const elem_align = self.getListElemAlign(ret_layout);
+    const list_abi = self.builtinInternalListAbi("wasm.generateLLListReleaseExcessCapacity.builtin_list_abi", ret_layout);
+    const elem_size = list_abi.elem_size;
+    const elem_align = list_abi.elem_align;
 
     // Generate list arg
     try self.emitProcLocal(args[0]);
@@ -11559,8 +11564,9 @@ fn generateLLListReleaseExcessCapacity(self: *Self, args: anytype, ret_layout: l
 fn generateLLListSplitFirst(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
     // ret_layout is a record { first: elem, rest: list }
     // We need to extract the element type and size
-    const elem_size = self.getListElemSize(ret_layout);
-    const elem_align = self.getListElemAlign(ret_layout);
+    const list_abi = self.builtinInternalListAbi("wasm.generateLLListSplitFirst.builtin_list_abi", self.procLocalLayoutIdx(args[0]));
+    const elem_size = list_abi.elem_size;
+    const elem_align = list_abi.elem_align;
     // Generate list arg
     try self.emitProcLocal(args[0]);
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -11628,7 +11634,7 @@ fn generateLLListSplitFirst(self: *Self, args: anytype, ret_layout: layout.Idx) 
     try self.emitLocalSet(rest_len);
 
     const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitPrepareListSliceMetadata(list_ptr, self.builtinInternalListContainsRefcounted(self.procLocalLayoutIdx(args[0])), encoded_cap);
+    try self.emitPrepareListSliceMetadata(list_ptr, list_abi.elements_refcounted, encoded_cap);
 
     // Store rest list in result struct
     const rest_base = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -11654,8 +11660,9 @@ fn generateLLListSplitFirst(self: *Self, args: anytype, ret_layout: layout.Idx) 
 
 /// Generate list_split_last: split list into rest and last element
 fn generateLLListSplitLast(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
-    const elem_size = self.getListElemSize(ret_layout);
-    const elem_align = self.getListElemAlign(ret_layout);
+    const list_abi = self.builtinInternalListAbi("wasm.generateLLListSplitLast.builtin_list_abi", self.procLocalLayoutIdx(args[0]));
+    const elem_size = list_abi.elem_size;
+    const elem_align = list_abi.elem_align;
 
     // Generate list arg
     try self.emitProcLocal(args[0]);

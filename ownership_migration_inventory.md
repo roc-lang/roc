@@ -31,57 +31,41 @@ ownership decisions. The remaining sites below show the specific gaps.
 
 ## Migration Table
 
-### Dev backend builtin-internal ownership sites that should move into LIR
+### Backend builtin-internal list helper ABI still needs a shared source
 
-1. List construction and list-manipulation builtins
+1. Dev backend list construction and list-manipulation builtins
    Files:
    - [`src/backend/dev/LirCodeGen.zig:1498`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig:1498)
    - [`src/backend/dev/LirCodeGen.zig:1782`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig:1782)
-   - [`src/backend/dev/LirCodeGen.zig:1840`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig:1840)
-   - [`src/backend/dev/LirCodeGen.zig:2935`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig:2935)
-   - [`src/backend/dev/LirCodeGen.zig:3739`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig:3739)
-   - [`src/backend/dev/LirCodeGen.zig:3849`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig:3849)
-   - [`src/backend/dev/LirCodeGen.zig:3937`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig:3937)
-   - [`src/backend/dev/LirCodeGen.zig:4069`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig:4069)
-   - [`src/backend/dev/LirCodeGen.zig:4283`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig:4283)
-   - [`src/backend/dev/LirCodeGen.zig:4416`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig:4416)
-   - [`src/backend/dev/LirCodeGen.zig:4466`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig:4466)
-   - [`src/backend/dev/LirCodeGen.zig:9118`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig:9118)
+   - [`src/backend/dev/LirCodeGen.zig:3697`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig:3697)
+   - [`src/backend/dev/LirCodeGen.zig:3911`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig:3911)
+   - [`src/backend/dev/LirCodeGen.zig:4140`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig:4140)
+   - [`src/backend/dev/LirCodeGen.zig:8938`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig:8938)
    Current behavior:
-   - Dev backend still determines “elements refcounted?” to parameterize builtin helper behavior.
+   - Dev backend now routes list helper ABI facts through one `builtinInternalListAbi` helper.
    Missing earlier fact:
-   - The primitive helper ABI still expects backend-supplied ownership metadata derived from layouts.
+   - The primitive helper ABI still expects backend-supplied list metadata instead of consuming a shared earlier artifact.
    LIR change needed:
-   - Decide whether these remain true builtin/runtime internals or whether the helper ABI should be normalized so ownership consequences are fully driven by explicit RC stmts plus data-only helper parameters.
+   - Decide whether builtin helper ABI facts remain primitive/runtime-internal, or whether an earlier shared helper-ABI artifact should be emitted before backend codegen.
    Replacement:
-   - Long-term ideal is that helper calls take only data-shape parameters; ownership transitions happen in explicit surrounding LIR.
+   - Long-term ideal is one shared helper-ABI artifact consumed mechanically by all backends, with ownership transitions still driven only by explicit surrounding LIR.
 
-### Wasm backend builtin-internal ownership sites that should move into LIR
-
-2. Wasm list element extraction / helper traversal
+2. Wasm backend list helper ABI and helper traversal
    Files:
-   - [`src/backend/wasm/WasmCodeGen.zig:1192`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/wasm/WasmCodeGen.zig:1192)
-   - [`src/backend/wasm/WasmCodeGen.zig:1407`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/wasm/WasmCodeGen.zig:1407)
+   - [`src/backend/wasm/WasmCodeGen.zig:1303`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/wasm/WasmCodeGen.zig:1303)
+   - [`src/backend/wasm/WasmCodeGen.zig:7018`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/wasm/WasmCodeGen.zig:7018)
+   - [`src/backend/wasm/WasmCodeGen.zig:7219`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/wasm/WasmCodeGen.zig:7219)
+   - [`src/backend/wasm/WasmCodeGen.zig:7422`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/wasm/WasmCodeGen.zig:7422)
+   - [`src/backend/wasm/WasmCodeGen.zig:11017`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/wasm/WasmCodeGen.zig:11017)
    Current behavior:
-   - Wasm helper generation still performs backend-local traversal/drop work for list payloads.
+   - Wasm now routes list helper ABI facts through one `builtinInternalListAbi` helper, but helper generation still performs backend-local traversal/drop work for list payloads.
    Missing earlier fact:
-   - LIR/low-level metadata still does not provide a precomputed helper-plan artifact or equivalent explicit child-traversal summary.
+   - LIR/low-level metadata still does not provide a shared helper-plan artifact or equivalent explicit child-traversal summary.
    LIR change needed:
    - Keep helper traversal fully builtin/runtime-internal, or move helper plans into an earlier shared artifact that wasm consumes mechanically.
-
-3. Wasm list/tag/box RC helper generation
-    Files:
-    - [`src/backend/wasm/WasmCodeGen.zig:1289`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/wasm/WasmCodeGen.zig:1289)
-    - [`src/backend/wasm/WasmCodeGen.zig:1477`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/wasm/WasmCodeGen.zig:1477)
-    Current behavior:
-    - Wasm RC helper generation still derives child traversal/refcounted-ness from layouts at codegen time.
-    Missing earlier fact:
-    - LIR/low-level metadata does not yet fully describe helper child traversal needs as an earlier explicit artifact.
-    LIR change needed:
-    - Decide whether helper-generation plans remain backend-local runtime-helper internals or move into a shared earlier “RC helper plan” artifact produced before backend codegen.
-    Replacement:
-    - If helpers remain primitive internals, keep them isolated and allowlisted.
-    - If long-term ideal is stricter single-sourcing, produce shared helper plans earlier and make backends consume them mechanically.
+   Replacement:
+   - If helpers remain primitive internals, keep them isolated and allowlisted.
+   - If long-term ideal is stricter single-sourcing, produce shared helper plans earlier and make all backends consume them mechanically.
 
 ### Shared design gaps inferred from the inventory
 
@@ -89,9 +73,9 @@ ownership decisions. The remaining sites below show the specific gaps.
    Required change:
    - delete the remaining backend/helper dependence on runtime child-RC metadata where explicit surrounding LIR should suffice
 
-2. Some low-level primitives still rely on backend-supplied ownership facts.
+2. Some low-level primitives still rely on backend-supplied helper ABI facts.
    Required change:
-   - strengthen [`src/base/LowLevel.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/base/LowLevel.zig) contracts so helper calls do not require backend ownership inference
+   - strengthen [`src/base/LowLevel.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/base/LowLevel.zig) contracts so helper calls do not require backend-local ABI derivation
 
 3. Backend RC helper generation is still partly layout-driven.
    Required change:
