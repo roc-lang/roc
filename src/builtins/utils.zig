@@ -378,7 +378,7 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize, roc_ops: *RocOps) ca
             },
             .none => unreachable,
         }
-        if (comptime builtin.mode == .Debug and builtin.os.tag != .freestanding) {
+        if (comptime builtin.os.tag != .freestanding) {
             DebugRefcountTracker.onIncref(@intFromPtr(ptr_to_refcount), amount);
         }
     }
@@ -495,7 +495,6 @@ pub fn increfDataPtrC(
     }
 
     const isizes: *isize = @as(*isize, @ptrFromInt(rc_addr));
-
     return increfRcPtrC(isizes, inc_amount, roc_ops);
 }
 
@@ -571,7 +570,7 @@ inline fn free_ptr_to_refcount(
     if (RC_TYPE == .none) return;
 
     // Debug-only: Track the free in the shadow refcount tracker.
-    if (comptime builtin.mode == .Debug and builtin.os.tag != .freestanding) {
+    if (comptime builtin.os.tag != .freestanding) {
         DebugRefcountTracker.onFree(@intFromPtr(refcount_ptr));
     }
 
@@ -633,7 +632,7 @@ inline fn decref_ptr_to_refcount(
         }
     }
 
-    if (comptime builtin.mode == .Debug and builtin.os.tag != .freestanding) {
+    if (comptime builtin.os.tag != .freestanding) {
         DebugRefcountTracker.onDecref(@intFromPtr(refcount_ptr), site);
     }
 
@@ -835,7 +834,7 @@ pub fn allocateWithRefcount(
     const refcount_ptr: [*]usize = alignedPtrCast([*]usize, data_ptr - @sizeOf(usize), @src());
     refcount_ptr[0] = if (RC_TYPE == .none) REFCOUNT_STATIC_DATA else 1;
 
-    if (comptime builtin.mode == .Debug and builtin.os.tag != .freestanding) {
+    if (comptime builtin.os.tag != .freestanding) {
         DebugRefcountTracker.trackAlloc(@intFromPtr(refcount_ptr));
     }
 
@@ -885,7 +884,7 @@ pub fn unsafeReallocate(
     roc_ops.roc_realloc(&roc_realloc_args, roc_ops.env);
 
     const new_source = @as([*]u8, @ptrCast(roc_realloc_args.answer)) + extra_bytes;
-    if (comptime builtin.mode == .Debug and builtin.os.tag != .freestanding) {
+    if (comptime builtin.os.tag != .freestanding) {
         const old_rc_addr = @intFromPtr(source_ptr - @sizeOf(usize));
         const new_rc_addr = @intFromPtr(new_source - @sizeOf(usize));
         DebugRefcountTracker.onRealloc(old_rc_addr, new_rc_addr);

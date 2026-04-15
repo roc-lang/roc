@@ -27,6 +27,8 @@ pub fn inferProcResultContracts(
     store: *LirStore,
 ) Allocator.Error!void {
     try propagateRefResultSemantics(allocator, store);
+    try normalizeRefLocalOwnership(allocator, store);
+    try inferProcOwnedParams(allocator, store);
 
     var changed = true;
     while (changed) {
@@ -46,6 +48,27 @@ pub fn inferProcResultContracts(
     }
 
     try propagateCallResultSemantics(allocator, store);
+}
+
+pub fn inferProcOwnedParams(
+    allocator: Allocator,
+    store: *LirStore,
+) Allocator.Error!void {
+    var changed = true;
+    while (changed) {
+        changed = false;
+        const proc_count = store.getProcSpecs().len;
+        var proc_index: usize = 0;
+        while (proc_index < proc_count) : (proc_index += 1) {
+            const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+            const proc = store.getProcSpec(proc_id);
+            const inferred = try inferOneProcOwnedParams(allocator, store, proc);
+            if (!localSpansEqual(store, proc.owned_params, inferred)) {
+                store.getProcSpecPtr(proc_id).owned_params = inferred;
+                changed = true;
+            }
+        }
+    }
 }
 
 fn inferOneProcResultContract(
@@ -84,6 +107,161 @@ fn inferOneProcResultContract(
         if (!procResultContractsEqual(first, summary)) return .fresh;
     }
     return first;
+}
+
+fn inferOneProcOwnedParams(
+    allocator: Allocator,
+    store: *LirStore,
+    proc: LIR.LirProcSpec,
+) Allocator.Error!LIR.LocalSpan {
+    const args = store.getLocalSpan(proc.args);
+    if (proc.body == null or args.len == 0) return .empty();
+
+    var arg_index_by_local = std.AutoHashMap(u32, usize).init(allocator);
+    defer arg_index_by_local.deinit();
+    try arg_index_by_local.ensureTotalCapacity(@intCast(args.len));
+    for (args, 0..) |arg_local, i| {
+        arg_index_by_local.putAssumeCapacity(@intFromEnum(arg_local), i);
+    }
+
+    const needs_owned = try allocator.alloc(bool, args.len);
+    defer allocator.free(needs_owned);
+    @memset(needs_owned, false);
+
+    var visited = std.AutoHashMap(u32, void).init(allocator);
+    defer visited.deinit();
+    var active = std.AutoHashMap(u32, void).init(allocator);
+    defer active.deinit();
+
+    try collectOwnedParams(
+        allocator,
+        store,
+        proc.body.?,
+        &arg_index_by_local,
+        &visited,
+        &active,
+        needs_owned,
+    );
+
+    var owned = std.ArrayList(LocalId).empty;
+    defer owned.deinit(allocator);
+    for (args, 0..) |arg_local, i| {
+        if (needs_owned[i]) {
+            try owned.append(allocator, arg_local);
+        }
+    }
+    return try store.addLocalSpan(owned.items);
+}
+
+fn collectOwnedParams(
+    allocator: Allocator,
+    store: *LirStore,
+    stmt_id: CFStmtId,
+    arg_index_by_local: *const std.AutoHashMap(u32, usize),
+    visited: *std.AutoHashMap(u32, void),
+    active: *std.AutoHashMap(u32, void),
+    needs_owned: []bool,
+) Allocator.Error!void {
+    const gop = try visited.getOrPut(@intFromEnum(stmt_id));
+    if (gop.found_existing) return;
+
+    switch (store.getCFStmt(stmt_id)) {
+        .assign_symbol => |assign| try collectOwnedParams(allocator, store, assign.next, arg_index_by_local, visited, active, needs_owned),
+        .assign_ref => |assign| {
+            try markSpanParamsOwned(allocator, store, assign.ownership.consumed_owned_inputs, arg_index_by_local, active, needs_owned);
+            try collectOwnedParams(allocator, store, assign.next, arg_index_by_local, visited, active, needs_owned);
+        },
+        .assign_literal => |assign| try collectOwnedParams(allocator, store, assign.next, arg_index_by_local, visited, active, needs_owned),
+        .assign_call => |assign| {
+            const callee = store.getProcSpec(assign.proc);
+            const call_args = store.getLocalSpan(assign.args);
+            const owned_params = store.getLocalSpan(callee.owned_params);
+            for (owned_params) |owned_param| {
+                const owned_index = indexOfLocal(store.getLocalSpan(callee.args), owned_param) orelse continue;
+                if (owned_index >= call_args.len) continue;
+                try markLocalParamOwned(allocator, store, call_args[owned_index], arg_index_by_local, active, needs_owned);
+            }
+            try collectOwnedParams(allocator, store, assign.next, arg_index_by_local, visited, active, needs_owned);
+        },
+        .assign_call_indirect => |assign| {
+            for (store.getLocalSpan(assign.args)) |arg_local| {
+                try markLocalParamOwned(allocator, store, arg_local, arg_index_by_local, active, needs_owned);
+            }
+            try collectOwnedParams(allocator, store, assign.next, arg_index_by_local, visited, active, needs_owned);
+        },
+        .assign_low_level => |assign| {
+            try markSpanParamsOwned(allocator, store, assign.ownership.consumed_owned_inputs, arg_index_by_local, active, needs_owned);
+            try collectOwnedParams(allocator, store, assign.next, arg_index_by_local, visited, active, needs_owned);
+        },
+        .assign_list => |assign| {
+            try markSpanParamsOwned(allocator, store, assign.ownership.consumed_owned_inputs, arg_index_by_local, active, needs_owned);
+            try collectOwnedParams(allocator, store, assign.next, arg_index_by_local, visited, active, needs_owned);
+        },
+        .assign_struct => |assign| {
+            try markSpanParamsOwned(allocator, store, assign.ownership.consumed_owned_inputs, arg_index_by_local, active, needs_owned);
+            try collectOwnedParams(allocator, store, assign.next, arg_index_by_local, visited, active, needs_owned);
+        },
+        .assign_tag => |assign| {
+            try markSpanParamsOwned(allocator, store, assign.ownership.consumed_owned_inputs, arg_index_by_local, active, needs_owned);
+            try collectOwnedParams(allocator, store, assign.next, arg_index_by_local, visited, active, needs_owned);
+        },
+        .set_local => |assign| {
+            try markLocalParamOwned(allocator, store, assign.value, arg_index_by_local, active, needs_owned);
+            try collectOwnedParams(allocator, store, assign.next, arg_index_by_local, visited, active, needs_owned);
+        },
+        .debug => |debug_stmt| try collectOwnedParams(allocator, store, debug_stmt.next, arg_index_by_local, visited, active, needs_owned),
+        .expect => |expect_stmt| try collectOwnedParams(allocator, store, expect_stmt.next, arg_index_by_local, visited, active, needs_owned),
+        .incref => |inc| try collectOwnedParams(allocator, store, inc.next, arg_index_by_local, visited, active, needs_owned),
+        .decref => |dec| try collectOwnedParams(allocator, store, dec.next, arg_index_by_local, visited, active, needs_owned),
+        .free => |free_stmt| try collectOwnedParams(allocator, store, free_stmt.next, arg_index_by_local, visited, active, needs_owned),
+        .switch_stmt => |sw| {
+            for (store.getCFSwitchBranches(sw.branches)) |branch| {
+                try collectOwnedParams(allocator, store, branch.body, arg_index_by_local, visited, active, needs_owned);
+            }
+            try collectOwnedParams(allocator, store, sw.default_branch, arg_index_by_local, visited, active, needs_owned);
+        },
+        .borrow_scope => |scope| {
+            try collectOwnedParams(allocator, store, scope.body, arg_index_by_local, visited, active, needs_owned);
+            try collectOwnedParams(allocator, store, scope.remainder, arg_index_by_local, visited, active, needs_owned);
+        },
+        .for_list => |for_stmt| {
+            try collectOwnedParams(allocator, store, for_stmt.body, arg_index_by_local, visited, active, needs_owned);
+            try collectOwnedParams(allocator, store, for_stmt.next, arg_index_by_local, visited, active, needs_owned);
+        },
+        .join => |join| {
+            try collectOwnedParams(allocator, store, join.body, arg_index_by_local, visited, active, needs_owned);
+            try collectOwnedParams(allocator, store, join.remainder, arg_index_by_local, visited, active, needs_owned);
+        },
+        .jump, .ret, .runtime_error, .scope_exit, .crash, .loop_continue => {},
+    }
+}
+
+fn markSpanParamsOwned(
+    allocator: Allocator,
+    store: *LirStore,
+    span: LIR.LocalSpan,
+    arg_index_by_local: *const std.AutoHashMap(u32, usize),
+    active: *std.AutoHashMap(u32, void),
+    needs_owned: []bool,
+) Allocator.Error!void {
+    for (store.getLocalSpan(span)) |local| {
+        try markLocalParamOwned(allocator, store, local, arg_index_by_local, active, needs_owned);
+    }
+}
+
+fn markLocalParamOwned(
+    allocator: Allocator,
+    store: *LirStore,
+    local: LocalId,
+    arg_index_by_local: *const std.AutoHashMap(u32, usize),
+    active: *std.AutoHashMap(u32, void),
+    needs_owned: []bool,
+) Allocator.Error!void {
+    switch (try inferLocalContract(allocator, store, local, arg_index_by_local, active)) {
+        .alias_of_param => |param| needs_owned[param.param_index] = true,
+        .borrow_of_param => |param| needs_owned[param.param_index] = true,
+        else => {},
+    }
 }
 
 fn collectReturnContracts(
@@ -326,6 +504,17 @@ fn procResultContractsEqual(a: ProcResultContract, b: ProcResultContract) bool {
     };
 }
 
+fn localSpansEqual(store: *const LirStore, a: LIR.LocalSpan, b: LIR.LocalSpan) bool {
+    return std.mem.eql(LocalId, store.getLocalSpan(a), store.getLocalSpan(b));
+}
+
+fn indexOfLocal(locals: []const LocalId, target: LocalId) ?usize {
+    for (locals, 0..) |local, i| {
+        if (local == target) return i;
+    }
+    return null;
+}
+
 fn propagateCallResultSemantics(
     allocator: Allocator,
     store: *LirStore,
@@ -388,6 +577,54 @@ fn propagateRefResultSemantics(
             },
             else => {},
         }
+    }
+}
+
+fn normalizeRefLocalOwnership(
+    allocator: Allocator,
+    store: *LirStore,
+) Allocator.Error!void {
+    _ = allocator;
+    for (store.cf_stmts.items, 0..) |stmt, i| {
+        const assign = switch (stmt) {
+            .assign_ref => |assign| assign,
+            else => continue,
+        };
+
+        const source = switch (assign.op) {
+            .local => |source| source,
+            else => continue,
+        };
+
+        if (assign.result != .fresh) continue;
+
+        const rewritten_ownership = blk: {
+            const semantics = localResultSemantics(store, source) orelse break :blk LIR.OwnershipSemantics{
+                .consumed_owned_inputs = try store.addLocalSpan(&.{source}),
+            };
+
+            switch (semantics) {
+                .fresh => break :blk LIR.OwnershipSemantics{
+                    .consumed_owned_inputs = try store.addLocalSpan(&.{source}),
+                },
+                .alias_of => |alias| break :blk LIR.OwnershipSemantics{
+                    .consumed_owned_inputs = try store.addLocalSpan(&.{alias.owner}),
+                },
+                .borrow_of => |borrow| break :blk LIR.OwnershipSemantics{
+                    .retained_borrows = try store.addLocalSpan(&.{borrow.owner}),
+                },
+            }
+        };
+
+        if (ownershipSemanticsEqual(store, assign.ownership, rewritten_ownership)) continue;
+
+        store.cf_stmts.items[i] = .{ .assign_ref = .{
+            .target = assign.target,
+            .result = assign.result,
+            .ownership = rewritten_ownership,
+            .op = assign.op,
+            .next = assign.next,
+        } };
     }
 }
 
@@ -533,4 +770,10 @@ fn borrowRegionsEqual(a: LIR.BorrowRegion, b: LIR.BorrowRegion) bool {
             else => false,
         },
     };
+}
+
+fn ownershipSemanticsEqual(store: *const LirStore, a: LIR.OwnershipSemantics, b: LIR.OwnershipSemantics) bool {
+    return a.materialization == b.materialization and
+        std.mem.eql(LocalId, store.getLocalSpan(a.consumed_owned_inputs), store.getLocalSpan(b.consumed_owned_inputs)) and
+        std.mem.eql(LocalId, store.getLocalSpan(a.retained_borrows), store.getLocalSpan(b.retained_borrows));
 }

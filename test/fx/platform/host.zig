@@ -975,6 +975,11 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
     // This allows us to display helpful error messages instead of crashing
     installRuntimeSignalHandlers();
 
+    if (trace_refcount) {
+        builtins.utils.DebugRefcountTracker.enable();
+        defer builtins.utils.DebugRefcountTracker.disable();
+    }
+
     var host_env = HostEnv{
         .gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){},
         .test_state = TestState.init(),
@@ -1016,6 +1021,9 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
         // Only report remaining allocations if test passed (otherwise it's expected
         // that cleanup may be incomplete due to test failure)
         if (remaining_count > 0 and test_passed) {
+            if (trace_refcount) {
+                _ = builtins.utils.DebugRefcountTracker.reportLeaks();
+            }
             const stderr_file: std.fs.File = .stderr();
             var buf: [512]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf,

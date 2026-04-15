@@ -143,6 +143,10 @@ const ProcPass = struct {
     }
 
     fn computeOwnedLocals(self: *ProcPass) void {
+        for (self.store.getLocalSpan(self.proc.owned_params)) |param| {
+            self.markOwnedLocal(param);
+        }
+
         for (self.store.cf_stmts.items) |stmt| {
             switch (stmt) {
                 .assign_ref => |assign| self.markOwnedFresh(assign.target, assign.result),
@@ -420,6 +424,7 @@ const ProcPass = struct {
             .assign_call => |assign| {
                 defs.set(@intFromEnum(assign.target));
                 self.markSpanUses(assign.args, uses);
+                self.markOwnedCallArgsPassed(assign.proc, assign.args, ownership_passed);
             },
             .assign_call_indirect => |assign| {
                 defs.set(@intFromEnum(assign.target));
@@ -516,9 +521,34 @@ const ProcPass = struct {
         ownership_passed.set(@intFromEnum(local));
     }
 
+    fn markOwnedCallArgsPassed(
+        self: *ProcPass,
+        proc_id: LIR.LirProcSpecId,
+        args_span: LIR.LocalSpan,
+        ownership_passed: *std.DynamicBitSetUnmanaged,
+    ) void {
+        const proc = self.store.getProcSpec(proc_id);
+        const args = self.store.getLocalSpan(args_span);
+        const params = self.store.getLocalSpan(proc.args);
+        const owned_params = self.store.getLocalSpan(proc.owned_params);
+
+        for (owned_params) |owned_param| {
+            const param_index = indexOfLocal(params, owned_param) orelse continue;
+            if (param_index >= args.len) continue;
+            self.markOwnershipPassedLocal(args[param_index], ownership_passed);
+        }
+    }
+
     fn localCanOwnRefcount(self: *const ProcPass, local: LocalId) bool {
         const idx = @intFromEnum(local);
         return self.owned_locals.isSet(idx);
+    }
+
+    fn indexOfLocal(locals: []const LocalId, target: LocalId) ?usize {
+        for (locals, 0..) |local, i| {
+            if (local == target) return i;
+        }
+        return null;
     }
 
     fn rewriteProcBody(self: *ProcPass) Allocator.Error!void {

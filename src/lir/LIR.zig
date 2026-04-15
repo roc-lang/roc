@@ -397,6 +397,7 @@ pub const CFStmt = union(enum) {
 pub const LirProcSpec = struct {
     name: Symbol,
     args: LocalSpan,
+    owned_params: LocalSpan = .empty(),
     body: ?CFStmtId = null,
     ret_layout: layout.Idx,
     result_contract: ProcResultContract,

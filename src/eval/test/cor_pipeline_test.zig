@@ -122,7 +122,9 @@ fn runModuleWithInterpreter(
     defer interp.deinit();
 
     try interp.eval(.{ .proc_id = compiled.lowered.main_proc });
-    return try runtime_env.snapshot(allocator);
+    const snapshot = try runtime_env.snapshot(allocator);
+    try runtime_env.checkForLeaks();
+    return snapshot;
 }
 
 fn runModuleWithDevBackend(
@@ -166,7 +168,9 @@ fn runModuleWithDevBackend(
     @memset(ret_buf, 0);
 
     exec_mem.callRocABI(@ptrCast(runtime_env.get_ops()), @ptrCast(ret_buf.ptr), null);
-    return try runtime_env.snapshot(allocator);
+    const snapshot = try runtime_env.snapshot(allocator);
+    try runtime_env.checkForLeaks();
+    return snapshot;
 }
 
 test "cor pipeline - recursive lambda factorial" {
@@ -387,6 +391,54 @@ test "cor pipeline - hosted function can flow as a first-class argument" {
     try testing.expectEqual(RuntimeHostEnv.Termination.returned, dev_run.termination);
     try testing.expectEqual(@as(usize, 1), dev_run.events.len);
     try testing.expectEqualStrings("hello", dev_run.events[0].bytes());
+}
+
+test "cor pipeline - recursive list_first branch into hosted proc keeps ownership explicit" {
+    const hosted_fns = [_]builtins.host_abi.HostedFn{
+        builtins.host_abi.hostedFn(&echoHostedFn),
+    };
+    var compiled = try helpers.compileProgram(
+        testing.allocator,
+        .module,
+        \\import Platform
+        \\
+        \\Node := [Text(Str), Element(Str, List(Node))]
+        \\
+        \\main! = || {
+        \\    text_node : Node
+        \\    text_node = Text("hello")
+        \\    children : List(Node)
+        \\    children = [text_node]
+        \\    match List.first(children) {
+        \\        Ok(child) =>
+        \\            match child {
+        \\                Text(_) => Platform.line!("Text")
+        \\                Element(_, _) => Platform.line!("Element")
+        \\            }
+        \\        Err(_) => Platform.line!("Err")
+        \\    }
+        \\}
+        ,
+        &.{.{
+            .name = "Platform",
+            .source =
+            \\line! : Str => {}
+            ,
+        }},
+    );
+    defer compiled.deinit(testing.allocator);
+
+    var interp_run = try runModuleWithInterpreter(testing.allocator, &compiled, &hosted_fns);
+    defer interp_run.deinit(testing.allocator);
+    try testing.expectEqual(RuntimeHostEnv.Termination.returned, interp_run.termination);
+    try testing.expectEqual(@as(usize, 1), interp_run.events.len);
+    try testing.expectEqualStrings("Text", interp_run.events[0].bytes());
+
+    var dev_run = try runModuleWithDevBackend(testing.allocator, &compiled, &hosted_fns);
+    defer dev_run.deinit(testing.allocator);
+    try testing.expectEqual(RuntimeHostEnv.Termination.returned, dev_run.termination);
+    try testing.expectEqual(@as(usize, 1), dev_run.events.len);
+    try testing.expectEqualStrings("Text", dev_run.events[0].bytes());
 }
 
 test "cor pipeline - hosted function survives boxed indirect-call round trip" {
