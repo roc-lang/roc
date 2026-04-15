@@ -935,26 +935,24 @@ const ProcPass = struct {
                 }
             },
             .assign_list => |assign| {
-                if (assign.result != .fresh) return;
-                try self.accumulateFreshInputRetains(self.store.getLocalSpan(assign.elems), retained_counts);
+                try self.accumulateRetainedBorrows(self.store.getLocalSpan(assign.ownership.retained_borrows), retained_counts);
             },
             .assign_struct => |assign| {
-                if (assign.result != .fresh) return;
-                try self.accumulateFreshInputRetains(self.store.getLocalSpan(assign.fields), retained_counts);
+                try self.accumulateRetainedBorrows(self.store.getLocalSpan(assign.ownership.retained_borrows), retained_counts);
             },
             .assign_tag => |assign| {
-                if (assign.result != .fresh) return;
-                const payload = assign.payload orelse return;
-                self.accumulateFreshInputRetain(payload, retained_counts);
+                try self.accumulateRetainedBorrows(self.store.getLocalSpan(assign.ownership.retained_borrows), retained_counts);
             },
             .assign_low_level => |assign| {
-                const args = self.store.getLocalSpan(assign.args);
-                for (args, 0..) |arg, i| {
-                    if (!assign.op.borrowedArgRetainedByResult(i)) continue;
-                    self.incrementRetainCount(arg, retained_counts, 1);
-                }
+                try self.accumulateRetainedBorrows(self.store.getLocalSpan(assign.ownership.retained_borrows), retained_counts);
             },
             else => {},
+        }
+    }
+
+    fn accumulateRetainedBorrows(self: *ProcPass, retained_borrows: []const LocalId, retained_counts: []u16) Allocator.Error!void {
+        for (retained_borrows) |local| {
+            self.incrementRetainCount(local, retained_counts, 1);
         }
     }
 
