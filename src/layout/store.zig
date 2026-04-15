@@ -51,6 +51,14 @@ fn assertAppendIdx(expected: usize, idx: anytype) void {
 pub const Store = struct {
     const Self = @This();
 
+    pub const BuiltinListAbi = struct {
+        elem_layout_idx: ?Idx,
+        elem_layout: Layout,
+        elem_size: u32,
+        elem_alignment: u32,
+        contains_refcounted: bool,
+    };
+
     /// All module environments for cross-module type resolution
     all_module_envs: []const *const ModuleEnv,
 
@@ -1481,6 +1489,37 @@ pub const Store = struct {
             .elem_size = self.layoutSize(elem_layout),
             .elem_alignment = @intCast(elem_layout.alignment(self.targetUsize()).toByteUnits()),
             .contains_refcounted = self.layoutContainsRefcounted(elem_layout),
+        };
+    }
+
+    pub fn runtimeRepresentationLayoutIdx(self: *const Self, layout_idx: Idx) Idx {
+        const layout_val = self.getLayout(layout_idx);
+        return switch (layout_val.tag) {
+            .closure => self.runtimeRepresentationLayoutIdx(layout_val.data.closure.captures_layout_idx),
+            else => layout_idx,
+        };
+    }
+
+    pub fn builtinListAbi(self: *const Self, list_layout_idx: Idx) BuiltinListAbi {
+        const list_layout = self.getLayout(list_layout_idx);
+        std.debug.assert(list_layout.tag == .list or list_layout.tag == .list_of_zst);
+        const info = self.getListInfo(list_layout);
+        const runtime_elem_layout_idx = switch (list_layout.tag) {
+            .list => self.runtimeRepresentationLayoutIdx(info.elem_layout_idx),
+            .list_of_zst => null,
+            else => unreachable,
+        };
+        const runtime_elem_layout = if (runtime_elem_layout_idx) |idx| self.getLayout(idx) else info.elem_layout;
+
+        return .{
+            .elem_layout_idx = runtime_elem_layout_idx,
+            .elem_layout = runtime_elem_layout,
+            .elem_size = if (runtime_elem_layout_idx != null) self.layoutSize(runtime_elem_layout) else 0,
+            .elem_alignment = if (runtime_elem_layout_idx != null)
+                @intCast(runtime_elem_layout.alignment(self.targetUsize()).toByteUnits())
+            else
+                1,
+            .contains_refcounted = if (runtime_elem_layout_idx != null) self.layoutContainsRefcounted(runtime_elem_layout) else false,
         };
     }
 

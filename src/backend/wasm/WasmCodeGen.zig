@@ -66,20 +66,13 @@ const BuiltinListAbi = struct {
 
 fn builtinInternalListAbi(self: *const Self, comptime site: []const u8, list_layout_idx: layout.Idx) BuiltinListAbi {
     ownership_boundary.builtinRuntimeInternal(site);
-    const ls = self.getLayoutStore();
-    const list_layout = ls.getLayout(list_layout_idx);
-    std.debug.assert(list_layout.tag == .list or list_layout.tag == .list_of_zst);
-    const info = ls.getListInfo(list_layout);
+    const abi = self.getLayoutStore().builtinListAbi(list_layout_idx);
     return .{
-        .elem_layout_idx = switch (list_layout.tag) {
-            .list => self.runtimeRepresentationLayoutIdx(info.elem_layout_idx),
-            .list_of_zst => null,
-            else => unreachable,
-        },
-        .elem_layout = info.elem_layout,
-        .elem_size = info.elem_size,
-        .elem_align = info.elem_alignment,
-        .elements_refcounted = info.contains_refcounted,
+        .elem_layout_idx = abi.elem_layout_idx,
+        .elem_layout = abi.elem_layout,
+        .elem_size = abi.elem_size,
+        .elem_align = abi.elem_alignment,
+        .elements_refcounted = abi.contains_refcounted,
     };
 }
 
@@ -1473,31 +1466,19 @@ fn generateBuiltinInternalRcHelperBody(
             try self.emitDataPtrFree(box_ptr_local, box_plan.elem_alignment, box_plan.child != null);
         },
         .struct_ => |struct_plan| {
-            const ls = self.getLayoutStore();
-            const struct_data = ls.getStructData(struct_plan.struct_idx);
-            const fields = ls.struct_fields.sliceRange(struct_data.getFields());
-            const field_count: u32 = @intCast(fields.len);
+            const field_count = self.getLayoutStore().rcHelperStructFieldCount(struct_plan);
             var i: u32 = 0;
             while (i < field_count) : (i += 1) {
-                const field = fields.get(i);
-                const field_layout_idx = field.layout;
-                const field_layout = ls.getLayout(field_layout_idx);
-                if (!builtinInternalLayoutContainsRefcounted(ls, "wasm.generateRcHelperBody.builtin_field_rc", field_layout_idx)) continue;
-                if (self.layoutStorageByteSize(field_layout_idx) == 0) continue;
-
+                const field_plan = self.getLayoutStore().rcHelperStructFieldPlan(struct_plan, i) orelse continue;
                 const field_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                 try self.emitLocalGet(value_ptr_local);
-                const field_offset = structFieldOffsetBySortedIndexWasm(self, struct_plan.struct_idx, i);
-                if (field_offset > 0) {
+                if (field_plan.offset > 0) {
                     self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_plan.offset)) catch return error.OutOfMemory;
                     self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
                 }
                 try self.emitLocalSet(field_ptr_local);
-                try self.emitRawRcHelperCallByKey(.{
-                    .op = struct_plan.child_op,
-                    .layout_idx = field_layout_idx,
-                }, field_ptr_local, count_local);
+                try self.emitRawRcHelperCallByKey(field_plan.child, field_ptr_local, count_local);
             }
         },
         .tag_union => |tag_plan| {

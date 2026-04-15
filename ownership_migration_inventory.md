@@ -43,7 +43,7 @@ ownership decisions. The remaining sites below show the specific gaps.
    - [`src/backend/dev/LirCodeGen.zig:8938`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig:8938)
    - [`src/layout/store.zig:1791`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/layout/store.zig:1791)
    Current behavior:
-   - Dev backend now consumes store-published RC helper plans and routes list helper ABI facts through one `builtinInternalListAbi` helper.
+   - Dev backend now consumes store-published RC helper plans and uses a thin compatibility wrapper over the store-published list helper ABI.
    Missing earlier fact:
    - The primitive helper ABI still expects backend-supplied list metadata instead of consuming a shared earlier artifact.
    LIR change needed:
@@ -51,16 +51,17 @@ ownership decisions. The remaining sites below show the specific gaps.
    Replacement:
    - Long-term ideal is one shared helper-ABI artifact consumed mechanically by all backends, with ownership transitions still driven only by explicit surrounding LIR.
 
-2. Wasm backend list helper ABI and helper traversal
+2. Wasm backend list helper ABI and list payload traversal
    Files:
    - [`src/backend/wasm/WasmCodeGen.zig:1303`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/wasm/WasmCodeGen.zig:1303)
    - [`src/backend/wasm/WasmCodeGen.zig:7018`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/wasm/WasmCodeGen.zig:7018)
    - [`src/backend/wasm/WasmCodeGen.zig:7219`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/wasm/WasmCodeGen.zig:7219)
    - [`src/backend/wasm/WasmCodeGen.zig:7422`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/wasm/WasmCodeGen.zig:7422)
    - [`src/backend/wasm/WasmCodeGen.zig:11017`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/wasm/WasmCodeGen.zig:11017)
+   - [`src/backend/wasm/WasmCodeGen.zig:1181`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/wasm/WasmCodeGen.zig:1181)
    - [`src/layout/store.zig:1791`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/layout/store.zig:1791)
    Current behavior:
-   - Wasm now consumes store-published RC helper plans and routes list helper ABI facts through one `builtinInternalListAbi` helper, but helper generation still performs backend-local traversal/drop work for list payloads.
+   - Wasm now consumes store-published RC helper plans and uses a thin compatibility wrapper over the store-published list helper ABI, but list payload teardown still performs backend-local element traversal inside builtin helper internals.
    Missing earlier fact:
    - LIR/low-level metadata still does not provide a shared helper-plan artifact or equivalent explicit child-traversal summary.
    LIR change needed:

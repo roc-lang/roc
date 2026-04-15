@@ -121,22 +121,16 @@ const BuiltinListAbi = struct {
 
 fn builtinInternalListAbi(ls: *const LayoutStore, comptime site: []const u8, list_layout_idx: layout.Idx) BuiltinListAbi {
     ownership_boundary.builtinRuntimeInternal(site);
-    const list_layout = ls.getLayout(list_layout_idx);
-    std.debug.assert(list_layout.tag == .list or list_layout.tag == .list_of_zst);
-    const info = ls.getListInfo(list_layout);
+    const abi = ls.builtinListAbi(list_layout_idx);
     return .{
-        .elem_layout_idx = switch (list_layout.tag) {
-            .list => info.elem_layout_idx,
-            .list_of_zst => null,
-            else => unreachable,
-        },
-        .elem_layout = info.elem_layout,
+        .elem_layout_idx = abi.elem_layout_idx,
+        .elem_layout = abi.elem_layout,
         .elem_size_align = .{
-            .size = info.elem_size,
-            .alignment = layout.RocAlignment.fromByteUnits(@intCast(info.elem_alignment)),
+            .size = abi.elem_size,
+            .alignment = layout.RocAlignment.fromByteUnits(@intCast(abi.elem_alignment)),
         },
-        .alignment_bytes = info.elem_alignment,
-        .elements_refcounted = info.contains_refcounted,
+        .alignment_bytes = abi.elem_alignment,
+        .elements_refcounted = abi.contains_refcounted,
     };
 }
 
