@@ -33,7 +33,7 @@ ownership decisions. The remaining sites below show the specific gaps.
 
 ### Interpreter forbidden ordinary-path ownership
 
-1. `coerceValueIntoBox`
+1. `coerceForbiddenAggregateValueIntoBox`
    Files:
    - [`src/eval/interpreter.zig:5054`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/interpreter.zig:5054)
    Current behavior:
@@ -45,7 +45,7 @@ ownership decisions. The remaining sites below show the specific gaps.
    Replacement:
    - No interpreter-side retain; only explicit LIR RC.
 
-2. `coerceStructValue`
+2. `coerceForbiddenAggregateStructValue`
    Files:
    - [`src/eval/interpreter.zig:5106`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/interpreter.zig:5106)
    Current behavior:
@@ -57,7 +57,7 @@ ownership decisions. The remaining sites below show the specific gaps.
    Replacement:
    - Fresh aggregate construction followed by explicit LIR `incref` statements as required.
 
-3. `coerceTagUnionValue`
+3. `coerceForbiddenAggregateTagUnionValue`
    Files:
    - [`src/eval/interpreter.zig:5185`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/interpreter.zig:5185)
    Current behavior:
