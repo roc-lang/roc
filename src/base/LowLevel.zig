@@ -414,6 +414,12 @@ pub const LowLevel = enum {
         requires_explicit_summary,
     };
 
+    pub const ResultMaterialization = enum {
+        direct,
+        copy_from_borrowed_input,
+        fresh_aggregate,
+    };
+
     pub const NumericParseSpec = union(enum) {
         int: struct {
             width_bytes: u8,
@@ -812,6 +818,23 @@ pub const LowLevel = enum {
             => .requires_explicit_summary,
 
             else => .fresh,
+        };
+    }
+
+    pub fn resultMaterialization(self: LowLevel) ResultMaterialization {
+        return switch (self) {
+            .list_get_unsafe,
+            .list_first,
+            .list_last,
+            .box_unbox,
+            => .copy_from_borrowed_input,
+
+            .list_split_first,
+            .list_split_last,
+            .box_box,
+            => .fresh_aggregate,
+
+            else => .direct,
         };
     }
 };

@@ -41,6 +41,10 @@ pub const BorrowRegion = LIR.BorrowRegion;
 pub const BorrowedRef = LIR.BorrowedRef;
 /// Ownership/provenance summary for a statement result.
 pub const ResultSemantics = LIR.ResultSemantics;
+/// Physical result materialization kind attached to value-producing statements.
+pub const ResultMaterialization = LIR.ResultMaterialization;
+/// Extra ownership data attached to value-producing statements.
+pub const OwnershipSemantics = LIR.OwnershipSemantics;
 /// Ref-producing operations lowerable by `assign_ref`.
 pub const RefOp = LIR.RefOp;
 /// Projection step applied when tracking aliases and borrows.

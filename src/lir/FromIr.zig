@@ -343,6 +343,39 @@ const ProcLowerer = struct {
             debugPanic("lir.from_ir missing explicit proc return layout ref");
     }
 
+    fn freshAggregateOwnership(self: *ProcLowerer, retained_borrows: []const LIR.LocalId) std.mem.Allocator.Error!LIR.OwnershipSemantics {
+        return .{
+            .materialization = .fresh_aggregate,
+            .retained_borrows = try self.parent.store.addLocalSpan(retained_borrows),
+        };
+    }
+
+    fn lowLevelOwnership(self: *ProcLowerer, op: base.LowLevel, args: []const LIR.LocalId) std.mem.Allocator.Error!LIR.OwnershipSemantics {
+        var retained_count: usize = 0;
+        for (args, 0..) |_, i| {
+            if (op.borrowedArgRetainedByResult(i)) retained_count += 1;
+        }
+
+        const retained = try self.parent.allocator.alloc(LIR.LocalId, retained_count);
+        defer self.parent.allocator.free(retained);
+
+        var write_index: usize = 0;
+        for (args, 0..) |arg, i| {
+            if (!op.borrowedArgRetainedByResult(i)) continue;
+            retained[write_index] = arg;
+            write_index += 1;
+        }
+
+        return .{
+            .materialization = switch (op.resultMaterialization()) {
+                .direct => .direct,
+                .copy_from_borrowed_input => .copy_from_borrowed_input,
+                .fresh_aggregate => .fresh_aggregate,
+            },
+            .retained_borrows = try self.parent.store.addLocalSpan(retained),
+        };
+    }
+
     fn freshLocalWithLayout(self: *ProcLowerer, layout_idx: layout_mod.Idx) std.mem.Allocator.Error!LIR.LocalId {
         return self.parent.store.addLocal(.{ .layout_idx = layout_idx });
     }
@@ -784,6 +817,7 @@ const ProcLowerer = struct {
             return try self.parent.store.addCFStmt(.{ .assign_low_level = .{
                 .target = target_local,
                 .result = .fresh,
+                .ownership = try self.lowLevelOwnership(.box_unbox, &.{source_local}),
                 .op = .box_unbox,
                 .args = args,
                 .next = next,
@@ -795,6 +829,7 @@ const ProcLowerer = struct {
             return try self.parent.store.addCFStmt(.{ .assign_low_level = .{
                 .target = target_local,
                 .result = .fresh,
+                .ownership = try self.lowLevelOwnership(.box_box, &.{source_local}),
                 .op = .box_box,
                 .args = args,
                 .next = next,
@@ -816,6 +851,7 @@ const ProcLowerer = struct {
             const box_stmt = try self.parent.store.addCFStmt(.{ .assign_low_level = .{
                 .target = target_local,
                 .result = .fresh,
+                .ownership = try self.lowLevelOwnership(.box_box, &.{boxed_child_local}),
                 .op = .box_box,
                 .args = box_args,
                 .next = next,
@@ -831,6 +867,7 @@ const ProcLowerer = struct {
             return try self.parent.store.addCFStmt(.{ .assign_low_level = .{
                 .target = unboxed_local,
                 .result = .fresh,
+                .ownership = try self.lowLevelOwnership(.box_unbox, &.{source_local}),
                 .op = .box_unbox,
                 .args = unbox_args,
                 .next = bridged,
@@ -921,6 +958,7 @@ const ProcLowerer = struct {
         const assign_struct = try self.parent.store.addCFStmt(.{ .assign_struct = .{
             .target = target_local,
             .result = .fresh,
+            .ownership = try self.freshAggregateOwnership(target_fields),
             .fields = try self.parent.store.addLocalSpan(target_fields),
             .next = next,
         } });
@@ -978,6 +1016,7 @@ const ProcLowerer = struct {
                 try self.parent.store.addCFStmt(.{ .assign_tag = .{
                     .target = target_local,
                     .result = .fresh,
+                    .ownership = try self.freshAggregateOwnership(&.{}),
                     .discriminant = discriminant,
                     .payload = null,
                     .next = next,
@@ -995,6 +1034,7 @@ const ProcLowerer = struct {
                 const assign_tag = try self.parent.store.addCFStmt(.{ .assign_tag = .{
                     .target = target_local,
                     .result = .fresh,
+                    .ownership = try self.freshAggregateOwnership(&.{target_payload_local}),
                     .discriminant = discriminant,
                     .payload = target_payload_local,
                     .next = next,
@@ -1354,6 +1394,7 @@ const ProcLowerer = struct {
                 const assign_tag = try self.parent.store.addCFStmt(.{ .assign_tag = .{
                     .target = target,
                     .result = .fresh,
+                    .ownership = try self.freshAggregateOwnership(if (payload_local) |local| &.{local} else &.{}),
                     .discriminant = union_expr.discriminant,
                     .payload = payload_local,
                     .next = next,
@@ -1440,6 +1481,7 @@ const ProcLowerer = struct {
                 const assign_struct = try self.parent.store.addCFStmt(.{ .assign_struct = .{
                     .target = target,
                     .result = .fresh,
+                    .ownership = try self.freshAggregateOwnership(planned.fields),
                     .fields = span,
                     .next = next,
                 } });
@@ -1463,6 +1505,7 @@ const ProcLowerer = struct {
                 const assign_list = try self.parent.store.addCFStmt(.{ .assign_list = .{
                     .target = target,
                     .result = .fresh,
+                    .ownership = try self.freshAggregateOwnership(planned.elems),
                     .elems = try self.parent.store.addLocalSpan(planned.elems),
                     .next = next,
                 } });
@@ -1553,6 +1596,7 @@ const ProcLowerer = struct {
                 break :blk try self.parent.store.addCFStmt(.{ .assign_call_indirect = .{
                     .target = target,
                     .result = .fresh,
+                    .ownership = .{},
                     .closure = try self.lowerVar(call.func),
                     .args = try self.parent.store.addLocalSpan(locals),
                     .capture_layout = if (call.capture_layout) |capture_ref|
@@ -1584,6 +1628,7 @@ const ProcLowerer = struct {
                 break :blk try self.parent.store.addCFStmt(.{ .assign_low_level = .{
                     .target = raw_target,
                     .result = .fresh,
+                    .ownership = try self.lowLevelOwnership(call.op, locals),
                     .op = call.op,
                     .args = try self.parent.store.addLocalSpan(locals),
                     .next = call_next,

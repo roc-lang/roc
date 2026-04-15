@@ -158,6 +158,30 @@ pub const ResultSemantics = union(enum) {
     borrow_of: BorrowedRef,
 };
 
+/// How a value-producing statement physically materializes its result.
+///
+/// `ResultSemantics` answers ownership/provenance questions at the local level.
+/// `ResultMaterialization` answers the lower-level question of whether the
+/// result is a direct alias/borrow, a copied value sourced from a borrowed
+/// input, or a freshly constructed aggregate/container that takes ownership of
+/// child references.
+pub const ResultMaterialization = enum {
+    direct,
+    copy_from_borrowed_input,
+    fresh_aggregate,
+};
+
+/// Additional ownership data attached to value-producing statements.
+///
+/// This is intentionally orthogonal to `ResultSemantics`:
+/// - `result` describes the ownership relation of the resulting local
+/// - `ownership` carries extra data needed to insert explicit RC without
+///   backend/interpreter reconstruction
+pub const OwnershipSemantics = struct {
+    materialization: ResultMaterialization = .direct,
+    retained_borrows: LocalSpan = .empty(),
+};
+
 /// One projection step applied to an alias or borrow root.
 pub const RefProjection = union(enum) {
     field: u16,
@@ -261,6 +285,7 @@ pub const CFStmt = union(enum) {
     assign_call_indirect: struct {
         target: LocalId,
         result: ResultSemantics,
+        ownership: OwnershipSemantics = .{},
         closure: LocalId,
         args: LocalSpan,
         capture_layout: ?layout.Idx,
@@ -269,6 +294,7 @@ pub const CFStmt = union(enum) {
     assign_low_level: struct {
         target: LocalId,
         result: ResultSemantics,
+        ownership: OwnershipSemantics = .{},
         op: LowLevel,
         args: LocalSpan,
         next: CFStmtId,
@@ -276,18 +302,21 @@ pub const CFStmt = union(enum) {
     assign_list: struct {
         target: LocalId,
         result: ResultSemantics,
+        ownership: OwnershipSemantics = .{},
         elems: LocalSpan,
         next: CFStmtId,
     },
     assign_struct: struct {
         target: LocalId,
         result: ResultSemantics,
+        ownership: OwnershipSemantics = .{},
         fields: LocalSpan,
         next: CFStmtId,
     },
     assign_tag: struct {
         target: LocalId,
         result: ResultSemantics,
+        ownership: OwnershipSemantics = .{},
         discriminant: u16,
         payload: ?LocalId,
         next: CFStmtId,

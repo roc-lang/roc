@@ -73,6 +73,7 @@ pub const TailRecursionPass = struct {
             .assign_call_indirect => |assign| self.store.addCFStmt(.{ .assign_call_indirect = .{
                 .target = assign.target,
                 .result = assign.result,
+                .ownership = assign.ownership,
                 .closure = assign.closure,
                 .args = assign.args,
                 .capture_layout = assign.capture_layout,
@@ -81,6 +82,7 @@ pub const TailRecursionPass = struct {
             .assign_low_level => |assign| self.store.addCFStmt(.{ .assign_low_level = .{
                 .target = assign.target,
                 .result = assign.result,
+                .ownership = assign.ownership,
                 .op = assign.op,
                 .args = assign.args,
                 .next = next,
@@ -88,18 +90,21 @@ pub const TailRecursionPass = struct {
             .assign_list => |assign| self.store.addCFStmt(.{ .assign_list = .{
                 .target = assign.target,
                 .result = assign.result,
+                .ownership = assign.ownership,
                 .elems = assign.elems,
                 .next = next,
             } }),
             .assign_struct => |assign| self.store.addCFStmt(.{ .assign_struct = .{
                 .target = assign.target,
                 .result = assign.result,
+                .ownership = assign.ownership,
                 .fields = assign.fields,
                 .next = next,
             } }),
             .assign_tag => |assign| self.store.addCFStmt(.{ .assign_tag = .{
                 .target = assign.target,
                 .result = assign.result,
+                .ownership = assign.ownership,
                 .discriminant = assign.discriminant,
                 .payload = assign.payload,
                 .next = next,
