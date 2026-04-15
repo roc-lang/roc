@@ -707,7 +707,7 @@ fn emitBuiltinInternalRcForValueLocal(
     try self.emitRawRcForValueLocal(kind, value_local, value_vt, layout_idx, inc_count);
 }
 
-fn emitDirectRcPlan(
+fn emitRawDirectRcPlan(
     self: *Self,
     helper_key: RcHelperKey,
     helper_plan: RcHelperPlan,
@@ -814,7 +814,7 @@ fn emitRawRcHelperCallForValuePtr(
     }, layout_idx);
     const helper_plan = resolver.plan(helper_key);
     if (helper_plan == .noop) return;
-    if (try self.emitDirectRcPlan(helper_key, helper_plan, value_ptr_local, null)) return;
+    if (try self.emitRawDirectRcPlan(helper_key, helper_plan, value_ptr_local, null)) return;
 
     const helper_func_idx = try self.compileRcHelper(helper_key);
     try self.emitLocalGet(value_ptr_local);
@@ -1360,7 +1360,7 @@ fn emitRawRcHelperCallByKey(
     const resolver = RcHelperResolver.init(self.getLayoutStore());
     const helper_plan = resolver.plan(helper_key);
     if (helper_plan == .noop) return;
-    if (try self.emitDirectRcPlan(helper_key, helper_plan, value_ptr_local, count_local)) return;
+    if (try self.emitRawDirectRcPlan(helper_key, helper_plan, value_ptr_local, count_local)) return;
 
     const helper_func_idx = try self.compileRcHelper(helper_key);
     try self.emitLocalGet(value_ptr_local);

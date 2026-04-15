@@ -37,6 +37,7 @@ wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitRawRcForValueLocal 
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitRawRcHelperCallForValuePtr | RC helper plumbing used by explicit RC lowering and builtin RC helpers
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitRawRcAtPtr | RC helper plumbing used by explicit RC lowering and builtin RC helpers
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitRawRcHelperCallByKey | RC helper plumbing used by explicit RC lowering and builtin RC helpers
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitRawDirectRcPlan | raw wasm direct-plan helper plumbing
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitBuiltinInternalRcForValueLocal | builtin primitive lowering choke point
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitBuiltinInternalRcAtPtr | builtin primitive lowering choke point
 wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitExplicitRcForValueLocal | explicit LIR RC lowering choke point
