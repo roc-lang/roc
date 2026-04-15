@@ -723,6 +723,57 @@ const CheckUnusedSuppressionStep = struct {
     }
 };
 
+/// Build step that checks for ownership-boundary violations in interpreter/backends.
+///
+/// This enforces the rule that non-builtin ownership semantics must be explicit
+/// in LIR rather than inferred in interpreter/dev/wasm code paths.
+const CheckOwnershipBoundaryStep = struct {
+    step: Step,
+
+    fn create(b: *std.Build) *CheckOwnershipBoundaryStep {
+        const self = b.allocator.create(CheckOwnershipBoundaryStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "check-ownership-boundary",
+                .owner = b,
+                .makeFn = make,
+            }),
+        };
+        return self;
+    }
+
+    fn make(step: *Step, _: Step.MakeOptions) !void {
+        const b = step.owner;
+
+        var child_argv = std.ArrayList([]const u8).empty;
+        defer child_argv.deinit(b.allocator);
+
+        try child_argv.append(b.allocator, "ci/check_ownership_boundaries.py");
+
+        var child = std.process.Child.init(child_argv.items, b.allocator);
+        child.stdin_behavior = .Inherit;
+        child.stdout_behavior = .Inherit;
+        child.stderr_behavior = .Inherit;
+
+        const term = try child.spawnAndWait();
+
+        switch (term) {
+            .Exited => |code| {
+                if (code != 0) {
+                    return step.fail(
+                        "Ownership boundary check failed. Run 'ci/check_ownership_boundaries.py' to see details.",
+                        .{},
+                    );
+                }
+            },
+            else => {
+                return step.fail("ci/check_ownership_boundaries.py terminated abnormally", .{});
+            },
+        }
+    }
+};
+
 /// Build step that checks for @panic and std.debug.panic usage in interpreter and builtins.
 ///
 /// In Roc's design philosophy, compile-time errors become runtime errors with helpful messages.
@@ -1469,7 +1520,7 @@ const MiniCiStep = struct {
     fn make(step: *Step, options: Step.MakeOptions) !void {
         _ = options;
 
-        var timings: [14]StepTiming = undefined;
+        var timings: [15]StepTiming = undefined;
         var count: usize = 0;
         var wall_timer = Timer.start() catch @panic("no clock");
         var timer = Timer.start() catch @panic("no clock");
@@ -1484,6 +1535,9 @@ const MiniCiStep = struct {
 
         try runTidy(step);
         recordTiming(&timings, &count, "tidy checks", &timer);
+
+        try checkOwnershipBoundary(step);
+        recordTiming(&timings, &count, "ownership boundary", &timer);
 
         try checkTestWiring(step);
         recordTiming(&timings, &count, "test wiring", &timer);
@@ -1718,6 +1772,37 @@ const MiniCiStep = struct {
             },
             else => {
                 return step.fail("zig run ci/check_test_wiring.zig terminated abnormally", .{});
+            },
+        }
+    }
+
+    fn checkOwnershipBoundary(step: *Step) !void {
+        const b = step.owner;
+        std.debug.print("---- minici: checking ownership boundary ----\n", .{});
+
+        var child_argv = std.ArrayList([]const u8).empty;
+        defer child_argv.deinit(b.allocator);
+
+        try child_argv.append(b.allocator, "ci/check_ownership_boundaries.py");
+
+        var child = std.process.Child.init(child_argv.items, b.allocator);
+        child.stdin_behavior = .Inherit;
+        child.stdout_behavior = .Inherit;
+        child.stderr_behavior = .Inherit;
+
+        const term = try child.spawnAndWait();
+
+        switch (term) {
+            .Exited => |code| {
+                if (code != 0) {
+                    return step.fail(
+                        "Ownership boundary check failed. Run 'ci/check_ownership_boundaries.py' to see details.",
+                        .{},
+                    );
+                }
+            },
+            else => {
+                return step.fail("ci/check_ownership_boundaries.py terminated abnormally", .{});
             },
         }
     }
@@ -2206,6 +2291,7 @@ pub fn build(b: *std.Build) void {
     const checkfx_step = b.step("checkfx", "Check that every .roc file in test/fx has a corresponding test");
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
+    const check_ownership_boundary_step = b.step("check-ownership-boundary", "Check that ownership stays centralized in explicit LIR RC plus builtin internals");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
     const eval_test_step = b.step("test-eval", "Run eval tests in parallel across all backends");
     const eval_host_effects_step = b.step("test-eval-host-effects", "Run runtime host-effects eval tests across supported backends");
@@ -3232,6 +3318,11 @@ pub fn build(b: *std.Build) void {
     // Add check for unused variable suppression patterns
     const check_unused = CheckUnusedSuppressionStep.create(b);
     test_step.dependOn(&check_unused.step);
+
+    // Add check for ownership-boundary violations in interpreter/backends
+    const check_ownership_boundary = CheckOwnershipBoundaryStep.create(b);
+    test_step.dependOn(&check_ownership_boundary.step);
+    check_ownership_boundary_step.dependOn(&check_ownership_boundary.step);
 
     // Check for @panic and std.debug.panic in interpreter and builtins
     const check_panic = CheckPanicStep.create(b);
