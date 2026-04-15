@@ -5070,7 +5070,6 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
 
             const elem_layout = for_stmt.iterable_elem_layout;
             const elem_size = self.layoutStorageByteSize(elem_layout);
-            const elem_contains_refcounted = builtinInternalLayoutContainsRefcounted(self.getLayoutStore(), "wasm.for_list.builtin_elem_rc", elem_layout);
             if (elem_size == 0) {
                 self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                 WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
@@ -5096,17 +5095,9 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
                     try self.emitLocalSet(dst_local);
 
                     try self.emitMemCopy(dst_local, 0, src_local, elem_size);
-                    try self.emitBuiltinInternalRcAtPtr(.incref, dst_local, elem_layout, 1);
                     try self.emitLocalGet(dst_local);
                 } else {
                     try self.emitLoadOpForLayout(elem_layout, 0);
-                    if (elem_contains_refcounted) {
-                        const elem_vt = self.resolveValType(elem_layout);
-                        const elem_local = self.storage.allocAnonymousLocal(elem_vt) catch return error.OutOfMemory;
-                        try self.emitLocalSet(elem_local);
-                        try self.emitBuiltinInternalRcForValueLocal(.incref, elem_local, elem_vt, elem_layout, 1);
-                        try self.emitLocalGet(elem_local);
-                    }
                 }
                 try self.bindAssignedLocal(for_stmt.elem);
             }

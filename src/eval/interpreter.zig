@@ -1371,9 +1371,6 @@ pub const Interpreter = struct {
                                 actual_elem_layout,
                                 elem_layout,
                             );
-                        if (self.forbiddenOrdinaryContainsRefcounted("interpreter.for_list.elem_layout_rc_check", elem_layout)) {
-                            self.performForbiddenOrdinaryRc("interpreter.for_list.elem_incref", .incref, normalized_elem, elem_layout, 1);
-                        }
                         const elem_value = try self.materializeLocalValue(normalized_elem, elem_layout);
 
                         self.setLocalChecked(frame, current, for_stmt.elem, elem_value);
