@@ -534,7 +534,7 @@ pub const Repl = struct {
         }
 
         const resources_ptr = &self.last_resources.?;
-        var lowered = lowerTypedCIRToLir(self.allocator, resources_ptr) catch |err| {
+        var lowered = lowerTypedCIRToLirForBackend(self.allocator, resources_ptr, self.backend) catch |err| {
             return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Lowering error: {s}", .{@errorName(err)}) };
         };
         defer lowered.deinit();
@@ -858,7 +858,11 @@ fn isTopLevelLambda(module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) bool {
     };
 }
 
-fn lowerTypedCIRToLir(allocator: Allocator, resources: *ParsedResources) !LoweredProgram {
+fn lowerTypedCIRToLirForBackend(
+    allocator: Allocator,
+    resources: *ParsedResources,
+    backend_kind: Backend,
+) !LoweredProgram {
     const module_envs = try allocator.alloc(*const ModuleEnv, resources.extra_modules.len + 2);
     defer allocator.free(module_envs);
     module_envs[0] = resources.module_env;
@@ -867,7 +871,17 @@ fn lowerTypedCIRToLir(allocator: Allocator, resources: *ParsedResources) !Lowere
         module_envs[i + 2] = extra.module_env;
     }
 
-    return eval_pipeline.lowerTypedCIRToLir(allocator, &resources.typed_cir_modules, module_envs);
+    const target_usize: base.target.TargetUsize = switch (backend_kind) {
+        .wasm => .u32,
+        .interpreter, .dev, .llvm => .native,
+    };
+
+    return eval_pipeline.lowerTypedCIRToLirForTarget(
+        allocator,
+        &resources.typed_cir_modules,
+        module_envs,
+        target_usize,
+    );
 }
 
 fn copyReturnedRocStr(
