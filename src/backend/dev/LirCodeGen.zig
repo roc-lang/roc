@@ -8313,7 +8313,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.patchJump(done_patch, self.codegen.currentOffset());
         }
 
-        fn emitRcHelperStrIncref(
+        fn emitBuiltinInternalRcHelperStrIncref(
             self: *Self,
             ptr_slot: i32,
             count_slot: i32,
@@ -8352,7 +8352,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
         }
 
-        fn emitRcHelperStrDrop(
+        fn emitBuiltinInternalRcHelperStrDrop(
             self: *Self,
             builtin_fn: BuiltinFn,
             fn_addr: usize,
@@ -8393,7 +8393,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
         }
 
-        fn emitRcHelperListIncref(
+        fn emitBuiltinInternalRcHelperListIncref(
             self: *Self,
             ptr_slot: i32,
             count_slot: i32,
@@ -8414,7 +8414,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.callBuiltin(&builder, @intFromPtr(&increfDataPtrC), .incref_data_ptr);
         }
 
-        fn emitRcHelperListDrop(
+        fn emitBuiltinInternalRcHelperListDrop(
             self: *Self,
             builtin_fn: BuiltinFn,
             fn_addr: usize,
@@ -8456,7 +8456,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.callBuiltin(&builder, fn_addr, builtin_fn);
         }
 
-        fn emitRcHelperBoxIncref(
+        fn emitBuiltinInternalRcHelperBoxIncref(
             self: *Self,
             ptr_slot: i32,
             count_slot: i32,
@@ -8477,7 +8477,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.callBuiltin(&builder, @intFromPtr(&increfDataPtrC), .incref_data_ptr);
         }
 
-        fn emitRcHelperBoxDrop(
+        fn emitBuiltinInternalRcHelperBoxDrop(
             self: *Self,
             builtin_fn: BuiltinFn,
             fn_addr: usize,
@@ -8520,33 +8520,33 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const resolver = RcHelperResolver.init(self.layout_store);
             switch (resolver.plan(helper_key)) {
                 .noop => {},
-                .str_incref => try self.emitRcHelperStrIncref(ptr_slot, count_slot.?, roc_ops_slot),
-                .str_decref => try self.emitRcHelperStrDrop(.decref_data_ptr, @intFromPtr(&decrefDataPtrC), ptr_slot, roc_ops_slot),
-                .str_free => try self.emitRcHelperStrDrop(.free_data_ptr, @intFromPtr(&freeDataPtrC), ptr_slot, roc_ops_slot),
-                .list_incref => try self.emitRcHelperListIncref(ptr_slot, count_slot.?, roc_ops_slot),
-                .list_decref => |list_plan| try self.emitRcHelperListDrop(
+                .str_incref => try self.emitBuiltinInternalRcHelperStrIncref(ptr_slot, count_slot.?, roc_ops_slot),
+                .str_decref => try self.emitBuiltinInternalRcHelperStrDrop(.decref_data_ptr, @intFromPtr(&decrefDataPtrC), ptr_slot, roc_ops_slot),
+                .str_free => try self.emitBuiltinInternalRcHelperStrDrop(.free_data_ptr, @intFromPtr(&freeDataPtrC), ptr_slot, roc_ops_slot),
+                .list_incref => try self.emitBuiltinInternalRcHelperListIncref(ptr_slot, count_slot.?, roc_ops_slot),
+                .list_decref => |list_plan| try self.emitBuiltinInternalRcHelperListDrop(
                     .list_decref_with,
                     @intFromPtr(&dev_wrappers.roc_builtins_list_decref_with),
                     list_plan,
                     ptr_slot,
                     roc_ops_slot,
                 ),
-                .list_free => |list_plan| try self.emitRcHelperListDrop(
+                .list_free => |list_plan| try self.emitBuiltinInternalRcHelperListDrop(
                     .list_free_with,
                     @intFromPtr(&dev_wrappers.roc_builtins_list_free_with),
                     list_plan,
                     ptr_slot,
                     roc_ops_slot,
                 ),
-                .box_incref => try self.emitRcHelperBoxIncref(ptr_slot, count_slot.?, roc_ops_slot),
-                .box_decref => |box_plan| try self.emitRcHelperBoxDrop(
+                .box_incref => try self.emitBuiltinInternalRcHelperBoxIncref(ptr_slot, count_slot.?, roc_ops_slot),
+                .box_decref => |box_plan| try self.emitBuiltinInternalRcHelperBoxDrop(
                     .box_decref_with,
                     @intFromPtr(&dev_wrappers.roc_builtins_box_decref_with),
                     box_plan,
                     ptr_slot,
                     roc_ops_slot,
                 ),
-                .box_free => |box_plan| try self.emitRcHelperBoxDrop(
+                .box_free => |box_plan| try self.emitBuiltinInternalRcHelperBoxDrop(
                     .box_free_with,
                     @intFromPtr(&dev_wrappers.roc_builtins_box_free_with),
                     box_plan,

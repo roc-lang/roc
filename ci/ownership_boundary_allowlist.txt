@@ -26,6 +26,12 @@ dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitRawRcHelperCallForValu
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitRawRcHelperCallFromPtrReg | RC helper plumbing used by explicit RC lowering and builtin RC helpers
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitBuiltinInternalOptionalRcHelperAddress | builtin primitive helper-address plumbing
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitBuiltinInternalRcHelperCallForValue | builtin primitive lowering choke point
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitBuiltinInternalRcHelperStrIncref | backend RC helper-body infrastructure
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitBuiltinInternalRcHelperStrDrop | backend RC helper-body infrastructure
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitBuiltinInternalRcHelperListIncref | backend RC helper-body infrastructure
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitBuiltinInternalRcHelperListDrop | backend RC helper-body infrastructure
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitBuiltinInternalRcHelperBoxIncref | backend RC helper-body infrastructure
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitBuiltinInternalRcHelperBoxDrop | backend RC helper-body infrastructure
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitExplicitRcHelperCallAtStackOffset | explicit LIR RC lowering choke point
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitExplicitRcHelperCallForValue | explicit LIR RC lowering choke point
 dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | generateRcHelperBody | backend RC helper codegen infrastructure
