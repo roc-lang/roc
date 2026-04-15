@@ -10,6 +10,8 @@ const builtins = @import("builtins");
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
 
+var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
+
 pub const host_abi = builtins.host_abi;
 pub const RocStr = builtins.str.RocStr;
 pub const RocList = builtins.list.RocList;
@@ -39,8 +41,8 @@ pub fn echoHostedFn(_: *anyopaque, _: [*]u8, roc_str: *RocStr) callconv(.c) void
         js.js_echo(message.ptr, message.len);
     } else {
         const stdout_file: std.Io.File = .stdout();
-        stdout_file.writeStreamingAll(std.Options.debug_io, message) catch |err| handleStdoutError(err);
-        stdout_file.writeStreamingAll(std.Options.debug_io, "\n") catch |err| handleStdoutError(err);
+        stdout_file.writeStreamingAll(app_sys_io, message) catch |err| handleStdoutError(err);
+        stdout_file.writeStreamingAll(app_sys_io, "\n") catch |err| handleStdoutError(err);
     }
     // Returns {} (ZST) — no bytes to write to ret_bytes
 }
@@ -125,9 +127,9 @@ pub fn makeDefaultRocOps(env: *DefaultRocOpsEnv, hosted_fns: []host_abi.HostedFn
             } else {
                 const msg = dbg_args.utf8_bytes[0..dbg_args.len];
                 const stderr_file: std.Io.File = .stderr();
-                stderr_file.writeStreamingAll(std.Options.debug_io, "[dbg] ") catch {};
-                stderr_file.writeStreamingAll(std.Options.debug_io, msg) catch {};
-                stderr_file.writeStreamingAll(std.Options.debug_io, "\n") catch {};
+                stderr_file.writeStreamingAll(app_sys_io, "[dbg] ") catch {};
+                stderr_file.writeStreamingAll(app_sys_io, msg) catch {};
+                stderr_file.writeStreamingAll(app_sys_io, "\n") catch {};
             }
         }
         fn rocExpectFailed(expect_args: *const host_abi.RocExpectFailed, env_ptr: *anyopaque) callconv(.c) void {
@@ -138,9 +140,9 @@ pub fn makeDefaultRocOps(env: *DefaultRocOpsEnv, hosted_fns: []host_abi.HostedFn
             } else {
                 const msg = expect_args.utf8_bytes[0..expect_args.len];
                 const stderr_file: std.Io.File = .stderr();
-                stderr_file.writeStreamingAll(std.Options.debug_io, "Expect failed: ") catch {};
-                stderr_file.writeStreamingAll(std.Options.debug_io, msg) catch {};
-                stderr_file.writeStreamingAll(std.Options.debug_io, "\n") catch {};
+                stderr_file.writeStreamingAll(app_sys_io, "Expect failed: ") catch {};
+                stderr_file.writeStreamingAll(app_sys_io, msg) catch {};
+                stderr_file.writeStreamingAll(app_sys_io, "\n") catch {};
             }
         }
         fn rocCrashed(crash_args: *const host_abi.RocCrashed, _: *anyopaque) callconv(.c) void {
@@ -149,9 +151,9 @@ pub fn makeDefaultRocOps(env: *DefaultRocOpsEnv, hosted_fns: []host_abi.HostedFn
             } else {
                 const msg = crash_args.utf8_bytes[0..crash_args.len];
                 const stderr_file: std.Io.File = .stderr();
-                stderr_file.writeStreamingAll(std.Options.debug_io, "Roc crashed: ") catch {};
-                stderr_file.writeStreamingAll(std.Options.debug_io, msg) catch {};
-                stderr_file.writeStreamingAll(std.Options.debug_io, "\n") catch {};
+                stderr_file.writeStreamingAll(app_sys_io, "Roc crashed: ") catch {};
+                stderr_file.writeStreamingAll(app_sys_io, msg) catch {};
+                stderr_file.writeStreamingAll(app_sys_io, "\n") catch {};
                 std.process.exit(1);
             }
         }

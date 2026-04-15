@@ -5,12 +5,14 @@ const builtin = @import("builtin");
 const target = @import("target.zig");
 const reporting = @import("reporting");
 
+var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
+
 const Allocator = std.mem.Allocator;
 
 const is_windows = builtin.target.os.tag == .windows;
 
 var stderr_file_writer: std.Io.File.Writer = .{
-    .io = std.Options.debug_io,
+    .io = std.Io.Threaded.global_single_threaded.io(),
     .interface = std.Io.File.Writer.initInterface(&.{}),
     .file = if (is_windows) undefined else std.Io.File.stderr(),
     .mode = .streaming,
@@ -191,7 +193,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
     std.log.debug("CPU: '{s}', Features: '{s}'", .{ config.cpu, config.features });
 
     // Verify input file exists
-    std.Io.Dir.cwd().access(std.Options.debug_io, config.input_path, .{}) catch |err| {
+    std.Io.Dir.cwd().access(app_sys_io, config.input_path, .{}) catch |err| {
         renderFileNotAccessibleError(gpa, config.input_path, err);
         return false;
     };

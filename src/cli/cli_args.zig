@@ -3,6 +3,8 @@ const std = @import("std");
 const testing = std.testing;
 const mem = std.mem;
 
+var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
+
 /// The core type representing a parsed command
 /// We could use anonymous structs for the argument types instead of defining one for each command to be more concise,
 /// but defining a struct per command means that we can easily take that type and pass it into the function that implements each command.
@@ -544,10 +546,10 @@ fn parseUnbundle(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
 
     // If no paths specified, default to all .tar.zst files in current directory
     if (paths.items.len == 0) {
-        var cwd = try std.Io.Dir.cwd().openDir(std.Options.debug_io, ".", .{ .iterate = true });
-        defer cwd.close(std.Options.debug_io);
+        var cwd = try std.Io.Dir.cwd().openDir(app_sys_io, ".", .{ .iterate = true });
+        defer cwd.close(app_sys_io);
         var iter = cwd.iterate();
-        while (try iter.next(std.Options.debug_io)) |entry| {
+        while (try iter.next(app_sys_io)) |entry| {
             if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".tar.zst")) {
                 try paths.append(try alloc.dupe(u8, entry.name));
             }

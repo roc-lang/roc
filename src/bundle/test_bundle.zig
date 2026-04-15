@@ -17,6 +17,8 @@ const DirExtractWriter = bundle.DirExtractWriter;
 const BufferExtractWriter = unbundle_mod.BufferExtractWriter;
 const FilePathIterator = test_util.FilePathIterator;
 
+var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
+
 // Use fast compression for tests
 const TEST_COMPRESSION_LEVEL: c_int = 2;
 
@@ -530,7 +532,7 @@ test "bundle and unbundle over socket stream" {
         done: std.Io.Semaphore = .{},
 
         fn run(ctx: *@This()) !void {
-            const thread_io = std.Options.debug_io;
+            const thread_io = app_sys_io;
             const unix_addr = try std.Io.net.UnixAddress.init(ctx.socket_path);
             var listener = try unix_addr.listen(thread_io, .{});
             defer listener.deinit(thread_io);
@@ -1488,7 +1490,7 @@ test "download from local server" {
         error_occurred: ?anyerror = null,
 
         fn run(ctx: *@This()) void {
-            const thread_io = std.Options.debug_io;
+            const thread_io = app_sys_io;
             ctx.runImpl() catch |err| {
                 ctx.error_occurred = err;
                 ctx.response_sent.post(thread_io);
@@ -1496,7 +1498,7 @@ test "download from local server" {
         }
 
         fn runImpl(ctx: *@This()) !void {
-            const thread_io = std.Options.debug_io;
+            const thread_io = app_sys_io;
             const stream = try ctx.server.accept(thread_io);
             defer stream.close(thread_io);
 

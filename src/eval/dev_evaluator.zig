@@ -16,7 +16,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
-const Io = @import("io").Io;
+const RocIo = @import("io").RocIo;
 const can = @import("can");
 const types = @import("types");
 const layout = @import("layout");
@@ -308,18 +308,18 @@ const DevRocEnv = struct {
     /// Jump buffer for unwinding from roc_crashed back to the call site.
     jmp_buf: JmpBuf = undefined,
     /// Io context for routing [dbg] output
-    io: Io = Io.default(),
+    roc_io: RocIo = RocIo.default(),
 
     const AllocInfo = struct {
         len: usize,
         alignment: usize,
     };
 
-    fn init(allocator: Allocator, io: ?Io) DevRocEnv {
+    fn init(allocator: Allocator, roc_io: ?RocIo) DevRocEnv {
         return .{
             .allocator = allocator,
             .allocations = std.AutoHashMap(usize, AllocInfo).init(allocator),
-            .io = io orelse Io.default(),
+            .roc_io = roc_io orelse RocIo.default(),
         };
     }
 
@@ -460,14 +460,14 @@ const DevRocEnv = struct {
         const msg = roc_dbg.utf8_bytes[0..roc_dbg.len];
         var buf: [256]u8 = undefined;
         const line = std.fmt.bufPrint(&buf, "[dbg] {s}\n", .{msg}) catch "[dbg] (message too long)\n";
-        self.io.writeStderr(line) catch {};
+        self.roc_io.writeStderr(line) catch {};
     }
 
     /// Expect failed function.
     fn rocExpectFailedFn(_: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
         const self: *DevRocEnv = @ptrCast(@alignCast(env));
         self.inline_expect_failed = true;
-        self.io.writeStderr("[expect failed]\n") catch {};
+        self.roc_io.writeStderr("[expect failed]\n") catch {};
     }
 
     /// Crash function — records the crash and longjmps back to the call site.
@@ -542,7 +542,7 @@ pub const DevEvaluator = struct {
     };
 
     /// Initialize the evaluator with builtin modules
-    pub fn init(allocator: Allocator, io: ?Io) Error!DevEvaluator {
+    pub fn init(allocator: Allocator, roc_io: ?RocIo) Error!DevEvaluator {
         // Load compiled builtins
         const compiled_builtins = @import("compiled_builtins");
 
@@ -567,7 +567,7 @@ pub const DevEvaluator = struct {
 
         // Heap-allocate the RocOps environment so the pointer remains stable
         const roc_env = allocator.create(DevRocEnv) catch return error.OutOfMemory;
-        roc_env.* = DevRocEnv.init(allocator, io);
+        roc_env.* = DevRocEnv.init(allocator, roc_io);
 
         // Create RocOps with function pointers to the DevRocEnv handlers
         // Use a static dummy array for hosted_fns since count=0 means no hosted functions

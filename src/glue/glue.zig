@@ -33,6 +33,8 @@ const RocList = builtins.list.RocList;
 
 const EvalBackend = @import("backend").EvalBackend;
 
+var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
+
 /// Arguments for glue code generation.
 pub const GlueArgs = struct {
     glue_spec: []const u8,
@@ -85,7 +87,7 @@ pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, a
 fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, temp_dir: []const u8) GlueError!void {
 
     // 0. Validate glue spec file exists
-    std.Io.Dir.cwd().access(std.Options.debug_io, args.glue_spec, .{}) catch {
+    std.Io.Dir.cwd().access(app_sys_io, args.glue_spec, .{}) catch {
         return error.GlueSpecNotFound;
     };
 
@@ -102,7 +104,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
 
     // 2. Compile platform using BuildEnv by creating a synthetic app
     // BuildEnv expects an app file, so we create a minimal app that imports the platform
-    const platform_abs_path = std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, args.platform_path, gpa) catch {
+    const platform_abs_path = std.Io.Dir.cwd().realPathFileAlloc(app_sys_io, args.platform_path, gpa) catch {
         return error.PlatformPathResolution;
     };
     defer gpa.free(platform_abs_path);
@@ -163,7 +165,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     };
     defer gpa.free(synthetic_app_path);
 
-    std.Io.Dir.cwd().writeFile(std.Options.debug_io, .{
+    std.Io.Dir.cwd().writeFile(app_sys_io, .{
         .sub_path = synthetic_app_path,
         .data = app_source.items,
     }) catch {
@@ -174,7 +176,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     const thread_count: usize = 1;
     const mode: Mode = .single_threaded;
 
-    const cwd = std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, ".", gpa) catch {
+    const cwd = std.Io.Dir.cwd().realPathFileAlloc(app_sys_io, ".", gpa) catch {
         return error.BuildEnvInit;
     };
     defer gpa.free(cwd);
@@ -357,12 +359,12 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     }
 
     // 5. Compile glue spec in-process and run via interpreter
-    const glue_spec_abs = std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, args.glue_spec, gpa) catch {
+    const glue_spec_abs = std.Io.Dir.cwd().realPathFileAlloc(app_sys_io, args.glue_spec, gpa) catch {
         return error.GlueSpecNotFound;
     };
     defer gpa.free(glue_spec_abs);
 
-    const glue_cwd = std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, ".", gpa) catch {
+    const glue_cwd = std.Io.Dir.cwd().realPathFileAlloc(app_sys_io, ".", gpa) catch {
         return error.BuildEnvInit;
     };
     defer gpa.free(glue_cwd);
@@ -473,7 +475,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     }
 
     // Create output directory if needed
-    std.Io.Dir.cwd().createDirPath(std.Options.debug_io, args.output_dir) catch {
+    std.Io.Dir.cwd().createDirPath(app_sys_io, args.output_dir) catch {
         stderr.print("Error: Could not create output directory: {s}\n", .{args.output_dir}) catch {};
         return error.CompilationFailed;
     };
@@ -488,7 +490,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         };
         defer gpa.free(file_path);
 
-        std.Io.Dir.cwd().writeFile(std.Options.debug_io, .{
+        std.Io.Dir.cwd().writeFile(app_sys_io, .{
             .sub_path = file_path,
             .data = file.content.asSlice(),
         }) catch {
@@ -533,7 +535,7 @@ pub const PlatformHeaderInfo = struct {
 /// Parse a platform header to extract requires entries and validate it's a platform file.
 fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8) !PlatformHeaderInfo {
     // Read source file
-    var source = std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, platform_path, gpa, .unlimited) catch |err| switch (err) {
+    var source = std.Io.Dir.cwd().readFileAlloc(app_sys_io, platform_path, gpa, .unlimited) catch |err| switch (err) {
         error.FileNotFound => return error.FileNotFound,
         else => return error.ParseFailed,
     };

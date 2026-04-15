@@ -5,7 +5,7 @@ const std = @import("std");
 const compile = @import("compile");
 const reporting = @import("reporting");
 const build_options = @import("build_options");
-const Io = @import("io").Io;
+const RocIo = @import("io").RocIo;
 const Allocator = std.mem.Allocator;
 const base = @import("base");
 const can = @import("can");
@@ -32,6 +32,8 @@ const CacheConfig = compile.CacheConfig;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const Region = base.Region;
+
+var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
 
 /// Flags allowing granular debugging
 pub const DebugFlags = struct {
@@ -96,8 +98,8 @@ pub const SyntaxChecker = struct {
     pub fn check(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8, workspace_root: ?[]const u8) ![]Diagnostics.PublishDiagnostics {
         _ = workspace_root; // Reserved for future use
 
-        self.mutex.lockUncancelable(std.Options.debug_io);
-        defer self.mutex.unlock(std.Options.debug_io);
+        self.mutex.lockUncancelable(app_sys_io);
+        defer self.mutex.unlock(app_sys_io);
 
         // Check if content has changed using hash comparison BEFORE building.
         // This avoids unnecessary rebuilds on focus/blur events.
@@ -106,7 +108,7 @@ pub const SyntaxChecker = struct {
             defer if (path) |p| self.allocator.free(p);
 
             const abs_path: ?[:0]u8 = if (path) |p|
-                std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, p, self.allocator) catch null
+                std.Io.Dir.cwd().realPathFileAlloc(app_sys_io, p, self.allocator) catch null
             else
                 null;
             defer if (abs_path) |a| self.allocator.free(a);
@@ -240,14 +242,14 @@ pub const SyntaxChecker = struct {
         }
 
         // Create a fresh BuildEnv
-        const cwd = try std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, ".", self.allocator);
+        const cwd = try std.Io.Dir.cwd().realPathFileAlloc(app_sys_io, ".", self.allocator);
         defer self.allocator.free(cwd);
         var env = try BuildEnv.init(self.allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd);
         env.compiler_version = build_options.compiler_version;
 
         if (self.cache_config.enabled) {
             const cache_manager = try self.allocator.create(CacheManager);
-            cache_manager.* = CacheManager.init(self.allocator, self.cache_config, Io.default());
+            cache_manager.* = CacheManager.init(self.allocator, self.cache_config, RocIo.default());
             env.setCacheManager(cache_manager);
         }
 
@@ -574,9 +576,9 @@ pub const SyntaxChecker = struct {
         var log_file = self.log_file orelse return;
         var buffer: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buffer, fmt, args) catch return;
-        log_file.writeStreamingAll(std.Options.debug_io, msg) catch return;
-        log_file.writeStreamingAll(std.Options.debug_io, "\n") catch {};
-        log_file.sync(std.Options.debug_io) catch {};
+        log_file.writeStreamingAll(app_sys_io, msg) catch return;
+        log_file.writeStreamingAll(app_sys_io, "\n") catch {};
+        log_file.sync(app_sys_io) catch {};
     }
 
     /// Temporary suppression to avoid noisy undefined-variable diagnostics from BuildEnv.
@@ -678,8 +680,8 @@ pub const SyntaxChecker = struct {
         line: u32,
         character: u32,
     ) !?HoverResult {
-        self.mutex.lockUncancelable(std.Options.debug_io);
-        defer self.mutex.unlock(std.Options.debug_io);
+        self.mutex.lockUncancelable(app_sys_io);
+        defer self.mutex.unlock(app_sys_io);
 
         const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();
@@ -1109,8 +1111,8 @@ pub const SyntaxChecker = struct {
         line: u32,
         character: u32,
     ) !?DefinitionResult {
-        self.mutex.lockUncancelable(std.Options.debug_io);
-        defer self.mutex.unlock(std.Options.debug_io);
+        self.mutex.lockUncancelable(app_sys_io);
+        defer self.mutex.unlock(app_sys_io);
 
         const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();
@@ -1366,19 +1368,19 @@ pub const SyntaxChecker = struct {
             self.allocator.free(cache_dir);
 
             // Write file if it doesn't exist
-            if (std.Io.Dir.cwd().access(std.Options.debug_io, builtin_cache_path, .{})) |_| {
+            if (std.Io.Dir.cwd().access(app_sys_io, builtin_cache_path, .{})) |_| {
                 // Already exists
             } else |_| {
                 // Create parent dirs and write embedded source
                 if (std.fs.path.dirname(builtin_cache_path)) |dir| {
-                    std.Io.Dir.cwd().createDirPath(std.Options.debug_io, dir) catch {};
+                    std.Io.Dir.cwd().createDirPath(app_sys_io, dir) catch {};
                 }
-                const file = std.Io.Dir.cwd().createFile(std.Options.debug_io, builtin_cache_path, .{}) catch {
+                const file = std.Io.Dir.cwd().createFile(app_sys_io, builtin_cache_path, .{}) catch {
                     self.allocator.free(builtin_cache_path);
                     return null;
                 };
-                defer file.close(std.Options.debug_io);
-                file.writeStreamingAll(std.Options.debug_io, compiled_builtins.builtin_source) catch {
+                defer file.close(app_sys_io);
+                file.writeStreamingAll(app_sys_io, compiled_builtins.builtin_source) catch {
                     self.allocator.free(builtin_cache_path);
                     return null;
                 };
@@ -1703,8 +1705,8 @@ pub const SyntaxChecker = struct {
         line: u32,
         character: u32,
     ) !?HighlightResult {
-        self.mutex.lockUncancelable(std.Options.debug_io);
-        defer self.mutex.unlock(std.Options.debug_io);
+        self.mutex.lockUncancelable(app_sys_io);
+        defer self.mutex.unlock(app_sys_io);
 
         const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();
@@ -1759,8 +1761,8 @@ pub const SyntaxChecker = struct {
     ) ![]document_symbol_handler.SymbolInformation {
         const SymbolInformation = document_symbol_handler.SymbolInformation;
 
-        self.mutex.lockUncancelable(std.Options.debug_io);
-        defer self.mutex.unlock(std.Options.debug_io);
+        self.mutex.lockUncancelable(app_sys_io);
+        defer self.mutex.unlock(app_sys_io);
 
         const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();
@@ -1769,12 +1771,12 @@ pub const SyntaxChecker = struct {
         const path = uri_util.uriToPath(allocator, uri) catch return &[_]SymbolInformation{};
         defer allocator.free(path);
 
-        const absolute_path: [:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, path, allocator) catch
+        const absolute_path: [:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(app_sys_io, path, allocator) catch
             allocator.dupeZ(u8, path) catch return &[_]SymbolInformation{};
         defer allocator.free(absolute_path);
 
         // Override readFile for the current file so in-memory source is used.
-        var override = Io.ReadFileOverride{ .path = absolute_path, .content = source };
+        var override = RocIo.ReadFileOverride{ .path = absolute_path, .content = source };
         const saved_io = env.filesystem;
         env.filesystem = override.io();
         defer env.filesystem = saved_io;
@@ -2099,8 +2101,8 @@ pub const SyntaxChecker = struct {
         line: u32,
         character: u32,
     ) !?completion_handler.CompletionResult {
-        self.mutex.lockUncancelable(std.Options.debug_io);
-        defer self.mutex.unlock(std.Options.debug_io);
+        self.mutex.lockUncancelable(app_sys_io);
+        defer self.mutex.unlock(app_sys_io);
 
         const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();

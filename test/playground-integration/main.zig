@@ -2,6 +2,7 @@ const std = @import("std");
 const bytebox = @import("bytebox");
 const build_options = @import("build_options");
 
+var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
 var verbose_mode = false;
 
 /// Replacement for removed std.time.nanoTimestamp
@@ -428,7 +429,7 @@ fn parseWasmResponseJson(allocator: std.mem.Allocator, response_json_slice: []co
 /// - `arena` allocator is the ArenaAllocator, used for other test harness allocations.
 /// - `wasm_path` is the path to the WASM file to load.
 fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []const u8) !WasmInterface {
-    const wasm_data: []const u8 = std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, wasm_path, arena, .unlimited) catch |err| {
+    const wasm_data: []const u8 = std.Io.Dir.cwd().readFileAlloc(app_sys_io, wasm_path, arena, .unlimited) catch |err| {
         logDebug("[ERROR] Failed to read WASM file '{s}': {}\n", .{ wasm_path, err });
         return err;
     };
@@ -920,6 +921,7 @@ fn createSimpleTest(allocator: std.mem.Allocator, name: []const u8, code: []cons
 }
 
 pub fn main(init: std.process.Init) !void {
+    app_sys_io = init.io;
     // Setup gpa allocator used for bytebox WASM VM
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();

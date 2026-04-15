@@ -3788,9 +3788,8 @@ fn canonicalizeFileImport(self: *Self, fi: @TypeOf(@as(AST.Statement, undefined)
     defer self.env.gpa.free(full_path);
 
     // Read the file
-    // TODO(zig-16): thread std.Io through canonicalization for file imports
     const file_contents: []u8 = std.Io.Dir.cwd().readFileAlloc(
-        @as(std.Io, undefined),
+        @import("io").RocIo.getSysIo(),
         full_path,
         self.env.gpa,
         .unlimited,

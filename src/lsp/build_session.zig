@@ -15,9 +15,11 @@ const can = @import("can");
 const uri_util = @import("uri.zig");
 
 const BuildEnv = compile.BuildEnv;
-const Io = compile.Io;
+const RocIo = compile.RocIo;
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
+
+var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
 
 /// A single build session with automatic cleanup.
 /// Encapsulates URI conversion, BuildEnv setup, building, and module lookup.
@@ -52,14 +54,14 @@ pub const BuildSession = struct {
         const path = try uri_util.uriToPath(allocator, uri);
         defer allocator.free(path);
 
-        const absolute_path: [:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, path, allocator) catch
+        const absolute_path: [:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(app_sys_io, path, allocator) catch
             try allocator.dupeZ(u8, path);
         errdefer allocator.free(absolute_path);
 
         // Set up file override if override text provided.
         // SAFETY: override lives on the stack and its address is stored in env.filesystem.
         // This is safe because env.build() is synchronous and we restore the Io before returning.
-        var override: Io.ReadFileOverride = undefined;
+        var override: RocIo.ReadFileOverride = undefined;
         const saved_io = env.filesystem;
         if (override_text) |text| {
             override = .{ .path = absolute_path, .content = text };

@@ -4,6 +4,8 @@ const Allocator = std.mem.Allocator;
 const Ast = std.zig.Ast;
 const PathList = std.ArrayList([]u8);
 
+var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
+
 const max_file_bytes: usize = 16 * 1024 * 1024;
 
 const test_file_exclusions = [_][]const u8{
@@ -19,6 +21,7 @@ const TermColor = struct {
 };
 
 pub fn main(init: std.process.Init) !void {
+    app_sys_io = init.io;
     const io = init.io;
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
@@ -239,7 +242,7 @@ fn fileHasTestDecl(allocator: Allocator, path: []const u8) !bool {
 
 fn readSourceFile(allocator: Allocator, path: []const u8) ![:0]u8 {
     return try std.Io.Dir.cwd().readFileAllocOptions(
-        std.Options.debug_io,
+        app_sys_io,
         path,
         allocator,
         .limited(max_file_bytes),
@@ -410,7 +413,7 @@ fn findNearestMod(allocator: Allocator, file_path: []const u8) !?[]u8 {
 }
 
 fn fileExists(path: []const u8) bool {
-    _ = std.Io.Dir.cwd().statFile(std.Options.debug_io, path, .{}) catch return false;
+    _ = std.Io.Dir.cwd().statFile(app_sys_io, path, .{}) catch return false;
     return true;
 }
 

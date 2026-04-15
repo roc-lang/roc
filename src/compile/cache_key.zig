@@ -3,7 +3,7 @@
 const std = @import("std");
 const io_mod = @import("io");
 
-const Io = io_mod.Io;
+const RocIo = io_mod.RocIo;
 const Allocator = std.mem.Allocator;
 
 /// Cache key that uniquely identifies a cached compilation result.
@@ -29,7 +29,7 @@ pub const CacheKey = struct {
     pub fn generate(
         source: []const u8,
         file_path: []const u8,
-        fs: Io,
+        fs: RocIo,
         allocator: Allocator,
     ) !Self {
         // Hash the source content
@@ -111,7 +111,7 @@ pub const CacheKey = struct {
 /// This provides a quick validation that the file hasn't changed since caching.
 /// While the content hash is the primary validation, mtime provides an additional
 /// layer of validation and can help detect file system-level changes.
-fn getFileModTime(file_path: []const u8, fs: Io) !i128 {
+fn getFileModTime(file_path: []const u8, fs: RocIo) !i128 {
     const file_info = fs.stat(file_path) catch |err| switch (err) {
         error.FileNotFound => return 0, // Use 0 for non-existent files (e.g., in-memory sources)
         else => return err,

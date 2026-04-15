@@ -29,6 +29,8 @@ const DebugFlags = @import("../syntax.zig").DebugFlags;
 const CompletionItem = completion_handler.CompletionItem;
 const CompletionItemKind = completion_handler.CompletionItemKind;
 
+var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
+
 /// Builder for constructing completion item lists.
 /// Handles deduplication and provides methods for adding different types of completions.
 pub const CompletionBuilder = struct {
@@ -98,9 +100,9 @@ pub const CompletionBuilder = struct {
         var log_file = self.log_file orelse return;
         var buffer: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buffer, fmt, args) catch return;
-        log_file.writeStreamingAll(std.Options.debug_io, msg) catch return;
-        log_file.writeStreamingAll(std.Options.debug_io, "\n") catch {};
-        log_file.sync(std.Options.debug_io) catch {};
+        log_file.writeStreamingAll(app_sys_io, msg) catch return;
+        log_file.writeStreamingAll(app_sys_io, "\n") catch {};
+        log_file.sync(app_sys_io) catch {};
     }
 
     /// Add a completion item, returning true if it was added (not a duplicate).

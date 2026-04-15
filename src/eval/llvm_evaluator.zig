@@ -45,6 +45,8 @@ const LoadedModule = builtin_loading.LoadedModule;
 const RocOps = builtins.host_abi.RocOps;
 const LlvmEntryFn = *const fn (*anyopaque, *anyopaque) callconv(.c) void;
 
+var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
+
 fn isBuiltinModuleEnv(env: *const ModuleEnv) bool {
     return env.display_module_name_idx.eql(env.idents.builtin_module);
 }
@@ -238,7 +240,7 @@ pub const LlvmEvaluator = struct {
 
         pub fn deinit(self: *CodeResult) void {
             self.library.close();
-            std.Io.Dir.cwd().deleteFile(std.Options.debug_io, self.library_path) catch {};
+            std.Io.Dir.cwd().deleteFile(app_sys_io, self.library_path) catch {};
             self.allocator.free(self.library_path);
             // Note: layout_store is owned by LlvmEvaluator, not cleaned up here
         }
@@ -354,7 +356,7 @@ pub const LlvmEvaluator = struct {
             .{ .function_sections = false, .opt_level = opt_level },
         ) catch return error.CompilationFailed;
         errdefer {
-            std.Io.Dir.cwd().deleteFile(std.Options.debug_io, library_path) catch {};
+            std.Io.Dir.cwd().deleteFile(app_sys_io, library_path) catch {};
             self.allocator.free(library_path);
         }
 

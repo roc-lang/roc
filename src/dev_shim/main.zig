@@ -31,6 +31,8 @@ fn traceDbg(comptime fmt: []const u8, args: anytype) void {
 
 const ipc = @import("ipc");
 
+var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
+
 // Debug allocator for native platforms - provides leak detection in Debug/ReleaseSafe builds
 var debug_allocator: std.heap.DebugAllocator(.{}) = .{ .backing_allocator = std.heap.c_allocator };
 
@@ -78,11 +80,11 @@ const PlatformMutex = struct {
     }
 
     pub fn lock(self: *Self) void {
-        self.inner.lockUncancelable(std.Options.debug_io);
+        self.inner.lockUncancelable(app_sys_io);
     }
 
     pub fn unlock(self: *Self) void {
-        self.inner.unlock(std.Options.debug_io);
+        self.inner.unlock(app_sys_io);
     }
 };
 
@@ -213,7 +215,7 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
     if (roc__serialized_base_ptr == null) {
         const page_size = SharedMemoryAllocator.getSystemPageSize() catch 4096;
 
-        var shm = SharedMemoryAllocator.fromCoordination(allocator, std.Options.debug_io, page_size) catch |err| {
+        var shm = SharedMemoryAllocator.fromCoordination(allocator, app_sys_io, page_size) catch |err| {
             const msg2 = std.fmt.bufPrint(&buf, "Failed to create shared memory allocator: {s}", .{@errorName(err)}) catch "Failed to create shared memory allocator";
             roc_ops.crash(msg2);
             return error.SharedMemoryError;

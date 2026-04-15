@@ -15,8 +15,19 @@ const Allocator = std.mem.Allocator;
 const Self = @This();
 
 /// System Io instance for OS-level file operations.
-/// Uses std.Options.debug_io which is always available.
-const sys_io: std.Io = std.Options.debug_io;
+/// Must be initialized before use via `initSysIo()`.
+/// Defaults to a safe single-threaded IO for use during startup.
+var sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
+
+/// Initialize the system IO with a properly set up Io instance (typically from `std.process.Init.io`).
+pub fn initSysIo(io: std.Io) void {
+    sys_io = io;
+}
+
+/// Get the current system IO instance for direct std.Io operations.
+pub fn getSysIo() std.Io {
+    return sys_io;
+}
 
 ctx: ?*anyopaque,
 vtable: VTable,

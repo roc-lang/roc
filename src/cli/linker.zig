@@ -12,6 +12,8 @@ const cli_ctx = @import("CliContext.zig");
 const CliContext = cli_ctx.CliContext;
 const Io = cli_ctx.Io;
 
+var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
+
 /// External C functions from zig_llvm.cpp - only available when LLVM is enabled
 const llvm_available = if (@import("builtin").is_test) false else @import("config").llvm;
 
@@ -134,7 +136,7 @@ fn getSelfExeDir(allocator: std.mem.Allocator) ![]const u8 {
     if (std.c._NSGetExecutablePath(&symlink_path_buf, &n) != 0) return error.OutOfMemory;
     const symlink_path = std.mem.sliceTo(&symlink_path_buf, 0);
     var real_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const exe_path_len = std.Io.Dir.cwd().realPathFile(std.Options.debug_io, symlink_path, &real_path_buf) catch return error.OutOfMemory;
+    const exe_path_len = std.Io.Dir.cwd().realPathFile(app_sys_io, symlink_path, &real_path_buf) catch return error.OutOfMemory;
     const exe_path = real_path_buf[0..exe_path_len];
     return allocator.dupe(u8, std.fs.path.dirname(exe_path) orelse return error.OutOfMemory);
 }
@@ -152,7 +154,7 @@ fn findDarwinSysroot(allocator: std.mem.Allocator) ![]const u8 {
     }
     const symlink_path = std.mem.sliceTo(&symlink_path_buf, 0);
     var real_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const exe_path_len = std.Io.Dir.cwd().realPathFile(std.Options.debug_io, symlink_path, &real_path_buf) catch |err| {
+    const exe_path_len = std.Io.Dir.cwd().realPathFile(app_sys_io, symlink_path, &real_path_buf) catch |err| {
         std.log.warn("Failed to resolve executable path: {}, falling back to compile-time path", .{err});
         return build_options.darwin_sysroot;
     };
@@ -174,7 +176,7 @@ fn findDarwinSysroot(allocator: std.mem.Allocator) ![]const u8 {
         return build_options.darwin_sysroot;
     };
 
-    std.Io.Dir.cwd().access(std.Options.debug_io, tbd_path, .{}) catch {
+    std.Io.Dir.cwd().access(app_sys_io, tbd_path, .{}) catch {
         // Runtime path doesn't exist, fall back to compile-time path (local dev builds)
         return build_options.darwin_sysroot;
     };
@@ -194,7 +196,7 @@ fn findPlatformSysroot(allocator: std.mem.Allocator, platform_files_dir: ?[]cons
 
     // Verify it exists and has the expected structure (usr/lib/libSystem.tbd)
     const lib_path = std.fs.path.join(allocator, &.{ sysroot_path, "usr", "lib", "libSystem.tbd" }) catch return null;
-    std.Io.Dir.cwd().access(std.Options.debug_io, lib_path, .{}) catch return null;
+    std.Io.Dir.cwd().access(app_sys_io, lib_path, .{}) catch return null;
 
     std.log.info("Using platform-provided macOS sysroot: {s}", .{sysroot_path});
     return sysroot_path;
@@ -205,14 +207,14 @@ fn findPlatformSysroot(allocator: std.mem.Allocator, platform_files_dir: ?[]cons
 /// which frameworks to bundle in their sysroot.
 /// Only links frameworks that have a .tbd file (skips header-only frameworks).
 fn discoverAndLinkFrameworks(allocator: std.mem.Allocator, args: *std.array_list.Managed([]const u8), frameworks_dir: []const u8) LinkError!void {
-    var dir = std.Io.Dir.cwd().openDir(std.Options.debug_io, frameworks_dir, .{ .iterate = true }) catch {
+    var dir = std.Io.Dir.cwd().openDir(app_sys_io, frameworks_dir, .{ .iterate = true }) catch {
         // No frameworks directory - that's fine, just skip
         return;
     };
-    defer dir.close(std.Options.debug_io);
+    defer dir.close(app_sys_io);
 
     var iter = dir.iterate();
-    while (iter.next(std.Options.debug_io) catch return) |entry| {
+    while (iter.next(app_sys_io) catch return) |entry| {
         if (entry.kind != .directory) continue;
 
         // Framework directories end with .framework
@@ -226,7 +228,7 @@ fn discoverAndLinkFrameworks(allocator: std.mem.Allocator, args: *std.array_list
             const tbd_path1 = std.fs.path.join(allocator, &.{ frameworks_dir, entry.name, tbd_name }) catch return LinkError.OutOfMemory;
             const tbd_path2 = std.fs.path.join(allocator, &.{ frameworks_dir, entry.name, "Versions", "Current", tbd_name }) catch return LinkError.OutOfMemory;
 
-            const has_tbd = std.Io.Dir.cwd().access(std.Options.debug_io, tbd_path1, .{}) catch std.Io.Dir.cwd().access(std.Options.debug_io, tbd_path2, .{}) catch null;
+            const has_tbd = std.Io.Dir.cwd().access(app_sys_io, tbd_path1, .{}) catch std.Io.Dir.cwd().access(app_sys_io, tbd_path2, .{}) catch null;
             if (has_tbd == null) continue; // Skip frameworks without TBD files
 
             const fw_name_copy = allocator.dupe(u8, fw_name) catch return LinkError.OutOfMemory;
@@ -378,11 +380,11 @@ fn buildLinkArgs(ctx: *CliContext, config: LinkConfig) LinkError!std.array_list.
                 .ofmt = .coff,
             };
 
-            const target = try std.zig.system.resolveTargetQuery(std.Options.debug_io, query);
+            const target = try std.zig.system.resolveTargetQuery(app_sys_io, query);
 
             var environ_map = std.process.Environ.empty.createMap(ctx.arena) catch return error.WindowsSDKNotFound;
             defer environ_map.deinit();
-            const native_libc = std.zig.LibCInstallation.findNative(ctx.arena, std.Options.debug_io, .{
+            const native_libc = std.zig.LibCInstallation.findNative(ctx.arena, app_sys_io, .{
                 .target = &target,
                 .environ_map = &environ_map,
             }) catch return error.WindowsSDKNotFound;
@@ -448,7 +450,7 @@ fn buildLinkArgs(ctx: *CliContext, config: LinkConfig) LinkError!std.array_list.
                     exe_dir,
                     "stack_probe.obj",
                 }) catch return LinkError.OutOfMemory;
-                std.Io.Dir.cwd().writeFile(std.Options.debug_io, .{
+                std.Io.Dir.cwd().writeFile(app_sys_io, .{
                     .sub_path = stack_probe_path,
                     .data = stack_probe_obj,
                 }) catch return LinkError.OutOfMemory;

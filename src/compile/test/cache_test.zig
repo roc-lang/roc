@@ -3,7 +3,7 @@ const io_mod = @import("io");
 
 const CacheManager = @import("../cache_manager.zig").CacheManager;
 const CacheConfig = @import("../cache_config.zig").CacheConfig;
-const Io = io_mod.Io;
+const RocIo = io_mod.RocIo;
 const testing = std.testing;
 
 test "getTestCacheDir returns test subdirectory" {
@@ -26,7 +26,7 @@ test "getTestCacheDir returns test subdirectory" {
 test "computeCacheFilePath uses subdirectory splitting" {
     const allocator = testing.allocator;
     const config = CacheConfig{};
-    const filesystem = Io.testing();
+    const filesystem = RocIo.testing();
 
     var manager = CacheManager.init(allocator, config, filesystem);
 
@@ -58,7 +58,7 @@ test "storeRawBytes and loadRawBytes round-trip" {
     defer allocator.free(tmp_path);
 
     const config = CacheConfig{};
-    const filesystem = Io.default();
+    const filesystem = RocIo.default();
 
     var manager = CacheManager.init(allocator, config, filesystem);
 
@@ -89,7 +89,7 @@ test "loadRawBytes returns null on miss" {
     defer allocator.free(tmp_path);
 
     const config = CacheConfig{};
-    const filesystem = Io.default();
+    const filesystem = RocIo.default();
 
     var manager = CacheManager.init(allocator, config, filesystem);
 

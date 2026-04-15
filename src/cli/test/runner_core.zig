@@ -11,6 +11,8 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 var next_cache_dir_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 
+var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
+
 /// Result of a test execution
 pub const TestResult = enum {
     passed,
@@ -63,7 +65,7 @@ fn createIsolatedTestCacheDir(allocator: Allocator) ![]u8 {
     return std.fs.path.join(allocator, &.{ cwd_path, cache_rel });
 }
 
-const run_io = std.Options.debug_io;
+var run_io: std.Io = std.Io.Threaded.global_single_threaded.io();
 
 fn runRocChild(allocator: Allocator, argv: []const []const u8) !std.process.RunResult {
     const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
@@ -410,7 +412,7 @@ pub fn verifyPlatformFiles(
     const libhost_path = try std.fmt.allocPrint(allocator, "{s}/platform/targets/{s}/libhost.a", .{ platform_dir, target });
     defer allocator.free(libhost_path);
 
-    if (std.Io.Dir.cwd().access(std.Options.debug_io, libhost_path, .{})) |_| {
+    if (std.Io.Dir.cwd().access(app_sys_io, libhost_path, .{})) |_| {
         return true;
     } else |_| {
         return false;

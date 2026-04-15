@@ -5,6 +5,8 @@ const control_code = std.ascii.control_code;
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 
+var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
+
 const ansi_term = @import("ansi_term.zig");
 const Unix = @import("Unix.zig");
 const Windows = @import("Windows.zig");
@@ -245,10 +247,10 @@ pub const ReadLineError =
 /// Falls back to simple line reading when stdin is not a TTY (e.g., piped input).
 pub fn readLine(self: *ReplLine, outlive: Allocator, prompt: []const u8, stdin: std.Io.File) ReadLineError![]u8 {
     var stdout_buffer: [1024]u8 = undefined;
-    var stdout_writer = std.Io.File.stdout().writerStreaming(std.Options.debug_io, &stdout_buffer);
+    var stdout_writer = std.Io.File.stdout().writerStreaming(app_sys_io, &stdout_buffer);
 
     // Use simple line reading for non-TTY input (pipes, redirects, tests)
-    if (!(stdin.isTty(std.Options.debug_io) catch false)) {
+    if (!(stdin.isTty(app_sys_io) catch false)) {
         return readLineSimple(outlive, prompt, &stdout_writer.interface, stdin);
     }
 
@@ -266,7 +268,7 @@ fn readLineSimple(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, i
     var read_buffer: [1]u8 = undefined;
 
     while (true) {
-        const bytes_read = try in.readStreaming(std.Options.debug_io, &.{&read_buffer});
+        const bytes_read = try in.readStreaming(app_sys_io, &.{&read_buffer});
         if (bytes_read == 0) {
             // EOF - return "exit" to signal REPL should exit
             line_buffer.deinit(outlive);
@@ -326,7 +328,7 @@ fn helper(self: *ReplLine, outlive: Allocator, prompt: []const u8, out: *std.Io.
     while (true) : ({
         try out.flush();
     }) {
-        const total = try in.readStreaming(std.Options.debug_io, &.{&read_buf});
+        const total = try in.readStreaming(app_sys_io, &.{&read_buf});
         if (total == 0) continue;
 
         var done = false;

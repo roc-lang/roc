@@ -12,6 +12,8 @@ const build_options = @import("build_options");
 
 const trace_refcount = build_options.trace_refcount;
 
+var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
+
 /// Zig logging configuration override
 pub const std_options: std.Options = .{
     .logFn = std.log.defaultLog,
@@ -177,7 +179,7 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
             total_size,
             roc_alloc.alignment,
         }) catch "\x1b[31mHost error:\x1b[0m allocation failed, out of memory\n";
-        stderr.writeStreamingAll(std.Options.debug_io, msg) catch {};
+        stderr.writeStreamingAll(app_sys_io, msg) catch {};
         std.process.exit(1);
     };
 
@@ -272,7 +274,7 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
 
     const new_ptr = allocator.rawAlloc(new_total_size, align_enum, @returnAddress()) orelse {
         const stderr: std.Io.File = .stderr();
-        stderr.writeStreamingAll(std.Options.debug_io, "\x1b[31mHost error:\x1b[0m reallocation failed, out of memory\n") catch {};
+        stderr.writeStreamingAll(app_sys_io, "\x1b[31mHost error:\x1b[0m reallocation failed, out of memory\n") catch {};
         std.process.exit(1);
     };
 
@@ -323,7 +325,7 @@ fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, _: *anyopaque)
     const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
     const stderr: std.Io.File = .stderr();
     var buf: [256]u8 = undefined;
-    var w = stderr.writer(std.Options.debug_io, &buf);
+    var w = stderr.writer(app_sys_io, &buf);
     w.interface.print("\n\x1b[31mRoc crashed:\x1b[0m {s}\n", .{message}) catch {};
     w.interface.flush() catch {};
     std.process.exit(1);
@@ -436,7 +438,7 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     // Expect platform source path as first argument
     const arg_count: usize = @intCast(argc);
     if (arg_count < 2) {
-        stderr_file.writeStreamingAll(std.Options.debug_io, "HOST ERROR: Expected platform source path as argument\n") catch {};
+        stderr_file.writeStreamingAll(app_sys_io, "HOST ERROR: Expected platform source path as argument\n") catch {};
         return 1;
     }
 
@@ -444,9 +446,9 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     const args = argv[1..arg_count];
 
     const exit_code = platform_main(args) catch |err| {
-        stderr_file.writeStreamingAll(std.Options.debug_io, "HOST ERROR: ") catch {};
-        stderr_file.writeStreamingAll(std.Options.debug_io, @errorName(err)) catch {};
-        stderr_file.writeStreamingAll(std.Options.debug_io, "\n") catch {};
+        stderr_file.writeStreamingAll(app_sys_io, "HOST ERROR: ") catch {};
+        stderr_file.writeStreamingAll(app_sys_io, @errorName(err)) catch {};
+        stderr_file.writeStreamingAll(app_sys_io, "\n") catch {};
         return 1;
     };
     return exit_code;
@@ -531,10 +533,10 @@ fn parseTypesJson(
     // Parse the JSON
     const parsed = std.json.parseFromSlice([]const JsonModuleTypeInfo, allocator, json_str, .{}) catch |err| {
         const stderr: std.Io.File = .stderr();
-        stderr.writeStreamingAll(std.Options.debug_io, "Error parsing types JSON: ") catch {};
+        stderr.writeStreamingAll(app_sys_io, "Error parsing types JSON: ") catch {};
         var buf: [64]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "{}\n", .{err}) catch "unknown error\n";
-        stderr.writeStreamingAll(std.Options.debug_io, msg) catch {};
+        stderr.writeStreamingAll(app_sys_io, msg) catch {};
         return RocList.empty();
     };
     defer parsed.deinit();
@@ -672,7 +674,7 @@ fn platform_main(args: [][*:0]u8) !c_int {
                 \\  Cleaning up {d} allocations...
                 \\
             , .{ remaining_count, remaining_count }) catch "";
-            stderr_file.writeStreamingAll(std.Options.debug_io, msg) catch {};
+            stderr_file.writeStreamingAll(app_sys_io, msg) catch {};
         }
 
         for (host_env.roc_allocations.items) |alloc| {
@@ -684,7 +686,7 @@ fn platform_main(args: [][*:0]u8) !c_int {
         const leaked = host_env.gpa.deinit();
         if (leaked == .leak) {
             const stderr_file: std.Io.File = .stderr();
-            stderr_file.writeStreamingAll(std.Options.debug_io,
+            stderr_file.writeStreamingAll(app_sys_io,
                 \\
                 \\[Roc Memory Info] Additional memory leak detected by GPA.
                 \\
@@ -853,38 +855,38 @@ fn platform_main(args: [][*:0]u8) !c_int {
     switch (result.tag) {
         .Err => {
             const err_str = result.payload.err;
-            stderr.writeStreamingAll(std.Options.debug_io, "Glue spec error: ") catch {};
-            stderr.writeStreamingAll(std.Options.debug_io, err_str.asSlice()) catch {};
-            stderr.writeStreamingAll(std.Options.debug_io, "\n") catch {};
+            stderr.writeStreamingAll(app_sys_io, "Glue spec error: ") catch {};
+            stderr.writeStreamingAll(app_sys_io, err_str.asSlice()) catch {};
+            stderr.writeStreamingAll(app_sys_io, "\n") catch {};
             return 1;
         },
 
         .Ok => {
             const files = result.payload.ok;
             if (files.len() == 0) {
-                stdout.writeStreamingAll(std.Options.debug_io, "Glue spec returned 0 files.\n") catch {};
+                stdout.writeStreamingAll(app_sys_io, "Glue spec returned 0 files.\n") catch {};
                 return 0;
             }
 
             var buf: [256]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf, "Glue spec returned {d} file(s):\n", .{files.len()}) catch "Glue spec returned files:\n";
-            stdout.writeStreamingAll(std.Options.debug_io, msg) catch {};
+            stdout.writeStreamingAll(app_sys_io, msg) catch {};
 
             // Write files to output directory if provided
             const file_bytes = files.bytes orelse return 0;
             const file_slice: [*]const File = @ptrCast(@alignCast(file_bytes));
 
             const out_dir = output_dir orelse {
-                stderr.writeStreamingAll(std.Options.debug_io, "Error: No --output-dir specified; cannot write glue files\n") catch {};
+                stderr.writeStreamingAll(app_sys_io, "Error: No --output-dir specified; cannot write glue files\n") catch {};
                 return 1;
             };
 
             // Create output directory if needed
-            std.Io.Dir.cwd().createDirPath(std.Options.debug_io, out_dir) catch |err| {
-                stderr.writeStreamingAll(std.Options.debug_io, "Error: Could not create output directory: ") catch {};
+            std.Io.Dir.cwd().createDirPath(app_sys_io, out_dir) catch |err| {
+                stderr.writeStreamingAll(app_sys_io, "Error: Could not create output directory: ") catch {};
                 var err_buf: [256]u8 = undefined;
                 const err_msg = std.fmt.bufPrint(&err_buf, "{}\n", .{err}) catch "unknown error\n";
-                stderr.writeStreamingAll(std.Options.debug_io, err_msg) catch {};
+                stderr.writeStreamingAll(app_sys_io, err_msg) catch {};
                 return 1;
             };
 
@@ -893,27 +895,27 @@ fn platform_main(args: [][*:0]u8) !c_int {
                 const file = file_slice[i];
                 const file_name = file.name.asSlice();
                 const file_path = std.fs.path.join(allocator, &.{ out_dir, file_name }) catch {
-                    stderr.writeStreamingAll(std.Options.debug_io, "Error: Out of memory allocating file path\n") catch {};
+                    stderr.writeStreamingAll(app_sys_io, "Error: Out of memory allocating file path\n") catch {};
                     return 1;
                 };
                 defer allocator.free(file_path);
 
-                std.Io.Dir.cwd().writeFile(std.Options.debug_io, .{
+                std.Io.Dir.cwd().writeFile(app_sys_io, .{
                     .sub_path = file_path,
                     .data = file.content.asSlice(),
                 }) catch |err| {
-                    stderr.writeStreamingAll(std.Options.debug_io, "Error: Could not write file '") catch {};
-                    stderr.writeStreamingAll(std.Options.debug_io, file_path) catch {};
-                    stderr.writeStreamingAll(std.Options.debug_io, "': ") catch {};
+                    stderr.writeStreamingAll(app_sys_io, "Error: Could not write file '") catch {};
+                    stderr.writeStreamingAll(app_sys_io, file_path) catch {};
+                    stderr.writeStreamingAll(app_sys_io, "': ") catch {};
                     var err_buf: [256]u8 = undefined;
                     const err_msg = std.fmt.bufPrint(&err_buf, "{}\n", .{err}) catch "unknown error\n";
-                    stderr.writeStreamingAll(std.Options.debug_io, err_msg) catch {};
+                    stderr.writeStreamingAll(app_sys_io, err_msg) catch {};
                     return 1;
                 };
 
-                stdout.writeStreamingAll(std.Options.debug_io, "  Wrote: ") catch {};
-                stdout.writeStreamingAll(std.Options.debug_io, file_path) catch {};
-                stdout.writeStreamingAll(std.Options.debug_io, "\n") catch {};
+                stdout.writeStreamingAll(app_sys_io, "  Wrote: ") catch {};
+                stdout.writeStreamingAll(app_sys_io, file_path) catch {};
+                stdout.writeStreamingAll(app_sys_io, "\n") catch {};
             }
 
             return 0;

@@ -7,6 +7,11 @@
 //! the given Roc code snippet.
 
 const std = @import("std");
+
+/// Application IO instance, initialized from `std.process.Init` in `main`.
+/// Use this instead of `app_io` for all application IO.
+var app_io: std.Io = undefined;
+
 const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
@@ -587,6 +592,10 @@ var debug_allocator: std.heap.DebugAllocator(.{}) = .{
 
 /// cli entrypoint for snapshot tool
 pub fn main(init: std.process.Init) !void {
+    app_io = init.io;
+    // Initialize the Roc IO module's system IO so file operations work
+    @import("io").RocIo.initSysIo(init.io);
+
     // Always use the debug allocator with the snapshot tool to help find allocation bugs.
     var gpa_tracy: tracy.TracyAllocator(null) = undefined;
     var gpa = debug_allocator.allocator();
@@ -601,13 +610,7 @@ pub fn main(init: std.process.Init) !void {
         gpa = gpa_tracy.allocator();
     }
 
-    var args_list: std.ArrayList([]const u8) = .empty;
-    defer args_list.deinit(gpa);
-    var args_iter = std.process.Args.Iterator.init(init.minimal.args);
-    while (args_iter.next()) |arg| {
-        try args_list.append(gpa, arg);
-    }
-    const args = args_list.items;
+    const args = try init.minimal.args.toSlice(gpa);
 
     var snapshot_paths = std.array_list.Managed([]const u8).init(gpa);
     defer snapshot_paths.deinit();
@@ -739,7 +742,7 @@ pub fn main(init: std.process.Init) !void {
     builtin_modules_ptr.* = try eval_mod.BuiltinModules.init(gpa);
     defer builtin_modules_ptr.deinit();
 
-    const cwd = try std.process.currentPathAlloc(std.Options.debug_io, gpa);
+    const cwd = try std.process.currentPathAlloc(app_io, gpa);
     defer gpa.free(cwd);
 
     const config = Config{
@@ -756,7 +759,7 @@ pub fn main(init: std.process.Init) !void {
 
     if (config.maybe_fuzz_corpus_path != null) {
         log("copying SOURCE from snapshots to: {s}", .{config.maybe_fuzz_corpus_path.?});
-        try std.Io.Dir.cwd().createDirPath(std.Options.debug_io, config.maybe_fuzz_corpus_path.?);
+        try std.Io.Dir.cwd().createDirPath(app_io, config.maybe_fuzz_corpus_path.?);
     }
     const snapshots_dir = "test/snapshots";
 
@@ -796,7 +799,7 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
     builtin_modules_ptr.* = try eval_mod.BuiltinModules.init(gpa);
     defer builtin_modules_ptr.deinit();
 
-    const cwd = try std.process.currentPathAlloc(std.Options.debug_io, gpa);
+    const cwd = try std.process.currentPathAlloc(app_io, gpa);
     defer gpa.free(cwd);
 
     const config = Config{
@@ -864,11 +867,11 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
     var success: bool = true;
     log("Processing multi-file snapshot directory: {s}", .{dir_path});
 
-    var dir = std.Io.Dir.cwd().openDir(std.Options.debug_io, dir_path, .{ .iterate = true }) catch |err| {
+    var dir = std.Io.Dir.cwd().openDir(app_io, dir_path, .{ .iterate = true }) catch |err| {
         std.log.err("Failed to open directory {s}: {}", .{ dir_path, err });
         return false;
     };
-    defer dir.close(std.Options.debug_io);
+    defer dir.close(app_io);
 
     // First, collect EXPECTED sections from existing .md files
     var expected_sections = std.StringHashMap([]const u8).init(allocator);
@@ -882,12 +885,12 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
     }
 
     var iterator = dir.iterate();
-    while (try iterator.next(std.Options.debug_io)) |entry| {
+    while (try iterator.next(app_io)) |entry| {
         if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".md")) {
             const full_path = try std.fs.path.join(allocator, &.{ dir_path, entry.name });
             defer allocator.free(full_path);
 
-            if (std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, full_path, allocator, .limited(1024 * 1024))) |content| {
+            if (std.Io.Dir.cwd().readFileAlloc(app_io, full_path, allocator, .limited(1024 * 1024))) |content| {
                 defer allocator.free(content);
 
                 // Extract EXPECTED section
@@ -927,7 +930,7 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
             files_to_delete.deinit();
         }
 
-        while (try iterator.next(std.Options.debug_io)) |entry| {
+        while (try iterator.next(app_io)) |entry| {
             if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".md")) {
                 const file_path = try allocator.dupe(u8, entry.name);
                 try files_to_delete.append(file_path);
@@ -935,7 +938,7 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
         }
 
         for (files_to_delete.items) |file_name| {
-            dir.deleteFile(std.Options.debug_io, file_name) catch |err| {
+            dir.deleteFile(app_io, file_name) catch |err| {
                 warn("Failed to delete {s}: {}", .{ file_name, err });
             };
         }
@@ -945,7 +948,7 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
     iterator = dir.iterate();
     const snapshot_type = getMultiFileSnapshotType(dir_path);
 
-    while (try iterator.next(std.Options.debug_io)) |entry| {
+    while (try iterator.next(app_io)) |entry| {
         if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".roc")) {
             const roc_file_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir_path, entry.name });
             defer allocator.free(roc_file_path);
@@ -958,7 +961,7 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
             defer allocator.free(snapshot_file_path);
 
             // Read the .roc file content
-            const roc_content = std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, roc_file_path, allocator, .limited(1024 * 1024)) catch |err| {
+            const roc_content = std.Io.Dir.cwd().readFileAlloc(app_io, roc_file_path, allocator, .limited(1024 * 1024)) catch |err| {
                 warn("Failed to read {s}: {}", .{ roc_file_path, err });
                 continue;
             };
@@ -1477,13 +1480,13 @@ fn processSnapshotContent(
 
     if (!config.disable_updates) {
         // Write the markdown file
-        const md_file = std.Io.Dir.cwd().createFile(std.Options.debug_io, output_path, .{}) catch |err| {
+        const md_file = std.Io.Dir.cwd().createFile(app_io, output_path, .{}) catch |err| {
             std.log.err("Failed to create {s}: {}", .{ output_path, err });
             return false;
         };
-        defer md_file.close(std.Options.debug_io);
+        defer md_file.close(app_io);
 
-        try md_file.writeStreamingAll(std.Options.debug_io, md_buffer_unmanaged.items);
+        try md_file.writeStreamingAll(app_io, md_buffer_unmanaged.items);
 
         if (html_buffer_unmanaged) |*buf| {
             writeHtmlFile(allocator, output_path, buf) catch |err| {
@@ -1609,16 +1612,16 @@ fn processWorkItems(gpa: Allocator, work_list: WorkList, max_threads: usize, deb
 
 /// Stage 1: Walk directory tree and collect work items
 fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) !void {
-    const canonical_path = std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, path, gpa) catch |err| {
+    const canonical_path = std.Io.Dir.cwd().realPathFileAlloc(app_io, path, gpa) catch |err| {
         std.log.err("failed to resolve path '{s}': {s}", .{ path, @errorName(err) });
         return;
     };
     defer gpa.free(canonical_path);
 
     // Try to open as directory first
-    if (std.Io.Dir.cwd().openDir(std.Options.debug_io, canonical_path, .{ .iterate = true })) |dir_handle| {
+    if (std.Io.Dir.cwd().openDir(app_io, canonical_path, .{ .iterate = true })) |dir_handle| {
         var dir = dir_handle;
-        defer dir.close(std.Options.debug_io);
+        defer dir.close(app_io);
 
         // It's a directory
         if (isMultiFileSnapshot(canonical_path)) {
@@ -1629,7 +1632,7 @@ fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) !voi
             });
         } else {
             var dir_iterator = dir.iterate();
-            while (try dir_iterator.next(std.Options.debug_io)) |entry| {
+            while (try dir_iterator.next(app_io)) |entry| {
                 // Skip hidden files and special directories
                 if (entry.name[0] == '.') continue;
 
@@ -3417,13 +3420,13 @@ fn writeHtmlFile(gpa: Allocator, snapshot_path: []const u8, html_buffer: *std.Ar
     defer gpa.free(html_path);
 
     // Write HTML file
-    var html_file = std.Io.Dir.cwd().createFile(std.Options.debug_io, html_path, .{}) catch |err| {
+    var html_file = std.Io.Dir.cwd().createFile(app_io, html_path, .{}) catch |err| {
         log("failed to create HTML file '{s}': {s}", .{ html_path, @errorName(err) });
         return;
     };
-    defer html_file.close(std.Options.debug_io);
+    defer html_file.close(app_io);
     var html_writer_buffer: [4096]u8 = undefined;
-    var html_writer = html_file.writer(std.Options.debug_io, &html_writer_buffer);
+    var html_writer = html_file.writer(app_io, &html_writer_buffer);
     try html_writer.interface.writeAll(html_buffer.items);
     try html_writer.interface.flush();
 
@@ -3436,7 +3439,7 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, config:
     log("processing snapshot file: {s}", .{snapshot_path});
 
     const @"1Mb" = 1024 * 1024;
-    const file_content = std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, snapshot_path, gpa, .limited(@"1Mb")) catch |err| {
+    const file_content = std.Io.Dir.cwd().readFileAlloc(app_io, snapshot_path, gpa, .limited(@"1Mb")) catch |err| {
         std.log.err("failed to read file '{s}': {s}", .{ snapshot_path, @errorName(err) });
         return false;
     };
@@ -3533,14 +3536,14 @@ fn writeCorpusFile(gpa: Allocator, path: []const u8, source: []const u8, rng: st
     const corpus_file_path = try std.fs.path.join(gpa, &rand_file_name);
     defer gpa.free(corpus_file_path);
 
-    var corpus_file = std.Io.Dir.cwd().createFile(std.Options.debug_io, corpus_file_path, .{}) catch |err| {
+    var corpus_file = std.Io.Dir.cwd().createFile(app_io, corpus_file_path, .{}) catch |err| {
         std.log.err("failed to create file in '{s}': {s}", .{ path, @errorName(err) });
         return;
     };
-    defer corpus_file.close(std.Options.debug_io);
+    defer corpus_file.close(app_io);
 
     var write_buffer: [4096]u8 = undefined;
-    var corpus_writer = corpus_file.writer(std.Options.debug_io, &write_buffer);
+    var corpus_writer = corpus_file.writer(app_io, &write_buffer);
     const writer = &corpus_writer.interface;
     try writer.writeAll(source);
     try writer.flush();
@@ -3647,18 +3650,18 @@ fn processDocsSnapshot(
         @as(u64, @intCast(@intFromPtr(output_path.ptr))),
     }) catch return false;
 
-    std.Io.Dir.cwd().createDirPath(std.Options.debug_io, tmp_dir_name) catch |err| {
+    std.Io.Dir.cwd().createDirPath(app_io, tmp_dir_name) catch |err| {
         std.log.err("Failed to create temp directory {s}: {}", .{ tmp_dir_name, err });
         return false;
     };
-    defer std.Io.Dir.cwd().deleteTree(std.Options.debug_io, tmp_dir_name) catch {};
+    defer std.Io.Dir.cwd().deleteTree(app_io, tmp_dir_name) catch {};
 
     // Find the app file (first .roc file, or explicitly "app.roc")
     var app_filename: ?[]const u8 = null;
     for (source_files) |sf| {
         const sub_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir_name, sf.filename });
         defer allocator.free(sub_path);
-        std.Io.Dir.cwd().writeFile(std.Options.debug_io, .{
+        std.Io.Dir.cwd().writeFile(app_io, .{
             .sub_path = sub_path,
             .data = sf.content,
         }) catch |err| {
@@ -3808,13 +3811,13 @@ fn processDocsSnapshot(
     md_buffer = md_writer.toArrayList();
 
     // Write the output file
-    const md_file = std.Io.Dir.cwd().createFile(std.Options.debug_io, output_path, .{}) catch |err| {
+    const md_file = std.Io.Dir.cwd().createFile(app_io, output_path, .{}) catch |err| {
         std.log.err("Failed to create {s}: {}", .{ output_path, err });
         return false;
     };
-    defer md_file.close(std.Options.debug_io);
+    defer md_file.close(app_io);
 
-    try md_file.writeStreamingAll(std.Options.debug_io, md_buffer.items);
+    try md_file.writeStreamingAll(app_io, md_buffer.items);
     return success;
 }
 
@@ -3952,18 +3955,18 @@ fn processDevObjectSnapshot(
         @as(u64, @intCast(@intFromPtr(output_path.ptr))),
     }) catch return false;
 
-    std.Io.Dir.cwd().createDirPath(std.Options.debug_io, tmp_dir_name) catch |err| {
+    std.Io.Dir.cwd().createDirPath(app_io, tmp_dir_name) catch |err| {
         std.log.err("Failed to create temp directory {s}: {}", .{ tmp_dir_name, err });
         return false;
     };
-    defer std.Io.Dir.cwd().deleteTree(std.Options.debug_io, tmp_dir_name) catch {};
+    defer std.Io.Dir.cwd().deleteTree(app_io, tmp_dir_name) catch {};
 
     // Find the app file (first .roc file, or explicitly "app.roc")
     var app_filename: ?[]const u8 = null;
     for (source_files) |sf| {
         const sub_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir_name, sf.filename });
         defer allocator.free(sub_path);
-        std.Io.Dir.cwd().writeFile(std.Options.debug_io, .{
+        std.Io.Dir.cwd().writeFile(app_io, .{
             .sub_path = sub_path,
             .data = sf.content,
         }) catch |err| {
@@ -4530,13 +4533,13 @@ fn processDevObjectSnapshot(
     md_buffer = md_writer.toArrayList();
 
     // Write the output file
-    const md_file = std.Io.Dir.cwd().createFile(std.Options.debug_io, output_path, .{}) catch |err| {
+    const md_file = std.Io.Dir.cwd().createFile(app_io, output_path, .{}) catch |err| {
         std.log.err("Failed to create {s}: {}", .{ output_path, err });
         return false;
     };
-    defer md_file.close(std.Options.debug_io);
+    defer md_file.close(app_io);
 
-    try md_file.writeStreamingAll(std.Options.debug_io, md_buffer.items);
+    try md_file.writeStreamingAll(app_io, md_buffer.items);
     return success;
 }
 
@@ -4577,13 +4580,13 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
 
     if (!config.disable_updates) {
         // Write the markdown file
-        const md_file = std.Io.Dir.cwd().createFile(std.Options.debug_io, output_path, .{}) catch |err| {
+        const md_file = std.Io.Dir.cwd().createFile(app_io, output_path, .{}) catch |err| {
             std.log.err("Failed to create {s}: {}", .{ output_path, err });
             return false;
         };
-        defer md_file.close(std.Options.debug_io);
+        defer md_file.close(app_io);
 
-        try md_file.writeStreamingAll(std.Options.debug_io, md_buffer_unmanaged.items);
+        try md_file.writeStreamingAll(app_io, md_buffer_unmanaged.items);
 
         if (html_buffer_unmanaged) |*buf| {
             writeHtmlFile(allocator, output_path, buf) catch |err| {

@@ -27,6 +27,8 @@ pub const root_node_idx: Node.List.Idx = .first;
 
 const NodeStore = @This();
 
+var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
+
 gpa: std.mem.Allocator,
 nodes: Node.List,
 extra_data: std.ArrayList(u32),
@@ -142,7 +144,7 @@ pub fn emptyScratch(store: *NodeStore) void {
 pub fn debug(store: *NodeStore) void {
     if (comptime builtin.target.os.tag != .freestanding) {
         var buf: [4096]u8 = undefined;
-        var stderr_writer = std.Io.File.stderr().writer(std.Options.debug_io, &buf);
+        var stderr_writer = std.Io.File.stderr().writer(app_sys_io, &buf);
         store.debugTo(&stderr_writer.interface) catch {};
     }
 }

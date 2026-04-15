@@ -24,6 +24,8 @@ const ObjectWriter = @import("ObjectWriter.zig");
 const LirCodeGenMod = @import("LirCodeGen.zig");
 const StaticDataInterner = @import("StaticDataInterner.zig");
 
+var app_sys_io: std.Io = std.Io.Threaded.global_single_threaded.io();
+
 /// Information about an entrypoint to compile
 pub const Entrypoint = struct {
     /// The exported symbol name (e.g., "roc__main")
@@ -104,7 +106,7 @@ pub const ObjectFileCompiler = struct {
         defer result.deinit();
 
         // Write to file
-        std.Io.Dir.cwd().writeFile(std.Options.debug_io, .{
+        std.Io.Dir.cwd().writeFile(app_sys_io, .{
             .sub_path = output_path,
             .data = result.object_bytes,
         }) catch |err| {
