@@ -48,6 +48,7 @@ const ProcPass = struct {
     reachable_stmt_ids: []CFStmtId,
     stmt_slots: std.AutoHashMap(u32, usize),
     provenance_owner: []?LocalId,
+    storage_locals: std.DynamicBitSetUnmanaged,
     owned_locals: std.DynamicBitSetUnmanaged,
     live_in: []std.DynamicBitSetUnmanaged,
     live_out: []std.DynamicBitSetUnmanaged,
@@ -103,6 +104,7 @@ const ProcPass = struct {
             .reachable_stmt_ids = reachable_stmt_ids,
             .stmt_slots = stmt_slots,
             .provenance_owner = provenance_owner,
+            .storage_locals = try std.DynamicBitSetUnmanaged.initEmpty(allocator, local_count),
             .owned_locals = try std.DynamicBitSetUnmanaged.initEmpty(allocator, local_count),
             .live_in = live_in,
             .live_out = live_out,
@@ -111,6 +113,7 @@ const ProcPass = struct {
             .join_params_by_id = std.AutoHashMap(u32, LIR.LocalSpan).init(allocator),
             .join_bodies_by_id = std.AutoHashMap(u32, CFStmtId).init(allocator),
         };
+        errdefer pass.storage_locals.deinit(allocator);
         errdefer pass.owned_locals.deinit(allocator);
         errdefer pass.rewritten_stmt_ids.deinit();
         errdefer pass.loop_continue_targets.deinit();
@@ -129,6 +132,7 @@ const ProcPass = struct {
         self.allocator.free(self.reachable_stmt_ids);
         self.stmt_slots.deinit();
         self.allocator.free(self.provenance_owner);
+        self.storage_locals.deinit(self.allocator);
         self.owned_locals.deinit(self.allocator);
         self.rewritten_stmt_ids.deinit();
         self.loop_continue_targets.deinit();
@@ -143,6 +147,13 @@ const ProcPass = struct {
     }
 
     fn computeOwnedLocals(self: *ProcPass) void {
+        for (self.store.cf_stmts.items) |stmt| {
+            switch (stmt) {
+                .set_local => |assign| self.storage_locals.set(@intFromEnum(assign.target)),
+                else => {},
+            }
+        }
+
         for (self.store.getLocalSpan(self.proc.owned_params)) |param| {
             self.markOwnedLocal(param);
         }
@@ -157,16 +168,29 @@ const ProcPass = struct {
                 .assign_list => |assign| self.markOwnedFresh(assign.target, assign.result),
                 .assign_struct => |assign| self.markOwnedFresh(assign.target, assign.result),
                 .assign_tag => |assign| self.markOwnedFresh(assign.target, assign.result),
-                .set_local => |assign| self.markOwnedLocal(assign.target),
                 .for_list => |for_stmt| self.markOwnedFresh(for_stmt.elem, for_stmt.elem_result),
                 .join => |join| {
                     _ = self.join_params_by_id.put(@intFromEnum(join.id), join.params) catch unreachable;
                     _ = self.join_bodies_by_id.put(@intFromEnum(join.id), join.body) catch unreachable;
-                    for (self.store.getLocalSpan(join.params)) |param| {
-                        self.markOwnedLocal(param);
-                    }
                 },
                 else => {},
+            }
+        }
+
+        self.computeJoinOwnedLocals();
+    }
+
+    fn computeJoinOwnedLocals(self: *ProcPass) void {
+        for (self.reachable_stmt_ids) |stmt_id| {
+            const join = switch (self.store.getCFStmt(stmt_id)) {
+                .join => |join| join,
+                else => continue,
+            };
+
+            for (self.store.getLocalSpan(join.params)) |param| {
+                const layout_idx = self.store.getLocal(param).layout_idx;
+                if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(layout_idx))) continue;
+                self.owned_locals.set(@intFromEnum(param));
             }
         }
     }
@@ -174,6 +198,7 @@ const ProcPass = struct {
     fn markOwnedFresh(self: *ProcPass, target: LocalId, result: LIR.ResultSemantics) void {
         if (result != .fresh) return;
         const local_idx = @intFromEnum(target);
+        if (self.storage_locals.isSet(local_idx)) return;
         const layout_idx = self.store.getLocal(target).layout_idx;
         if (self.layouts.layoutContainsRefcounted(self.layouts.getLayout(layout_idx))) {
             self.owned_locals.set(local_idx);
@@ -182,6 +207,7 @@ const ProcPass = struct {
 
     fn markOwnedLocal(self: *ProcPass, target: LocalId) void {
         const local_idx = @intFromEnum(target);
+        if (self.storage_locals.isSet(local_idx)) return;
         const layout_idx = self.store.getLocal(target).layout_idx;
         if (self.layouts.layoutContainsRefcounted(self.layouts.getLayout(layout_idx))) {
             self.owned_locals.set(local_idx);
@@ -435,6 +461,7 @@ const ProcPass = struct {
                 defs.set(@intFromEnum(assign.target));
                 self.markSpanUses(assign.args, uses);
                 self.markOwnedCallArgsPassed(assign.proc, assign.args, ownership_passed);
+                self.markOwnedCallArgsConsumed(assign.proc, assign.args, defs);
             },
             .assign_call_indirect => |assign| {
                 defs.set(@intFromEnum(assign.target));
@@ -445,16 +472,19 @@ const ProcPass = struct {
                 defs.set(@intFromEnum(assign.target));
                 self.markSpanUses(assign.args, uses);
                 self.markSpanOwnershipPassed(assign.ownership.consumed_owned_inputs, ownership_passed);
+                self.markSpanOwnershipConsumed(assign.ownership.consumed_owned_inputs, defs);
             },
             .assign_list => |assign| {
                 defs.set(@intFromEnum(assign.target));
                 self.markSpanUses(assign.elems, uses);
                 self.markSpanOwnershipPassed(assign.ownership.consumed_owned_inputs, ownership_passed);
+                self.markSpanOwnershipConsumed(assign.ownership.consumed_owned_inputs, defs);
             },
             .assign_struct => |assign| {
                 defs.set(@intFromEnum(assign.target));
                 self.markSpanUses(assign.fields, uses);
                 self.markSpanOwnershipPassed(assign.ownership.consumed_owned_inputs, ownership_passed);
+                self.markSpanOwnershipConsumed(assign.ownership.consumed_owned_inputs, defs);
             },
             .assign_tag => |assign| {
                 defs.set(@intFromEnum(assign.target));
@@ -462,11 +492,13 @@ const ProcPass = struct {
                     uses.set(@intFromEnum(payload));
                 }
                 self.markSpanOwnershipPassed(assign.ownership.consumed_owned_inputs, ownership_passed);
+                self.markSpanOwnershipConsumed(assign.ownership.consumed_owned_inputs, defs);
             },
             .set_local => |assign| {
                 defs.set(@intFromEnum(assign.target));
                 uses.set(@intFromEnum(assign.value));
                 self.markOwnershipPassedValue(assign.value, ownership_passed);
+                self.markOwnershipConsumedValue(assign.value, defs);
             },
             .debug => |debug_stmt| uses.set(@intFromEnum(debug_stmt.message)),
             .expect => |expect_stmt| uses.set(@intFromEnum(expect_stmt.condition)),
@@ -491,6 +523,7 @@ const ProcPass = struct {
                         for (args, params) |arg, param| {
                             if (self.localCanOwnRefcount(param)) {
                                 self.markOwnershipPassedValue(arg, ownership_passed);
+                                self.markOwnershipConsumedValue(arg, defs);
                             }
                         }
                     }
@@ -524,6 +557,12 @@ const ProcPass = struct {
         }
     }
 
+    fn markSpanOwnershipConsumed(self: *ProcPass, span: LIR.LocalSpan, defs: *std.DynamicBitSetUnmanaged) void {
+        for (self.store.getLocalSpan(span)) |local| {
+            self.markOwnershipConsumedValue(local, defs);
+        }
+    }
+
     fn markOwnershipPassedLocal(self: *ProcPass, local: LocalId, ownership_passed: *std.DynamicBitSetUnmanaged) void {
         if (!self.localCanOwnRefcount(local)) return;
         const layout_idx = self.store.getLocal(local).layout_idx;
@@ -534,6 +573,13 @@ const ProcPass = struct {
     fn markOwnershipPassedValue(self: *ProcPass, local: LocalId, ownership_passed: *std.DynamicBitSetUnmanaged) void {
         const owner = self.explicitOwnerForLocal(local) orelse local;
         self.markOwnershipPassedLocal(owner, ownership_passed);
+    }
+
+    fn markOwnershipConsumedValue(self: *ProcPass, local: LocalId, defs: *std.DynamicBitSetUnmanaged) void {
+        const owner = self.explicitOwnerForLocal(local) orelse local;
+        const layout_idx = self.store.getLocal(owner).layout_idx;
+        if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(layout_idx))) return;
+        defs.set(@intFromEnum(owner));
     }
 
     fn markOwnedCallArgsPassed(
@@ -551,6 +597,24 @@ const ProcPass = struct {
             const param_index = indexOfLocal(params, owned_param) orelse continue;
             if (param_index >= args.len) continue;
             self.markOwnershipPassedValue(args[param_index], ownership_passed);
+        }
+    }
+
+    fn markOwnedCallArgsConsumed(
+        self: *ProcPass,
+        proc_id: LIR.LirProcSpecId,
+        args_span: LIR.LocalSpan,
+        defs: *std.DynamicBitSetUnmanaged,
+    ) void {
+        const proc = self.store.getProcSpec(proc_id);
+        const args = self.store.getLocalSpan(args_span);
+        const params = self.store.getLocalSpan(proc.args);
+        const owned_params = self.store.getLocalSpan(proc.owned_params);
+
+        for (owned_params) |owned_param| {
+            const param_index = indexOfLocal(params, owned_param) orelse continue;
+            if (param_index >= args.len) continue;
+            self.markOwnershipConsumedValue(args[param_index], defs);
         }
     }
 
@@ -854,7 +918,14 @@ const ProcPass = struct {
                 const terminal = try self.store.addCFStmt(.{ .scope_exit = .{ .id = scope_exit.id } });
                 break :blk try self.prependTerminalDrops(stmt_id, terminal);
             },
-            .jump => stmt_id,
+            .jump => |jump| blk: {
+                const rewritten_jump = try self.store.addCFStmt(.{ .jump = .{
+                    .target = jump.target,
+                    .args = jump.args,
+                } });
+                const successor = self.join_bodies_by_id.get(@intFromEnum(jump.target)) orelse unreachable;
+                break :blk try self.prependOwnershipRetains(stmt_id, rewritten_jump, successor);
+            },
             .ret => |ret_stmt| blk: {
                 const terminal = try self.store.addCFStmt(.{ .ret = .{ .value = ret_stmt.value } });
                 break :blk try self.prependTerminalDrops(stmt_id, terminal);
@@ -1103,6 +1174,17 @@ const ProcPass = struct {
                 }
             },
             .set_local => |assign| self.accumulateBorrowedConsumeRetain(assign.value, retained_counts),
+            .jump => |jump| {
+                if (self.join_params_by_id.get(@intFromEnum(jump.target))) |params_span| {
+                    const params = self.store.getLocalSpan(params_span);
+                    const args = self.store.getLocalSpan(jump.args);
+                    if (params.len != args.len) return;
+                    for (args, params) |arg, param| {
+                        if (!self.localCanOwnRefcount(param)) continue;
+                        self.accumulateBorrowedConsumeRetain(arg, retained_counts);
+                    }
+                }
+            },
             else => {},
         }
     }

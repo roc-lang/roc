@@ -1847,6 +1847,12 @@ const Lowerer = struct {
         if (expr.data == .inspect) {
             return try self.specializeInspectExpr(inst, mono_cache, venv, expr.data.inspect, default_ty);
         }
+        if (self.exprNeedsRuntimeError(default_ty, expr.data)) {
+            return try self.output.addExpr(.{
+                .ty = default_ty,
+                .data = .{ .runtime_error = try self.runtimeErrorLiteral() },
+            });
+        }
 
         const specialized: SpecializedExprLowering = switch (expr.data) {
             .var_ => |symbol| blk: {
@@ -2025,6 +2031,27 @@ const Lowerer = struct {
             .for_ => |for_expr| .{ .ty = default_ty, .data = .{ .for_ = try self.specializeForExpr(inst, mono_cache, venv, for_expr) } },
         };
         return try self.output.addExpr(.{ .ty = specialized.ty, .data = specialized.data });
+    }
+
+    fn runtimeErrorLiteral(self: *Lowerer) std.mem.Allocator.Error!base.StringLiteral.Idx {
+        return self.internStringLiteral("runtime error");
+    }
+
+    fn exprNeedsRuntimeError(self: *Lowerer, exec_ty: type_mod.TypeId, data: solved.Ast.Expr.Data) bool {
+        const prim = switch (self.types.getType(exec_ty)) {
+            .primitive => |prim| prim,
+            else => return false,
+        };
+
+        return switch (data) {
+            .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit => switch (prim) {
+                .dec, .f32, .f64, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => false,
+                .bool, .str, .erased => true,
+            },
+            .str_lit => prim != .str,
+            .bool_lit => prim != .bool,
+            else => false,
+        };
     }
 
     const dec_scale_i128: i128 = 1_000_000_000_000_000_000;

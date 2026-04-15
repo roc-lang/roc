@@ -814,13 +814,13 @@ pub const LowLevel = enum {
             .list_release_excess_capacity,
             => .{ .alias_arg = 0 },
 
-            .list_get_unsafe => .{ .borrow_arg = 0 },
-
             .list_first,
             .list_last,
             .list_split_first,
             .list_split_last,
             => .fresh,
+
+            .list_get_unsafe => .fresh,
 
             else => .fresh,
         };

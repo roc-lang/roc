@@ -415,7 +415,15 @@ const ProcLowerer = struct {
             .local => |source| .{
                 .consumed_owned_inputs = try self.parent.store.addLocalSpan(&.{source}),
             },
-            else => .{},
+            .field,
+            .tag_payload,
+            .tag_payload_struct,
+            .list_reinterpret,
+            .nominal,
+            => .{
+                .materialization = .copy_from_borrowed_input,
+            },
+            .discriminant => .{},
         };
     }
 

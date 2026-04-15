@@ -169,10 +169,7 @@ fn collectOwnedParams(
 
     switch (store.getCFStmt(stmt_id)) {
         .assign_symbol => |assign| try collectOwnedParams(allocator, store, assign.next, arg_index_by_local, visited, active, needs_owned),
-        .assign_ref => |assign| {
-            try markSpanParamsOwned(allocator, store, assign.ownership.consumed_owned_inputs, arg_index_by_local, active, needs_owned);
-            try collectOwnedParams(allocator, store, assign.next, arg_index_by_local, visited, active, needs_owned);
-        },
+        .assign_ref => |assign| try collectOwnedParams(allocator, store, assign.next, arg_index_by_local, visited, active, needs_owned),
         .assign_literal => |assign| try collectOwnedParams(allocator, store, assign.next, arg_index_by_local, visited, active, needs_owned),
         .assign_call => |assign| {
             const callee = store.getProcSpec(assign.proc);
@@ -195,22 +192,10 @@ fn collectOwnedParams(
             try markSpanParamsOwned(allocator, store, assign.ownership.consumed_owned_inputs, arg_index_by_local, active, needs_owned);
             try collectOwnedParams(allocator, store, assign.next, arg_index_by_local, visited, active, needs_owned);
         },
-        .assign_list => |assign| {
-            try markSpanParamsOwned(allocator, store, assign.ownership.consumed_owned_inputs, arg_index_by_local, active, needs_owned);
-            try collectOwnedParams(allocator, store, assign.next, arg_index_by_local, visited, active, needs_owned);
-        },
-        .assign_struct => |assign| {
-            try markSpanParamsOwned(allocator, store, assign.ownership.consumed_owned_inputs, arg_index_by_local, active, needs_owned);
-            try collectOwnedParams(allocator, store, assign.next, arg_index_by_local, visited, active, needs_owned);
-        },
-        .assign_tag => |assign| {
-            try markSpanParamsOwned(allocator, store, assign.ownership.consumed_owned_inputs, arg_index_by_local, active, needs_owned);
-            try collectOwnedParams(allocator, store, assign.next, arg_index_by_local, visited, active, needs_owned);
-        },
-        .set_local => |assign| {
-            try markLocalParamOwned(allocator, store, assign.value, arg_index_by_local, active, needs_owned);
-            try collectOwnedParams(allocator, store, assign.next, arg_index_by_local, visited, active, needs_owned);
-        },
+        .assign_list => |assign| try collectOwnedParams(allocator, store, assign.next, arg_index_by_local, visited, active, needs_owned),
+        .assign_struct => |assign| try collectOwnedParams(allocator, store, assign.next, arg_index_by_local, visited, active, needs_owned),
+        .assign_tag => |assign| try collectOwnedParams(allocator, store, assign.next, arg_index_by_local, visited, active, needs_owned),
+        .set_local => |assign| try collectOwnedParams(allocator, store, assign.next, arg_index_by_local, visited, active, needs_owned),
         .debug => |debug_stmt| try collectOwnedParams(allocator, store, debug_stmt.next, arg_index_by_local, visited, active, needs_owned),
         .expect => |expect_stmt| try collectOwnedParams(allocator, store, expect_stmt.next, arg_index_by_local, visited, active, needs_owned),
         .incref => |inc| try collectOwnedParams(allocator, store, inc.next, arg_index_by_local, visited, active, needs_owned),
