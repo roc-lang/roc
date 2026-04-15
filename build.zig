@@ -2930,6 +2930,24 @@ pub fn build(b: *std.Build) void {
     }
     eval_test_step.dependOn(&run_mono_emit_test.step);
 
+    const ownership_boundary_test = b.addTest(.{
+        .name = "ownership_boundary_test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/ownership_boundary_test_root.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+        .filters = test_filters,
+    });
+    configureBackend(ownership_boundary_test, target);
+    const run_ownership_boundary_test = b.addRunArtifact(ownership_boundary_test);
+    if (run_args.len != 0) {
+        run_ownership_boundary_test.addArgs(run_args);
+    }
+    tests_summary.addRun(&run_ownership_boundary_test.step);
+    test_step.dependOn(&run_ownership_boundary_test.step);
+
     const cor_pipeline_test = b.addTest(.{
         .name = "cor_pipeline_eval",
         .root_module = b.createModule(.{
