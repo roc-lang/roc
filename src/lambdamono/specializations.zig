@@ -135,9 +135,10 @@ pub fn buildFEnv(allocator: std.mem.Allocator, input: *const solved.Lower.Result
     return try out.toOwnedSlice(allocator);
 }
 
-pub fn lookupFn(fenv: []const FEnvEntry, name: Symbol) ?FEnvEntry {
+pub fn lookupFn(fenv: []const FEnvEntry, symbols: *const symbol_mod.Store, name: Symbol) ?FEnvEntry {
     for (fenv) |entry| {
         if (entry.name == name) return entry;
+        if (canonicalSourceSymbol(symbols, entry.name) == canonicalSourceSymbol(symbols, name)) return entry;
     }
     return null;
 }
@@ -150,7 +151,7 @@ pub fn specializeFnLset(
     requested_ty: TypeVarId,
     sig: SigKey,
 ) std.mem.Allocator.Error!Symbol {
-    const entry = lookupFn(fenv, requested_name) orelse debugPanic("lambdamono.specializations.specializeFnLset missing function");
+    const entry = lookupFn(fenv, symbols, requested_name) orelse debugPanic("lambdamono.specializations.specializeFnLset missing function");
     if (queue.by_key.get(sig)) |idx| {
         return queue.items.items[idx].specialized_symbol;
     }
@@ -181,7 +182,7 @@ pub fn specializeFnErased(
     requested_ty: TypeVarId,
     sig: SigKey,
 ) std.mem.Allocator.Error!Symbol {
-    const entry = lookupFn(fenv, requested_name) orelse debugPanic("lambdamono.specializations.specializeFnErased missing function");
+    const entry = lookupFn(fenv, symbols, requested_name) orelse debugPanic("lambdamono.specializations.specializeFnErased missing function");
     if (queue.by_key.get(sig)) |idx| {
         return queue.items.items[idx].specialized_symbol;
     }
@@ -207,4 +208,22 @@ pub fn specializeFnErased(
 fn debugPanic(comptime msg: []const u8) noreturn {
     @branchHint(.cold);
     std.debug.panic("{s}", .{msg});
+}
+
+fn canonicalSourceSymbol(symbols: *const symbol_mod.Store, symbol: Symbol) Symbol {
+    var current = symbol;
+    var depth: usize = 0;
+    while (depth < 8) : (depth += 1) {
+        const next: ?Symbol = switch (symbols.get(current).origin) {
+            .specialized_top_level_def => |info| Symbol.fromRaw(info.source_symbol),
+            .specialized_local_fn => |info| Symbol.fromRaw(info.source_symbol),
+            .lifted_local_fn => |info| Symbol.fromRaw(info.source_symbol),
+            .lifted_local_fn_alias => |info| Symbol.fromRaw(info.source_symbol),
+            else => null,
+        };
+        const resolved = next orelse break;
+        if (resolved == current) break;
+        current = resolved;
+    }
+    return current;
 }

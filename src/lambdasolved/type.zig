@@ -7,6 +7,14 @@ const lifted_type = @import("monotype_lifted").Type;
 
 pub const Symbol = symbol_mod.Symbol;
 pub const Prim = lifted_type.Prim;
+pub const Nominal = struct {
+    module_idx: u32,
+    ident: base.Ident.Idx,
+    is_opaque: bool,
+    to_inspect_symbol: Symbol,
+    args: Span(TypeVarId),
+    backing: TypeVarId,
+};
 
 pub const TypeVarId = enum(u32) { _ };
 
@@ -66,7 +74,7 @@ pub const Content = union(enum) {
 
 pub const Node = union(enum) {
     link: TypeVarId,
-    nominal: TypeVarId,
+    nominal: Nominal,
     unbd,
     for_a,
     content: Content,
@@ -138,10 +146,12 @@ pub const Store = struct {
                 }
                 break :blk terminal;
             },
-            .nominal => |next| blk: {
-                const terminal = self.unlink(next);
-                if (terminal != next) {
-                    self.setNode(id, .{ .nominal = terminal });
+            .nominal => |nominal| blk: {
+                const terminal = self.unlink(nominal.backing);
+                if (terminal != nominal.backing) {
+                    var rewritten = nominal;
+                    rewritten.backing = terminal;
+                    self.setNode(id, .{ .nominal = rewritten });
                 }
                 break :blk terminal;
             },
@@ -293,8 +303,22 @@ pub const Store = struct {
 
         return switch (left_node) {
             .link => unreachable,
-            .nominal => |left_backing| switch (right_node) {
-                .nominal => |right_backing| try self.equalIdsVisited(left_backing, right_backing, visited),
+            .nominal => |left_nominal| switch (right_node) {
+                .nominal => |right_nominal| blk: {
+                    if (left_nominal.module_idx != right_nominal.module_idx) break :blk false;
+                    if (left_nominal.ident != right_nominal.ident) break :blk false;
+                    if (left_nominal.is_opaque != right_nominal.is_opaque) break :blk false;
+                    if (left_nominal.to_inspect_symbol != right_nominal.to_inspect_symbol) break :blk false;
+
+                    const left_args = self.sliceTypeVarSpan(left_nominal.args);
+                    const right_args = self.sliceTypeVarSpan(right_nominal.args);
+                    if (left_args.len != right_args.len) break :blk false;
+                    for (left_args, right_args) |left_arg, right_arg| {
+                        if (!try self.equalIdsVisited(left_arg, right_arg, visited)) break :blk false;
+                    }
+
+                    break :blk try self.equalIdsVisited(left_nominal.backing, right_nominal.backing, visited);
+                },
                 else => unreachable,
             },
             .unbd => true,

@@ -405,7 +405,7 @@ fn lowerNode(
         .placeholder => debugPanic("lambdamono.layout_facts.lowerNode unresolved executable type"),
         .link => unreachable,
         .primitive => debugPanic("lambdamono.layout_facts.lowerNode primitive should have been returned directly"),
-        .nominal => |backing| .{ .nominal = try lowerTypeRec(allocator, mono_types, idents, graph, cache, backing) },
+        .nominal => |nominal| .{ .nominal = try lowerTypeRec(allocator, mono_types, idents, graph, cache, nominal.backing) },
         .list => |elem| .{ .list = try lowerTypeRec(allocator, mono_types, idents, graph, cache, elem) },
         .box => |elem| .{ .box = try lowerTypeRec(allocator, mono_types, idents, graph, cache, elem) },
         .erased_fn => |maybe_capture| blk: {

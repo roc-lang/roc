@@ -197,6 +197,21 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Record inspection",
     },
     .{
+        .roc_file = "test/fx/inspect_field_only_repro.roc",
+        .io_spec = "1>\"test\"",
+        .description = "Repro: inspect projected string field",
+    },
+    .{
+        .roc_file = "test/fx/inspect_field_concat_repro.roc",
+        .io_spec = "1>{ name: \"test\"",
+        .description = "Repro: concat inspected projected string field",
+    },
+    .{
+        .roc_file = "test/fx/inspect_field_concat_chain_repro.roc",
+        .io_spec = "1>{ name: \"test\", count: 42.0 }",
+        .description = "Repro: chained concats with inspected projected field",
+    },
+    .{
         .roc_file = "test/fx/inspect_wrong_sig_test.roc",
         .io_spec = "1>Result: 1",
         .description = "Inspect with wrong signature",

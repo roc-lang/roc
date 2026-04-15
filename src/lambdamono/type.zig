@@ -8,6 +8,14 @@ const solved_type = @import("lambdasolved").Type;
 pub const TypeId = enum(u32) { _ };
 pub const Prim = solved_type.Prim;
 pub const Symbol = @import("symbol").Symbol;
+pub const Nominal = struct {
+    module_idx: u32,
+    ident: base.Ident.Idx,
+    is_opaque: bool,
+    to_inspect_symbol: Symbol,
+    args: Span(TypeId),
+    backing: TypeId,
+};
 
 pub fn Span(comptime _: type) type {
     return extern struct {
@@ -38,7 +46,7 @@ pub const Field = struct {
 pub const Content = union(enum) {
     placeholder,
     link: TypeId,
-    nominal: TypeId,
+    nominal: Nominal,
     list: TypeId,
     box: TypeId,
     erased_fn: ?TypeId,
@@ -125,7 +133,7 @@ pub const Store = struct {
         while (true) {
             switch (self.types.items[@intFromEnum(current)]) {
                 .link => |next| current = next,
-                .nominal => |next| current = next,
+                .nominal => |nominal| current = nominal.backing,
                 else => |content| return content,
             }
         }
@@ -221,7 +229,12 @@ pub const Store = struct {
             .placeholder => false,
             .link => unreachable,
             .primitive => true,
-            .nominal => |backing| try self.isFullyResolvedVisited(backing, visited),
+            .nominal => |nominal| blk: {
+                for (self.sliceTypeSpan(nominal.args)) |arg| {
+                    if (!try self.isFullyResolvedVisited(arg, visited)) break :blk false;
+                }
+                break :blk try self.isFullyResolvedVisited(nominal.backing, visited);
+            },
             .list => |elem| try self.isFullyResolvedVisited(elem, visited),
             .box => |elem| try self.isFullyResolvedVisited(elem, visited),
             .erased_fn => |maybe_capture| if (maybe_capture) |capture|
@@ -280,7 +293,22 @@ pub const Store = struct {
         const canonical_content: Content = switch (root_content) {
             .placeholder, .link => unreachable,
             .primitive => |prim| .{ .primitive = prim },
-            .nominal => |backing| .{ .nominal = try self.canonicalizeResolvedInner(backing, active) },
+            .nominal => |nominal| blk: {
+                const args = self.sliceTypeSpan(nominal.args);
+                const lowered_args = try self.allocator.alloc(TypeId, args.len);
+                defer self.allocator.free(lowered_args);
+                for (args, 0..) |arg, i| {
+                    lowered_args[i] = try self.canonicalizeResolvedInner(arg, active);
+                }
+                break :blk .{ .nominal = .{
+                    .module_idx = nominal.module_idx,
+                    .ident = nominal.ident,
+                    .is_opaque = nominal.is_opaque,
+                    .to_inspect_symbol = nominal.to_inspect_symbol,
+                    .args = try self.addTypeSpan(lowered_args),
+                    .backing = try self.canonicalizeResolvedInner(nominal.backing, active),
+                } };
+            },
             .list => |elem| .{ .list = try self.canonicalizeResolvedInner(elem, active) },
             .box => |elem| .{ .box = try self.canonicalizeResolvedInner(elem, active) },
             .erased_fn => |maybe_capture| .{ .erased_fn = if (maybe_capture) |capture|
@@ -408,9 +436,18 @@ pub const Store = struct {
                         try self_builder.store.appendInternKeyValue(@as(u8, 10));
                         try self_builder.store.appendInternKeyValue(@intFromEnum(prim));
                     },
-                    .nominal => |backing| {
+                    .nominal => |nominal| {
                         try self_builder.store.appendInternKeyValue(@as(u8, 11));
-                        try self_builder.serializeType(backing);
+                        try self_builder.store.appendInternKeyValue(nominal.module_idx);
+                        try self_builder.store.appendInternKeyValue(@as(u32, @bitCast(nominal.ident)));
+                        try self_builder.store.appendInternKeyValue(@as(u8, @intFromBool(nominal.is_opaque)));
+                        try self_builder.store.appendInternKeyValue(nominal.to_inspect_symbol.raw());
+                        const args = self_builder.store.sliceTypeSpan(nominal.args);
+                        try self_builder.store.appendInternKeyValue(@as(u32, @intCast(args.len)));
+                        for (args) |arg| {
+                            try self_builder.serializeType(arg);
+                        }
+                        try self_builder.serializeType(nominal.backing);
                     },
                     .list => |elem| {
                         try self_builder.store.appendInternKeyValue(@as(u8, 12));
@@ -537,7 +574,20 @@ pub const Store = struct {
         return switch (left_content) {
             .placeholder => false,
             .link => unreachable,
-            .nominal => |backing| self.equalIdsVisited(backing, right_content.nominal, visited),
+            .nominal => |nominal| blk: {
+                const right_nominal = right_content.nominal;
+                if (nominal.module_idx != right_nominal.module_idx) break :blk false;
+                if (nominal.ident != right_nominal.ident) break :blk false;
+                if (nominal.is_opaque != right_nominal.is_opaque) break :blk false;
+                if (nominal.to_inspect_symbol != right_nominal.to_inspect_symbol) break :blk false;
+                const left_args = self.sliceTypeSpan(nominal.args);
+                const right_args = self.sliceTypeSpan(right_nominal.args);
+                if (left_args.len != right_args.len) break :blk false;
+                for (left_args, right_args) |left_arg, right_arg| {
+                    if (!try self.equalIdsVisited(left_arg, right_arg, visited)) break :blk false;
+                }
+                break :blk try self.equalIdsVisited(nominal.backing, right_nominal.backing, visited);
+            },
             .primitive => |prim| prim == right_content.primitive,
             .list => |elem| self.equalIdsVisited(elem, right_content.list, visited),
             .box => |elem| self.equalIdsVisited(elem, right_content.box, visited),

@@ -2613,6 +2613,24 @@ test "RocStr.concat: small concat small" {
     try std.testing.expect(roc_str3.eql(result));
 }
 
+test "RocStr.concat: concat result fed into concat again" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const first_a = RocStr.fromSliceSmall("a");
+    const first_b = RocStr.fromSliceSmall("b");
+    const second = RocStr.fromSliceSmall("c");
+
+    const first = strConcat(first_a, first_b, test_env.getOps());
+    defer first.decref(test_env.getOps());
+
+    const result = strConcat(first, second, test_env.getOps());
+    defer result.decref(test_env.getOps());
+
+    const expected = RocStr.fromSliceSmall("abc");
+    try std.testing.expect(expected.eql(result));
+}
+
 test "RocStr.concat: big concat overlapping seamless suffix" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();

@@ -788,9 +788,10 @@ pub const LowLevel = enum {
         return switch (self) {
             .crash => .no_return,
             // These low-levels consume an owned container/string argument and
-            // return the continued ownership of that value, regardless of
-            // whether the runtime path reuses the same allocation or moves the
-            // ownership into a freshly allocated result.
+            // return a fresh owned value whose ownership is transferred from
+            // that input. Even if the runtime reuses the same allocation, the
+            // source value has been consumed; later stages must not treat the
+            // result as an alias of the pre-call local.
             .str_concat,
             .str_trim,
             .str_trim_start,
@@ -812,7 +813,7 @@ pub const LowLevel = enum {
             .list_prepend,
             .list_reverse,
             .list_release_excess_capacity,
-            => .{ .alias_arg = 0 },
+            => .fresh,
 
             .list_first,
             .list_last,

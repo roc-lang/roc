@@ -21,6 +21,97 @@ const BuiltinModules = eval.BuiltinModules;
 const RocOps = builtins.host_abi.RocOps;
 const Symbol = @import("symbol").Symbol;
 
+pub const LoweringModuleEnvs = struct {
+    allocator: std.mem.Allocator,
+    all_module_envs: []*ModuleEnv,
+    all_module_envs_const: []const *const ModuleEnv,
+    builtin_module_idx: u32,
+    primary_module_idx: u32,
+    app_module_idx: ?u32,
+    builtin_str: ?base.Ident.Idx,
+
+    pub fn deinit(self: *LoweringModuleEnvs) void {
+        self.allocator.free(self.all_module_envs_const);
+        self.allocator.free(self.all_module_envs);
+    }
+};
+
+pub fn buildLoweringModuleEnvs(
+    allocator: std.mem.Allocator,
+    builtin_env: *ModuleEnv,
+    primary_env: *ModuleEnv,
+    app_env: ?*ModuleEnv,
+    imported_envs: ?[]const *const ModuleEnv,
+) !LoweringModuleEnvs {
+    var module_envs = std.ArrayList(*ModuleEnv).empty;
+    defer module_envs.deinit(allocator);
+
+    try module_envs.append(allocator, builtin_env);
+    if (imported_envs) |envs| {
+        for (envs) |env| {
+            const mutable_env = @constCast(env);
+            var seen = false;
+            for (module_envs.items) |existing| {
+                if (existing == mutable_env) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) try module_envs.append(allocator, mutable_env);
+        }
+    }
+
+    if (!containsModuleEnv(module_envs.items, primary_env)) {
+        try module_envs.append(allocator, primary_env);
+    }
+    if (app_env) |env| {
+        if (!containsModuleEnv(module_envs.items, env)) {
+            try module_envs.append(allocator, env);
+        }
+    }
+
+    const all_module_envs = try module_envs.toOwnedSlice(allocator);
+    errdefer allocator.free(all_module_envs);
+
+    const all_module_envs_const = try allocator.alloc(*const ModuleEnv, all_module_envs.len);
+    errdefer allocator.free(all_module_envs_const);
+    for (all_module_envs, 0..) |module_env, i| {
+        all_module_envs_const[i] = module_env;
+    }
+
+    for (all_module_envs) |module_env| {
+        module_env.imports.resolveImports(module_env, all_module_envs_const);
+    }
+
+    const builtin_module_idx: u32 = 0;
+    const primary_module_idx: u32 = findModuleEnvIdx(all_module_envs, primary_env) orelse return error.EntrypointModuleNotFound;
+    const resolved_app_module_idx = if (app_env) |env|
+        findModuleEnvIdx(all_module_envs, env)
+    else
+        null;
+
+    return .{
+        .allocator = allocator,
+        .all_module_envs = all_module_envs,
+        .all_module_envs_const = all_module_envs_const,
+        .builtin_module_idx = builtin_module_idx,
+        .primary_module_idx = primary_module_idx,
+        .app_module_idx = resolved_app_module_idx,
+        .builtin_str = builtin_env.idents.builtin_str,
+    };
+}
+
+fn containsModuleEnv(module_envs: []const *ModuleEnv, target: *const ModuleEnv) bool {
+    return findModuleEnvIdx(module_envs, target) != null;
+}
+
+pub fn findModuleEnvIdx(module_envs: []const *ModuleEnv, target: *const ModuleEnv) ?u32 {
+    for (module_envs, 0..) |module_env, i| {
+        if (module_env == target) return @intCast(i);
+    }
+    return null;
+}
+
 /// Run a compiled Roc entrypoint expression through the interpreter.
 pub fn runViaInterpreter(
     gpa: std.mem.Allocator,
@@ -47,25 +138,12 @@ pub fn runViaInterpreter(
     defer typed_cir_modules.deinit();
 
     const builtin_env = builtin_modules.builtin_module.env;
-    var builtin_module_idx: ?u32 = null;
-    var entrypoint_module_idx: ?u32 = null;
-    for (all_module_envs, 0..) |module_env, i| {
-        if (module_env == builtin_env) builtin_module_idx = @intCast(i);
-        if (module_env == entrypoint_env) entrypoint_module_idx = @intCast(i);
-    }
-
-    const builtin_idx = builtin_module_idx orelse return error.BuiltinModuleNotFound;
-    const entry_idx = entrypoint_module_idx orelse return error.EntrypointModuleNotFound;
-
-    var app_module_idx: ?u32 = null;
-    if (app_module_env) |app_env| {
-        for (all_module_envs, 0..) |module_env, i| {
-            if (module_env == app_env) {
-                app_module_idx = @intCast(i);
-                break;
-            }
-        }
-    }
+    const builtin_idx = findModuleEnvIdx(all_module_envs, builtin_env) orelse return error.BuiltinModuleNotFound;
+    const entry_idx = findModuleEnvIdx(all_module_envs, entrypoint_env) orelse return error.EntrypointModuleNotFound;
+    const app_module_idx = if (app_module_env) |app_env|
+        findModuleEnvIdx(all_module_envs, app_env)
+    else
+        null;
 
     var mono_lowerer = try monotype.Lower.Lowerer.init(gpa, &typed_cir_modules, builtin_idx, app_module_idx);
     defer mono_lowerer.deinit();
@@ -91,7 +169,7 @@ pub fn runViaInterpreter(
     var lir_result = try lir.FromIr.run(
         gpa,
         all_module_envs,
-        null,
+        builtin_env.idents.builtin_str,
         base.target.TargetUsize.native,
         lowered_ir,
     );

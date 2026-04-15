@@ -28,6 +28,7 @@ pub const Result = struct {
     types: type_mod.Store,
     strings: base.StringLiteral.Store,
     idents: base.Ident.Store,
+    runtime_inspect_symbols: std.AutoHashMap(Symbol, Symbol),
 
     pub fn deinit(self: *Result) void {
         self.store.deinit();
@@ -36,6 +37,7 @@ pub const Result = struct {
         self.types.deinit();
         self.strings.deinit(self.store.allocator);
         self.idents.deinit(self.store.allocator);
+        self.runtime_inspect_symbols.deinit();
     }
 };
 
@@ -113,6 +115,7 @@ const Lowerer = struct {
             .types = self.input.types,
             .strings = self.input.strings,
             .idents = self.input.idents,
+            .runtime_inspect_symbols = self.input.runtime_inspect_symbols,
         };
 
         self.output = ast.Store.init(self.allocator);
@@ -121,6 +124,7 @@ const Lowerer = struct {
         self.input.types = type_mod.Store.init(self.allocator);
         self.input.strings = .{};
         self.input.idents = try base.Ident.Store.initCapacity(self.allocator, 1);
+        self.input.runtime_inspect_symbols = std.AutoHashMap(Symbol, Symbol).init(self.allocator);
         return result;
     }
 

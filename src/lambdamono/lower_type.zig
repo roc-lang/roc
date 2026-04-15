@@ -178,7 +178,22 @@ fn lowerTypeRec(
 
     const lowered: mono.Content = switch (types.getNode(id)) {
         .link => unreachable,
-        .nominal => |backing| .{ .nominal = try lowerTypeRec(types, mono_types, mono_cache, backing, symbols) },
+        .nominal => |nominal| blk: {
+            const args = types.sliceTypeVarSpan(nominal.args);
+            const lowered_args = try mono_types.allocator.alloc(mono.TypeId, args.len);
+            defer mono_types.allocator.free(lowered_args);
+            for (args, 0..) |arg, i| {
+                lowered_args[i] = try lowerTypeRec(types, mono_types, mono_cache, arg, symbols);
+            }
+            break :blk .{ .nominal = .{
+                .module_idx = nominal.module_idx,
+                .ident = nominal.ident,
+                .is_opaque = nominal.is_opaque,
+                .to_inspect_symbol = nominal.to_inspect_symbol,
+                .args = try mono_types.addTypeSpan(lowered_args),
+                .backing = try lowerTypeRec(types, mono_types, mono_cache, nominal.backing, symbols),
+            } };
+        },
         .for_a, .unbd => .{ .record = .{ .fields = mono.Span(mono.Field).empty() } },
         .content => |content| switch (content) {
             .func => blk: {
