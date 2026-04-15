@@ -1351,7 +1351,7 @@ fn emitBoxRc(self: *Self, comptime kind: RcOpKind, box_ptr_local: u32, box_layou
     }
 }
 
-fn emitRcHelperCallByKey(
+fn emitRawRcHelperCallByKey(
     self: *Self,
     helper_key: RcHelperKey,
     value_ptr_local: u32,
@@ -1399,7 +1399,7 @@ fn emitBoxChildDropIfUnique(
     self.body.append(self.allocator, Op.br_if) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
 
-    try self.emitRcHelperCallByKey(child_key, box_ptr_local, null);
+    try self.emitRawRcHelperCallByKey(child_key, box_ptr_local, null);
 
     self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
 }
@@ -1486,7 +1486,7 @@ fn generateRcHelperBody(
                     self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
                 }
                 try self.emitLocalSet(field_ptr_local);
-                try self.emitRcHelperCallByKey(.{
+                try self.emitRawRcHelperCallByKey(.{
                     .op = struct_plan.child_op,
                     .layout_idx = field_layout_idx,
                 }, field_ptr_local, count_local);
@@ -1498,7 +1498,7 @@ fn generateRcHelperBody(
 
             if (variant_count == 1) {
                 if (resolver.tagUnionVariantPlan(tag_plan, 0)) |child_key| {
-                    try self.emitRcHelperCallByKey(child_key, value_ptr_local, count_local);
+                    try self.emitRawRcHelperCallByKey(child_key, value_ptr_local, count_local);
                 }
                 return;
             }
@@ -1529,7 +1529,7 @@ fn generateRcHelperBody(
                 self.body.append(self.allocator, Op.br_if) catch return error.OutOfMemory;
                 WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
 
-                try self.emitRcHelperCallByKey(child_key, value_ptr_local, count_local);
+                try self.emitRawRcHelperCallByKey(child_key, value_ptr_local, count_local);
 
                 self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
             }
@@ -1539,7 +1539,7 @@ fn generateRcHelperBody(
             try self.emitLocalGet(value_ptr_local);
             try self.emitLoadOp(.i32, 0);
             try self.emitLocalSet(captures_ptr_local);
-            try self.emitRcHelperCallByKey(child_key, captures_ptr_local, count_local);
+            try self.emitRawRcHelperCallByKey(child_key, captures_ptr_local, count_local);
         },
     }
 }
