@@ -139,10 +139,12 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
         fn readSome(self: *Self, buffer: []u8) ReadMessageError!usize {
             if (@hasDecl(ReaderType, "read")) {
                 return self.reader.read(buffer) catch return error.EndOfStream;
+            } else if (@hasDecl(ReaderType, "readSliceShort")) {
+                return (&self.reader).readSliceShort(buffer) catch return error.EndOfStream;
             } else if (@hasField(ReaderType, "interface")) {
                 return (&self.reader.interface).readSliceShort(buffer) catch return error.EndOfStream;
             } else {
-                @compileError("ReaderType must provide either a read method or expose an interface field");
+                @compileError("ReaderType must provide either a read method, readSliceShort, or expose an interface field");
             }
         }
 

@@ -14,13 +14,13 @@ test "transport decodes and encodes LSP frames" {
     const framed = try frame(allocator, request_body);
     defer allocator.free(framed);
 
-    var input = std.io.fixedBufferStream(framed);
+    const input: std.Io.Reader = .fixed(framed);
     var output_buffer: [512]u8 = undefined;
-    var output = std.io.fixedBufferStream(&output_buffer);
+    const output: std.Io.Writer = .fixed(&output_buffer);
 
-    const ReaderType = @TypeOf(input.reader());
-    const WriterType = @TypeOf(output.writer());
-    var transport = transport_module.Transport(ReaderType, WriterType).init(allocator, input.reader(), output.writer(), null);
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var transport = transport_module.Transport(ReaderType, WriterType).init(allocator, input, output, null);
 
     const payload = try transport.readMessage();
     defer allocator.free(payload);
@@ -36,7 +36,7 @@ test "transport decodes and encodes LSP frames" {
 
     try transport.sendJson(response_body);
 
-    const written = output.getWritten();
+    const written = output_buffer[0..transport.writer.end];
     const separator_index = std.mem.indexOf(u8, written, "\r\n\r\n") orelse unreachable;
     const body = written[(separator_index + 4)..];
 
@@ -51,13 +51,13 @@ test "transport decodes and encodes LSP frames" {
 test "transport errors when Content-Length header is missing" {
     const allocator = std.testing.allocator;
     const invalid_frame = "Content-Type: application/vscode-jsonrpc; charset=utf-8\r\n\r\n{}";
-    var input = std.io.fixedBufferStream(invalid_frame);
+    const input: std.Io.Reader = .fixed(invalid_frame);
     var output_buffer: [16]u8 = undefined;
-    var output = std.io.fixedBufferStream(&output_buffer);
+    const output: std.Io.Writer = .fixed(&output_buffer);
 
-    const ReaderType = @TypeOf(input.reader());
-    const WriterType = @TypeOf(output.writer());
-    var transport = transport_module.Transport(ReaderType, WriterType).init(allocator, input.reader(), output.writer(), null);
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var transport = transport_module.Transport(ReaderType, WriterType).init(allocator, input, output, null);
 
     try std.testing.expectError(error.MissingContentLength, transport.readMessage());
 }
@@ -67,18 +67,18 @@ test "transport logs traffic when debug file is provided" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const log_handle = try tmp.dir.createFile("traffic.log", .{ .truncate = true, .read = true });
+    const log_handle = try tmp.dir.createFile(std.testing.io, "traffic.log", .{});
 
-    var input = std.io.fixedBufferStream("");
+    const input: std.Io.Reader = .fixed("");
     var output_buffer: [512]u8 = undefined;
-    var output = std.io.fixedBufferStream(&output_buffer);
+    const output: std.Io.Writer = .fixed(&output_buffer);
 
-    const ReaderType = @TypeOf(input.reader());
-    const WriterType = @TypeOf(output.writer());
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
     var transport = transport_module.Transport(ReaderType, WriterType).init(
         allocator,
-        input.reader(),
-        output.writer(),
+        input,
+        output,
         log_handle,
     );
     defer transport.deinit();
@@ -89,9 +89,11 @@ test "transport logs traffic when debug file is provided" {
         .result = .{ .ack = true },
     });
 
-    const log_file = try tmp.dir.openFile("traffic.log", .{});
-    defer log_file.close();
-    const contents = try log_file.readToEndAlloc(allocator, 2048);
+    const log_file = try tmp.dir.openFile(std.testing.io, "traffic.log", .{});
+    defer log_file.close(std.testing.io);
+    var file_read_buffer: [4096]u8 = undefined;
+    var file_reader = log_file.reader(std.testing.io, &file_read_buffer);
+    const contents = try file_reader.interface.allocRemaining(allocator, .unlimited);
     defer allocator.free(contents);
 
     try std.testing.expect(std.mem.indexOf(u8, contents, "OUT") != null);
@@ -110,16 +112,16 @@ test "transport rejects oversized header lines" {
 
     const header_frame = frame_builder.items;
 
-    var input = std.io.fixedBufferStream(header_frame);
+    const input: std.Io.Reader = .fixed(header_frame);
     var output_buffer: [16]u8 = undefined;
-    var output = std.io.fixedBufferStream(&output_buffer);
+    const output: std.Io.Writer = .fixed(&output_buffer);
 
-    const ReaderType = @TypeOf(input.reader());
-    const WriterType = @TypeOf(output.writer());
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
     var transport = transport_module.Transport(ReaderType, WriterType).init(
         allocator,
-        input.reader(),
-        output.writer(),
+        input,
+        output,
         null,
     );
     defer transport.deinit();

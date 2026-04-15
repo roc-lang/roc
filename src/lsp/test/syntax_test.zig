@@ -30,7 +30,7 @@ const TestHarness = struct {
     checker: SyntaxChecker,
     tmp: std.testing.TmpDir,
     platform_path: []u8,
-    file_path: ?[]u8 = null,
+    file_path: ?[:0]u8 = null,
     uri: ?[]u8 = null,
 
     fn init() !TestHarness {
@@ -670,7 +670,6 @@ test "static dispatch completion for chained call" {
 // Doc Comment Tests
 
 test "completion includes doc comments from source" {
-    std.debug.print("===== DOC COMMENTS TEST=====", .{});
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -791,7 +790,6 @@ test "hover shows documentation for local function call" {
     const hover = try h.getHover(source, 6, 10);
     if (hover) |text| {
         defer h.allocator.free(text);
-        std.debug.print("\n=== HOVER TEXT ===\n{s}\n=== END ===\n", .{text});
         // Should contain the doc comment from the definition
         try std.testing.expect(std.mem.indexOf(u8, text, "Multiplies two numbers") != null);
         // Should contain the type signature
