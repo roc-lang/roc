@@ -9,7 +9,7 @@ interpreter-perform-rc | src/eval/interpreter.zig | rocDeallocFn | builtin/runti
 interpreter-perform-rc | src/eval/interpreter.zig | rocReallocFn | builtin/runtime forwarding lives in interpreter RocOps shim
 interpreter-perform-rc | src/eval/interpreter.zig | listElementIncref | list builtin callback currently owns builtin-internal RC
 interpreter-perform-rc | src/eval/interpreter.zig | listElementDecref | list builtin callback currently owns builtin-internal RC
-interpreter-perform-rc | src/eval/interpreter.zig | performRc | layout-driven interpreter RC engine; callers are checked separately
+interpreter-perform-rc | src/eval/interpreter.zig | performRawRc | layout-driven interpreter RC engine; callers are checked separately
 interpreter-perform-rc | src/eval/interpreter.zig | performExplicitRcStmt | explicit LIR RC execution choke point
 interpreter-perform-rc | src/eval/interpreter.zig | performBuiltinInternalRc | builtin/runtime-internal RC choke point
 interpreter-perform-rc | src/eval/interpreter.zig | performInterpreterApiRc | interpreter API cleanup for externally held result values

@@ -2447,8 +2447,8 @@ pub const Interpreter = struct {
     /// Perform a reference count operation on a value using the layout-driven
     /// RC helper plan.  This walks structs, tag unions, boxes, etc. recursively
     /// so the interpreter's refcounting matches what the dev backend emits.
-    fn performRc(self: *LirInterpreter, op: RcOp, val: Value, layout_idx: layout_mod.Idx, count: u16) void {
-        trace.log("performRc: op={s} layout={any} val.ptr={*} count={d}", .{ @tagName(op), layout_idx, val.ptr, count });
+    fn performRawRc(self: *LirInterpreter, op: RcOp, val: Value, layout_idx: layout_mod.Idx, count: u16) void {
+        trace.log("performRawRc: op={s} layout={any} val.ptr={*} count={d}", .{ @tagName(op), layout_idx, val.ptr, count });
         const resolver = layout_mod.RcHelperResolver.init(self.layout_store);
         const key = resolver.makeKey(op, layout_idx);
         self.performRcPlan(resolver.plan(key), &resolver, val, count);
@@ -2456,7 +2456,7 @@ pub const Interpreter = struct {
 
     fn performExplicitRcStmt(self: *LirInterpreter, op: RcOp, val: Value, layout_idx: layout_mod.Idx, count: u16) void {
         ownership_boundary.explicitLirRcExecution("interpreter.performExplicitRcStmt");
-        self.performRc(op, val, layout_idx, count);
+        self.performRawRc(op, val, layout_idx, count);
     }
 
     fn performBuiltinInternalRc(
@@ -2468,12 +2468,12 @@ pub const Interpreter = struct {
         count: u16,
     ) void {
         ownership_boundary.builtinRuntimeInternal(site);
-        self.performRc(op, val, layout_idx, count);
+        self.performRawRc(op, val, layout_idx, count);
     }
 
     fn performInterpreterApiRc(self: *LirInterpreter, op: RcOp, val: Value, layout_idx: layout_mod.Idx, count: u16) void {
         ownership_boundary.explicitLirRcExecution("interpreter.performInterpreterApiRc");
-        self.performRc(op, val, layout_idx, count);
+        self.performRawRc(op, val, layout_idx, count);
     }
 
     fn performForbiddenOrdinaryRc(
@@ -2485,7 +2485,7 @@ pub const Interpreter = struct {
         count: u16,
     ) void {
         ownership_boundary.forbiddenInterpreterOrdinaryRc(site);
-        self.performRc(op, val, layout_idx, count);
+        self.performRawRc(op, val, layout_idx, count);
     }
 
     fn builtinInternalContainsRefcounted(self: *LirInterpreter, comptime site: []const u8, layout_idx: layout_mod.Idx) bool {
