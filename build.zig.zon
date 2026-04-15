@@ -1,13 +1,14 @@
 .{
     .name = .roc,
     .version = "0.0.0",
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .afl_kit = .{
             .url = "git+https://github.com/kristoff-it/zig-afl-kit.git#395c39d5b33d999f6871a90bd731ec112d3995ca",
             .hash = "afl_kit-0.1.0-NdJ3ch8eAABQkd1wk2W-JDCvvX5Jmnu3uJulS3lPepG7",
             .lazy = true,
         },
+        // TODO ZIG 16: all roc_deps_* bootstrap URLs below need updating to zig-0.16.x releases
         .roc_deps_aarch64_macos_none = .{
             .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.15.1/aarch64-macos-none.tar.xz",
             .hash = "N-V-__8AAJuttw4mNdQg3ig107ac4uyAhcFPznGHmpnmX58C",

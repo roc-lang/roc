@@ -68,7 +68,7 @@ This is useful when working on LSP features like syntax checking, completions, s
 ### Expanding to ZLS
 
 This fast config can also be used with `zls`. Simply follow these steps:
-1. run `zls --version` and make sure it is `0.15.0` (this is still used for zig `0.15.2`).
+1. run `zls --version` and make sure it is `0.15.0` (this is still used for zig `0.15.2`). <!-- TODO ZIG 16: update zls and zig versions -->
 2. run `zls env` and grab the `config_file` path.
 3. Edit the config file to include
 ```json
