@@ -483,7 +483,7 @@ pub const Interpreter = struct {
         const proc_ret_layout = self.store.getProcSpec(request.proc_id).ret_layout;
         const result_value = try self.evalProcById(request.proc_id, args, request.arg_layouts);
         const ret_layout = request.ret_layout orelse proc_ret_layout;
-        const normalized_result = try self.coerceValueToLayout(result_value, proc_ret_layout, ret_layout);
+        const normalized_result = try self.coerceExplicitRefValueToLayout(result_value, proc_ret_layout, ret_layout);
 
         if (request.ret_ptr) |ret_ptr| {
             const ret_size = self.helper.sizeOf(ret_layout);
@@ -963,7 +963,7 @@ pub const Interpreter = struct {
             const param_layouts = try self.localLayoutsFromSpan(proc_spec.args);
             const normalized_args = try self.arena.allocator().alloc(Value, args.len);
             for (args, arg_layouts, param_layouts, 0..) |arg, arg_layout, param_layout, i| {
-                normalized_args[i] = try self.coerceValueToLayout(arg, arg_layout, param_layout);
+                normalized_args[i] = try self.coerceExplicitRefValueToLayout(arg, arg_layout, param_layout);
             }
             return self.callHostedProc(hosted, normalized_args, param_layouts, proc_spec.ret_layout);
         }
@@ -1002,7 +1002,7 @@ pub const Interpreter = struct {
                 &frame,
                 null,
                 param,
-                try self.coerceValueToLayout(
+                try self.coerceExplicitRefValueToLayout(
                     arg,
                     arg_layout,
                     self.store.getLocal(param).layout_idx,
@@ -1023,7 +1023,7 @@ pub const Interpreter = struct {
                     defer visited.deinit(self.allocator);
                     self.debugAssertValueMatchesLayout(proc_id, null, ret_local, raw_result, raw_layout, &visited);
                 }
-                const coerced_result = try self.coerceValueToLayout(
+                const coerced_result = try self.coerceExplicitRefValueToLayout(
                     raw_result,
                     raw_layout,
                     proc_spec.ret_layout,
@@ -1155,7 +1155,7 @@ pub const Interpreter = struct {
                         frame,
                         current,
                         assign.target,
-                        try self.coerceValueToLayout(
+                        try self.coerceExplicitRefValueToLayout(
                             result,
                             self.store.getProcSpec(assign.proc).ret_layout,
                             self.store.getLocal(assign.target).layout_idx,
@@ -1177,7 +1177,7 @@ pub const Interpreter = struct {
                         frame,
                         current,
                         assign.target,
-                        try self.coerceValueToLayout(
+                        try self.coerceExplicitRefValueToLayout(
                             result.value,
                             result.layout,
                             self.store.getLocal(assign.target).layout_idx,
@@ -1212,7 +1212,7 @@ pub const Interpreter = struct {
                 },
                 .set_local => |assign| {
                     const target_layout = self.store.getLocal(assign.target).layout_idx;
-                    const normalized = try self.coerceValueToLayout(
+                    const normalized = try self.coerceExplicitRefValueToLayout(
                         try self.getLocalChecked(frame, assign.value),
                         self.store.getLocal(assign.value).layout_idx,
                         target_layout,
@@ -1779,7 +1779,7 @@ pub const Interpreter = struct {
     ) Error!Value {
         return switch (op) {
             .local => |source| blk: {
-                const local_value = try self.coerceValueToLayout(
+                const local_value = try self.coerceExplicitRefValueToLayout(
                     try self.getLocalChecked(frame, source),
                     self.store.getLocal(source).layout_idx,
                     target_layout,
@@ -1799,7 +1799,7 @@ pub const Interpreter = struct {
                     struct_layout_val.data.struct_.idx,
                     field.field_idx,
                 );
-                const field_value = try self.coerceValueToLayout(
+                const field_value = try self.coerceExplicitRefValueToLayout(
                     struct_base.value.offset(field_offset),
                     actual_field_layout,
                     target_layout,
@@ -1847,7 +1847,7 @@ pub const Interpreter = struct {
                             payload_layout_val.data.struct_.idx,
                             payload.payload_idx,
                         );
-                        const payload_value = try self.coerceValueToLayout(
+                        const payload_value = try self.coerceExplicitRefValueToLayout(
                             tag_base.value.offset(field_offset),
                             actual_field_layout,
                             target_layout,
@@ -1861,7 +1861,7 @@ pub const Interpreter = struct {
                                 .{ payload.payload_idx, @intFromEnum(actual_payload_layout) },
                             );
                         }
-                        const payload_value = try self.coerceValueToLayout(tag_base.value, actual_payload_layout, target_layout);
+                        const payload_value = try self.coerceExplicitRefValueToLayout(tag_base.value, actual_payload_layout, target_layout);
                         break :blk try self.materializeRefResult(payload_value, result, target_layout);
                     },
                 }
@@ -1878,7 +1878,7 @@ pub const Interpreter = struct {
                     );
                 }
                 const actual_payload_layout = self.tagPayloadLayout(source_layout, payload.tag_discriminant);
-                const payload_value = try self.coerceValueToLayout(tag_base.value, actual_payload_layout, target_layout);
+                const payload_value = try self.coerceExplicitRefValueToLayout(tag_base.value, actual_payload_layout, target_layout);
                 break :blk try self.materializeRefResult(payload_value, result, target_layout);
             },
             .list_reinterpret => |list_bridge| blk: {
@@ -2135,7 +2135,7 @@ pub const Interpreter = struct {
                 base_layout_val.data.struct_.idx,
                 @intCast(i),
             );
-            const field_value = try self.coerceValueToLayout(
+            const field_value = try self.coerceExplicitRefValueToLayout(
                 try self.getLocalChecked(frame, field_local),
                 self.store.getLocal(field_local).layout_idx,
                 field_layout,
@@ -2212,7 +2212,7 @@ pub const Interpreter = struct {
         if (payload_local) |local| {
             const payload_size = self.helper.sizeOf(payload_layout);
             if (payload_size > 0) {
-                const payload_value = try self.coerceValueToLayout(
+                const payload_value = try self.coerceExplicitRefValueToLayout(
                     try self.getLocalChecked(frame, local),
                     self.store.getLocal(local).layout_idx,
                     payload_layout,
@@ -2260,7 +2260,7 @@ pub const Interpreter = struct {
         const elem_layout_val = self.layout_store.getLayout(elem_layout);
         for (elem_locals, 0..) |elem_local, i| {
             const offset = i * elem_size;
-            const elem_value = try self.coerceValueToLayout(
+            const elem_value = try self.coerceExplicitRefValueToLayout(
                 try self.getLocalChecked(frame, elem_local),
                 self.store.getLocal(elem_local).layout_idx,
                 elem_layout,
@@ -4991,6 +4991,46 @@ pub const Interpreter = struct {
             }
         }
         return value;
+    }
+
+    fn coerceExplicitRefValueToLayout(
+        self: *LirInterpreter,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        expected_layout: layout_mod.Idx,
+    ) Error!Value {
+        if (actual_layout == expected_layout) return value;
+
+        const actual_layout_val = self.layout_store.getLayout(actual_layout);
+        const expected_layout_val = self.layout_store.getLayout(expected_layout);
+        const actual_is_list = actual_layout_val.tag == .list or actual_layout_val.tag == .list_of_zst;
+        const expected_is_list = expected_layout_val.tag == .list or expected_layout_val.tag == .list_of_zst;
+        if (actual_is_list or expected_is_list) {
+            return try self.coerceExplicitListValueToLayout(value, actual_layout, expected_layout);
+        }
+
+        const actual_is_box = actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst;
+        const expected_is_box = expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst;
+        if (actual_is_box or expected_is_box) {
+            return try self.coerceExplicitNominalValueToLayout(value, actual_layout, expected_layout);
+        }
+
+        if (builtin.mode == .Debug and
+            (actual_layout_val.tag == .struct_ or expected_layout_val.tag == .struct_ or
+                actual_layout_val.tag == .tag_union or expected_layout_val.tag == .tag_union))
+        {
+            self.invariantFailed(
+                "LIR/interpreter invariant violated: explicit ref bridge reached aggregate coercion path actual={d} ({s}) expected={d} ({s})",
+                .{
+                    @intFromEnum(actual_layout),
+                    @tagName(actual_layout_val.tag),
+                    @intFromEnum(expected_layout),
+                    @tagName(expected_layout_val.tag),
+                },
+            );
+        }
+
+        return self.normalizeValueToLayout(value, actual_layout, expected_layout);
     }
 
     fn coerceValueIntoBox(
