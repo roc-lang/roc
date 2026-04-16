@@ -192,9 +192,7 @@ const Ctx = struct {
             type_name: []const u8,
             method_name: []const u8,
         ) ?typed_cir.Modules.ResolvedMethodTarget {
-            const local_type_ident = self.findCommonIdent(type_name) orelse return null;
-            const local_method_ident = self.findCommonIdent(method_name) orelse return null;
-            return self.resolveAttachedMethodTargetByIdents(local_type_ident, local_method_ident);
+            return self.source_module.resolveAttachedMethodTargetByText(type_name, method_name);
         }
 
         pub fn getStatement(self: @This(), idx: CIR.Statement.Idx) CIR.Statement {
@@ -1249,7 +1247,7 @@ pub const Lowerer = struct {
                     .def_idx = def_idx,
                     .pattern_idx = typed_cir_def.pattern.idx,
                     .is_function = isLambdaExpr(typed_cir_def.expr.data),
-                    .needs_specialization = typed_cir_module.typeStoreConst().needsInstantiation(typed_cir_def.expr.ty()),
+                    .needs_specialization = typed_cir_module.exprNeedsInstantiation(typed_cir_def.expr.idx),
                 });
                 try self.top_level_symbols_by_pattern.put(.{
                     .module_idx = @intCast(module_idx),

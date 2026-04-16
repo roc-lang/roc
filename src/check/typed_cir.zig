@@ -263,6 +263,10 @@ pub const Module = struct {
         return ModuleEnv.varFrom(idx);
     }
 
+    pub fn exprNeedsInstantiation(self: @This(), idx: CIR.Expr.Idx) bool {
+        return self.typeStoreConst().needsInstantiation(self.exprType(idx));
+    }
+
     pub fn exprHasErrType(self: @This(), idx: CIR.Expr.Idx) bool {
         return self.typeStoreConst().resolveVar(self.exprType(idx)).desc.content == .err;
     }
@@ -352,6 +356,16 @@ pub const Module = struct {
             .module_idx = self.module_idx,
             .def_idx = @enumFromInt(@as(u32, @intCast(exposed))),
         };
+    }
+
+    pub fn resolveAttachedMethodTargetByText(
+        self: @This(),
+        type_name: []const u8,
+        method_name: []const u8,
+    ) ?Modules.ResolvedMethodTarget {
+        const local_type_ident = self.findCommonIdent(type_name) orelse return null;
+        const local_method_ident = self.findCommonIdent(method_name) orelse return null;
+        return self.resolveAttachedMethodTargetByIdents(local_type_ident, local_method_ident);
     }
 
     pub fn getStatement(self: @This(), idx: CIR.Statement.Idx) CIR.Statement {
