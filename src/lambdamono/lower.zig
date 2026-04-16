@@ -1082,15 +1082,7 @@ const Lowerer = struct {
                             .ty = try self.lowerExecutableTypeWithBoxErasureRec(mono_cache, field.ty),
                         };
                     }
-                    std.mem.sort(type_mod.Field, out, &self.input.idents, struct {
-                        fn lessThan(idents: *const base.Ident.Store, a: type_mod.Field, b: type_mod.Field) bool {
-                            return std.mem.lessThan(
-                                u8,
-                                idents.getText(a.name),
-                                idents.getText(b.name),
-                            );
-                        }
-                    }.lessThan);
+                    assertSortedFields(&self.input.idents, out);
                     break :blk .{ .record = .{
                         .fields = try self.types.dupeFields(out),
                     } };
@@ -5158,14 +5150,31 @@ const Lowerer = struct {
         return try self.input.types.addCaptures(out.items);
     }
 
-    fn lookupEnvEntry(_: *const Lowerer, venv: []const EnvEntry, symbol: Symbol) ?EnvEntry {
-        for (venv) |entry| {
-            if (entry.symbol == symbol) return entry;
-        }
-        return null;
+fn lookupEnvEntry(_: *const Lowerer, venv: []const EnvEntry, symbol: Symbol) ?EnvEntry {
+    for (venv) |entry| {
+        if (entry.symbol == symbol) return entry;
     }
+    return null;
+}
 
-    fn maybeCallableEnvExpr(self: *Lowerer, venv: []const EnvEntry, expr_id: ast.ExprId) ?ast.ExprId {
+fn assertSortedFields(idents: *const base.Ident.Store, fields: []const type_mod.Field) void {
+    if (fields.len <= 1) return;
+
+    var prev = fields[0];
+    for (fields[1..]) |field| {
+        switch (std.mem.order(
+            u8,
+            idents.getText(prev.name),
+            idents.getText(field.name),
+        )) {
+            .lt => prev = field,
+            .eq => debugPanic("lambdamono lowered duplicate record field"),
+            .gt => debugPanic("lambdamono lowered record fields were not pre-sorted"),
+        }
+    }
+}
+
+fn maybeCallableEnvExpr(self: *Lowerer, venv: []const EnvEntry, expr_id: ast.ExprId) ?ast.ExprId {
         const expr = self.output.getExpr(expr_id);
         switch (self.types.getType(expr.ty)) {
             .erased_fn => return expr_id,

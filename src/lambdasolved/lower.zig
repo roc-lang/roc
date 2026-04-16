@@ -451,15 +451,7 @@ const Lowerer = struct {
                         .ty = try self.instantiateTypeRec(field.ty, cache),
                     };
                 }
-                std.mem.sort(type_mod.Field, out, &self.input.idents, struct {
-                    fn lessThan(idents: *const base.Ident.Store, a: type_mod.Field, b: type_mod.Field) bool {
-                        return std.mem.lessThan(
-                            u8,
-                            idents.getText(a.name),
-                            idents.getText(b.name),
-                        );
-                    }
-                }.lessThan);
+                assertSortedFields(&self.input.idents, out);
                 break :blk type_mod.Node{ .content = .{ .record = .{
                     .fields = try self.types.addFields(out),
                 } } };
@@ -2994,6 +2986,23 @@ fn findCaptureBySymbol(captures: []const type_mod.Capture, symbol: Symbol) ?type
         if (capture.symbol == symbol) return capture;
     }
     return null;
+}
+
+fn assertSortedFields(idents: *const base.Ident.Store, fields: []const type_mod.Field) void {
+    if (fields.len <= 1) return;
+
+    var prev = fields[0];
+    for (fields[1..]) |field| {
+        switch (std.mem.order(
+            u8,
+            idents.getText(prev.name),
+            idents.getText(field.name),
+        )) {
+            .lt => prev = field,
+            .eq => debugPanic("lambdasolved lowered duplicate record field"),
+            .gt => debugPanic("lambdasolved lowered record fields were not pre-sorted"),
+        }
+    }
 }
 
 fn debugPanic(comptime msg: []const u8, args: anytype) noreturn {
