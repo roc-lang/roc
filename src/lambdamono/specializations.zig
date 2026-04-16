@@ -142,17 +142,6 @@ pub fn lookupFnExact(fenv: []const FEnvEntry, name: Symbol) ?FEnvEntry {
     return null;
 }
 
-pub fn lookupFnByCanonicalSource(fenv: []const FEnvEntry, symbols: *const symbol_mod.Store, source_name: Symbol) ?FEnvEntry {
-    const canonical_name = canonicalSourceSymbol(symbols, source_name);
-    var match: ?FEnvEntry = null;
-    for (fenv) |entry| {
-        if (canonicalSourceSymbol(symbols, entry.name) != canonical_name) continue;
-        if (match != null) debugPanic("lambdamono.specializations.lookupFnByCanonicalSource ambiguous canonical source");
-        match = entry;
-    }
-    return match;
-}
-
 pub fn specializeFnLset(
     queue: *Queue,
     fenv: []const FEnvEntry,
@@ -220,22 +209,4 @@ pub fn specializeFnErased(
 fn debugPanic(comptime msg: []const u8) noreturn {
     @branchHint(.cold);
     std.debug.panic("{s}", .{msg});
-}
-
-fn canonicalSourceSymbol(symbols: *const symbol_mod.Store, symbol: Symbol) Symbol {
-    var current = symbol;
-    var depth: usize = 0;
-    while (depth < 8) : (depth += 1) {
-        const next: ?Symbol = switch (symbols.get(current).origin) {
-            .specialized_top_level_def => |info| Symbol.fromRaw(info.source_symbol),
-            .specialized_local_fn => |info| Symbol.fromRaw(info.source_symbol),
-            .lifted_local_fn => |info| Symbol.fromRaw(info.source_symbol),
-            .lifted_local_fn_alias => |info| Symbol.fromRaw(info.source_symbol),
-            else => null,
-        };
-        const resolved = next orelse break;
-        if (resolved == current) break;
-        current = resolved;
-    }
-    return current;
 }

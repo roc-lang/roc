@@ -232,6 +232,11 @@ const Lowerer = struct {
                 .final_expr = try self.instantiateExpr(block.final_expr),
             } },
             .tuple => |tuple| .{ .tuple = try self.instantiateExprSpan(tuple) },
+            .tag_payload => |tag_payload| .{ .tag_payload = .{
+                .tag_union = try self.instantiateExpr(tag_payload.tag_union),
+                .tag_discriminant = tag_payload.tag_discriminant,
+                .payload_index = tag_payload.payload_index,
+            } },
             .tuple_access => |tuple_access| .{ .tuple_access = .{
                 .tuple = try self.instantiateExpr(tuple_access.tuple),
                 .elem_index = tuple_access.elem_index,
@@ -912,6 +917,32 @@ const Lowerer = struct {
                 try self.unifyTargetWithWantedPreservingNominal(target_ty, wanted);
                 break :blk target_ty;
             },
+            .tag_payload => |tag_payload| blk: {
+                const union_ty = try self.inferExpr(venv, tag_payload.tag_union);
+                const subject_ty = self.output.getExpr(tag_payload.tag_union).ty;
+                try self.unify(union_ty, subject_ty);
+                const subject_root = self.types.unlink(subject_ty);
+                const subject_node = self.types.getNode(subject_root);
+                const payload_ty = switch (subject_node) {
+                    .content => |content| switch (content) {
+                        .tag_union => |tag_union| blk_payload: {
+                            const tags = self.types.sliceTags(tag_union.tags);
+                            if (tag_payload.tag_discriminant >= tags.len) {
+                                return debugPanic("lambdasolved.tag_payload invariant violated: tag discriminant out of bounds", .{});
+                            }
+                            const args = self.types.sliceTypeVarSpan(tags[tag_payload.tag_discriminant].args);
+                            if (tag_payload.payload_index >= args.len) {
+                                return debugPanic("lambdasolved.tag_payload invariant violated: payload index out of bounds", .{});
+                            }
+                            break :blk_payload args[tag_payload.payload_index];
+                        },
+                        else => return debugPanic("lambdasolved.tag_payload invariant violated: subject is not a tag union", .{}),
+                    },
+                    else => return debugPanic("lambdasolved.tag_payload invariant violated: subject tag union type is unresolved", .{}),
+                };
+                try self.unify(target_ty, payload_ty);
+                break :blk target_ty;
+            },
             .tuple_access => |tuple_access| blk: {
                 const tuple_ty = try self.inferExpr(venv, tuple_access.tuple);
                 const subject_ty = self.output.getExpr(tuple_access.tuple).ty;
@@ -1351,6 +1382,7 @@ const Lowerer = struct {
                 self.debugCountExprSymbol(block.final_expr, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
             },
             .tuple => |tuple| for (self.output.sliceExprSpan(tuple)) |arg| self.debugCountExprSymbol(arg, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr),
+            .tag_payload => |tag_payload| self.debugCountExprSymbol(tag_payload.tag_union, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr),
             .tuple_access => |tuple_access| self.debugCountExprSymbol(tuple_access.tuple, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr),
             .list => |list| for (self.output.sliceExprSpan(list)) |arg| self.debugCountExprSymbol(arg, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr),
             .return_ => |ret| self.debugCountExprSymbol(ret, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr),
@@ -1678,6 +1710,7 @@ const Lowerer = struct {
                     .tuple = try self.types.addTypeVarSpan(new_elems),
                 });
             },
+            .tag_payload => |tag_payload| try self.propagateExprErasure(tag_payload.tag_union, venv),
             .tuple_access => |tuple_access| try self.propagateExprErasure(tuple_access.tuple, venv),
             .list => |list| for (self.output.sliceExprSpan(list)) |item| try self.propagateExprErasure(item, venv),
             .return_ => |ret| try self.propagateExprErasure(ret, venv),
@@ -2185,6 +2218,7 @@ const Lowerer = struct {
                 try self.collectExprEdges(block.final_expr, edges);
             },
             .tuple => |tuple| for (self.output.sliceExprSpan(tuple)) |item| try self.collectExprEdges(item, edges),
+            .tag_payload => |tag_payload| try self.collectExprEdges(tag_payload.tag_union, edges),
             .tuple_access => |tuple_access| try self.collectExprEdges(tuple_access.tuple, edges),
             .list => |list| for (self.output.sliceExprSpan(list)) |item| try self.collectExprEdges(item, edges),
             .return_ => |ret| try self.collectExprEdges(ret, edges),

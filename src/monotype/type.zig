@@ -8,14 +8,7 @@ const symbol_mod = @import("symbol");
 const Symbol = symbol_mod.Symbol;
 
 pub const TypeId = enum(u32) { _ };
-pub const TypeSpan = extern struct {
-    start: u32,
-    len: u32,
-
-    pub fn empty() TypeSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-};
+pub const TypeIds = []const TypeId;
 
 pub const Prim = enum(u16) {
     bool,
@@ -38,20 +31,24 @@ pub const Prim = enum(u16) {
 
 pub const Tag = struct {
     name: base.Ident.Idx,
-    args: TypeSpan,
+    args: TypeIds,
 };
+
+pub const Tags = []const Tag;
 
 pub const Field = struct {
     name: base.Ident.Idx,
     ty: TypeId,
 };
 
+pub const Fields = []const Field;
+
 pub const Nominal = struct {
     module_idx: u32,
     ident: base.Ident.Idx,
     is_opaque: bool,
     to_inspect_symbol: Symbol,
-    args: TypeSpan,
+    args: TypeIds,
     backing: TypeId,
 };
 
@@ -66,33 +63,19 @@ pub const Content = union(enum) {
     nominal: Nominal,
     list: TypeId,
     box: TypeId,
-    tuple: TypeSpan,
+    tuple: TypeIds,
     tag_union: struct {
-        tags: Span(Tag),
+        tags: Tags,
     },
     record: struct {
-        fields: Span(Field),
+        fields: Fields,
     },
     primitive: Prim,
 };
 
-pub fn Span(comptime _: type) type {
-    return extern struct {
-        start: u32,
-        len: u32,
-
-        pub fn empty() @This() {
-            return .{ .start = 0, .len = 0 };
-        }
-    };
-}
-
 pub const Store = struct {
     allocator: std.mem.Allocator,
     types: std.ArrayList(Content),
-    type_ids: std.ArrayList(TypeId),
-    tags: std.ArrayList(Tag),
-    fields: std.ArrayList(Field),
     interned_types: std.StringHashMap(TypeId),
     scratch_intern_key: std.ArrayList(u8),
     canonical_by_raw: std.AutoHashMap(TypeId, TypeId),
@@ -101,9 +84,6 @@ pub const Store = struct {
         return .{
             .allocator = allocator,
             .types = .empty,
-            .type_ids = .empty,
-            .tags = .empty,
-            .fields = .empty,
             .interned_types = std.StringHashMap(TypeId).init(allocator),
             .scratch_intern_key = .empty,
             .canonical_by_raw = std.AutoHashMap(TypeId, TypeId).init(allocator),
@@ -111,10 +91,10 @@ pub const Store = struct {
     }
 
     pub fn deinit(self: *Store) void {
+        for (self.types.items) |content| {
+            self.freeOwnedContent(content);
+        }
         self.types.deinit(self.allocator);
-        self.type_ids.deinit(self.allocator);
-        self.tags.deinit(self.allocator);
-        self.fields.deinit(self.allocator);
         var keys = self.interned_types.keyIterator();
         while (keys.next()) |key| {
             self.allocator.free(key.*);
@@ -131,47 +111,29 @@ pub const Store = struct {
         return @enumFromInt(idx);
     }
 
-    pub fn cloneTypeGraph(self: *Store, id: TypeId) std.mem.Allocator.Error!TypeId {
-        var cloned = std.AutoHashMap(TypeId, TypeId).init(self.allocator);
-        defer cloned.deinit();
-        return try self.cloneTypeGraphInner(id, &cloned);
-    }
-
     pub fn setType(self: *Store, id: TypeId, content: Content) void {
-        self.types.items[@intFromEnum(id)] = content;
-    }
-
-    /// Intern a fully resolved type graph rooted at `id` and return its canonical id.
-    pub fn canonicalizeResolved(self: *Store, id: TypeId) std.mem.Allocator.Error!TypeId {
-        const root = self.resolveLinks(id);
-        if (self.canonical_by_raw.get(root)) |cached| return cached;
-
-        var active = std.AutoHashMap(TypeId, TypeId).init(self.allocator);
-        defer active.deinit();
-        return try self.canonicalizeResolvedInner(root, &active);
-    }
-
-    /// Finalize a published monotype type. Any remaining builder-only placeholder
-    /// leaves become explicit published abstract types.
-    pub fn canonicalizePublished(self: *Store, id: TypeId) std.mem.Allocator.Error!TypeId {
-        const root = self.resolveLinks(id);
-        if (self.canonical_by_raw.get(root)) |cached| return cached;
-
-        var active = std.AutoHashMap(TypeId, TypeId).init(self.allocator);
-        defer active.deinit();
-        return try self.canonicalizePublishedInner(root, &active);
+        self.replaceType(id, content);
     }
 
     pub fn keyId(self: *Store, id: TypeId) std.mem.Allocator.Error!TypeId {
         const root = self.resolveLinks(id);
         if (!self.isFullyResolved(root)) return root;
-        return try self.canonicalizeResolved(root);
+        return try self.internTypeId(root);
     }
 
     /// Convenience for callers creating an already-resolved one-off type.
     pub fn internResolved(self: *Store, content: Content) std.mem.Allocator.Error!TypeId {
         const raw = try self.addType(content);
-        return try self.canonicalizeResolved(raw);
+        return try self.internTypeId(raw);
+    }
+
+    pub fn internTypeId(self: *Store, id: TypeId) std.mem.Allocator.Error!TypeId {
+        const root = self.resolveLinks(id);
+        if (self.canonical_by_raw.get(root)) |cached| return cached;
+
+        var active = std.AutoHashMap(TypeId, TypeId).init(self.allocator);
+        defer active.deinit();
+        return try self.internTypeIdInner(root, &active);
     }
 
     pub fn getType(self: *const Store, id: TypeId) Content {
@@ -195,50 +157,36 @@ pub const Store = struct {
         }
     }
 
-    pub fn addTypeSpan(self: *Store, ids: []const TypeId) std.mem.Allocator.Error!TypeSpan {
-        if (ids.len == 0) return .empty();
-        const start: u32 = @intCast(self.type_ids.items.len);
-        try self.type_ids.appendSlice(self.allocator, ids);
-        return .{ .start = start, .len = @intCast(ids.len) };
+    pub fn dupeTypeIds(self: *const Store, ids: []const TypeId) std.mem.Allocator.Error![]const TypeId {
+        if (ids.len == 0) return &.{};
+        return try self.allocator.dupe(TypeId, ids);
     }
 
-    pub fn sliceTypeSpan(self: *const Store, span: TypeSpan) []const TypeId {
-        if (span.len == 0) return &.{};
-        return self.type_ids.items[span.start..][0..span.len];
-    }
+    pub fn dupeTags(self: *const Store, tags: []const Tag) std.mem.Allocator.Error![]const Tag {
+        if (tags.len == 0) return &.{};
 
-    pub fn addTags(self: *Store, tags: []const Tag) std.mem.Allocator.Error!Span(Tag) {
-        if (tags.len == 0) return Span(Tag).empty();
-        if (tags.len == 1) {
-            const start_single: u32 = @intCast(self.tags.items.len);
-            try self.tags.append(self.allocator, tags[0]);
-            return .{ .start = start_single, .len = 1 };
+        const out = try self.allocator.alloc(Tag, tags.len);
+        errdefer {
+            var i: usize = 0;
+            while (i < tags.len) : (i += 1) {
+                if (out[i].args.len > 0) self.allocator.free(out[i].args);
+            }
+            self.allocator.free(out);
         }
 
-        const canonical = try self.allocator.dupe(Tag, tags);
-        defer self.allocator.free(canonical);
+        for (tags, 0..) |tag, i| {
+            out[i] = .{
+                .name = tag.name,
+                .args = try self.dupeTypeIds(tag.args),
+            };
+        }
 
-        const canonical_len = self.canonicalizeSortedTags(canonical);
-        const start: u32 = @intCast(self.tags.items.len);
-        try self.tags.appendSlice(self.allocator, canonical[0..canonical_len]);
-        return .{ .start = start, .len = @intCast(canonical_len) };
+        return out;
     }
 
-    pub fn sliceTags(self: *const Store, span: Span(Tag)) []const Tag {
-        if (span.len == 0) return &.{};
-        return self.tags.items[span.start..][0..span.len];
-    }
-
-    pub fn addFields(self: *Store, fields: []const Field) std.mem.Allocator.Error!Span(Field) {
-        if (fields.len == 0) return Span(Field).empty();
-        const start: u32 = @intCast(self.fields.items.len);
-        try self.fields.appendSlice(self.allocator, fields);
-        return .{ .start = start, .len = @intCast(fields.len) };
-    }
-
-    pub fn sliceFields(self: *const Store, span: Span(Field)) []const Field {
-        if (span.len == 0) return &.{};
-        return self.fields.items[span.start..][0..span.len];
+    pub fn dupeFields(self: *const Store, fields: []const Field) std.mem.Allocator.Error![]const Field {
+        if (fields.len == 0) return &.{};
+        return try self.allocator.dupe(Field, fields);
     }
 
     pub fn equalIds(self: *const Store, a: TypeId, b: TypeId) bool {
@@ -247,22 +195,29 @@ pub const Store = struct {
         return self.equalIdsVisited(a, b, &visited) catch false;
     }
 
-    pub fn publishedContainsPlaceholder(self: *const Store, id: TypeId) bool {
+    pub fn containsPlaceholder(self: *const Store, id: TypeId) bool {
         var visited = std.AutoHashMap(TypeId, void).init(self.allocator);
         defer visited.deinit();
-        return self.publishedContainsPlaceholderVisited(id, &visited) catch true;
+        return self.containsPlaceholderVisited(id, &visited) catch true;
     }
 
-    pub fn publishedContainsAbstractLeaf(self: *const Store, id: TypeId) bool {
+    pub fn containsAbstractLeaf(self: *const Store, id: TypeId) bool {
         var visited = std.AutoHashMap(TypeId, void).init(self.allocator);
         defer visited.deinit();
-        return self.publishedContainsAbstractLeafVisited(id, &visited) catch true;
+        return self.containsAbstractLeafVisited(id, &visited) catch true;
     }
 
     pub fn isFullyResolved(self: *const Store, id: TypeId) bool {
         var visited = std.AutoHashMap(TypeId, void).init(self.allocator);
         defer visited.deinit();
         return self.isFullyResolvedVisited(id, &visited) catch false;
+    }
+
+    pub fn debugValidateTypeGraph(self: *const Store, root: TypeId) void {
+        if (builtin.mode != .Debug) return;
+        var visited = std.AutoHashMap(TypeId, void).init(self.allocator);
+        defer visited.deinit();
+        self.debugValidateTypeGraphInner(root, &visited);
     }
 
     fn resolveLinks(self: *const Store, id: TypeId) TypeId {
@@ -275,7 +230,83 @@ pub const Store = struct {
         }
     }
 
-    fn publishedContainsPlaceholderVisited(
+    fn freeOwnedContent(self: *Store, content: Content) void {
+        switch (content) {
+            .nominal => |nominal| {
+                if (nominal.args.len > 0) self.allocator.free(nominal.args);
+            },
+            .tuple => |elems| {
+                if (elems.len > 0) self.allocator.free(elems);
+            },
+            .tag_union => |tag_union| {
+                if (tag_union.tags.len > 0) {
+                    for (tag_union.tags) |tag| {
+                        if (tag.args.len > 0) self.allocator.free(tag.args);
+                    }
+                    self.allocator.free(tag_union.tags);
+                }
+            },
+            .record => |record| {
+                if (record.fields.len > 0) self.allocator.free(record.fields);
+            },
+            else => {},
+        }
+    }
+
+    fn replaceType(self: *Store, id: TypeId, content: Content) void {
+        const idx = @intFromEnum(id);
+        self.freeOwnedContent(self.types.items[idx]);
+        self.types.items[idx] = content;
+    }
+
+    fn debugValidateTypeGraphInner(
+        self: *const Store,
+        id: TypeId,
+        visited: *std.AutoHashMap(TypeId, void),
+    ) void {
+        const root = self.resolveLinks(id);
+        if (visited.contains(root)) return;
+        visited.put(root, {}) catch unreachable;
+
+        switch (self.types.items[@intFromEnum(root)]) {
+            .placeholder,
+            .unbd,
+            .primitive,
+            => {},
+            .link => unreachable,
+            .func => |func| {
+                self.debugValidateTypeGraphInner(func.arg, visited);
+                self.debugValidateTypeGraphInner(func.ret, visited);
+            },
+            .nominal => |nominal| {
+                for (nominal.args) |arg| {
+                    self.debugValidateTypeGraphInner(arg, visited);
+                }
+                self.debugValidateTypeGraphInner(nominal.backing, visited);
+            },
+            .list => |elem| self.debugValidateTypeGraphInner(elem, visited),
+            .box => |elem| self.debugValidateTypeGraphInner(elem, visited),
+            .tuple => |tuple| {
+                for (tuple) |elem| {
+                    self.debugValidateTypeGraphInner(elem, visited);
+                }
+            },
+            .tag_union => |tag_union| {
+                for (tag_union.tags) |tag| {
+                    for (tag.args) |arg| {
+                        self.debugValidateTypeGraphInner(arg, visited);
+                    }
+                }
+            },
+            .record => |record| {
+                for (record.fields) |field| {
+                    self.debugValidateTypeGraphInner(field.ty, visited);
+                }
+            },
+        }
+    }
+
+    fn containsPlaceholderVisited(
         self: *const Store,
         id: TypeId,
         visited: *std.AutoHashMap(TypeId, void),
@@ -288,40 +319,40 @@ pub const Store = struct {
             .placeholder => true,
             .unbd, .primitive => false,
             .link => unreachable,
-            .func => |func| try self.publishedContainsPlaceholderVisited(func.arg, visited) or
-                try self.publishedContainsPlaceholderVisited(func.ret, visited),
+            .func => |func| try self.containsPlaceholderVisited(func.arg, visited) or
+                try self.containsPlaceholderVisited(func.ret, visited),
             .nominal => |nominal| {
-                for (self.sliceTypeSpan(nominal.args)) |arg| {
-                    if (try self.publishedContainsPlaceholderVisited(arg, visited)) return true;
+                for (nominal.args) |arg| {
+                    if (try self.containsPlaceholderVisited(arg, visited)) return true;
                 }
-                return try self.publishedContainsPlaceholderVisited(nominal.backing, visited);
+                return try self.containsPlaceholderVisited(nominal.backing, visited);
             },
-            .list => |elem| try self.publishedContainsPlaceholderVisited(elem, visited),
-            .box => |elem| try self.publishedContainsPlaceholderVisited(elem, visited),
+            .list => |elem| try self.containsPlaceholderVisited(elem, visited),
+            .box => |elem| try self.containsPlaceholderVisited(elem, visited),
             .tuple => |tuple| blk: {
-                for (self.sliceTypeSpan(tuple)) |elem| {
-                    if (try self.publishedContainsPlaceholderVisited(elem, visited)) break :blk true;
+                for (tuple) |elem| {
+                    if (try self.containsPlaceholderVisited(elem, visited)) break :blk true;
                 }
                 break :blk false;
             },
             .tag_union => |tag_union| blk: {
-                for (self.sliceTags(tag_union.tags)) |tag| {
-                    for (self.sliceTypeSpan(tag.args)) |arg| {
-                        if (try self.publishedContainsPlaceholderVisited(arg, visited)) break :blk true;
+                for (tag_union.tags) |tag| {
+                    for (tag.args) |arg| {
+                        if (try self.containsPlaceholderVisited(arg, visited)) break :blk true;
                     }
                 }
                 break :blk false;
             },
             .record => |record| blk: {
-                for (self.sliceFields(record.fields)) |field| {
-                    if (try self.publishedContainsPlaceholderVisited(field.ty, visited)) break :blk true;
+                for (record.fields) |field| {
+                    if (try self.containsPlaceholderVisited(field.ty, visited)) break :blk true;
                 }
                 break :blk false;
             },
         };
     }
 
-    fn publishedContainsAbstractLeafVisited(
+    fn containsAbstractLeafVisited(
         self: *const Store,
         id: TypeId,
         visited: *std.AutoHashMap(TypeId, void),
@@ -334,33 +365,33 @@ pub const Store = struct {
             .placeholder, .unbd => true,
             .primitive => false,
             .link => unreachable,
-            .func => |func| try self.publishedContainsAbstractLeafVisited(func.arg, visited) or
-                try self.publishedContainsAbstractLeafVisited(func.ret, visited),
+            .func => |func| try self.containsAbstractLeafVisited(func.arg, visited) or
+                try self.containsAbstractLeafVisited(func.ret, visited),
             .nominal => |nominal| {
-                for (self.sliceTypeSpan(nominal.args)) |arg| {
-                    if (try self.publishedContainsAbstractLeafVisited(arg, visited)) return true;
+                for (nominal.args) |arg| {
+                    if (try self.containsAbstractLeafVisited(arg, visited)) return true;
                 }
-                return try self.publishedContainsAbstractLeafVisited(nominal.backing, visited);
+                return try self.containsAbstractLeafVisited(nominal.backing, visited);
             },
-            .list => |elem| try self.publishedContainsAbstractLeafVisited(elem, visited),
-            .box => |elem| try self.publishedContainsAbstractLeafVisited(elem, visited),
+            .list => |elem| try self.containsAbstractLeafVisited(elem, visited),
+            .box => |elem| try self.containsAbstractLeafVisited(elem, visited),
             .tuple => |tuple| blk: {
-                for (self.sliceTypeSpan(tuple)) |elem| {
-                    if (try self.publishedContainsAbstractLeafVisited(elem, visited)) break :blk true;
+                for (tuple) |elem| {
+                    if (try self.containsAbstractLeafVisited(elem, visited)) break :blk true;
                 }
                 break :blk false;
             },
             .tag_union => |tag_union| blk: {
-                for (self.sliceTags(tag_union.tags)) |tag| {
-                    for (self.sliceTypeSpan(tag.args)) |arg| {
-                        if (try self.publishedContainsAbstractLeafVisited(arg, visited)) break :blk true;
+                for (tag_union.tags) |tag| {
+                    for (tag.args) |arg| {
+                        if (try self.containsAbstractLeafVisited(arg, visited)) break :blk true;
                     }
                 }
                 break :blk false;
             },
             .record => |record| blk: {
-                for (self.sliceFields(record.fields)) |field| {
-                    if (try self.publishedContainsAbstractLeafVisited(field.ty, visited)) break :blk true;
+                for (record.fields) |field| {
+                    if (try self.containsAbstractLeafVisited(field.ty, visited)) break :blk true;
                 }
                 break :blk false;
             },
@@ -383,7 +414,7 @@ pub const Store = struct {
             .func => |func| try self.isFullyResolvedVisited(func.arg, visited) and
                 try self.isFullyResolvedVisited(func.ret, visited),
             .nominal => |nominal| {
-                for (self.sliceTypeSpan(nominal.args)) |arg| {
+                for (nominal.args) |arg| {
                     if (!try self.isFullyResolvedVisited(arg, visited)) return false;
                 }
                 return try self.isFullyResolvedVisited(nominal.backing, visited);
@@ -391,21 +422,21 @@ pub const Store = struct {
             .list => |elem| try self.isFullyResolvedVisited(elem, visited),
             .box => |elem| try self.isFullyResolvedVisited(elem, visited),
             .tuple => |tuple| blk: {
-                for (self.sliceTypeSpan(tuple)) |elem| {
+                for (tuple) |elem| {
                     if (!try self.isFullyResolvedVisited(elem, visited)) break :blk false;
                 }
                 break :blk true;
             },
             .tag_union => |tag_union| blk: {
-                for (self.sliceTags(tag_union.tags)) |tag| {
-                    for (self.sliceTypeSpan(tag.args)) |arg| {
+                for (tag_union.tags) |tag| {
+                    for (tag.args) |arg| {
                         if (!try self.isFullyResolvedVisited(arg, visited)) break :blk false;
                     }
                 }
                 break :blk true;
             },
             .record => |record| blk: {
-                for (self.sliceFields(record.fields)) |field| {
+                for (record.fields) |field| {
                     if (!try self.isFullyResolvedVisited(field.ty, visited)) break :blk false;
                 }
                 break :blk true;
@@ -413,7 +444,7 @@ pub const Store = struct {
         };
     }
 
-    fn canonicalizeResolvedInner(
+    fn internTypeIdInner(
         self: *Store,
         raw_id: TypeId,
         active: *std.AutoHashMap(TypeId, TypeId),
@@ -424,7 +455,7 @@ pub const Store = struct {
 
         const root_content = self.types.items[@intFromEnum(root)];
         switch (root_content) {
-            .placeholder => debugPanic("monotype.type canonicalizeResolved encountered unresolved placeholder"),
+            .placeholder => debugPanic("monotype.type internTypeId encountered unresolved placeholder"),
             .link => unreachable,
             else => {},
         }
@@ -435,77 +466,84 @@ pub const Store = struct {
             .unbd => .unbd,
             .primitive => |prim| .{ .primitive = prim },
             .func => |func| .{ .func = .{
-                .arg = try self.canonicalizeResolvedInner(func.arg, active),
-                .ret = try self.canonicalizeResolvedInner(func.ret, active),
+                .arg = try self.internTypeIdInner(func.arg, active),
+                .ret = try self.internTypeIdInner(func.ret, active),
             } },
             .nominal => |nominal| blk: {
-                const args = self.sliceTypeSpan(nominal.args);
-                const lowered_args = try self.allocator.alloc(TypeId, args.len);
-                defer self.allocator.free(lowered_args);
-                for (args, 0..) |arg, i| {
-                    lowered_args[i] = try self.canonicalizeResolvedInner(arg, active);
+                const lowered_args = try self.allocator.alloc(TypeId, nominal.args.len);
+                errdefer self.allocator.free(lowered_args);
+                for (nominal.args, 0..) |arg, i| {
+                    lowered_args[i] = try self.internTypeIdInner(arg, active);
                 }
                 break :blk .{ .nominal = .{
                     .module_idx = nominal.module_idx,
                     .ident = nominal.ident,
                     .is_opaque = nominal.is_opaque,
                     .to_inspect_symbol = nominal.to_inspect_symbol,
-                    .args = try self.addTypeSpan(lowered_args),
-                    .backing = try self.canonicalizeResolvedInner(nominal.backing, active),
+                    .args = lowered_args,
+                    .backing = try self.internTypeIdInner(nominal.backing, active),
                 } };
             },
-            .list => |elem| .{ .list = try self.canonicalizeResolvedInner(elem, active) },
-            .box => |elem| .{ .box = try self.canonicalizeResolvedInner(elem, active) },
+            .list => |elem| .{ .list = try self.internTypeIdInner(elem, active) },
+            .box => |elem| .{ .box = try self.internTypeIdInner(elem, active) },
             .tuple => |tuple| blk: {
-                const elems = self.sliceTypeSpan(tuple);
-                const lowered_elems = try self.allocator.alloc(TypeId, elems.len);
-                defer self.allocator.free(lowered_elems);
-                for (elems, 0..) |elem, i| {
-                    lowered_elems[i] = try self.canonicalizeResolvedInner(elem, active);
+                const lowered_elems = try self.allocator.alloc(TypeId, tuple.len);
+                errdefer self.allocator.free(lowered_elems);
+                for (tuple, 0..) |elem, i| {
+                    lowered_elems[i] = try self.internTypeIdInner(elem, active);
                 }
-                break :blk .{ .tuple = try self.addTypeSpan(lowered_elems) };
+                break :blk .{ .tuple = lowered_elems };
             },
             .tag_union => |tag_union| blk: {
-                const tags = self.sliceTags(tag_union.tags);
-                const lowered_tags = try self.allocator.alloc(Tag, tags.len);
-                defer self.allocator.free(lowered_tags);
-                for (tags, 0..) |tag, i| {
-                    const args = self.sliceTypeSpan(tag.args);
-                    const lowered_args = try self.allocator.alloc(TypeId, args.len);
-                    defer self.allocator.free(lowered_args);
-                    for (args, 0..) |arg, j| {
-                        lowered_args[j] = try self.canonicalizeResolvedInner(arg, active);
+                const lowered_tags = try self.allocator.alloc(Tag, tag_union.tags.len);
+                errdefer {
+                    var i: usize = 0;
+                    while (i < tag_union.tags.len) : (i += 1) {
+                        if (lowered_tags[i].args.len > 0) self.allocator.free(lowered_tags[i].args);
+                    }
+                    self.allocator.free(lowered_tags);
+                }
+                for (tag_union.tags, 0..) |tag, i| {
+                    const lowered_args = try self.allocator.alloc(TypeId, tag.args.len);
+                    errdefer self.allocator.free(lowered_args);
+                    for (tag.args, 0..) |arg, j| {
+                        lowered_args[j] = try self.internTypeIdInner(arg, active);
                     }
                     lowered_tags[i] = .{
                         .name = tag.name,
-                        .args = try self.addTypeSpan(lowered_args),
+                        .args = lowered_args,
                     };
                 }
-                break :blk .{ .tag_union = .{
-                    .tags = try self.addTags(lowered_tags),
-                } };
+                const canonical_len = self.canonicalizeSortedTags(lowered_tags);
+                if (canonical_len != lowered_tags.len) {
+                    const canonical_tags = try self.allocator.alloc(Tag, canonical_len);
+                    errdefer self.allocator.free(canonical_tags);
+                    @memcpy(canonical_tags, lowered_tags[0..canonical_len]);
+                    self.allocator.free(lowered_tags);
+                    break :blk .{ .tag_union = .{ .tags = canonical_tags } };
+                }
+                break :blk .{ .tag_union = .{ .tags = lowered_tags } };
             },
             .record => |record| blk: {
-                const fields = self.sliceFields(record.fields);
-                const lowered_fields = try self.allocator.alloc(Field, fields.len);
-                defer self.allocator.free(lowered_fields);
-                for (fields, 0..) |field, i| {
+                const lowered_fields = try self.allocator.alloc(Field, record.fields.len);
+                errdefer self.allocator.free(lowered_fields);
+                for (record.fields, 0..) |field, i| {
                     lowered_fields[i] = .{
                         .name = field.name,
-                        .ty = try self.canonicalizeResolvedInner(field.ty, active),
+                        .ty = try self.internTypeIdInner(field.ty, active),
                     };
                 }
                 break :blk .{ .record = .{
-                    .fields = try self.addFields(lowered_fields),
+                    .fields = lowered_fields,
                 } };
             },
         };
 
-        self.setType(root, canonical_content);
+        self.replaceType(root, canonical_content);
         try self.buildCanonicalKey(root);
         if (self.lookupInternedScratchKey()) |existing| {
             if (root != existing) {
-                self.setType(root, .{ .link = existing });
+                self.replaceType(root, .{ .link = existing });
             }
             try self.canonical_by_raw.put(root, existing);
             const removed = active.remove(root);
@@ -524,115 +562,6 @@ pub const Store = struct {
         } else if (!removed) {
             unreachable;
         }
-        return root;
-    }
-
-    fn canonicalizePublishedInner(
-        self: *Store,
-        raw_id: TypeId,
-        active: *std.AutoHashMap(TypeId, TypeId),
-    ) std.mem.Allocator.Error!TypeId {
-        const root = self.resolveLinks(raw_id);
-        if (self.canonical_by_raw.get(root)) |cached| return cached;
-        if (active.get(root)) |pending| return pending;
-
-        const root_content = self.types.items[@intFromEnum(root)];
-        switch (root_content) {
-            .placeholder, .unbd => {
-                self.setType(root, .unbd);
-                try self.canonical_by_raw.put(root, root);
-                return root;
-            },
-            else => {},
-        }
-
-        try active.put(root, root);
-        const canonical_content: Content = switch (root_content) {
-            .placeholder, .unbd => unreachable,
-            .link => unreachable,
-            .primitive => |prim| .{ .primitive = prim },
-            .func => |func| .{ .func = .{
-                .arg = try self.canonicalizePublishedInner(func.arg, active),
-                .ret = try self.canonicalizePublishedInner(func.ret, active),
-            } },
-            .nominal => |nominal| blk: {
-                const args = self.sliceTypeSpan(nominal.args);
-                const lowered_args = try self.allocator.alloc(TypeId, args.len);
-                defer self.allocator.free(lowered_args);
-                for (args, 0..) |arg, i| {
-                    lowered_args[i] = try self.canonicalizePublishedInner(arg, active);
-                }
-                break :blk .{ .nominal = .{
-                    .module_idx = nominal.module_idx,
-                    .ident = nominal.ident,
-                    .is_opaque = nominal.is_opaque,
-                    .to_inspect_symbol = nominal.to_inspect_symbol,
-                    .args = try self.addTypeSpan(lowered_args),
-                    .backing = try self.canonicalizePublishedInner(nominal.backing, active),
-                } };
-            },
-            .list => |elem| .{ .list = try self.canonicalizePublishedInner(elem, active) },
-            .box => |elem| .{ .box = try self.canonicalizePublishedInner(elem, active) },
-            .tuple => |tuple| blk: {
-                const elems = self.sliceTypeSpan(tuple);
-                const lowered_elems = try self.allocator.alloc(TypeId, elems.len);
-                defer self.allocator.free(lowered_elems);
-                for (elems, 0..) |elem, i| {
-                    lowered_elems[i] = try self.canonicalizePublishedInner(elem, active);
-                }
-                break :blk .{ .tuple = try self.addTypeSpan(lowered_elems) };
-            },
-            .tag_union => |tag_union| blk: {
-                const tags = self.sliceTags(tag_union.tags);
-                const lowered_tags = try self.allocator.alloc(Tag, tags.len);
-                defer self.allocator.free(lowered_tags);
-                for (tags, 0..) |tag, i| {
-                    const args = self.sliceTypeSpan(tag.args);
-                    const lowered_args = try self.allocator.alloc(TypeId, args.len);
-                    defer self.allocator.free(lowered_args);
-                    for (args, 0..) |arg, j| {
-                        lowered_args[j] = try self.canonicalizePublishedInner(arg, active);
-                    }
-                    lowered_tags[i] = .{
-                        .name = tag.name,
-                        .args = try self.addTypeSpan(lowered_args),
-                    };
-                }
-                break :blk .{ .tag_union = .{
-                    .tags = try self.addTags(lowered_tags),
-                } };
-            },
-            .record => |record| blk: {
-                const fields = self.sliceFields(record.fields);
-                const lowered_fields = try self.allocator.alloc(Field, fields.len);
-                defer self.allocator.free(lowered_fields);
-                for (fields, 0..) |field, i| {
-                    lowered_fields[i] = .{
-                        .name = field.name,
-                        .ty = try self.canonicalizePublishedInner(field.ty, active),
-                    };
-                }
-                break :blk .{ .record = .{
-                    .fields = try self.addFields(lowered_fields),
-                } };
-            },
-        };
-
-        self.setType(root, canonical_content);
-        if (!self.publishedContainsAbstractLeaf(root)) {
-            try self.buildCanonicalKey(root);
-            if (self.lookupInternedScratchKey()) |existing| {
-                if (root != existing) {
-                    self.setType(root, .{ .link = existing });
-                }
-                try self.canonical_by_raw.put(root, existing);
-                _ = active.remove(root);
-                return existing;
-            }
-            try self.rememberScratchInternKey(root);
-        }
-        try self.canonical_by_raw.put(root, root);
-        _ = active.remove(root);
         return root;
     }
 
@@ -717,9 +646,8 @@ pub const Store = struct {
                         try self_builder.store.appendInternKeyValue(@as(u32, @bitCast(nominal.ident)));
                         try self_builder.store.appendInternKeyValue(@as(u8, @intFromBool(nominal.is_opaque)));
                         try self_builder.store.appendInternKeyValue(nominal.to_inspect_symbol.raw());
-                        const args = self_builder.store.sliceTypeSpan(nominal.args);
-                        try self_builder.store.appendInternKeyValue(@as(u32, @intCast(args.len)));
-                        for (args) |arg| {
+                        try self_builder.store.appendInternKeyValue(@as(u32, @intCast(nominal.args.len)));
+                        for (nominal.args) |arg| {
                             try self_builder.serializeType(arg);
                         }
                         try self_builder.serializeType(nominal.backing);
@@ -733,31 +661,27 @@ pub const Store = struct {
                         try self_builder.serializeType(elem);
                     },
                     .tuple => |tuple| {
-                        const elems = self_builder.store.sliceTypeSpan(tuple);
                         try self_builder.store.appendInternKeyValue(@as(u8, 15));
-                        try self_builder.store.appendInternKeyValue(@as(u32, @intCast(elems.len)));
-                        for (elems) |elem| {
+                        try self_builder.store.appendInternKeyValue(@as(u32, @intCast(tuple.len)));
+                        for (tuple) |elem| {
                             try self_builder.serializeType(elem);
                         }
                     },
                     .tag_union => |tag_union| {
-                        const tags = self_builder.store.sliceTags(tag_union.tags);
                         try self_builder.store.appendInternKeyValue(@as(u8, 16));
-                        try self_builder.store.appendInternKeyValue(@as(u32, @intCast(tags.len)));
-                        for (tags) |tag| {
+                        try self_builder.store.appendInternKeyValue(@as(u32, @intCast(tag_union.tags.len)));
+                        for (tag_union.tags) |tag| {
                             try self_builder.store.appendInternKeyValue(@as(u32, @bitCast(tag.name)));
-                            const args = self_builder.store.sliceTypeSpan(tag.args);
-                            try self_builder.store.appendInternKeyValue(@as(u32, @intCast(args.len)));
-                            for (args) |arg| {
+                            try self_builder.store.appendInternKeyValue(@as(u32, @intCast(tag.args.len)));
+                            for (tag.args) |arg| {
                                 try self_builder.serializeType(arg);
                             }
                         }
                     },
                     .record => |record| {
-                        const fields = self_builder.store.sliceFields(record.fields);
                         try self_builder.store.appendInternKeyValue(@as(u8, 17));
-                        try self_builder.store.appendInternKeyValue(@as(u32, @intCast(fields.len)));
-                        for (fields) |field| {
+                        try self_builder.store.appendInternKeyValue(@as(u32, @intCast(record.fields.len)));
+                        for (record.fields) |field| {
                             try self_builder.store.appendInternKeyValue(@as(u32, @bitCast(field.name)));
                             try self_builder.serializeType(field.ty);
                         }
@@ -777,7 +701,7 @@ pub const Store = struct {
         try builder.serializeType(root);
     }
 
-    fn canonicalizeSortedTags(self: *const Store, tags: []Tag) usize {
+    fn canonicalizeSortedTags(self: *Store, tags: []Tag) usize {
         if (tags.len <= 1) return tags.len;
 
         var write_index: usize = 1;
@@ -791,16 +715,15 @@ pub const Store = struct {
                 continue;
             }
 
-            const prev_args = self.sliceTypeSpan(prev.args);
-            const tag_args = self.sliceTypeSpan(tag.args);
-            if (prev_args.len != tag_args.len) {
+            if (prev.args.len != tag.args.len) {
                 debugPanic("monotype.type duplicate tag constructor had different arity");
             }
-            for (prev_args, tag_args) |prev_arg, tag_arg| {
+            for (prev.args, tag.args) |prev_arg, tag_arg| {
                 if (!self.equalIds(prev_arg, tag_arg)) {
                     debugPanic("monotype.type duplicate tag constructor had different payload types");
                 }
             }
+            if (tag.args.len > 0) self.allocator.free(tag.args);
         }
 
         return write_index;
@@ -810,93 +733,6 @@ pub const Store = struct {
         left: TypeId,
         right: TypeId,
     };
-
-    fn cloneTypeGraphInner(
-        self: *Store,
-        id: TypeId,
-        cloned: *std.AutoHashMap(TypeId, TypeId),
-    ) std.mem.Allocator.Error!TypeId {
-        const root = self.resolveLinks(id);
-        if (cloned.get(root)) |existing| return existing;
-
-        const placeholder = try self.addType(.placeholder);
-        try cloned.put(root, placeholder);
-
-        const cloned_content: Content = switch (self.types.items[@intFromEnum(root)]) {
-            .placeholder => .placeholder,
-            .unbd => .unbd,
-            .link => unreachable,
-            .primitive => |prim| .{ .primitive = prim },
-            .func => |func| .{ .func = .{
-                .arg = try self.cloneTypeGraphInner(func.arg, cloned),
-                .ret = try self.cloneTypeGraphInner(func.ret, cloned),
-            } },
-            .nominal => |nominal| blk: {
-                const args = self.sliceTypeSpan(nominal.args);
-                const cloned_args = try self.allocator.alloc(TypeId, args.len);
-                defer self.allocator.free(cloned_args);
-                for (args, 0..) |arg, i| {
-                    cloned_args[i] = try self.cloneTypeGraphInner(arg, cloned);
-                }
-                break :blk .{ .nominal = .{
-                    .module_idx = nominal.module_idx,
-                    .ident = nominal.ident,
-                    .is_opaque = nominal.is_opaque,
-                    .to_inspect_symbol = nominal.to_inspect_symbol,
-                    .args = try self.addTypeSpan(cloned_args),
-                    .backing = try self.cloneTypeGraphInner(nominal.backing, cloned),
-                } };
-            },
-            .list => |elem| .{ .list = try self.cloneTypeGraphInner(elem, cloned) },
-            .box => |elem| .{ .box = try self.cloneTypeGraphInner(elem, cloned) },
-            .tuple => |tuple| blk: {
-                const elems = self.sliceTypeSpan(tuple);
-                const cloned_elems = try self.allocator.alloc(TypeId, elems.len);
-                defer self.allocator.free(cloned_elems);
-                for (elems, 0..) |elem, i| {
-                    cloned_elems[i] = try self.cloneTypeGraphInner(elem, cloned);
-                }
-                break :blk .{ .tuple = try self.addTypeSpan(cloned_elems) };
-            },
-            .tag_union => |tag_union| blk: {
-                const tags = self.sliceTags(tag_union.tags);
-                const cloned_tags = try self.allocator.alloc(Tag, tags.len);
-                defer self.allocator.free(cloned_tags);
-                for (tags, 0..) |tag, i| {
-                    const args = self.sliceTypeSpan(tag.args);
-                    const cloned_args = try self.allocator.alloc(TypeId, args.len);
-                    defer self.allocator.free(cloned_args);
-                    for (args, 0..) |arg, j| {
-                        cloned_args[j] = try self.cloneTypeGraphInner(arg, cloned);
-                    }
-                    cloned_tags[i] = .{
-                        .name = tag.name,
-                        .args = try self.addTypeSpan(cloned_args),
-                    };
-                }
-                break :blk .{ .tag_union = .{
-                    .tags = try self.addTags(cloned_tags),
-                } };
-            },
-            .record => |record| blk: {
-                const fields = self.sliceFields(record.fields);
-                const cloned_fields = try self.allocator.alloc(Field, fields.len);
-                defer self.allocator.free(cloned_fields);
-                for (fields, 0..) |field, i| {
-                    cloned_fields[i] = .{
-                        .name = field.name,
-                        .ty = try self.cloneTypeGraphInner(field.ty, cloned),
-                    };
-                }
-                break :blk .{ .record = .{
-                    .fields = try self.addFields(cloned_fields),
-                } };
-            },
-        };
-
-        self.setType(placeholder, cloned_content);
-        return placeholder;
-    }
 
     fn equalIdsVisited(
         self: *const Store,
@@ -925,10 +761,8 @@ pub const Store = struct {
                 if (nominal.ident != right_nominal.ident) break :blk false;
                 if (nominal.is_opaque != right_nominal.is_opaque) break :blk false;
                 if (nominal.to_inspect_symbol != right_nominal.to_inspect_symbol) break :blk false;
-                const left_args = self.sliceTypeSpan(nominal.args);
-                const right_args = self.sliceTypeSpan(right_nominal.args);
-                if (left_args.len != right_args.len) break :blk false;
-                for (left_args, right_args) |left_arg, right_arg| {
+                if (nominal.args.len != right_nominal.args.len) break :blk false;
+                for (nominal.args, right_nominal.args) |left_arg, right_arg| {
                     if (!try self.equalIdsVisited(left_arg, right_arg, visited)) break :blk false;
                 }
                 break :blk try self.equalIdsVisited(nominal.backing, right_nominal.backing, visited);
@@ -942,34 +776,29 @@ pub const Store = struct {
             .list => |elem| self.equalIdsVisited(elem, right.list, visited),
             .box => |elem| self.equalIdsVisited(elem, right.box, visited),
             .tuple => |tuple| blk: {
-                const left_elems = self.sliceTypeSpan(tuple);
-                const right_elems = self.sliceTypeSpan(right.tuple);
-                if (left_elems.len != right_elems.len) break :blk false;
-                for (left_elems, right_elems) |left_elem, right_elem| {
+                const right_elems = right.tuple;
+                if (tuple.len != right_elems.len) break :blk false;
+                for (tuple, right_elems) |left_elem, right_elem| {
                     if (!try self.equalIdsVisited(left_elem, right_elem, visited)) break :blk false;
                 }
                 break :blk true;
             },
             .tag_union => |tag_union| blk: {
-                const left_tags = self.sliceTags(tag_union.tags);
-                const right_tags = self.sliceTags(right.tag_union.tags);
-                if (left_tags.len != right_tags.len) break :blk false;
-                for (left_tags, right_tags) |left_tag, right_tag| {
+                const right_tags = right.tag_union.tags;
+                if (tag_union.tags.len != right_tags.len) break :blk false;
+                for (tag_union.tags, right_tags) |left_tag, right_tag| {
                     if (left_tag.name != right_tag.name) break :blk false;
-                    const left_args = self.sliceTypeSpan(left_tag.args);
-                    const right_args = self.sliceTypeSpan(right_tag.args);
-                    if (left_args.len != right_args.len) break :blk false;
-                    for (left_args, right_args) |left_arg, right_arg| {
+                    if (left_tag.args.len != right_tag.args.len) break :blk false;
+                    for (left_tag.args, right_tag.args) |left_arg, right_arg| {
                         if (!try self.equalIdsVisited(left_arg, right_arg, visited)) break :blk false;
                     }
                 }
                 break :blk true;
             },
             .record => |record| blk: {
-                const left_fields = self.sliceFields(record.fields);
-                const right_fields = self.sliceFields(right.record.fields);
-                if (left_fields.len != right_fields.len) break :blk false;
-                for (left_fields, right_fields) |left_field, right_field| {
+                const right_fields = right.record.fields;
+                if (record.fields.len != right_fields.len) break :blk false;
+                for (record.fields, right_fields) |left_field, right_field| {
                     if (left_field.name != right_field.name) break :blk false;
                     if (!try self.equalIdsVisited(left_field.ty, right_field.ty, visited)) break :blk false;
                 }
@@ -1000,7 +829,7 @@ test "nominal identity preserves generic arguments" {
         .ident = foo_ident,
         .is_opaque = true,
         .to_inspect_symbol = Symbol.none,
-        .args = try store.addTypeSpan(&.{u8_ty}),
+        .args = try store.dupeTypeIds(&.{u8_ty}),
         .backing = bool_ty,
     } });
     const foo_i64 = try store.internResolved(.{ .nominal = .{
@@ -1008,7 +837,7 @@ test "nominal identity preserves generic arguments" {
         .ident = foo_ident,
         .is_opaque = true,
         .to_inspect_symbol = Symbol.none,
-        .args = try store.addTypeSpan(&.{i64_ty}),
+        .args = try store.dupeTypeIds(&.{i64_ty}),
         .backing = bool_ty,
     } });
     const foo_u8_again = try store.internResolved(.{ .nominal = .{
@@ -1016,7 +845,7 @@ test "nominal identity preserves generic arguments" {
         .ident = foo_ident,
         .is_opaque = true,
         .to_inspect_symbol = Symbol.none,
-        .args = try store.addTypeSpan(&.{u8_ty}),
+        .args = try store.dupeTypeIds(&.{u8_ty}),
         .backing = bool_ty,
     } });
 
@@ -1024,7 +853,7 @@ test "nominal identity preserves generic arguments" {
     try std.testing.expect(!store.equalIds(foo_u8, foo_i64));
 }
 
-test "published canonicalization preserves distinct abstract leaves" {
+test "keyId does not intern unresolved placeholders" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
@@ -1035,58 +864,14 @@ test "published canonicalization preserves distinct abstract leaves" {
         .ret = ret_ty,
     } });
 
-    const published = try store.canonicalizePublished(func_ty);
-    const published_func = store.getTypePreservingNominal(published).func;
-
-    try std.testing.expect(published_func.arg != published_func.ret);
-    try std.testing.expect(store.getTypePreservingNominal(published_func.arg) == .unbd);
-    try std.testing.expect(store.getTypePreservingNominal(published_func.ret) == .unbd);
+    try std.testing.expect(try store.keyId(func_ty) == func_ty);
+    try std.testing.expect(store.containsAbstractLeaf(func_ty));
 }
 
-test "published canonicalization does not merge standalone abstract leaves" {
-    var store = Store.init(std.testing.allocator);
-    defer store.deinit();
-
-    const left = try store.addType(.placeholder);
-    const right = try store.addType(.placeholder);
-
-    const published_left = try store.canonicalizePublished(left);
-    const published_right = try store.canonicalizePublished(right);
-
-    try std.testing.expect(published_left != published_right);
-    try std.testing.expect(store.getTypePreservingNominal(published_left) == .unbd);
-    try std.testing.expect(store.getTypePreservingNominal(published_right) == .unbd);
-}
-
-test "clone plus published canonicalization preserves shared function leaves" {
-    var store = Store.init(std.testing.allocator);
-    defer store.deinit();
-
-    const elem_ty = try store.addType(.placeholder);
-    const list_ty = try store.addType(.{ .list = elem_ty });
-    const inner_fn = try store.addType(.{ .func = .{
-        .arg = elem_ty,
-        .ret = list_ty,
-    } });
-    const outer_fn = try store.addType(.{ .func = .{
-        .arg = list_ty,
-        .ret = inner_fn,
-    } });
-
-    const cloned = try store.cloneTypeGraph(outer_fn);
-    const published = try store.canonicalizePublished(cloned);
-
-    const published_outer = store.getTypePreservingNominal(published).func;
-    const published_outer_arg = store.getTypePreservingNominal(published_outer.arg).list;
-    const published_inner = store.getTypePreservingNominal(published_outer.ret).func;
-    const published_inner_ret = store.getTypePreservingNominal(published_inner.ret).list;
-
-    try std.testing.expect(published_outer_arg == published_inner.arg);
-    try std.testing.expect(published_outer_arg == published_inner_ret);
-    try std.testing.expect(store.getTypePreservingNominal(published_outer_arg) == .unbd);
-}
-
-fn debugPanic(comptime msg: []const u8) noreturn {
-    @branchHint(.cold);
-    std.debug.panic("{s}", .{msg});
+fn debugPanic(comptime fmt: []const u8, args: anytype) noreturn {
+    if (builtin.mode == .Debug) {
+        std.debug.panic(fmt, args);
+    } else {
+        unreachable;
+    }
 }

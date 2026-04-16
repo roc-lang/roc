@@ -171,6 +171,12 @@ pub const Facts = struct {
                     @intCast(tuple_access.elem_index),
                 );
             },
+            .tag_payload => |tag_payload| {
+                self.expr_tag_payload_layouts[i] = try self.unionPayloadLayout(
+                    self.exprLayout(tag_payload.tag_union),
+                    tag_payload.tag_discriminant,
+                );
+            },
             .packed_fn => |packed_fn| {
                 if (packed_fn.capture_ty) |capture_ty| {
                     try self.recordType(allocator, mono_types, idents, capture_ty);
@@ -178,7 +184,7 @@ pub const Facts = struct {
                     try self.recordType(allocator, mono_types, idents, capture_box_ty);
                 } else {
                     const unit_ty = try mono_types.internResolved(.{ .record = .{
-                        .fields = type_mod.Span(type_mod.Field).empty(),
+                        .fields = &.{},
                     } });
                     try self.recordType(allocator, mono_types, idents, unit_ty);
                     const capture_box_ty = try mono_types.internResolved(.{ .box = unit_ty });
@@ -410,7 +416,7 @@ fn lowerNode(
         .box => |elem| .{ .box = try lowerTypeRec(allocator, mono_types, idents, graph, cache, elem) },
         .erased_fn => |maybe_capture| blk: {
             const capture_ty = maybe_capture orelse blk_capture: {
-                const unit_ty = try mono_types.internResolved(.{ .record = .{ .fields = type_mod.Span(type_mod.Field).empty() } });
+                const unit_ty = try mono_types.internResolved(.{ .record = .{ .fields = &.{} } });
                 break :blk_capture unit_ty;
             };
             const capture_box_ty = try mono_types.internResolved(.{ .box = capture_ty });
@@ -421,9 +427,9 @@ fn lowerNode(
             };
             break :blk .{ .struct_ = try graph.appendFields(allocator, &fields) };
         },
-        .tuple => |tuple| .{ .struct_ = try lowerTupleLikeSpan(allocator, mono_types, idents, graph, cache, mono_types.sliceTypeSpan(tuple)) },
+        .tuple => |tuple| .{ .struct_ = try lowerTupleLikeSpan(allocator, mono_types, idents, graph, cache, tuple) },
         .record => |record| blk: {
-            const fields = mono_types.sliceFields(record.fields);
+            const fields = record.fields;
             var graph_fields = std.ArrayList(layout_mod.GraphField).empty;
             defer graph_fields.deinit(allocator);
             try graph_fields.ensureTotalCapacity(allocator, fields.len);
@@ -436,12 +442,12 @@ fn lowerNode(
             break :blk .{ .struct_ = try graph.appendFields(allocator, graph_fields.items) };
         },
         .tag_union => |tag_union| blk: {
-            const tags = mono_types.sliceTags(tag_union.tags);
+            const tags = tag_union.tags;
             var variants = std.ArrayList(layout_mod.GraphRef).empty;
             defer variants.deinit(allocator);
             try variants.ensureTotalCapacity(allocator, tags.len);
             for (tags) |tag| {
-                const args = mono_types.sliceTypeSpan(tag.args);
+                const args = tag.args;
                 if (args.len == 0) {
                     variants.appendAssumeCapacity(.{ .canonical = .zst });
                     continue;

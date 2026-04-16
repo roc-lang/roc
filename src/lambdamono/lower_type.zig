@@ -142,10 +142,10 @@ pub fn lowerCaptureBindings(
     }
 
     const raw = try mono_types.addType(.{ .record = .{
-        .fields = try mono_types.addFields(fields),
+        .fields = try mono_types.dupeFields(fields),
     } });
     if (!mono_types.isFullyResolved(raw)) return raw;
-    return try mono_types.canonicalizeResolved(raw);
+    return try mono_types.internTypeId(raw);
 }
 
 fn lowerTypeRec(
@@ -160,7 +160,7 @@ fn lowerTypeRec(
     if (mono_cache.resolved.get(id)) |cached| return cached;
     if (mono_cache.provisional.get(id)) |provisional| {
         if (mono_types.isFullyResolved(provisional)) {
-            const canonical = try mono_types.canonicalizeResolved(provisional);
+            const canonical = try mono_types.internTypeId(provisional);
             const removed = mono_cache.provisional.remove(id);
             if (comptime builtin.mode == .Debug) {
                 std.debug.assert(removed);
@@ -190,15 +190,15 @@ fn lowerTypeRec(
                 .ident = nominal.ident,
                 .is_opaque = nominal.is_opaque,
                 .to_inspect_symbol = nominal.to_inspect_symbol,
-                .args = try mono_types.addTypeSpan(lowered_args),
+                .args = try mono_types.dupeTypeIds(lowered_args),
                 .backing = try lowerTypeRec(types, mono_types, mono_cache, nominal.backing, symbols),
             } };
         },
-        .for_a, .unbd => .{ .record = .{ .fields = mono.Span(mono.Field).empty() } },
+        .for_a, .unbd => .{ .record = .{ .fields = &.{} } },
         .content => |content| switch (content) {
             .func => blk: {
                 const unit_ty = try mono_types.internResolved(.{
-                    .record = .{ .fields = mono.Span(mono.Field).empty() },
+                    .record = .{ .fields = &.{} },
                 });
                 break :blk .{ .erased_fn = unit_ty };
             },
@@ -216,7 +216,7 @@ fn lowerTypeRec(
                 for (elems, 0..) |elem, i| {
                     lowered_elems[i] = try lowerTypeRec(types, mono_types, mono_cache, elem, symbols);
                 }
-                break :blk .{ .tuple = try mono_types.addTypeSpan(lowered_elems) };
+                break :blk .{ .tuple = try mono_types.dupeTypeIds(lowered_elems) };
             },
             .record => |record| blk: {
                 const fields = types.sliceFields(record.fields);
@@ -229,7 +229,7 @@ fn lowerTypeRec(
                     };
                 }
                 break :blk .{ .record = .{
-                    .fields = try mono_types.addFields(out),
+                    .fields = try mono_types.dupeFields(out),
                 } };
             },
             .tag_union => |tag_union| blk: {
@@ -245,11 +245,11 @@ fn lowerTypeRec(
                     }
                     out[i] = .{
                         .name = .{ .ctor = tag.name },
-                        .args = try mono_types.addTypeSpan(lowered_args),
+                        .args = try mono_types.dupeTypeIds(lowered_args),
                     };
                 }
                 break :blk .{ .tag_union = .{
-                    .tags = try mono_types.addTags(out),
+                    .tags = try mono_types.dupeTags(out),
                 } };
             },
             .lambda_set => |span| try lowerLambdaSet(types, mono_types, mono_cache, types.sliceLambdas(span), symbols),
@@ -264,7 +264,7 @@ fn lowerTypeRec(
         unreachable;
     }
     if (mono_types.isFullyResolved(placeholder)) {
-        const canonical = try mono_types.canonicalizeResolved(placeholder);
+        const canonical = try mono_types.internTypeId(placeholder);
         try mono_cache.resolved.put(id, canonical);
         return canonical;
     }
@@ -292,7 +292,7 @@ fn lowerLambdaSet(
         if (captures.len == 0) {
             out[i] = .{
                 .name = lambdaTagKey(lambda.symbol),
-                .args = mono.Span(mono.TypeId).empty(),
+                .args = &.{},
             };
         } else {
             const captures_ty = try lowerCaptures(types, mono_types, mono_cache, captures, symbols);
@@ -301,13 +301,13 @@ fn lowerLambdaSet(
             args[0] = captures_ty;
             out[i] = .{
                 .name = lambdaTagKey(lambda.symbol),
-                .args = try mono_types.addTypeSpan(args),
+                .args = try mono_types.dupeTypeIds(args),
             };
         }
     }
 
     return .{ .tag_union = .{
-        .tags = try mono_types.addTags(out),
+        .tags = try mono_types.dupeTags(out),
     } };
 }
 

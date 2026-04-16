@@ -774,6 +774,59 @@ const CheckOwnershipBoundaryStep = struct {
     }
 };
 
+/// Build step that checks for deleted post-check architecture APIs being reintroduced.
+///
+/// This enforces the cor-style lowering contract:
+/// - no publication/canonicalization layer in post-check lowering
+/// - no workspace/source-var remapping layer in monotype
+/// - no canonical-source specialization lookup in compilation stages
+const CheckPostcheckArchitectureStep = struct {
+    step: Step,
+
+    fn create(b: *std.Build) *CheckPostcheckArchitectureStep {
+        const self = b.allocator.create(CheckPostcheckArchitectureStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "check-postcheck-architecture",
+                .owner = b,
+                .makeFn = make,
+            }),
+        };
+        return self;
+    }
+
+    fn make(step: *Step, _: Step.MakeOptions) !void {
+        const b = step.owner;
+
+        var child_argv = std.ArrayList([]const u8).empty;
+        defer child_argv.deinit(b.allocator);
+
+        try child_argv.append(b.allocator, "ci/check_postcheck_architecture.py");
+
+        var child = std.process.Child.init(child_argv.items, b.allocator);
+        child.stdin_behavior = .Inherit;
+        child.stdout_behavior = .Inherit;
+        child.stderr_behavior = .Inherit;
+
+        const term = try child.spawnAndWait();
+
+        switch (term) {
+            .Exited => |code| {
+                if (code != 0) {
+                    return step.fail(
+                        "Post-check architecture check failed. Run 'ci/check_postcheck_architecture.py' to see details.",
+                        .{},
+                    );
+                }
+            },
+            else => {
+                return step.fail("ci/check_postcheck_architecture.py terminated abnormally", .{});
+            },
+        }
+    }
+};
+
 /// Build step that checks for @panic and std.debug.panic usage in interpreter and builtins.
 ///
 /// In Roc's design philosophy, compile-time errors become runtime errors with helpful messages.
@@ -1539,6 +1592,9 @@ const MiniCiStep = struct {
         try checkOwnershipBoundary(step);
         recordTiming(&timings, &count, "ownership boundary", &timer);
 
+        try checkPostcheckArchitecture(step);
+        recordTiming(&timings, &count, "post-check architecture", &timer);
+
         try checkTestWiring(step);
         recordTiming(&timings, &count, "test wiring", &timer);
 
@@ -1803,6 +1859,37 @@ const MiniCiStep = struct {
             },
             else => {
                 return step.fail("ci/check_ownership_boundaries.py terminated abnormally", .{});
+            },
+        }
+    }
+
+    fn checkPostcheckArchitecture(step: *Step) !void {
+        const b = step.owner;
+        std.debug.print("---- minici: checking post-check architecture ----\n", .{});
+
+        var child_argv = std.ArrayList([]const u8).empty;
+        defer child_argv.deinit(b.allocator);
+
+        try child_argv.append(b.allocator, "ci/check_postcheck_architecture.py");
+
+        var child = std.process.Child.init(child_argv.items, b.allocator);
+        child.stdin_behavior = .Inherit;
+        child.stdout_behavior = .Inherit;
+        child.stderr_behavior = .Inherit;
+
+        const term = try child.spawnAndWait();
+
+        switch (term) {
+            .Exited => |code| {
+                if (code != 0) {
+                    return step.fail(
+                        "Post-check architecture check failed. Run 'ci/check_postcheck_architecture.py' to see details.",
+                        .{},
+                    );
+                }
+            },
+            else => {
+                return step.fail("ci/check_postcheck_architecture.py terminated abnormally", .{});
             },
         }
     }
@@ -2292,6 +2379,7 @@ pub fn build(b: *std.Build) void {
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
     const check_ownership_boundary_step = b.step("check-ownership-boundary", "Check that ownership stays centralized in explicit LIR RC plus builtin internals");
+    const check_postcheck_architecture_step = b.step("check-postcheck-architecture", "Check that deleted post-check publication/remapping APIs stay gone");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
     const eval_test_step = b.step("test-eval", "Run eval tests in parallel across all backends");
     const eval_host_effects_step = b.step("test-eval-host-effects", "Run runtime host-effects eval tests across supported backends");
@@ -3340,6 +3428,11 @@ pub fn build(b: *std.Build) void {
     const check_ownership_boundary = CheckOwnershipBoundaryStep.create(b);
     test_step.dependOn(&check_ownership_boundary.step);
     check_ownership_boundary_step.dependOn(&check_ownership_boundary.step);
+
+    // Add check that deleted post-check publication/remapping APIs do not reappear
+    const check_postcheck_architecture = CheckPostcheckArchitectureStep.create(b);
+    test_step.dependOn(&check_postcheck_architecture.step);
+    check_postcheck_architecture_step.dependOn(&check_postcheck_architecture.step);
 
     // Check for @panic and std.debug.panic in interpreter and builtins
     const check_panic = CheckPanicStep.create(b);

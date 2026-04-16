@@ -3,10 +3,11 @@
 const mono_type = @import("monotype").Type;
 
 pub const TypeId = mono_type.TypeId;
-pub const TypeSpan = mono_type.TypeSpan;
+pub const TypeIds = mono_type.TypeIds;
 pub const Prim = mono_type.Prim;
 pub const Tag = mono_type.Tag;
+pub const Tags = mono_type.Tags;
 pub const Field = mono_type.Field;
+pub const Fields = mono_type.Fields;
 pub const Content = mono_type.Content;
-pub const Span = mono_type.Span;
 pub const Store = mono_type.Store;

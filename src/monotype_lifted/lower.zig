@@ -421,6 +421,16 @@ const Lowerer = struct {
                     .data = .{ .tuple = try self.lowerExprSpan(&lowered.lifted_defs, venv, tuple) },
                 });
             },
+            .tag_payload => |tag_payload| {
+                lowered.expr = try self.output.addExpr(.{
+                    .ty = expr.ty,
+                    .data = .{ .tag_payload = .{
+                        .tag_union = try self.lowerExprInto(&lowered.lifted_defs, venv, tag_payload.tag_union),
+                        .tag_discriminant = tag_payload.tag_discriminant,
+                        .payload_index = tag_payload.payload_index,
+                    } },
+                });
+            },
             .tuple_access => |tuple_access| {
                 lowered.expr = try self.output.addExpr(.{
                     .ty = expr.ty,
@@ -946,6 +956,7 @@ const Lowerer = struct {
                 }
             },
             .tuple => |tuple| for (self.input.program.store.sliceExprSpan(tuple)) |arg| try self.collectFreeVarsExpr(arg, bound, free),
+            .tag_payload => |tag_payload| try self.collectFreeVarsExpr(tag_payload.tag_union, bound, free),
             .tuple_access => |tuple_access| try self.collectFreeVarsExpr(tuple_access.tuple, bound, free),
             .list => |list| for (self.input.program.store.sliceExprSpan(list)) |arg| try self.collectFreeVarsExpr(arg, bound, free),
             .return_ => |ret| try self.collectFreeVarsExpr(ret, bound, free),
@@ -1177,7 +1188,7 @@ const Lowerer = struct {
 
     fn assertPublishedType(self: *const Lowerer, ty: type_mod.TypeId, comptime site: []const u8) void {
         if (comptime builtin.mode == .Debug) {
-            if (self.input.types.publishedContainsPlaceholder(ty)) {
+            if (self.input.types.containsPlaceholder(ty)) {
                 debugPanic("monotype_lifted invariant violated: " ++ site ++ " leaked monotype builder placeholder");
             }
         }
@@ -1245,6 +1256,7 @@ const Lowerer = struct {
                 try self.collectBindingTypesExpr(block.final_expr);
             },
             .tuple => |tuple| for (self.input.program.store.sliceExprSpan(tuple)) |arg| try self.collectBindingTypesExpr(arg),
+            .tag_payload => |tag_payload| try self.collectBindingTypesExpr(tag_payload.tag_union),
             .tuple_access => |tuple_access| try self.collectBindingTypesExpr(tuple_access.tuple),
             .list => |list| for (self.input.program.store.sliceExprSpan(list)) |arg| try self.collectBindingTypesExpr(arg),
             .return_ => |ret| try self.collectBindingTypesExpr(ret),

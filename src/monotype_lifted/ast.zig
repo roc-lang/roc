@@ -108,6 +108,11 @@ pub const Expr = struct {
             final_expr: ExprId,
         },
         tuple: Span(ExprId),
+        tag_payload: struct {
+            tag_union: ExprId,
+            tag_discriminant: u16,
+            payload_index: u16,
+        },
         tuple_access: struct {
             tuple: ExprId,
             elem_index: u32,
