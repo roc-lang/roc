@@ -579,7 +579,7 @@ pub const Lowerer = struct {
         }
     };
 
-    const TypeCloneScope = struct {
+    const TypeScope = struct {
         const TypeKey = clone_inst.TypeKey;
         const ExprKey = struct {
             module_idx: u32,
@@ -645,19 +645,19 @@ pub const Lowerer = struct {
         nominal_type_cache: std.StringHashMap(type_mod.TypeId),
         scratch_nominal_key: std.ArrayList(u8),
 
-        fn initCloneAll(
-            self: *TypeCloneScope,
+        fn initAll(
+            self: *TypeScope,
             allocator: std.mem.Allocator,
             module: Ctx.Module,
         ) std.mem.Allocator.Error!void {
-            try self.initCloneAllFromParent(allocator, module, null, false);
+            try self.initFromParent(allocator, module, null, false);
         }
 
-        fn initCloneAllFromParent(
-            self: *TypeCloneScope,
+        fn initFromParent(
+            self: *TypeScope,
             allocator: std.mem.Allocator,
             module: Ctx.Module,
-            parent: ?*const TypeCloneScope,
+            parent: ?*const TypeScope,
             inherit_specialization_state: bool,
         ) std.mem.Allocator.Error!void {
             self.allocator = allocator;
@@ -681,7 +681,7 @@ pub const Lowerer = struct {
                 self.owns_state = true;
             }
 
-            self.initWithRankBehavior();
+            self.initState();
             if (parent) |scope| {
                 var expr_result_iter = scope.memo.expr_result_var_map.iterator();
                 while (expr_result_iter.next()) |entry| {
@@ -736,7 +736,7 @@ pub const Lowerer = struct {
             }
         }
 
-        fn initWithRankBehavior(self: *TypeCloneScope) void {
+        fn initState(self: *TypeScope) void {
             self.instantiated_source_var_map = clone_inst.ScopedCloneMap.init(self.allocator);
             self.active_type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(self.allocator);
             self.provisional_type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(self.allocator);
@@ -746,27 +746,27 @@ pub const Lowerer = struct {
             self.scratch_nominal_key = .empty;
         }
 
-        fn typeStoreConst(self: *const TypeCloneScope) *const types.Store {
+        fn typeStoreConst(self: *const TypeScope) *const types.Store {
             return self.type_store;
         }
 
-        fn typeStoreMut(self: *TypeCloneScope) *types.Store {
+        fn typeStoreMut(self: *TypeScope) *types.Store {
             return self.type_store;
         }
 
-        fn identStoreConst(self: *const TypeCloneScope) *const base.Ident.Store {
+        fn identStoreConst(self: *const TypeScope) *const base.Ident.Store {
             return self.ident_store;
         }
 
-        fn identStoreMut(self: *TypeCloneScope) *base.Ident.Store {
+        fn identStoreMut(self: *TypeScope) *base.Ident.Store {
             return self.ident_store;
         }
 
-        fn getIdent(self: *const TypeCloneScope, idx: base.Ident.Idx) []const u8 {
+        fn getIdent(self: *const TypeScope, idx: base.Ident.Idx) []const u8 {
             return self.identStoreConst().getText(idx);
         }
 
-        fn deinit(self: *TypeCloneScope) void {
+        fn deinit(self: *TypeScope) void {
             var nominal_keys = self.nominal_type_cache.keyIterator();
             while (nominal_keys.next()) |key_ptr| {
                 self.allocator.free(key_ptr.*);
@@ -788,7 +788,7 @@ pub const Lowerer = struct {
     };
 
     const CallInfo = struct {
-        call_scope: *TypeCloneScope,
+        call_scope: *TypeScope,
         fn_var: Var,
         fn_ty: type_mod.TypeId,
         arg_vars: []Var,
@@ -922,8 +922,8 @@ pub const Lowerer = struct {
             return symbol;
         }
 
-        var type_scope: TypeCloneScope = undefined;
-        try type_scope.initCloneAll(self.allocator, typed_cir_module);
+        var type_scope: TypeScope = undefined;
+        try type_scope.initAll(self.allocator, typed_cir_module);
         defer type_scope.deinit();
         var binding_env = BindingEnv.init(self.allocator);
         defer binding_env.deinit();
@@ -955,7 +955,7 @@ pub const Lowerer = struct {
 
     fn specializeTopLevelFromCallSite(
         self: *Lowerer,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         top_level_symbol: symbol_mod.Symbol,
         top_level: TopLevelDef,
         expected_ty: type_mod.TypeId,
@@ -1275,8 +1275,8 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!ast.DefId {
         const typed_cir_module = self.ctx.typedCirModule(module_idx);
 
-        var type_scope: TypeCloneScope = undefined;
-        try type_scope.initCloneAll(self.allocator, typed_cir_module);
+        var type_scope: TypeScope = undefined;
+        try type_scope.initAll(self.allocator, typed_cir_module);
         defer type_scope.deinit();
         var binding_env = BindingEnv.init(self.allocator);
         defer binding_env.deinit();
@@ -1335,8 +1335,8 @@ pub const Lowerer = struct {
                 if (self.emitted_defs_by_symbol.get(bind_symbol)) |existing| break :blk existing;
                 if (self.isTopLevelFunction(bind_symbol)) break :blk null;
 
-                var type_scope: TypeCloneScope = undefined;
-                try type_scope.initCloneAll(self.allocator, typed_cir_module);
+                var type_scope: TypeScope = undefined;
+                try type_scope.initAll(self.allocator, typed_cir_module);
                 defer type_scope.deinit();
                 var binding_env = BindingEnv.init(self.allocator);
                 defer binding_env.deinit();
@@ -1382,8 +1382,8 @@ pub const Lowerer = struct {
         const solved_def = typed_cir_module.def(def_idx);
         const bind_symbol = self.lookupTopLevelSymbol(module_idx, solved_def.pattern.idx) orelse try self.ctx.addSyntheticSymbol(base.Ident.Idx.NONE);
 
-        var type_scope: TypeCloneScope = undefined;
-        try type_scope.initCloneAll(self.allocator, typed_cir_module);
+        var type_scope: TypeScope = undefined;
+        try type_scope.initAll(self.allocator, typed_cir_module);
         defer type_scope.deinit();
         var binding_env = BindingEnv.init(self.allocator);
         defer binding_env.deinit();
@@ -1482,8 +1482,8 @@ pub const Lowerer = struct {
         if (self.emitted_defs_by_symbol.get(pending.specialized_symbol)) |existing| return existing;
         const typed_cir_module = self.ctx.typedCirModule(pending.source.module_idx);
         const solved_def = typed_cir_module.def(pending.source.def_idx);
-        var type_scope: TypeCloneScope = undefined;
-        try type_scope.initCloneAll(self.allocator, typed_cir_module);
+        var type_scope: TypeScope = undefined;
+        try type_scope.initAll(self.allocator, typed_cir_module);
         defer type_scope.deinit();
         const specialized_checker_var = try self.materializeSpecializedTopLevelCheckerVar(&type_scope, pending);
 
@@ -1527,8 +1527,8 @@ pub const Lowerer = struct {
         expected_var: ?Var,
     ) std.mem.Allocator.Error!ast.DefId {
         const typed_cir_module = self.ctx.typedCirModule(module_idx);
-        var type_scope: TypeCloneScope = undefined;
-        try type_scope.initCloneAll(self.allocator, typed_cir_module);
+        var type_scope: TypeScope = undefined;
+        try type_scope.initAll(self.allocator, typed_cir_module);
         defer type_scope.deinit();
         return self.lowerHostedTopLevelDefWithScope(module_idx, def_idx, bind_symbol, expected_var, &type_scope);
     }
@@ -1539,7 +1539,7 @@ pub const Lowerer = struct {
         def_idx: CIR.Def.Idx,
         bind_symbol: symbol_mod.Symbol,
         expected_var: ?Var,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
     ) std.mem.Allocator.Error!ast.DefId {
         const typed_cir_module = self.ctx.typedCirModule(module_idx);
         const solved_def = typed_cir_module.def(def_idx);
@@ -1596,7 +1596,7 @@ pub const Lowerer = struct {
 
     fn materializeSpecializedTopLevelCheckerVar(
         self: *Lowerer,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pending: specializations_mod.Pending,
     ) std.mem.Allocator.Error!Var {
         return try self.materializeFrozenCheckerVar(type_scope, pending.expected_checker_seed);
@@ -1632,7 +1632,7 @@ pub const Lowerer = struct {
 
     fn freezeCheckerVarFromScope(
         self: *Lowerer,
-        type_scope: *const TypeCloneScope,
+        type_scope: *const TypeScope,
         source_var: Var,
     ) std.mem.Allocator.Error!FrozenCheckerVar {
         return self.freezeCheckerVarFromStores(
@@ -1644,7 +1644,7 @@ pub const Lowerer = struct {
 
     fn materializeFrozenCheckerVar(
         self: *Lowerer,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         frozen: FrozenCheckerVar,
     ) std.mem.Allocator.Error!Var {
         var var_map = std.AutoHashMap(Var, Var).init(self.allocator);
@@ -1664,7 +1664,7 @@ pub const Lowerer = struct {
     fn lowerLambdaLikeDefWithEnv(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         incoming_env: BindingEnv,
         bind_symbol: symbol_mod.Symbol,
         expr_idx: CIR.Expr.Idx,
@@ -1772,7 +1772,7 @@ pub const Lowerer = struct {
     fn lowerCurriedClosureChain(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         incoming_env: BindingEnv,
         source_fn_var: ?Var,
         next_arg_index: usize,
@@ -1842,7 +1842,7 @@ pub const Lowerer = struct {
     fn lowerLambdaBodyWithPattern(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         incoming_env: BindingEnv,
         arg_bind: ast.TypedSymbol,
         arg_solved_var: ?Var,
@@ -1999,7 +1999,7 @@ pub const Lowerer = struct {
     fn buildRemainingCurriedClosureTypeFromFunctionType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         source_fn_var: ?Var,
         next_arg_index: usize,
         remaining_arity: usize,
@@ -2043,7 +2043,7 @@ pub const Lowerer = struct {
     fn bindExprResultVar(
         _: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         body_expr_idx: CIR.Expr.Idx,
         result_var_opt: ?Var,
     ) std.mem.Allocator.Error!void {
@@ -2051,7 +2051,7 @@ pub const Lowerer = struct {
             "monotype lambda invariant violated: final lambda body missing function return var in module {d}",
             .{module_idx},
         );
-        const key: TypeCloneScope.ExprKey = .{
+        const key: TypeScope.ExprKey = .{
             .module_idx = module_idx,
             .expr_idx = body_expr_idx,
         };
@@ -2064,7 +2064,7 @@ pub const Lowerer = struct {
     fn collectExprInfoWithResultVar(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
         result_var: ?Var,
@@ -2080,10 +2080,10 @@ pub const Lowerer = struct {
     fn requirePatternSourceType(
         _: *const Lowerer,
         module_idx: u32,
-        type_scope: *const TypeCloneScope,
+        type_scope: *const TypeScope,
         pattern_idx: CIR.Pattern.Idx,
     ) type_mod.TypeId {
-        const key: TypeCloneScope.PatternTypeKey = .{
+        const key: TypeScope.PatternTypeKey = .{
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
         };
@@ -2094,11 +2094,11 @@ pub const Lowerer = struct {
     fn recordPatternSourceType(
         _: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
         source_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!void {
-        const key: TypeCloneScope.PatternTypeKey = .{
+        const key: TypeScope.PatternTypeKey = .{
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
         };
@@ -2117,7 +2117,7 @@ pub const Lowerer = struct {
     fn requireExprFieldIndex(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!u16 {
         const expr = self.ctx.typedCirModule(module_idx).expr(expr_idx).data;
@@ -2135,7 +2135,7 @@ pub const Lowerer = struct {
     fn requireExprTagDiscriminant(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!u16 {
         const expr_ty = self.requireExprType(module_idx, type_scope, expr_idx) catch |err| {
@@ -2156,11 +2156,11 @@ pub const Lowerer = struct {
     fn recordPatternTagDiscriminant(
         _: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
         discriminant: u16,
     ) std.mem.Allocator.Error!void {
-        const key: TypeCloneScope.PatternTypeKey = .{
+        const key: TypeScope.PatternTypeKey = .{
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
         };
@@ -2176,10 +2176,10 @@ pub const Lowerer = struct {
     fn requirePatternTagDiscriminant(
         _: *const Lowerer,
         module_idx: u32,
-        type_scope: *const TypeCloneScope,
+        type_scope: *const TypeScope,
         pattern_idx: CIR.Pattern.Idx,
     ) u16 {
-        const key: TypeCloneScope.PatternTypeKey = .{
+        const key: TypeScope.PatternTypeKey = .{
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
         };
@@ -2190,11 +2190,11 @@ pub const Lowerer = struct {
     fn recordPatternListElemType(
         _: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
         elem_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!void {
-        const key: TypeCloneScope.PatternTypeKey = .{
+        const key: TypeScope.PatternTypeKey = .{
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
         };
@@ -2210,10 +2210,10 @@ pub const Lowerer = struct {
     fn requirePatternListElemType(
         _: *const Lowerer,
         module_idx: u32,
-        type_scope: *const TypeCloneScope,
+        type_scope: *const TypeScope,
         pattern_idx: CIR.Pattern.Idx,
     ) type_mod.TypeId {
-        const key: TypeCloneScope.PatternTypeKey = .{
+        const key: TypeScope.PatternTypeKey = .{
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
         };
@@ -2224,11 +2224,11 @@ pub const Lowerer = struct {
     fn recordRecordDestructFieldIndex(
         _: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         destruct_idx: CIR.Pattern.RecordDestruct.Idx,
         field_index: u16,
     ) std.mem.Allocator.Error!void {
-        const key: TypeCloneScope.RecordDestructKey = .{
+        const key: TypeScope.RecordDestructKey = .{
             .module_idx = module_idx,
             .destruct_idx = destruct_idx,
         };
@@ -2244,10 +2244,10 @@ pub const Lowerer = struct {
     fn requireRecordDestructFieldIndex(
         _: *const Lowerer,
         module_idx: u32,
-        type_scope: *const TypeCloneScope,
+        type_scope: *const TypeScope,
         destruct_idx: CIR.Pattern.RecordDestruct.Idx,
     ) u16 {
-        const key: TypeCloneScope.RecordDestructKey = .{
+        const key: TypeScope.RecordDestructKey = .{
             .module_idx = module_idx,
             .destruct_idx = destruct_idx,
         };
@@ -2258,14 +2258,14 @@ pub const Lowerer = struct {
     fn prepareCallInfo(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         call_expr_idx: CIR.Expr.Idx,
         fn_var: Var,
         arg_exprs: []const CIR.Expr.Idx,
     ) std.mem.Allocator.Error!CallInfo {
-        const call_scope = try self.allocator.create(TypeCloneScope);
+        const call_scope = try self.allocator.create(TypeScope);
         errdefer self.allocator.destroy(call_scope);
-        try call_scope.initCloneAllFromParent(self.allocator, self.ctx.typedCirModule(module_idx), type_scope, false);
+        try call_scope.initFromParent(self.allocator, self.ctx.typedCirModule(module_idx), type_scope, false);
         errdefer call_scope.deinit();
 
         const cloned_fn_var = try self.instantiateScopedVar(call_scope, fn_var);
@@ -2336,7 +2336,7 @@ pub const Lowerer = struct {
     fn lookupLambdaReturnExpectation(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         lambda_expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!ExpectedType {
@@ -2355,7 +2355,7 @@ pub const Lowerer = struct {
     fn lowerExprInfo(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!LoweredExprInfo {
@@ -2370,7 +2370,7 @@ pub const Lowerer = struct {
     fn lowerExprInfoWithExpectedType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
         expected_ty: type_mod.TypeId,
@@ -2403,7 +2403,7 @@ pub const Lowerer = struct {
     fn exprResultVar(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         _: BindingEnv,
         expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!Var {
@@ -2413,7 +2413,7 @@ pub const Lowerer = struct {
     fn lowerExpr(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!ast.ExprId {
@@ -2423,7 +2423,7 @@ pub const Lowerer = struct {
     fn lowerSolvedExpr(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         expr: typed_cir.Expr,
     ) std.mem.Allocator.Error!ast.ExprId {
@@ -2805,7 +2805,7 @@ pub const Lowerer = struct {
     fn lowerStringExpr(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         result_ty: type_mod.TypeId,
         str_expr: @FieldType(CIR.Expr, "e_str"),
@@ -2831,7 +2831,7 @@ pub const Lowerer = struct {
     fn maybeLowerBuiltinSpecialCall(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         call: @FieldType(CIR.Expr, "e_call"),
         result_ty: type_mod.TypeId,
@@ -3267,7 +3267,7 @@ pub const Lowerer = struct {
     fn lowerAnonymousClosure(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         source_expr_idx: CIR.Expr.Idx,
         closure_ty: type_mod.TypeId,
@@ -3276,8 +3276,8 @@ pub const Lowerer = struct {
         expected_var: ?Var,
     ) std.mem.Allocator.Error!LoweredClosure {
         const typed_cir_module = self.ctx.typedCirModule(module_idx);
-        var closure_scope: TypeCloneScope = undefined;
-        try closure_scope.initCloneAllFromParent(self.allocator, typed_cir_module, type_scope, true);
+        var closure_scope: TypeScope = undefined;
+        try closure_scope.initFromParent(self.allocator, typed_cir_module, type_scope, true);
         defer closure_scope.deinit();
         const scope = &closure_scope;
         const arg_patterns = typed_cir_module.slicePatterns(args_span);
@@ -3370,7 +3370,7 @@ pub const Lowerer = struct {
     fn lowerClosureExpr(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         source_expr_idx: CIR.Expr.Idx,
         closure_ty: type_mod.TypeId,
@@ -3385,7 +3385,7 @@ pub const Lowerer = struct {
     fn lowerIfExpr(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         if_expr: anytype,
     ) std.mem.Allocator.Error!@FieldType(ast.Expr.Data, "if_") {
@@ -3420,7 +3420,7 @@ pub const Lowerer = struct {
     fn lowerMatchExprData(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         result_ty: type_mod.TypeId,
         expected_result_var: ?Var,
@@ -3438,7 +3438,7 @@ pub const Lowerer = struct {
     fn matchExprCanLowerDirect(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         match_expr: CIR.Expr.Match,
     ) std.mem.Allocator.Error!bool {
         const typed_cir_module = self.ctx.typedCirModule(module_idx);
@@ -3460,7 +3460,7 @@ pub const Lowerer = struct {
     fn patternIsIrrefutableStructural(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
     ) std.mem.Allocator.Error!bool {
         const typed_cir_module = self.ctx.typedCirModule(module_idx);
@@ -3502,10 +3502,10 @@ pub const Lowerer = struct {
     fn patternIsSingleTagUnion(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
     ) std.mem.Allocator.Error!bool {
-        const key: TypeCloneScope.PatternTypeKey = .{
+        const key: TypeScope.PatternTypeKey = .{
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
         };
@@ -3524,7 +3524,7 @@ pub const Lowerer = struct {
     fn patternVarIsSingleTagUnion(
         _: *Lowerer,
         _: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         var_: Var,
     ) std.mem.Allocator.Error!bool {
         const store = type_scope.typeStoreMut();
@@ -3544,7 +3544,7 @@ pub const Lowerer = struct {
     fn lowerDirectMatchExpr(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         result_ty: type_mod.TypeId,
         expected_result_var: ?Var,
@@ -3593,7 +3593,7 @@ pub const Lowerer = struct {
     fn lowerMatchExpr(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         result_ty: type_mod.TypeId,
         expected_result_var: ?Var,
@@ -3651,7 +3651,7 @@ pub const Lowerer = struct {
     fn matchExprNeedsPredicateDesugaring(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         match_expr: CIR.Expr.Match,
     ) std.mem.Allocator.Error!bool {
         const typed_cir_module = self.ctx.typedCirModule(module_idx);
@@ -3749,7 +3749,7 @@ pub const Lowerer = struct {
     fn lowerPredicateMatchExpr(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         result_ty: type_mod.TypeId,
         expected_result_var: ?Var,
@@ -3833,7 +3833,7 @@ pub const Lowerer = struct {
     fn lowerPredicateMatchBranch(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         incoming_env: BindingEnv,
         result_ty: type_mod.TypeId,
         expected_result_var: ?Var,
@@ -3953,7 +3953,7 @@ pub const Lowerer = struct {
     fn lowerStructuredPredicateMatchBranch(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         incoming_env: BindingEnv,
         result_ty: type_mod.TypeId,
         expected_result_var: ?Var,
@@ -4041,7 +4041,7 @@ pub const Lowerer = struct {
     fn lowerTagPatternGuardExpr(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         scrutinee_expr: ast.ExprId,
         scrutinee_ty: type_mod.TypeId,
         pattern_idx: CIR.Pattern.Idx,
@@ -4108,7 +4108,7 @@ pub const Lowerer = struct {
     fn lowerGuardablePattern(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
         guard_entries: *std.ArrayList(GuardEntry),
     ) std.mem.Allocator.Error!ast.PatId {
@@ -4191,7 +4191,7 @@ pub const Lowerer = struct {
     fn lowerPatternGuardExpr(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         scrutinee_expr: ast.ExprId,
         scrutinee_ty: type_mod.TypeId,
         pattern_idx: CIR.Pattern.Idx,
@@ -4407,7 +4407,7 @@ pub const Lowerer = struct {
     fn lowerWholeValuePatternBranch(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         incoming_env: BindingEnv,
         result_ty: type_mod.TypeId,
         expected_result_var: ?Var,
@@ -4480,7 +4480,7 @@ pub const Lowerer = struct {
     fn collectBranchValueInfo(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         branch_env: BindingEnv,
         branch_value: CIR.Expr.Idx,
         expected_result_var: ?Var,
@@ -4504,14 +4504,14 @@ pub const Lowerer = struct {
     fn recordPatternTypesFromBindings(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
     ) std.mem.Allocator.Error!void {
         var iter = env.iterator();
         while (iter.next()) |entry| {
             if (entry.key_ptr.*.module_idx != module_idx) continue;
             const pattern_idx: CIR.Pattern.Idx = @enumFromInt(entry.key_ptr.*.pattern_idx);
-            const key: TypeCloneScope.PatternTypeKey = .{
+            const key: TypeScope.PatternTypeKey = .{
                 .module_idx = module_idx,
                 .pattern_idx = pattern_idx,
             };
@@ -4526,7 +4526,7 @@ pub const Lowerer = struct {
     fn lowerExactListPatternBranch(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         incoming_env: BindingEnv,
         result_ty: type_mod.TypeId,
         expected_result_var: ?Var,
@@ -4570,7 +4570,7 @@ pub const Lowerer = struct {
     fn lowerLiteralPatternBranch(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         incoming_env: BindingEnv,
         result_ty: type_mod.TypeId,
         expected_result_var: ?Var,
@@ -4669,7 +4669,7 @@ pub const Lowerer = struct {
     fn bindPatternFromSourceExpr(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
         source_expr: ast.ExprId,
         source_ty: type_mod.TypeId,
@@ -5042,7 +5042,7 @@ pub const Lowerer = struct {
     fn makeMatchedTagPayloadExpr(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         scrutinee_expr: ast.ExprId,
         scrutinee_ty: type_mod.TypeId,
         pattern_idx: CIR.Pattern.Idx,
@@ -5075,7 +5075,7 @@ pub const Lowerer = struct {
     fn lowerBlockExpr(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         incoming_env: BindingEnv,
         stmts_span: CIR.Statement.Span,
         final_expr_idx: CIR.Expr.Idx,
@@ -5129,7 +5129,7 @@ pub const Lowerer = struct {
     fn lowerBlockExprWithExpectedType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         incoming_env: BindingEnv,
         stmts_span: CIR.Statement.Span,
         final_expr_idx: CIR.Expr.Idx,
@@ -5195,7 +5195,7 @@ pub const Lowerer = struct {
     fn seedLocalLambdaDeclGroupInfo(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: *BindingEnv,
         cir_stmts: []const CIR.Statement.Idx,
         start_idx: usize,
@@ -5228,7 +5228,7 @@ pub const Lowerer = struct {
     fn lowerLocalLambdaDeclGroup(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: *BindingEnv,
         cir_stmts: []const CIR.Statement.Idx,
         start_idx: usize,
@@ -5318,7 +5318,7 @@ pub const Lowerer = struct {
     fn lowerStmtInto(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: *BindingEnv,
         stmt_idx: CIR.Statement.Idx,
         lowered: *std.ArrayList(ast.StmtId),
@@ -5504,7 +5504,7 @@ pub const Lowerer = struct {
     fn lowerIfExprWithExpectedType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         result_ty: type_mod.TypeId,
         expected_result_var: ?Var,
@@ -5561,7 +5561,7 @@ pub const Lowerer = struct {
     fn lowerDebugMessageExpr(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!ast.ExprId {
@@ -5576,7 +5576,7 @@ pub const Lowerer = struct {
     fn lowerForExpr(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         incoming_env: BindingEnv,
         patt_idx: CIR.Pattern.Idx,
         iterable_expr_idx: CIR.Expr.Idx,
@@ -5628,7 +5628,7 @@ pub const Lowerer = struct {
     fn lowerPat(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
     ) std.mem.Allocator.Error!ast.PatId {
         const pattern = self.ctx.typedCirModule(module_idx).pattern(pattern_idx).data;
@@ -5688,7 +5688,7 @@ pub const Lowerer = struct {
     fn lowerPatWithType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
         ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.PatId {
@@ -5730,7 +5730,7 @@ pub const Lowerer = struct {
     fn lowerExprList(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         span: CIR.Expr.Span,
     ) std.mem.Allocator.Error!ast.Span(ast.ExprId) {
@@ -5740,7 +5740,7 @@ pub const Lowerer = struct {
     fn lowerExprSlice(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         exprs: []const CIR.Expr.Idx,
     ) std.mem.Allocator.Error!ast.Span(ast.ExprId) {
@@ -5755,7 +5755,7 @@ pub const Lowerer = struct {
     fn lowerRecordFields(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         record_ty: type_mod.TypeId,
         span: CIR.RecordField.Span,
@@ -5814,7 +5814,7 @@ pub const Lowerer = struct {
     fn lowerRecordExpr(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         record_ty: type_mod.TypeId,
         record_var: Var,
@@ -5847,7 +5847,7 @@ pub const Lowerer = struct {
     fn lowerRecordUpdateExpr(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         record_ty: type_mod.TypeId,
         _: Var,
@@ -6017,7 +6017,7 @@ pub const Lowerer = struct {
 
     fn copyTopLevelDefExprVarToScope(
         self: *Lowerer,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         source_module_idx: u32,
         def_idx: CIR.Def.Idx,
     ) std.mem.Allocator.Error!Var {
@@ -6028,7 +6028,7 @@ pub const Lowerer = struct {
     fn lowerRecordedMethodCall(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
         method_name: base.Ident.Idx,
@@ -6108,7 +6108,7 @@ pub const Lowerer = struct {
     fn maybeLowerNominalEqBinop(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
         binop: CIR.Expr.Binop,
@@ -6173,7 +6173,7 @@ pub const Lowerer = struct {
     fn lowerCurriedCall(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         call_expr_idx: CIR.Expr.Idx,
         func_expr_idx: CIR.Expr.Idx,
@@ -6213,7 +6213,7 @@ pub const Lowerer = struct {
     fn lowerDirectCallCallee(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         func_expr_idx: CIR.Expr.Idx,
         expected_fn_ty: type_mod.TypeId,
@@ -6249,7 +6249,7 @@ pub const Lowerer = struct {
     fn lowerExprWithExpectedType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
         expected_ty: type_mod.TypeId,
@@ -6268,7 +6268,7 @@ pub const Lowerer = struct {
     fn lowerSolvedExprWithExpectedType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         expr: typed_cir.Expr,
         expected_ty: type_mod.TypeId,
@@ -6542,7 +6542,7 @@ pub const Lowerer = struct {
     fn lowerTransparentNominalExprWithType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
         backing_expr_idx: CIR.Expr.Idx,
@@ -6569,7 +6569,7 @@ pub const Lowerer = struct {
 
     fn resolveTransparentBackingVar(
         self: *const Lowerer,
-        type_scope: *const TypeCloneScope,
+        type_scope: *const TypeScope,
         source_var: ?Var,
     ) ?Var {
         const root = source_var orelse return null;
@@ -6587,7 +6587,7 @@ pub const Lowerer = struct {
     fn maybeLowerRecordedDispatchCallExpr(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         call_expr_idx: CIR.Expr.Idx,
         call: anytype,
@@ -6630,7 +6630,7 @@ pub const Lowerer = struct {
     fn maybeLowerSpecialCallExpr(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
         call: anytype,
@@ -6652,7 +6652,7 @@ pub const Lowerer = struct {
     fn lowerListExprsWithExpectedType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         _: type_mod.TypeId,
         _: ?Var,
@@ -6677,7 +6677,7 @@ pub const Lowerer = struct {
     fn lowerTupleExprsWithExpectedType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         _: type_mod.TypeId,
         _: ?Var,
@@ -6702,7 +6702,7 @@ pub const Lowerer = struct {
     fn lowerExprSliceWithExpectedType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         exprs: []const CIR.Expr.Idx,
         expected_ty: type_mod.TypeId,
@@ -6719,7 +6719,7 @@ pub const Lowerer = struct {
     fn lowerHomogeneousBinopArgs(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         operand_ty: type_mod.TypeId,
         operand_var: ?Var,
@@ -6736,7 +6736,7 @@ pub const Lowerer = struct {
     fn lowerRecordFieldsWithExpectedType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         _: type_mod.TypeId,
         span: CIR.RecordField.Span,
@@ -6773,7 +6773,7 @@ pub const Lowerer = struct {
     fn lowerTagExprWithExpectedType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
         expected_ty: type_mod.TypeId,
@@ -6826,7 +6826,7 @@ pub const Lowerer = struct {
     fn lowerErroneousExprWithType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
         expected_ty: type_mod.TypeId,
@@ -6852,7 +6852,7 @@ pub const Lowerer = struct {
     fn lowerErroneousBlockExpr(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         incoming_env: BindingEnv,
         stmts_span: CIR.Statement.Span,
         result_ty: type_mod.TypeId,
@@ -6925,10 +6925,10 @@ pub const Lowerer = struct {
     fn requireExprResultVar(
         _: *const Lowerer,
         module_idx: u32,
-        type_scope: *const TypeCloneScope,
+        type_scope: *const TypeScope,
         expr_idx: CIR.Expr.Idx,
     ) Var {
-        const key: TypeCloneScope.ExprKey = .{
+        const key: TypeScope.ExprKey = .{
             .module_idx = module_idx,
             .expr_idx = expr_idx,
         };
@@ -6939,7 +6939,7 @@ pub const Lowerer = struct {
     fn instantiateVarType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         var_: Var,
     ) std.mem.Allocator.Error!type_mod.TypeId {
         const resolved = type_scope.typeStoreConst().resolveVar(var_);
@@ -6949,7 +6949,7 @@ pub const Lowerer = struct {
     fn instantiateSourceVarType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         source_var: Var,
     ) std.mem.Allocator.Error!type_mod.TypeId {
         const scoped = try self.instantiateSourceVar(type_scope, module_idx, source_var);
@@ -6959,10 +6959,10 @@ pub const Lowerer = struct {
     fn recordExprType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!void {
-        const key: TypeCloneScope.ExprKey = .{
+        const key: TypeScope.ExprKey = .{
             .module_idx = module_idx,
             .expr_idx = expr_idx,
         };
@@ -6983,7 +6983,7 @@ pub const Lowerer = struct {
     fn finalizeExprTypes(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
     ) std.mem.Allocator.Error!void {
         var iter = type_scope.memo.collected_expr.keyIterator();
         while (iter.next()) |key_ptr| {
@@ -6995,10 +6995,10 @@ pub const Lowerer = struct {
     fn recordPatternType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
     ) std.mem.Allocator.Error!void {
-        const key: TypeCloneScope.PatternTypeKey = .{
+        const key: TypeScope.PatternTypeKey = .{
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
         };
@@ -7017,7 +7017,7 @@ pub const Lowerer = struct {
     fn finalizePatternTypes(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
     ) std.mem.Allocator.Error!void {
         var iter = type_scope.memo.collected_pattern.keyIterator();
         while (iter.next()) |key_ptr| {
@@ -7029,7 +7029,7 @@ pub const Lowerer = struct {
     fn collectPatternInfo(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
     ) std.mem.Allocator.Error!void {
         return self.collectSolvedPatternInfo(module_idx, type_scope, self.ctx.typedCirModule(module_idx).pattern(pattern_idx));
@@ -7038,10 +7038,10 @@ pub const Lowerer = struct {
     fn collectSolvedPatternInfo(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern: typed_cir.Pattern,
     ) std.mem.Allocator.Error!void {
-        const key: TypeCloneScope.PatternTypeKey = .{
+        const key: TypeScope.PatternTypeKey = .{
             .module_idx = module_idx,
             .pattern_idx = pattern.idx,
         };
@@ -7098,7 +7098,7 @@ pub const Lowerer = struct {
     fn recordPatternStructuralInfoFromSourceType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
         source_ty: type_mod.TypeId,
         source_solved_var: ?Var,
@@ -7298,7 +7298,7 @@ pub const Lowerer = struct {
     fn bindPatternEnvWithSolvedVarOnly(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
         source_solved_var: Var,
         env: *BindingEnv,
@@ -7417,7 +7417,7 @@ pub const Lowerer = struct {
     fn collectPatternBindingsIntoEnvWithSolvedVar(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
         source_solved_var: Var,
         env: *BindingEnv,
@@ -7435,7 +7435,7 @@ pub const Lowerer = struct {
     fn collectStmtInfo(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: *BindingEnv,
         stmt_idx: CIR.Statement.Idx,
     ) std.mem.Allocator.Error!void {
@@ -7509,7 +7509,7 @@ pub const Lowerer = struct {
     fn collectExprInfo(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!void {
@@ -7519,11 +7519,11 @@ pub const Lowerer = struct {
     fn collectSolvedExprInfo(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         expr: typed_cir.Expr,
     ) std.mem.Allocator.Error!void {
-        const key: TypeCloneScope.ExprKey = .{
+        const key: TypeScope.ExprKey = .{
             .module_idx = module_idx,
             .expr_idx = expr.idx,
         };
@@ -7753,10 +7753,10 @@ pub const Lowerer = struct {
     fn requireExprType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!type_mod.TypeId {
-        const key: TypeCloneScope.ExprKey = .{
+        const key: TypeScope.ExprKey = .{
             .module_idx = module_idx,
             .expr_idx = expr_idx,
         };
@@ -7774,7 +7774,7 @@ pub const Lowerer = struct {
     fn requirePatternSolvedVar(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
     ) std.mem.Allocator.Error!Var {
         return try self.instantiateSourceVar(type_scope, module_idx, self.ctx.typedCirModule(module_idx).patternType(pattern_idx));
@@ -7783,10 +7783,10 @@ pub const Lowerer = struct {
     fn requirePatternType(
         _: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
     ) std.mem.Allocator.Error!type_mod.TypeId {
-        const key: TypeCloneScope.PatternTypeKey = .{
+        const key: TypeScope.PatternTypeKey = .{
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
         };
@@ -7797,7 +7797,7 @@ pub const Lowerer = struct {
     fn lowerExprType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         _: BindingEnv,
         expr_idx: CIR.Expr.Idx,
         _: CIR.Expr,
@@ -7808,7 +7808,7 @@ pub const Lowerer = struct {
     fn lookupTrySuffixPayloadType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         _: BindingEnv,
         match_expr: CIR.Expr.Match,
     ) std.mem.Allocator.Error!?type_mod.TypeId {
@@ -7896,14 +7896,14 @@ pub const Lowerer = struct {
     fn lowerInstantiatedType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         var_: Var,
     ) std.mem.Allocator.Error!type_mod.TypeId {
         const resolved = type_scope.typeStoreConst().resolveVar(var_);
         if (self.defaultNumeralPrimitiveForContent(type_scope, resolved.desc.content)) |prim| {
             return self.makePrimitiveType(prim);
         }
-        const key: TypeCloneScope.TypeKey = .{ .module_idx = module_idx, .var_ = resolved.var_ };
+        const key: TypeScope.TypeKey = .{ .module_idx = module_idx, .var_ = resolved.var_ };
         if (type_scope.active_type_cache.get(key)) |active| return active;
         if (type_scope.type_cache.get(key)) |cached| return cached;
         if (type_scope.provisional_type_cache.get(key)) |provisional| {
@@ -7983,7 +7983,7 @@ pub const Lowerer = struct {
     fn lowerTagUnionContent(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         initial_tags: types.Tag.SafeMultiList.Range,
         initial_ext: Var,
     ) std.mem.Allocator.Error!type_mod.Content {
@@ -8082,7 +8082,7 @@ pub const Lowerer = struct {
     fn lowerRecordContent(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         initial_fields: types.RecordField.SafeMultiList.Range,
         initial_ext: Var,
     ) std.mem.Allocator.Error!type_mod.Content {
@@ -8152,7 +8152,7 @@ pub const Lowerer = struct {
     fn lowerRecordUnboundContent(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         fields: types.RecordField.SafeMultiList.Range,
     ) std.mem.Allocator.Error!type_mod.Content {
         const fields_slice = type_scope.typeStoreConst().getRecordFieldsSlice(fields);
@@ -8177,7 +8177,7 @@ pub const Lowerer = struct {
     fn lowerNominalType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         nominal_type_id: type_mod.TypeId,
         nominal: types.NominalType,
     ) std.mem.Allocator.Error!type_mod.Content {
@@ -8248,7 +8248,7 @@ pub const Lowerer = struct {
 
     fn resolveNominalDefiningIdentity(
         self: *const Lowerer,
-        type_scope: *const TypeCloneScope,
+        type_scope: *const TypeScope,
         nominal: types.NominalType,
     ) std.mem.Allocator.Error!NominalDefiningIdentity {
         const defining_module_idx = self.ctx.findModuleIdxByName(type_scope.getIdent(nominal.origin_module));
@@ -8266,7 +8266,7 @@ pub const Lowerer = struct {
 
     fn appendNominalKeyValue(
         self: *Lowerer,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         value: anytype,
     ) std.mem.Allocator.Error!void {
         var copy = value;
@@ -8275,7 +8275,7 @@ pub const Lowerer = struct {
 
     fn buildNominalTypeCacheKey(
         self: *Lowerer,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         target_module_idx: u32,
         target_ident: base.Ident.Idx,
         lowered_args: []const type_mod.TypeId,
@@ -8292,7 +8292,7 @@ pub const Lowerer = struct {
 
     fn defaultNumeralPrimitiveForContent(
         _: *Lowerer,
-        type_scope: *const TypeCloneScope,
+        type_scope: *const TypeScope,
         content: types.Content,
     ) ?type_mod.Prim {
         return switch (content) {
@@ -8309,7 +8309,7 @@ pub const Lowerer = struct {
     fn defaultPrimitiveForConstraints(
         _: *Lowerer,
         _: u32,
-        type_scope: *const TypeCloneScope,
+        type_scope: *const TypeScope,
         constraints: types.StaticDispatchConstraint.SafeList.Range,
     ) std.mem.Allocator.Error!?type_mod.Prim {
         if (constraints.len() == 0) return null;
@@ -8324,7 +8324,7 @@ pub const Lowerer = struct {
     fn debugPanicUnresolvedTypeVar(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *const TypeCloneScope,
+        type_scope: *const TypeScope,
         var_: Var,
     ) noreturn {
         const source_module = self.ctx.typedCirModule(module_idx);
@@ -8404,7 +8404,7 @@ pub const Lowerer = struct {
     fn bindLambdaArg(
         self: *Lowerer,
         module_idx: u32,
-        _: *TypeCloneScope,
+        _: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
         arg_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.TypedSymbol {
@@ -8469,7 +8469,7 @@ pub const Lowerer = struct {
     fn patternNeedsAnyExplicitMatch(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
     ) std.mem.Allocator.Error!bool {
         return self.patternNeedsPredicateDesugaring(module_idx, pattern_idx) or
@@ -8479,7 +8479,7 @@ pub const Lowerer = struct {
     fn makePatternSourceBind(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
     ) std.mem.Allocator.Error!ast.TypedSymbol {
         const ty = try self.requirePatternType(module_idx, type_scope, pattern_idx);
@@ -8503,7 +8503,7 @@ pub const Lowerer = struct {
     fn collectStructuralBindingDecls(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         source: ast.TypedSymbol,
         pattern_idx: CIR.Pattern.Idx,
         env: *BindingEnv,
@@ -8523,7 +8523,7 @@ pub const Lowerer = struct {
     fn collectStructuralBindingDeclsWithSolvedVar(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         source: ast.TypedSymbol,
         source_solved_var: ?Var,
         pattern_idx: CIR.Pattern.Idx,
@@ -8794,7 +8794,7 @@ pub const Lowerer = struct {
     fn lowerPatternReassignFromExpr(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
         source_expr: ast.ExprId,
         source_ty: type_mod.TypeId,
@@ -8902,7 +8902,7 @@ pub const Lowerer = struct {
     fn lowerStructuralPatWithSource(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
         env: *BindingEnv,
         decls: *std.ArrayList(BindingDecl),
@@ -8918,7 +8918,7 @@ pub const Lowerer = struct {
     fn lowerStructuralPatWithType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
         source_ty: type_mod.TypeId,
         source_solved_var: ?Var,
@@ -8952,7 +8952,7 @@ pub const Lowerer = struct {
     fn lowerMatchPatWithType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
         source_ty: type_mod.TypeId,
         source_solved_var: ?Var,
@@ -9065,7 +9065,7 @@ pub const Lowerer = struct {
     fn lookupListElemSolvedVar(
         self: *const Lowerer,
         module_idx: u32,
-        type_scope: *const TypeCloneScope,
+        type_scope: *const TypeScope,
         source_solved_var: ?Var,
     ) ?Var {
         const root = source_solved_var orelse return null;
@@ -9237,7 +9237,7 @@ pub const Lowerer = struct {
     fn requireRecordFieldIndexForSolvedVar(
         self: *Lowerer,
         _: u32,
-        type_scope: *const TypeCloneScope,
+        type_scope: *const TypeScope,
         record_var: Var,
         field_name_text: []const u8,
     ) std.mem.Allocator.Error!u16 {
@@ -9313,7 +9313,7 @@ pub const Lowerer = struct {
     fn bindPatternEnv(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
         env: *BindingEnv,
     ) std.mem.Allocator.Error!void {
@@ -9353,7 +9353,7 @@ pub const Lowerer = struct {
     fn bindPatternEnvFromType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
         source_ty: type_mod.TypeId,
         env: *BindingEnv,
@@ -9364,7 +9364,7 @@ pub const Lowerer = struct {
     fn bindPatternEnvFromTypeWithSolvedVar(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
         source_ty: type_mod.TypeId,
         source_solved_var: ?Var,
@@ -9478,7 +9478,7 @@ pub const Lowerer = struct {
     fn requirePatternBinder(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
     ) std.mem.Allocator.Error!ast.TypedSymbol {
         const pattern = self.ctx.typedCirModule(module_idx).pattern(pattern_idx).data;
@@ -9540,7 +9540,7 @@ pub const Lowerer = struct {
     fn specializeLocalFnSource(
         self: *Lowerer,
         source_ref: LocalFnSourceRef,
-        caller_scope: *const TypeCloneScope,
+        caller_scope: *const TypeScope,
         expected_ty: type_mod.TypeId,
         expected_var: ?Var,
     ) std.mem.Allocator.Error!symbol_mod.Symbol {
@@ -9568,8 +9568,8 @@ pub const Lowerer = struct {
         });
         const pending_idx = group.pending.items.len - 1;
 
-        var type_scope: TypeCloneScope = undefined;
-        try type_scope.initCloneAll(self.allocator, self.ctx.typedCirModule(group.module_idx));
+        var type_scope: TypeScope = undefined;
+        try type_scope.initAll(self.allocator, self.ctx.typedCirModule(group.module_idx));
         defer type_scope.deinit();
         var declaration_env = try self.materializeFrozenBindingEnv(&type_scope, group.declaration_env);
         defer declaration_env.deinit();
@@ -9651,7 +9651,7 @@ pub const Lowerer = struct {
     fn lookupOrSpecializeLocal(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         pattern_idx: CIR.Pattern.Idx,
         expected_ty: type_mod.TypeId,
@@ -9783,7 +9783,7 @@ pub const Lowerer = struct {
     fn scopedExprResultVar(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!Var {
@@ -9793,7 +9793,7 @@ pub const Lowerer = struct {
 
     fn scopedSolvedExprResultVar(
         self: *Lowerer,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
         expr: typed_cir.Expr,
     ) std.mem.Allocator.Error!Var {
@@ -9805,7 +9805,7 @@ pub const Lowerer = struct {
         self: *const Lowerer,
         source_module_idx: u32,
         source_var: Var,
-    ) TypeCloneScope.TypeKey {
+    ) TypeScope.TypeKey {
         const resolved = self.ctx.typedCirModule(source_module_idx).typeStoreConst().resolveVar(source_var);
         return .{
             .module_idx = source_module_idx,
@@ -9815,7 +9815,7 @@ pub const Lowerer = struct {
 
     fn instantiateSourceVar(
         self: *Lowerer,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         source_module_idx: u32,
         source_var: Var,
     ) std.mem.Allocator.Error!Var {
@@ -9850,7 +9850,7 @@ pub const Lowerer = struct {
 
     fn instantiateScopedVar(
         _: *Lowerer,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         var_: Var,
     ) std.mem.Allocator.Error!Var {
         var var_map = std.AutoHashMap(Var, Var).init(type_scope.allocator);
@@ -9999,7 +9999,7 @@ pub const Lowerer = struct {
     fn requireFunctionArgType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         fn_var: ?Var,
         arg_index: usize,
     ) std.mem.Allocator.Error!type_mod.TypeId {
@@ -10057,7 +10057,7 @@ pub const Lowerer = struct {
     fn lookupOrSpecializeExternal(
         self: *Lowerer,
         current_module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         lookup: anytype,
         expected_ty: type_mod.TypeId,
         expected_var: ?Var,
@@ -10110,7 +10110,7 @@ pub const Lowerer = struct {
 
     fn copyCheckerVarToScope(
         self: *Lowerer,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         source_module_idx: u32,
         source_var: Var,
     ) std.mem.Allocator.Error!Var {
@@ -10196,7 +10196,7 @@ pub const Lowerer = struct {
     fn lowerResolvedTargetCallee(
         self: *Lowerer,
         _: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         target: ResolvedTarget,
         expected_ty: type_mod.TypeId,
         expected_var: ?Var,
@@ -10269,7 +10269,7 @@ pub const Lowerer = struct {
 
     fn freezeBindingEnv(
         self: *Lowerer,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         env: BindingEnv,
     ) std.mem.Allocator.Error!FrozenBindingEnv {
         var out = FrozenBindingEnv.init(self.allocator);
@@ -10307,7 +10307,7 @@ pub const Lowerer = struct {
 
     fn materializeFrozenBindingEnv(
         self: *Lowerer,
-        type_scope: *TypeCloneScope,
+        type_scope: *TypeScope,
         frozen_env: FrozenBindingEnv,
     ) std.mem.Allocator.Error!BindingEnv {
         var out = BindingEnv.init(self.allocator);
