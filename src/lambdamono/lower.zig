@@ -179,11 +179,11 @@ const Lowerer = struct {
     }
 
     fn finalizeTypedSymbol(self: *Lowerer, bind: *ast.TypedSymbol) std.mem.Allocator.Error!void {
-        bind.ty = try self.publishExecutableType(bind.ty);
+        bind.ty = try self.internExecutableType(bind.ty);
     }
 
     fn finalizeExpr(self: *Lowerer, expr: *ast.Expr, _: usize) std.mem.Allocator.Error!void {
-        expr.ty = try self.publishExecutableType(expr.ty);
+        expr.ty = try self.internExecutableType(expr.ty);
         switch (expr.data) {
             .let_ => |*let_expr| try self.finalizeTypedSymbol(&let_expr.bind),
             else => {},
@@ -200,7 +200,7 @@ const Lowerer = struct {
 
     fn finalizeDef(self: *Lowerer, def: *ast.Def) std.mem.Allocator.Error!void {
         if (def.result_ty) |ty| {
-            def.result_ty = try self.publishExecutableType(ty);
+            def.result_ty = try self.internExecutableType(ty);
         }
     }
 
@@ -210,7 +210,7 @@ const Lowerer = struct {
             try layouts.recordTypedSymbol(self.allocator, &self.types, &self.input.idents, i, bind.*);
         }
         for (self.output.pats.items, 0..) |*pat, i| {
-            pat.ty = try self.publishExecutableType(pat.ty);
+            pat.ty = try self.internExecutableType(pat.ty);
             try layouts.recordPat(self.allocator, &self.types, &self.input.idents, &self.output, @enumFromInt(@as(u32, @intCast(i))), pat.*);
         }
         for (self.output.exprs.items, 0..) |*expr, i| {
@@ -539,7 +539,7 @@ const Lowerer = struct {
                     debugPanic("lambdamono.lower.applyFuncValue expected callable executable type");
                 }
 
-                const lambda_members = try self.freezeLsetLambdaMembers(mono_cache, func_ty);
+                const lambda_members = try self.collectLsetLambdaMembers(mono_cache, func_ty);
                 defer self.allocator.free(lambda_members);
                 const branches = try self.allocator.alloc(ast.Branch, lambda_members.len);
                 defer self.allocator.free(branches);
@@ -743,16 +743,16 @@ const Lowerer = struct {
         const arg_ty = if (arg_ty_override) |override|
             if (builtin_boundary) |op|
                 switch (op) {
-                    .box_box => try self.eraseBoundaryExecutableType(try self.publishExecutableType(override)),
-                    .box_unbox => try self.eraseBoundaryBoxedExecutableType(try self.publishExecutableType(override)),
+                    .box_box => try self.eraseBoundaryExecutableType(try self.internExecutableType(override)),
+                    .box_unbox => try self.eraseBoundaryBoxedExecutableType(try self.internExecutableType(override)),
                     else => unreachable,
                 }
             else
-                try self.publishExecutableType(override)
+                try self.internExecutableType(override)
         else if (builtin_boundary) |op|
             switch (op) {
-                .box_box => try self.publishBoxBoundaryCallableTypeFact(mono_cache, requested_fn.arg),
-                .box_unbox => try self.publishBoxedBoundaryCallableTypeFact(mono_cache, requested_fn.arg),
+                .box_box => try self.lowerBoxBoundaryCallableType(mono_cache, requested_fn.arg),
+                .box_unbox => try self.lowerBoxedBoundaryCallableType(mono_cache, requested_fn.arg),
                 else => unreachable,
             }
         else
@@ -760,7 +760,7 @@ const Lowerer = struct {
         const ret_ty = if (builtin_boundary) |op|
             try self.boxBoundaryResultTypeFromArg(op, arg_ty)
         else if (ret_ty_override) |override|
-            try self.publishExecutableType(override)
+            try self.internExecutableType(override)
         else
             try self.lowerExecutableTypeFromSolved(mono_cache, requested_fn.ret);
         const captures: specializations.CaptureSpec = if (requested_capture_ty) |capture_ty|
@@ -781,8 +781,8 @@ const Lowerer = struct {
         const builtin_boundary = self.boxBoundaryBuiltinOp(requested_name);
         const arg_ty = if (builtin_boundary) |op|
             switch (op) {
-                .box_box => try self.publishBoxBoundaryCallableTypeFact(mono_cache, requested_fn.arg),
-                .box_unbox => try self.publishBoxedBoundaryCallableTypeFact(mono_cache, requested_fn.arg),
+                .box_box => try self.lowerBoxBoundaryCallableType(mono_cache, requested_fn.arg),
+                .box_unbox => try self.lowerBoxedBoundaryCallableType(mono_cache, requested_fn.arg),
                 else => unreachable,
             }
         else
@@ -851,7 +851,7 @@ const Lowerer = struct {
         arg_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!type_mod.TypeId {
         return switch (op) {
-            .box_box => try self.publishExecutableType(try self.types.internResolved(.{ .box = arg_ty })),
+            .box_box => try self.internExecutableType(try self.types.internResolved(.{ .box = arg_ty })),
             .box_unbox => switch (self.types.getTypePreservingNominal(arg_ty)) {
                 .box => |elem| elem,
                 else => debugPanic("lambdamono.lower.boxBoundaryResultTypeFromArg box_unbox expected boxed executable arg"),
@@ -874,7 +874,7 @@ const Lowerer = struct {
         return try self.types.dupeTypeIds(lowered_args);
     }
 
-    fn publishBoxBoundaryCallableTypeFact(
+    fn lowerBoxBoundaryCallableType(
         self: *Lowerer,
         mono_cache: *lower_type.MonoCache,
         ty: TypeVarId,
@@ -882,8 +882,8 @@ const Lowerer = struct {
         const id = self.input.types.unlinkPreservingNominal(ty);
         return switch (self.input.types.getNode(id)) {
             .nominal => |nominal| blk: {
-                const lowered_backing = try self.publishBoxBoundaryCallableTypeFact(mono_cache, nominal.backing);
-                break :blk try self.publishExecutableType(try self.types.internResolved(.{ .nominal = .{
+                const lowered_backing = try self.lowerBoxBoundaryCallableType(mono_cache, nominal.backing);
+                break :blk try self.internExecutableType(try self.types.internResolved(.{ .nominal = .{
                     .module_idx = nominal.module_idx,
                     .ident = nominal.ident,
                     .is_opaque = nominal.is_opaque,
@@ -910,11 +910,11 @@ const Lowerer = struct {
             .link => unreachable,
             .unbd,
             .for_a,
-            => debugPanic("lambdamono.lower.publishBoxBoundaryCallableTypeFact unbound type survived instantiation"),
+            => debugPanic("lambdamono.lower.lowerBoxBoundaryCallableType unbound type survived instantiation"),
         };
     }
 
-    fn publishBoxedBoundaryCallableTypeFact(
+    fn lowerBoxedBoundaryCallableType(
         self: *Lowerer,
         mono_cache: *lower_type.MonoCache,
         ty: TypeVarId,
@@ -922,8 +922,8 @@ const Lowerer = struct {
         const id = self.input.types.unlinkPreservingNominal(ty);
         return switch (self.input.types.getNode(id)) {
             .nominal => |nominal| blk: {
-                const lowered_backing = try self.publishBoxedBoundaryCallableTypeFact(mono_cache, nominal.backing);
-                break :blk try self.publishExecutableType(try self.types.internResolved(.{ .nominal = .{
+                const lowered_backing = try self.lowerBoxedBoundaryCallableType(mono_cache, nominal.backing);
+                break :blk try self.internExecutableType(try self.types.internResolved(.{ .nominal = .{
                     .module_idx = nominal.module_idx,
                     .ident = nominal.ident,
                     .is_opaque = nominal.is_opaque,
@@ -934,15 +934,15 @@ const Lowerer = struct {
             },
             .content => |content| switch (content) {
                 .box => |elem| blk: {
-                    const lowered_elem = try self.publishBoxBoundaryCallableTypeFact(mono_cache, elem);
-                    break :blk try self.publishExecutableType(try self.types.internResolved(.{ .box = lowered_elem }));
+                    const lowered_elem = try self.lowerBoxBoundaryCallableType(mono_cache, elem);
+                    break :blk try self.internExecutableType(try self.types.internResolved(.{ .box = lowered_elem }));
                 },
                 else => try self.lowerExecutableTypeFromSolved(mono_cache, id),
             },
             .link => unreachable,
             .unbd,
             .for_a,
-            => debugPanic("lambdamono.lower.publishBoxedBoundaryCallableTypeFact unbound type survived instantiation"),
+            => debugPanic("lambdamono.lower.lowerBoxedBoundaryCallableType unbound type survived instantiation"),
         };
     }
 
@@ -951,7 +951,7 @@ const Lowerer = struct {
         ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!type_mod.TypeId {
         return switch (self.types.getTypePreservingNominal(ty)) {
-            .nominal => |nominal| try self.publishExecutableType(try self.types.internResolved(.{
+            .nominal => |nominal| try self.internExecutableType(try self.types.internResolved(.{
                 .nominal = .{
                     .module_idx = nominal.module_idx,
                     .ident = nominal.ident,
@@ -975,7 +975,7 @@ const Lowerer = struct {
         ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!type_mod.TypeId {
         return switch (self.types.getTypePreservingNominal(ty)) {
-            .nominal => |nominal| try self.publishExecutableType(try self.types.internResolved(.{
+            .nominal => |nominal| try self.internExecutableType(try self.types.internResolved(.{
                 .nominal = .{
                     .module_idx = nominal.module_idx,
                     .ident = nominal.ident,
@@ -985,7 +985,7 @@ const Lowerer = struct {
                     .backing = try self.eraseBoundaryBoxedExecutableType(nominal.backing),
                 },
             })),
-            .box => |elem| try self.publishExecutableType(try self.types.internResolved(.{
+            .box => |elem| try self.internExecutableType(try self.types.internResolved(.{
                 .box = try self.eraseBoundaryExecutableType(elem),
             })),
             else => ty,
@@ -1224,7 +1224,7 @@ const Lowerer = struct {
     }
 
 
-    fn lowerExecutableTypeFact(
+    fn lowerExecutableTypeNode(
         self: *Lowerer,
         mono_cache: *lower_type.MonoCache,
         ty: TypeVarId,
@@ -1241,7 +1241,7 @@ const Lowerer = struct {
         return switch (self.input.types.getNode(id)) {
             .nominal => |nominal| blk: {
                 const lowered_backing = try self.lowerErasedFnExecutableType(mono_cache, nominal.backing) orelse break :blk null;
-                break :blk try self.publishExecutableType(try self.types.internResolved(.{ .nominal = .{
+                break :blk try self.internExecutableType(try self.types.internResolved(.{ .nominal = .{
                     .module_idx = nominal.module_idx,
                     .ident = nominal.ident,
                     .is_opaque = nominal.is_opaque,
@@ -1267,15 +1267,15 @@ const Lowerer = struct {
         solved_ty: TypeVarId,
     ) std.mem.Allocator.Error!type_mod.TypeId {
         const lowered = if (self.boxPayloadRequiresErasure(solved_ty))
-            try self.publishBoxedBoundaryCallableTypeFact(mono_cache, solved_ty)
+            try self.lowerBoxedBoundaryCallableType(mono_cache, solved_ty)
         else if (try self.lowerErasedFnExecutableType(mono_cache, solved_ty)) |erased|
             erased
         else
-            try self.publishExecutableType(try self.lowerExecutableTypeFact(mono_cache, solved_ty));
-        return try self.publishExecutableType(lowered);
+            try self.internExecutableType(try self.lowerExecutableTypeNode(mono_cache, solved_ty));
+        return try self.internExecutableType(lowered);
     }
 
-    fn publishExecutableType(self: *Lowerer, ty: type_mod.TypeId) std.mem.Allocator.Error!type_mod.TypeId {
+    fn internExecutableType(self: *Lowerer, ty: type_mod.TypeId) std.mem.Allocator.Error!type_mod.TypeId {
         if (!self.types.isFullyResolved(ty)) {
             debugPanic("lambdamono output invariant violated: unresolved executable type escaped stage boundary");
         }
@@ -1379,7 +1379,7 @@ const Lowerer = struct {
                 );
             }
         }.lessThan);
-        return try self.publishExecutableType(try self.types.internResolved(.{ .record = .{
+        return try self.internExecutableType(try self.types.internResolved(.{ .record = .{
             .fields = try self.types.dupeFields(lowered_fields),
         } }));
     }
@@ -1545,7 +1545,7 @@ const Lowerer = struct {
         for (elems, 0..) |elem, i| {
             lowered_elems[i] = self.output.getExpr(elem).ty;
         }
-        return try self.publishExecutableType(try self.types.internResolved(.{ .tuple = try self.types.dupeTypeIds(lowered_elems) }));
+        return try self.internExecutableType(try self.types.internResolved(.{ .tuple = try self.types.dupeTypeIds(lowered_elems) }));
     }
 
     fn containsErasedFn(self: *Lowerer, ty: type_mod.TypeId) bool {
@@ -1807,7 +1807,7 @@ const Lowerer = struct {
                     }
                     body = try self.bindCaptureLets(
                         captures_symbol,
-                        try self.publishExecutableType(capture_info.ty),
+                        try self.internExecutableType(capture_info.ty),
                         capture_bindings,
                         body,
                     );
@@ -1819,7 +1819,7 @@ const Lowerer = struct {
                                 .symbol = pending.fn_def.arg.symbol,
                             },
                             .{
-                                .ty = try self.publishExecutableType(capture_info.ty),
+                                .ty = try self.internExecutableType(capture_info.ty),
                                 .symbol = captures_symbol,
                             },
                         }),
@@ -2955,8 +2955,8 @@ const Lowerer = struct {
         const source_ty = try self.cloneInstType(inst, self.input.store.getExpr(expr_id).ty);
         const lowered = try self.lowerBoxBoundaryExpr(inst, mono_cache, venv, source_ty, lowered_expr);
         var expected_exec_ty = switch (op) {
-            .box_box => try self.publishBoxBoundaryCallableTypeFact(mono_cache, source_ty),
-            .box_unbox => try self.publishBoxedBoundaryCallableTypeFact(mono_cache, source_ty),
+            .box_box => try self.lowerBoxBoundaryCallableType(mono_cache, source_ty),
+            .box_unbox => try self.lowerBoxedBoundaryCallableType(mono_cache, source_ty),
             else => unreachable,
         };
         if (self.preferErasedExecType(expected_exec_ty, self.output.getExpr(lowered).ty)) {
@@ -3046,7 +3046,7 @@ const Lowerer = struct {
         forced_capture_ty: ?type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.ExprId {
         const callable = self.output.getExpr(callable_expr);
-        const lambda_members = try self.freezeLsetLambdaMembers(mono_cache, source_ty);
+        const lambda_members = try self.collectLsetLambdaMembers(mono_cache, source_ty);
         defer self.allocator.free(lambda_members);
 
         return switch (callable.data) {
@@ -3064,7 +3064,7 @@ const Lowerer = struct {
             },
             .packed_fn => callable_expr,
             else => blk: {
-                const erased_capture_ty = forced_capture_ty orelse self.commonErasedCaptureTypeFromFrozen(lambda_members);
+                const erased_capture_ty = forced_capture_ty orelse self.commonErasedCaptureTypeFromMembers(lambda_members);
                 if (erased_capture_ty == null) {
                     for (lambda_members) |lambda_member| {
                         if (lambda_member.capture_ty != null) {
@@ -3109,7 +3109,7 @@ const Lowerer = struct {
         forced_capture_ty: ?type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.ExprId {
         const callable = self.output.getExpr(callable_expr);
-        const lambda_members = try self.freezeLsetLambdaMembersFromExecutable(tag_union);
+        const lambda_members = try self.collectLsetLambdaMembersFromExecutable(tag_union);
         defer self.allocator.free(lambda_members);
 
         return switch (callable.data) {
@@ -3195,7 +3195,7 @@ const Lowerer = struct {
                     switch (expr.data) {
                         .tag => |tag| switch (tag.name) {
                             .lambda => |lambda_symbol| {
-                                const expected_members = try self.freezeLsetLambdaMembersFromExecutable(expected_tag_union);
+                                const expected_members = try self.collectLsetLambdaMembersFromExecutable(expected_tag_union);
                                 defer self.allocator.free(expected_members);
 
                                 for (expected_members) |member| {
@@ -3492,7 +3492,7 @@ const Lowerer = struct {
                 &self.input.symbols
             )) {
                 .toplevel => null,
-                .lset => |capture_info| try self.publishExecutableType(capture_info.ty),
+                .lset => |capture_info| try self.internExecutableType(capture_info.ty),
             };
             if (common == null) {
                 common = next;
@@ -3537,7 +3537,7 @@ const Lowerer = struct {
         mono_cache: *lower_type.MonoCache,
         requested_ty: TypeVarId,
         callable_ty: type_mod.TypeId,
-        lambda_member: FrozenLambdaMemberFact,
+        lambda_member: LambdaMemberInfo,
         erased_capture_ty: ?type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.Branch {
         return if (lambda_member.capture_ty == null) .{
@@ -3715,7 +3715,7 @@ const Lowerer = struct {
                             } },
                         },
                         .lset => |capture_info| {
-                            const precise_ty = try self.makeSingletonExecutableLambdaType(symbol, try self.publishExecutableType(capture_info.ty));
+                            const precise_ty = try self.makeSingletonExecutableLambdaType(symbol, try self.internExecutableType(capture_info.ty));
                             const capture_span = self.input.store.sliceTypedSymbolSpan(fn_entry.fn_def.captures);
                             const capture_bindings = if (capture_span.len != 0)
                                 try self.captureBindingsFromTypedSymbolsAtType(
@@ -3747,7 +3747,7 @@ const Lowerer = struct {
                     const capture_ty: type_mod.TypeId = if (captures.len == 0)
                         try self.makeUnitType()
                     else
-                        try self.publishExecutableType(try lower_type.lowerCaptureBindings(
+                        try self.internExecutableType(try lower_type.lowerCaptureBindings(
                             &self.input.types,
                             &self.types,
                             mono_cache,
@@ -3857,28 +3857,28 @@ const Lowerer = struct {
         data: ast.Expr.Data,
     };
 
-    const FrozenLambdaMemberFact = struct {
+    const LambdaMemberInfo = struct {
         symbol: Symbol,
         discriminant: u16,
         capture_ty: ?type_mod.TypeId,
     };
 
-    fn freezeLsetLambdaMembersFromExecutable(
+    fn collectLsetLambdaMembersFromExecutable(
         self: *Lowerer,
         tag_union: @FieldType(type_mod.Content, "tag_union"),
-    ) std.mem.Allocator.Error![]FrozenLambdaMemberFact {
+    ) std.mem.Allocator.Error![]LambdaMemberInfo {
         const tags = tag_union.tags;
-        const out = try self.allocator.alloc(FrozenLambdaMemberFact, tags.len);
+        const out = try self.allocator.alloc(LambdaMemberInfo, tags.len);
         for (tags, 0..) |tag, i| {
             const symbol = switch (tag.name) {
                 .lambda => |lambda_symbol| lambda_symbol,
-                .ctor => debugPanic("lambdamono.lower.freezeLsetLambdaMembersFromExecutable expected lambda tag"),
+                .ctor => debugPanic("lambdamono.lower.collectLsetLambdaMembersFromExecutable expected lambda tag"),
             };
             const args = tag.args;
             const capture_ty = switch (args.len) {
                 0 => null,
                 1 => args[0],
-                else => debugPanic("lambdamono.lower.freezeLsetLambdaMembersFromExecutable expected at most one capture payload"),
+                else => debugPanic("lambdamono.lower.collectLsetLambdaMembersFromExecutable expected at most one capture payload"),
             };
             out[i] = .{
                 .symbol = symbol,
@@ -3889,16 +3889,16 @@ const Lowerer = struct {
         return out;
     }
 
-    fn freezeLsetLambdaMembers(
+    fn collectLsetLambdaMembers(
         self: *Lowerer,
         mono_cache: *lower_type.MonoCache,
         requested_ty: TypeVarId,
-    ) std.mem.Allocator.Error![]FrozenLambdaMemberFact {
+    ) std.mem.Allocator.Error![]LambdaMemberInfo {
         const lambdas = switch (lower_type.lambdaRepr(&self.input.types, requested_ty)) {
-            .erased => debugPanic("lambdamono.lower.freezeLsetLambdaMembers expected concrete lambda-set"),
+            .erased => debugPanic("lambdamono.lower.collectLsetLambdaMembers expected concrete lambda-set"),
             .lset => |lset| lset,
         };
-        const out = try self.allocator.alloc(FrozenLambdaMemberFact, lambdas.len);
+        const out = try self.allocator.alloc(LambdaMemberInfo, lambdas.len);
         for (lambdas, 0..) |lambda, i| {
             const capture_ty: ?type_mod.TypeId = switch (try lower_type.extractLsetFn(
                 &self.input.types,
@@ -3909,7 +3909,7 @@ const Lowerer = struct {
                 &self.input.symbols
             )) {
                 .toplevel => null,
-                .lset => |capture_info| try self.publishExecutableType(capture_info.ty),
+                .lset => |capture_info| try self.internExecutableType(capture_info.ty),
             };
             out[i] = .{
                 .symbol = lambda.symbol,
@@ -3938,9 +3938,9 @@ const Lowerer = struct {
         }));
     }
 
-    fn commonErasedCaptureTypeFromFrozen(
+    fn commonErasedCaptureTypeFromMembers(
         _: *const Lowerer,
-        members: []const FrozenLambdaMemberFact,
+        members: []const LambdaMemberInfo,
     ) ?type_mod.TypeId {
         var common: ?type_mod.TypeId = null;
         for (members) |member| {
@@ -3951,7 +3951,7 @@ const Lowerer = struct {
             }
             if (common == null and next == null) continue;
             if (common == null or next == null or common.? != next.?) {
-                debugPanic("lambdamono.lower.commonErasedCaptureTypeFromFrozen boxed callable variants require a common capture type");
+                debugPanic("lambdamono.lower.commonErasedCaptureTypeFromMembers boxed callable variants require a common capture type");
             }
         }
         return common;
@@ -4163,8 +4163,8 @@ const Lowerer = struct {
                 }
 
                 const lambda_members = switch (lower_type.lambdaRepr(&self.input.types, func_ty)) {
-                    .lset => try self.freezeLsetLambdaMembers(mono_cache, func_ty),
-                    .erased => try self.freezeLsetLambdaMembersFromExecutable(tag_union),
+                    .lset => try self.collectLsetLambdaMembers(mono_cache, func_ty),
+                    .erased => try self.collectLsetLambdaMembersFromExecutable(tag_union),
                 };
                 defer self.allocator.free(lambda_members);
                 const branches = try self.allocator.alloc(ast.Branch, lambda_members.len);
