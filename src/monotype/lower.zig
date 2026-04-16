@@ -8174,10 +8174,10 @@ pub const Lowerer = struct {
 
         const backing_var = type_scope.typeStoreConst().getNominalBackingVar(nominal);
         const to_inspect_symbol = blk: {
-            const target = self.ctx.source_modules.resolveAttachedMethodTargetByName(
+            const target = self.ctx.source_modules.resolveAttachedMethodTarget(
                 defining.module_idx,
-                defining.module.getIdent(defining_ident),
-                "to_inspect",
+                defining_ident,
+                defining.module.commonIdents().to_inspect,
             ) orelse break :blk symbol_mod.Symbol.none;
             const symbol = self.lookupTopLevelDefSymbol(target.module_idx, target.def_idx) orelse debugPanic(
                 "monotype.lowerNominalType missing symbol for resolved to_inspect method",
