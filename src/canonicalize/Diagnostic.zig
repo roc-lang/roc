@@ -103,8 +103,10 @@ pub const Diagnostic = union(enum) {
     malformed_type_annotation: struct {
         region: Region,
     },
+    malformed_where_clause: struct {
         region: Region,
     },
+    where_clause_not_allowed_in_type_decl: struct {
         region: Region,
     },
     open_ext_not_allowed_in_type_decl: struct {
@@ -352,6 +354,8 @@ pub const Diagnostic = union(enum) {
             .if_then_not_canonicalized => |d| d.region,
             .if_else_not_canonicalized => |d| d.region,
             .malformed_type_annotation => |d| d.region,
+            .malformed_where_clause => |d| d.region,
+            .where_clause_not_allowed_in_type_decl => |d| d.region,
             .open_ext_not_allowed_in_type_decl => |d| d.region,
             .var_across_function_boundary => |d| d.region,
             .shadowing_warning => |d| d.region,
@@ -414,6 +418,7 @@ pub const Diagnostic = union(enum) {
         return report;
     }
 
+    /// Build a report for "malformed where clause" diagnostic
     pub fn buildMalformedWhereClauseReport(
         allocator: Allocator,
         region_info: base.RegionInfo,
@@ -422,6 +427,7 @@ pub const Diagnostic = union(enum) {
         line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "MALFORMED WHERE CLAUSE", .runtime_error);
+        try report.document.addReflowingText("This where clause could not be parsed correctly.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -435,6 +441,7 @@ pub const Diagnostic = union(enum) {
         );
 
         try report.document.addLineBreak();
+        try report.document.addReflowingText("Check the syntax of your where clause.");
         return report;
     }
 

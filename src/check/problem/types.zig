@@ -32,9 +32,11 @@ pub const MissingPatternsRange = struct { start: usize, count: usize };
 pub const Problem = union(enum) {
     type_mismatch: TypeMismatch,
     type_apply_mismatch_arities: TypeApplyArityMismatch,
+    static_dispatch: StaticDispatch,
     cannot_access_opaque_nominal: CannotAccessOpaqueNominal,
     nominal_type_resolution_failed: NominalTypeResolutionFailed,
     recursive_alias: RecursiveAlias,
+    unsupported_alias_where_clause: UnsupportedAliasWhereClause,
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
     hosted_unboxed_function: HostedUnboxedFunction,
@@ -146,7 +148,7 @@ pub const TypePair = struct {
     expected_snapshot: SnapshotContentIdx,
     actual_var: Var,
     actual_snapshot: SnapshotContentIdx,
-    /// The specific region where this constraint originated from (e.g., field access expression)
+    /// The specific region where this constraint originated from (e.g., dot access expression)
     /// If present, this region should be highlighted instead of the variable's region
     constraint_origin_var: ?Var = null,
 };
@@ -186,6 +188,49 @@ pub const UnmatchablePattern = struct {
     problem_branch_index: u32,
 };
 
+// static dispatch //
+
+/// Error related to static dispatch
+pub const StaticDispatch = union(enum) {
+    dispatcher_not_nominal: DispatcherNotNominal,
+    dispatcher_does_not_impl_method: DispatcherDoesNotImplMethod,
+    type_does_not_support_equality: TypeDoesNotSupportEquality,
+};
+
+/// Error when you try to static dispatch on something that's not a nominal type
+pub const DispatcherNotNominal = struct {
+    dispatcher_var: Var,
+    dispatcher_snapshot: SnapshotContentIdx,
+    fn_var: Var,
+    method_name: Ident.Idx,
+};
+
+/// Error when you try to static dispatch but the dispatcher does not have that method
+pub const DispatcherDoesNotImplMethod = struct {
+    dispatcher_var: Var,
+    dispatcher_snapshot: SnapshotContentIdx,
+    dispatcher_type: DispatcherType,
+    fn_var: Var,
+    method_name: Ident.Idx,
+    origin: types_mod.StaticDispatchConstraint.Origin,
+    /// Optional numeric literal info for from_numeral constraints
+    num_literal: ?types_mod.NumeralInfo = null,
+    /// True when the dispatcher was a numeric literal that was defaulted to Dec
+    /// because no type annotation was given. Used to add explanatory text in errors.
+    defaulted_from_numeric_literal: bool = false,
+
+    /// Type of the dispatcher
+    pub const DispatcherType = enum { nominal, rigid };
+};
+
+/// Error when an anonymous type (record, tuple, tag union) doesn't support equality
+/// because one or more of its components contain types that don't have is_eq
+pub const TypeDoesNotSupportEquality = struct {
+    dispatcher_var: Var,
+    dispatcher_snapshot: SnapshotContentIdx,
+    fn_var: Var,
+};
+
 // nominal type errors //
 
 /// Error when you try to use an opaque nominal type constructor
@@ -222,6 +267,7 @@ pub const RecursiveAlias = struct {
     region: base.Region,
 };
 
+/// Error when using alias syntax in where clause (e.g., `where [a.SomeAlias]`)
 /// This syntax was used for abilities which have been removed from the language
 pub const UnsupportedAliasWhereClause = struct {
     alias_name: base.Ident.Idx,

@@ -15,6 +15,7 @@ pub const SnapshotContentIdx = SnapshotContentList.Idx;
 
 const SnapshotContentList = collections.SafeList(SnapshotContent);
 const SnapshotContentIdxSafeList = collections.SafeList(SnapshotContentIdx);
+const SnapshotStaticDispatchConstraintSafeList = collections.SafeList(SnapshotStaticDispatchConstraint);
 
 /// A safe list of record fields
 pub const SnapshotRecordFieldSafeList = collections.SafeMultiList(SnapshotRecordField);
@@ -37,11 +38,13 @@ pub const SnapshotContent = union(enum) {
 pub const SnapshotFlex = struct {
     name: ?Ident.Idx,
     var_: Var,
+    constraints: SnapshotStaticDispatchConstraintSafeList.Range,
 };
 
 /// A snapshotted rigid (bound) type variable with name and constraints.
 pub const SnapshotRigid = struct {
     name: Ident.Idx,
+    constraints: SnapshotStaticDispatchConstraintSafeList.Range,
 };
 
 /// A snapshotted type alias with its backing type and type variables.
@@ -125,12 +128,13 @@ pub const SnapshotTag = struct {
     formatted: []const u8,
 };
 
-/// A snapshotted constraint.
+/// A snapshotted static dispatch constraint for method resolution.
+pub const SnapshotStaticDispatchConstraint = struct {
     fn_name: Ident.Idx,
     fn_content: SnapshotContentIdx,
-    /// The type variable that has this constraint.
-    /// This is the type the requirement is attached to.
-    type_var: SnapshotContentIdx,
+    /// The type variable that has this constraint (the dispatcher).
+    /// This is the type that the method is called on.
+    dispatcher: SnapshotContentIdx,
 };
 
 const Var = types.Var;
@@ -169,11 +173,13 @@ pub const Store = struct {
     content_indexes: SnapshotContentIdxSafeList,
     record_fields: SnapshotRecordFieldSafeList,
     tags: SnapshotTagSafeList,
+    static_dispatch_constraints: SnapshotStaticDispatchConstraintSafeList,
 
     // Scratch
     scratch_content: base.Scratch(SnapshotContentIdx),
     scratch_tags: base.Scratch(SnapshotTag),
     scratch_record_fields: base.Scratch(SnapshotRecordField),
+    scratch_static_dispatch_constraints: base.Scratch(SnapshotStaticDispatchConstraint),
 
     /// Formatted type strings, indexed by SnapshotContentIdx
     formatted_strings: std.AutoHashMapUnmanaged(SnapshotContentIdx, ByteListRange),
@@ -187,9 +193,11 @@ pub const Store = struct {
             .content_indexes = try SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
             .record_fields = try SnapshotRecordFieldSafeList.initCapacity(gpa, 256),
             .tags = try SnapshotTagSafeList.initCapacity(gpa, 256),
+            .static_dispatch_constraints = try SnapshotStaticDispatchConstraintSafeList.initCapacity(gpa, 64),
             .scratch_content = try base.Scratch(SnapshotContentIdx).init(gpa),
             .scratch_tags = try base.Scratch(SnapshotTag).init(gpa),
             .scratch_record_fields = try base.Scratch(SnapshotRecordField).init(gpa),
+            .scratch_static_dispatch_constraints = try base.Scratch(SnapshotStaticDispatchConstraint).init(gpa),
             .formatted_strings = blk: {
                 var map = std.AutoHashMapUnmanaged(SnapshotContentIdx, ByteListRange){};
                 try map.ensureTotalCapacity(gpa, 32);
@@ -219,11 +227,11 @@ pub const Store = struct {
         self.content_indexes.deinit(self.gpa);
         self.record_fields.deinit(self.gpa);
         self.tags.deinit(self.gpa);
-        self.where_requirements.deinit(self.gpa);
+        self.static_dispatch_constraints.deinit(self.gpa);
         self.scratch_content.deinit();
         self.scratch_tags.deinit();
         self.scratch_record_fields.deinit();
-        self.scratch_where_requirements.deinit();
+        self.scratch_static_dispatch_constraints.deinit();
     }
 
     /// Get the pre-formatted string for a snapshot.
@@ -309,33 +317,44 @@ pub const Store = struct {
         return SnapshotFlex{
             .name = flex.name,
             .var_ = var_,
+            .constraints = try self.deepCopyStaticDispatchConstraintRange(store, type_writer, flex.constraints),
         };
     }
 
     fn deepCopyRigid(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, rigid: types.Rigid) std.mem.Allocator.Error!SnapshotRigid {
         return SnapshotRigid{
             .name = rigid.name,
+            .constraints = try self.deepCopyStaticDispatchConstraintRange(store, type_writer, rigid.constraints),
         };
     }
 
+    fn deepCopyStaticDispatchConstraintRange(
         self: *Self,
         store: *const TypesStore,
         type_writer: *TypeWriter,
-        const scratch_top = self.scratch_where_requirements.top();
-        defer self.scratch_where_requirements.clearFrom(scratch_top);
+        range: types.StaticDispatchConstraint.SafeList.Range,
+    ) std.mem.Allocator.Error!SnapshotStaticDispatchConstraintSafeList.Range {
+        const scratch_top = self.scratch_static_dispatch_constraints.top();
+        defer self.scratch_static_dispatch_constraints.clearFrom(scratch_top);
 
+        for (store.sliceStaticDispatchConstraints(range)) |constraint| {
+            try self.scratch_static_dispatch_constraints.append(try self.deepCopyStaticDispatchConstraint(store, type_writer, constraint));
         }
 
-        return self.where_requirements.appendSlice(self.gpa, self.scratch_where_requirements.sliceFromStart(scratch_top));
+        return self.static_dispatch_constraints.appendSlice(self.gpa, self.scratch_static_dispatch_constraints.sliceFromStart(scratch_top));
     }
 
+    fn deepCopyStaticDispatchConstraint(
         self: *Self,
         store: *const TypesStore,
         type_writer: *TypeWriter,
+        constraint: types.StaticDispatchConstraint,
+    ) std.mem.Allocator.Error!SnapshotStaticDispatchConstraint {
+        return SnapshotStaticDispatchConstraint{
             .fn_name = constraint.fn_name,
             .fn_content = try self.deepCopyVarInternal(store, type_writer, constraint.fn_var),
-            // The owning type var is set when collecting constraints during write
-            .type_var = undefined,
+            // Dispatcher is set when collecting constraints during write
+            .dispatcher = undefined,
         };
     }
 
@@ -579,7 +598,8 @@ pub const Store = struct {
         return self.record_fields.sliceRange(range);
     }
 
-        return self.where_requirements.sliceRange(range);
+    pub fn sliceStaticDispatchConstraints(self: *const Self, range: SnapshotStaticDispatchConstraintSafeList.Range) SnapshotStaticDispatchConstraintSafeList.Slice {
+        return self.static_dispatch_constraints.sliceRange(range);
     }
 
     pub fn sliceTags(self: *const Self, range: SnapshotTagSafeList.Range) SnapshotTagSafeList.Slice {

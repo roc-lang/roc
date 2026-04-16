@@ -947,7 +947,9 @@ fn processTypeDeclFirstPass(
         break :blk try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno);
     };
 
+    // Canonicalize where clauses if present
     if (type_decl.where) |_| {
+        try self.env.pushDiagnostic(Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
             .region = region,
         } });
     }
@@ -1063,7 +1065,9 @@ fn processTypeDeclFirstPassWithExisting(
         break :blk try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno);
     };
 
+    // Canonicalize where clauses if present
     if (type_decl.where) |_| {
+        try self.env.pushDiagnostic(Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
             .region = region,
         } });
     }
@@ -1613,6 +1617,7 @@ fn canonicalizeAssociatedDeclWithAnno(
     decl: AST.Statement.Decl,
     qualified_ident: Ident.Idx,
     type_anno_idx: CIR.TypeAnno.Idx,
+    mb_where_clauses: ?CIR.WhereClause.Span,
 ) std.mem.Allocator.Error!CIR.Def.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -1660,6 +1665,7 @@ fn canonicalizeAssociatedDeclWithAnno(
     // Create the annotation structure
     const annotation = CIR.Annotation{
         .anno = type_anno_idx,
+        .where = mb_where_clauses,
     };
     const annotation_idx = try self.env.addAnnotation(annotation, pattern_region);
 
@@ -1713,6 +1719,8 @@ fn processAssociatedItemsSecondPass(
                 // Now canonicalize the annotation with type variables in scope
                 const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .local_anno);
 
+                // Canonicalize where clauses if present
+                const where_clauses = if (ta.where) |where_coll| blk: {
                     const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
                     const where_start = self.env.store.scratchWhereClauseTop();
 
@@ -1752,12 +1760,16 @@ fn processAssociatedItemsSecondPass(
                                         decl,
                                         qualified_idx,
                                         type_anno_idx,
+                                        where_clauses,
                                     );
                                     try self.env.store.addScratchDef(def_idx);
 
                                     // Register this associated item by its qualified name
                                     const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                                     try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+
+                                    // Register the method ident mapping for fast index-based lookup
+                                    try self.registerAssociatedMethodIdent(parent_name, relative_parent_name, type_name, decl_ident, qualified_idx);
 
                                     // Add aliases for this item in the current (associated block) scope
                                     const def_cir = self.env.store.getDef(def_idx);
@@ -1807,10 +1819,14 @@ fn processAssociatedItemsSecondPass(
                     const name_text = self.env.getIdent(name_ident);
                     const qualified_idx = try self.env.insertQualifiedIdent(parent_text, name_text);
                     // Create anno-only def with the qualified name
+                    const def_idx = try self.createAnnoOnlyDef(qualified_idx, type_anno_idx, where_clauses, region);
 
                     // Register this associated item by its qualified name
                     const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                     try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+
+                    // Register the method ident mapping for fast index-based lookup
+                    try self.registerAssociatedMethodIdent(parent_name, relative_parent_name, type_name, name_ident, qualified_idx);
 
                     // Pattern is now available in scope (was created in createAnnoOnlyDef)
 
@@ -1836,6 +1852,9 @@ fn processAssociatedItemsSecondPass(
                         // Register this associated item by its qualified name
                         const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                         try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+
+                        // Register the method ident mapping for fast index-based lookup
+                        try self.registerAssociatedMethodIdent(parent_name, relative_parent_name, type_name, decl_ident, qualified_idx);
 
                         // Add aliases for this item in the current (associated block) scope
                         // so it can be referenced by unqualified and type-qualified names
@@ -1898,6 +1917,60 @@ fn processAssociatedItemsSecondPass(
             },
         }
     }
+}
+
+fn registerAssociatedMethodIdent(
+    self: *Self,
+    parent_name: Ident.Idx,
+    relative_parent_name: ?Ident.Idx,
+    type_name: Ident.Idx,
+    method_ident: Ident.Idx,
+    qualified_ident: Ident.Idx,
+) std.mem.Allocator.Error!void {
+    try self.env.registerMethodIdent(parent_name, method_ident, qualified_ident);
+
+    if (relative_parent_name) |relative_name| {
+        if (!relative_name.eql(parent_name)) {
+            try self.env.registerMethodIdent(relative_name, method_ident, qualified_ident);
+        }
+    }
+
+    if (!type_name.eql(parent_name) and
+        (relative_parent_name == null or !type_name.eql(relative_parent_name.?)))
+    {
+        try self.env.registerMethodIdent(type_name, method_ident, qualified_ident);
+    }
+
+    const builtin_numeric_alias = self.builtinNumericMethodAlias(type_name) orelse return;
+    if (!builtin_numeric_alias.eql(parent_name) and
+        (relative_parent_name == null or !builtin_numeric_alias.eql(relative_parent_name.?)) and
+        !builtin_numeric_alias.eql(type_name))
+    {
+        try self.env.registerMethodIdent(builtin_numeric_alias, method_ident, qualified_ident);
+    }
+}
+
+fn builtinNumericMethodAlias(self: *Self, type_name: Ident.Idx) ?Ident.Idx {
+    if (!std.mem.eql(u8, self.env.module_name, "Builtin")) return null;
+
+    if (type_name.eql(self.env.idents.u8) or
+        type_name.eql(self.env.idents.i8) or
+        type_name.eql(self.env.idents.u16) or
+        type_name.eql(self.env.idents.i16) or
+        type_name.eql(self.env.idents.u32) or
+        type_name.eql(self.env.idents.i32) or
+        type_name.eql(self.env.idents.u64) or
+        type_name.eql(self.env.idents.i64) or
+        type_name.eql(self.env.idents.u128) or
+        type_name.eql(self.env.idents.i128) or
+        type_name.eql(self.env.idents.dec) or
+        type_name.eql(self.env.idents.f32) or
+        type_name.eql(self.env.idents.f64))
+    {
+        return type_name;
+    }
+
+    return null;
 }
 
 /// Register the user-facing fully qualified name in the module scope.
@@ -2427,6 +2500,8 @@ pub fn canonicalizeFile(
                     defer self.scopeExitTypeVar(type_var_scope);
                     const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .local_anno);
 
+                    // Canonicalize where clauses if present
+                    const where_clauses = if (ta.where) |where_coll| blk: {
                         const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
                         const where_start = self.env.store.scratchWhereClauseTop();
                         for (where_slice) |where_idx| {
@@ -2437,6 +2512,7 @@ pub fn canonicalizeFile(
                     } else null;
 
                     // Create the anno-only def immediately
+                    const def_idx = try self.createAnnoOnlyDef(name_ident, type_anno_idx, where_clauses, region);
                     try self.env.store.addScratchDef(def_idx);
 
                     // If exposed, register it
@@ -2910,6 +2986,8 @@ pub fn canonicalizeFile(
                 // Now canonicalize the annotation with type variables in scope
                 const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .local_anno);
 
+                // Canonicalize where clauses if present
+                const where_clauses = if (ta.where) |where_coll| blk: {
                     const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
                     const where_start = self.env.store.scratchWhereClauseTop();
 
@@ -2958,11 +3036,13 @@ pub fn canonicalizeFile(
                                 try self.canonicalizeStmtDecl(decl, if (skipped_malformed) null else TypeAnnoIdent{
                                     .name = name_ident,
                                     .anno_idx = type_anno_idx,
+                                    .where = where_clauses,
                                     .anno_region = region,
                                 });
                             } else {
                                 // Names don't match - create an anno-only def for this annotation
                                 // and let the next iteration handle the decl normally
+                                const def_idx = try self.createAnnoOnlyDef(name_ident, type_anno_idx, where_clauses, region);
                                 try self.env.store.addScratchDef(def_idx);
 
                                 // If this identifier should be exposed, register it
@@ -2976,6 +3056,7 @@ pub fn canonicalizeFile(
                         else => {
                             // If the next non-malformed stmt is not a decl,
                             // create a Def with an e_anno_only body
+                            const def_idx = try self.createAnnoOnlyDef(name_ident, type_anno_idx, where_clauses, region);
                             try self.env.store.addScratchDef(def_idx);
 
                             // If this identifier should be exposed, register it
@@ -2992,6 +3073,7 @@ pub fn canonicalizeFile(
                 // If we didn't find any next statement, create an anno-only def
                 // (This handles the case where the type annotation is the last statement in the file)
                 if (next_i >= ast_stmt_idxs.len) {
+                    const def_idx = try self.createAnnoOnlyDef(name_ident, type_anno_idx, where_clauses, region);
                     try self.env.store.addScratchDef(def_idx);
 
                     // If this identifier should be exposed, register it
@@ -3175,6 +3257,7 @@ fn createAnnoOnlyDef(
     self: *Self,
     ident: base.Ident.Idx,
     type_anno_idx: TypeAnno.Idx,
+    where_clauses: ?WhereClause.Span,
     region: Region,
 ) std.mem.Allocator.Error!CIR.Def.Idx {
     // Check if a placeholder exists for this identifier (from multi-phase canonicalization)
@@ -3236,6 +3319,7 @@ fn createAnnoOnlyDef(
     // Create the annotation structure
     const annotation = CIR.Annotation{
         .anno = type_anno_idx,
+        .where = where_clauses,
     };
     const annotation_idx = try self.env.addAnnotation(annotation, region);
 
@@ -4376,7 +4460,7 @@ fn introduceItemsAliased(
                                 }
                             }
                         }
-                        // Fall back to the main type ident if we can't find it via statement_idx
+                        // Fallback to the old method if we can't find it via statement_idx
                         break :blk module_env.getExposedNodeIndexById(main_type_ident);
                     };
 
@@ -6221,17 +6305,17 @@ pub fn canonicalizeExpr(
                 .free_vars = free_vars_span,
             };
         },
-        .arrow_apply => |arrow_apply| {
+        .local_dispatch => |local_dispatch| {
             // Desugar `arg1->fn(arg2, arg3)` to `fn(arg1, arg2, arg3)`
             // and `arg1->fn` to `fn(arg1)`
-            const region = self.parse_ir.tokenizedRegionToRegion(arrow_apply.region);
+            const region = self.parse_ir.tokenizedRegionToRegion(local_dispatch.region);
             const free_vars_start = self.scratch_free_vars.top();
 
             // Canonicalize the left expression (first argument)
-            const can_first_arg = try self.canonicalizeExpr(arrow_apply.left) orelse return null;
+            const can_first_arg = try self.canonicalizeExpr(local_dispatch.left) orelse return null;
 
             // Get the right expression to determine the function and additional args
-            const right_expr = self.parse_ir.store.getExpr(arrow_apply.right);
+            const right_expr = self.parse_ir.store.getExpr(local_dispatch.right);
 
             switch (right_expr) {
                 .apply => |apply| {
@@ -6328,7 +6412,7 @@ pub fn canonicalizeExpr(
                     }
 
                     // It's an ident
-                    const can_fn_expr = try self.canonicalizeExpr(arrow_apply.right) orelse return null;
+                    const can_fn_expr = try self.canonicalizeExpr(local_dispatch.right) orelse return null;
 
                     const scratch_top = self.env.store.scratchExprTop();
                     try self.env.store.addScratchExpr(can_first_arg.idx);
@@ -6348,7 +6432,7 @@ pub fn canonicalizeExpr(
                 else => {
                     // Generic case: expr->(any_expression)
                     // Desugar to (any_expression)(left)
-                    const can_fn_expr = try self.canonicalizeExpr(arrow_apply.right) orelse return null;
+                    const can_fn_expr = try self.canonicalizeExpr(local_dispatch.right) orelse return null;
 
                     const scratch_top = self.env.store.scratchExprTop();
                     try self.env.store.addScratchExpr(can_first_arg.idx);
@@ -7598,9 +7682,9 @@ fn canonicalizeRecordBuilder(self: *Self, rb: @TypeOf(@as(AST.Expr, undefined).r
 
     // Step 3: Look up T.map2
     const type_name_text = self.env.getIdent(type_name);
-    const map2_name = try self.env.insertQualifiedIdent(type_name_text, "map2");
+    const map2_method_name = try self.env.insertQualifiedIdent(type_name_text, "map2");
 
-    const map2_pattern_idx: ?Pattern.Idx = switch (self.scopeLookup(.ident, map2_name)) {
+    const map2_pattern_idx: ?Pattern.Idx = switch (self.scopeLookup(.ident, map2_method_name)) {
         .found => |found| found,
         .not_found => null,
     };
@@ -11124,6 +11208,7 @@ const StatementsProcessed = enum { one, two };
 /// The stmt may be null if:
 /// * the stmt is an import statement, in which case it is processed but not
 ///   added to CIR
+/// * it's a type annotation without a where clause, in which case the anno is
 ///   simply attached to  decl node
 pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt_idxs: []const AST.Statement.Idx, current_index: u32) std.mem.Allocator.Error!StatementResult {
     var mb_canonicailzed_stmt: ?CanonicalizedStatement = null;
@@ -11292,6 +11377,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             const region = self.parse_ir.tokenizedRegionToRegion(type_decl.region);
 
             // Check if this is a type variable alias (e.g., `Thing : thing` where `thing` is a type var in scope)
+            // This enables static dispatch on type variables: `Thing.method(arg)`
             const is_type_var_alias = type_var_alias_check: {
                 // Must be an alias (not nominal or opaque)
                 if (type_decl.kind != .alias) break :type_var_alias_check false;
@@ -11340,7 +11426,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                     .type_var_anno = type_var_anno,
                 } }, region);
 
-                // Introduce the type var alias into scope.
+                // Introduce the type var alias into scope for use in `Thing.method()` calls
                 const current_scope = &self.scopes.items[self.scopes.items.len - 1];
                 switch (try current_scope.introduceTypeVarAlias(self.env.gpa, alias_name, type_var_ident, type_var_anno, stmt_idx, null)) {
                     .success => {},
@@ -11350,6 +11436,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
 
                 // Where clauses are not allowed
                 if (type_decl.where) |_| {
+                    try self.env.pushDiagnostic(Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
                         .region = region,
                     } });
                 }
@@ -11412,6 +11499,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
 
                     // Where clauses are not allowed in type declarations
                     if (type_decl.where) |_| {
+                        try self.env.pushDiagnostic(Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
                             .region = region,
                         } });
                     }
@@ -11455,9 +11543,12 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             // Extract type variables from the AST annotation
             try self.extractTypeVarIdentsFromASTAnno(ta.anno, type_vars_top);
 
+            // Canonicalize where clauses if present
+            const where_clauses = if (ta.where) |where_coll| inner_blk: {
                 const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
                 const where_start = self.env.store.scratchWhereClauseTop();
 
+                // Enter a new scope for where clause
                 try self.scopeEnter(self.env.gpa, false);
                 defer self.scopeExit(self.env.gpa) catch {}; // See above comment for why this is necessary
 
@@ -11492,6 +11583,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                             mb_canonicailzed_stmt = try self.canonicalizeBlockDecl(decl, TypeAnnoIdent{
                                 .name = name_ident,
                                 .anno_idx = type_anno_idx,
+                                .where = where_clauses,
                                 .anno_region = region,
                             });
                             stmts_processed = .two;
@@ -11541,6 +11633,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                             // Create the annotation structure
                             const annotation = CIR.Annotation{
                                 .anno = type_anno_idx,
+                                .where = where_clauses,
                             };
                             const annotation_idx = try self.env.addAnnotation(annotation, region);
 
@@ -11589,6 +11682,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                             // Create the annotation structure
                             const annotation = CIR.Annotation{
                                 .anno = type_anno_idx,
+                                .where = where_clauses,
                             };
                             const annotation_idx = try self.env.addAnnotation(annotation, region);
 
@@ -11650,6 +11744,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                             // Create the annotation structure
                             const annotation = CIR.Annotation{
                                 .anno = type_anno_idx,
+                                .where = where_clauses,
                             };
                             const annotation_idx = try self.env.addAnnotation(annotation, region);
 
@@ -11721,6 +11816,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                         // Create the annotation structure
                         const annotation = CIR.Annotation{
                             .anno = type_anno_idx,
+                            .where = where_clauses,
                         };
                         const annotation_idx = try self.env.addAnnotation(annotation, region);
 
@@ -11792,6 +11888,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                 // Create the annotation structure
                 const annotation = CIR.Annotation{
                     .anno = type_anno_idx,
+                    .where = where_clauses,
                 };
                 const annotation_idx = try self.env.addAnnotation(annotation, region);
 
@@ -13136,6 +13233,7 @@ fn extractModuleName(self: *Self, module_name_ident: Ident.Idx) std.mem.Allocato
     }
 }
 
+/// Canonicalize a where clause from AST to CIR
 fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type_anno_ctx: TypeAnnoCtx.TypeAnnoCtxType) std.mem.Allocator.Error!WhereClause.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -13143,6 +13241,89 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
     const ast_where = self.parse_ir.store.getWhereClause(ast_where_idx);
 
     switch (ast_where) {
+        .mod_method => |mm| {
+            const region = self.parse_ir.tokenizedRegionToRegion(mm.region);
+
+            // Get variable being referenced
+            // where [ a.method : ... ]
+            //         ^
+            const var_name_text = self.parse_ir.resolve(mm.var_tok);
+            const var_ident = try self.env.insertIdent(Ident.for_text(var_name_text));
+
+            // Find the variable in scope
+            const var_anno_idx =
+                switch (self.scopeLookupTypeVar(var_ident)) {
+                    .found => |found_anno_idx| blk: {
+                        // Track this type variable for underscore validation
+                        try self.scratch_type_var_validation.append(var_ident);
+
+                        break :blk try self.env.addTypeAnno(.{ .rigid_var_lookup = .{
+                            .ref = found_anno_idx,
+                        } }, region);
+                    },
+                    .not_found => blk: {
+                        switch (type_anno_ctx) {
+                            // If this is an inline anno, then we can introduce the variable
+                            // into the scope
+                            .local_anno => {
+                                // Track this type variable for underscore validation
+                                try self.scratch_type_var_validation.append(var_ident);
+
+                                const new_anno_idx = try self.env.addTypeAnno(.{ .rigid_var = .{
+                                    .name = var_ident,
+                                } }, region);
+
+                                // Add to scope
+                                handleTypeVarIntroduceResult(try self.scopeIntroduceTypeVar(var_ident, new_anno_idx));
+
+                                break :blk new_anno_idx;
+                            },
+                            // Otherwise, this is malformed
+                            .type_decl_anno, .for_clause_anno => {
+                                break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type_var = .{
+                                    .name = var_ident,
+                                    .region = region,
+                                } });
+                            },
+                        }
+                    },
+                };
+
+            // Get alias being referenced
+            // where [ a.method : ... ]
+            //           ^^^^^^
+            const method_ident = blk: {
+                // Resolve alias name (remove leading dot)
+                const method_name_text = self.parse_ir.resolve(mm.name_tok);
+
+                // Remove leading dot from method name
+                const method_name_clean = if (method_name_text.len > 0 and method_name_text[0] == '.')
+                    method_name_text[1..]
+                else
+                    method_name_text;
+
+                break :blk try self.env.insertIdent(Ident.for_text(method_name_clean));
+            };
+
+            // Canonicalize argument types
+            const args_slice = self.parse_ir.store.typeAnnoSlice(.{ .span = self.parse_ir.store.getCollection(mm.args).span });
+            const args_start = self.env.store.scratchTypeAnnoTop();
+            for (args_slice) |arg_idx| {
+                const canonicalized_arg = try self.canonicalizeTypeAnno(arg_idx, type_anno_ctx);
+                try self.env.store.addScratchTypeAnno(canonicalized_arg);
+            }
+            const args_span = try self.env.store.typeAnnoSpanFrom(args_start);
+
+            // Canonicalize return type
+            const ret = try self.canonicalizeTypeAnno(mm.ret_anno, type_anno_ctx);
+
+            return try self.env.addWhereClause(WhereClause{ .w_method = .{
+                .var_ = var_anno_idx,
+                .method_name = method_ident,
+                .args = args_span,
+                .ret = ret,
+            } }, region);
+        },
         .mod_alias => |ma| {
             const region = self.parse_ir.tokenizedRegionToRegion(ma.region);
 
@@ -13215,6 +13396,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
         },
         .malformed => |m| {
             const region = self.parse_ir.tokenizedRegionToRegion(m.region);
+            const diagnostic = try self.env.addDiagnostic(Diagnostic{ .malformed_where_clause = .{
                 .region = region,
             } });
             return try self.env.addWhereClause(WhereClause{ .w_malformed = .{
@@ -13229,12 +13411,14 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
 fn createAnnotationFromTypeAnno(
     self: *Self,
     type_anno_idx: TypeAnno.Idx,
+    mb_where_clauses: ?CIR.WhereClause.Span,
     region: Region,
 ) std.mem.Allocator.Error!Annotation.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // Create the annotation structure
+    const annotation = CIR.Annotation{ .anno = type_anno_idx, .where = mb_where_clauses };
 
     // Add to NodeStore and return the index
     const annotation_idx = try self.env.addAnnotation(annotation, region);

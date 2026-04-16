@@ -7949,6 +7949,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 .{@tagName(self.procLocalLayoutIdx(args[0]))},
             ),
         },
+        .num_from_numeral => unreachable, // Resolved before backend codegen
 
         // Box operations
         .box_box => {

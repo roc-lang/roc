@@ -26,6 +26,12 @@ pub const TypePair = types.TypePair;
 pub const IncompatiblePlatformRequirement = types.IncompatiblePlatformRequirement;
 pub const CrossModuleImport = types.CrossModuleImport;
 
+// Static dispatch errors
+pub const StaticDispatch = types.StaticDispatch;
+pub const DispatcherNotNominal = types.DispatcherNotNominal;
+pub const DispatcherDoesNotImplMethod = types.DispatcherDoesNotImplMethod;
+pub const TypeDoesNotSupportEquality = types.TypeDoesNotSupportEquality;
+
 // Number errors
 pub const NumberDoesNotFit = types.NumberDoesNotFit;
 pub const NegativeUnsignedInt = types.NegativeUnsignedInt;

@@ -13,6 +13,7 @@ const TypesStore = types_mod.Store;
 const Var = types_mod.Var;
 const Flex = types_mod.Flex;
 const Rigid = types_mod.Rigid;
+const StaticDispatchConstraint = types_mod.StaticDispatchConstraint;
 const Content = types_mod.Content;
 const FlatType = types_mod.FlatType;
 const Alias = types_mod.Alias;
@@ -74,11 +75,14 @@ pub fn copyVar(
         allocator,
     );
 
+    const from_numeral_origin = switch (resolved.desc.content) {
+        .flex => resolved.desc.from_numeral_origin,
         else => false,
     };
     try dest_store.dangerousSetVarDesc(placeholder_var, .{
         .content = dest_content,
         .rank = types_mod.Rank.generalized,
+        .from_numeral_origin = from_numeral_origin,
     });
 
     return placeholder_var;
@@ -116,6 +120,7 @@ fn copyFlex(
     else
         null;
 
+    const dest_constraints_range = try copyStaticDispatchConstraints(
         source_store,
         dest_store,
         source_flex.constraints,
@@ -142,6 +147,7 @@ fn copyRigid(
 ) std.mem.Allocator.Error!Rigid {
     const translated_name = try copyImportedIdent(source_idents, dest_idents, source_rigid.name, allocator);
 
+    const dest_constraints_range = try copyStaticDispatchConstraints(
         source_store,
         dest_store,
         source_rigid.constraints,
@@ -392,18 +398,24 @@ fn copyNominalType(
     };
 }
 
+fn copyStaticDispatchConstraints(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
+    source_constraints: StaticDispatchConstraint.SafeList.Range,
     var_mapping: *VarMapping,
     source_idents: *const base.Ident.Store,
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!StaticDispatchConstraint.SafeList.Range {
     const source_constraints_len = source_constraints.len();
     if (source_constraints_len == 0) {
+        return StaticDispatchConstraint.SafeList.Range.empty();
     }
 
+    var dest_constraints = try std.array_list.Managed(StaticDispatchConstraint).initCapacity(dest_store.gpa, source_constraints_len);
     defer dest_constraints.deinit();
 
+    for (source_store.sliceStaticDispatchConstraints(source_constraints)) |source_constraint| {
         const translated_fn_name = try copyImportedIdent(source_idents, dest_idents, source_constraint.fn_name, allocator);
 
         var dest_constraint = source_constraint;
@@ -413,4 +425,5 @@ fn copyNominalType(
         try dest_constraints.append(dest_constraint);
     }
 
+    return try dest_store.appendStaticDispatchConstraints(dest_constraints.items);
 }

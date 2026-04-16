@@ -221,6 +221,7 @@ pub const DocType = union(enum) {
     /// Type application: List(Str), Result(ok, err)
     apply: Apply,
     /// Where clause wrapping a type
+    where_clause: WhereClause,
     /// Wildcard _
     wildcard,
     /// Error/unknown type
@@ -279,7 +280,7 @@ pub const DocType = union(enum) {
 
     pub const Constraint = struct {
         type_var: []const u8,
-        entry_name: []const u8,
+        method_name: []const u8,
         signature: *const DocType, // the method's type signature
     };
 
@@ -368,13 +369,14 @@ pub const DocType = union(enum) {
                 }
                 try writer.writeAll(")");
             },
+            .where_clause => |wc| {
                 try writer.writeAll("(where ");
                 try wc.type.writeToSExpr(writer, depth);
                 for (wc.constraints) |constraint| {
                     try writer.writeAll(" (constraint \"");
                     try writeEscaped(writer, constraint.type_var);
                     try writer.writeAll("\" \"");
-                    try writeEscaped(writer, constraint.entry_name);
+                    try writeEscaped(writer, constraint.method_name);
                     try writer.writeAll("\" ");
                     try constraint.signature.writeToSExpr(writer, depth);
                     try writer.writeAll(")");
@@ -451,11 +453,12 @@ pub const DocType = union(enum) {
                 }
                 gpa.free(app.args);
             },
+            .where_clause => |wc| {
                 wc.type.deinit(gpa);
                 gpa.destroy(wc.type);
                 for (wc.constraints) |constraint| {
                     gpa.free(constraint.type_var);
-                    gpa.free(constraint.entry_name);
+                    gpa.free(constraint.method_name);
                     constraint.signature.deinit(gpa);
                     gpa.destroy(constraint.signature);
                 }

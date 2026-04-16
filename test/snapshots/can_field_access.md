@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Field access expression
+description=Dot access expression
 type=expr
 ~~~
 # SOURCE

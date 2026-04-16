@@ -12,6 +12,7 @@ const types_mod = @import("types.zig");
 const TypesStore = types_store.Store;
 const Var = types_mod.Var;
 const Flex = types_mod.Flex;
+const StaticDispatchConstraint = types_mod.StaticDispatchConstraint;
 const Rigid = types_mod.Rigid;
 const Content = types_mod.Content;
 const FlatType = types_mod.FlatType;
@@ -139,6 +140,7 @@ pub const Instantiator = struct {
                 try self.var_map.put(resolved_var, fresh_var);
 
                 // Copy the rigid var's constraints
+                const fresh_constraints = try self.instantiateStaticDispatchConstraints(rigid.constraints);
 
                 // Copy the rigid var's constraints
                 const fresh_content = switch (fresh_type) {
@@ -146,6 +148,8 @@ pub const Instantiator = struct {
                     .rigid => Content{ .rigid = Rigid{ .name = rigid.name, .constraints = fresh_constraints } },
                 };
 
+                const from_numeral_origin = switch (resolved.desc.content) {
+                    .flex => resolved.desc.from_numeral_origin,
                     else => false,
                 };
                 // Update the placeholder fresh var with the real content
@@ -154,6 +158,7 @@ pub const Instantiator = struct {
                     .{
                         .content = fresh_content,
                         .rank = self.current_rank,
+                        .from_numeral_origin = from_numeral_origin,
                     },
                 );
 
@@ -169,6 +174,8 @@ pub const Instantiator = struct {
 
                 const fresh_content = try self.instantiateContent(resolved.desc.content);
 
+                const from_numeral_origin = switch (resolved.desc.content) {
+                    .flex => resolved.desc.from_numeral_origin,
                     else => false,
                 };
                 // Update the placeholder fresh var with the real content
@@ -177,6 +184,7 @@ pub const Instantiator = struct {
                     .{
                         .content = fresh_content,
                         .rank = self.current_rank,
+                        .from_numeral_origin = from_numeral_origin,
                     },
                 );
 
@@ -207,6 +215,7 @@ pub const Instantiator = struct {
     }
 
     fn instantiateFlex(self: *Self, flex: Flex) std.mem.Allocator.Error!Flex {
+        const fresh_constraints = try self.instantiateStaticDispatchConstraints(flex.constraints);
 
         return Flex{ .name = flex.name, .constraints = fresh_constraints };
     }
@@ -423,26 +432,33 @@ pub const Instantiator = struct {
         return self.getIdentText(idx);
     }
 
+    fn instantiateStaticDispatchConstraints(self: *Self, constraints: StaticDispatchConstraint.SafeList.Range) std.mem.Allocator.Error!StaticDispatchConstraint.SafeList.Range {
         const constraints_len = constraints.len();
         if (constraints_len == 0) {
+            return StaticDispatchConstraint.SafeList.Range.empty();
         } else {
+            var fresh_constraints = try std.ArrayList(StaticDispatchConstraint).initCapacity(self.store.gpa, constraints.len());
             defer fresh_constraints.deinit(self.store.gpa);
 
             // IMPORTANT: We must re-fetch on each iteration, not cache the slice.
             // The slice would point into the backing ArrayList, but instantiateVar
             // can recursively instantiate flex vars with constraints, which calls
+            // appendStaticDispatchConstraints, potentially reallocating the array
             // and invalidating any cached slice.
             const constraints_start: usize = @intFromEnum(constraints.start);
             for (0..constraints_len) |i| {
                 // Re-fetch the constraint on each iteration since the backing array may have moved
-                const constraint = self.store.where_requirements.items.items[constraints_start + i];
+                const constraint = self.store.static_dispatch_constraints.items.items[constraints_start + i];
+                const fresh_constraint = try self.instantiateStaticDispatchConstraint(constraint);
                 try fresh_constraints.append(self.store.gpa, fresh_constraint);
             }
 
+            const fresh_constraints_range = try self.store.appendStaticDispatchConstraints(fresh_constraints.items);
             return fresh_constraints_range;
         }
     }
 
+    fn instantiateStaticDispatchConstraint(self: *Self, constraint: StaticDispatchConstraint) std.mem.Allocator.Error!StaticDispatchConstraint {
         var result = constraint;
         result.fn_var = try self.instantiateVar(constraint.fn_var);
         return result;

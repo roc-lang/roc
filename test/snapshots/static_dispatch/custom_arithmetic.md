@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Custom plus, minus, and times entries on a nominal type are used by operators
+description=Custom plus, minus, times methods on nominal type are used by operators
 type=file:Vec.roc
 ~~~
 # SOURCE

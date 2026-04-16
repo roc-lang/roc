@@ -893,6 +893,7 @@ fn renderDocTypeHtml(w: Writer, ctx: *const RenderContext, doc_type: *const DocT
             }
             try w.writeAll(")");
         },
+        .where_clause => |wc| {
             try renderDocTypeHtml(w, ctx, wc.type, needs_parens);
             try w.writeAll(" <span class=\"kw\">where</span> { ");
             for (wc.constraints, 0..) |constraint, i| {
@@ -900,7 +901,7 @@ fn renderDocTypeHtml(w: Writer, ctx: *const RenderContext, doc_type: *const DocT
                 try w.writeAll("<span class=\"type-var\">");
                 try writeHtmlEscaped(w, constraint.type_var);
                 try w.writeAll("</span>.");
-                try writeHtmlEscaped(w, constraint.entry_name);
+                try writeHtmlEscaped(w, constraint.method_name);
                 try w.writeAll(" : ");
                 try renderDocTypeHtml(w, ctx, constraint.signature, false);
             }

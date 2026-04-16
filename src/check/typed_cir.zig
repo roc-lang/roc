@@ -285,6 +285,10 @@ pub const Module = struct {
         return self.data_store.top_level_defs_by_ident.get(ident);
     }
 
+    pub fn methodIdentEntries(self: @This()) []const ModuleEnv.MethodIdents.Entry {
+        return self.env().method_idents.entries.items;
+    }
+
     pub fn exprType(_: @This(), idx: CIR.Expr.Idx) Var {
         return ModuleEnv.varFrom(idx);
     }
@@ -298,9 +302,17 @@ pub const Module = struct {
     }
 
     pub fn exprDefaultsToDec(self: @This(), idx: CIR.Expr.Idx) bool {
-        _ = self;
-        _ = idx;
-        return false;
+        const resolved = self.typeStoreConst().resolveVar(self.exprType(idx));
+        return switch (resolved.desc.content) {
+            .flex => |flex| blk: {
+                const constraints = self.typeStoreConst().sliceStaticDispatchConstraints(flex.constraints);
+                for (constraints) |constraint| {
+                    if (constraint.origin == .from_numeral) break :blk true;
+                }
+                break :blk false;
+            },
+            else => false,
+        };
     }
 
     pub fn curriedFnShape(self: @This(), fn_var: Var) Allocator.Error!CurriedFnShape {

@@ -104,6 +104,7 @@ pub const LowLevel = enum {
     num_shift_right_zf_by,
 
     // Numeric parsing operations
+    num_from_numeral,
     u8_from_str,
     i8_from_str,
     u16_from_str,
@@ -513,6 +514,7 @@ pub const LowLevel = enum {
 
             .num_negate, .num_abs, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str => &.{.borrow},
             .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_abs_diff, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_pow => &.{ .borrow, .borrow },
+            .num_from_numeral => &.{.borrow},
             .u8_from_str,
             .i8_from_str,
             .u16_from_str,

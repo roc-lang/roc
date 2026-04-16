@@ -8,17 +8,17 @@ type=expr
 (|x| !x)(True)
 ~~~
 # EXPECTED
-MISSING MEMBER - bool_closure_type_check.md:1:6:1:8
+MISSING METHOD - bool_closure_type_check.md:1:6:1:8
 # PROBLEMS
-**MISSING MEMBER**
-This **not** member is being used on a value whose type doesn't provide that member:
+**MISSING METHOD**
+This **not** method is being called on a value whose type doesn't have that method:
 **bool_closure_type_check.md:1:6:1:8:**
 ```roc
 (|x| !x)(True)
 ```
      ^^
 
-The value's type, which does not have a member named **not**, is:
+The value's type, which does not have a method named **not**, is:
 
     [True, ..]
 

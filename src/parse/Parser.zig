@@ -1709,6 +1709,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 };
                 self.advance();
                 const anno = try self.parseTypeAnno(.not_looking_for_args);
+                const where_clause = try self.parseWhereConstraint();
 
                 // Check if there's a .{ associated } after the type annotation
                 var associated: ?AST.Associated = null;
@@ -1733,6 +1734,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     .header = header,
                     .anno = anno,
                     .kind = kind,
+                    .where = where_clause,
                     .associated = associated,
                     .region = .{ .start = start, .end = self.pos },
                 } });
@@ -1829,13 +1831,19 @@ fn parseWhereConstraint(self: *Parser) Error!?AST.Collection.Idx {
             .region = diagnostic_region,
         });
         const malformed_clause = try self.store.addMalformed(AST.WhereClause.Idx, .where_expected_open_bracket, diagnostic_region);
+        const where_clauses_top = self.store.scratchWhereClauseTop();
         try self.store.addScratchWhereClause(malformed_clause);
+        const where_clauses = try self.store.whereClauseSpanFrom(where_clauses_top);
+        const coll_id = try self.store.addCollection(.collection_where_clause, .{
             .region = .{ .start = where_start, .end = self.pos },
+            .span = where_clauses.span,
         });
         return coll_id;
     };
 
+    const where_clauses_top = self.store.scratchWhereClauseTop();
 
+    // Parse comma-separated where clauses until we hit ]
     while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
         const clause = try self.parseWhereClause();
         try self.store.addScratchWhereClause(clause);
@@ -1848,7 +1856,10 @@ fn parseWhereConstraint(self: *Parser) Error!?AST.Collection.Idx {
         }
     }
 
+    const where_clauses = try self.store.whereClauseSpanFrom(where_clauses_top);
 
+    // Check if the where clause is empty
+    if (where_clauses.span.len == 0) {
         const diagnostic_region = AST.TokenizedRegion{ .start = where_start, .end = self.pos };
         try self.diagnostics.append(self.gpa, .{
             .tag = .where_expected_constraints,
@@ -1856,7 +1867,10 @@ fn parseWhereConstraint(self: *Parser) Error!?AST.Collection.Idx {
         });
         const malformed_clause = try self.store.addMalformed(AST.WhereClause.Idx, .where_expected_constraints, diagnostic_region);
         try self.store.addScratchWhereClause(malformed_clause);
+        const updated_where_clauses = try self.store.whereClauseSpanFrom(where_clauses_top);
+        const coll_id = try self.store.addCollection(.collection_where_clause, .{
             .region = .{ .start = where_start, .end = self.pos },
+            .span = updated_where_clauses.span,
         });
         return coll_id;
     }
@@ -1870,7 +1884,9 @@ fn parseWhereConstraint(self: *Parser) Error!?AST.Collection.Idx {
         });
     };
 
+    const coll_id = try self.store.addCollection(.collection_where_clause, .{
         .region = .{ .start = where_start, .end = self.pos },
+        .span = where_clauses.span,
     });
 
     return coll_id;
@@ -2374,6 +2390,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
             self.advance();
 
             // Disallow NoSpaceDotInt after Int (ambiguous with decimal literals like 35.123)
+            // But allow NoSpaceDotLowerIdent for method calls like 35.to_str()
             if (self.peek() == .NoSpaceDotInt) {
                 return try self.pushMalformed(AST.Expr.Idx, .expr_dot_suffix_not_allowed, self.pos);
             }
@@ -2750,7 +2767,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
 
                     // Only parse function applications on the right side, not ? suffix
                     const ident_suffixed = try self.parseExprApplicationSuffix(s, expr_node);
-                    expression = try self.store.addExpr(.{ .arrow_apply = .{
+                    expression = try self.store.addExpr(.{ .local_dispatch = .{
                         .region = .{ .start = start, .end = self.pos },
                         .operator = s,
                         .left = expression,
@@ -2766,7 +2783,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                     self.advance(); // consume )
                     // Allow chained application: expr->(|x| x)(extra_args)
                     const rhs_suffixed = try self.parseExprApplicationSuffix(s, inner_expr);
-                    expression = try self.store.addExpr(.{ .arrow_apply = .{
+                    expression = try self.store.addExpr(.{ .local_dispatch = .{
                         .region = .{ .start = start, .end = self.pos },
                         .operator = s,
                         .left = expression,
@@ -2775,7 +2792,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                 } else {
                     return try self.pushMalformed(AST.Expr.Idx, .expr_arrow_expects_ident, self.pos);
                 }
-            } else {
+            } else { // NoSpaceDotLowerIdent
                 const s = self.pos;
                 self.advance();
                 const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
@@ -2784,15 +2801,17 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                     .token = s,
                     .qualifiers = empty_qualifiers,
                 } });
+                // Only parse function applications on the right side, not ? suffix
+                const ident_suffixed = try self.parseExprApplicationSuffix(s, ident);
                 expression = try self.store.addExpr(.{ .field_access = .{
                     .region = .{ .start = start, .end = self.pos },
                     .operator = start,
                     .left = expression,
-                    .right = ident,
+                    .right = ident_suffixed,
                 } });
             }
 
-            // Handle ? suffix on the entire field access / arrow-apply expression.
+            // Handle ? suffix on the entire field access / local dispatch expression.
             // This ensures `a.b()?` is parsed as `(a.b())?` rather than `a.(b()?)`.
             while (self.peek() == .NoSpaceOpQuestion) {
                 self.advance();
@@ -3430,6 +3449,7 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
         // Don't treat comma as function argument separator if followed by:
         // - CloseCurly (end of record)
         // - DoubleDot (record extension like { field: Type, ..ext })
+        // - CloseSquare (where clause)
         if (looking_for_args == .not_looking_for_args and
             (curr_is_arrow or
                 (curr == .Comma and (next_is_not_lower_ident or not_followed_by_colon or two_away_is_arrow) and next_tok != .CloseCurly and next_tok != .DoubleDot and next_tok != .CloseSquare)))
@@ -3499,6 +3519,7 @@ pub fn parseAnnoRecordField(self: *Parser) Error!AST.AnnoRecordField.Idx {
     });
 }
 
+/// Parse a where clause
 ///
 /// e.g. `a.hash : a -> U64`
 /// e.g. `a.Hasher : Type`
@@ -3518,12 +3539,12 @@ pub fn parseWhereClause(self: *Parser) Error!AST.WhereClause.Idx {
         );
     };
 
-    // Expect dot followed by alias name
+    // Expect dot followed by method/alias name
     const name_tok = self.pos;
     if (self.peek() != .NoSpaceDotLowerIdent and self.peek() != .DotLowerIdent and self.peek() != .NoSpaceDotUpperIdent and self.peek() != .DotUpperIdent) {
         return try self.pushMalformed(
             AST.WhereClause.Idx,
-            .where_expected_alias_name,
+            .where_expected_method_or_alias_name,
             start,
         );
     }
@@ -3540,11 +3561,55 @@ pub fn parseWhereClause(self: *Parser) Error!AST.WhereClause.Idx {
         } });
     }
 
-    return try self.pushMalformed(
-        AST.WhereClause.Idx,
-        .where_expected_alias_name,
-        start,
-    );
+    // Expect colon
+    self.expect(.OpColon) catch {
+        return try self.pushMalformed(
+            AST.WhereClause.Idx,
+            .where_expected_colon,
+            start,
+        );
+    };
+
+    // Parse type annotation
+    const args_start = self.pos;
+    const method_type_anno = try self.parseTypeAnno(.not_looking_for_args);
+    const method_type = self.store.getTypeAnno(method_type_anno);
+
+    // Check if the type annotation is a function type
+    if (method_type == .@"fn") {
+        // Function type: extract args and return type
+        const fn_type = method_type.@"fn";
+        const args = try self.store.addCollection(
+            .collection_ty_anno,
+            .{
+                .region = .{ .start = args_start, .end = self.pos },
+                .span = fn_type.args.span,
+            },
+        );
+        return try self.store.addWhereClause(.{ .mod_method = .{
+            .region = .{ .start = start, .end = self.pos },
+            .name_tok = name_tok,
+            .var_tok = var_tok,
+            .args = args,
+            .ret_anno = fn_type.ret,
+        } });
+    } else {
+        // Non-function type: treat as zero-argument method
+        const empty_args = try self.store.addCollection(
+            .collection_ty_anno,
+            .{
+                .region = .{ .start = args_start, .end = self.pos },
+                .span = base.DataSpan.empty(),
+            },
+        );
+        return try self.store.addWhereClause(.{ .mod_method = .{
+            .region = .{ .start = start, .end = self.pos },
+            .name_tok = name_tok,
+            .var_tok = var_tok,
+            .args = empty_args,
+            .ret_anno = method_type_anno,
+        } });
+    }
 }
 
 /// Parse a block of statements.

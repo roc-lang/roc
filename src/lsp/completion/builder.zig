@@ -5,7 +5,8 @@
 //! - Local variables and function definitions
 //! - Module names and module members
 //! - Type names (for type annotations)
-//! - Record fields (for field access)
+//! - Record fields (for dot access)
+//! - Methods (for static dispatch)
 
 const std = @import("std");
 const base = @import("base");
@@ -947,6 +948,7 @@ pub const CompletionBuilder = struct {
 
     // Method Completions
 
+    /// Add method completions for static dispatch (e.g., "value.method()").
     pub fn addMethodCompletions(
         self: *CompletionBuilder,
         module_env: *ModuleEnv,
@@ -1052,6 +1054,33 @@ pub const CompletionBuilder = struct {
                 self.logDebug("addMethodsFromTypeVar: hit step limit", .{});
                 break;
             }
+
+            const type_ident_opt: ?base.Ident.Idx = switch (content) {
+                .alias => |alias| alias.ident.ident_idx,
+                .structure => |flat_type| switch (flat_type) {
+                    .nominal_type => |nominal| nominal.ident.ident_idx,
+                    else => null,
+                },
+                else => null,
+            };
+
+            if (type_ident_opt) |type_ident| {
+                const type_name = module_env.getIdentText(type_ident);
+                self.logDebug("addMethodsFromTypeVar: type_ident={any} name={s}", .{ type_ident, type_name });
+
+                // Route builtin type methods through the builtin module env to ensure
+                // completions include real Builtin.roc backing data.
+                if (self.builtin_module_env) |builtin_env| {
+                    if (builtin_completion.isBuiltinType(type_name)) {
+                        try self.addMethodsForTypeNameInEnv(builtin_env, type_name);
+                    } else {
+                        try self.addMethodsForTypeIdentInEnv(module_env, type_ident);
+                    }
+                } else {
+                    try self.addMethodsForTypeIdentInEnv(module_env, type_ident);
+                }
+            }
+
             switch (content) {
                 .flex => |flex| {
                     self.logDebug("addMethodsFromTypeVar: flex constraints", .{});
@@ -1077,20 +1106,23 @@ pub const CompletionBuilder = struct {
         }
     }
 
+    /// Extract method names from static dispatch constraints and add them as completions.
     fn addMethodsFromConstraints(
         self: *CompletionBuilder,
         module_env: *ModuleEnv,
+        constraints: types.StaticDispatchConstraint.SafeList.Range,
     ) !void {
         if (constraints.isEmpty()) {
             self.logDebug("addMethodsFromConstraints: empty", .{});
             return;
         }
 
+        const constraints_slice = module_env.types.sliceStaticDispatchConstraints(constraints);
         self.logDebug("addMethodsFromConstraints: count={d}", .{constraints_slice.len});
         for (constraints_slice) |constraint| {
-            const member_name = module_env.getIdentText(constraint.fn_name);
+            const method_name = module_env.getIdentText(constraint.fn_name);
 
-            if (member_name.len == 0) continue;
+            if (method_name.len == 0) continue;
 
             // Try to get detail from the constraint's function type
             var detail: ?[]const u8 = null;
@@ -1108,7 +1140,7 @@ pub const CompletionBuilder = struct {
             }
 
             const added = try self.addItem(.{
-                .label = member_name,
+                .label = method_name,
                 .kind = @intFromEnum(CompletionItemKind.method),
                 .detail = detail,
             });
@@ -1144,6 +1176,186 @@ pub const CompletionBuilder = struct {
         self.logDebug("findExprTypeForPattern: no expr for pattern_idx={}", .{pattern_idx});
         return null;
     }
+
+    /// Add methods for a specific type identifier by searching method_idents.
+    fn addMethodsForTypeIdentInEnv(self: *CompletionBuilder, module_env: *ModuleEnv, type_ident: base.Ident.Idx) !void {
+        // Initialize type writer for formatting method signatures
+        var type_writer = module_env.initTypeWriter() catch null;
+        defer if (type_writer) |*tw| tw.deinit();
+
+        // Get the type name for display purposes
+        const type_name = module_env.getIdentText(type_ident);
+
+        // Iterate through method_idents to find all methods for this type.
+        // The method_idents maps (type_ident, method_ident) -> qualified_ident.
+        const entries = module_env.method_idents.entries.items;
+        for (entries) |entry| {
+            // Check if this method is for our type
+            if (entry.key.type_ident.eql(type_ident)) {
+                const method_ident = entry.key.method_ident;
+                const method_name = module_env.getIdentText(method_ident);
+
+                if (method_name.len == 0) continue;
+
+                // Try to get the method's type signature
+                var detail: ?[]const u8 = null;
+                const qualified_ident = entry.value;
+                const qualified_name = module_env.getIdentText(qualified_ident);
+
+                // Look up the method definition to get its type
+                if (self.findMethodType(module_env, qualified_ident)) |method_type_var| {
+                    if (type_writer) |*tw| {
+                        // Type formatting is best-effort; missing type info is acceptable
+                        tw.write(method_type_var, .one_line) catch {};
+                        const type_str = tw.get();
+                        if (type_str.len > 0) {
+                            detail = self.allocator.dupe(u8, type_str) catch null;
+                        }
+                        tw.reset();
+                    }
+                }
+
+                // If we couldn't get the type signature, at least show which type it's from
+                if (detail == null and type_name.len > 0 and qualified_name.len > 0) {
+                    detail = std.fmt.allocPrint(self.allocator, "method on {s}", .{type_name}) catch null;
+                }
+
+                // Extract documentation for the method definition.
+                const documentation = self.findMethodDocumentation(module_env, qualified_ident);
+
+                const added = try self.addItem(.{
+                    .label = method_name,
+                    .kind = @intFromEnum(CompletionItemKind.method),
+                    .detail = detail,
+                    .documentation = documentation,
+                });
+                if (added) {} else {}
+            }
+        }
+    }
+
+    /// Add methods for a type name within the provided module environment.
+    ///
+    /// This is used to bridge from local types to builtin module methods by
+    /// resolving the type name in the builtin module ident table.
+    fn addMethodsForTypeNameInEnv(self: *CompletionBuilder, module_env: *ModuleEnv, type_name: []const u8) !void {
+        // Try direct lookup first (e.g., "Str")
+        if (module_env.common.findIdent(type_name)) |type_ident| {
+            try self.addMethodsForTypeIdentInEnv(module_env, type_ident);
+            return;
+        }
+
+        // Fall back to fully-qualified lookup (e.g., "Builtin.Str")
+        const qualified = std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ module_env.module_name, type_name }) catch return;
+        defer self.allocator.free(qualified);
+
+        if (module_env.common.findIdent(qualified)) |type_ident| {
+            try self.addMethodsForTypeIdentInEnv(module_env, type_ident);
+        }
+    }
+
+    /// Find the documentation string for a method by its qualified identifier.
+    ///
+    /// Searches top-level definitions and statements for a def/decl whose
+    /// pattern ident matches `qualified_ident`, then extracts the doc comment.
+    fn findMethodDocumentation(self: *CompletionBuilder, module_env: *ModuleEnv, qualified_ident: base.Ident.Idx) ?[]const u8 {
+        // Search all_defs for a matching definition.
+        const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+        for (defs_slice) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            const pattern = module_env.store.getPattern(def.pattern);
+
+            const ident_idx = switch (pattern) {
+                .assign => |p| p.ident,
+                .as => |p| p.ident,
+                else => continue,
+            };
+
+            if (ident_idx.eql(qualified_ident)) {
+                return doc_comments.extractDocForDef(
+                    self.allocator,
+                    module_env.common.source,
+                    &module_env.store,
+                    def,
+                ) catch null;
+            }
+        }
+
+        // Fall back to statements (apps use s_decl/s_var for definitions).
+        const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+        for (statements_slice) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+            const pattern_idx = switch (stmt) {
+                .s_decl => |decl| decl.pattern,
+                .s_var => |var_stmt| var_stmt.pattern_idx,
+                else => continue,
+            };
+
+            const pattern = module_env.store.getPattern(pattern_idx);
+            const ident_idx = switch (pattern) {
+                .assign => |p| p.ident,
+                .as => |p| p.ident,
+                else => continue,
+            };
+
+            if (ident_idx.eql(qualified_ident)) {
+                return doc_comments.extractDocForStatement(
+                    self.allocator,
+                    module_env.common.source,
+                    &module_env.store,
+                    stmt,
+                    stmt_idx,
+                ) catch null;
+            }
+        }
+
+        return null;
+    }
+
+    /// Find the type of a method definition by its qualified identifier.
+    fn findMethodType(_: *CompletionBuilder, module_env: *ModuleEnv, qualified_ident: base.Ident.Idx) ?types.Var {
+        // Look through definitions to find the method
+        const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+        for (defs_slice) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            const pattern = module_env.store.getPattern(def.pattern);
+
+            const ident_idx = switch (pattern) {
+                .assign => |p| p.ident,
+                .as => |p| p.ident,
+                else => continue,
+            };
+
+            if (ident_idx.eql(qualified_ident)) {
+                return ModuleEnv.varFrom(def.pattern);
+            }
+        }
+
+        // Also check statements
+        const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+        for (statements_slice) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+            const pattern_idx = switch (stmt) {
+                .s_decl => |decl| decl.pattern,
+                .s_var => |var_stmt| var_stmt.pattern_idx,
+                else => continue,
+            };
+
+            const pattern = module_env.store.getPattern(pattern_idx);
+            const ident_idx = switch (pattern) {
+                .assign => |p| p.ident,
+                .as => |p| p.ident,
+                else => continue,
+            };
+
+            if (ident_idx.eql(qualified_ident)) {
+                return ModuleEnv.varFrom(pattern_idx);
+            }
+        }
+
+        return null;
+    }
+
     // Tag Union Completions
 
     /// Add tag completions for a nominal type (e.g., `Color.` → `Red`, `Green`, `Blue`).

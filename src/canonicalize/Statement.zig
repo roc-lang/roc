@@ -183,14 +183,16 @@ pub const Statement = union(enum) {
         where: ?CIR.WhereClause.Span,
     },
 
-    /// A type variable alias within a block.
-    /// This binds an uppercase name to a type variable from the enclosing function signature.
+    /// A type variable alias within a block - enables static dispatch on type vars.
+    /// This binds an uppercase name to a type variable from the enclosing function signature,
+    /// allowing method calls like `Thing.method(arg)` that dispatch based on what the type
+    /// variable resolves to at runtime.
     ///
     /// ```roc
-    /// foo : thing -> thing
+    /// foo : thing -> Str
     /// foo = |arg|
     ///     Thing : thing       # Type var alias - binds `Thing` to the type variable `thing`
-    ///     arg
+    ///     Thing.something(arg) # Static dispatch using the type var alias
     /// ```
     s_type_var_alias: struct {
         /// The alias name (e.g., "Thing") - uppercase identifier
@@ -396,6 +398,8 @@ pub const Statement = union(enum) {
                     const where_begin = tree.beginNode();
                     try tree.pushStaticAtom("where");
                     const where_attrs = tree.beginNode();
+                    const where_clauses = env.store.sliceWhereClauses(where_span);
+                    for (where_clauses) |clause_idx| {
                         const clause = env.store.getWhereClause(clause_idx);
                         try clause.pushToSExprTree(env, tree, clause_idx);
                     }

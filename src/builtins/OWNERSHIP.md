@@ -227,10 +227,10 @@ pub fn exampleFunction(...) ReturnType { ... }
 ### box.zig (interpreter intrinsics)
 
 **Consume arg, Independent result:**
-- `box` intrinsic - consumes value → Box (heap-allocated copy)
+- `Box.box` - consumes value → Box (heap-allocated copy)
   - Copies value data to heap with refcount = 1
   - Original value is decremented after copy
-- `unbox` intrinsic - consumes Box → value (stack copy)
+- `Box.unbox` - consumes Box → value (stack copy)
   - Copies boxed data from heap to stack
   - Box is decremented after copy (may free heap memory if refcount reaches 0)
   - If boxed value is refcounted, its refcount is incremented (new reference created)

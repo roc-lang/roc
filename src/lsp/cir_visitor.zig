@@ -558,6 +558,7 @@ pub fn CirVisitor(comptime Context: type) type {
             if (self.visit_type_anno_post) |post| post(self.ctx, anno_idx, anno);
         }
 
+        /// Walk an annotation (type annotation with optional where clause)
         fn walkAnnotation(self: *Self, store: *const NodeStore, anno_idx: CIR.Annotation.Idx) void {
             if (self.stopped) return;
 
@@ -571,6 +572,7 @@ pub fn CirVisitor(comptime Context: type) type {
             }
         }
 
+        /// Walk where clauses
         fn walkWhereClauses(self: *Self, store: *const NodeStore, where_span: CIR.WhereClause.Span) void {
             for (store.sliceWhereClauses(where_span)) |clause_idx| {
                 if (self.stopped) return;

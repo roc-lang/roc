@@ -32,7 +32,7 @@ EndOfFile,
 	(statements
 		(s-decl
 			(p-ident (raw "test1"))
-			(e-arrow-apply
+			(e-local-dispatch
 				(e-int (raw "10"))
 				(e-lambda
 					(args
@@ -42,7 +42,7 @@ EndOfFile,
 						(e-int (raw "1"))))))
 		(s-decl
 			(p-ident (raw "test2"))
-			(e-arrow-apply
+			(e-local-dispatch
 				(e-string
 					(e-string-part (raw "hello")))
 				(e-lambda
@@ -52,7 +52,7 @@ EndOfFile,
 						(e-string-part (raw "world"))))))
 		(s-decl
 			(p-ident (raw "test3"))
-			(e-arrow-apply
+			(e-local-dispatch
 				(e-string
 					(e-string-part (raw "")))
 				(e-lambda

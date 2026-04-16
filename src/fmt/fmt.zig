@@ -1167,11 +1167,11 @@ const Formatter = struct {
                 try fmt.pushTokenText(i.token);
             },
             .field_access => |fa| {
-                // Check if left side is a arrow_apply with a plain ident or tag
+                // Check if left side is a local_dispatch with a plain ident or tag
                 // e.g., `0->M .c` should format as multiline to avoid ambiguity with qualified ident
                 const left_expr = fmt.ast.store.getExpr(fa.left);
-                const needs_newline_before_dot = if (left_expr == .arrow_apply) blk: {
-                    const ld = left_expr.arrow_apply;
+                const needs_newline_before_dot = if (left_expr == .local_dispatch) blk: {
+                    const ld = left_expr.local_dispatch;
                     const ld_right = fmt.ast.store.getExpr(ld.right);
                     break :blk ld_right == .ident or ld_right == .tag;
                 } else false;
@@ -1191,7 +1191,7 @@ const Formatter = struct {
                 try fmt.push('.');
                 try fmt.formatExprInnerDiscard(fa.right, .no_indent_on_access);
             },
-            .arrow_apply => |ld| {
+            .local_dispatch => |ld| {
                 try fmt.formatExprDiscard(ld.left);
                 if (multiline and try fmt.flushCommentsBefore(ld.operator)) {
                     if (format_behavior == .normal) {
@@ -2345,6 +2345,62 @@ const Formatter = struct {
 
         const multiline = fmt.nodeWillBeMultiline(AST.WhereClause.Idx, idx);
         switch (clause) {
+            .mod_method => |c| {
+                // Format as: a.method : Type
+                try fmt.pushTokenText(c.var_tok);
+                if (multiline and try fmt.flushCommentsAfter(c.var_tok)) {
+                    fmt.curr_indent = start_indent;
+                    try fmt.pushIndent();
+                }
+                try fmt.push('.');
+                try fmt.pushTokenText(c.name_tok);
+                try fmt.pushAll(" :");
+                const args_coll = fmt.ast.store.getCollection(c.args);
+                const ret_region = fmt.nodeRegion(@intFromEnum(c.ret_anno));
+
+                fmt.curr_indent = start_indent;
+                if (args_coll.span.len > 0) {
+                    if (multiline and try fmt.flushCommentsBefore(args_coll.region.start)) {
+                        fmt.curr_indent += 1;
+                        try fmt.pushIndent();
+                    } else {
+                        try fmt.push(' ');
+                    }
+                    const args = fmt.ast.store.typeAnnoSlice(.{ .span = args_coll.span });
+                    // Format function arguments without parentheses (like regular function types)
+                    for (args, 0..) |arg_idx, i| {
+                        const arg_region = fmt.nodeRegion(@intFromEnum(arg_idx));
+                        if (multiline and i > 0) {
+                            try fmt.flushCommentsBeforeDiscard(arg_region.start);
+                            try fmt.ensureNewline();
+                            try fmt.pushIndent();
+                        }
+                        try fmt.formatTypeAnnoDiscard(arg_idx);
+                        if (i < args.len - 1) {
+                            if (multiline) {
+                                try fmt.push(',');
+                            } else {
+                                try fmt.pushAll(", ");
+                            }
+                        } else {
+                            if (multiline and try fmt.flushCommentsAfter(arg_region.end - 1)) {
+                                fmt.curr_indent += 1;
+                                try fmt.pushIndent();
+                                try fmt.pushAll("->");
+                            } else {
+                                try fmt.pushAll(" ->");
+                            }
+                        }
+                    }
+                }
+                if (multiline and try fmt.flushCommentsBefore(ret_region.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                try fmt.formatTypeAnnoDiscard(c.ret_anno);
+            },
             .mod_alias => |c| {
                 // Format as: a.TypeAlias
                 try fmt.pushTokenText(c.var_tok);
@@ -2774,7 +2830,7 @@ const Formatter = struct {
 
                         return fmt.nodeWillBeMultiline(AST.Expr.Idx, i.then);
                     },
-                    .arrow_apply => |l| {
+                    .local_dispatch => |l| {
                         if (fmt.nodeWillBeMultiline(AST.Expr.Idx, l.left)) {
                             return true;
                         }
@@ -2990,25 +3046,25 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
     return try result.toOwnedSlice();
 }
 
-// Issue #8851: Formatter idempotence tests for arrow-apply with field access
+// Issue #8851: Formatter idempotence tests for local dispatch with field access
 // These test cases verify that formatting is stable (idempotent) - formatting twice
 // produces the same output as formatting once.
 
-test "issue 8851: arrow apply with space before field access is idempotent" {
+test "issue 8851: local dispatch with space before field access is idempotent" {
     // a=0->b .c() should format stably with newline to disambiguate
     const result = try moduleFmtsStable(std.testing.allocator, "a=0->b .c()", false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("a = 0->b()\n\t.c()\n", result);
 }
 
-test "issue 8851: arrow apply with chained zero-arg applies is idempotent" {
+test "issue 8851: local dispatch with chained zero-arg applies is idempotent" {
     // a = 0->b()().c() should format stably - must preserve ALL levels of function application
     const result = try moduleFmtsStable(std.testing.allocator, "a = 0->b()().c()", false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("a = 0->b()().c()\n", result);
 }
 
-test "issue 8851: multiline arrow apply with field access is idempotent" {
+test "issue 8851: multiline local dispatch with field access is idempotent" {
     // Multiline case from issue comment 1
     const result = try moduleFmtsStable(std.testing.allocator,
         \\a=0->b
@@ -3025,14 +3081,14 @@ test "issue 8851: tuple dispatch with chained zero-arg applies is idempotent" {
     try std.testing.expectEqualStrings("a = ()->b()()()\n", result);
 }
 
-test "issue 8851: chained field access after arrow apply is idempotent" {
+test "issue 8851: chained field access after local dispatch is idempotent" {
     // 0->b .c .d() - multiple field accesses, newline to disambiguate
     const result = try moduleFmtsStable(std.testing.allocator, "a=0->b .c .d()", false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("a = 0->b()\n\t.c.d()\n", result);
 }
 
-test "issue 8851: arrow apply with uppercase tag (module-like) is idempotent" {
+test "issue 8851: local dispatch with uppercase tag (module-like) is idempotent" {
     // 0->M .c - uppercase identifier parses as tag, not ident
     // Dispatching to a tag is invalid, newline disambiguates from qualified identifier
     const result = try moduleFmtsStable(std.testing.allocator, "a=0->M .c", false);

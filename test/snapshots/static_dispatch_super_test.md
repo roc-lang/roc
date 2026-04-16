@@ -5,23 +5,23 @@ type=expr
 ~~~
 # SOURCE
 ~~~roc
-some_fn(arg1)?.sample_member()?.next_sample_member()?.record_field?
+some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - where_requirements_super_test.md:1:1:1:8
-UNDEFINED VARIABLE - where_requirements_super_test.md:1:9:1:13
-TRY OPERATOR OUTSIDE FUNCTION - where_requirements_super_test.md:1:1:1:15
-TRY OPERATOR OUTSIDE FUNCTION - where_requirements_super_test.md:1:1:1:41
-TRY OPERATOR OUTSIDE FUNCTION - where_requirements_super_test.md:1:1:1:72
-TRY OPERATOR OUTSIDE FUNCTION - where_requirements_super_test.md:1:1:1:86
+UNDEFINED VARIABLE - static_dispatch_super_test.md:1:1:1:8
+UNDEFINED VARIABLE - static_dispatch_super_test.md:1:9:1:13
+TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:15
+TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:41
+TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:72
+TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:86
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `some_fn` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**where_requirements_super_test.md:1:1:1:8:**
+**static_dispatch_super_test.md:1:1:1:8:**
 ```roc
-some_fn(arg1)?.sample_member()?.next_sample_member()?.record_field?
+some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
 ```
 ^^^^^^^
 
@@ -30,9 +30,9 @@ some_fn(arg1)?.sample_member()?.next_sample_member()?.record_field?
 Nothing is named `arg1` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**where_requirements_super_test.md:1:9:1:13:**
+**static_dispatch_super_test.md:1:9:1:13:**
 ```roc
-some_fn(arg1)?.sample_member()?.next_sample_member()?.record_field?
+some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
 ```
         ^^^^
 
@@ -40,9 +40,9 @@ some_fn(arg1)?.sample_member()?.next_sample_member()?.record_field?
 **TRY OPERATOR OUTSIDE FUNCTION**
 The `?` operator can only be used inside function bodies because it can cause an early return.
 
-**where_requirements_super_test.md:1:1:1:15:**
+**static_dispatch_super_test.md:1:1:1:15:**
 ```roc
-some_fn(arg1)?.sample_member()?.next_sample_member()?.record_field?
+some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
 ```
 ^^^^^^^^^^^^^^
 
@@ -50,9 +50,9 @@ some_fn(arg1)?.sample_member()?.next_sample_member()?.record_field?
 **TRY OPERATOR OUTSIDE FUNCTION**
 The `?` operator can only be used inside function bodies because it can cause an early return.
 
-**where_requirements_super_test.md:1:1:1:41:**
+**static_dispatch_super_test.md:1:1:1:41:**
 ```roc
-some_fn(arg1)?.sample_member()?.next_sample_member()?.record_field?
+some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -60,9 +60,9 @@ some_fn(arg1)?.sample_member()?.next_sample_member()?.record_field?
 **TRY OPERATOR OUTSIDE FUNCTION**
 The `?` operator can only be used inside function bodies because it can cause an early return.
 
-**where_requirements_super_test.md:1:1:1:72:**
+**static_dispatch_super_test.md:1:1:1:72:**
 ```roc
-some_fn(arg1)?.sample_member()?.next_sample_member()?.record_field?
+some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -70,9 +70,9 @@ some_fn(arg1)?.sample_member()?.next_sample_member()?.record_field?
 **TRY OPERATOR OUTSIDE FUNCTION**
 The `?` operator can only be used inside function bodies because it can cause an early return.
 
-**where_requirements_super_test.md:1:1:1:86:**
+**static_dispatch_super_test.md:1:1:1:86:**
 ```roc
-some_fn(arg1)?.sample_member()?.next_sample_member()?.record_field?
+some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -95,9 +95,9 @@ EndOfFile,
 								(e-ident (raw "some_fn"))
 								(e-ident (raw "arg1"))))
 						(e-apply
-							(e-ident (raw "sample_member")))))
+							(e-ident (raw "static_dispatch_method")))))
 				(e-apply
-					(e-ident (raw "next_sample_member")))))
+					(e-ident (raw "next_static_dispatch_method")))))
 		(e-ident (raw "record_field"))))
 ~~~
 # FORMATTED
@@ -114,12 +114,12 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-field-access (field "next_sample_member")
+								(e-field-access (field "next_static_dispatch_method")
 									(receiver
 										(e-match
 											(match
 												(cond
-													(e-field-access (field "sample_member")
+													(e-field-access (field "static_dispatch_method")
 														(receiver
 															(e-match
 																(match

@@ -42,6 +42,11 @@ const Store = problem_mod.Store;
 // Type mismatch types
 const TypePair = problem_mod.TypePair;
 
+// Static dispatch errors
+const DispatcherNotNominal = problem_mod.DispatcherNotNominal;
+const DispatcherDoesNotImplMethod = problem_mod.DispatcherDoesNotImplMethod;
+const TypeDoesNotSupportEquality = problem_mod.TypeDoesNotSupportEquality;
+
 // Match/exhaustiveness errors
 const NonExhaustiveMatch = problem_mod.NonExhaustiveMatch;
 const RedundantPattern = problem_mod.RedundantPattern;
@@ -724,6 +729,7 @@ pub const ReportBuilder = struct {
                         .value => self.buildInvalidNominalValue(mismatch.types),
                     },
                     .fn_args_bound_var => |ctx| self.buildIncompatibleFnArgsBoundVar(mismatch.types, ctx),
+                    .method_type => |ctx| self.buildIncompatibleMethodType(mismatch.types, ctx),
                     .expect => self.buildExpect(mismatch.types),
                     .record_access => |ctx| self.buildRecordAccess(mismatch.types, ctx),
                     .record_update => |ctx| self.buildRecordUpdate(mismatch.types, ctx),
@@ -758,9 +764,17 @@ pub const ReportBuilder = struct {
             .nominal_type_resolution_failed => |data| {
                 return self.buildNominalTypeResolutionFailed(data);
             },
+            .static_dispatch => |detail| {
+                switch (detail) {
+                    .dispatcher_not_nominal => |data| return self.buildStaticDispatchDispatcherNotNominal(data),
+                    .dispatcher_does_not_impl_method => |data| return self.buildStaticDispatchDispatcherDoesNotImplMethod(data),
+                    .type_does_not_support_equality => |data| return self.buildTypeDoesNotSupportEquality(data),
+                }
+            },
             .recursive_alias => |data| {
                 return self.buildRecursiveAliasReport(data);
             },
+            .unsupported_alias_where_clause => |data| {
                 return self.buildUnsupportedAliasWhereClauseReport(data);
             },
             .infinite_recursion => |data| {
@@ -1731,6 +1745,7 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// Build a report for when alias syntax is used in a where clause
     /// This syntax was used for abilities which have been removed
     fn buildUnsupportedAliasWhereClauseReport(
         self: *Self,
@@ -1740,6 +1755,7 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         try D.renderSlice(&.{
+            D.bytes("The where clause syntax"),
             D.ident(data.alias_name).withAnnotation(.type_variable),
             D.bytes("is not supported:"),
         }, self, &report);
@@ -1757,15 +1773,361 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
-            D.bytes("This syntax was used for abilities, which have been removed from Roc. Use where requirements like"),
-            D.bytes("where [a.SomeTypeAlias]").withAnnotation(.inline_code),
+            D.bytes("This syntax was used for abilities, which have been removed from Roc. Use method constraints like"),
+            D.bytes("where [a.methodName(args) -> ret]").withAnnotation(.inline_code),
             D.bytes("instead."),
         }, self, &report);
 
         return report;
     }
 
-    /// Build a report for an `expect` mismatch
+    // static dispatch //
+
+    /// Build a report for when a type is not nominal, but you're trying to
+    /// static dispatch on it
+    fn buildStaticDispatchDispatcherNotNominal(
+        self: *Self,
+        data: DispatcherNotNominal,
+    ) !Report {
+        var report = Report.init(self.gpa, "MISSING METHOD", .runtime_error);
+        errdefer report.deinit();
+
+        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
+
+        try D.renderSlice(&.{
+            D.bytes("This"),
+            D.ident(data.method_name).withAnnotation(.emphasized),
+            D.bytes("method is being called on a value whose type doesn't have that method:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        // Add source region highlighting
+        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.fn_var)))) |region| {
+            const region_info = self.module_env.calcRegionInfo(region.*);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+        }
+
+        try D.renderSlice(&.{
+            D.bytes("The value's type, which does not have a method named "),
+            D.ident(data.method_name).withAnnotation(.emphasized).withNoPrecedingSpace(),
+            D.bytes(",").withNoPrecedingSpace(),
+            D.bytes("is:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(snapshot_str);
+
+        return report;
+    }
+
+    /// Build a report for when a type doesn't have the expected static dispatch
+    /// method
+    fn buildStaticDispatchDispatcherDoesNotImplMethod(
+        self: *Self,
+        data: DispatcherDoesNotImplMethod,
+    ) !Report {
+        // Special case: number literal being used where a non-number type is expected
+        if (data.origin == .from_numeral) {
+            return self.buildNumberUsedAsNonNumber(data);
+        }
+
+        var report = Report.init(self.gpa, "MISSING METHOD", .runtime_error);
+        errdefer report.deinit();
+
+        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
+
+        // Check if this method corresponds to an operator (using ident index comparison, not strings)
+        const is_from_binop = data.origin == .desugared_binop;
+        const mb_operator = self.getOperatorForMethod(data.method_name);
+
+        if (is_from_binop) {
+            if (mb_operator) |operator| {
+                try D.renderSlice(&.{
+                    D.bytes("The value before this"),
+                    D.bytes(operator).withAnnotation(.emphasized),
+                    D.bytes("operator has a type that doesn't have a"),
+                    D.ident(data.method_name).withAnnotation(.emphasized),
+                    D.bytes("method:"),
+                }, self, &report);
+            } else {
+                try D.renderSlice(&.{
+                    D.bytes("This"),
+                    D.ident(data.method_name).withAnnotation(.emphasized),
+                    D.bytes("method is being called on a value whose type doesn't have that method:"),
+                }, self, &report);
+            }
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("This"),
+                D.ident(data.method_name).withAnnotation(.emphasized),
+                D.bytes("method is being called on a value whose type doesn't have that method:"),
+            }, self, &report);
+        }
+        try report.document.addLineBreak();
+
+        // Add source region highlighting
+        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.fn_var)))) |region| {
+            const region_info = self.module_env.calcRegionInfo(region.*);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+        }
+
+        try D.renderSlice(&.{
+            D.bytes("The value's type, which does not have a method named "),
+            D.ident(data.method_name).withAnnotation(.emphasized).withNoPrecedingSpace(),
+            D.bytes(",").withNoPrecedingSpace(),
+            D.bytes("is:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(snapshot_str);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        if (data.defaulted_from_numeric_literal) {
+            try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("This numeric literal was given the type"),
+                D.bytes("Dec").withAnnotation(.emphasized),
+                D.bytes("because it was never used as any concrete number type. To use a different numeric type, add a suffix or a type annotation."),
+            }, self, &report);
+        }
+
+        switch (data.dispatcher_type) {
+            .nominal => {
+                if (data.defaulted_from_numeric_literal) {
+                    // Already provided a more specific hint above
+                } else if (is_from_binop) {
+                    if (mb_operator) |operator| {
+                        try D.renderSlice(&.{
+                            D.bytes("Hint:").withAnnotation(.emphasized),
+                            D.bytes("The"),
+                            D.bytes(operator).withAnnotation(.emphasized),
+                            D.bytes("operator calls a method named"),
+                            D.ident(data.method_name).withAnnotation(.emphasized),
+                            D.bytes("on the value preceding it, passing the value after the operator as the one argument."),
+                        }, self, &report);
+                    } else {
+                        try D.renderSlice(&.{
+                            D.bytes("Hint:").withAnnotation(.emphasized),
+                            D.bytes("For this to work, the type would need to have a method named"),
+                            D.ident(data.method_name).withAnnotation(.emphasized),
+                            D.bytes("associated with it in the type's declaration."),
+                        }, self, &report);
+                    }
+                } else {
+                    try D.renderSlice(&.{
+                        D.bytes("Hint:").withAnnotation(.emphasized),
+                        D.bytes("For this to work, the type would need to have a method named"),
+                        D.ident(data.method_name).withAnnotation(.emphasized),
+                        D.bytes("associated with it in the type's declaration."),
+                    }, self, &report);
+                }
+            },
+            .rigid => {
+                if (is_from_binop) {
+                    if (mb_operator) |operator| {
+                        try D.renderSlice(&.{
+                            D.bytes("Hint:").withAnnotation(.emphasized),
+                            D.bytes("The"),
+                            D.bytes(operator).withAnnotation(.emphasized),
+                            D.bytes("operator requires the type to have a"),
+                            D.ident(data.method_name).withAnnotation(.emphasized),
+                            D.bytes("method. Did you forget to specify it in the type annotation?"),
+                        }, self, &report);
+                    } else {
+                        try D.renderSlice(&.{
+                            D.bytes("Hint:").withAnnotation(.emphasized),
+                            D.bytes("Did you forget to specify"),
+                            D.ident(data.method_name).withAnnotation(.emphasized),
+                            D.bytes("in the type annotation?"),
+                        }, self, &report);
+                    }
+                } else {
+                    try D.renderSlice(&.{
+                        D.bytes("Hint:").withAnnotation(.emphasized),
+                        D.bytes("Did you forget to specify"),
+                        D.ident(data.method_name).withAnnotation(.emphasized),
+                        D.bytes("in the type annotation?"),
+                    }, self, &report);
+                }
+            },
+        }
+
+        return report;
+    }
+
+    /// Build a report for when a number literal is used where a non-number type is expected
+    fn buildNumberUsedAsNonNumber(
+        self: *Self,
+        data: DispatcherDoesNotImplMethod,
+    ) !Report {
+        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        errdefer report.deinit();
+
+        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
+
+        // Get the region of the number literal from the num_literal info
+        const num_literal = data.num_literal.?;
+        const num_region = num_literal.region;
+        const num_region_info = self.module_env.calcRegionInfo(num_region);
+
+        // Get the region of the dispatcher (the type that was expected)
+        // This might be different if the type came from somewhere else (e.g., a type annotation)
+        const dispatcher_region = if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.dispatcher_var)))) |r| r.* else Region.zero();
+
+        try D.renderSlice(&.{
+            D.bytes("This number is being used where a non-number type is needed:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            num_region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        // Check if we have a different origin region we can show
+        if (dispatcher_region.start.offset != num_region.start.offset or
+            dispatcher_region.end.offset != num_region.end.offset)
+        {
+            const dispatcher_region_info = self.module_env.calcRegionInfo(dispatcher_region);
+            try D.renderSlice(&.{
+                D.bytes("The type was determined to be non-numeric here:"),
+            }, self, &report);
+            try report.document.addLineBreak();
+
+            try report.document.addSourceRegion(
+                dispatcher_region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+        }
+
+        try D.renderSlice(&.{
+            D.bytes("Other code expects this to have the type:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(snapshot_str);
+
+        return report;
+    }
+
+    /// Build a report for when an anonymous type doesn't support equality
+    fn buildTypeDoesNotSupportEquality(
+        self: *Self,
+        data: TypeDoesNotSupportEquality,
+    ) !Report {
+        var report = Report.init(self.gpa, "TYPE DOES NOT SUPPORT EQUALITY", .runtime_error);
+        errdefer report.deinit();
+
+        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
+
+        try D.renderSlice(&.{
+            D.bytes("This expression is doing an equality check on a type that doesn't support equality:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.fn_var)))) |region| {
+            const region_info = self.module_env.calcRegionInfo(region.*);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+        }
+
+        try D.renderSlice(&.{
+            D.bytes("The type is:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(snapshot_str);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        // Get the content and explain which parts don't support equality
+        const content = self.snapshots.getContentUnwrapAlias(data.dispatcher_snapshot);
+        if (content == .structure) {
+            switch (content.structure) {
+                .record => |record| {
+                    try self.explainRecordEqualityFailure(&report, record);
+                },
+                .tuple => |tuple| {
+                    try self.explainTupleEqualityFailure(&report, tuple);
+                },
+                .tag_union => |tag_union| {
+                    try self.explainTagUnionEqualityFailure(&report, tag_union);
+                },
+                .fn_pure, .fn_effectful, .fn_unbound => {
+                    try D.renderSlice(&.{
+                        D.bytes("Functions cannot be compared for equality."),
+                    }, self, &report);
+                    try report.document.addLineBreak();
+                },
+                else => {},
+            }
+        }
+
+        return report;
+    }
+
+    /// Build a report for when a method exists but its type doesn't match the where clause requirement
+    fn buildIncompatibleMethodType(
+        self: *Self,
+        types: TypePair,
+        ctx: Context.MethodTypeContext,
+    ) !Report {
+        // Note: The unifier's actual/expected are opposite to display order.
+        // We want to show "type has X" (from expected_snapshot) then "expected Y" (from actual_snapshot)
+        return try self.makeMismatchReport(
+            .{ .simple = regionIdxFrom(ctx.constraint_var) },
+            &.{
+                D.bytes("The"),
+                D.ident(ctx.method_name).withAnnotation(.inline_code),
+                D.bytes("method on"),
+                D.ident(ctx.dispatcher_name).withAnnotation(.inline_code),
+                D.bytes("has an incompatible type:"),
+            },
+            &.{
+                D.bytes("The method"),
+                D.ident(ctx.method_name).withAnnotation(.inline_code),
+                D.bytes("has the type:"),
+            },
+            types.expected_snapshot,
+            &.{D.bytes("But I need it to have the type:")},
+            types.actual_snapshot,
+            &.{
+                // TODO: Once we have nicer type diff hints, use them here
+            },
+        );
+    }
+
+    /// Build a report for when a method exists but its type doesn't match the where clause requirement
     fn buildExpect(
         self: *Self,
         types: TypePair,
@@ -1917,6 +2279,7 @@ pub const ReportBuilder = struct {
         }
     }
 
+    /// Build a report for when a method exists but its type doesn't match the where clause requirement
     fn buildRecordUpdate(
         self: *Self,
         types: TypePair,
@@ -2051,6 +2414,7 @@ pub const ReportBuilder = struct {
         }
     }
 
+    /// Build a report for when a method exists but its type doesn't match the where clause requirement
     fn buildRecursiveDef(
         self: *Self,
         types: TypePair,
@@ -2193,11 +2557,11 @@ pub const ReportBuilder = struct {
                 }
             }
             try report.document.addAnnotated("Hint:", .emphasized);
-            try report.document.addReflowingText(" Anonymous records only support ");
+            try report.document.addReflowingText(" Anonymous records only have an ");
             try report.document.addAnnotated("is_eq", .emphasized);
-            try report.document.addReflowingText(" if all of their fields support ");
+            try report.document.addReflowingText(" method if all of their fields have ");
             try report.document.addAnnotated("is_eq", .emphasized);
-            try report.document.addReflowingText(".");
+            try report.document.addReflowingText(" methods.");
             try report.document.addLineBreak();
         }
     }
@@ -2243,11 +2607,11 @@ pub const ReportBuilder = struct {
                 }
             }
             try report.document.addAnnotated("Hint:", .emphasized);
-            try report.document.addReflowingText(" Tuples only support ");
+            try report.document.addReflowingText(" Tuples only have an ");
             try report.document.addAnnotated("is_eq", .emphasized);
-            try report.document.addReflowingText(" if all of their elements support ");
+            try report.document.addReflowingText(" method if all of their elements have ");
             try report.document.addAnnotated("is_eq", .emphasized);
-            try report.document.addReflowingText(".");
+            try report.document.addReflowingText(" methods.");
             try report.document.addLineBreak();
         }
     }
@@ -2320,11 +2684,11 @@ pub const ReportBuilder = struct {
                 }
             }
             try report.document.addAnnotated("Hint:", .emphasized);
-            try report.document.addReflowingText(" Tag unions only support ");
+            try report.document.addReflowingText(" Tag unions only have an ");
             try report.document.addAnnotated("is_eq", .emphasized);
-            try report.document.addReflowingText(" if all of their payload types support ");
+            try report.document.addReflowingText(" method if all of their payload types have ");
             try report.document.addAnnotated("is_eq", .emphasized);
-            try report.document.addReflowingText(".");
+            try report.document.addReflowingText(" methods.");
             try report.document.addLineBreak();
         }
     }
@@ -2955,4 +3319,23 @@ pub const ReportBuilder = struct {
         return self.snapshots.getFormattedString(idx) orelse "<unknown type>";
     }
 
+    /// Returns the operator symbol for a given method ident, or null if not an operator method.
+    /// Maps method idents like plus, minus, times, div_by to their corresponding operator symbols.
+    fn getOperatorForMethod(self: *const Self, method_ident: Ident.Idx) ?[]const u8 {
+        const idents = self.can_ir.idents;
+        if (method_ident.eql(idents.plus)) return "+";
+        if (method_ident.eql(idents.minus)) return "-";
+        if (method_ident.eql(idents.times)) return "*";
+        if (method_ident.eql(idents.div_by)) return "/";
+        if (method_ident.eql(idents.div_trunc_by)) return "//";
+        if (method_ident.eql(idents.rem_by)) return "%";
+        if (method_ident.eql(idents.negate)) return "-";
+        if (method_ident.eql(idents.is_eq)) return "==";
+        if (method_ident.eql(idents.is_lt)) return "<";
+        if (method_ident.eql(idents.is_lte)) return "<=";
+        if (method_ident.eql(idents.is_gt)) return ">";
+        if (method_ident.eql(idents.is_gte)) return ">=";
+        if (method_ident.eql(idents.not)) return "not";
+        return null;
+    }
 };

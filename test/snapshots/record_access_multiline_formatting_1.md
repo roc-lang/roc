@@ -6,8 +6,8 @@ type=expr
 # SOURCE
 ~~~roc
 some_fn(arg1)?
-	.sample_member()?
-	.next_sample_member()?
+	.static_dispatch_method()?
+	.next_static_dispatch_method()?
 	.record_field?
 ~~~
 # EXPECTED
@@ -56,7 +56,7 @@ The `?` operator can only be used inside function bodies because it can cause an
 **record_access_multiline_formatting_1.md:1:1:2:28:**
 ```roc
 some_fn(arg1)?
-	.sample_member()?
+	.static_dispatch_method()?
 ```
 
 
@@ -66,8 +66,8 @@ The `?` operator can only be used inside function bodies because it can cause an
 **record_access_multiline_formatting_1.md:1:1:3:33:**
 ```roc
 some_fn(arg1)?
-	.sample_member()?
-	.next_sample_member()?
+	.static_dispatch_method()?
+	.next_static_dispatch_method()?
 ```
 
 
@@ -77,8 +77,8 @@ The `?` operator can only be used inside function bodies because it can cause an
 **record_access_multiline_formatting_1.md:1:1:4:16:**
 ```roc
 some_fn(arg1)?
-	.sample_member()?
-	.next_sample_member()?
+	.static_dispatch_method()?
+	.next_static_dispatch_method()?
 	.record_field?
 ```
 
@@ -104,9 +104,9 @@ EndOfFile,
 								(e-ident (raw "some_fn"))
 								(e-ident (raw "arg1"))))
 						(e-apply
-							(e-ident (raw ".sample_member")))))
+							(e-ident (raw ".static_dispatch_method")))))
 				(e-apply
-					(e-ident (raw ".next_sample_member")))))
+					(e-ident (raw ".next_static_dispatch_method")))))
 		(e-ident (raw ".record_field"))))
 ~~~
 # FORMATTED
@@ -123,12 +123,12 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-field-access (field "next_sample_member")
+								(e-field-access (field "next_static_dispatch_method")
 									(receiver
 										(e-match
 											(match
 												(cond
-													(e-field-access (field "sample_member")
+													(e-field-access (field "static_dispatch_method")
 														(receiver
 															(e-match
 																(match

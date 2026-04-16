@@ -162,6 +162,12 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) !std.ArrayList(CIR.Def.Id
     if (env.common.findIdent("Builtin.Str.join_with")) |str_join_with_ident| {
         try low_level_map.put(str_join_with_ident, .str_join_with);
     }
+    if (env.common.findIdent("Builtin.Box.box")) |box_box_ident| {
+        try low_level_map.put(box_box_ident, .box_box);
+    }
+    if (env.common.findIdent("Builtin.Box.unbox")) |box_unbox_ident| {
+        try low_level_map.put(box_unbox_ident, .box_unbox);
+    }
     if (env.common.findIdent("Builtin.List.len")) |list_len_ident| {
         try low_level_map.put(list_len_ident, .list_len);
     }
@@ -272,9 +278,13 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) !std.ArrayList(CIR.Def.Id
         }
     }
 
+    // from_numeral (all numeric types)
     for (numeric_types) |num_type| {
         var buf: [256]u8 = undefined;
 
+        const from_numeral = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.from_numeral", .{num_type});
+        if (env.common.findIdent(from_numeral)) |ident| {
+            try low_level_map.put(ident, .num_from_numeral);
         }
     }
 

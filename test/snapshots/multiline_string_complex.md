@@ -54,25 +54,25 @@ x = {
 }
 ~~~
 # EXPECTED
-MISSING MEMBER - multiline_string_complex.md:40:5:40:8
-MISSING MEMBER - multiline_string_complex.md:37:3:37:9
+MISSING METHOD - multiline_string_complex.md:40:5:40:8
+MISSING METHOD - multiline_string_complex.md:37:3:37:9
 TYPE MISMATCH - multiline_string_complex.md:37:3:37:4
 # PROBLEMS
-**MISSING MEMBER**
-This **not** member is being used on a value whose type doesn't provide that member:
+**MISSING METHOD**
+This **not** method is being called on a value whose type doesn't have that method:
 **multiline_string_complex.md:40:5:40:8:**
 ```roc
 	e: !\\
 ```
 	   ^^^
 
-The value's type, which does not have a member named **not**, is:
+The value's type, which does not have a method named **not**, is:
 
     Str
 
-**Hint:** For this to work, the type would need to have a member named **not** in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **not** associated with it in the type's declaration.
 
-**MISSING MEMBER**
+**MISSING METHOD**
 The value before this **-** operator has a type that doesn't have a **minus** method:
 **multiline_string_complex.md:37:3:37:9:**
 ```roc
@@ -80,7 +80,7 @@ The value before this **-** operator has a type that doesn't have a **minus** me
 ```
 		^^^^^^
 
-The value's type, which does not have a member named **minus**, is:
+The value's type, which does not have a method named **minus**, is:
 
     Str
 

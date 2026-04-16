@@ -94,7 +94,7 @@ pub fn PackedDataSpan(comptime start_bits: u6, comptime length_bits: u6) type {
 }
 
 /// Common configurations for different use cases
-/// Good for function arguments and similar short collections (up to 4095 args, 1M+ start positions)
+/// Good for function arguments and method calls (up to 4095 args, 1M+ start positions)
 pub const FunctionArgs = PackedDataSpan(20, 12);
 
 /// Good for small collections with high start range (up to 255 items, 16M+ start positions)

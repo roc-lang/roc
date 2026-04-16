@@ -270,7 +270,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .where_expected_open_bracket => "WHERE CLAUSE ERROR",
         .where_expected_close_bracket => "WHERE CLAUSE ERROR",
         .where_expected_var => "WHERE CLAUSE ERROR",
-        .where_expected_alias_name => "WHERE CLAUSE ERROR",
+        .where_expected_method_or_alias_name => "WHERE CLAUSE ERROR",
         .where_expected_colon => "WHERE CLAUSE ERROR",
         .where_expected_constraints => "WHERE CLAUSE ERROR",
         .type_alias_cannot_have_associated => "TYPE ALIAS WITH ASSOCIATED ITEMS",
@@ -469,34 +469,43 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addText(".");
             try report.document.addLineBreak();
             try report.document.addText("Where clauses should look like: ");
-            try report.document.addCodeBlock("where [a.SomeTypeAlias]");
+            try report.document.addCodeBlock("where [a.method : Type]");
         },
         .where_expected_close_bracket => {
             try report.document.addReflowingText("Expected a closing bracket ");
             try report.document.addAnnotated("]", .emphasized);
+            try report.document.addText(" after the where clause constraints.");
             try report.document.addLineBreak();
             try report.document.addText("Where clauses should look like: ");
-            try report.document.addCodeBlock("where [a.SomeTypeAlias]");
+            try report.document.addCodeBlock("where [a.method : Type]");
         },
         .where_expected_var => {
             try report.document.addReflowingText("Expected a type variable name here.");
             try report.document.addLineBreak();
             try report.document.addReflowingText("Type variables are lowercase identifiers that represent types.");
         },
-        .where_expected_alias_name => {
-            try report.document.addReflowingText("Expected a type alias after the dot.");
+        .where_expected_method_or_alias_name => {
+            try report.document.addReflowingText("Expected a method name or type alias after the dot.");
             try report.document.addLineBreak();
-            try report.document.addText("Where clauses now only allow alias constraints such as: ");
+            try report.document.addText("Where clauses can contain:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addText("• Method constraints: ");
+            try report.document.addCodeBlock("a.method : args -> ret");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addText("• Type aliases: ");
             try report.document.addCodeBlock("a.SomeTypeAlias");
         },
         .where_expected_colon => {
             try report.document.addReflowingText("Expected a colon ");
             try report.document.addAnnotated(":", .emphasized);
+            try report.document.addText(" after the method name in this where clause constraint.");
             try report.document.addLineBreak();
             try report.document.addReflowingText("Method constraints require a colon to separate the method name from its type.");
             try report.document.addLineBreak();
             try report.document.addText("For example: ");
-            try report.document.addCodeBlock("a.SomeTypeAlias");
+            try report.document.addCodeBlock("a.method : a -> b");
         },
         .where_expected_constraints => {
             try report.document.addReflowingText("A ");
@@ -508,7 +517,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addText("For example:");
             try report.document.addLineBreak();
             try report.document.addIndent(1);
-            try report.document.addCodeBlock("where [a.SomeTypeAlias]");
+            try report.document.addCodeBlock("where [a.method : a -> b]");
         },
         .match_branch_wrong_arrow => {
             try report.document.addReflowingText("Match branches use `=>` instead of `->`.");
@@ -664,7 +673,7 @@ pub const Diagnostic = struct {
         where_expected_open_bracket,
         where_expected_close_bracket,
         where_expected_var,
-        where_expected_alias_name,
+        where_expected_method_or_alias_name,
         where_expected_colon,
         where_expected_constraints,
         import_must_be_top_level,
@@ -2431,15 +2440,49 @@ pub const AnnoRecordField = struct {
     }
 };
 
-/// The clause of a `where` constraint.
+/// The clause of a `where` constraint
+///
+/// Where clauses specify constraints on type variables that must be satisfied
+/// for a function or type to be valid. They enable generic programming with
+/// compile-time guarantees about available capabilities.
 pub const WhereClause = union(enum) {
+    /// Module method constraint specifying a method must exist in the module containing a type.
+    ///
+    /// This is the most common form of where clause constraint. It specifies that
+    /// a type variable must come from a module that provides a specific method.
+    ///
+    /// Examples:
+    /// ```roc
+    /// convert : a -> b where [a.to_b : a -> b]
+    /// decode : List(U8) -> a where [a.decode : List(U8) -> a]
+    /// hash : a -> U64 where [a.hash : a -> U64]
+    /// ```
+    mod_method: struct {
+        var_tok: Token.Idx,
+        name_tok: Token.Idx,
+        args: Collection.Idx,
+        ret_anno: TypeAnno.Idx,
+        region: TokenizedRegion,
+    },
+
     /// Module type alias constraint.
+    ///
+    /// Specifies that a type variable must satisfy the constraints for an alias type.
+    /// This is useful to avoid writing out the constraints repeatedly which can be cumbersome and error prone
+    ///
+    /// Example:
+    /// ```roc
+    /// Sort(a) : a where [a.order : elem, elem -> [LT, EQ, GT]]
+    ///
+    /// sort : List(elem) -> List(elem) where [elem.Sort]
+    /// ```
     mod_alias: struct {
         var_tok: Token.Idx,
         name_tok: Token.Idx,
         region: TokenizedRegion,
     },
 
+    /// Malformed where clause that failed to parse correctly.
     ///
     /// Contains diagnostic information about what went wrong during parsing.
     malformed: struct {
@@ -2448,6 +2491,31 @@ pub const WhereClause = union(enum) {
     },
     pub fn pushToSExprTree(self: @This(), gpa: std.mem.Allocator, env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         switch (self) {
+            .mod_method => |m| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("method");
+                try ast.appendRegionInfoToSexprTree(env, tree, m.region);
+
+                try tree.pushStringPair("module-of", ast.resolve(m.var_tok));
+
+                // remove preceding dot
+                const method_name = ast.resolve(m.name_tok)[1..];
+                try tree.pushStringPair("name", method_name);
+                const attrs = tree.beginNode();
+
+                const args_begin = tree.beginNode();
+                try tree.pushStaticAtom("args");
+                const attrs2 = tree.beginNode();
+                const args = ast.store.typeAnnoSlice(.{ .span = ast.store.getCollection(m.args).span });
+                for (args) |arg| {
+                    try ast.store.getTypeAnno(arg).pushToSExprTree(gpa, env, ast, tree);
+                }
+                try tree.endNode(args_begin, attrs2);
+
+                try ast.store.getTypeAnno(m.ret_anno).pushToSExprTree(gpa, env, ast, tree);
+
+                try tree.endNode(begin, attrs);
+            },
             .mod_alias => |a| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("alias");
@@ -2476,6 +2544,7 @@ pub const WhereClause = union(enum) {
     /// Extract the region from any WhereClause variant
     pub fn to_tokenized_region(self: @This()) TokenizedRegion {
         switch (self) {
+            .mod_method => |m| return m.region,
             .mod_alias => |a| return a.region,
             .malformed => |m| return m.region,
         }
@@ -2557,7 +2626,7 @@ pub const Expr = union(enum) {
         elem_token: Token.Idx,
         region: TokenizedRegion,
     },
-    arrow_apply: BinOp,
+    local_dispatch: BinOp,
     bin_op: BinOp,
     suffix_single_question: Unary,
     unary_op: Unary,
@@ -2638,7 +2707,7 @@ pub const Expr = union(enum) {
             .tuple => |e| e.region,
             .field_access => |e| e.region,
             .tuple_access => |e| e.region,
-            .arrow_apply => |e| e.region,
+            .local_dispatch => |e| e.region,
             .lambda => |e| e.region,
             .record_updater => |e| e.region,
             .bin_op => |e| e.region,
@@ -2995,9 +3064,9 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .arrow_apply => |a| {
+            .local_dispatch => |a| {
                 const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-arrow-apply");
+                try tree.pushStaticAtom("e-local-dispatch");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 const attrs = tree.beginNode();
 

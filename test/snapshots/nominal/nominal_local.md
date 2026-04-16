@@ -17,17 +17,17 @@ test = |{}| {
 }
 ~~~
 # EXPECTED
-MISSING MEMBER - nominal_local.md:9:5:9:15
+MISSING METHOD - nominal_local.md:9:5:9:15
 # PROBLEMS
-**MISSING MEMBER**
-This **encode_str** member is being used on a value whose type doesn't provide that member:
+**MISSING METHOD**
+This **encode_str** method is being called on a value whose type doesn't have that method:
 **nominal_local.md:9:5:9:15:**
 ```roc
     Str.encode("hi", fmt)
 ```
     ^^^^^^^^^^
 
-The value's type, which does not have a member named **encode_str**, is:
+The value's type, which does not have a method named **encode_str**, is:
 
     [Utf8Format, ..]
 
