@@ -6704,36 +6704,14 @@ pub const Lowerer = struct {
             break :blk source_var;
         } else null;
 
-        const receiver_var = if (source_receiver_var) |source_var| blk: {
-            break :blk try self.scopeVar(type_scope, module_idx, source_var);
-        } else blk: {
-            const receiver_expr_idx = args.implicit_receiver orelse blk_inner: {
-                if (args.explicit_args.len == 0) {
-                    return debugPanic(
-                        "monotype static dispatch invariant violated: method call missing receiver in module {d}",
-                        .{module_idx},
-                    );
-                }
-                break :blk_inner args.explicit_args[0];
-            };
-            break :blk self.requireExprResultVar(module_idx, type_scope, receiver_expr_idx);
-        };
-
-        const resolved_target = blk: {
-            if (source_receiver_var) |source_var| {
-                if (try self.resolveAttachedMethodTargetFromSourceVar(module_idx, source_var, method_name)) |target| {
-                    break :blk target;
-                }
-            }
-
-            const target = try self.resolveAttachedMethodTargetFromScopedVar(
-                module_idx,
-                type_scope,
-                receiver_var,
-                method_name,
-            ) orelse return null;
-            break :blk target;
-        };
+        const source_resolved_target = if (source_receiver_var) |source_var|
+            try self.resolveAttachedMethodTargetFromSourceVar(module_idx, source_var, method_name)
+        else
+            debugPanic(
+                "monotype static dispatch invariant violated: method call missing explicit source receiver type in module {d}",
+                .{module_idx},
+            );
+        const resolved_target = source_resolved_target orelse return null;
         const source_fn_var = try self.copyTopLevelDefExprVarToScope(type_scope, resolved_target.module_idx, resolved_target.def_idx);
 
         const arg_exprs = blk: {
@@ -6786,11 +6764,10 @@ pub const Lowerer = struct {
         switch (self.ctx.types.getTypePreservingNominal(operand_ty)) {
             .nominal => |_| {
                 const method_name = self.ctx.typedCirModule(module_idx).commonIdents().is_eq;
-                const receiver_var = self.requireExprResultVar(module_idx, type_scope, binop.lhs);
-                const target = try self.resolveAttachedMethodTargetFromScopedVar(
+                const source_receiver_var = self.ctx.typedCirModule(module_idx).exprType(binop.lhs);
+                const target = try self.resolveAttachedMethodTargetFromSourceVar(
                     module_idx,
-                    type_scope,
-                    receiver_var,
+                    source_receiver_var,
                     method_name,
                 ) orelse {
                     return null;
@@ -10866,68 +10843,10 @@ pub const Lowerer = struct {
         };
     }
 
-    const ScopedDispatchReceiverIdentity = struct {
+    const DispatchReceiverIdentity = struct {
         module_idx: u32,
         type_name: []const u8,
     };
-
-    fn resolveScopedDispatchReceiverIdentity(
-        self: *const Lowerer,
-        type_scope: *const TypeCloneScope,
-        receiver_var: Var,
-    ) ?ScopedDispatchReceiverIdentity {
-        const resolved = type_scope.typeStoreConst().resolveVar(receiver_var);
-        return switch (resolved.desc.content) {
-            .alias => |alias| .{
-                .module_idx = self.ctx.findModuleIdxByName(type_scope.getIdent(alias.origin_module)),
-                .type_name = type_scope.getIdent(alias.ident.ident_idx),
-            },
-            .structure => |flat| switch (flat) {
-                .nominal_type => |nominal| .{
-                    .module_idx = self.ctx.findModuleIdxByName(type_scope.getIdent(nominal.origin_module)),
-                    .type_name = type_scope.getIdent(nominal.ident.ident_idx),
-                },
-                else => null,
-            },
-            else => null,
-        };
-    }
-
-    fn resolveAttachedMethodTargetFromScopedVar(
-        self: *Lowerer,
-        source_module_idx: u32,
-        type_scope: *TypeCloneScope,
-        receiver_var: Var,
-        method_name: base.Ident.Idx,
-    ) std.mem.Allocator.Error!?ResolvedTarget {
-        const source_module = self.ctx.typedCirModule(source_module_idx);
-        const method_name_text = source_module.getIdent(method_name);
-        var receiver_writer = try types.TypeWriter.initFromParts(
-            self.allocator,
-            type_scope.typeStoreConst(),
-            type_scope.identStoreConst(),
-            null,
-        );
-        defer receiver_writer.deinit();
-        receiver_writer.setDefaultNumeralsToDec(true);
-        const receiver_text = try receiver_writer.writeGet(receiver_var, .one_line);
-        const receiver_copy = try self.allocator.dupe(u8, receiver_text);
-        defer self.allocator.free(receiver_copy);
-        const receiver = self.resolveScopedDispatchReceiverIdentity(type_scope, receiver_var) orelse {
-            return null;
-        };
-        const receiver_module = self.ctx.typedCirModule(receiver.module_idx);
-        const resolved = receiver_module.resolveAttachedMethodTargetByText(
-            receiver.type_name,
-            method_name_text,
-        ) orelse {
-            return null;
-        };
-        return .{
-            .module_idx = resolved.module_idx,
-            .def_idx = resolved.def_idx,
-        };
-    }
 
     fn resolveAttachedMethodTargetFromSourceVar(
         self: *Lowerer,
@@ -10953,7 +10872,7 @@ pub const Lowerer = struct {
         self: *const Lowerer,
         source_module_idx: u32,
         source_var: Var,
-    ) ?ScopedDispatchReceiverIdentity {
+    ) ?DispatchReceiverIdentity {
         const source_module = self.ctx.typedCirModule(source_module_idx);
         const source_store = source_module.typeStoreConst();
         const resolved = source_store.resolveVar(source_var);
@@ -10990,41 +10909,6 @@ pub const Lowerer = struct {
             else => null,
         };
     }
-
-    fn assertScopedVarTypesEqual(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeCloneScope,
-        actual_var: Var,
-        expected_var: Var,
-        comptime context: []const u8,
-    ) std.mem.Allocator.Error!void {
-        const actual_ty = try self.instantiateVarType(module_idx, type_scope, actual_var);
-        const expected_ty = try self.instantiateVarType(module_idx, type_scope, expected_var);
-        if (!self.ctx.types.equalIds(actual_ty, expected_ty)) {
-            var writer = try types.TypeWriter.initFromParts(
-                self.allocator,
-                type_scope.typeStoreConst(),
-                type_scope.identStoreConst(),
-                null,
-            );
-            defer writer.deinit();
-            writer.setDefaultNumeralsToDec(true);
-            const actual_text = try writer.writeGet(actual_var, .one_line);
-            const actual_copy = try self.allocator.dupe(u8, actual_text);
-            defer self.allocator.free(actual_copy);
-            writer.reset();
-            writer.setDefaultNumeralsToDec(true);
-            const expected_text = try writer.writeGet(expected_var, .one_line);
-            const expected_copy = try self.allocator.dupe(u8, expected_text);
-            defer self.allocator.free(expected_copy);
-            debugPanic(
-                "monotype invariant violated: " ++ context ++ " type mismatch in module {d}; actual var {d} => {s}; expected var {d} => {s}",
-                .{ module_idx, @intFromEnum(actual_var), actual_copy, @intFromEnum(expected_var), expected_copy },
-            );
-        }
-    }
-
     fn requireFunctionArgType(
         self: *Lowerer,
         module_idx: u32,
