@@ -409,7 +409,7 @@ fn collectContainingRegionsFromExpr(
         .field_access => |f| {
             try collectContainingRegionsFromExpr(allocator, ast, f.left, target_offset, regions);
         },
-        .local_dispatch => |d| {
+        .arrow_call => |d| {
             try collectContainingRegionsFromExpr(allocator, ast, d.left, target_offset, regions);
         },
         .unary_op => |u| {

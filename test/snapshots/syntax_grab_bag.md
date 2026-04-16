@@ -1536,7 +1536,7 @@ EndOfFile,
 								(field (name "bar") (rest false)
 									(p-int (raw "2")))
 								(field (name "rest") (rest true)))
-							(e-local-dispatch
+							(e-arrow-call
 								(e-int (raw "12"))
 								(e-apply
 									(e-ident (raw "add"))

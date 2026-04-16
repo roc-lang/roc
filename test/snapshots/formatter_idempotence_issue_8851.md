@@ -34,7 +34,7 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "a"))
 			(e-field-access
-				(e-local-dispatch
+				(e-arrow-call
 					(e-int (raw "0"))
 					(e-apply
 						(e-ident (raw "b"))))

@@ -83,7 +83,7 @@ EndOfFile,
 							(e-ident (raw "thing")))))))
 		(s-decl
 			(p-ident (raw "y"))
-			(e-local-dispatch
+			(e-arrow-call
 				(e-int (raw "5"))
 				(e-apply
 					(e-ident (raw "call"))

@@ -6305,17 +6305,17 @@ pub fn canonicalizeExpr(
                 .free_vars = free_vars_span,
             };
         },
-        .local_dispatch => |local_dispatch| {
+        .arrow_call => |arrow_call| {
             // Desugar `arg1->fn(arg2, arg3)` to `fn(arg1, arg2, arg3)`
             // and `arg1->fn` to `fn(arg1)`
-            const region = self.parse_ir.tokenizedRegionToRegion(local_dispatch.region);
+            const region = self.parse_ir.tokenizedRegionToRegion(arrow_call.region);
             const free_vars_start = self.scratch_free_vars.top();
 
             // Canonicalize the left expression (first argument)
-            const can_first_arg = try self.canonicalizeExpr(local_dispatch.left) orelse return null;
+            const can_first_arg = try self.canonicalizeExpr(arrow_call.left) orelse return null;
 
             // Get the right expression to determine the function and additional args
-            const right_expr = self.parse_ir.store.getExpr(local_dispatch.right);
+            const right_expr = self.parse_ir.store.getExpr(arrow_call.right);
 
             switch (right_expr) {
                 .apply => |apply| {
@@ -6412,7 +6412,7 @@ pub fn canonicalizeExpr(
                     }
 
                     // It's an ident
-                    const can_fn_expr = try self.canonicalizeExpr(local_dispatch.right) orelse return null;
+                    const can_fn_expr = try self.canonicalizeExpr(arrow_call.right) orelse return null;
 
                     const scratch_top = self.env.store.scratchExprTop();
                     try self.env.store.addScratchExpr(can_first_arg.idx);
@@ -6432,7 +6432,7 @@ pub fn canonicalizeExpr(
                 else => {
                     // Generic case: expr->(any_expression)
                     // Desugar to (any_expression)(left)
-                    const can_fn_expr = try self.canonicalizeExpr(local_dispatch.right) orelse return null;
+                    const can_fn_expr = try self.canonicalizeExpr(arrow_call.right) orelse return null;
 
                     const scratch_top = self.env.store.scratchExprTop();
                     try self.env.store.addScratchExpr(can_first_arg.idx);

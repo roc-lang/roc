@@ -733,8 +733,8 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.main_token = ta.elem_token;
             node.data.lhs = @intFromEnum(ta.expr);
         },
-        .local_dispatch => |ld| {
-            node.tag = .local_dispatch;
+        .arrow_call => |ld| {
+            node.tag = .arrow_call;
             node.region = ld.region;
             node.main_token = ld.operator;
             node.data.lhs = @intFromEnum(ld.left);
@@ -1763,8 +1763,8 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .region = node.region,
             } };
         },
-        .local_dispatch => {
-            return .{ .local_dispatch = .{
+        .arrow_call => {
+            return .{ .arrow_call = .{
                 .left = @enumFromInt(node.data.lhs),
                 .right = @enumFromInt(node.data.rhs),
                 .operator = node.main_token,

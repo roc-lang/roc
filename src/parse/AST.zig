@@ -2626,7 +2626,7 @@ pub const Expr = union(enum) {
         elem_token: Token.Idx,
         region: TokenizedRegion,
     },
-    local_dispatch: BinOp,
+    arrow_call: BinOp,
     bin_op: BinOp,
     suffix_single_question: Unary,
     unary_op: Unary,
@@ -2707,7 +2707,7 @@ pub const Expr = union(enum) {
             .tuple => |e| e.region,
             .field_access => |e| e.region,
             .tuple_access => |e| e.region,
-            .local_dispatch => |e| e.region,
+            .arrow_call => |e| e.region,
             .lambda => |e| e.region,
             .record_updater => |e| e.region,
             .bin_op => |e| e.region,
@@ -3064,9 +3064,9 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .local_dispatch => |a| {
+            .arrow_call => |a| {
                 const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-local-dispatch");
+                try tree.pushStaticAtom("e-arrow-call");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 const attrs = tree.beginNode();
 
