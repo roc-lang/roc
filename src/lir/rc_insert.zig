@@ -7427,6 +7427,137 @@ test "RC proc body: returning list param does not tail-decref it" {
     try std.testing.expectEqual(@as(u32, 0), countDecrefsForSymbol(&env.lir_store, result, sym_list));
 }
 
+test "RC proc body: borrowed list_len stmt preserves list param for later consuming call" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_layout: LayoutIdx = .i64;
+    const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(i64_layout));
+    const sym_list = makeSymbol(1);
+    const sym_len = makeSymbol(2);
+    const sym_id = makeSymbol(3);
+
+    const lookup_list_len = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_list,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const len_args = try env.lir_store.addExprSpan(&.{lookup_list_len});
+    const len_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_len,
+        .args = len_args,
+        .ret_layout = i64_layout,
+    } }, Region.zero());
+
+    const lookup_list_call = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_list,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const callee_proc = try makeProc(&env.lir_store, sym_id, .bool);
+    const call_args = try env.lir_store.addExprSpan(&.{lookup_list_call});
+    const call_expr = try env.lir_store.addExpr(.{ .proc_call = .{
+        .proc = callee_proc,
+        .args = call_args,
+        .ret_layout = .bool,
+        .called_via = .apply,
+    } }, Region.zero());
+
+    const lookup_len = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_len,
+        .layout_idx = i64_layout,
+    } }, Region.zero());
+    const pat_list = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_list,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const pat_len = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_len,
+        .layout_idx = i64_layout,
+    } }, Region.zero());
+    const wild_bool = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = .bool } }, Region.zero());
+    const params = try env.lir_store.addPatternSpan(&.{pat_list});
+    const stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_len, .expr = len_expr } },
+        .{ .decl = .{ .pattern = wild_bool, .expr = call_expr } },
+    });
+    const body = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = lookup_len,
+        .result_layout = i64_layout,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOpsForProcBody(body, params, i64_layout);
+
+    try std.testing.expectEqual(@as(u32, 0), countIncrefsForSymbol(&env.lir_store, result, sym_list));
+    try std.testing.expectEqual(@as(u32, 0), countDecrefsForSymbol(&env.lir_store, result, sym_list));
+}
+
+test "RC proc body: consuming call stmt preserves list param for later consuming call" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_layout: LayoutIdx = .i64;
+    const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(i64_layout));
+    const sym_list = makeSymbol(1);
+    const sym_first_call = makeSymbol(2);
+    const sym_second_call = makeSymbol(3);
+
+    const lookup_list_first = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_list,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const first_call_args = try env.lir_store.addExprSpan(&.{lookup_list_first});
+    const first_call = try env.lir_store.addExpr(.{ .proc_call = .{
+        .proc = try makeProc(&env.lir_store, sym_first_call, .bool),
+        .args = first_call_args,
+        .ret_layout = .bool,
+        .called_via = .apply,
+    } }, Region.zero());
+
+    const lookup_list_second = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_list,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const second_call_args = try env.lir_store.addExprSpan(&.{lookup_list_second});
+    const second_call = try env.lir_store.addExpr(.{ .proc_call = .{
+        .proc = try makeProc(&env.lir_store, sym_second_call, .bool),
+        .args = second_call_args,
+        .ret_layout = .bool,
+        .called_via = .apply,
+    } }, Region.zero());
+
+    const pat_list = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_list,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const wild_bool = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = .bool } }, Region.zero());
+    const params = try env.lir_store.addPatternSpan(&.{pat_list});
+    const stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = wild_bool, .expr = first_call } },
+    });
+    const body = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = second_call,
+        .result_layout = .bool,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOpsForProcBody(body, params, .bool);
+
+    try std.testing.expectEqual(@as(u32, 1), countIncrefsForSymbol(&env.lir_store, result, sym_list));
+    try std.testing.expectEqual(@as(u32, 0), countDecrefsForSymbol(&env.lir_store, result, sym_list));
+}
+
 test "RC proc_call caller: consumed refcounted arg is not tail-decref'd by caller" {
     const allocator = std.testing.allocator;
 

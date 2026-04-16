@@ -94,8 +94,10 @@ pub const CacheManager = struct {
 
     /// Initialize a new cache manager.
     pub fn init(allocator: Allocator, config: CacheConfig, roc_ctx: CoreCtx) Self {
+        var cfg = config;
+        cfg.roc_ctx = roc_ctx;
         return Self{
-            .config = config,
+            .config = cfg,
             .roc_ctx = roc_ctx,
             .allocator = allocator,
             .stats = CacheStats{},

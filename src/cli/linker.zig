@@ -711,7 +711,7 @@ test "target format detection" {
 
 test "link error when LLVM not available" {
     if (comptime !llvm_available) {
-        var io = Io.init();
+        var io = Io.create(std.testing.io);
         var ctx = CliCtx.init(std.testing.allocator, std.testing.allocator, &io, .build);
         ctx.initIo();
         defer ctx.deinit();

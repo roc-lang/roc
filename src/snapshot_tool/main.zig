@@ -4873,6 +4873,7 @@ fn generateReplProblemsSection(output: *DualOutput, _: *const Content) !void {
 }
 
 test "snapshot validation" {
+    app_io = std.testing.io;
     const allocator = std.testing.allocator;
     if (!try checkSnapshotExpectations(allocator)) {
         return error.SnapshotValidationFailed;
