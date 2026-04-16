@@ -3556,11 +3556,17 @@ pub const Lowerer = struct {
 
         for (branches, 0..) |branch_idx, i| {
             const branch = typed_cir_module.getMatchBranch(branch_idx);
-            if (branch.guard != null) debugTodo("monotype.lowerMatchExpr guard");
+            if (branch.guard != null) {
+                debugPanic("monotype match invariant violated: guarded branch reached direct when lowering", .{});
+            }
             const branch_pattern_ids = typed_cir_module.sliceMatchBranchPatterns(branch.patterns);
-            if (branch_pattern_ids.len != 1) debugTodo("monotype.lowerMatchExpr or-pattern");
+            if (branch_pattern_ids.len != 1) {
+                debugPanic("monotype match invariant violated: alternative branch pattern reached direct when lowering", .{});
+            }
             const branch_pattern = typed_cir_module.getMatchBranchPattern(branch_pattern_ids[0]);
-            if (branch_pattern.degenerate) debugTodo("monotype.lowerMatchExpr degenerate branch");
+            if (branch_pattern.degenerate) {
+                debugPanic("monotype match invariant violated: degenerate branch reached direct when lowering", .{});
+            }
 
             var branch_env = try self.cloneEnv(env);
             defer branch_env.deinit();
