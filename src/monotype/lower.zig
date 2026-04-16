@@ -2519,11 +2519,7 @@ pub const Lowerer = struct {
                 const req = requires_items[req_idx];
                 const required_name = self.ctx.typedCirModule(module_idx).getIdent(req.ident);
                 const app_module = self.ctx.typedCirModule(app_module_idx);
-                const app_ident = app_module.findCommonIdent(required_name) orelse debugPanic(
-                    "monotype invariant violated: required lookup '{s}' missing from app module {d}",
-                    .{ required_name, app_module_idx },
-                );
-                const app_def_idx = self.findTopLevelDefByIdent(app_module_idx, app_ident) orelse debugPanic(
+                const app_def_idx = app_module.topLevelDefByText(required_name) orelse debugPanic(
                     "monotype invariant violated: required lookup '{s}' missing def in app module {d}",
                     .{ required_name, app_module_idx },
                 );
@@ -2879,12 +2875,7 @@ pub const Lowerer = struct {
         if (module_idx != self.ctx.builtin_module_idx) return false;
 
         const typed_cir_module = self.ctx.typedCirModule(module_idx);
-        const inspect_ident = typed_cir_module.findCommonIdent("Builtin.Str.inspect") orelse return false;
-        const def = typed_cir_module.def(def_idx).data;
-        return switch (typed_cir_module.pattern(def.pattern).data) {
-            .assign => |assign| assign.ident.eql(inspect_ident),
-            else => false,
-        };
+        return typed_cir_module.topLevelDefByText("Builtin.Str.inspect") == def_idx;
     }
 
     fn lowerNumericIntLiteralData(
@@ -9972,25 +9963,6 @@ pub const Lowerer = struct {
             const top_level = entry.value_ptr.*;
             if (top_level.module_idx == module_idx and top_level.def_idx == def_idx) {
                 return entry.key_ptr.*;
-            }
-        }
-        return null;
-    }
-
-    fn findTopLevelDefByIdent(
-        self: *const Lowerer,
-        module_idx: u32,
-        ident: base.Ident.Idx,
-    ) ?CIR.Def.Idx {
-        const typed_cir_module = self.ctx.typedCirModule(module_idx);
-        for (typed_cir_module.allDefs()) |def_idx| {
-            const def = typed_cir_module.def(def_idx);
-            if (def.data.kind != .let) continue;
-            switch (def.pattern.data) {
-                .assign => |assign| {
-                    if (assign.ident.eql(ident)) return def_idx;
-                },
-                else => {},
             }
         }
         return null;

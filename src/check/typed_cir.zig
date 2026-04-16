@@ -259,6 +259,23 @@ pub const Module = struct {
         return self.patternType(def_data.pattern);
     }
 
+    pub fn topLevelDefByIdent(self: @This(), ident: Ident.Idx) ?CIR.Def.Idx {
+        for (self.allDefs()) |def_idx| {
+            const def = self.def(def_idx);
+            if (def.data.kind != .let) continue;
+            switch (def.pattern.data) {
+                .assign => |assign| if (assign.ident.eql(ident)) return def_idx,
+                else => {},
+            }
+        }
+        return null;
+    }
+
+    pub fn topLevelDefByText(self: @This(), text: []const u8) ?CIR.Def.Idx {
+        const ident = self.findCommonIdent(text) orelse return null;
+        return self.topLevelDefByIdent(ident);
+    }
+
     pub fn exprType(_: @This(), idx: CIR.Expr.Idx) Var {
         return ModuleEnv.varFrom(idx);
     }
