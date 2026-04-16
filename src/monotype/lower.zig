@@ -457,11 +457,11 @@ pub const Lowerer = struct {
         solved_var: ?Var = null,
     };
 
-    const FrozenCheckerVar = specializations_mod.FrozenCheckerVar;
+    const CheckerSnapshot = specializations_mod.CheckerSnapshot;
 
-    const FrozenTypedBinding = struct {
+    const SnapshotTypedBinding = struct {
         symbol: symbol_mod.Symbol,
-        checker_var: ?FrozenCheckerVar = null,
+        checker_var: ?CheckerSnapshot = null,
 
         fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
             if (self.checker_var) |*checker_var| {
@@ -478,10 +478,10 @@ pub const Lowerer = struct {
 
     const BindingEnv = std.AutoHashMap(PatternKey, BindingValue);
 
-    const FrozenBindingValue = struct {
-        typed: ?FrozenTypedBinding = null,
+    const SnapshotBindingValue = struct {
+        typed: ?SnapshotTypedBinding = null,
         local_fn_source: ?LocalFnSourceRef = null,
-        local_fn_seed_var: ?FrozenCheckerVar = null,
+        local_fn_seed_var: ?CheckerSnapshot = null,
 
         fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
             if (self.typed) |*typed| {
@@ -493,7 +493,7 @@ pub const Lowerer = struct {
         }
     };
 
-    const FrozenBindingEnv = std.AutoHashMap(PatternKey, FrozenBindingValue);
+    const SnapshotBindingEnv = std.AutoHashMap(PatternKey, SnapshotBindingValue);
 
     fn putTypedBinding(
         _: *Lowerer,
@@ -562,7 +562,7 @@ pub const Lowerer = struct {
 
     const LocalFnGroupState = struct {
         module_idx: u32,
-        declaration_env: FrozenBindingEnv,
+        declaration_env: SnapshotBindingEnv,
         insertion_index: usize,
         sources: []LocalFnSource,
         pending: std.ArrayList(LocalFnPending),
@@ -941,7 +941,7 @@ pub const Lowerer = struct {
         try self.finalizePatternTypes(module_idx, &type_scope);
 
         const expected_ty = try self.requireExprType(module_idx, &type_scope, solved_def.expr.idx);
-        const expected_checker_seed = try self.freezeCheckerVarFromScope(&type_scope, expected_var);
+        const expected_checker_snapshot = try self.snapshotCheckerVarFromScope(&type_scope, expected_var);
 
         return try self.specializations.specializeFn(
             &self.ctx.symbols,
@@ -949,7 +949,7 @@ pub const Lowerer = struct {
             symbol,
             .{ .module_idx = module_idx, .def_idx = def_idx },
             expected_ty,
-            expected_checker_seed,
+            expected_checker_snapshot,
         );
     }
 
@@ -966,7 +966,7 @@ pub const Lowerer = struct {
             scoped_expected_var
         else
             try self.instantiateSourceVar(type_scope, top_level.module_idx, source_root_var);
-        const expected_checker_seed = try self.freezeCheckerVarFromScope(
+        const expected_checker_snapshot = try self.snapshotCheckerVarFromScope(
             type_scope,
             specialization_root_var,
         );
@@ -979,7 +979,7 @@ pub const Lowerer = struct {
                 .def_idx = top_level.def_idx,
             },
             expected_ty,
-            expected_checker_seed,
+            expected_checker_snapshot,
         );
     }
 
@@ -1599,15 +1599,15 @@ pub const Lowerer = struct {
         type_scope: *TypeScope,
         pending: specializations_mod.Pending,
     ) std.mem.Allocator.Error!Var {
-        return try self.materializeFrozenCheckerVar(type_scope, pending.expected_checker_seed);
+        return try self.restoreCheckerSnapshot(type_scope, pending.expected_checker_snapshot);
     }
 
-    fn freezeCheckerVarFromStores(
+    fn snapshotCheckerVarFromStores(
         self: *Lowerer,
         source_store: *const types.Store,
         source_idents: *const base.Ident.Store,
         source_var: Var,
-    ) std.mem.Allocator.Error!FrozenCheckerVar {
+    ) std.mem.Allocator.Error!CheckerSnapshot {
         var type_store = try types.Store.init(self.allocator);
         errdefer type_store.deinit();
         var ident_store = try base.Ident.Store.initCapacity(self.allocator, 16);
@@ -1630,22 +1630,22 @@ pub const Lowerer = struct {
         };
     }
 
-    fn freezeCheckerVarFromScope(
+    fn snapshotCheckerVarFromScope(
         self: *Lowerer,
         type_scope: *const TypeScope,
         source_var: Var,
-    ) std.mem.Allocator.Error!FrozenCheckerVar {
-        return self.freezeCheckerVarFromStores(
+    ) std.mem.Allocator.Error!CheckerSnapshot {
+        return self.snapshotCheckerVarFromStores(
             type_scope.typeStoreConst(),
             type_scope.identStoreConst(),
             source_var,
         );
     }
 
-    fn materializeFrozenCheckerVar(
+    fn restoreCheckerSnapshot(
         self: *Lowerer,
         type_scope: *TypeScope,
-        frozen: FrozenCheckerVar,
+        frozen: CheckerSnapshot,
     ) std.mem.Allocator.Error!Var {
         var var_map = std.AutoHashMap(Var, Var).init(self.allocator);
         defer var_map.deinit();
@@ -5255,7 +5255,7 @@ pub const Lowerer = struct {
 
         group.* = .{
             .module_idx = module_idx,
-            .declaration_env = FrozenBindingEnv.init(self.allocator),
+            .declaration_env = SnapshotBindingEnv.init(self.allocator),
             .insertion_index = lowered.items.len,
             .sources = sources,
             .pending = .empty,
@@ -5285,7 +5285,7 @@ pub const Lowerer = struct {
             });
         }
 
-        group.declaration_env = try self.freezeBindingEnv(type_scope, env.*);
+        group.declaration_env = try self.snapshotBindingEnv(type_scope, env.*);
         return .{
             .group_index = group_index,
             .group_end = end_idx,
@@ -9571,15 +9571,15 @@ pub const Lowerer = struct {
         var type_scope: TypeScope = undefined;
         try type_scope.initAll(self.allocator, self.ctx.typedCirModule(group.module_idx));
         defer type_scope.deinit();
-        var declaration_env = try self.materializeFrozenBindingEnv(&type_scope, group.declaration_env);
+        var declaration_env = try self.restoreBindingEnvFromSnapshots(&type_scope, group.declaration_env);
         defer declaration_env.deinit();
         const scoped_expected_var = if (expected_var) |var_| blk: {
-            const frozen = try self.freezeCheckerVarFromScope(caller_scope, var_);
+            const frozen = try self.snapshotCheckerVarFromScope(caller_scope, var_);
             defer {
                 var owned = frozen;
                 owned.deinit(self.allocator);
             }
-            break :blk try self.materializeFrozenCheckerVar(&type_scope, frozen);
+            break :blk try self.restoreCheckerSnapshot(&type_scope, frozen);
         } else null;
         const letfn = try self.lowerLambdaLikeDefWithEnv(
             group.module_idx,
@@ -10267,12 +10267,12 @@ pub const Lowerer = struct {
         return out;
     }
 
-    fn freezeBindingEnv(
+    fn snapshotBindingEnv(
         self: *Lowerer,
         type_scope: *TypeScope,
         env: BindingEnv,
-    ) std.mem.Allocator.Error!FrozenBindingEnv {
-        var out = FrozenBindingEnv.init(self.allocator);
+    ) std.mem.Allocator.Error!SnapshotBindingEnv {
+        var out = SnapshotBindingEnv.init(self.allocator);
         errdefer {
             var iter = out.valueIterator();
             while (iter.next()) |value| {
@@ -10284,10 +10284,10 @@ pub const Lowerer = struct {
         var iter = env.iterator();
         while (iter.next()) |entry| {
             const frozen_typed = if (entry.value_ptr.typed) |typed| blk: {
-                break :blk FrozenTypedBinding{
+                break :blk SnapshotTypedBinding{
                     .symbol = typed.symbol,
                     .checker_var = if (typed.solved_var) |var_|
-                        try self.freezeCheckerVarFromScope(type_scope, var_)
+                        try self.snapshotCheckerVarFromScope(type_scope, var_)
                     else
                         null,
                 };
@@ -10297,7 +10297,7 @@ pub const Lowerer = struct {
                 .typed = frozen_typed,
                 .local_fn_source = entry.value_ptr.local_fn_source,
                 .local_fn_seed_var = if (entry.value_ptr.local_fn_seed_var) |var_|
-                    try self.freezeCheckerVarFromScope(type_scope, var_)
+                    try self.snapshotCheckerVarFromScope(type_scope, var_)
                 else
                     null,
             });
@@ -10305,10 +10305,10 @@ pub const Lowerer = struct {
         return out;
     }
 
-    fn materializeFrozenBindingEnv(
+    fn restoreBindingEnvFromSnapshots(
         self: *Lowerer,
         type_scope: *TypeScope,
-        frozen_env: FrozenBindingEnv,
+        frozen_env: SnapshotBindingEnv,
     ) std.mem.Allocator.Error!BindingEnv {
         var out = BindingEnv.init(self.allocator);
         errdefer out.deinit();
@@ -10319,7 +10319,7 @@ pub const Lowerer = struct {
                 break :blk TypedBinding{
                     .symbol = frozen_typed.symbol,
                     .solved_var = if (frozen_typed.checker_var) |frozen_var|
-                        try self.materializeFrozenCheckerVar(type_scope, frozen_var)
+                        try self.restoreCheckerSnapshot(type_scope, frozen_var)
                     else
                         null,
                 };
@@ -10329,7 +10329,7 @@ pub const Lowerer = struct {
                 .typed = typed,
                 .local_fn_source = entry.value_ptr.local_fn_source,
                 .local_fn_seed_var = if (entry.value_ptr.local_fn_seed_var) |frozen_var|
-                    try self.materializeFrozenCheckerVar(type_scope, frozen_var)
+                    try self.restoreCheckerSnapshot(type_scope, frozen_var)
                 else
                     null,
             });
