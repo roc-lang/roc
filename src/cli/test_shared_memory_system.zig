@@ -17,7 +17,7 @@ test "platform resolution - basic cli platform" {
     const arena = arena_impl.allocator();
 
     // Create a CLI context for error reporting
-    var io = Io.init();
+    var io = Io.create(std.testing.io);
     var ctx = CliCtx.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
@@ -56,7 +56,7 @@ test "platform resolution - no platform in file" {
     const arena = arena_impl.allocator();
 
     // Create a CLI context for error reporting
-    var io = Io.init();
+    var io = Io.create(std.testing.io);
     var ctx = CliCtx.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
@@ -90,7 +90,7 @@ test "platform resolution - file not found" {
     const arena = arena_impl.allocator();
 
     // Create a CLI context for error reporting
-    var io = Io.init();
+    var io = Io.create(std.testing.io);
     var ctx = CliCtx.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
@@ -108,7 +108,7 @@ test "platform resolution - insecure HTTP URL rejected" {
     const arena = arena_impl.allocator();
 
     // Create a CLI context for error reporting
-    var io = Io.init();
+    var io = Io.create(std.testing.io);
     var ctx = CliCtx.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
@@ -150,7 +150,7 @@ test "integration - shared memory setup and parsing" {
     defer gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
-    var io = Io.init();
+    var io = Io.create(std.testing.io);
     var ctx = CliCtx.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
@@ -198,7 +198,7 @@ test "integration - compilation pipeline for different platforms" {
     defer gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
-    var io = Io.init();
+    var io = Io.create(std.testing.io);
     var ctx = CliCtx.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
@@ -258,7 +258,7 @@ test "integration - error handling for non-existent file" {
     defer gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
-    var io = Io.init();
+    var io = Io.create(std.testing.io);
     var ctx = CliCtx.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
@@ -323,7 +323,7 @@ test "integration - automatic module dependency ordering" {
     defer gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
-    var io = Io.init();
+    var io = Io.create(std.testing.io);
     var ctx = CliCtx.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
@@ -363,7 +363,7 @@ test "integration - transitive module imports (module A imports module B)" {
     defer gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
-    var io = Io.init();
+    var io = Io.create(std.testing.io);
     var ctx = CliCtx.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
@@ -410,7 +410,7 @@ test "integration - diamond dependency pattern (A imports B and C, both import D
     defer gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
-    var io = Io.init();
+    var io = Io.create(std.testing.io);
     var ctx = CliCtx.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
@@ -447,7 +447,7 @@ test "integration - direct Core and Utils calls from app" {
     defer gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
-    var io = Io.init();
+    var io = Io.create(std.testing.io);
     var ctx = CliCtx.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();

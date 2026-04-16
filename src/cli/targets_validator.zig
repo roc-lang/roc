@@ -719,7 +719,7 @@ test "validateTargetFilesExist returns valid when no files_dir specified" {
         .shared_lib = &.{},
     };
 
-    const result = try validateTargetFilesExist(allocator, config, std.Io.Dir.cwd());
+    const result = try validateTargetFilesExist(allocator, std.testing.io, config, std.Io.Dir.cwd());
     try std.testing.expectEqual(ValidationResult{ .valid = {} }, result);
 }
 
@@ -957,7 +957,7 @@ test "validateTargetFilesExist reports missing target file with valid path" {
     };
 
     // This should return a missing_target_file result with a valid expected_full_path
-    const result = try validateTargetFilesExist(allocator, config, tmp_dir.dir);
+    const result = try validateTargetFilesExist(allocator, std.testing.io, config, tmp_dir.dir);
 
     switch (result) {
         .missing_target_file => |info| {

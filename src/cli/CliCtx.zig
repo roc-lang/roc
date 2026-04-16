@@ -327,7 +327,7 @@ pub fn renderProblem(
 
 test "CliCtx accumulates problems" {
     const allocator = std.testing.allocator;
-    var io = Io.init();
+    var io = Io.create(std.testing.io);
 
     var ctx = CliCtx.init(allocator, allocator, &io, .build);
     ctx.initIo();
@@ -347,7 +347,7 @@ test "CliCtx accumulates problems" {
 
 test "CliCtx counts errors vs warnings correctly" {
     const allocator = std.testing.allocator;
-    var io = Io.init();
+    var io = Io.create(std.testing.io);
 
     var ctx = CliCtx.init(allocator, allocator, &io, .build);
     ctx.initIo();
@@ -362,7 +362,7 @@ test "CliCtx counts errors vs warnings correctly" {
 
 test "CliCtx clear resets state" {
     const allocator = std.testing.allocator;
-    var io = Io.init();
+    var io = Io.create(std.testing.io);
 
     var ctx = CliCtx.init(allocator, allocator, &io, .build);
     ctx.initIo();
