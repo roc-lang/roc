@@ -77,6 +77,8 @@ const Ctx = struct {
     idents: base.Ident.Store,
     source_modules: *typed_cir.Modules,
     builtin_module_idx: u32,
+    executable_start_ident: base.Ident.Idx,
+    executable_len_ident: base.Ident.Idx,
     top_level_symbols: std.AutoHashMap(TopLevelKey, symbol_mod.Symbol),
     pattern_symbols: std.AutoHashMap(PatternKey, symbol_mod.Symbol),
 
@@ -247,13 +249,19 @@ const Ctx = struct {
         typed_cir_modules: *typed_cir.Modules,
         builtin_module_idx: u32,
     ) std.mem.Allocator.Error!Ctx {
+        var idents = try base.Ident.Store.initCapacity(allocator, 256);
+        errdefer idents.deinit(allocator);
+        const executable_start_ident = try idents.insert(allocator, base.Ident.for_text("start"));
+        const executable_len_ident = try idents.insert(allocator, base.Ident.for_text("len"));
         return .{
             .allocator = allocator,
             .symbols = symbol_mod.Store.init(allocator),
             .types = type_mod.Store.init(allocator),
-            .idents = try base.Ident.Store.initCapacity(allocator, 256),
+            .idents = idents,
             .source_modules = typed_cir_modules,
             .builtin_module_idx = builtin_module_idx,
+            .executable_start_ident = executable_start_ident,
+            .executable_len_ident = executable_len_ident,
             .top_level_symbols = std.AutoHashMap(TopLevelKey, symbol_mod.Symbol).init(allocator),
             .pattern_symbols = std.AutoHashMap(PatternKey, symbol_mod.Symbol).init(allocator),
         };
@@ -3132,12 +3140,9 @@ pub const Lowerer = struct {
         self: *Lowerer,
         len_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!type_mod.TypeId {
-        const start_ident = try self.ctx.idents.insert(self.allocator, base.Ident.for_text("start"));
-        const len_ident = try self.ctx.idents.insert(self.allocator, base.Ident.for_text("len"));
-
         var fields = [_]type_mod.Field{
-            .{ .name = len_ident, .ty = len_ty },
-            .{ .name = start_ident, .ty = len_ty },
+            .{ .name = self.ctx.executable_len_ident, .ty = len_ty },
+            .{ .name = self.ctx.executable_start_ident, .ty = len_ty },
         };
         std.mem.sort(type_mod.Field, &fields, &self.ctx.idents, struct {
             fn lessThan(idents: *const base.Ident.Store, a: type_mod.Field, b: type_mod.Field) bool {
@@ -3145,7 +3150,7 @@ pub const Lowerer = struct {
             }
         }.lessThan);
         if (builtin.mode == .Debug) {
-            if (fields.len != 2 or fields[0].name != len_ident or fields[1].name != start_ident) {
+            if (fields.len != 2 or fields[0].name != self.ctx.executable_len_ident or fields[1].name != self.ctx.executable_start_ident) {
                 debugPanic("monotype invariant violated: list slice bounds field order mismatch", .{});
             }
         }
@@ -3161,10 +3166,6 @@ pub const Lowerer = struct {
         len_expr: ast.ExprId,
     ) std.mem.Allocator.Error!ast.ExprId {
         const bounds_ty = try self.makeListSliceBoundsType(self.program.store.getExpr(len_expr).ty);
-        const start_ident = self.ctx.idents.findByString("start") orelse
-            debugPanic("monotype invariant violated: missing executable start ident", .{});
-        const len_ident = self.ctx.idents.findByString("len") orelse
-            debugPanic("monotype invariant violated: missing executable len ident", .{});
         const record = self.ctx.types.getType(bounds_ty);
         if (record != .record) {
             debugPanic("monotype invariant violated: list slice bounds expected record type", .{});
@@ -3172,16 +3173,16 @@ pub const Lowerer = struct {
 
         const record_fields = record.record.fields;
         if (builtin.mode == .Debug) {
-            if (record_fields.len != 2 or record_fields[0].name != len_ident or record_fields[1].name != start_ident) {
+            if (record_fields.len != 2 or record_fields[0].name != self.ctx.executable_len_ident or record_fields[1].name != self.ctx.executable_start_ident) {
                 debugPanic("monotype invariant violated: list slice bounds record fields not len/start", .{});
             }
         }
         const ordered_fields = try self.allocator.alloc(ast.FieldExpr, record_fields.len);
         defer self.allocator.free(ordered_fields);
         for (record_fields, 0..) |field, i| {
-            const value = if (field.name == len_ident)
+            const value = if (field.name == self.ctx.executable_len_ident)
                 len_expr
-            else if (field.name == start_ident)
+            else if (field.name == self.ctx.executable_start_ident)
                 start_expr
             else
                 debugPanic("monotype invariant violated: unexpected list slice bounds field", .{});
