@@ -193,13 +193,10 @@ pub const Store = struct {
             return .{ .start = start_single, .len = 1 };
         }
 
-        const canonical = try self.allocator.dupe(Tag, values);
-        defer self.allocator.free(canonical);
-
-        const canonical_len = self.canonicalizeSortedTags(canonical);
         const start: u32 = @intCast(self.tags.items.len);
-        try self.tags.appendSlice(self.allocator, canonical[0..canonical_len]);
-        return .{ .start = start, .len = @intCast(canonical_len) };
+        self.assertDistinctSortedTags(values);
+        try self.tags.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn sliceTags(self: *const Store, span: Span(Tag)) []const Tag {
@@ -414,18 +411,17 @@ pub const Store = struct {
         };
     }
 
-    fn canonicalizeSortedTags(self: *Store, tags: []Tag) usize {
-        if (tags.len <= 1) return tags.len;
+    fn assertDistinctSortedTags(self: *Store, tags: []const Tag) void {
+        if (tags.len <= 1) return;
 
-        var write_index: usize = 1;
         var prev = tags[0];
-
         for (tags[1..]) |tag| {
-            if (tag.name != prev.name) {
-                tags[write_index] = tag;
-                write_index += 1;
+            if (@intFromEnum(tag.name) > @intFromEnum(prev.name)) {
                 prev = tag;
                 continue;
+            }
+            if (@intFromEnum(tag.name) < @intFromEnum(prev.name)) {
+                debugPanic("lambdasolved.type tag constructors were not pre-sorted");
             }
 
             const prev_args = self.sliceTypeVarSpan(prev.args);
@@ -438,9 +434,8 @@ pub const Store = struct {
                     debugPanic("lambdasolved.type duplicate tag constructor had different payload types");
                 }
             }
+            debugPanic("lambdasolved.type duplicate tag constructor reached addTags");
         }
-
-        return write_index;
     }
 };
 

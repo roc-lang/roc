@@ -514,14 +514,7 @@ pub const Store = struct {
                         .args = lowered_args,
                     };
                 }
-                const canonical_len = self.canonicalizeSortedTags(lowered_tags);
-                if (canonical_len != lowered_tags.len) {
-                    const canonical_tags = try self.allocator.alloc(Tag, canonical_len);
-                    errdefer self.allocator.free(canonical_tags);
-                    @memcpy(canonical_tags, lowered_tags[0..canonical_len]);
-                    self.allocator.free(lowered_tags);
-                    break :blk .{ .tag_union = .{ .tags = canonical_tags } };
-                }
+                self.assertDistinctSortedTags(lowered_tags);
                 break :blk .{ .tag_union = .{ .tags = lowered_tags } };
             },
             .record => |record| blk: {
@@ -701,20 +694,18 @@ pub const Store = struct {
         try builder.serializeType(root);
     }
 
-    fn canonicalizeSortedTags(self: *Store, tags: []Tag) usize {
-        if (tags.len <= 1) return tags.len;
+    fn assertDistinctSortedTags(self: *Store, tags: []const Tag) void {
+        if (tags.len <= 1) return;
 
-        var write_index: usize = 1;
         var prev = tags[0];
-
         for (tags[1..]) |tag| {
-            if (tag.name != prev.name) {
-                tags[write_index] = tag;
-                write_index += 1;
+            if (@intFromEnum(tag.name) > @intFromEnum(prev.name)) {
                 prev = tag;
                 continue;
             }
-
+            if (@intFromEnum(tag.name) < @intFromEnum(prev.name)) {
+                debugPanic("monotype.type tag constructors were not pre-sorted");
+            }
             if (prev.args.len != tag.args.len) {
                 debugPanic("monotype.type duplicate tag constructor had different arity");
             }
@@ -723,10 +714,8 @@ pub const Store = struct {
                     debugPanic("monotype.type duplicate tag constructor had different payload types");
                 }
             }
-            if (tag.args.len > 0) self.allocator.free(tag.args);
+            debugPanic("monotype.type duplicate tag constructor reached interning");
         }
-
-        return write_index;
     }
 
     const TypePair = struct {
