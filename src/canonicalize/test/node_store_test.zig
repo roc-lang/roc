@@ -446,6 +446,7 @@ test "NodeStore round trip - Expressions" {
     try expressions.append(gpa, CIR.Expr{
         .e_type_var_dispatch = .{
             .type_var_alias_stmt = rand_idx(CIR.Statement.Idx),
+            .receiver_var = rand_idx(types.Var),
             .method_name = rand_ident_idx(),
             .args = .{ .span = .{ .start = rand.random().int(u32), .len = rand.random().int(u32) } },
         },

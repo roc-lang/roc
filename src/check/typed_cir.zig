@@ -82,16 +82,6 @@ pub const Modules = struct {
     modules: []ModuleData,
     module_idxs_by_name: std.StringHashMapUnmanaged(u32),
 
-    pub const ResolvedDefTarget = struct {
-        module_idx: u32,
-        def_idx: CIR.Def.Idx,
-    };
-
-    pub const ResolvedExternalIdent = struct {
-        module_idx: u32,
-        ident: Ident.Idx,
-    };
-
     pub const SourceModule = union(enum) {
         precompiled: *ModuleEnv,
         owned_checked: OwnedCheckedModule,
@@ -187,45 +177,6 @@ pub const Modules = struct {
         return self.module_idxs_by_name.get(target_name);
     }
 
-    pub fn resolveExternalIdent(
-        self: @This(),
-        origin_module_name: []const u8,
-        ident_text: []const u8,
-    ) ?ResolvedExternalIdent {
-        const module_idx = self.moduleIdxByName(origin_module_name) orelse return null;
-        const module_ = self.module(module_idx);
-        const ident = module_.findCommonIdent(ident_text) orelse return null;
-        return .{
-            .module_idx = module_idx,
-            .ident = ident,
-        };
-    }
-
-    pub fn resolveTopLevelDefByName(
-        self: @This(),
-        module_idx: u32,
-        def_name: []const u8,
-    ) ?CIR.Def.Idx {
-        return self.module(module_idx).topLevelDefByText(def_name);
-    }
-
-    pub fn resolveRequiredLookupTarget(
-        self: @This(),
-        source_module_idx: u32,
-        app_module_idx: u32,
-        requires_idx: u32,
-    ) ?ResolvedDefTarget {
-        const source_module = self.module(source_module_idx);
-        const requires_items = source_module.requiresTypes();
-        if (requires_idx >= requires_items.len) return null;
-        const required_name = source_module.getIdent(requires_items[requires_idx].ident);
-        const def_idx = self.resolveTopLevelDefByName(app_module_idx, required_name) orelse return null;
-        return .{
-            .module_idx = app_module_idx,
-            .def_idx = def_idx,
-        };
-    }
-
 };
 
 pub const Module = struct {
@@ -283,10 +234,6 @@ pub const Module = struct {
         return self.env().getString(idx);
     }
 
-    pub fn findCommonIdent(self: @This(), text: []const u8) ?Ident.Idx {
-        return self.identStoreConst().findByString(text);
-    }
-
     pub fn name(self: @This()) []const u8 {
         if (!self.env().qualified_module_ident.isNone()) {
             return self.getIdent(self.env().qualified_module_ident);
@@ -338,13 +285,8 @@ pub const Module = struct {
         return self.data_store.top_level_defs_by_ident.get(ident);
     }
 
-    pub fn topLevelDefByText(self: @This(), text: []const u8) ?CIR.Def.Idx {
-        const ident = self.findCommonIdent(text) orelse return null;
-        return self.topLevelDefByIdent(ident);
-    }
-
-    pub fn isBuiltinStrInspectDef(self: @This(), def_idx: CIR.Def.Idx) bool {
-        return self.topLevelDefByText("Builtin.Str.inspect") == def_idx;
+    pub fn methodIdentEntries(self: @This()) []const ModuleEnv.MethodIdents.Entry {
+        return self.env().method_idents.entries.items;
     }
 
     pub fn exprType(_: @This(), idx: CIR.Expr.Idx) Var {

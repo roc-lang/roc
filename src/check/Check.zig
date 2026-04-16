@@ -5041,10 +5041,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // If any arguments are errors, propagate the error
                 try self.unifyWith(expr_var, .err, env);
             } else {
-                // Get the type var alias statement to access the type variable
-                const type_var_alias_stmt = self.cir.store.getStatement(tvd.type_var_alias_stmt);
-                const type_var_anno = type_var_alias_stmt.s_type_var_alias.type_var_anno;
-                const type_var = ModuleEnv.varFrom(type_var_anno);
+                const type_var = tvd.receiver_var;
 
                 // For type var dispatch, the arguments are just the explicit args (no receiver)
                 const dispatch_arg_vars_range = try self.types.appendVars(@ptrCast(dispatch_arg_expr_idxs));

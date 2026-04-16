@@ -11138,12 +11138,7 @@ pub const Interpreter = struct {
 
             .e_type_var_dispatch => |tvd| {
                 // Type variable dispatch: Thing.method(args) where Thing is a type var alias.
-                // Get the type variable from the type var alias statement
-                const type_var_alias_stmt = self.env.store.getStatement(tvd.type_var_alias_stmt);
-                const type_var_anno = type_var_alias_stmt.s_type_var_alias.type_var_anno;
-
-                // Translate the type annotation to a runtime type variable
-                const ct_var = can.ModuleEnv.varFrom(type_var_anno);
+                const ct_var = tvd.receiver_var;
                 const dispatch_rt_var = try self.translateTypeVar(self.env, ct_var);
 
                 // Resolve the type to find the nominal type info

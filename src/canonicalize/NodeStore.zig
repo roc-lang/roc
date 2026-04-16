@@ -891,11 +891,13 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const p = payload.expr_type_var_dispatch;
             // Retrieve type var dispatch data from node and span2_data
             const type_var_alias_stmt: CIR.Statement.Idx = @enumFromInt(p.type_var_alias_stmt);
+            const receiver_var: types.Var = @enumFromInt(p.receiver_var);
             const method_name: base.Ident.Idx = @bitCast(p.method_name);
             const args_span = store.span2_data.items.items[p.args_span2_idx];
 
             return CIR.Expr{ .e_type_var_dispatch = .{
                 .type_var_alias_stmt = type_var_alias_stmt,
+                .receiver_var = receiver_var,
                 .method_name = method_name,
                 .args = .{ .span = .{ .start = args_span.start, .len = args_span.len } },
             } };
@@ -2050,6 +2052,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
 
             node.setPayload(.{ .expr_type_var_dispatch = .{
                 .type_var_alias_stmt = @intFromEnum(tvd.type_var_alias_stmt),
+                .receiver_var = @intFromEnum(tvd.receiver_var),
                 .method_name = @bitCast(tvd.method_name),
                 .args_span2_idx = span2_idx,
             } });

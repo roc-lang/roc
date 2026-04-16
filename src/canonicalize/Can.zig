@@ -5051,6 +5051,7 @@ pub fn canonicalizeExpr(
                                         // Create e_type_var_dispatch expression with args
                                         const dispatch_expr_idx = try self.env.addExpr(CIR.Expr{ .e_type_var_dispatch = .{
                                             .type_var_alias_stmt = binding.statement_idx,
+                                            .receiver_var = ModuleEnv.varFrom(binding.type_var_anno),
                                             .method_name = method_name,
                                             .args = args_span,
                                         } }, region);
@@ -5151,6 +5152,7 @@ pub fn canonicalizeExpr(
                                         const dispatch_expr_idx = try self.env.addExpr(CIR.Expr{
                                             .e_type_var_dispatch = .{
                                                 .type_var_alias_stmt = binding.statement_idx,
+                                                .receiver_var = ModuleEnv.varFrom(binding.type_var_anno),
                                                 .method_name = method_name,
                                                 .args = .{ .span = .{ .start = 0, .len = 0 } }, // No args for now; filled in by apply
                                             },
@@ -13576,6 +13578,7 @@ fn tryTypeVarAliasDispatch(self: *Self, field_access: AST.BinOp) std.mem.Allocat
                     const expr_idx = try self.env.addExpr(CIR.Expr{
                         .e_type_var_dispatch = .{
                             .type_var_alias_stmt = binding.statement_idx,
+                            .receiver_var = ModuleEnv.varFrom(binding.type_var_anno),
                             .method_name = method_name,
                             .args = args_span,
                         },
@@ -13595,6 +13598,7 @@ fn tryTypeVarAliasDispatch(self: *Self, field_access: AST.BinOp) std.mem.Allocat
                     const expr_idx = try self.env.addExpr(CIR.Expr{
                         .e_type_var_dispatch = .{
                             .type_var_alias_stmt = binding.statement_idx,
+                            .receiver_var = ModuleEnv.varFrom(binding.type_var_anno),
                             .method_name = method_name,
                             .args = .{ .span = DataSpan.empty() },
                         },

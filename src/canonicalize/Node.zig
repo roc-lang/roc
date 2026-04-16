@@ -712,6 +712,7 @@ pub const Payload = extern union {
     /// expr_type_var_dispatch: type variable method dispatch
     pub const ExprTypeVarDispatch = extern struct {
         type_var_alias_stmt: u32,
+        receiver_var: u32,
         method_name: u32,
         args_span2_idx: u32,
     };
@@ -1024,6 +1025,6 @@ pub const Payload = extern union {
 
     // Compile-time size verification
     comptime {
-        std.debug.assert(@sizeOf(Payload) == 12);
+        std.debug.assert(@sizeOf(Payload) == 16);
     }
 };

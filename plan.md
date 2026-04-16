@@ -1,116 +1,266 @@
-# Plan: Replace Roc's Post-Check Lowering Architecture With cor's Architecture
+# Plan: Delete Post-Check Method Resolution Completely, Then Rebuild It Lazily
 
-## Summary
-Rebuild the post-check pipeline to match `~/code/cor/experiments/lss`, instead of continuing to repair Roc's current monotype/workspace/publication machinery.
+## Global Rule
 
-The target end state is:
+Do **not** run `zig` until this plan explicitly says it is allowed.
 
-- monotype types are direct, immutable lowered types, not entries in a mutable span-backed store
-- monotype lowering consumes explicit solved facts from typed CIR/lambdasolved directly
-- specialization uses exact function identity only
-- payload extraction stays explicit in the IR, never reconstructed via structural binding tricks
-- no publication/canonicalization/workspace-remapping layer exists anywhere in the compiler
-- none of the removed machinery is reintroduced in any form
+That means:
 
-`zig` must not be run until the final "fix what breaks under the new architecture" phase.
+- no `zig build`
+- no `zig test`
+- no `zig build run`
+- no compile-checking for partial progress
+- no “just check whether this parses”
 
-## Required Architecture Changes
-- Replace [`src/monotype/type.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/type.zig) `Store`/`TypeId`/`TypeSpan` architecture with a cor-style monotype type representation:
-  - immutable arena-owned type nodes
-  - child payloads stored as owned slices on the node itself
-  - no global `type_ids`/`tags`/`fields` append-only backing arrays
-  - no `cloneTypeGraph`, `canonicalizeResolved`, `canonicalizePublished`, or equivalent replacement
-  - only direct instantiated-type construction and exact per-instantiation caching, mirroring cor's clone/lower caches
-- Replace [`src/monotype/lower.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig) workspace/source-var remapping model with direct fact consumption:
-  - delete `prepareScopedFunctionRoot`
-  - delete `bindSourceVarToExistingWorkspace`
-  - delete `lookupFunctionNodeRetVar`
-  - delete `lookupCurriedFunctionFinalRetVar` recovery logic
-  - delete `materializeAppliedFunctionResultVar`
-  - delete any logic that aligns or reconstructs function structure by mutating a workspace graph
-- Move function-shape truth to the solved input:
-  - every top-level fn, anonymous lambda, closure, and curried lambda stage input must expose exact arg vars and exact result var directly
-  - if typed CIR does not already provide those facts explicitly, extend typed CIR/checker output first
-  - monotype must then read those facts directly and never recover them from type-store shape
-- Keep match payload handling cor-style:
-  - `tag_payload` remains an explicit node all the way down
-  - no synthetic `runtime_error` fallback payload extraction
-  - no "structural binding decls imply payload access" path for refutable payload patterns
-- Keep specialization exact-symbol-driven:
-  - compilation pipeline uses `lookupFnExact` only
-  - any canonical-source lookup is removed from compilation stages entirely
-  - no mixed API, no fallback, no ambiguous identity behavior
-- Keep lambdamono cor-style:
-  - lower executable types directly from instantiated types
-  - no separate fact publication/recovery layer
-  - no stage-internal reconstruction of information already known from solved input
+At the beginning, and throughout the deletion phase, focus only on deleting the old method-resolution architecture.
 
-## Execution Phases
-### Phase 1: Lock in the cor architecture without running `zig`
-- Read `~/code/cor/experiments/lss/{canonical_solved,monotype,monotype_lifted,lambdasolved,lambdamono,ir}` and mirror their architecture exactly, except where Roc-specific constructs require explicit extensions.
-- For Roc-only constructs, preserve the same design rule:
-  - explicit earlier-stage facts only
-  - immutable lowered types
-  - no publication/recovery/reconstruction layer
-- Add invariant comments and a grep-based boundary script that forbids reintroducing:
-  - `canonicalizePublished`
-  - `canonicalizeResolved`
-  - `cloneTypeGraph`
-  - `prepareScopedFunctionRoot`
-  - `bindSourceVarToExistingWorkspace`
-  - `lookupFunctionNodeRetVar`
-  - `materializeAppliedFunctionResultVar`
-  - any mixed exact/canonical specialization lookup in compilation stages
-- Commit after each completed deletion/refactor slice, even if the tree does not build.
+## Phase 1: Delete Absolutely Every Trace Of The Existing Post-Check Method Resolution System
 
-### Phase 2: Delete the monotype type-store model
-- Remove the mutable monotype store and replace all monotype type construction/traversal with direct immutable types.
-- Convert all monotype/lambdamono/IR consumers to work on those direct types.
-- Delete every remaining publication/canonicalization entrypoint and all callers.
-- Do not add compatibility shims. Callers must be rewritten to the new model directly.
+Goal:
 
-### Phase 3: Delete the workspace/source-var remapping model
-- Rewrite monotype lowering so expression, pattern, lambda, and call lowering consume explicit solved vars and solved signature facts directly from typed CIR/lambdasolved.
-- For anonymous and curried closures, make exact arg/result facts explicit in the solved input, then consume them directly.
-- Delete all function-shape recovery logic instead of patching missing cases.
-- If any missing fact is discovered, add it to the earlier solved IR; do not reconstruct it later.
+- remove all post-check method-resolution code
+- remove all method-resolution helpers used after type checking
+- remove all post-check recovery/reconstruction logic for method targets
+- leave all post-check method calls as hard TODO panics
 
-### Phase 4: Align remaining stages to cor before any build/test run
-- Ensure monotype-lifted, lambdasolved, lambdamono, and IR lowering all consume the new direct monotype representation without publication or recovery steps.
-- Remove any remaining payload-extraction shortcuts, structural binding side channels, or defensive guards against earlier compiler bugs.
-- Remove any remaining compiler-path use of canonical-source specialization lookup.
-- Remove any remaining code whose only purpose is to defend against the deleted architecture.
+Important scope:
 
-### Phase 5: Only now run `zig`, then fix what breaks under the new architecture
-- Start running builds/tests only after the cor-style architecture is fully in place.
-- Fix breakage by adding missing explicit earlier-stage facts or correcting direct consumers.
-- Never fix breakage by:
-  - reintroducing publication/canonicalization
-  - reintroducing workspace/source-var remapping
-  - adding fallback/recovery/reconstruction logic
-  - adding defensive post-hoc guards for earlier-stage bugs
-- If a failure appears to require one of those, stop and move the missing fact earlier in the pipeline instead.
+- this phase is about **method resolution after type checking**
+- parser / AST / CIR syntax distinction between `a.foo` and `a.foo()` is not the target of deletion
+- check-time type-checking of method syntax is not the target of deletion
+- everything after checking that tries to turn a method call into a target def **is** the target of deletion
 
-## Test and Acceptance Plan
-- First targeted checks after `zig` is allowed:
-  - `./zig-out/bin/eval-test-runner --filter 'tag union payload matching inside function single module'`
-  - legacy lambda-closure eval repro
-  - `zig build run -- --opt=interpreter test/echo/all_syntax_test.roc`
-- Then broader suites:
-  - `zig build test-eval`
-  - `zig build test-repl`
-  - `zig build test-cli`
-  - `zig build`
-- Add/keep invariant checks that fail if forbidden architecture is reintroduced.
-- Acceptance criteria:
-  - no publication/canonicalization/workspace-remapping machinery remains in compiler stages
-  - monotype and lambdamono match cor's architecture in design, not just behavior
-  - specialization is exact-symbol-only in compilation stages
-  - payload extraction is explicit and branch-guarded
-  - all targeted regressions and full suites pass
+### 1.1 Delete all post-check method-target lookup code
 
-## Assumptions and Defaults
-- `~/code/cor/experiments/lss` is the architectural source of truth.
-- Zig may use arena-owned immutable structs/slices instead of OCaml refs/lists, but the semantics and pipeline shape must match cor.
-- Roc-only features may extend cor's design, but only as explicit earlier-stage facts; they must not reintroduce any publication, recovery, fallback, heuristic, or workspace-remapping machinery.
-- Never reintroduce any of the deleted architecture, even temporarily.
+Delete every code path after checking that does any of the following:
+
+- resolves a method target from a receiver var
+- resolves a method target from a source var
+- resolves a method target from a type-var alias statement
+- resolves a method target from text, names, or idents during lowering/specialization
+- reconstructs a method target from any checker leftovers
+- performs any cross-module method lookup after checking
+
+This includes deleting, not rewriting:
+
+- post-check lookup helpers
+- post-check dispatch-resolution helpers
+- post-check “recorded dispatch” lowering
+- post-check exact-target recovery logic
+- any “temporary” compatibility path
+
+### 1.2 Delete all post-check method-resolution entrypoints
+
+The compiler is not “done deleting” until every post-check method-resolution entrypoint is gone.
+
+All places that previously resolved method calls after checking must now do only one thing:
+
+- panic with exactly:
+
+```text
+TODO method resolution
+```
+
+That means:
+
+- no fallback
+- no stub implementation
+- no old code kept around behind conditionals
+- no “best effort”
+- no partial resolution path
+
+### 1.3 Delete all traces, not just active calls
+
+Do not stop at deleting the call sites.
+
+Also delete:
+
+- dead helper functions
+- structs and enums that only existed for the old post-check method-resolution system
+- comments describing the old system
+- debug code for the old system
+- tests specifically tied to old post-check resolution behavior
+- obsolete terminology that implies the old system still exists
+
+If a type, helper, or comment only makes sense because the old post-check method-resolution architecture existed, delete it.
+
+## Phase 2: Verify The Old Post-Check Method Resolution System Is Truly Gone
+
+Still do **not** run `zig`.
+
+Verification in this phase is by reading, grepping, and auditing source only.
+
+### 2.1 Verify all post-check method-resolution sites are now TODOs
+
+Audit all post-check stages:
+
+- typed CIR consumer code
+- monotype
+- monotype lifted
+- lambdasolved
+- lambdamono
+- IR lowering
+- any helper modules they use
+
+For every place that previously resolved methods after checking, verify it is now either:
+
+- deleted
+- or a hard panic with:
+
+```text
+TODO method resolution
+```
+
+### 2.2 Verify the compiler has no remaining post-check resolution machinery
+
+Do a grep-based audit and keep deleting until this is true:
+
+- the zig compiler has absolutely no clue how to resolve methods after type checking
+- every old post-check method-resolution path is gone
+- no post-check method lookup logic survives in any form
+
+This verification is not complete until:
+
+- grepping cannot find active post-check method-resolution helpers
+- grepping cannot find old recovery pathways
+- grepping cannot find source-var / alias-stmt / later-stage method-target reconstruction logic
+- there is no remaining shred of evidence in post-check code that the previous method-resolution system still exists, other than intentional `TODO method resolution` panics
+
+### 2.3 Commit the full deletion checkpoint
+
+Once the old post-check system is fully gone and the source audit confirms it:
+
+- commit the deletion checkpoint
+
+This commit is expected to leave the compiler non-working for methods after checking, by design.
+
+## Phase 3: Study The Replacement Design
+
+Still do **not** run `zig`.
+
+Read and use:
+
+- [`method_design.md`](/Users/rtfeldman/.codex/worktrees/1d55/roc/method_design.md)
+
+Use it as the architectural source of truth for the replacement.
+
+Key constraints from that design:
+
+- `a.foo` and `a.foo()` are already syntactically distinct from parsing onward
+- no later-stage disambiguation between field access and method calls is needed
+- checking records explicit solved vars on method-call nodes
+- checked modules emit explicit attached-method definition metadata
+- global attached-method index is built only after checked modules are loaded globally
+- specialization is the only place exact method resolution runs
+- specialization rewrites method calls to direct calls
+- no later stage after specialization performs method lookup
+
+## Phase 4: Implement The Replacement Without Running Zig
+
+Still do **not** run `zig`.
+
+Implement the replacement architecture from `method_design.md`.
+
+### 4.1 Checked-output facts
+
+Ensure checked output preserves exactly the facts required for lazy specialization-time method resolution:
+
+- explicit method-call nodes remain explicit
+- record access remains separate
+- method-call nodes preserve solved receiver/arg/result facts needed by specialization
+- per-module attached-method metadata is explicit
+
+### 4.2 Global index construction
+
+Implement the global attached-method index construction that happens after checked modules are loaded into the global compilation context.
+
+This must be:
+
+- exact
+- explicit
+- cross-module aware
+- free of fallback/recovery logic
+
+### 4.3 Specialization-time resolution
+
+Implement the only legal method-resolution path:
+
+- specialization-time resolution from the instantiated receiver nominal plus method ident through the global attached-method index
+
+No other stage may resolve methods.
+
+### 4.4 Rewrite method calls to direct calls during specialization
+
+By the end of specialization:
+
+- unresolved method-call nodes are gone
+- calls are rewritten to exact direct calls
+
+Later stages must no longer need any method-resolution logic.
+
+## Phase 5: Add Tests Before Re-Enabling Zig
+
+Still do **not** run `zig`.
+
+Implement tests for:
+
+- polymorphic method resolution
+- cross-module method resolution
+- cross-module **and** polymorphic method resolution at the same time
+
+Use eval tests if they can cover cross-module behavior.
+
+The tests should verify the intended lazy specialization-time resolution architecture, including:
+
+- same polymorphic function specializing to different concrete method targets
+- method resolution across module boundaries
+- polymorphic code defined in one module and specialized from another module
+- field access continuing to stay separate from method calls
+
+Do not postpone the test implementation until after running `zig`.
+
+## Phase 6: Only Now Re-Enable Zig
+
+Only after all previous phases are complete may `zig` be run again.
+
+At this point:
+
+- the old post-check method-resolution system is deleted
+- the replacement is implemented
+- the tests are written
+
+Now it is finally allowed to:
+
+- run `zig`
+- fix breakage
+- get the tests passing
+
+## Phase 7: Make It Work Under The New Architecture
+
+Now that `zig` is allowed:
+
+- run the targeted method-resolution tests first
+- fix failures under the new architecture
+- then expand to broader relevant suites
+
+Rules for this phase:
+
+- do not resurrect the old post-check method-resolution system
+- do not add fallback logic
+- do not add heuristic logic
+- do not reintroduce alias/source-var recovery
+- do not move exact resolution out of specialization
+
+If a failure suggests any of those, treat that as architectural regression and fix the earlier stage/output instead.
+
+## Completion Criteria
+
+The work is complete only when all of the following are true:
+
+- the old post-check method-resolution system was fully deleted first
+- there was a deletion checkpoint commit where every post-check method path was only `TODO method resolution`
+- the replacement from `method_design.md` is fully implemented
+- specialization is the only place exact method resolution happens
+- cross-module and polymorphic tests exist
+- cross-module polymorphic method resolution works
+- later stages after specialization perform no method lookup

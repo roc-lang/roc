@@ -89,6 +89,11 @@ pub const Expr = struct {
             func: ExprId,
             arg: ExprId,
         },
+        method_lookup: struct {
+            receiver_ty: TypeId,
+            method: base.Ident.Idx,
+            has_receiver_arg: bool,
+        },
         inspect: ExprId,
         low_level: struct {
             op: base.LowLevel,

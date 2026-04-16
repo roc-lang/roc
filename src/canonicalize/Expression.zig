@@ -466,6 +466,8 @@ pub const Expr = union(enum) {
     e_type_var_dispatch: struct {
         /// Reference to the s_type_var_alias statement that introduced this type alias
         type_var_alias_stmt: CIR.Statement.Idx,
+        /// The receiver type variable that this method dispatch resolves against
+        receiver_var: TypeVar,
         /// The method name being called (e.g., "default" in Thing.default())
         method_name: Ident.Idx,
         /// Arguments to the method call (may be empty for no-arg methods)

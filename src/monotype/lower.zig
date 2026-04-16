@@ -58,6 +58,7 @@ pub const Result = struct {
     types: type_mod.Store,
     strings: base.StringLiteral.Store,
     idents: base.Ident.Store,
+    attached_methods: symbol_mod.AttachedMethodIndex,
     runtime_inspect_symbols: std.AutoHashMap(symbol_mod.Symbol, symbol_mod.Symbol),
 
     pub fn deinit(self: *Result) void {
@@ -66,6 +67,7 @@ pub const Result = struct {
         self.types.deinit();
         self.strings.deinit(self.program.store.allocator);
         self.idents.deinit(self.program.store.allocator);
+        self.attached_methods.deinit();
         self.runtime_inspect_symbols.deinit();
     }
 };
@@ -193,8 +195,12 @@ const Ctx = struct {
             return self.source_module.curriedFnShape(fn_var);
         }
 
-        pub fn isBuiltinStrInspectDef(self: @This(), def_idx: CIR.Def.Idx) bool {
-            return self.source_module.isBuiltinStrInspectDef(def_idx);
+        pub fn topLevelDefByIdent(self: @This(), ident: base.Ident.Idx) ?CIR.Def.Idx {
+            return self.source_module.topLevelDefByIdent(ident);
+        }
+
+        pub fn methodIdentEntries(self: @This()) []const ModuleEnv.MethodIdents.Entry {
+            return self.source_module.methodIdentEntries();
         }
 
         pub fn sourceVarRoot(self: @This(), var_: Var) Var {
@@ -419,6 +425,7 @@ pub const Lowerer = struct {
     top_level_symbols_by_pattern: std.AutoHashMap(PatternKey, symbol_mod.Symbol),
     emitted_defs_by_symbol: std.AutoHashMap(symbol_mod.Symbol, ast.DefId),
     emitting_value_defs: std.AutoHashMap(symbol_mod.Symbol, void),
+    attached_methods: symbol_mod.AttachedMethodIndex,
     runtime_inspect_symbols: std.AutoHashMap(symbol_mod.Symbol, symbol_mod.Symbol),
     local_fn_groups: std.ArrayList(*LocalFnGroupState),
     required_app_module_idx: ?u32 = null,
@@ -820,6 +827,7 @@ pub const Lowerer = struct {
             .top_level_symbols_by_pattern = std.AutoHashMap(PatternKey, symbol_mod.Symbol).init(allocator),
             .emitted_defs_by_symbol = std.AutoHashMap(symbol_mod.Symbol, ast.DefId).init(allocator),
             .emitting_value_defs = std.AutoHashMap(symbol_mod.Symbol, void).init(allocator),
+            .attached_methods = symbol_mod.AttachedMethodIndex.init(allocator),
             .runtime_inspect_symbols = std.AutoHashMap(symbol_mod.Symbol, symbol_mod.Symbol).init(allocator),
             .local_fn_groups = .empty,
             .required_app_module_idx = app_module_idx,
@@ -833,6 +841,7 @@ pub const Lowerer = struct {
         }
         self.local_fn_groups.deinit(self.allocator);
         self.runtime_inspect_symbols.deinit();
+        self.attached_methods.deinit();
         self.emitting_value_defs.deinit();
         self.emitted_defs_by_symbol.deinit();
         self.top_level_symbols_by_pattern.deinit();
@@ -845,6 +854,7 @@ pub const Lowerer = struct {
 
     pub fn run(self: *Lowerer, root_module_idx: u32) std.mem.Allocator.Error!Result {
         try self.registerAllTopLevelDefs();
+        try self.buildAttachedMethodIndex();
         try self.lowerRootModule(root_module_idx);
         try self.drainPendingLoweringWork();
         try self.finalizeProgramTypes();
@@ -855,6 +865,7 @@ pub const Lowerer = struct {
             .types = self.ctx.types,
             .strings = self.strings,
             .idents = self.ctx.idents,
+            .attached_methods = self.attached_methods,
             .runtime_inspect_symbols = self.runtime_inspect_symbols,
         };
         self.program = Program.init(self.allocator);
@@ -862,6 +873,7 @@ pub const Lowerer = struct {
         self.ctx.types = type_mod.Store.init(self.allocator);
         self.ctx.idents = try base.Ident.Store.initCapacity(self.allocator, 1);
         self.strings = .{};
+        self.attached_methods = symbol_mod.AttachedMethodIndex.init(self.allocator);
         self.runtime_inspect_symbols = std.AutoHashMap(symbol_mod.Symbol, symbol_mod.Symbol).init(self.allocator);
         return result;
     }
@@ -878,9 +890,6 @@ pub const Lowerer = struct {
         def_idx: CIR.Def.Idx,
     ) std.mem.Allocator.Error!symbol_mod.Symbol {
         try self.registerAllTopLevelDefs();
-        const typed_cir_module = self.ctx.typedCirModule(module_idx);
-        const solved_def = typed_cir_module.def(def_idx);
-
         const symbol = self.lookupTopLevelDefSymbol(module_idx, def_idx) orelse debugPanic(
             "monotype invariant violated: missing top-level symbol for module {d} def {d}",
             .{ module_idx, @intFromEnum(def_idx) },
@@ -889,7 +898,16 @@ pub const Lowerer = struct {
             "monotype invariant violated: missing top-level def for symbol {d}",
             .{symbol.raw()},
         );
+        return try self.materializeTopLevelRuntimeSymbol(symbol, top_level);
+    }
 
+    fn materializeTopLevelRuntimeSymbol(
+        self: *Lowerer,
+        symbol: symbol_mod.Symbol,
+        top_level: TopLevelDef,
+    ) std.mem.Allocator.Error!symbol_mod.Symbol {
+        const typed_cir_module = self.ctx.typedCirModule(top_level.module_idx);
+        const solved_def = typed_cir_module.def(top_level.def_idx);
         if (!top_level.is_function) {
             try self.ensureTopLevelValueDefEmitted(symbol);
             return symbol;
@@ -902,25 +920,25 @@ pub const Lowerer = struct {
         defer binding_env.deinit();
 
         const bind_var = solved_def.pattern.ty();
-        const expected_var = try self.instantiateSourceVar(&type_scope, module_idx, bind_var);
+        const expected_var = try self.instantiateSourceVar(&type_scope, top_level.module_idx, bind_var);
         try self.collectExprInfoWithResultVar(
-            module_idx,
+            top_level.module_idx,
             &type_scope,
             binding_env,
             solved_def.expr.idx,
             expected_var,
         );
-        try self.finalizeExprTypes(module_idx, &type_scope);
-        try self.finalizePatternTypes(module_idx, &type_scope);
+        try self.finalizeExprTypes(top_level.module_idx, &type_scope);
+        try self.finalizePatternTypes(top_level.module_idx, &type_scope);
 
-        const expected_ty = try self.requireExprType(module_idx, &type_scope, solved_def.expr.idx);
+        const expected_ty = try self.requireExprType(top_level.module_idx, &type_scope, solved_def.expr.idx);
         const expected_var_image = try self.captureSolvedVarImageFromScope(&type_scope, expected_var);
 
         return try self.specializations.specializeFn(
             &self.ctx.symbols,
             &self.ctx.types,
             symbol,
-            .{ .module_idx = module_idx, .def_idx = def_idx },
+            .{ .module_idx = top_level.module_idx, .def_idx = top_level.def_idx },
             expected_ty,
             expected_var_image,
         );
@@ -964,6 +982,7 @@ pub const Lowerer = struct {
         expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!Result {
         try self.registerAllTopLevelDefs();
+        try self.buildAttachedMethodIndex();
         const def_id = try self.lowerRootExpr(module_idx, expr_idx);
         try self.program.root_defs.append(self.allocator, def_id);
         try self.drainPendingLoweringWork();
@@ -975,12 +994,14 @@ pub const Lowerer = struct {
             .types = self.ctx.types,
             .strings = self.strings,
             .idents = self.ctx.idents,
+            .attached_methods = self.attached_methods,
             .runtime_inspect_symbols = self.runtime_inspect_symbols,
         };
         self.program = Program.init(self.allocator);
         self.ctx.symbols = symbol_mod.Store.init(self.allocator);
         self.ctx.types = type_mod.Store.init(self.allocator);
         self.ctx.idents = try base.Ident.Store.initCapacity(self.allocator, 1);
+        self.attached_methods = symbol_mod.AttachedMethodIndex.init(self.allocator);
         self.runtime_inspect_symbols = std.AutoHashMap(symbol_mod.Symbol, symbol_mod.Symbol).init(self.allocator);
         self.strings = .{};
         return result;
@@ -1228,6 +1249,46 @@ pub const Lowerer = struct {
                     .module_idx = @intCast(module_idx),
                     .pattern_idx = @intFromEnum(typed_cir_def.pattern.idx),
                 }, symbol);
+            }
+        }
+    }
+
+    fn buildAttachedMethodIndex(self: *Lowerer) std.mem.Allocator.Error!void {
+        for (0..self.ctx.moduleCount()) |module_idx_usize| {
+            const module_idx: u32 = @intCast(module_idx_usize);
+            const typed_cir_module = self.ctx.typedCirModule(module_idx);
+            for (typed_cir_module.methodIdentEntries()) |entry| {
+                const method_def_idx = typed_cir_module.topLevelDefByIdent(entry.value) orelse debugPanic(
+                    "monotype attached method invariant violated: missing top-level def for registered method in module {d}",
+                    .{module_idx},
+                );
+                const source_symbol = self.lookupTopLevelDefSymbol(module_idx, method_def_idx) orelse debugPanic(
+                    "monotype attached method invariant violated: missing top-level symbol for method module {d} def {d}",
+                    .{ module_idx, @intFromEnum(method_def_idx) },
+                );
+                const top_level = self.top_level_defs_by_symbol.get(source_symbol) orelse debugPanic(
+                    "monotype attached method invariant violated: missing top-level metadata for method symbol {d}",
+                    .{source_symbol.raw()},
+                );
+                const method_symbol = if (top_level.is_function and module_idx != self.ctx.builtin_module_idx)
+                    try self.materializeTopLevelRuntimeSymbol(source_symbol, top_level)
+                else
+                    source_symbol;
+                const key = symbol_mod.AttachedMethodKey{
+                    .module_idx = module_idx,
+                    .type_ident = try self.ctx.copyExecutableIdent(module_idx, entry.key.type_ident),
+                    .method_ident = try self.ctx.copyExecutableIdent(module_idx, entry.key.method_ident),
+                };
+                if (self.attached_methods.get(key)) |existing| {
+                    if (existing != method_symbol) {
+                        debugPanic(
+                            "monotype attached method invariant violated: duplicate method target for module {d}",
+                            .{module_idx},
+                        );
+                    }
+                    continue;
+                }
+                try self.attached_methods.put(key, method_symbol);
             }
         }
     }
@@ -1522,7 +1583,6 @@ pub const Lowerer = struct {
         };
 
         const source_expr_var = solved_def.expr.ty();
-        _ = expected_var;
         const source_fn_var = source_expr_var;
         var source_fn_shape = try typed_cir_module.curriedFnShape(source_fn_var);
         defer source_fn_shape.deinit(self.allocator);
@@ -1543,15 +1603,18 @@ pub const Lowerer = struct {
                 try self.makeUnitArgWithType(arg_tys[i]);
         }
 
-        const bind_ty = try self.buildCurriedFuncType(arg_tys, try self.instantiateSourceVarType(module_idx, type_scope, source_fn_shape.ret));
+        const bind_ty = if (expected_var) |scoped_expected_var|
+            try self.instantiateVarType(module_idx, type_scope, scoped_expected_var)
+        else
+            try self.ctx.types.addType(try self.buildCurriedFuncType(arg_tys, try self.instantiateSourceVarType(module_idx, type_scope, source_fn_shape.ret)));
         const lowered = try self.program.store.addDef(.{
             .bind = .{
-                .ty = try self.ctx.types.addType(bind_ty),
+                .ty = bind_ty,
                 .symbol = bind_symbol,
             },
             .value = .{ .hosted_fn = .{
                 .bind = .{
-                    .ty = try self.ctx.types.addType(bind_ty),
+                    .ty = bind_ty,
                     .symbol = bind_symbol,
                 },
                 .args = try self.program.store.addTypedSymbolSpan(lowered_args),
@@ -1639,7 +1702,6 @@ pub const Lowerer = struct {
         const expr = solved_expr.data;
         const source_expr_var = solved_expr.ty();
         const source_seed_source_var = source_seed_var orelse source_expr_var;
-        _ = expected_var;
         const typed_cir_module = self.ctx.typedCirModule(module_idx);
         const source_fn_var = source_seed_source_var;
         var source_fn_shape = try typed_cir_module.curriedFnShape(source_fn_var);
@@ -1719,12 +1781,15 @@ pub const Lowerer = struct {
         return .{
             .recursive = recursive,
             .bind = .{
-                .ty = try self.ctx.types.addType(.{
-                    .func = .{
-                        .arg = first_arg.ty,
-                        .ret = self.program.store.getExpr(body).ty,
-                    },
-                }),
+                .ty = if (expected_var) |scoped_expected_var|
+                    try self.instantiateVarType(module_idx, type_scope, scoped_expected_var)
+                else
+                    try self.ctx.types.addType(.{
+                        .func = .{
+                            .arg = first_arg.ty,
+                            .ret = self.program.store.getExpr(body).ty,
+                        },
+                    }),
                 .symbol = bind_symbol,
             },
             .arg = first_arg,
@@ -1799,7 +1864,7 @@ pub const Lowerer = struct {
             .ty = try self.ctx.types.addType(.{
                 .func = .{
                     .arg = first_arg.ty,
-                    .ret = self.program.store.getExpr(body).ty,
+                    .ret = result_ty,
                 },
             }),
             .data = .{ .clos = .{
@@ -2497,7 +2562,7 @@ pub const Lowerer = struct {
                     "monotype invariant violated: required lookup in module {d} without app module index",
                     .{module_idx},
                 );
-                const resolved = self.ctx.source_modules.resolveRequiredLookupTarget(
+                const resolved = self.resolveRequiredLookupTarget(
                     module_idx,
                     app_module_idx,
                     lookup.requires_idx.toU32(),
@@ -2668,7 +2733,17 @@ pub const Lowerer = struct {
             } },
             .e_dot_access => |dot| blk: {
                 if (dot.args) |_| {
-                    return todoMethodResolution();
+                    return self.lowerMethodCallExpr(
+                        module_idx,
+                        type_scope,
+                        env,
+                        expr.idx,
+                        try self.requireExprType(module_idx, type_scope, dot.receiver),
+                        dot.field_name,
+                        dot.receiver,
+                        typed_cir_module.sliceExpr(dot.args.?),
+                        ty,
+                    );
                 }
                 break :blk .{ .access = .{
                     .record = try self.lowerExpr(module_idx, type_scope, env, dot.receiver),
@@ -2733,7 +2808,17 @@ pub const Lowerer = struct {
                 .op = ll.op,
                 .args = try self.lowerExprList(module_idx, type_scope, env, ll.args),
             } },
-            .e_type_var_dispatch => return todoMethodResolution(),
+            .e_type_var_dispatch => |dispatch| return self.lowerMethodCallExpr(
+                module_idx,
+                type_scope,
+                env,
+                expr.idx,
+                try self.instantiateSourceVarType(module_idx, type_scope, dispatch.receiver_var),
+                dispatch.method_name,
+                null,
+                typed_cir_module.sliceExpr(dispatch.args),
+                ty,
+            ),
             else => debugTodoExpr(expr.data),
         };
 
@@ -2764,6 +2849,16 @@ pub const Lowerer = struct {
     const ResolvedTopLevelSource = struct {
         module_idx: u32,
         def_idx: CIR.Def.Idx,
+    };
+
+    const ResolvedDefTarget = struct {
+        module_idx: u32,
+        def_idx: CIR.Def.Idx,
+    };
+
+    const ResolvedExternalIdent = struct {
+        module_idx: u32,
+        ident: base.Ident.Idx,
     };
 
     fn maybeLowerBuiltinSpecialCall(
@@ -2827,6 +2922,47 @@ pub const Lowerer = struct {
         };
     }
 
+    fn resolveExternalIdent(
+        self: *const Lowerer,
+        origin_module_name: []const u8,
+        ident_text: []const u8,
+    ) ?ResolvedExternalIdent {
+        const module_idx = self.ctx.source_modules.moduleIdxByName(origin_module_name) orelse return null;
+        const typed_cir_module = self.ctx.typedCirModule(module_idx);
+        const ident = typed_cir_module.identStoreConst().findByString(ident_text) orelse return null;
+        return .{
+            .module_idx = module_idx,
+            .ident = ident,
+        };
+    }
+
+    fn topLevelDefByText(
+        self: *const Lowerer,
+        module_idx: u32,
+        text: []const u8,
+    ) ?CIR.Def.Idx {
+        const typed_cir_module = self.ctx.typedCirModule(module_idx);
+        const ident = typed_cir_module.identStoreConst().findByString(text) orelse return null;
+        return typed_cir_module.topLevelDefByIdent(ident);
+    }
+
+    fn resolveRequiredLookupTarget(
+        self: *const Lowerer,
+        source_module_idx: u32,
+        app_module_idx: u32,
+        requires_idx: u32,
+    ) ?ResolvedDefTarget {
+        const source_module = self.ctx.typedCirModule(source_module_idx);
+        const requires_items = source_module.requiresTypes();
+        if (requires_idx >= requires_items.len) return null;
+        const required_name = source_module.getIdent(requires_items[requires_idx].ident);
+        const def_idx = self.topLevelDefByText(app_module_idx, required_name) orelse return null;
+        return .{
+            .module_idx = app_module_idx,
+            .def_idx = def_idx,
+        };
+    }
+
     fn isBuiltinStrInspectSource(
         self: *const Lowerer,
         module_idx: u32,
@@ -2835,7 +2971,8 @@ pub const Lowerer = struct {
         if (module_idx != self.ctx.builtin_module_idx) return false;
 
         const typed_cir_module = self.ctx.typedCirModule(module_idx);
-        return typed_cir_module.isBuiltinStrInspectDef(def_idx);
+        const inspect_ident = typed_cir_module.identStoreConst().findByString("Builtin.Str.inspect") orelse return false;
+        return typed_cir_module.topLevelDefByIdent(inspect_ident) == def_idx;
     }
 
     fn lowerNumericIntLiteralData(
@@ -3211,8 +3348,7 @@ pub const Lowerer = struct {
             if (source_fn_shape.args.len == 0) {
                 debugPanic("monotype closure invariant violated: missing first arg in module {d}", .{module_idx});
             }
-            break :blk
-            try self.instantiateSourceVarType(
+            break :blk try self.instantiateSourceVarType(
                 module_idx,
                 scope,
                 source_fn_shape.args[0],
@@ -3278,12 +3414,7 @@ pub const Lowerer = struct {
         );
 
         return .{
-            .ty = try self.ctx.types.addType(.{
-                .func = .{
-                    .arg = arg.ty,
-                    .ret = self.program.store.getExpr(body).ty,
-                },
-            }),
+            .ty = closure_ty,
             .data = .{
                 .arg = arg,
                 .body = body,
@@ -5903,15 +6034,93 @@ pub const Lowerer = struct {
         expr_idx: CIR.Expr.Idx,
         binop: CIR.Expr.Binop,
     ) std.mem.Allocator.Error!?ast.ExprId {
-        _ = env;
-        _ = expr_idx;
         if (binop.op != .eq and binop.op != .ne) return null;
 
         const operand_ty = try self.requireExprType(module_idx, type_scope, binop.lhs);
         switch (self.ctx.types.getTypePreservingNominal(operand_ty)) {
-            .nominal => |_| return todoMethodResolution(),
+            .nominal => |_| {
+                const bool_ty = try self.makePrimitiveType(.bool);
+                const eq_expr = try self.lowerMethodCallExpr(
+                    module_idx,
+                    type_scope,
+                    env,
+                    expr_idx,
+                    operand_ty,
+                    self.ctx.typedCirModule(module_idx).commonIdents().is_eq,
+                    binop.lhs,
+                    &.{binop.rhs},
+                    bool_ty,
+                );
+                if (binop.op == .eq) return eq_expr;
+                return try self.makeLowLevelExpr(bool_ty, .bool_not, &.{eq_expr});
+            },
             else => return null,
         }
+    }
+
+    fn lowerMethodCallExpr(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeScope,
+        env: BindingEnv,
+        expr_idx: CIR.Expr.Idx,
+        receiver_ty: type_mod.TypeId,
+        method_ident: base.Ident.Idx,
+        receiver_expr: ?CIR.Expr.Idx,
+        explicit_arg_exprs: []const CIR.Expr.Idx,
+        result_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        _ = expr_idx;
+        const total_arg_count = explicit_arg_exprs.len + @intFromBool(receiver_expr != null);
+        const lowered_args = try self.allocator.alloc(ast.ExprId, total_arg_count);
+        defer self.allocator.free(lowered_args);
+        const arg_tys = try self.allocator.alloc(type_mod.TypeId, total_arg_count);
+        defer self.allocator.free(arg_tys);
+
+        var next_arg: usize = 0;
+        if (receiver_expr) |receiver_expr_idx| {
+            lowered_args[next_arg] = try self.lowerExprWithExpectedType(
+                module_idx,
+                type_scope,
+                env,
+                receiver_expr_idx,
+                receiver_ty,
+                try self.exprResultVar(module_idx, type_scope, env, receiver_expr_idx),
+            );
+            arg_tys[next_arg] = receiver_ty;
+            next_arg += 1;
+        }
+        for (explicit_arg_exprs) |arg_expr_idx| {
+            const arg_ty = try self.requireExprType(module_idx, type_scope, arg_expr_idx);
+            lowered_args[next_arg] = try self.lowerExprWithExpectedType(
+                module_idx,
+                type_scope,
+                env,
+                arg_expr_idx,
+                arg_ty,
+                try self.exprResultVar(module_idx, type_scope, env, arg_expr_idx),
+            );
+            arg_tys[next_arg] = arg_ty;
+            next_arg += 1;
+        }
+
+        const method_ty = try self.ctx.types.addType(try self.buildCurriedFuncType(arg_tys, result_ty));
+        const method_lookup = try self.program.store.addExpr(.{
+            .ty = method_ty,
+            .data = .{ .method_lookup = .{
+                .receiver_ty = receiver_ty,
+                .method = try self.ctx.copyExecutableIdent(module_idx, method_ident),
+                .has_receiver_arg = receiver_expr != null,
+            } },
+        });
+        const applied_arg_count = if (total_arg_count == 0) 1 else total_arg_count;
+        const applied_result_tys = try self.collectCurriedAppliedResultTypes(method_ty, applied_arg_count);
+        defer self.allocator.free(applied_result_tys);
+
+        return try self.program.store.addExpr(.{
+            .ty = result_ty,
+            .data = .{ .call = try self.buildCurriedCallFromLowered(method_lookup, lowered_args, applied_result_tys) },
+        });
     }
 
     fn lowerCurriedCall(
@@ -6254,9 +6463,29 @@ pub const Lowerer = struct {
                 if (dot.args == null) {
                     break :blk try self.lowerSolvedExpr(module_idx, type_scope, env, expr);
                 }
-                break :blk todoMethodResolution();
+                break :blk try self.lowerMethodCallExpr(
+                    module_idx,
+                    type_scope,
+                    env,
+                    expr.idx,
+                    try self.requireExprType(module_idx, type_scope, dot.receiver),
+                    dot.field_name,
+                    dot.receiver,
+                    typed_cir_module.sliceExpr(dot.args.?),
+                    target_ty,
+                );
             },
-            .e_type_var_dispatch => |_| todoMethodResolution(),
+            .e_type_var_dispatch => |dispatch| try self.lowerMethodCallExpr(
+                module_idx,
+                type_scope,
+                env,
+                expr.idx,
+                try self.instantiateSourceVarType(module_idx, type_scope, dispatch.receiver_var),
+                dispatch.method_name,
+                null,
+                typed_cir_module.sliceExpr(dispatch.args),
+                target_ty,
+            ),
             else => try self.lowerSolvedExpr(module_idx, type_scope, env, expr),
         };
     }
@@ -6326,14 +6555,13 @@ pub const Lowerer = struct {
         call_expr_idx: CIR.Expr.Idx,
         call: anytype,
     ) std.mem.Allocator.Error!?ast.ExprId {
+        _ = self;
         _ = type_scope;
         _ = env;
         _ = call_expr_idx;
-        return switch (self.ctx.typedCirModule(module_idx).expr(call.func).data) {
-            .e_dot_access => |dot| if (dot.args != null) todoMethodResolution() else null,
-            .e_type_var_dispatch => todoMethodResolution(),
-            else => null,
-        };
+        _ = module_idx;
+        _ = call;
+        return null;
     }
 
     fn maybeLowerSpecialCallExpr(
@@ -7645,13 +7873,13 @@ pub const Lowerer = struct {
                 if (try self.defaultPrimitiveForConstraints(module_idx, type_scope, flex.constraints)) |prim| {
                     break :blk .{ .primitive = prim };
                 }
-                break :blk .placeholder;
+                break :blk .unbd;
             },
             .rigid => |rigid| blk: {
                 if (try self.defaultPrimitiveForConstraints(module_idx, type_scope, rigid.constraints)) |prim| {
                     break :blk .{ .primitive = prim };
                 }
-                break :blk .placeholder;
+                break :blk .unbd;
             },
             .err => .placeholder,
         };
@@ -7875,7 +8103,7 @@ pub const Lowerer = struct {
         nominal_type_id: type_mod.TypeId,
         nominal: types.NominalType,
     ) std.mem.Allocator.Error!type_mod.Content {
-        const defining = self.ctx.source_modules.resolveExternalIdent(
+        const defining = self.resolveExternalIdent(
             type_scope.getIdent(nominal.origin_module),
             type_scope.getIdent(nominal.ident.ident_idx),
         ) orelse debugPanic(
@@ -7917,12 +8145,21 @@ pub const Lowerer = struct {
         errdefer self.allocator.free(owned_key);
         try type_scope.nominal_type_cache.put(owned_key, nominal_type_id);
 
+        const exec_defining_ident = try self.ctx.copyExecutableIdent(defining.module_idx, defining_ident);
+        const exec_to_inspect_ident = try self.ctx.copyExecutableIdent(
+            defining.module_idx,
+            defining_module.commonIdents().to_inspect,
+        );
         const backing_var = type_scope.typeStoreConst().getNominalBackingVar(nominal);
         return .{ .nominal = .{
             .module_idx = defining.module_idx,
-            .ident = try self.ctx.copyExecutableIdent(defining.module_idx, defining_ident),
+            .ident = exec_defining_ident,
             .is_opaque = nominal.is_opaque,
-            .to_inspect_symbol = symbol_mod.Symbol.none,
+            .to_inspect_symbol = self.attached_methods.get(.{
+                .module_idx = defining.module_idx,
+                .type_ident = exec_defining_ident,
+                .method_ident = exec_to_inspect_ident,
+            }) orelse symbol_mod.Symbol.none,
             .args = try self.ctx.types.dupeTypeIds(lowered_args),
             .backing = try self.lowerInstantiatedType(module_idx, type_scope, backing_var),
         } };
@@ -8743,7 +8980,7 @@ pub const Lowerer = struct {
         return switch (resolved.desc.content) {
             .structure => |flat| switch (flat) {
                 .nominal_type => |nominal| blk: {
-                    const defining = self.ctx.source_modules.resolveExternalIdent(
+                    const defining = self.resolveExternalIdent(
                         type_scope.getIdent(nominal.origin_module),
                         type_scope.getIdent(nominal.ident.ident_idx),
                     ) orelse return null;
@@ -9937,13 +10174,6 @@ fn debugTodo(comptime msg: []const u8) noreturn {
         std.debug.panic("TODO {s}", .{msg});
     }
     unreachable;
-}
-
-fn todoMethodResolution() noreturn {
-    if (comptime builtin.target.os.tag == .freestanding) {
-        @trap();
-    }
-    std.debug.panic("TODO method resolution", .{});
 }
 
 fn debugPanic(comptime fmt: []const u8, args: anytype) noreturn {

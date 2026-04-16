@@ -17,6 +17,10 @@ const ExecutableMemory = backend.ExecutableMemory;
 fn expectInspect(comptime source: []const u8, expected: []const u8) !void {
     var compiled = try helpers.compileInspectedExpr(testing.allocator, source);
     defer compiled.deinit(testing.allocator);
+    try expectCompiledInspect(&compiled, expected);
+}
+
+fn expectCompiledInspect(compiled: *const helpers.CompiledInspectedExpr, expected: []const u8) !void {
     const actual = try helpers.lirInterpreterInspectedStr(testing.allocator, &compiled.lowered);
     defer testing.allocator.free(actual);
     try testing.expectEqualStrings(expected, actual);
@@ -240,6 +244,144 @@ test "cor pipeline - recursive lambda with record" {
     ,
         "5050",
     );
+}
+
+test "cor pipeline - polymorphic local method specialization resolves exact targets" {
+    var compiled = try helpers.compileInspectedProgram(
+        testing.allocator,
+        .module,
+        \\Counter := [Counter(U64)].{
+        \\    get : Counter -> U64
+        \\    get = |Counter.Counter(n)| n
+        \\}
+        \\
+        \\Gauge := [Gauge(U64)].{
+        \\    get : Gauge -> U64
+        \\    get = |Gauge.Gauge(n)| n + 100
+        \\}
+        \\
+        \\read = |value| value.get()
+        \\
+        \\main = (read(Counter.Counter(5)), read(Gauge.Gauge(8)))
+        ,
+        &.{},
+    );
+    defer compiled.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 0), countIndirectCalls(&compiled));
+    try expectCompiledInspect(&compiled, "(5, 108)");
+}
+
+test "cor pipeline - imported method resolution stays separate from record field access" {
+    var compiled = try helpers.compileInspectedProgram(
+        testing.allocator,
+        .module,
+        \\import Counter
+        \\
+        \\unwrap = |record| record.value
+        \\
+        \\main = (Counter.Counter({ value: 41 }).get(), unwrap({ value: 7 }))
+        ,
+        &.{.{
+            .name = "Counter",
+            .source =
+            \\Counter := [Counter({ value: U64 })].{
+            \\    get : Counter -> U64
+            \\    get = |Counter.Counter(record)| record.value
+            \\}
+            ,
+        }},
+    );
+    defer compiled.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 0), countIndirectCalls(&compiled));
+    try expectCompiledInspect(&compiled, "(41, 7)");
+}
+
+test "cor pipeline - cross-module polymorphic helper specializes imported methods" {
+    var compiled = try helpers.compileInspectedProgram(
+        testing.allocator,
+        .module,
+        \\import Ops
+        \\import Counter
+        \\import Gauge
+        \\
+        \\main = (Ops.read(Counter.Counter(5)), Ops.read(Gauge.Gauge(8)))
+        ,
+        &.{
+            .{
+                .name = "Counter",
+                .source =
+                \\Counter := [Counter(U64)].{
+                \\    get : Counter -> U64
+                \\    get = |Counter.Counter(n)| n
+                \\}
+                ,
+            },
+            .{
+                .name = "Gauge",
+                .source =
+                \\Gauge := [Gauge(U64)].{
+                \\    get : Gauge -> U64
+                \\    get = |Gauge.Gauge(n)| n + 100
+                \\}
+                ,
+            },
+            .{
+                .name = "Ops",
+                .source =
+                \\read = |value| value.get()
+                ,
+            },
+        },
+    );
+    defer compiled.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 0), countIndirectCalls(&compiled));
+    try expectCompiledInspect(&compiled, "(5, 108)");
+}
+
+test "cor pipeline - cross-module polymorphic helper rewrites multi-arg methods to direct calls" {
+    var compiled = try helpers.compileInspectedProgram(
+        testing.allocator,
+        .module,
+        \\import Ops
+        \\import Counter
+        \\import Gauge
+        \\
+        \\main = (Ops.add(Counter.Counter(5), 3), Ops.add(Gauge.Gauge(8), 4))
+        ,
+        &.{
+            .{
+                .name = "Counter",
+                .source =
+                \\Counter := [Counter(U64)].{
+                \\    add : Counter, U64 -> U64
+                \\    add = |Counter.Counter(n), delta| n + delta
+                \\}
+                ,
+            },
+            .{
+                .name = "Gauge",
+                .source =
+                \\Gauge := [Gauge(U64)].{
+                \\    add : Gauge, U64 -> U64
+                \\    add = |Gauge.Gauge(n), delta| n + delta + 100
+                \\}
+                ,
+            },
+            .{
+                .name = "Ops",
+                .source =
+                \\add = |value, delta| value.add(delta)
+                ,
+            },
+        },
+    );
+    defer compiled.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 0), countIndirectCalls(&compiled));
+    try expectCompiledInspect(&compiled, "(8, 112)");
 }
 
 test "cor pipeline - for loop early return" {
