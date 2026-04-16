@@ -1277,7 +1277,7 @@ const Lowerer = struct {
 
     fn publishExecutableType(self: *Lowerer, ty: type_mod.TypeId) std.mem.Allocator.Error!type_mod.TypeId {
         if (!self.types.isFullyResolved(ty)) {
-            debugPanic("lambdamono publication invariant violated: unresolved executable type escaped stage boundary");
+            debugPanic("lambdamono output invariant violated: unresolved executable type escaped stage boundary");
         }
         return try self.types.internTypeId(ty);
     }
