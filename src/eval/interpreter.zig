@@ -1259,7 +1259,7 @@ pub const Interpreter = struct {
                     current = expect_stmt.next;
                 },
                 .runtime_error => {
-                    if (builtin.mode == .Debug and trace.enabled) {
+                    if (builtin.mode == .Debug) {
                         std.debug.print(
                             "LIR/interpreter runtime_error in proc {d} at stmt {d}\n",
                             .{ @intFromEnum(frame.proc_id), @intFromEnum(current) },
@@ -1424,6 +1424,32 @@ pub const Interpreter = struct {
                         );
                     }
                     for (params, arg_values, arg_locals) |param, arg, arg_local| {
+                        if (builtin.mode == .Debug) {
+                            const actual_layout = self.store.getLocal(arg_local).layout_idx;
+                            const expected_layout = self.store.getLocal(param).layout_idx;
+                            const actual_layout_val = self.layout_store.getLayout(actual_layout);
+                            const expected_layout_val = self.layout_store.getLayout(expected_layout);
+                            if ((actual_layout_val.tag == .struct_ or actual_layout_val.tag == .tag_union) and
+                                actual_layout != expected_layout)
+                            {
+                                std.debug.print(
+                                    "LIR/interpreter jump bridge proc={d} stmt={d} join={d} arg_local={d} actual={d} ({s}) param={d} expected={d} ({s})\n",
+                                    .{
+                                        @intFromEnum(frame.proc_id),
+                                        @intFromEnum(current),
+                                        @intFromEnum(jump_stmt.target),
+                                        @intFromEnum(arg_local),
+                                        @intFromEnum(actual_layout),
+                                        @tagName(actual_layout_val.tag),
+                                        @intFromEnum(param),
+                                        @intFromEnum(expected_layout),
+                                        @tagName(expected_layout_val.tag),
+                                    },
+                                );
+                                self.debugDumpProc(frame.proc_id);
+                                self.debugPrintStmtChain(current, 24);
+                            }
+                        }
                         self.setLocalChecked(
                             frame,
                             current,
@@ -1786,10 +1812,19 @@ pub const Interpreter = struct {
                 2 => value.read(u16),
                 4 => value.read(u32),
                 8 => value.read(u64),
-                else => return self.invariantFailedError(
-                    "LIR/interpreter invariant violated: switch condition layout {d} is not a supported scalar width",
-                    .{@intFromEnum(layout_idx)},
-                ),
+                else => {
+                    if (builtin.mode == .Debug) {
+                        const layout_val_dbg = self.layout_store.getLayout(layout_idx);
+                        std.debug.print(
+                            "LIR/interpreter bad switch layout idx={d} tag={s} size={d}\n",
+                            .{ @intFromEnum(layout_idx), @tagName(layout_val_dbg.tag), self.helper.sizeOf(layout_idx) },
+                        );
+                    }
+                    return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: switch condition layout {d} is not a supported scalar width",
+                        .{@intFromEnum(layout_idx)},
+                    );
+                },
             },
         };
     }

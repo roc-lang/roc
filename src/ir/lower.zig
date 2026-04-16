@@ -42,6 +42,7 @@ const Lowerer = struct {
     output: ast.Store,
     root_defs: std.ArrayList(ast.DefId),
     value_thunks: std.AutoHashMap(Symbol, ValueThunk),
+    runtime_replacement: ?ast.BlockId,
 
     const EnvEntry = struct {
         symbol: Symbol,
@@ -90,6 +91,7 @@ const Lowerer = struct {
             .output = ast.Store.init(allocator),
             .root_defs = .empty,
             .value_thunks = std.AutoHashMap(Symbol, ValueThunk).init(allocator),
+            .runtime_replacement = null,
         };
     }
 
@@ -217,6 +219,19 @@ const Lowerer = struct {
     }
 
     fn lowerExpr(self: *Lowerer, env: []const EnvEntry, expr_id: lambdamono.Ast.ExprId) std.mem.Allocator.Error!LoweredBlock {
+        return self.lowerExprReplacingRuntimeError(env, expr_id, null);
+    }
+
+    fn lowerExprReplacingRuntimeError(
+        self: *Lowerer,
+        env: []const EnvEntry,
+        expr_id: lambdamono.Ast.ExprId,
+        runtime_replacement: ?ast.BlockId,
+    ) std.mem.Allocator.Error!LoweredBlock {
+        const prev_runtime_replacement = self.runtime_replacement;
+        self.runtime_replacement = runtime_replacement;
+        defer self.runtime_replacement = prev_runtime_replacement;
+
         const expr = self.input.store.getExpr(expr_id);
         var block = LoweredBlock.init(self.allocator);
         errdefer block.deinit(self.allocator);
@@ -344,7 +359,7 @@ const Lowerer = struct {
                 });
                 defer self.allocator.free(extended_env);
 
-                var rest = try self.lowerExpr(extended_env, let_expr.rest);
+                var rest = try self.lowerExprReplacingRuntimeError(extended_env, let_expr.rest, runtime_replacement);
                 defer rest.deinit(self.allocator);
                 try self.appendChildBlock(&block, &rest);
             },
@@ -451,13 +466,19 @@ const Lowerer = struct {
             },
             .when => |when_expr| try self.lowerWhenExpr(&block, env, expr.ty, when_expr.cond, when_expr.branches),
             .if_ => |if_expr| try self.lowerIfExpr(&block, env, expr.ty, if_expr.cond, if_expr.then_body, if_expr.else_body),
-            .block => |body| try self.lowerBlockExpr(&block, env, body.stmts, body.final_expr),
+            .block => |body| try self.lowerBlockExprReplacingRuntimeError(&block, env, body.stmts, body.final_expr, runtime_replacement),
             .return_ => |ret_expr| {
                 const value = try self.lowerSubexprValue(&block, env, ret_expr);
                 if (value == null) return if (block.has_term) block else debugPanic("ir.lower return missing terminator");
                 block.setTerm(.{ .return_ = value.? });
             },
-            .runtime_error => block.setTerm(.runtime_error),
+            .runtime_error => {
+                if (runtime_replacement) |replacement| {
+                    try self.appendStoredBlock(&block, replacement);
+                } else {
+                    block.setTerm(.runtime_error);
+                }
+            },
             .for_ => |for_expr| try self.lowerForExpr(&block, env, for_expr.patt, for_expr.iterable, for_expr.body),
         }
 
@@ -537,7 +558,7 @@ const Lowerer = struct {
         env: []const EnvEntry,
         expr_id: lambdamono.Ast.ExprId,
     ) std.mem.Allocator.Error!?ast.Var {
-        var child = try self.lowerExpr(env, expr_id);
+        var child = try self.lowerExprReplacingRuntimeError(env, expr_id, self.runtime_replacement);
         defer child.deinit(self.allocator);
         try dst.stmts.appendSlice(self.allocator, child.stmts.items);
         return switch (child.term) {
@@ -638,9 +659,30 @@ const Lowerer = struct {
         const cond = try self.lowerSubexprValue(block, env, cond_expr);
         if (cond == null) return;
 
-        const discr = if (self.input.layout_facts.exprDiscriminantLayout(cond_expr)) |discr_layout| blk: {
+        const discr_layout = self.input.layout_facts.exprDiscriminantLayout(cond_expr);
+        if (discr_layout == null) {
+            const ir_branches = self.input.store.sliceBranchSpan(branches_span);
+            if (ir_branches.len != 0) {
+                var all_var_patterns = true;
+                for (ir_branches) |branch_id| {
+                    const branch = self.input.store.getBranch(branch_id);
+                    const pat = self.input.store.getPat(branch.pat);
+                    if (pat.data != .var_) {
+                        all_var_patterns = false;
+                        break;
+                    }
+                }
+                if (all_var_patterns) {
+                    const chained_block = try self.lowerSequentialPatternBranches(env, cond.?, ir_branches);
+                    try self.appendStoredBlock(block, chained_block);
+                    return;
+                }
+            }
+        }
+
+        const discr = if (discr_layout) |resolved_discr_layout| blk: {
             const discr_var = try self.freshVarWithLayout(
-                discr_layout,
+                resolved_discr_layout,
                 "when_discr",
             );
             try block.stmts.append(self.allocator, .{ .let_ = .{
@@ -661,18 +703,22 @@ const Lowerer = struct {
             const pat = self.input.store.getPat(branch.pat);
             switch (pat.data) {
                 .var_ => {
-                    default_block = try self.lowerPatternBranchBlock(env, cond.?, branch.pat, branch.body);
+                    const replacement = if (self.input.store.getExpr(branch.body).data == .runtime_error)
+                        self.runtime_replacement
+                    else
+                        null;
+                    default_block = try self.lowerPatternBranchBlock(env, cond.?, branch.pat, branch.body, replacement);
                 },
                 .bool_lit => |value| {
                     try tag_branches.append(self.allocator, .{
                         .value = if (value) 1 else 0,
-                        .block = try self.lowerPatternBranchBlock(env, cond.?, branch.pat, branch.body),
+                        .block = try self.lowerPatternBranchBlock(env, cond.?, branch.pat, branch.body, null),
                     });
                 },
                 .tag => |tag| {
                     try tag_branches.append(self.allocator, .{
                         .value = tag.discriminant,
-                        .block = try self.lowerPatternBranchBlock(env, cond.?, branch.pat, branch.body),
+                        .block = try self.lowerPatternBranchBlock(env, cond.?, branch.pat, branch.body, null),
                     });
                 },
             }
@@ -684,7 +730,7 @@ const Lowerer = struct {
             }
         }.lessThan);
 
-        const default_final = default_block orelse try self.output.addBlock(.{
+        const default_final = default_block orelse self.runtime_replacement orelse try self.output.addBlock(.{
             .stmts = try self.output.addStmtSpan(&.{}),
             .term = .runtime_error,
         });
@@ -696,6 +742,36 @@ const Lowerer = struct {
             .join = join,
         } });
         block.setTerm(.{ .value = join });
+    }
+
+    fn lowerSequentialPatternBranches(
+        self: *Lowerer,
+        env: []const EnvEntry,
+        source_var: ast.Var,
+        branches: []const lambdamono.Ast.BranchId,
+    ) std.mem.Allocator.Error!ast.BlockId {
+        var chained_block: ?ast.BlockId = null;
+
+        var index = branches.len;
+        while (index > 0) {
+            index -= 1;
+            const branch = self.input.store.getBranch(branches[index]);
+            chained_block = try self.lowerPatternBranchBlock(env, source_var, branch.pat, branch.body, chained_block);
+        }
+
+        return chained_block orelse debugPanic("ir.lower invariant violated: empty sequential when branches");
+    }
+
+    fn appendStoredBlock(
+        self: *Lowerer,
+        dst: *LoweredBlock,
+        block_id: ast.BlockId,
+    ) std.mem.Allocator.Error!void {
+        const src = self.output.getBlock(block_id);
+        for (self.output.sliceStmtSpan(src.stmts)) |stmt_id| {
+            try dst.stmts.append(self.allocator, self.output.getStmt(stmt_id));
+        }
+        dst.setTerm(src.term);
     }
 
     fn lowerIfExpr(
@@ -733,6 +809,17 @@ const Lowerer = struct {
         stmts_span: lambdamono.Ast.Span(lambdamono.Ast.StmtId),
         final_expr: lambdamono.Ast.ExprId,
     ) std.mem.Allocator.Error!void {
+        try self.lowerBlockExprReplacingRuntimeError(block, env, stmts_span, final_expr, null);
+    }
+
+    fn lowerBlockExprReplacingRuntimeError(
+        self: *Lowerer,
+        block: *LoweredBlock,
+        env: []const EnvEntry,
+        stmts_span: lambdamono.Ast.Span(lambdamono.Ast.StmtId),
+        final_expr: lambdamono.Ast.ExprId,
+        runtime_replacement: ?ast.BlockId,
+    ) std.mem.Allocator.Error!void {
         var current_env = try self.allocator.dupe(EnvEntry, env);
         defer self.allocator.free(current_env);
 
@@ -741,7 +828,7 @@ const Lowerer = struct {
             if (!keep_going) return;
         }
 
-        var tail = try self.lowerExpr(current_env, final_expr);
+        var tail = try self.lowerExprReplacingRuntimeError(current_env, final_expr, runtime_replacement);
         defer tail.deinit(self.allocator);
         try self.appendChildBlock(block, &tail);
     }
@@ -874,7 +961,7 @@ const Lowerer = struct {
         if (iterable == null) return;
 
         const elem = try self.freshVarWithLayout(self.input.layout_facts.patLayout(patt), "for_elem");
-        const body_block = try self.lowerPatternBranchBlock(env, elem, patt, body_expr);
+        const body_block = try self.lowerPatternBranchBlock(env, elem, patt, body_expr, null);
         try block.stmts.append(self.allocator, .{ .for_list = .{
             .elem = elem,
             .iterable = iterable.?,
@@ -901,6 +988,7 @@ const Lowerer = struct {
         source_var: ast.Var,
         pat_id: lambdamono.Ast.PatId,
         body_expr: lambdamono.Ast.ExprId,
+        runtime_replacement: ?ast.BlockId,
     ) std.mem.Allocator.Error!ast.BlockId {
         var prefix = std.ArrayList(ast.Stmt).empty;
         defer prefix.deinit(self.allocator);
@@ -912,7 +1000,7 @@ const Lowerer = struct {
         const extended_env = try self.concatEnv(env, additions.items);
         defer self.allocator.free(extended_env);
 
-        var body = try self.lowerExpr(extended_env, body_expr);
+        var body = try self.lowerExprReplacingRuntimeError(extended_env, body_expr, runtime_replacement);
         defer body.deinit(self.allocator);
 
         try prefix.appendSlice(self.allocator, body.stmts.items);

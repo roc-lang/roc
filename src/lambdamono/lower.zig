@@ -2476,6 +2476,9 @@ const Lowerer = struct {
                     if (inspect_method.ret_ty == result_ty) break :blk inspect_expr;
                     break :blk try self.specializeInspectValueExpr(mono_cache, inspect_expr, result_ty);
                 }
+                if (nominal.is_opaque) {
+                    break :blk self.makeStringLiteralExpr(result_ty, "<opaque>");
+                }
                 const backing_expr = try self.retypeExpr(value_expr, nominal.backing);
                 break :blk try self.buildInlineInspectValueExpr(mono_cache, backing_expr, result_ty);
             },

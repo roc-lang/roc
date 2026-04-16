@@ -5232,153 +5232,31 @@ pub const Lowerer = struct {
         branch_value: CIR.Expr.Idx,
         else_expr: ast.ExprId,
     ) std.mem.Allocator.Error!ast.ExprId {
-        try self.recordPatternStructuralInfoFromSourceType(
+        _ = list_pattern;
+        const then_expr = try self.lowerWholeValuePatternBranch(
             module_idx,
             type_scope,
-            match_pattern_idx,
-            scrutinee_ty,
-            scrutinee_solved_var,
-        );
-        const elem_ty = self.requirePatternListElemType(module_idx, type_scope, match_pattern_idx);
-        const bool_ty = try self.makePrimitiveType(.bool);
-        const u64_ty = try self.makePrimitiveType(.u64);
-        const patterns = self.ctx.typedCirModule(module_idx).slicePatterns(list_pattern.patterns);
-        const prefix_len: usize = if (list_pattern.rest_info) |rest| @intCast(rest.index) else patterns.len;
-        const suffix_len = patterns.len - prefix_len;
-
-        const len_expr = try self.makeLowLevelExpr(u64_ty, .list_len, &.{scrutinee_expr});
-        const expected_len_expr = try self.makeU64LiteralExpr(@intCast(patterns.len));
-        const cond_expr = if (list_pattern.rest_info != null)
-            try self.makeLowLevelExpr(bool_ty, .num_is_gte, &.{ len_expr, expected_len_expr })
-        else
-            try self.makeLowLevelExpr(bool_ty, .num_is_eq, &.{ len_expr, expected_len_expr });
-
-        var branch_env = try self.cloneEnv(incoming_env);
-        defer branch_env.deinit();
-        var binding_decls = std.ArrayList(BindingDecl).empty;
-        defer binding_decls.deinit(self.allocator);
-
-        for (patterns[0..prefix_len], 0..) |elem_pattern_idx, i| {
-            const index_expr = try self.makeU64LiteralExpr(@intCast(i));
-            const elem_expr = try self.makeLowLevelExpr(elem_ty, .list_get_unsafe, &.{ scrutinee_expr, index_expr });
-            try self.bindPatternFromSourceExpr(
-                module_idx,
-                type_scope,
-                elem_pattern_idx,
-                elem_expr,
-                elem_ty,
-                self.lookupListElemSolvedVar(module_idx, type_scope, scrutinee_solved_var),
-                &branch_env,
-                &binding_decls,
-            );
-        }
-
-        if (suffix_len != 0) {
-            const suffix_start = try self.makeLowLevelExpr(
-                u64_ty,
-                .num_minus,
-                &.{ len_expr, try self.makeU64LiteralExpr(@intCast(suffix_len)) },
-            );
-            for (patterns[prefix_len..], 0..) |elem_pattern_idx, i| {
-                const index_expr = if (i == 0)
-                    suffix_start
-                else
-                    try self.makeLowLevelExpr(
-                        u64_ty,
-                        .num_plus,
-                        &.{ suffix_start, try self.makeU64LiteralExpr(@intCast(i)) },
-                    );
-                const elem_expr = try self.makeLowLevelExpr(elem_ty, .list_get_unsafe, &.{ scrutinee_expr, index_expr });
-                try self.bindPatternFromSourceExpr(
-                    module_idx,
-                    type_scope,
-                    elem_pattern_idx,
-                    elem_expr,
-                    elem_ty,
-                    self.lookupListElemSolvedVar(module_idx, type_scope, scrutinee_solved_var),
-                    &branch_env,
-                    &binding_decls,
-                );
-            }
-        }
-
-        if (list_pattern.rest_info) |rest| {
-            if (rest.pattern) |rest_pattern_idx| {
-                const start_expr = try self.makeU64LiteralExpr(rest.index);
-                const rest_len_expr = try self.makeLowLevelExpr(u64_ty, .num_minus, &.{ len_expr, expected_len_expr });
-                const bounds_expr = try self.makeListSliceBoundsExpr(start_expr, rest_len_expr);
-                const rest_expr = try self.makeLowLevelExpr(scrutinee_ty, .list_sublist, &.{ scrutinee_expr, bounds_expr });
-                try self.bindPatternFromSourceExpr(
-                    module_idx,
-                    type_scope,
-                    rest_pattern_idx,
-                    rest_expr,
-                    scrutinee_ty,
-                    scrutinee_solved_var,
-                    &branch_env,
-                    &binding_decls,
-                );
-            }
-        }
-
-        try self.bindPatternFromSourceExpr(
-            module_idx,
-            type_scope,
-            match_pattern_idx,
+            incoming_env,
+            result_ty,
+            expected_result_var,
             scrutinee_expr,
             scrutinee_ty,
             scrutinee_solved_var,
-            &branch_env,
-            &binding_decls,
+            match_pattern_idx,
+            bind_pattern_idx,
+            guard_expr,
+            branch_value,
+            else_expr,
         );
-        if (match_pattern_idx != bind_pattern_idx) {
-            try self.recordPatternStructuralInfoFromSourceType(
-                module_idx,
-                type_scope,
-                bind_pattern_idx,
-                scrutinee_ty,
-                scrutinee_solved_var,
-            );
-            try self.aliasPatternBindings(module_idx, match_pattern_idx, bind_pattern_idx, &branch_env);
-        }
-        try self.collectBranchValueInfo(module_idx, type_scope, branch_env, branch_value, expected_result_var);
-
-        var branch_body = try self.lowerExprWithExpectedType(
+        return try self.lowerPatternGuardExpr(
             module_idx,
             type_scope,
-            branch_env,
-            branch_value,
-            result_ty,
-            expected_result_var,
+            scrutinee_expr,
+            scrutinee_ty,
+            match_pattern_idx,
+            then_expr,
+            else_expr,
         );
-        if (guard_expr) |guard_idx| {
-            const guard_bool_ty = try self.makePrimitiveType(.bool);
-            const lowered_guard = try self.lowerExprWithExpectedType(
-                module_idx,
-                type_scope,
-                branch_env,
-                guard_idx,
-                guard_bool_ty,
-                null,
-            );
-            branch_body = try self.program.store.addExpr(.{
-                .ty = result_ty,
-                .data = .{ .if_ = .{
-                    .cond = lowered_guard,
-                    .then_body = branch_body,
-                    .else_body = else_expr,
-                } },
-            });
-        }
-        const then_expr = try self.wrapExprWithBindingDecls(branch_body, binding_decls.items);
-        return try self.program.store.addExpr(.{
-            .ty = result_ty,
-            .data = .{ .if_ = .{
-                .cond = cond_expr,
-                .then_body = then_expr,
-                .else_body = else_expr,
-            } },
-        });
     }
 
     fn lowerLiteralPatternBranch(

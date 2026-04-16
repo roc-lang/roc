@@ -161,7 +161,7 @@ pub fn specializeFnLset(
     requested_ty: TypeVarId,
     sig: SigKey,
 ) std.mem.Allocator.Error!Symbol {
-    const entry = lookupFnByCanonicalSource(fenv, symbols, requested_name) orelse
+    const entry = lookupFnExact(fenv, requested_name) orelse
         debugPanic("lambdamono.specializations.specializeFnLset missing function");
     if (queue.by_key.get(sig)) |idx| {
         return queue.items.items[idx].specialized_symbol;
@@ -193,7 +193,7 @@ pub fn specializeFnErased(
     requested_ty: TypeVarId,
     sig: SigKey,
 ) std.mem.Allocator.Error!Symbol {
-    const entry = lookupFnByCanonicalSource(fenv, symbols, requested_name) orelse
+    const entry = lookupFnExact(fenv, requested_name) orelse
         debugPanic("lambdamono.specializations.specializeFnErased missing function");
     if (queue.by_key.get(sig)) |idx| {
         return queue.items.items[idx].specialized_symbol;
