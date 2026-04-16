@@ -20,8 +20,8 @@ fn runGlueCommand(
         "test/fx/platform/main.roc",
     });
     // Common checks: should not panic
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "PANIC") == null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "unreachable") == null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "PANIC") == null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "unreachable") == null);
     return result;
 }
 
@@ -49,10 +49,10 @@ test "glue command with DebugGlue succeeds (interpreter)" {
     try checkGlueSuccess(result, "DebugGlue");
 
     // Empty string would indicate an encoding bug with the small string optimization
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "name: \"\"") == null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "name: \"\"") == null);
 
     // Should show the actual entry point name from the platform header
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "name: \"main!\"") != null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "name: \"main!\"") != null);
 }
 
 test "glue command with DebugGlue succeeds (dev backend)" {
@@ -225,7 +225,7 @@ test "glue command with ZigGlue succeeds (interpreter)" {
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "misaligned") == null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "misaligned") == null);
     try checkGlueSuccess(result, "ZigGlue");
 
     // Should produce a Zig output file
@@ -240,9 +240,9 @@ test "glue command with ZigGlue succeeds (interpreter)" {
     defer allocator.free(generated_content);
 
     // Generated file should contain key Zig constructs
-    try std.testing.expect(std.mem.indexOf(u8, generated_content, "pub const RocStr") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated_content, "pub const RocOps") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated_content, "Entrypoint") != null);
+    try std.testing.expect(std.mem.find(u8, generated_content, "pub const RocStr") != null);
+    try std.testing.expect(std.mem.find(u8, generated_content, "pub const RocOps") != null);
+    try std.testing.expect(std.mem.find(u8, generated_content, "Entrypoint") != null);
 }
 
 test "glue command with ZigGlue succeeds (dev backend)" {
@@ -267,8 +267,8 @@ test "CGlue.roc expect tests pass (interpreter)" {
     defer allocator.free(result.stderr);
 
     // Should not panic
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "PANIC") == null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "unreachable") == null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "PANIC") == null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "unreachable") == null);
 
     // Should complete successfully
     if (result.term != .exited or result.term.exited != 0) {

@@ -181,7 +181,7 @@ pub fn bundle(
             @memcpy(path_buf, unescaped_path);
             std.mem.replaceScalar(u8, path_buf, '\\', '/');
             break :blk path_buf;
-        } else if (std.mem.indexOf(u8, unescaped_path, "\\") == null) unescaped_path else {
+        } else if (std.mem.find(u8, unescaped_path, "\\") == null) unescaped_path else {
             if (error_context) |ctx| {
                 ctx.path = unescaped_path;
                 ctx.reason = .contained_backslash_on_unix;
@@ -308,7 +308,7 @@ pub const PathValidationError = struct {
 /// there's no security concern; if the OS doesn't accept the path,
 /// it will give an error.
 pub fn pathHasBundleErr(path: []const u8) ?PathValidationError {
-    std.debug.assert(std.mem.indexOf(u8, path, "\\") == null);
+    std.debug.assert(std.mem.find(u8, path, "\\") == null);
 
     // Start by doing the validation checks we'd do on unbundle.
     // If unbundling would fail, then bundling should too!
@@ -335,7 +335,7 @@ pub fn pathHasBundleErr(path: []const u8) ?PathValidationError {
         // Check for Windows reserved names (case-insensitive)
         for (WINDOWS_RESERVED_NAMES) |reserved| {
             // Check base name without extension
-            const dot_pos = std.mem.indexOfScalar(u8, component, '.');
+            const dot_pos = std.mem.findScalar(u8, component, '.');
             const base_name = if (dot_pos) |pos| component[0..pos] else component;
 
             if (base_name.len == reserved.len) {

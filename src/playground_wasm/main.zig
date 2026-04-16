@@ -1410,7 +1410,7 @@ fn convertStepResult(result: repl.Repl.StepResult) ReplStepResult {
 
 /// Extract error details from an error message (part after ": ")
 fn extractErrorDetails(message: []const u8) ?[]const u8 {
-    if (std.mem.indexOf(u8, message, ": ")) |idx| {
+    if (std.mem.find(u8, message, ": ")) |idx| {
         return message[idx + 2 ..];
     }
     return null;

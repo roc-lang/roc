@@ -6585,7 +6585,7 @@ pub const Pass = struct {
         if (start >= bytes.len) return false;
 
         const tail = bytes[start..];
-        const end_rel = std.mem.indexOfScalar(u8, tail, 0) orelse return false;
+        const end_rel = std.mem.findScalar(u8, tail, 0) orelse return false;
         const text = tail[0..end_rel];
 
         const roundtrip = ident_store.findByString(text) orelse return false;
@@ -11250,7 +11250,7 @@ fn identMatchesMethodName(full_name: []const u8, method_name: []const u8) bool {
 }
 
 fn identLastSegment(ident: []const u8) []const u8 {
-    const idx = std.mem.lastIndexOfScalar(u8, ident, '.') orelse return ident;
+    const idx = std.mem.findScalarLast(u8, ident, '.') orelse return ident;
     return ident[idx + 1 ..];
 }
 

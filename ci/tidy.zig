@@ -223,7 +223,7 @@ fn tidyControlCharacters(file: SourceFile, errors: *Errors) void {
     if (file.hasExtension(".bat")) return;
 
     var remaining = file.text;
-    while (mem.indexOfScalar(u8, remaining, '\r')) |index| {
+    while (mem.findScalar(u8, remaining, '\r')) |index| {
         const offset = index + (file.text.len - remaining.len);
         errors.addControlCharacter(file, offset, '\r');
         remaining = remaining[index + 1 ..];
@@ -282,7 +282,7 @@ fn tidyBannedStdIo(file: SourceFile, errors: *Errors) void {
     for (banned_io_patterns) |ban_item| {
         const banned, const replacement = ban_item;
         var remaining: []const u8 = file.text;
-        while (std.mem.indexOf(u8, remaining, banned)) |index| {
+        while (std.mem.find(u8, remaining, banned)) |index| {
             const offset = @intFromPtr(remaining.ptr) - @intFromPtr(file.text.ptr) + index;
             errors.addBanned(file, offset, banned, replacement);
             remaining = remaining[index + banned.len ..];
@@ -309,7 +309,7 @@ fn tidyBannedCoreCtxCreation(file: SourceFile, errors: *Errors) void {
     if (std.mem.endsWith(u8, file.path, "ci/tidy.zig")) return;
 
     // Allow all test files
-    if (std.mem.indexOf(u8, file.path, "/test/") != null) return;
+    if (std.mem.find(u8, file.path, "/test/") != null) return;
     if (std.mem.endsWith(u8, file.path, "_test.zig")) return;
 
     // Allow entrypoint files
@@ -318,7 +318,7 @@ fn tidyBannedCoreCtxCreation(file: SourceFile, errors: *Errors) void {
     }
 
     // Only scan production code — skip inline test blocks at the bottom of files.
-    const scan_text = if (std.mem.indexOf(u8, file.text, "\ntest \"")) |test_start|
+    const scan_text = if (std.mem.find(u8, file.text, "\ntest \"")) |test_start|
         file.text[0..test_start]
     else
         file.text;
@@ -326,7 +326,7 @@ fn tidyBannedCoreCtxCreation(file: SourceFile, errors: *Errors) void {
     const banned_patterns: []const []const u8 = &.{ "CoreCtx.default(", "CoreCtx.os(" };
     for (banned_patterns) |banned| {
         var remaining: []const u8 = scan_text;
-        while (std.mem.indexOf(u8, remaining, banned)) |index| {
+        while (std.mem.find(u8, remaining, banned)) |index| {
             const offset = @intFromPtr(remaining.ptr) - @intFromPtr(file.text.ptr) + index;
             errors.addBanned(file, offset, banned, "accept CoreCtx as a parameter instead");
             remaining = remaining[index + banned.len ..];
@@ -349,7 +349,7 @@ fn tidyBanned(file: SourceFile, errors: *Errors) void {
 
     for (ban_list) |ban_item| {
         const banned, const replacement = ban_item;
-        if (std.mem.indexOf(u8, file.text, banned)) |offset| {
+        if (std.mem.find(u8, file.text, banned)) |offset| {
             errors.addBanned(file, offset, banned, replacement);
         }
     }
@@ -358,7 +358,7 @@ fn tidyBanned(file: SourceFile, errors: *Errors) void {
     // Do use FIXME comments proactively while iterating on the code when you want to make sure
     // something is revisited before getting into the main branch.
     inline for (.{"FIXME"}) |banned| {
-        if (std.mem.indexOf(u8, file.text, banned)) |offset| {
+        if (std.mem.find(u8, file.text, banned)) |offset| {
             errors.addBannedReminder(file, offset, banned);
         }
     }
@@ -402,7 +402,7 @@ const IdentifierCounter = struct {
             // Count occurrences on a single line as one, as a special case for imports:
             // const foo = std.foo;
             const between_tokens_text = tree.source[gop.value_ptr.offset..token_offset];
-            const same_line_occurrence = mem.indexOfScalar(u8, between_tokens_text, '\n') == null;
+            const same_line_occurrence = mem.findScalar(u8, between_tokens_text, '\n') == null;
             if (same_line_occurrence) return;
         }
 
@@ -592,7 +592,7 @@ fn tidyMarkdownTitle(file: SourceFile, errors: *Errors) void {
         "www/",            // Website content
     };
     for (skip_paths) |skip_path| {
-        if (std.mem.indexOf(u8, file.path, skip_path) != null) return;
+        if (std.mem.find(u8, file.path, skip_path) != null) return;
     }
 
     var fenced_block = false; // Avoid interpreting `# ` shell comments as titles.
@@ -757,6 +757,6 @@ fn listFilePaths(allocator: Allocator, io: std.Io) ![][]const u8 {
 /// Splits a string at the first occurrence of a delimiter.
 /// Returns null if delimiter is not found.
 fn cut(str: []const u8, delimiter: []const u8) ?struct { []const u8, []const u8 } {
-    const index = std.mem.indexOf(u8, str, delimiter) orelse return null;
+    const index = std.mem.find(u8, str, delimiter) orelse return null;
     return .{ str[0..index], str[index + delimiter.len ..] };
 }

@@ -103,9 +103,9 @@ fn expectInterpreterRuntimeStackOverflow() !void {
                 std.debug.print("STDERR: {s}\n", .{run_result.stderr});
                 return error.UnexpectedExitCode;
             }
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Roc crashed:") != null);
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "This Roc program overflowed its stack memory") != null);
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "divided by zero") == null);
+            try testing.expect(std.mem.find(u8, run_result.stderr, "Roc crashed:") != null);
+            try testing.expect(std.mem.find(u8, run_result.stderr, "This Roc program overflowed its stack memory") != null);
+            try testing.expect(std.mem.find(u8, run_result.stderr, "divided by zero") == null);
         },
         else => {
             std.debug.print("Unexpected interpreter termination: {}\n", .{run_result.term});
@@ -133,10 +133,10 @@ fn expectDevRuntimeStackOverflow() !void {
                 std.debug.print("STDERR: {s}\n", .{run_result.stderr});
                 return error.UnexpectedExitCode;
             }
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "This Roc application overflowed its stack memory and crashed.") != null);
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "divided by zero") == null);
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Roc crashed:") == null);
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "panic:") == null);
+            try testing.expect(std.mem.find(u8, run_result.stderr, "This Roc application overflowed its stack memory and crashed.") != null);
+            try testing.expect(std.mem.find(u8, run_result.stderr, "divided by zero") == null);
+            try testing.expect(std.mem.find(u8, run_result.stderr, "Roc crashed:") == null);
+            try testing.expect(std.mem.find(u8, run_result.stderr, "panic:") == null);
         },
         .signal => |sig| {
             std.debug.print("Host self-test crashed with signal {}\n", .{sig});
@@ -164,9 +164,9 @@ fn expectInterpreterRuntimeDivisionByZero() !void {
                 std.debug.print("STDERR: {s}\n", .{run_result.stderr});
                 return error.UnexpectedExitCode;
             }
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Roc crashed:") != null);
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "DivisionByZero") != null);
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "overflowed its stack memory") == null);
+            try testing.expect(std.mem.find(u8, run_result.stderr, "Roc crashed:") != null);
+            try testing.expect(std.mem.find(u8, run_result.stderr, "DivisionByZero") != null);
+            try testing.expect(std.mem.find(u8, run_result.stderr, "overflowed its stack memory") == null);
         },
         else => {
             std.debug.print("Unexpected interpreter termination: {}\n", .{run_result.term});
@@ -194,10 +194,10 @@ fn expectDevRuntimeDivisionByZero() !void {
                 std.debug.print("STDERR: {s}\n", .{run_result.stderr});
                 return error.UnexpectedExitCode;
             }
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "This Roc application divided by zero and crashed.") != null);
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "overflowed its stack memory") == null);
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Roc crashed:") == null);
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "panic:") == null);
+            try testing.expect(std.mem.find(u8, run_result.stderr, "This Roc application divided by zero and crashed.") != null);
+            try testing.expect(std.mem.find(u8, run_result.stderr, "overflowed its stack memory") == null);
+            try testing.expect(std.mem.find(u8, run_result.stderr, "Roc crashed:") == null);
+            try testing.expect(std.mem.find(u8, run_result.stderr, "panic:") == null);
         },
         .signal => |sig| {
             std.debug.print("Host self-test crashed with signal {}\n", .{sig});
@@ -334,7 +334,7 @@ test "fx platform wildcard match on open union (interpreter)" {
     try util.checkSuccess(run_result);
 
     // Verify that the wildcard match worked correctly
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "PASS: Wildcard match worked correctly") != null);
+    try testing.expect(std.mem.find(u8, run_result.stdout, "PASS: Wildcard match worked correctly") != null);
 }
 
 test "fx platform wildcard match on open union (dev backend)" {
@@ -347,7 +347,7 @@ test "fx platform wildcard match on open union (dev backend)" {
     try util.checkSuccess(run_result);
 
     // Verify that the wildcard match worked correctly
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "PASS: Wildcard match worked correctly") != null);
+    try testing.expect(std.mem.find(u8, run_result.stdout, "PASS: Wildcard match worked correctly") != null);
 }
 
 test "fx platform nested tag match in statement position (dev backend)" {
@@ -359,7 +359,7 @@ test "fx platform nested tag match in statement position (dev backend)" {
 
     try util.checkSuccess(run_result);
 
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "PASS: statement-position nested tag match works") != null);
+    try testing.expect(std.mem.find(u8, run_result.stdout, "PASS: statement-position nested tag match works") != null);
 }
 
 test "fx platform dbg missing return value (interpreter)" {
@@ -375,7 +375,7 @@ test "fx platform dbg missing return value (interpreter)" {
     try util.checkSuccess(run_result);
 
     // Verify that the dbg output was printed
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "this should work now") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "this should work now") != null);
 }
 
 test "fx platform dbg missing return value (dev backend)" {
@@ -424,11 +424,11 @@ test "fx platform check unused state var reports correct errors" {
 
     var line_iter = std.mem.splitScalar(u8, stderr, '\n');
     while (line_iter.next()) |line| {
-        if (std.mem.indexOf(u8, line, "UNUSED VARIABLE") != null) {
+        if (std.mem.find(u8, line, "UNUSED VARIABLE") != null) {
             unused_variable_count += 1;
-        } else if (std.mem.indexOf(u8, line, "MODULE NOT FOUND") != null) {
+        } else if (std.mem.find(u8, line, "MODULE NOT FOUND") != null) {
             module_not_found_count += 1;
-        } else if (std.mem.indexOf(u8, line, "EXPOSED BUT NOT DEFINED") != null) {
+        } else if (std.mem.find(u8, line, "EXPOSED BUT NOT DEFINED") != null) {
             exposed_but_not_defined_count += 1;
         }
     }
@@ -484,7 +484,7 @@ test "fx platform checked directly finds sibling modules" {
 
     var line_iter = std.mem.splitScalar(u8, stderr, '\n');
     while (line_iter.next()) |line| {
-        if (std.mem.indexOf(u8, line, "MODULE NOT FOUND") != null) {
+        if (std.mem.find(u8, line, "MODULE NOT FOUND") != null) {
             module_not_found_count += 1;
         }
     }
@@ -524,7 +524,7 @@ test "custom platform and package qualifiers work in roc run" {
     defer allocator.free(run_result.stderr);
 
     // Check for undefined variable errors which would indicate qualifier mismatch
-    if (std.mem.indexOf(u8, run_result.stderr, "UNDEFINED VARIABLE") != null) {
+    if (std.mem.find(u8, run_result.stderr, "UNDEFINED VARIABLE") != null) {
         std.debug.print("\n❌ Custom qualifiers not recognized\n", .{});
         std.debug.print("This indicates the qualifiers were not correctly extracted from the app header.\n", .{});
         std.debug.print("\n========== FULL OUTPUT ==========\n", .{});
@@ -552,7 +552,7 @@ test "custom platform and package qualifiers work in roc run" {
 
     // Verify the expected output
     const expected_output = "Hello, World!";
-    if (std.mem.indexOf(u8, run_result.stdout, expected_output) == null) {
+    if (std.mem.find(u8, run_result.stdout, expected_output) == null) {
         std.debug.print("\n❌ Expected output not found\n", .{});
         std.debug.print("Expected: {s}\n", .{expected_output});
         std.debug.print("Got:\n{s}\n", .{run_result.stdout});
@@ -588,14 +588,14 @@ test "fx platform string interpolation type mismatch (interpreter)" {
 
     // Verify the error output contains proper diagnostic info
     // Should show TYPE MISMATCH error with the type information
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "U8") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Str") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "U8") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "Str") != null);
     // The coordinator now detects additional errors (COMPTIME EVAL ERROR) beyond TYPE MISMATCH
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Found 2 error") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "Found 2 error") != null);
 
     // The program should still produce output (it runs despite errors)
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "two:") != null);
+    try testing.expect(std.mem.find(u8, run_result.stdout, "two:") != null);
 }
 
 test "fx platform string interpolation type mismatch (dev backend)" {
@@ -646,7 +646,7 @@ test "fx platform run from different cwd" {
     }
 
     // Verify stdout contains expected messages
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello from stdout!") != null);
+    try testing.expect(std.mem.find(u8, run_result.stdout, "Hello from stdout!") != null);
 }
 
 test "drop_prefix segfault regression" {
@@ -674,9 +674,9 @@ test "drop_prefix match use-after-free regression" {
     try util.checkSuccess(run_result);
 
     // Also check for panic messages in stderr that indicate use-after-free
-    if (std.mem.indexOf(u8, run_result.stderr, "panic") != null or
-        std.mem.indexOf(u8, run_result.stderr, "use-after-free") != null or
-        std.mem.indexOf(u8, run_result.stderr, "Invalid pointer") != null)
+    if (std.mem.find(u8, run_result.stderr, "panic") != null or
+        std.mem.find(u8, run_result.stderr, "use-after-free") != null or
+        std.mem.find(u8, run_result.stderr, "Invalid pointer") != null)
     {
         std.debug.print("Detected memory safety panic in stderr:\n{s}\n", .{run_result.stderr});
         return error.UseAfterFree;
@@ -696,10 +696,10 @@ test "multiline string split_on" {
     try util.checkSuccess(run_result);
 
     // Verify the output contains lines from the multiline string
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "This is a longer line number one") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "This is a longer line number two") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "L68") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "The last line is here") != null);
+    try testing.expect(std.mem.find(u8, run_result.stdout, "This is a longer line number one") != null);
+    try testing.expect(std.mem.find(u8, run_result.stdout, "This is a longer line number two") != null);
+    try testing.expect(std.mem.find(u8, run_result.stdout, "L68") != null);
+    try testing.expect(std.mem.find(u8, run_result.stdout, "The last line is here") != null);
 }
 
 test "big string equality regression (interpreter)" {
@@ -715,9 +715,9 @@ test "big string equality regression (interpreter)" {
     try util.checkSuccess(run_result);
 
     // Check for panic messages in stderr that indicate use-after-free
-    if (std.mem.indexOf(u8, run_result.stderr, "panic") != null or
-        std.mem.indexOf(u8, run_result.stderr, "use-after-free") != null or
-        std.mem.indexOf(u8, run_result.stderr, "Use-after-free") != null)
+    if (std.mem.find(u8, run_result.stderr, "panic") != null or
+        std.mem.find(u8, run_result.stderr, "use-after-free") != null or
+        std.mem.find(u8, run_result.stderr, "Use-after-free") != null)
     {
         std.debug.print("Detected memory safety panic in stderr:\n{s}\n", .{run_result.stderr});
         return error.UseAfterFree;
@@ -733,9 +733,9 @@ test "big string equality regression (dev backend)" {
 
     try util.checkSuccess(run_result);
 
-    if (std.mem.indexOf(u8, run_result.stderr, "panic") != null or
-        std.mem.indexOf(u8, run_result.stderr, "use-after-free") != null or
-        std.mem.indexOf(u8, run_result.stderr, "Use-after-free") != null)
+    if (std.mem.find(u8, run_result.stderr, "panic") != null or
+        std.mem.find(u8, run_result.stderr, "use-after-free") != null or
+        std.mem.find(u8, run_result.stderr, "Use-after-free") != null)
     {
         std.debug.print("Detected memory safety panic in stderr:\n{s}\n", .{run_result.stderr});
         return error.UseAfterFree;
@@ -752,7 +752,7 @@ test "fx platform expect with toplevel numeric (interpreter)" {
 
     try util.checkSuccess(run_result);
 
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "hello") != null);
+    try testing.expect(std.mem.find(u8, run_result.stdout, "hello") != null);
 
     // Run `roc test` since this file has a top-level expect
     const test_result = try util.runRoc(allocator, &.{ "test", "--opt=interpreter" }, "test/fx/expect_with_toplevel_numeric.roc");
@@ -770,7 +770,7 @@ test "fx platform expect with toplevel numeric (dev backend)" {
     defer allocator.free(run_result.stderr);
 
     try util.checkSuccess(run_result);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "hello") != null);
+    try testing.expect(std.mem.find(u8, run_result.stdout, "hello") != null);
 
     const test_result = try util.runRoc(allocator, &.{ "test", "--opt=dev" }, "test/fx/expect_with_toplevel_numeric.roc");
     defer allocator.free(test_result.stdout);
@@ -794,7 +794,7 @@ test "fx platform test_type_mismatch" {
         .exited => |code| {
             if (code != 0) {
                 // Expected to fail - check for type mismatch error message
-                try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
+                try testing.expect(std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null);
             } else {
                 std.debug.print("Expected compilation error but succeeded\n", .{});
                 return error.UnexpectedSuccess;
@@ -804,7 +804,7 @@ test "fx platform test_type_mismatch" {
             // Abnormal termination should also indicate error
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
+            try testing.expect(std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null);
         },
     }
 }
@@ -822,7 +822,7 @@ test "fx platform issue8433" {
         .exited => |code| {
             if (code != 0) {
                 // Expected to fail - check for type mismatch error message
-                try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
+                try testing.expect(std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null);
             } else {
                 std.debug.print("Expected compilation error but succeeded\n", .{});
                 return error.UnexpectedSuccess;
@@ -832,7 +832,7 @@ test "fx platform issue8433" {
             // Abnormal termination should also indicate error
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
+            try testing.expect(std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null);
         },
     }
 }
@@ -849,7 +849,7 @@ test "run aborts on type errors by default" {
     try util.checkFailure(run_result);
 
     // Should show the errors
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "UNDEFINED VARIABLE") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "UNDEFINED VARIABLE") != null);
 }
 
 test "run aborts on parse errors by default" {
@@ -864,7 +864,7 @@ test "run aborts on parse errors by default" {
     try util.checkFailure(run_result);
 
     // Should show the errors
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "PARSE ERROR") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "PARSE ERROR") != null);
 }
 
 test "run with --allow-errors attempts execution despite type errors" {
@@ -884,7 +884,7 @@ test "run with --allow-errors attempts execution despite type errors" {
     defer allocator.free(run_result.stderr);
 
     // Should still show the errors
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "UNDEFINED VARIABLE") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "UNDEFINED VARIABLE") != null);
 
     // The program will attempt to run and likely crash, which is expected behavior
     // We just verify it didn't abort during type checking
@@ -906,7 +906,7 @@ test "run with --allow-errors handles type mismatch in function args" {
     defer allocator.free(run_result.stderr);
 
     // Should report the type mismatch
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null);
 
     // Must not crash with SIGABRT — the process should exit cleanly (or with
     // a runtime error exit code), not be killed by a signal.
@@ -935,10 +935,10 @@ test "run allows warnings without blocking execution" {
     try util.checkFailure(run_result);
 
     // Should show the warning
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "UNUSED VARIABLE") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "UNUSED VARIABLE") != null);
 
     // Should produce output (runs successfully)
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello, World!") != null);
+    try testing.expect(std.mem.find(u8, run_result.stdout, "Hello, World!") != null);
 }
 
 test "fx platform method inspect on string" {
@@ -982,9 +982,9 @@ test "fx platform var with string interpolation segfault (interpreter)" {
     try util.checkSuccess(run_result);
 
     // Verify the expected output
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A1: 1") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A2: 1") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A3: 1") != null);
+    try testing.expect(std.mem.find(u8, run_result.stdout, "A1: 1") != null);
+    try testing.expect(std.mem.find(u8, run_result.stdout, "A2: 1") != null);
+    try testing.expect(std.mem.find(u8, run_result.stdout, "A3: 1") != null);
 }
 
 test "fx platform var with string interpolation segfault (dev backend)" {
@@ -1000,9 +1000,9 @@ test "fx platform var with string interpolation segfault (dev backend)" {
     try util.checkSuccess(run_result);
 
     // Verify the expected output
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A1: 1") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A2: 1") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A3: 1") != null);
+    try testing.expect(std.mem.find(u8, run_result.stdout, "A1: 1") != null);
+    try testing.expect(std.mem.find(u8, run_result.stdout, "A2: 1") != null);
+    try testing.expect(std.mem.find(u8, run_result.stdout, "A3: 1") != null);
 }
 
 test "fx platform sublist method on inferred type" {
@@ -1080,7 +1080,7 @@ test "fx platform inline expect fails as expected (interpreter)" {
     const stderr = run_result.stderr;
 
     // Should report a crash with the expect expression snippet
-    try testing.expect(std.mem.indexOf(u8, stderr, "1 == 2") != null);
+    try testing.expect(std.mem.find(u8, stderr, "1 == 2") != null);
 }
 
 test "fx platform inline expect fails as expected (dev backend)" {
@@ -1139,7 +1139,7 @@ test "fx platform inline expect fails in dev backend binary" {
     }
 
     // Should report the failing inline expect via roc_expect_failed
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Expect failed") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "Expect failed") != null);
 }
 
 test "fx platform index out of bounds in instantiate regression" {
@@ -1202,9 +1202,9 @@ test "fx platform fold_rev static dispatch regression" {
     try util.checkSuccess(run_result);
 
     // Verify the expected output
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Start reverse") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Reversed: 3 elements") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Done") != null);
+    try testing.expect(std.mem.find(u8, run_result.stdout, "Start reverse") != null);
+    try testing.expect(std.mem.find(u8, run_result.stdout, "Reversed: 3 elements") != null);
+    try testing.expect(std.mem.find(u8, run_result.stdout, "Done") != null);
 }
 
 test "external platform memory alignment regression" {
@@ -1245,7 +1245,7 @@ test "fx platform issue8826 app vs platform type mismatch" {
         .exited => |code| {
             if (code != 0) {
                 // Expected to fail - check for type mismatch error message
-                try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
+                try testing.expect(std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null);
             } else {
                 std.debug.print("Expected type mismatch error but roc check succeeded\n", .{});
                 std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -1285,10 +1285,10 @@ test "fx platform issue8826 large file type checking" {
     // The file has mutually recursive type aliases, type mismatches, etc.
     // On Windows, we may hit OOM due to shared memory limits, which should
     // still print an error message (just not the type error message).
-    const has_type_error = std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null or
-        std.mem.indexOf(u8, run_result.stderr, "MUTUALLY RECURSIVE TYPE ALIASES") != null or
-        std.mem.indexOf(u8, run_result.stderr, "UNDECLARED TYPE") != null;
-    const has_oom_error = std.mem.indexOf(u8, run_result.stderr, "Out of memory") != null;
+    const has_type_error = std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null or
+        std.mem.find(u8, run_result.stderr, "MUTUALLY RECURSIVE TYPE ALIASES") != null or
+        std.mem.find(u8, run_result.stderr, "UNDECLARED TYPE") != null;
+    const has_oom_error = std.mem.find(u8, run_result.stderr, "Out of memory") != null;
 
     if (!has_type_error and !has_oom_error) {
         std.debug.print("Expected type error or OOM output but got:\n", .{});
@@ -1316,7 +1316,7 @@ test "fx platform issue8943 error message memory corruption" {
     try util.checkFailure(run_result);
 
     // Check that the TYPE MISMATCH error is present
-    const has_try_type_error = std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null;
+    const has_try_type_error = std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null;
     if (!has_try_type_error) {
         std.debug.print("Expected 'TYPE MISMATCH' error but got:\n", .{});
         std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -1324,7 +1324,7 @@ test "fx platform issue8943 error message memory corruption" {
     }
 
     // Check that the COMPTIME CRASH error is present
-    const has_comptime_crash = std.mem.indexOf(u8, run_result.stderr, "COMPTIME CRASH") != null;
+    const has_comptime_crash = std.mem.find(u8, run_result.stderr, "COMPTIME CRASH") != null;
     if (!has_comptime_crash) {
         std.debug.print("Expected 'COMPTIME CRASH' error but got:\n", .{});
         std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -1336,7 +1336,7 @@ test "fx platform issue8943 error message memory corruption" {
     // (once in each error's source region). The bug causes the first one to be garbled.
     var filename_count: usize = 0;
     var search_start: usize = 0;
-    while (std.mem.indexOfPos(u8, run_result.stderr, search_start, "issue8943.roc")) |pos| {
+    while (std.mem.findPos(u8, run_result.stderr, search_start, "issue8943.roc")) |pos| {
         filename_count += 1;
         search_start = pos + 1;
     }
@@ -1367,7 +1367,7 @@ test "fx platform issue8943 error message memory corruption" {
 
     // Also check that the crash message contains readable text, not garbled bytes
     // A valid crash message should contain "Try" since that's what the error is about
-    const has_readable_crash_msg = std.mem.indexOf(u8, run_result.stderr, "Try") != null;
+    const has_readable_crash_msg = std.mem.find(u8, run_result.stderr, "Try") != null;
     if (!has_readable_crash_msg) {
         std.debug.print("Crash message appears corrupted - expected 'Try' not found:\n", .{});
         std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -1399,14 +1399,14 @@ test "fx platform issue9118 try operator on tuple in type method (interpreter)" 
                 return error.UnexpectedSuccess;
             }
             // Expected to fail - check for type mismatch error message
-            const has_type_error = std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null;
+            const has_type_error = std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null;
             if (!has_type_error) {
                 std.debug.print("Expected 'TYPE MISMATCH' error but got:\n", .{});
                 std.debug.print("STDERR: {s}\n", .{run_result.stderr});
                 return error.ExpectedTypeError;
             }
             // Verify it mentions the ? operator and Try type
-            const mentions_try = std.mem.indexOf(u8, run_result.stderr, "Try") != null;
+            const mentions_try = std.mem.find(u8, run_result.stderr, "Try") != null;
             if (!mentions_try) {
                 std.debug.print("Expected error to mention 'Try' type but got:\n", .{});
                 std.debug.print("STDERR: {s}\n", .{run_result.stderr});

@@ -45,7 +45,7 @@ test "InitializeParams parses fields" {
     try std.testing.expectEqualStrings("0.1", params.client_info.?.version.?);
 
     try std.testing.expect(params.capabilities_json != null);
-    try std.testing.expect(std.mem.indexOf(u8, params.capabilities_json.?, "textDocumentSync") != null);
+    try std.testing.expect(std.mem.find(u8, params.capabilities_json.?, "textDocumentSync") != null);
 }
 
 test "SemanticTokensParams parses textDocument.uri" {
@@ -90,8 +90,8 @@ test "SemanticTokens serializes data array" {
     const output = try writer.toOwnedSlice();
     defer allocator.free(output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output, "\"data\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "[0,0,5,7,0,0,6,3,3,0]") != null);
+    try std.testing.expect(std.mem.find(u8, output, "\"data\"") != null);
+    try std.testing.expect(std.mem.find(u8, output, "[0,0,5,7,0,0,6,3,3,0]") != null);
 }
 
 test "empty SemanticTokens serializes correctly" {
@@ -106,5 +106,5 @@ test "empty SemanticTokens serializes correctly" {
     const output = try writer.toOwnedSlice();
     defer allocator.free(output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output, "\"data\":[]") != null);
+    try std.testing.expect(std.mem.find(u8, output, "\"data\":[]") != null);
 }

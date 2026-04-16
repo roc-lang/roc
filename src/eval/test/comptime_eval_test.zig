@@ -1249,7 +1249,7 @@ fn errorContains(problems: *check.problem.Store, expected: []const u8) bool {
     for (problems.problems.items) |problem| {
         switch (problem) {
             .comptime_eval_error => |comptime_eval_error| {
-                return std.mem.indexOf(u8, problems.getExtraString(comptime_eval_error.error_name), expected) != null;
+                return std.mem.find(u8, problems.getExtraString(comptime_eval_error.error_name), expected) != null;
             },
             else => {},
         }

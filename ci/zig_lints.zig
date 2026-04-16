@@ -218,14 +218,14 @@ fn isSeparatorComment(after_slashes: []const u8) bool {
     // Check for box-drawing horizontal line (U+2500 "─", encoded as 0xE2 0x94 0x80 in UTF-8).
     // Only flag if the line has 4+ consecutive ─ but NO box-drawing corners/intersections
     // (┌ ┐ └ ┘ ├ ┤ ┬ ┴ ┼ │ etc.), which would indicate it's part of a diagram.
-    if (std.mem.indexOf(u8, content, "\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80") != null) {
+    if (std.mem.find(u8, content, "\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80") != null) {
         if (!containsBoxDrawingCorner(content)) return true;
     }
 
     // For ASCII separators, must contain 4+ repeated chars and start with them
-    const sep_char: u8 = if (std.mem.indexOf(u8, content, "====") != null)
+    const sep_char: u8 = if (std.mem.find(u8, content, "====") != null)
         '='
-    else if (std.mem.indexOf(u8, content, "----") != null)
+    else if (std.mem.find(u8, content, "----") != null)
         '-'
     else
         return false;
@@ -300,9 +300,9 @@ fn checkPubDocComments(allocator: Allocator, io: std.Io, file_path: []const u8) 
 
         // Skip exceptions: init, deinit, @import, and pub const re-exports
         // Note: "pub.*fn init\(" in bash matches "init" anywhere in function name
-        if (std.mem.indexOf(u8, line, "fn init") != null) continue;
-        if (std.mem.indexOf(u8, line, "fn deinit") != null) continue;
-        if (std.mem.indexOf(u8, line, "@import") != null) continue;
+        if (std.mem.find(u8, line, "fn init") != null) continue;
+        if (std.mem.find(u8, line, "fn deinit") != null) continue;
+        if (std.mem.find(u8, line, "@import") != null) continue;
 
         // Check for pub const re-exports (e.g., "pub const Foo = bar.Baz;")
         if (isReExport(line)) continue;
@@ -321,7 +321,7 @@ fn isReExport(line: []const u8) bool {
     if (!std.mem.startsWith(u8, line, "pub const ")) return false;
 
     // Find the '=' sign
-    const eq_pos = std.mem.indexOf(u8, line, "=") orelse return false;
+    const eq_pos = std.mem.find(u8, line, "=") orelse return false;
     const after_eq = std.mem.trimStart(u8, line[eq_pos + 1 ..], " \t");
 
     // Check if it starts with a lowercase letter (module reference)
@@ -330,8 +330,8 @@ fn isReExport(line: []const u8) bool {
     if (first_char < 'a' or first_char > 'z') return false;
 
     // Check if it contains a dot and ends with semicolon (but not a function call)
-    if (std.mem.indexOf(u8, after_eq, ".") == null) return false;
-    if (std.mem.indexOf(u8, after_eq, "(") != null) return false;
+    if (std.mem.find(u8, after_eq, ".") == null) return false;
+    if (std.mem.find(u8, after_eq, "(") != null) return false;
     if (!std.mem.endsWith(u8, std.mem.trimEnd(u8, after_eq, " \t"), ";")) return false;
 
     return true;
@@ -379,7 +379,7 @@ fn fileHasTopLevelComment(allocator: Allocator, io: std.Io, file_path: []const u
     };
     defer allocator.free(source);
 
-    return std.mem.indexOf(u8, source, "//!") != null;
+    return std.mem.find(u8, source, "//!") != null;
 }
 
 fn readSourceFile(allocator: Allocator, io: std.Io, path: []const u8) ![:0]u8 {

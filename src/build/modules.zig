@@ -152,7 +152,7 @@ fn collectAggregatorImports(
     var search_index: usize = 0;
     const current_dir = std.fs.path.dirname(current_path) orelse ".";
 
-    while (std.mem.indexOfPos(u8, source, search_index, pattern)) |match_pos| {
+    while (std.mem.findPos(u8, source, search_index, pattern)) |match_pos| {
         const literal_start = match_pos + pattern.len;
         var cursor = literal_start;
         while (cursor < source.len) : (cursor += 1) {

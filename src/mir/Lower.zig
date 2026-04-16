@@ -316,7 +316,7 @@ fn moduleOwnsIdent(env: *const ModuleEnv, ident: Ident.Idx) bool {
     if (start >= bytes.len) return false;
 
     const tail = bytes[start..];
-    const end_rel = std.mem.indexOfScalar(u8, tail, 0) orelse return false;
+    const end_rel = std.mem.findScalar(u8, tail, 0) orelse return false;
     const text = tail[0..end_rel];
 
     const roundtrip = ident_store.findByString(text) orelse return false;
@@ -439,7 +439,7 @@ fn identsStructurallyEqual(self: *const Self, lhs: anytype, rhs: anytype) bool {
 }
 
 fn identLastSegment(text: []const u8) []const u8 {
-    const dot = std.mem.lastIndexOfScalar(u8, text, '.') orelse return text;
+    const dot = std.mem.findScalarLast(u8, text, '.') orelse return text;
     return text[dot + 1 ..];
 }
 

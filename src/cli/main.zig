@@ -1886,7 +1886,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
 /// - Embedded quotes must be escaped with backslash: " -> \"
 /// - Backslashes before quotes must be doubled: \" -> \\"
 fn appendWindowsQuotedArg(cmd_builder: *std.array_list.Managed(u8), arg: []const u8) !void {
-    const needs_quoting = arg.len == 0 or std.mem.indexOfAny(u8, arg, " \t\"") != null;
+    const needs_quoting = arg.len == 0 or std.mem.findAny(u8, arg, " \t\"") != null;
 
     if (!needs_quoting) {
         try cmd_builder.appendSlice(arg);
@@ -7011,7 +7011,7 @@ fn generateDocs(
 
     // Determine if we're documenting a platform or something else by checking the module path
     // If the path contains "platform", we're documenting a platform directly
-    const is_documenting_platform = std.mem.indexOf(u8, module_path, "platform") != null;
+    const is_documenting_platform = std.mem.find(u8, module_path, "platform") != null;
 
     // Collect ModuleDocs from all compiled modules
     var module_docs_list = std.ArrayList(DocModel.ModuleDocs).empty;

@@ -281,7 +281,7 @@ pub const CompletionBuilder = struct {
                 // Module exports can be qualified (Module.member) or unqualified (member).
                 // Prefer matching the actual module name to avoid leaking unrelated items,
                 // but allow unqualified names when we are completing the module itself.
-                const dot_index = std.mem.indexOfScalar(u8, without_module, '.');
+                const dot_index = std.mem.findScalar(u8, without_module, '.');
                 if (dot_index == null) {
                     if (!std.mem.eql(u8, module_env.module_name, module_name)) continue;
                     break :blk without_module;
@@ -510,7 +510,7 @@ pub const CompletionBuilder = struct {
 
             const name = module_env.getIdentText(ident_idx);
             if (name.len == 0) continue;
-            if (std.mem.indexOfScalar(u8, name, '.') != null) continue;
+            if (std.mem.findScalar(u8, name, '.') != null) continue;
 
             // Determine completion kind based on the expression type
             const expr = module_env.store.getExpr(def.expr);
@@ -564,7 +564,7 @@ pub const CompletionBuilder = struct {
 
                 const name = module_env.getIdentText(ident_idx);
                 if (name.len == 0) continue;
-                if (std.mem.indexOfScalar(u8, name, '.') != null) continue;
+                if (std.mem.findScalar(u8, name, '.') != null) continue;
 
                 // Determine completion kind
                 var kind: u32 = @intFromEnum(CompletionItemKind.variable);
@@ -1591,7 +1591,7 @@ fn stripModulePrefix(name: []const u8, module_name: []const u8) []const u8 {
     var i: usize = 0;
     while (i < name.len) {
         const seg_start = i;
-        const dot_idx = std.mem.indexOfScalarPos(u8, name, seg_start, '.') orelse name.len;
+        const dot_idx = std.mem.findScalarPos(u8, name, seg_start, '.') orelse name.len;
         const seg = name[seg_start..dot_idx];
 
         if (std.mem.eql(u8, seg, module_name)) {
@@ -1608,13 +1608,13 @@ fn stripModulePrefix(name: []const u8, module_name: []const u8) []const u8 {
 
 /// Get the first segment of a dotted name.
 fn firstSegment(name: []const u8) []const u8 {
-    const dot_idx = std.mem.indexOfScalar(u8, name, '.') orelse name.len;
+    const dot_idx = std.mem.findScalar(u8, name, '.') orelse name.len;
     return name[0..dot_idx];
 }
 
 /// Get the last segment of a dotted name.
 fn lastSegment(name: []const u8) []const u8 {
-    const dot_idx = std.mem.lastIndexOfScalar(u8, name, '.') orelse return name;
+    const dot_idx = std.mem.findScalarLast(u8, name, '.') orelse return name;
     if (dot_idx + 1 >= name.len) return name;
     return name[dot_idx + 1 ..];
 }

@@ -2218,7 +2218,7 @@ pub const Coordinator = struct {
             if (std.mem.eql(u8, mod_name, "Builtin")) continue;
 
             // Check if qualified (external) import
-            if (std.mem.indexOfScalar(u8, mod_name, '.') != null) {
+            if (std.mem.findScalar(u8, mod_name, '.') != null) {
                 external_imports.append(worker_alloc, .{
                     .import_name = worker_alloc.dupe(u8, mod_name) catch continue,
                 }) catch {};

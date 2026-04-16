@@ -620,7 +620,7 @@ pub const SyntaxChecker = struct {
 
     fn textHasAny(text: []const u8, needles: []const []const u8) bool {
         for (needles) |needle| {
-            if (std.mem.indexOf(u8, text, needle) != null) return true;
+            if (std.mem.find(u8, text, needle) != null) return true;
         }
         return false;
     }
@@ -914,7 +914,7 @@ pub const SyntaxChecker = struct {
             .e_lookup_external => |lookup| {
                 // External lookup - parse "Module.function" and find docs in that module
                 const region_text = module_env.getSource(lookup.region);
-                if (std.mem.indexOf(u8, region_text, ".")) |dot_pos| {
+                if (std.mem.find(u8, region_text, ".")) |dot_pos| {
                     const module_name = region_text[0..dot_pos];
                     const function_name = region_text[dot_pos + 1 ..];
 
@@ -934,7 +934,7 @@ pub const SyntaxChecker = struct {
                 }
 
                 // If the pending lookup is qualified, try external module docs.
-                if (std.mem.indexOfScalar(u8, region_text, '.')) |dot_pos| {
+                if (std.mem.findScalar(u8, region_text, '.')) |dot_pos| {
                     const module_name = region_text[0..dot_pos];
                     const function_name = region_text[dot_pos + 1 ..];
                     if (findExternalModuleEnv(env, module_name)) |external_env| {
@@ -1013,7 +1013,7 @@ pub const SyntaxChecker = struct {
 
     /// Find a module environment by name (handles builtins and regular modules).
     fn findExternalModuleEnv(env: *BuildEnv, module_name: []const u8) ?*ModuleEnv {
-        const base_name = if (std.mem.lastIndexOf(u8, module_name, ".")) |dot_pos|
+        const base_name = if (std.mem.findLast(u8, module_name, ".")) |dot_pos|
             module_name[dot_pos + 1 ..]
         else
             module_name;
@@ -1276,7 +1276,7 @@ pub const SyntaxChecker = struct {
                     // Extract module name from source text (handles builtins correctly)
                     const region_text = module_env.getSource(lookup.region);
                     // Module.function format - extract the module name (before the dot)
-                    if (std.mem.indexOf(u8, region_text, ".")) |dot_pos| {
+                    if (std.mem.find(u8, region_text, ".")) |dot_pos| {
                         const module_name = region_text[0..dot_pos];
                         self.logDebug(.build, "[DEF] e_lookup_external: extracted module='{s}' from '{s}'", .{ module_name, region_text });
                         return self.findModuleByName(module_name);
@@ -1300,7 +1300,7 @@ pub const SyntaxChecker = struct {
                         };
                     }
 
-                    if (std.mem.indexOfScalar(u8, region_text, '.')) |dot_pos| {
+                    if (std.mem.findScalar(u8, region_text, '.')) |dot_pos| {
                         const module_name = region_text[0..dot_pos];
                         return self.findModuleByName(module_name);
                     }
@@ -1350,7 +1350,7 @@ pub const SyntaxChecker = struct {
         const env = self.getModuleLookupEnv() orelse return null;
 
         // Extract the base module name (e.g., "Stdout" from "pf.Stdout")
-        const base_name = if (std.mem.lastIndexOf(u8, module_name, ".")) |dot_pos|
+        const base_name = if (std.mem.findLast(u8, module_name, ".")) |dot_pos|
             module_name[dot_pos + 1 ..]
         else
             module_name;
@@ -2047,7 +2047,7 @@ pub const SyntaxChecker = struct {
     /// Get the next segment in a dotted access chain.
     fn nextChainSegment(chain: []const u8, start: usize) ?struct { segment: []const u8, next: usize } {
         if (start >= chain.len) return null;
-        const dot_idx = std.mem.indexOfScalarPos(u8, chain, start, '.') orelse chain.len;
+        const dot_idx = std.mem.findScalarPos(u8, chain, start, '.') orelse chain.len;
         const segment = chain[start..dot_idx];
         const next = if (dot_idx < chain.len) dot_idx + 1 else chain.len;
         return .{ .segment = segment, .next = next };
@@ -2055,7 +2055,7 @@ pub const SyntaxChecker = struct {
 
     /// Get the last segment in a dotted access chain.
     fn lastChainSegment(chain: []const u8) []const u8 {
-        const dot_idx = std.mem.lastIndexOfScalar(u8, chain, '.') orelse return chain;
+        const dot_idx = std.mem.findScalarLast(u8, chain, '.') orelse return chain;
         if (dot_idx + 1 >= chain.len) return chain;
         return chain[dot_idx + 1 ..];
     }

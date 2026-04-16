@@ -8071,7 +8071,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
 /// Handles: \n, \r, \t, \\, \", \', \$, and \u(XXXX) unicode escapes.
 fn processEscapeSequences(allocator: std.mem.Allocator, input: []const u8) std.mem.Allocator.Error![]const u8 {
     // Quick check: if no backslashes, return the input as-is
-    if (std.mem.indexOfScalar(u8, input, '\\') == null) {
+    if (std.mem.findScalar(u8, input, '\\') == null) {
         return input;
     }
 
@@ -8113,7 +8113,7 @@ fn processEscapeSequences(allocator: std.mem.Allocator, input: []const u8) std.m
                     // Unicode escape: \u(XXXX)
                     if (i + 2 < input.len and input[i + 2] == '(') {
                         // Find the closing paren
-                        if (std.mem.indexOfScalarPos(u8, input, i + 3, ')')) |close_paren| {
+                        if (std.mem.findScalarPos(u8, input, i + 3, ')')) |close_paren| {
                             const hex_code = input[i + 3 .. close_paren];
                             if (std.fmt.parseInt(u21, hex_code, 16)) |codepoint| {
                                 if (std.unicode.utf8ValidCodepoint(codepoint)) {
@@ -9273,7 +9273,7 @@ fn parseSmallDec(token_text: []const u8) ?struct { numerator: i16, denominator_p
     }
 
     // Parse as a whole number by removing the decimal point
-    const dot_pos = std.mem.indexOf(u8, token_text, ".") orelse {
+    const dot_pos = std.mem.find(u8, token_text, ".") orelse {
         // No decimal point, parse as integer
         const val = std.fmt.parseInt(i32, token_text, 10) catch return null;
         if (val < -32768 or val > 32767) return null;
@@ -12856,7 +12856,7 @@ fn extractModuleName(self: *Self, module_name_ident: Ident.Idx) std.mem.Allocato
     const module_text = self.env.getIdent(module_name_ident);
 
     // Find the last dot and extract the part after it
-    if (std.mem.lastIndexOf(u8, module_text, ".")) |last_dot_idx| {
+    if (std.mem.findLast(u8, module_text, ".")) |last_dot_idx| {
         const extracted_name = module_text[last_dot_idx + 1 ..];
         return try self.env.insertIdent(base.Ident.for_text(extracted_name));
     } else {

@@ -129,8 +129,8 @@ test "end-to-end: emit block with let binding" {
     defer test_allocator.free(output);
 
     // The emitter will output the block structure
-    try testing.expect(std.mem.indexOf(u8, output, "x = 42") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "x") != null);
+    try testing.expect(std.mem.find(u8, output, "x = 42") != null);
+    try testing.expect(std.mem.find(u8, output, "x") != null);
 }
 
 // Emitter tests
@@ -156,8 +156,8 @@ test "emitter: can emit identity function applied to integer" {
     defer test_allocator.free(output);
 
     // Verify the output contains the identity function and application
-    try testing.expect(std.mem.indexOf(u8, output, "identity = |x| x") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "identity(42)") != null);
+    try testing.expect(std.mem.find(u8, output, "identity = |x| x") != null);
+    try testing.expect(std.mem.find(u8, output, "identity(42)") != null);
 }
 
 // Roundtrip verification tests
@@ -436,7 +436,7 @@ test "end-to-end: emit tag application with single integer payload" {
 
     // Tag applications are currently emitted as just the tag name for the tag part
     // and the arguments follow the syntax of the original expression
-    try testing.expect(std.mem.indexOf(u8, output, "Some") != null);
+    try testing.expect(std.mem.find(u8, output, "Some") != null);
 }
 
 test "end-to-end: emit tag application with multiple arguments" {
@@ -444,7 +444,7 @@ test "end-to-end: emit tag application with multiple arguments" {
     const output = try emitFromSource(test_allocator, "Pair 1 2");
     defer test_allocator.free(output);
 
-    try testing.expect(std.mem.indexOf(u8, output, "Pair") != null);
+    try testing.expect(std.mem.find(u8, output, "Pair") != null);
 }
 
 test "end-to-end: emit nested tag application" {
@@ -452,7 +452,7 @@ test "end-to-end: emit nested tag application" {
     defer test_allocator.free(output);
 
     // The outer tag should be present
-    try testing.expect(std.mem.indexOf(u8, output, "Outer") != null);
+    try testing.expect(std.mem.find(u8, output, "Outer") != null);
 }
 
 /// Helper to evaluate an expression and get the first element of a tuple result

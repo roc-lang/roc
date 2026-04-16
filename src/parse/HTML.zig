@@ -124,10 +124,10 @@ test "tokensToHtml generates valid HTML" {
 
     // Verify the output contains expected HTML elements
     const html = output_writer.written();
-    try testing.expect(std.mem.indexOf(u8, html, "<div class=\"token-list\">") != null);
-    try testing.expect(std.mem.indexOf(u8, html, "</div>") != null);
-    try testing.expect(std.mem.indexOf(u8, html, "LowerIdent") != null); // "foo" token
-    try testing.expect(std.mem.indexOf(u8, html, "Int") != null); // "42" token
+    try testing.expect(std.mem.find(u8, html, "<div class=\"token-list\">") != null);
+    try testing.expect(std.mem.find(u8, html, "</div>") != null);
+    try testing.expect(std.mem.find(u8, html, "LowerIdent") != null); // "foo" token
+    try testing.expect(std.mem.find(u8, html, "Int") != null); // "42" token
 }
 
 test "tokensToHtml handles position errors gracefully" {
@@ -176,8 +176,8 @@ test "tokensToHtml handles position errors gracefully" {
 
     // Verify the output contains expected HTML elements (fallback format)
     const html = output_writer.written();
-    try testing.expect(std.mem.indexOf(u8, html, "<div class=\"token-list\">") != null);
-    try testing.expect(std.mem.indexOf(u8, html, "</div>") != null);
+    try testing.expect(std.mem.find(u8, html, "<div class=\"token-list\">") != null);
+    try testing.expect(std.mem.find(u8, html, "</div>") != null);
     // Should use the fallback format with just byte offsets
-    try testing.expect(std.mem.indexOf(u8, html, "data-start-byte=") != null);
+    try testing.expect(std.mem.find(u8, html, "data-start-byte=") != null);
 }

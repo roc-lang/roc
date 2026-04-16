@@ -2,7 +2,7 @@
 //! Maps fully-qualified type identifiers to their display names (e.g., "Builtin.Bool" to "Bool").
 //!
 //! This module provides semantic type name shortening - instead of using string manipulation
-//! like `lastIndexOf(".")` to strip prefixes, we look up the shortest imported alias for a type.
+//! like `findLast(".")` to strip prefixes, we look up the shortest imported alias for a type.
 //! This ensures that error messages show types the way the user would write them in their code.
 
 const std = @import("std");
@@ -26,7 +26,7 @@ pub const ImportMapping = std.AutoHashMap(Ident.Idx, Ident.Idx);
 /// or it's an auto-imported builtin), returns the mapped display name.
 /// Otherwise, returns the original identifier text unchanged.
 ///
-/// This should be used instead of string manipulation like `lastIndexOf(".")`
+/// This should be used instead of string manipulation like `findLast(".")`
 /// to ensure type names are displayed semantically based on what's in scope.
 ///
 /// Example:

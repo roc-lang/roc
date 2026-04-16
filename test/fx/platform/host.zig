@@ -256,7 +256,7 @@ const ParseError = error{
 /// Always returns an allocated copy (simplifies cleanup)
 fn unescapeSpecValue(allocator: std.mem.Allocator, input: []const u8) ParseError![]u8 {
     // Quick check: if no backslash, just duplicate
-    if (std.mem.indexOfScalar(u8, input, '\\') == null) {
+    if (std.mem.findScalar(u8, input, '\\') == null) {
         return allocator.dupe(u8, input) catch return ParseError.OutOfMemory;
     }
 
@@ -808,7 +808,7 @@ fn hostedStdinLine(ops: *builtins.host_abi.RocOps, result: *RocStr, _: *anyopaqu
 
     // Find newline and trim it (handle both \n and \r\n)
     const line_with_newline = buffer[0..bytes_read];
-    var line = if (std.mem.indexOfScalar(u8, line_with_newline, '\n')) |newline_idx|
+    var line = if (std.mem.findScalar(u8, line_with_newline, '\n')) |newline_idx|
         line_with_newline[0..newline_idx]
     else
         line_with_newline;

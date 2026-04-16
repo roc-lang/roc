@@ -1186,7 +1186,7 @@ pub const PackageEnv = struct {
         // Use the resolver to get the ACTUAL module env if available
         for (additional_known_modules) |km| {
             // Extract base module name (e.g., "Stdout" from "pf.Stdout")
-            const base_module_name = if (std.mem.lastIndexOfScalar(u8, km.qualified_name, '.')) |dot_idx|
+            const base_module_name = if (std.mem.findScalarLast(u8, km.qualified_name, '.')) |dot_idx|
                 km.qualified_name[dot_idx + 1 ..]
             else
                 km.qualified_name;
@@ -1432,7 +1432,7 @@ pub const PackageEnv = struct {
                     if (!std.mem.eql(u8, module_name, mod_name_text)) continue;
                     // After canonicalization, qualified imports have their full name
                     // stored in module_name_tok. Check if it contains a dot.
-                    return std.mem.indexOfScalar(u8, module_name, '.') != null;
+                    return std.mem.findScalar(u8, module_name, '.') != null;
                 },
                 else => {},
             }

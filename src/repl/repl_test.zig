@@ -72,7 +72,7 @@ test "Repl - special commands" {
 
     const help_result = try repl.step(":help");
     defer alloc.free(help_result);
-    try testing.expect(std.mem.indexOf(u8, help_result, "Enter an expression") != null);
+    try testing.expect(std.mem.find(u8, help_result, "Enter an expression") != null);
 
     const exit_result = try repl.step(":exit");
     defer alloc.free(exit_result);

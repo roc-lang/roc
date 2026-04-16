@@ -460,7 +460,7 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
     // Verify the output contains the type information
     const result_str = result.items;
 
-    try testing.expect(std.mem.indexOf(u8, result_str, "(expr") != null);
-    try testing.expect(std.mem.indexOf(u8, result_str, "(type") != null);
-    try testing.expect(std.mem.indexOf(u8, result_str, "Str") != null);
+    try testing.expect(std.mem.find(u8, result_str, "(expr") != null);
+    try testing.expect(std.mem.find(u8, result_str, "(type") != null);
+    try testing.expect(std.mem.find(u8, result_str, "Str") != null);
 }

@@ -160,7 +160,7 @@ pub fn runRocTest(allocator: std.mem.Allocator, roc_file: []const u8, spec: []co
 /// Check if a run result indicates success (exit code 0).
 /// Also checks for GPA memory errors in stderr.
 pub fn checkSuccess(result: RocResult) !void {
-    if (std.mem.indexOf(u8, result.stderr, "error(gpa):") != null) {
+    if (std.mem.find(u8, result.stderr, "error(gpa):") != null) {
         std.debug.print("Memory error detected (GPA)\n", .{});
         std.debug.print("STDOUT: {s}\n", .{result.stdout});
         std.debug.print("STDERR: {s}\n", .{result.stderr});
@@ -219,7 +219,7 @@ pub fn checkFailure(result: RocResult) !void {
 /// Check if a test mode run succeeded (exit code 0).
 /// Also checks for GPA memory errors.
 pub fn checkTestSuccess(result: RocResult) !void {
-    if (std.mem.indexOf(u8, result.stderr, "error(gpa):") != null) {
+    if (std.mem.find(u8, result.stderr, "error(gpa):") != null) {
         std.debug.print("Memory error detected (GPA)\n", .{});
         std.debug.print("STDERR: {s}\n", .{result.stderr});
         return error.MemoryError;

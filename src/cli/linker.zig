@@ -639,7 +639,7 @@ pub fn formatLinkCommand(ctx: *CliCtx, config: LinkConfig) LinkError![]const u8 
         if (i > 0) result.append(' ') catch return LinkError.OutOfMemory;
 
         // Quote if contains spaces or shell metacharacters
-        const needs_quoting = std.mem.indexOfAny(u8, arg, " \t'\"\\$`") != null;
+        const needs_quoting = std.mem.findAny(u8, arg, " \t'\"\\$`") != null;
         if (needs_quoting) {
             result.append('\'') catch return LinkError.OutOfMemory;
             // Escape single quotes within the string

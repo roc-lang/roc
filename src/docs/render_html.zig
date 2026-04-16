@@ -876,7 +876,7 @@ fn renderEntrySignature(w: Writer, ctx: *const RenderContext, entry: *const DocM
 
     // Display only the identifier (last component) of the entry name
     // For "Builtin.Str.Utf8Problem.is_eq", display as "is_eq"
-    const display_name = if (std.mem.lastIndexOfScalar(u8, entry.name, '.')) |idx|
+    const display_name = if (std.mem.findScalarLast(u8, entry.name, '.')) |idx|
         entry.name[idx + 1 ..]
     else
         entry.name;
@@ -1193,7 +1193,7 @@ fn renderDocTypeHtml(w: Writer, ctx: *const RenderContext, doc_type: *const DocT
                 try w.writeAll("\">");
                 try w.writeAll("<span class=\"type\">");
                 // Display only the last component of the type name
-                const display_name = if (std.mem.lastIndexOfScalar(u8, ref.type_name, '.')) |idx|
+                const display_name = if (std.mem.findScalarLast(u8, ref.type_name, '.')) |idx|
                     ref.type_name[idx + 1 ..]
                 else
                     ref.type_name;
@@ -1202,7 +1202,7 @@ fn renderDocTypeHtml(w: Writer, ctx: *const RenderContext, doc_type: *const DocT
             } else {
                 try w.writeAll("<span class=\"type\">");
                 // Display only the last component of the type name
-                const display_name = if (std.mem.lastIndexOfScalar(u8, ref.type_name, '.')) |idx|
+                const display_name = if (std.mem.findScalarLast(u8, ref.type_name, '.')) |idx|
                     ref.type_name[idx + 1 ..]
                 else
                     ref.type_name;
@@ -1312,7 +1312,7 @@ fn resolveTypeNameToFullPath(
     type_name: []const u8,
 ) ?[]const u8 {
     // If it already has a dot, it's a full path
-    if (std.mem.indexOf(u8, type_name, ".") != null) {
+    if (std.mem.find(u8, type_name, ".") != null) {
         return type_name;
     }
 

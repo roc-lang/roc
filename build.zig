@@ -121,7 +121,7 @@ const TestsSummaryStep = struct {
     /// Returns true if the test name contains any of the user's filter strings.
     fn matchesUserFilter(test_filters: []const []const u8, name: []const u8) bool {
         for (test_filters) |filter| {
-            if (std.mem.indexOf(u8, name, filter) != null) return true;
+            if (std.mem.find(u8, name, filter) != null) return true;
         }
         return false;
     }
@@ -336,7 +336,7 @@ const CheckTypeCheckerPatternsStep = struct {
 
             // Skip test files - they may legitimately need string comparison for assertions
             if (std.mem.endsWith(u8, entry.path, "_test.zig")) continue;
-            if (std.mem.indexOf(u8, entry.path, "test/") != null) continue;
+            if (std.mem.find(u8, entry.path, "test/") != null) continue;
             if (std.mem.startsWith(u8, entry.path, "test")) continue;
             if (std.mem.endsWith(u8, entry.path, "test_runner.zig")) continue;
 
@@ -361,7 +361,7 @@ const CheckTypeCheckerPatternsStep = struct {
                     }
 
                     // Check for std.mem. usage (but allow safe patterns)
-                    if (std.mem.indexOf(u8, line, "std.mem.")) |idx| {
+                    if (std.mem.find(u8, line, "std.mem.")) |idx| {
                         const after_match = line[idx + 8 ..];
 
                         // Allow these safe patterns that don't involve string/byte comparison:
@@ -393,7 +393,7 @@ const CheckTypeCheckerPatternsStep = struct {
                     }
 
                     // Check for findByString usage - should use Ident.Idx comparison instead
-                    if (std.mem.indexOf(u8, line, "findByString") != null and !isInExcludedRange(full_path, line_number)) {
+                    if (std.mem.find(u8, line, "findByString") != null and !isInExcludedRange(full_path, line_number)) {
                         try violations.append(allocator, .{
                             .file_path = full_path,
                             .line_number = line_number,
@@ -402,7 +402,7 @@ const CheckTypeCheckerPatternsStep = struct {
                     }
 
                     // Check for findIdent usage - should use pre-stored Ident.Idx instead
-                    if (std.mem.indexOf(u8, line, "findIdent") != null and !isInExcludedRange(full_path, line_number)) {
+                    if (std.mem.find(u8, line, "findIdent") != null and !isInExcludedRange(full_path, line_number)) {
                         try violations.append(allocator, .{
                             .file_path = full_path,
                             .line_number = line_number,
@@ -411,7 +411,7 @@ const CheckTypeCheckerPatternsStep = struct {
                     }
 
                     // Check for getMethodIdent usage - should use pre-stored Ident.Idx instead
-                    if (std.mem.indexOf(u8, line, "getMethodIdent") != null and !isInExcludedRange(full_path, line_number)) {
+                    if (std.mem.find(u8, line, "getMethodIdent") != null and !isInExcludedRange(full_path, line_number)) {
                         try violations.append(allocator, .{
                             .file_path = full_path,
                             .line_number = line_number,
@@ -560,7 +560,7 @@ const CheckEnumFromIntZeroStep = struct {
                     }
 
                     // Check for @enumFromInt(0) usage
-                    if (std.mem.indexOf(u8, line, "@enumFromInt(0)") != null) {
+                    if (std.mem.find(u8, line, "@enumFromInt(0)") != null) {
                         try violations.append(allocator, .{
                             .file_path = full_path,
                             .line_number = line_number,
@@ -789,7 +789,7 @@ const CheckPanicStep = struct {
 
     fn isAllowlisted(line: []const u8) bool {
         for (allowlist_patterns) |pattern| {
-            if (std.mem.indexOf(u8, line, pattern) != null) return true;
+            if (std.mem.find(u8, line, pattern) != null) return true;
         }
         return false;
     }
@@ -823,9 +823,9 @@ const CheckPanicStep = struct {
                 // Skip comments
                 if (!std.mem.startsWith(u8, trimmed, "//")) {
                     // Check for @panic usage
-                    const has_panic = std.mem.indexOf(u8, line, "@panic(") != null;
+                    const has_panic = std.mem.find(u8, line, "@panic(") != null;
                     // Check for std.debug.panic usage
-                    const has_debug_panic = std.mem.indexOf(u8, line, "std.debug.panic") != null;
+                    const has_debug_panic = std.mem.find(u8, line, "std.debug.panic") != null;
 
                     if (has_panic or has_debug_panic) {
                         if (!isAllowlisted(line) and !isInExcludedRange(file_path, line_number)) {
@@ -995,7 +995,7 @@ const CheckCliGlobalStdioStep = struct {
                 };
 
                 for (forbidden_patterns) |pattern| {
-                    if (std.mem.indexOf(u8, trimmed, pattern) != null) {
+                    if (std.mem.find(u8, trimmed, pattern) != null) {
                         try violations.append(allocator, .{
                             .file_path = file_path,
                             .line_number = line_number,
@@ -1204,10 +1204,10 @@ const CoverageSummaryStep = struct {
                     const filename = filename_val.string;
 
                     // Only include src/parse files
-                    if (std.mem.indexOf(u8, filename, "src/parse") == null) continue;
+                    if (std.mem.find(u8, filename, "src/parse") == null) continue;
 
                     // Skip test files
-                    if (std.mem.indexOf(u8, filename, "/test/") != null) continue;
+                    if (std.mem.find(u8, filename, "/test/") != null) continue;
 
                     // Get coverage percentage (stored as string in kcov JSON)
                     const percent_val = file_obj.object.get("percent_covered") orelse continue;
@@ -1348,15 +1348,15 @@ fn checkFxPlatformTestCoverage(step: *Step) !void {
         while (line_iter.next()) |line| {
             // Look for patterns like "test/fx/filename.roc"
             var search_start: usize = 0;
-            while (std.mem.indexOfPos(u8, line, search_start, "test/fx/")) |idx| {
+            while (std.mem.findPos(u8, line, search_start, "test/fx/")) |idx| {
                 const rest_of_line = line[idx..];
                 // Find the end of the filename
-                if (std.mem.indexOf(u8, rest_of_line, ".roc")) |roc_pos| {
+                if (std.mem.find(u8, rest_of_line, ".roc")) |roc_pos| {
                     const full_path = rest_of_line[0 .. roc_pos + 4]; // Include ".roc"
                     // Extract just the filename (after "test/fx/")
                     const filename = full_path["test/fx/".len..];
                     // Only count files in test/fx (not subdirectories like test/fx/subdir/)
-                    if (std.mem.indexOf(u8, filename, "/") == null) {
+                    if (std.mem.find(u8, filename, "/") == null) {
                         // Dupe the filename since the source buffer will be freed
                         const duped_filename = try allocator.dupe(u8, filename);
                         try tested_files.put(duped_filename, {});

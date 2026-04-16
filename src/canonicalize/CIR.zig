@@ -895,7 +895,7 @@ pub const Import = struct {
                 const import_name = env.common.getString(str_idx);
 
                 // For package-qualified imports like "pf.Stdout", extract the base module name
-                const base_name = if (std.mem.lastIndexOf(u8, import_name, ".")) |dot_pos|
+                const base_name = if (std.mem.findLast(u8, import_name, ".")) |dot_pos|
                     import_name[dot_pos + 1 ..]
                 else
                     import_name;

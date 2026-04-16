@@ -32,7 +32,7 @@ pub const LibcInfo = struct {
 /// Validate that a path is safe (absolute and no traversal)
 fn validatePath(path: []const u8) bool {
     if (!fs.path.isAbsolute(path)) return false;
-    if (std.mem.indexOf(u8, path, "../") != null) return false;
+    if (std.mem.find(u8, path, "../") != null) return false;
     return true;
 }
 

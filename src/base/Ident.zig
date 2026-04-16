@@ -59,7 +59,7 @@ pub fn from_bytes(bytes: []const u8) Error!Ident {
     }
 
     // Check for null bytes (causes crashes in string interner)
-    if (std.mem.indexOfScalar(u8, bytes, 0) != null) {
+    if (std.mem.findScalar(u8, bytes, 0) != null) {
         return Error.ContainsNullByte;
     }
 

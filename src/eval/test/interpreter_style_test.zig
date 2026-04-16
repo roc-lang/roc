@@ -2133,10 +2133,10 @@ test "dbg: record" {
     try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
     // Record fields may be in any order
     const msg = host.dbg_messages.items[0];
-    try std.testing.expect(std.mem.indexOf(u8, msg, "name") != null);
-    try std.testing.expect(std.mem.indexOf(u8, msg, "Alice") != null);
-    try std.testing.expect(std.mem.indexOf(u8, msg, "age") != null);
-    try std.testing.expect(std.mem.indexOf(u8, msg, "30") != null);
+    try std.testing.expect(std.mem.find(u8, msg, "name") != null);
+    try std.testing.expect(std.mem.find(u8, msg, "Alice") != null);
+    try std.testing.expect(std.mem.find(u8, msg, "age") != null);
+    try std.testing.expect(std.mem.find(u8, msg, "30") != null);
 }
 
 test "dbg: empty record" {
@@ -2244,7 +2244,7 @@ test "dbg: function prints as unsupported or function marker" {
     // Function should print as <function> or <unsupported>
     try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
     const msg = host.dbg_messages.items[0];
-    try std.testing.expect(std.mem.indexOf(u8, msg, "<") != null or std.mem.indexOf(u8, msg, "function") != null or std.mem.indexOf(u8, msg, "unsupported") != null);
+    try std.testing.expect(std.mem.find(u8, msg, "<") != null or std.mem.find(u8, msg, "function") != null or std.mem.find(u8, msg, "unsupported") != null);
 }
 
 test "dbg: expression form returns unit" {
@@ -2587,7 +2587,7 @@ test "dbg: with string containing special chars" {
     // The string should contain the actual newline character, rendered with quotes
     const msg = host.dbg_messages.items[0];
     try std.testing.expect(std.mem.startsWith(u8, msg, "\"hello"));
-    try std.testing.expect(std.mem.indexOf(u8, msg, "world") != null);
+    try std.testing.expect(std.mem.find(u8, msg, "world") != null);
 }
 
 test "dbg: large integer" {

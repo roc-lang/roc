@@ -424,7 +424,7 @@ pub fn verifyPlatformFiles(
 
 /// Check if a target requires Linux host (glibc targets).
 pub fn requiresLinuxHost(target: []const u8) bool {
-    return std.mem.indexOf(u8, target, "glibc") != null;
+    return std.mem.find(u8, target, "glibc") != null;
 }
 
 /// Check if we should skip this target on current host.
@@ -475,10 +475,10 @@ pub fn printResultLine(status: []const u8, target: []const u8, message: []const 
 /// - Roc runtime leak detection: allocations not freed
 /// Returns a description string if an error is found, null otherwise.
 fn hasMemoryErrors(stderr: []const u8) ?[]const u8 {
-    if (std.mem.indexOf(u8, stderr, "error(gpa):") != null) {
+    if (std.mem.find(u8, stderr, "error(gpa):") != null) {
         return "memory error detected";
     }
-    if (std.mem.indexOf(u8, stderr, "allocation(s) not freed") != null) {
+    if (std.mem.find(u8, stderr, "allocation(s) not freed") != null) {
         return "memory leak detected";
     }
     return null;

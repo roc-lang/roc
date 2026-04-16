@@ -91,6 +91,6 @@ test "canonicalizeAndTypeCheckModule preserves Try types in type printing" {
     const type_str = type_writer.get();
 
     // Check that the type contains "Try" and not "Error"
-    try testing.expect(std.mem.indexOf(u8, type_str, "Try") != null);
-    try testing.expect(std.mem.indexOf(u8, type_str, "Error") == null);
+    try testing.expect(std.mem.find(u8, type_str, "Try") != null);
+    try testing.expect(std.mem.find(u8, type_str, "Error") == null);
 }

@@ -825,7 +825,7 @@ fn freestandingListDir(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) L
 }
 
 fn freestandingDirName(_: ?*anyopaque, _: std.Io, path: []const u8) ?[]const u8 {
-    if (std.mem.lastIndexOfScalar(u8, path, '/')) |last_slash| {
+    if (std.mem.findScalarLast(u8, path, '/')) |last_slash| {
         if (last_slash == 0) return "/";
         return path[0..last_slash];
     }
@@ -833,7 +833,7 @@ fn freestandingDirName(_: ?*anyopaque, _: std.Io, path: []const u8) ?[]const u8 
 }
 
 fn freestandingBaseName(_: ?*anyopaque, _: std.Io, path: []const u8) []const u8 {
-    if (std.mem.lastIndexOfScalar(u8, path, '/')) |last_slash| {
+    if (std.mem.findScalarLast(u8, path, '/')) |last_slash| {
         return path[last_slash + 1 ..];
     }
     return path;

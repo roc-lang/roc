@@ -715,8 +715,8 @@ test "completion includes doc comments from source" {
             found_add = true;
             // The documentation should contain our doc comment
             if (item.documentation) |doc| {
-                try std.testing.expect(std.mem.indexOf(u8, doc, "Adds two numbers together") != null);
-                try std.testing.expect(std.mem.indexOf(u8, doc, "Returns the sum") != null);
+                try std.testing.expect(std.mem.find(u8, doc, "Adds two numbers together") != null);
+                try std.testing.expect(std.mem.find(u8, doc, "Returns the sum") != null);
             } else {
                 // Documentation should be present
                 std.debug.print("Expected documentation for 'add' but got null\n", .{});
@@ -758,10 +758,10 @@ test "hover shows documentation for function definition" {
     if (hover) |text| {
         defer h.allocator.free(text);
         // Should contain the doc comment
-        try std.testing.expect(std.mem.indexOf(u8, text, "Adds two numbers together") != null);
-        try std.testing.expect(std.mem.indexOf(u8, text, "Returns the sum") != null);
+        try std.testing.expect(std.mem.find(u8, text, "Adds two numbers together") != null);
+        try std.testing.expect(std.mem.find(u8, text, "Returns the sum") != null);
         // Should also contain the type signature
-        try std.testing.expect(std.mem.indexOf(u8, text, "I64, I64 -> I64") != null);
+        try std.testing.expect(std.mem.find(u8, text, "I64, I64 -> I64") != null);
     } else {
         return error.TestUnexpectedResult;
     }
@@ -791,9 +791,9 @@ test "hover shows documentation for local function call" {
     if (hover) |text| {
         defer h.allocator.free(text);
         // Should contain the doc comment from the definition
-        try std.testing.expect(std.mem.indexOf(u8, text, "Multiplies two numbers") != null);
+        try std.testing.expect(std.mem.find(u8, text, "Multiplies two numbers") != null);
         // Should contain the type signature
-        try std.testing.expect(std.mem.indexOf(u8, text, "I64, I64 -> I64") != null);
+        try std.testing.expect(std.mem.find(u8, text, "I64, I64 -> I64") != null);
     } else {
         std.debug.print("\n=== HOVER RETURNED NULL ===\n", .{});
         return error.TestUnexpectedResult;
@@ -821,7 +821,7 @@ test "hover shows documentation for external function call" {
         defer h.allocator.free(text);
         // Should at least contain a type signature (documentation may or may not be available)
         try std.testing.expect(text.len > 0);
-        try std.testing.expect(std.mem.indexOf(u8, text, "Str") != null);
+        try std.testing.expect(std.mem.find(u8, text, "Str") != null);
         // Note: We don't strictly check for documentation here as builtin docs
         // may not always be available, but the type should always be present
     } else {
@@ -853,7 +853,7 @@ test "hover shows documentation for function without type annotation" {
     if (hover) |text| {
         defer h.allocator.free(text);
         // Should contain the doc comment
-        try std.testing.expect(std.mem.indexOf(u8, text, "A simple helper function") != null);
+        try std.testing.expect(std.mem.find(u8, text, "A simple helper function") != null);
     } else {
         return error.TestUnexpectedResult;
     }
@@ -883,7 +883,7 @@ test "hover shows documentation for local variable" {
     if (hover) |text| {
         defer h.allocator.free(text);
         // Should contain the doc comment
-        try std.testing.expect(std.mem.indexOf(u8, text, "The magic number") != null);
+        try std.testing.expect(std.mem.find(u8, text, "The magic number") != null);
     } else {
         return error.TestUnexpectedResult;
     }
@@ -917,7 +917,7 @@ test "hover shows documentation for method call via static dispatch" {
     if (hover) |text| {
         defer h.allocator.free(text);
         // Should contain the doc comment from the method definition
-        try std.testing.expect(std.mem.indexOf(u8, text, "Doubles the value") != null);
+        try std.testing.expect(std.mem.find(u8, text, "Doubles the value") != null);
     } else {
         return error.TestUnexpectedResult;
     }
@@ -946,9 +946,9 @@ test "hover without documentation shows only type" {
     if (hover) |text| {
         defer h.allocator.free(text);
         // Should contain the type but no doc text
-        try std.testing.expect(std.mem.indexOf(u8, text, "I64, I64 -> I64") != null);
+        try std.testing.expect(std.mem.find(u8, text, "I64, I64 -> I64") != null);
         // Should not have doc comment-specific text from a previous line
-        try std.testing.expect(std.mem.indexOf(u8, text, "##") == null);
+        try std.testing.expect(std.mem.find(u8, text, "##") == null);
     } else {
         return error.TestUnexpectedResult;
     }

@@ -3066,5 +3066,5 @@ test "issue 8989: platform header targets section is preserved" {
     const result = try moduleFmtsStable(std.testing.allocator, input, false);
     defer std.testing.allocator.free(result);
     // The targets section must be preserved in the output
-    try std.testing.expect(std.mem.indexOf(u8, result, "targets:") != null);
+    try std.testing.expect(std.mem.find(u8, result, "targets:") != null);
 }

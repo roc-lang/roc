@@ -253,8 +253,8 @@ fn verifyHandlerOutput(exited_normally: bool, exit_code: u8, termination_signal:
     // Exit code 139 = generic segfault (handler caught it but didn't classify as stack overflow)
     if (exited_normally and (exit_code == 134 or exit_code == 139)) {
         // Check that our handler message was printed
-        const has_stack_overflow_msg = std.mem.indexOf(u8, stderr_output, "overflowed its stack memory") != null;
-        const has_segfault_msg = std.mem.indexOf(u8, stderr_output, "Segmentation fault") != null;
+        const has_stack_overflow_msg = std.mem.find(u8, stderr_output, "overflowed its stack memory") != null;
+        const has_segfault_msg = std.mem.find(u8, stderr_output, "Segmentation fault") != null;
 
         // Handler should have printed EITHER stack overflow message OR segfault message
         try std.testing.expect(has_stack_overflow_msg or has_segfault_msg);

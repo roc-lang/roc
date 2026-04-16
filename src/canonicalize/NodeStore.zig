@@ -4223,14 +4223,14 @@ pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []c
                 }
 
                 // Extract base module name for qualified imports (e.g., "pf.Stdout" -> "Stdout")
-                const base_import_name = if (std.mem.lastIndexOfScalar(u8, import_name, '.')) |dot_idx|
+                const base_import_name = if (std.mem.findScalarLast(u8, import_name, '.')) |dot_idx|
                     import_name[dot_idx + 1 ..]
                 else
                     import_name;
 
                 // Extract base member name (e.g., "pf.Stdout.line!" -> "line!")
                 // The member_name may be fully qualified, so we take everything after the last dot
-                const base_member_name = if (std.mem.lastIndexOfScalar(u8, member_name, '.')) |dot_idx|
+                const base_member_name = if (std.mem.findScalarLast(u8, member_name, '.')) |dot_idx|
                     member_name[dot_idx + 1 ..]
                 else
                     member_name;
@@ -4338,7 +4338,7 @@ pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []c
                     }
 
                     // Extract base module name for qualified imports (e.g., "pf.Simple" -> "Simple")
-                    const base_import_name = if (std.mem.lastIndexOfScalar(u8, import_name, '.')) |dot_idx|
+                    const base_import_name = if (std.mem.findScalarLast(u8, import_name, '.')) |dot_idx|
                         import_name[dot_idx + 1 ..]
                     else
                         import_name;
@@ -4409,7 +4409,7 @@ pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []c
                     }
 
                     // Extract base module name for qualified imports
-                    const base_import_name = if (std.mem.lastIndexOfScalar(u8, import_name, '.')) |dot_idx|
+                    const base_import_name = if (std.mem.findScalarLast(u8, import_name, '.')) |dot_idx|
                         import_name[dot_idx + 1 ..]
                     else
                         import_name;

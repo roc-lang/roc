@@ -501,7 +501,7 @@ pub fn assertLastDefTypeContains(self: *TestEnv, expected_substring: []const u8)
 
     try self.type_writer.write(last_def_var, .wrap);
     const type_str = self.type_writer.get();
-    if (std.mem.indexOf(u8, type_str, expected_substring) == null) {
+    if (std.mem.find(u8, type_str, expected_substring) == null) {
         std.debug.print("Expected type to contain '{s}', but got: {s}\n", .{ expected_substring, type_str });
         return error.TestExpectedEqual;
     }
@@ -673,7 +673,7 @@ fn assertNoCanProblems(self: *TestEnv) !void {
         try renderReportToMarkdownBuffer(&report_buf, &report);
 
         // Ignore "MISSING MAIN! FUNCTION" error - it's expected in test modules
-        if (std.mem.indexOf(u8, report_buf.items, "MISSING MAIN! FUNCTION") != null) {
+        if (std.mem.find(u8, report_buf.items, "MISSING MAIN! FUNCTION") != null) {
             continue;
         }
 

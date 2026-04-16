@@ -1512,8 +1512,8 @@ test "download from local server" {
 
             // Parse request line to get the path
             const request = request_buf[0..bytes_read];
-            if (std.mem.indexOf(u8, request, " ")) |first_space| {
-                if (std.mem.indexOf(u8, request[first_space + 1 ..], " ")) |second_space| {
+            if (std.mem.find(u8, request, " ")) |first_space| {
+                if (std.mem.find(u8, request[first_space + 1 ..], " ")) |second_space| {
                     const path = request[first_space + 1 ..][0..second_space];
                     ctx.request_path = try ctx.allocator.dupe(u8, path);
                 }

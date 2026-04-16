@@ -23,9 +23,9 @@ test "roc check writes parse errors to stderr" {
     try testing.expect(result.stderr.len > 0);
 
     // 3. Stderr contains error reporting
-    const has_error = std.mem.indexOf(u8, result.stderr, "Failed to check") != null or
-        std.mem.indexOf(u8, result.stderr, "error") != null or
-        std.mem.indexOf(u8, result.stderr, "Unsupported") != null;
+    const has_error = std.mem.find(u8, result.stderr, "Failed to check") != null or
+        std.mem.find(u8, result.stderr, "error") != null or
+        std.mem.find(u8, result.stderr, "Unsupported") != null;
     try testing.expect(has_error);
 }
 
@@ -46,13 +46,13 @@ test "roc check displays correct file path in parse error messages" {
 
     // 3. Stderr contains the actual file path, not mangled bytes
     // The error message should include "has_parse_error.roc" in the location indicator
-    const has_file_path = std.mem.indexOf(u8, result.stderr, "has_parse_error.roc") != null;
+    const has_file_path = std.mem.find(u8, result.stderr, "has_parse_error.roc") != null;
     try testing.expect(has_file_path);
 
     // 4. Stderr should NOT contain sequences of 0xaa bytes (indicates path encoding issue)
     // When paths are mangled, they appear as repeated 0xaa bytes in the output
     const mangled_path_pattern = [_]u8{ 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa };
-    const has_mangled_path = std.mem.indexOf(u8, result.stderr, &mangled_path_pattern) != null;
+    const has_mangled_path = std.mem.find(u8, result.stderr, &mangled_path_pattern) != null;
     try testing.expect(!has_mangled_path);
 }
 
@@ -70,8 +70,8 @@ test "roc check succeeds on valid file" {
 
     // 2. Stderr should be empty or minimal for success
     // (No errors should be reported)
-    const has_error = std.mem.indexOf(u8, result.stderr, "Failed to check") != null or
-        std.mem.indexOf(u8, result.stderr, "error") != null;
+    const has_error = std.mem.find(u8, result.stderr, "Failed to check") != null or
+        std.mem.find(u8, result.stderr, "error") != null;
     try testing.expect(!has_error);
 }
 
@@ -104,11 +104,11 @@ test "roc repl shows welcome banner" {
     try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // Stdout contains the welcome banner
-    const has_welcome = std.mem.indexOf(u8, result.stdout, "Roc REPL") != null;
+    const has_welcome = std.mem.find(u8, result.stdout, "Roc REPL") != null;
     try testing.expect(has_welcome);
 
     // Stdout mentions help
-    const has_help_hint = std.mem.indexOf(u8, result.stdout, ":help") != null;
+    const has_help_hint = std.mem.find(u8, result.stdout, ":help") != null;
     try testing.expect(has_help_hint);
 }
 
@@ -125,7 +125,7 @@ test "roc repl evaluates simple expression" {
     try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // Output contains the result "2"
-    const has_result = std.mem.indexOf(u8, result.stdout, "2") != null;
+    const has_result = std.mem.find(u8, result.stdout, "2") != null;
     try testing.expect(has_result);
 }
 
@@ -142,8 +142,8 @@ test "roc repl :help command works" {
     try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // Output contains help text (mentions commands)
-    const has_help_output = std.mem.indexOf(u8, result.stdout, ":exit") != null or
-        std.mem.indexOf(u8, result.stdout, ":quit") != null;
+    const has_help_output = std.mem.find(u8, result.stdout, ":exit") != null or
+        std.mem.find(u8, result.stdout, ":quit") != null;
     try testing.expect(has_help_output);
 }
 
@@ -160,7 +160,7 @@ test "roc repl :exit command exits cleanly" {
     try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // Output contains goodbye message
-    const has_goodbye = std.mem.indexOf(u8, result.stdout, "Goodbye") != null;
+    const has_goodbye = std.mem.find(u8, result.stdout, "Goodbye") != null;
     try testing.expect(has_goodbye);
 }
 
@@ -177,7 +177,7 @@ test "roc repl variable definition and usage" {
     try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // Output contains the result "8"
-    const has_result = std.mem.indexOf(u8, result.stdout, "8") != null;
+    const has_result = std.mem.find(u8, result.stdout, "8") != null;
     try testing.expect(has_result);
 }
 
@@ -194,7 +194,7 @@ test "roc repl string expression" {
     try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // Output contains the string (with quotes in output)
-    const has_string = std.mem.indexOf(u8, result.stdout, "hello") != null;
+    const has_string = std.mem.find(u8, result.stdout, "hello") != null;
     try testing.expect(has_string);
 }
 
@@ -211,7 +211,7 @@ test "roc help contains Usage:" {
     try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // 2. Stdout contains "Usage:"
-    const has_usage = std.mem.indexOf(u8, result.stdout, "Usage:") != null;
+    const has_usage = std.mem.find(u8, result.stdout, "Usage:") != null;
     try testing.expect(has_usage);
 }
 
@@ -228,7 +228,7 @@ test "roc licenses contains =====" {
     try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // 2. Stdout contains "====="
-    const has_usage = std.mem.indexOf(u8, result.stdout, "=====") != null;
+    const has_usage = std.mem.find(u8, result.stdout, "=====") != null;
     try testing.expect(has_usage);
 }
 
@@ -245,10 +245,10 @@ test "roc fmt --check fails on unformatted file" {
     try testing.expect(result.term != .exited or result.term.exited != 0);
 
     // 2. Stderr or stdout contains formatting-related message
-    const has_format_msg = std.mem.indexOf(u8, result.stderr, "needs_formatting.roc") != null or
-        std.mem.indexOf(u8, result.stdout, "needs_formatting.roc") != null or
-        std.mem.indexOf(u8, result.stderr, "formatted") != null or
-        std.mem.indexOf(u8, result.stdout, "formatted") != null;
+    const has_format_msg = std.mem.find(u8, result.stderr, "needs_formatting.roc") != null or
+        std.mem.find(u8, result.stdout, "needs_formatting.roc") != null or
+        std.mem.find(u8, result.stderr, "formatted") != null or
+        std.mem.find(u8, result.stdout, "formatted") != null;
     try testing.expect(has_format_msg);
 }
 
@@ -488,9 +488,9 @@ test "roc check reports type error - annotation mismatch" {
     try testing.expect(result.stderr.len > 0);
 
     // 3. Error message mentions type mismatch or error
-    const has_type_error = std.mem.indexOf(u8, result.stderr, "TYPE MISMATCH") != null or
-        std.mem.indexOf(u8, result.stderr, "error") != null or
-        std.mem.indexOf(u8, result.stderr, "Found") != null;
+    const has_type_error = std.mem.find(u8, result.stderr, "TYPE MISMATCH") != null or
+        std.mem.find(u8, result.stderr, "error") != null or
+        std.mem.find(u8, result.stderr, "Found") != null;
     try testing.expect(has_type_error);
 }
 
@@ -510,10 +510,10 @@ test "roc check reports type error - plus operator with incompatible types" {
     try testing.expect(result.stderr.len > 0);
 
     // 3. Error message mentions missing method or type error
-    const has_type_error = std.mem.indexOf(u8, result.stderr, "MISSING METHOD") != null or
-        std.mem.indexOf(u8, result.stderr, "TYPE MISMATCH") != null or
-        std.mem.indexOf(u8, result.stderr, "error") != null or
-        std.mem.indexOf(u8, result.stderr, "Found") != null;
+    const has_type_error = std.mem.find(u8, result.stderr, "MISSING METHOD") != null or
+        std.mem.find(u8, result.stderr, "TYPE MISMATCH") != null or
+        std.mem.find(u8, result.stderr, "error") != null or
+        std.mem.find(u8, result.stderr, "Found") != null;
     try testing.expect(has_type_error);
 }
 
@@ -538,7 +538,7 @@ test "roc check test/int/app.roc does not panic" {
     try testing.expect(!did_panic);
 
     // 2. Should not contain "panic" in output
-    const has_panic_text = std.mem.indexOf(u8, result.stderr, "panic") != null;
+    const has_panic_text = std.mem.find(u8, result.stderr, "panic") != null;
     try testing.expect(!has_panic_text);
 }
 
@@ -612,7 +612,7 @@ test "roc build creates executable from test/int/app.roc (interpreter)" {
 
     // 4. Stdout contains success message
     try testing.expect(result.stdout.len > 5);
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "Successfully built") != null);
+    try testing.expect(std.mem.find(u8, result.stdout, "Successfully built") != null);
 }
 
 test "roc build creates executable from test/int/app.roc (dev)" {
@@ -664,8 +664,8 @@ test "roc build executable runs correctly (interpreter)" {
     try testing.expect(run_result.term == .exited and run_result.term.exited == 0);
 
     // 2. Output contains expected success message
-    const has_success = std.mem.indexOf(u8, run_result.stdout, "SUCCESS") != null or
-        std.mem.indexOf(u8, run_result.stdout, "PASSED") != null;
+    const has_success = std.mem.find(u8, run_result.stdout, "SUCCESS") != null or
+        std.mem.find(u8, run_result.stdout, "PASSED") != null;
     try testing.expect(has_success);
 }
 
@@ -731,7 +731,7 @@ test "roc build --opt=dev executable runs correctly for test/int/app.roc" {
     defer gpa.free(run_result.stderr);
 
     try testing.expect(run_result.term == .exited and run_result.term.exited == 0);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "ALL TESTS PASSED") != null);
+    try testing.expect(std.mem.find(u8, run_result.stdout, "ALL TESTS PASSED") != null);
 }
 
 test "roc build fails with file not found error" {
@@ -747,10 +747,10 @@ test "roc build fails with file not found error" {
     try testing.expect(result.term != .exited or result.term.exited != 0);
 
     // 2. Stderr contains file not found error
-    const has_error = std.mem.indexOf(u8, result.stderr, "FileNotFound") != null or
-        std.mem.indexOf(u8, result.stderr, "not found") != null or
-        std.mem.indexOf(u8, result.stderr, "NOT FOUND") != null or
-        std.mem.indexOf(u8, result.stderr, "Failed") != null;
+    const has_error = std.mem.find(u8, result.stderr, "FileNotFound") != null or
+        std.mem.find(u8, result.stderr, "not found") != null or
+        std.mem.find(u8, result.stderr, "NOT FOUND") != null or
+        std.mem.find(u8, result.stderr, "Failed") != null;
     try testing.expect(has_error);
 }
 
@@ -767,8 +767,8 @@ test "roc build fails with invalid target error" {
     try testing.expect(result.term != .exited or result.term.exited != 0);
 
     // 2. Stderr contains invalid target error
-    const has_error = std.mem.indexOf(u8, result.stderr, "Invalid target") != null or
-        std.mem.indexOf(u8, result.stderr, "invalid") != null;
+    const has_error = std.mem.find(u8, result.stderr, "Invalid target") != null or
+        std.mem.find(u8, result.stderr, "invalid") != null;
     try testing.expect(has_error);
 }
 
@@ -791,11 +791,11 @@ test "roc build glibc target gives helpful error on non-Linux" {
     try testing.expect(result.term != .exited or result.term.exited != 0);
 
     // 2. Stderr contains helpful error message about glibc not being supported
-    const has_glibc_error = std.mem.indexOf(u8, result.stderr, "glibc") != null;
+    const has_glibc_error = std.mem.find(u8, result.stderr, "glibc") != null;
     try testing.expect(has_glibc_error);
 
     // 3. Stderr suggests using musl instead
-    const suggests_musl = std.mem.indexOf(u8, result.stderr, "musl") != null;
+    const suggests_musl = std.mem.find(u8, result.stderr, "musl") != null;
     try testing.expect(suggests_musl);
 }
 
@@ -813,7 +813,7 @@ fn testCachesPassingResults(opt: []const u8) !void {
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
     try std.testing.expect(result2.term == .exited and result2.term.exited == 0);
-    try std.testing.expect(std.mem.indexOf(u8, result2.stdout, "(cached)") != null);
+    try std.testing.expect(std.mem.find(u8, result2.stdout, "(cached)") != null);
 }
 
 test "roc test caches passing results (interpreter)" {
@@ -838,7 +838,7 @@ fn testCachesFailingResults(opt: []const u8) !void {
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
     try std.testing.expect(result2.term == .exited and result2.term.exited == 1);
-    try std.testing.expect(std.mem.indexOf(u8, result2.stderr, "(cached)") != null);
+    try std.testing.expect(std.mem.find(u8, result2.stderr, "(cached)") != null);
 }
 
 test "roc test caches failing results (interpreter)" {
@@ -908,7 +908,7 @@ test "roc test cache invalidated by source change (interpreter)" {
     try testing.expect(result2.term == .exited and result2.term.exited == 0);
 
     // Second run should NOT contain "(cached)" since source changed
-    try testing.expect(std.mem.indexOf(u8, result2.stdout, "(cached)") == null);
+    try testing.expect(std.mem.find(u8, result2.stdout, "(cached)") == null);
 }
 
 test "roc test cache invalidated by source change (dev)" {
@@ -930,8 +930,8 @@ fn testVerboseWorksFromCache(opt: []const u8) !void {
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
     try std.testing.expect(result2.term == .exited and result2.term.exited == 0);
-    try std.testing.expect(std.mem.indexOf(u8, result2.stdout, "(cached)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result2.stdout, "PASS") != null);
+    try std.testing.expect(std.mem.find(u8, result2.stdout, "(cached)") != null);
+    try std.testing.expect(std.mem.find(u8, result2.stdout, "PASS") != null);
 }
 
 test "roc test --verbose works from cache (interpreter)" {
@@ -955,9 +955,9 @@ fn testVerboseCachesFailureReports(opt: []const u8) !void {
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
     try std.testing.expect(result2.term == .exited and result2.term.exited == 1);
-    try std.testing.expect(std.mem.indexOf(u8, result2.stderr, "(cached)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result1.stderr, "FAIL") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result2.stderr, "FAIL") != null);
+    try std.testing.expect(std.mem.find(u8, result2.stderr, "(cached)") != null);
+    try std.testing.expect(std.mem.find(u8, result1.stderr, "FAIL") != null);
+    try std.testing.expect(std.mem.find(u8, result2.stderr, "FAIL") != null);
 }
 
 test "roc test --verbose caches failure reports (interpreter)" {
@@ -977,15 +977,15 @@ fn testNonVerboseCachesVerboseReports(opt: []const u8) !void {
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
     try std.testing.expect(result1.term == .exited and result1.term.exited == 1);
-    try std.testing.expect(std.mem.indexOf(u8, result1.stderr, "expect failed") == null);
+    try std.testing.expect(std.mem.find(u8, result1.stderr, "expect failed") == null);
 
     const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc", &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
     try std.testing.expect(result2.term == .exited and result2.term.exited == 1);
-    try std.testing.expect(std.mem.indexOf(u8, result2.stderr, "(cached)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result2.stderr, "expect") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result2.stderr, "TEST FAILURE") != null);
+    try std.testing.expect(std.mem.find(u8, result2.stderr, "(cached)") != null);
+    try std.testing.expect(std.mem.find(u8, result2.stderr, "expect") != null);
+    try std.testing.expect(std.mem.find(u8, result2.stderr, "TEST FAILURE") != null);
 }
 
 test "roc test non-verbose run caches verbose failure reports for later verbose run (interpreter)" {
@@ -1012,12 +1012,12 @@ test "roc test with nested list chunks does not panic on layout upgrade (interpr
     try testing.expect(result.term == .exited and result.term.exited == 1);
 
     // 2. Stderr contains "FAIL" indicating a test failure (not a panic/crash)
-    const has_fail = std.mem.indexOf(u8, result.stderr, "FAIL") != null;
+    const has_fail = std.mem.find(u8, result.stderr, "FAIL") != null;
     try testing.expect(has_fail);
 
     // 3. Stderr should not contain "panic" or "overflow" (no crash occurred)
-    const has_panic = std.mem.indexOf(u8, result.stderr, "panic") != null or
-        std.mem.indexOf(u8, result.stderr, "overflow") != null;
+    const has_panic = std.mem.find(u8, result.stderr, "panic") != null or
+        std.mem.find(u8, result.stderr, "overflow") != null;
     try testing.expect(!has_panic);
 }
 
@@ -1127,12 +1127,12 @@ test "roc check returns exit code 2 for warnings" {
     try testing.expect(result.term == .exited and result.term.exited == 2);
 
     // 2. Stderr contains warning information
-    const has_warning = std.mem.indexOf(u8, result.stderr, "UNUSED VARIABLE") != null or
-        std.mem.indexOf(u8, result.stderr, "warning") != null;
+    const has_warning = std.mem.find(u8, result.stderr, "UNUSED VARIABLE") != null or
+        std.mem.find(u8, result.stderr, "warning") != null;
     try testing.expect(has_warning);
 
     // 3. Output shows 0 errors and at least 1 warning
-    const has_zero_errors = std.mem.indexOf(u8, result.stderr, "0 error") != null;
+    const has_zero_errors = std.mem.find(u8, result.stderr, "0 error") != null;
     try testing.expect(has_zero_errors);
 }
 
@@ -1187,8 +1187,8 @@ test "roc run returns exit code 2 for warnings (interpreter)" {
     try testing.expect(result.term == .exited and result.term.exited == 2);
 
     // 2. Stderr contains warning information
-    const has_warning = std.mem.indexOf(u8, result.stderr, "UNUSED VARIABLE") != null or
-        std.mem.indexOf(u8, result.stderr, "warning") != null;
+    const has_warning = std.mem.find(u8, result.stderr, "UNUSED VARIABLE") != null or
+        std.mem.find(u8, result.stderr, "warning") != null;
     try testing.expect(has_warning);
 }
 
@@ -1202,8 +1202,8 @@ test "roc run --opt=dev returns exit code 2 for warnings" {
 
     try testing.expect(result.term == .exited and result.term.exited == 2);
 
-    const has_warning = std.mem.indexOf(u8, result.stderr, "UNUSED VARIABLE") != null or
-        std.mem.indexOf(u8, result.stderr, "warning") != null;
+    const has_warning = std.mem.find(u8, result.stderr, "UNUSED VARIABLE") != null or
+        std.mem.find(u8, result.stderr, "warning") != null;
     try testing.expect(has_warning);
 }
 
@@ -1230,9 +1230,9 @@ test "roc run --opt=dev rejects non executable targets" {
 
     try testing.expect(result.term == .exited and result.term.exited != 0);
 
-    const has_expected_error = std.mem.indexOf(u8, result.stderr, "only produces static libraries") != null or
-        std.mem.indexOf(u8, result.stderr, "TARGET NOT SUPPORTED") != null or
-        std.mem.indexOf(u8, result.stderr, "unsupported target") != null;
+    const has_expected_error = std.mem.find(u8, result.stderr, "only produces static libraries") != null or
+        std.mem.find(u8, result.stderr, "TARGET NOT SUPPORTED") != null or
+        std.mem.find(u8, result.stderr, "unsupported target") != null;
     try testing.expect(has_expected_error);
 }
 
@@ -1262,8 +1262,8 @@ test "roc build returns exit code 2 for warnings (interpreter)" {
     try testing.expect(result.term == .exited and result.term.exited == 2);
 
     // 2. Stderr contains warning information
-    const has_warning = std.mem.indexOf(u8, result.stderr, "UNUSED VARIABLE") != null or
-        std.mem.indexOf(u8, result.stderr, "warning") != null;
+    const has_warning = std.mem.find(u8, result.stderr, "UNUSED VARIABLE") != null or
+        std.mem.find(u8, result.stderr, "warning") != null;
     try testing.expect(has_warning);
 
     // 3. Binary was still created successfully
@@ -1274,7 +1274,7 @@ test "roc build returns exit code 2 for warnings (interpreter)" {
     try testing.expect(stat.size > 0);
 
     // 4. Success message was printed
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "Successfully built") != null);
+    try testing.expect(std.mem.find(u8, result.stdout, "Successfully built") != null);
 }
 
 test "roc build returns exit code 2 for warnings (dev)" {
@@ -1331,7 +1331,7 @@ test "roc check with invalid --jobs value returns error" {
     try testing.expect(result.term == .exited and result.term.exited == 1);
 
     // Verify error message mentions invalid value
-    const has_error = std.mem.indexOf(u8, result.stderr, "not a valid value") != null;
+    const has_error = std.mem.find(u8, result.stderr, "not a valid value") != null;
     try testing.expect(has_error);
 }
 
@@ -1352,8 +1352,8 @@ test "roc check does not panic on invalid package shorthand import (issue 9084)"
     try testing.expect(!did_panic);
 
     // 2. Stderr should not contain "panic" or "Coordinator stuck"
-    const has_panic_text = std.mem.indexOf(u8, result.stderr, "panic") != null or
-        std.mem.indexOf(u8, result.stderr, "Coordinator stuck") != null;
+    const has_panic_text = std.mem.find(u8, result.stderr, "panic") != null or
+        std.mem.find(u8, result.stderr, "Coordinator stuck") != null;
     try testing.expect(!has_panic_text);
 
     // 3. Command should fail with a non-zero exit code (error, not success)
@@ -1376,7 +1376,7 @@ test "roc check succeeds on Parser type module" {
     try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // 2. No errors should be reported
-    const has_error = std.mem.indexOf(u8, result.stderr, "error") != null;
+    const has_error = std.mem.find(u8, result.stderr, "error") != null;
     try testing.expect(!has_error);
 }
 
@@ -1393,13 +1393,13 @@ test "roc test runs expects in Parser type module (interpreter)" {
     try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // 2. Output indicates tests passed
-    const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
+    const has_passed = std.mem.find(u8, result.stdout, "passed") != null;
     try testing.expect(has_passed);
 
     // 3. Should have run 2 tests (extract count from "(N)" in output)
     const count = blk: {
-        const open = std.mem.indexOf(u8, result.stdout, "(") orelse break :blk @as(usize, 0);
-        const close = std.mem.indexOfPos(u8, result.stdout, open, ")") orelse break :blk @as(usize, 0);
+        const open = std.mem.find(u8, result.stdout, "(") orelse break :blk @as(usize, 0);
+        const close = std.mem.findPos(u8, result.stdout, open, ")") orelse break :blk @as(usize, 0);
         break :blk std.fmt.parseInt(usize, result.stdout[open + 1 .. close], 10) catch 0;
     };
     try testing.expect(count == 2);
@@ -1425,12 +1425,12 @@ test "roc test polymorphic list reverse with numeric literal does not overflow (
     try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // Stderr should not contain "panic" or "overflow"
-    const has_panic = std.mem.indexOf(u8, result.stderr, "panic") != null or
-        std.mem.indexOf(u8, result.stderr, "overflow") != null;
+    const has_panic = std.mem.find(u8, result.stderr, "panic") != null or
+        std.mem.find(u8, result.stderr, "overflow") != null;
     try testing.expect(!has_panic);
 
     // Should report 1 passing test
-    const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
+    const has_passed = std.mem.find(u8, result.stdout, "passed") != null;
     try testing.expect(has_passed);
 }
 
@@ -1449,12 +1449,12 @@ test "roc test polymorphic list reverse with numeric literal does not overflow (
     try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // Stderr should not contain "panic" or "overflow"
-    const has_panic = std.mem.indexOf(u8, result.stderr, "panic") != null or
-        std.mem.indexOf(u8, result.stderr, "overflow") != null;
+    const has_panic = std.mem.find(u8, result.stderr, "panic") != null or
+        std.mem.find(u8, result.stderr, "overflow") != null;
     try testing.expect(!has_panic);
 
     // Should report 1 passing test
-    const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
+    const has_passed = std.mem.find(u8, result.stdout, "passed") != null;
     try testing.expect(has_passed);
 }
 
@@ -1471,7 +1471,7 @@ test "roc test polymorphic list reverse within same module" {
 
     try testing.expect(result.term == .exited and result.term.exited == 0);
 
-    const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
+    const has_passed = std.mem.find(u8, result.stdout, "passed") != null;
     try testing.expect(has_passed);
 }
 
@@ -1665,7 +1665,7 @@ test "echo platform: roc test all_syntax_test.roc passes" {
 
     try util.checkSuccess(result);
 
-    const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
+    const has_passed = std.mem.find(u8, result.stdout, "passed") != null;
     try std.testing.expect(has_passed);
 }
 
@@ -1679,7 +1679,7 @@ test "roc docs Builtin.roc succeeds" {
 
     try util.checkSuccess(result);
 
-    const has_generated = std.mem.indexOf(u8, result.stdout, "Generated docs for") != null;
+    const has_generated = std.mem.find(u8, result.stdout, "Generated docs for") != null;
     try testing.expect(has_generated);
 }
 

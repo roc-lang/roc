@@ -68,7 +68,7 @@ fn renderParseDiagnosticForRepl(
     var end_pos: usize = full_result.len;
 
     // Find the last occurrence of "\n\n**" which marks the start of the source location section
-    if (std.mem.lastIndexOf(u8, full_result, "\n\n**")) |pos| {
+    if (std.mem.findLast(u8, full_result, "\n\n**")) |pos| {
         end_pos = pos;
     }
 

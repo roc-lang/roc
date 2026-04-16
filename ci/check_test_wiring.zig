@@ -331,7 +331,7 @@ fn markBuildTestRootsAsReferenced(
     const pattern = ".root_source_file = b.path(\"";
     var search_index: usize = 0;
 
-    while (std.mem.indexOfPos(u8, source, search_index, pattern)) |match_pos| {
+    while (std.mem.findPos(u8, source, search_index, pattern)) |match_pos| {
         const literal_start = match_pos + pattern.len;
         var cursor = literal_start;
 
