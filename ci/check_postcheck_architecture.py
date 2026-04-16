@@ -36,6 +36,10 @@ RULES = (
     ("nullable-recorded-dispatch-lowering", re.compile(r"\)\s*std\.mem\.Allocator\.Error!\?LoweredCall\s*\{")),
     ("nullable-attached-method-target", re.compile(r"\)\s*std\.mem\.Allocator\.Error!\?ResolvedTarget\s*\{")),
     ("runtime-error-wrapper", re.compile(r"\bmakeRuntimeErrorExprAt\b")),
+    ("monotype-source-fn-arg-walk", re.compile(r"\blookupCurriedFunctionArgVarInStore\(typed_cir_module\.typeStoreConst\(\),")),
+    ("monotype-source-fn-ret-walk", re.compile(r"\blookupFunctionRetVarInStore\(typed_cir_module\.typeStoreConst\(\),")),
+    ("monotype-source-fn-arity-walk", re.compile(r"\bfunctionArgCountInStore\(typed_cir_module\.typeStoreConst\(\),")),
+    ("monotype-source-curried-result-walk", re.compile(r"\blookupCurriedFunctionResultVarInStore\(typed_cir_module\.typeStoreConst\(\),")),
 )
 
 
