@@ -457,15 +457,15 @@ pub const Lowerer = struct {
         solved_var: ?Var = null,
     };
 
-    const CheckerSnapshot = specializations_mod.CheckerSnapshot;
+    const SolvedVarImage = specializations_mod.SolvedVarImage;
 
-    const SnapshotTypedBinding = struct {
+    const DeclarationTypedBinding = struct {
         symbol: symbol_mod.Symbol,
-        checker_var: ?CheckerSnapshot = null,
+        solved_var_image: ?SolvedVarImage = null,
 
         fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-            if (self.checker_var) |*checker_var| {
-                checker_var.deinit(allocator);
+            if (self.solved_var_image) |*solved_var_image| {
+                solved_var_image.deinit(allocator);
             }
         }
     };
@@ -478,22 +478,22 @@ pub const Lowerer = struct {
 
     const BindingEnv = std.AutoHashMap(PatternKey, BindingValue);
 
-    const SnapshotBindingValue = struct {
-        typed: ?SnapshotTypedBinding = null,
+    const DeclarationBindingValue = struct {
+        typed: ?DeclarationTypedBinding = null,
         local_fn_source: ?LocalFnSourceRef = null,
-        local_fn_seed_var: ?CheckerSnapshot = null,
+        local_fn_seed_image: ?SolvedVarImage = null,
 
         fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
             if (self.typed) |*typed| {
                 typed.deinit(allocator);
             }
-            if (self.local_fn_seed_var) |*seed| {
-                seed.deinit(allocator);
+            if (self.local_fn_seed_image) |*seed_image| {
+                seed_image.deinit(allocator);
             }
         }
     };
 
-    const SnapshotBindingEnv = std.AutoHashMap(PatternKey, SnapshotBindingValue);
+    const DeclarationBindingEnv = std.AutoHashMap(PatternKey, DeclarationBindingValue);
 
     fn putTypedBinding(
         _: *Lowerer,
@@ -562,7 +562,7 @@ pub const Lowerer = struct {
 
     const LocalFnGroupState = struct {
         module_idx: u32,
-        declaration_env: SnapshotBindingEnv,
+        declaration_env: DeclarationBindingEnv,
         insertion_index: usize,
         sources: []LocalFnSource,
         pending: std.ArrayList(LocalFnPending),
@@ -941,7 +941,7 @@ pub const Lowerer = struct {
         try self.finalizePatternTypes(module_idx, &type_scope);
 
         const expected_ty = try self.requireExprType(module_idx, &type_scope, solved_def.expr.idx);
-        const expected_checker_snapshot = try self.snapshotCheckerVarFromScope(&type_scope, expected_var);
+        const expected_var_image = try self.captureSolvedVarImageFromScope(&type_scope, expected_var);
 
         return try self.specializations.specializeFn(
             &self.ctx.symbols,
@@ -949,7 +949,7 @@ pub const Lowerer = struct {
             symbol,
             .{ .module_idx = module_idx, .def_idx = def_idx },
             expected_ty,
-            expected_checker_snapshot,
+            expected_var_image,
         );
     }
 
@@ -966,7 +966,7 @@ pub const Lowerer = struct {
             scoped_expected_var
         else
             try self.instantiateSourceVar(type_scope, top_level.module_idx, source_root_var);
-        const expected_checker_snapshot = try self.snapshotCheckerVarFromScope(
+        const expected_var_image = try self.captureSolvedVarImageFromScope(
             type_scope,
             specialization_root_var,
         );
@@ -979,7 +979,7 @@ pub const Lowerer = struct {
                 .def_idx = top_level.def_idx,
             },
             expected_ty,
-            expected_checker_snapshot,
+            expected_var_image,
         );
     }
 
@@ -1485,14 +1485,14 @@ pub const Lowerer = struct {
         var type_scope: TypeScope = undefined;
         try type_scope.initAll(self.allocator, typed_cir_module);
         defer type_scope.deinit();
-        const specialized_checker_var = try self.restoreCheckerSnapshot(&type_scope, pending.expected_checker_snapshot);
+        const specialized_expected_var = try self.restoreSolvedVarImage(&type_scope, pending.expected_var_image);
 
         if (solved_def.expr.data == .e_hosted_lambda) {
             return try self.lowerHostedTopLevelDefWithScope(
                 pending.source.module_idx,
                 pending.source.def_idx,
                 pending.specialized_symbol,
-                specialized_checker_var,
+                specialized_expected_var,
                 &type_scope,
             );
         }
@@ -1509,7 +1509,7 @@ pub const Lowerer = struct {
             solved_def.expr.idx,
             recursive,
             null,
-            specialized_checker_var,
+            specialized_expected_var,
         );
         const lowered = try self.program.store.addDef(.{
             .bind = letfn.bind,
@@ -1594,12 +1594,12 @@ pub const Lowerer = struct {
         return lowered;
     }
 
-    fn snapshotCheckerVarFromStores(
+    fn captureSolvedVarImageFromStores(
         self: *Lowerer,
         source_store: *const types.Store,
         source_idents: *const base.Ident.Store,
         source_var: Var,
-    ) std.mem.Allocator.Error!CheckerSnapshot {
+    ) std.mem.Allocator.Error!SolvedVarImage {
         var type_store = try types.Store.init(self.allocator);
         errdefer type_store.deinit();
         var ident_store = try base.Ident.Store.initCapacity(self.allocator, 16);
@@ -1622,31 +1622,31 @@ pub const Lowerer = struct {
         };
     }
 
-    fn snapshotCheckerVarFromScope(
+    fn captureSolvedVarImageFromScope(
         self: *Lowerer,
         type_scope: *const TypeScope,
         source_var: Var,
-    ) std.mem.Allocator.Error!CheckerSnapshot {
-        return self.snapshotCheckerVarFromStores(
+    ) std.mem.Allocator.Error!SolvedVarImage {
+        return self.captureSolvedVarImageFromStores(
             type_scope.typeStoreConst(),
             type_scope.identStoreConst(),
             source_var,
         );
     }
 
-    fn restoreCheckerSnapshot(
+    fn restoreSolvedVarImage(
         self: *Lowerer,
         type_scope: *TypeScope,
-        frozen: CheckerSnapshot,
+        image: SolvedVarImage,
     ) std.mem.Allocator.Error!Var {
         var var_map = std.AutoHashMap(Var, Var).init(self.allocator);
         defer var_map.deinit();
         const copied_root = try clone_inst.cloneVar(
-            &frozen.type_store,
+            &image.type_store,
             type_scope.typeStoreMut(),
-            frozen.root_var,
+            image.root_var,
             &var_map,
-            &frozen.ident_store,
+            &image.ident_store,
             type_scope.identStoreMut(),
             self.allocator,
         );
@@ -3111,13 +3111,6 @@ pub const Lowerer = struct {
         });
     }
 
-    fn makeRuntimeErrorExprAt(
-        self: *Lowerer,
-        ty: type_mod.TypeId,
-    ) std.mem.Allocator.Error!ast.ExprId {
-        return self.makeRuntimeErrorExpr(ty);
-    }
-
     fn copySourceStringLiteral(
         self: *Lowerer,
         module_idx: u32,
@@ -4215,7 +4208,10 @@ pub const Lowerer = struct {
             ),
             .record_destructure => |record| blk: {
                 if (self.ctx.types.getType(scrutinee_ty) != .record) {
-                    return self.makeRuntimeErrorExprAt(self.program.store.getExpr(then_expr).ty);
+                    debugPanic(
+                        "monotype pattern-guard invariant violated: record destructure scrutinee is not a record",
+                        .{},
+                    );
                 }
                 var current = then_expr;
                 const destructs = typed_cir_module.sliceRecordDestructs(record.destructs);
@@ -4248,7 +4244,10 @@ pub const Lowerer = struct {
             },
             .tuple => |tuple| blk: {
                 if (self.ctx.types.getType(scrutinee_ty) != .tuple) {
-                    return self.makeRuntimeErrorExprAt(self.program.store.getExpr(then_expr).ty);
+                    debugPanic(
+                        "monotype pattern-guard invariant violated: tuple destructure scrutinee is not a tuple",
+                        .{},
+                    );
                 }
                 var current = then_expr;
                 const elem_patterns = typed_cir_module.slicePatterns(tuple.patterns);
@@ -5239,7 +5238,7 @@ pub const Lowerer = struct {
 
         group.* = .{
             .module_idx = module_idx,
-            .declaration_env = SnapshotBindingEnv.init(self.allocator),
+            .declaration_env = DeclarationBindingEnv.init(self.allocator),
             .insertion_index = lowered.items.len,
             .sources = sources,
             .pending = .empty,
@@ -5269,7 +5268,7 @@ pub const Lowerer = struct {
             });
         }
 
-        group.declaration_env = try self.snapshotBindingEnv(type_scope, env.*);
+        group.declaration_env = try self.captureDeclarationBindingEnv(type_scope, env.*);
         return .{
             .group_index = group_index,
             .group_end = end_idx,
@@ -8570,7 +8569,10 @@ pub const Lowerer = struct {
                             } },
                         })
                     else
-                        try self.makeRuntimeErrorExprAt(field_ty);
+                        debugPanic(
+                            "monotype structural binding invariant violated: record pattern source is not a record",
+                            .{},
+                        );
                     try decls.append(self.allocator, .{
                         .bind = field_bind,
                         .body = field_expr,
@@ -8605,7 +8607,10 @@ pub const Lowerer = struct {
                         .body = if (source_is_tuple)
                             try self.makeTupleAccessExpr(source_expr.?, elem_ty, i)
                         else
-                            try self.makeRuntimeErrorExprAt(elem_ty),
+                            debugPanic(
+                                "monotype structural binding invariant violated: tuple pattern source is not a tuple",
+                                .{},
+                            ),
                     });
                     if (!self.patternCanCollectStructuralBindings(module_idx, elem_pattern_idx)) continue;
                     try self.collectStructuralBindingDeclsWithSolvedVar(
@@ -9076,7 +9081,7 @@ pub const Lowerer = struct {
         return switch (self.ctx.types.getType(list_ty)) {
             .list => |elem_ty| elem_ty,
             else => debugPanic(
-                "monotype pattern invariant violated: expected frozen list source type, found non-list type {d}",
+                "monotype pattern invariant violated: expected list source type, found non-list type {d}",
                 .{@intFromEnum(list_ty)},
             ),
         };
@@ -9089,7 +9094,7 @@ pub const Lowerer = struct {
         return switch (self.ctx.types.getType(tuple_ty)) {
             .tuple => |elems| elems,
             else => debugPanic(
-                "monotype pattern invariant violated: expected frozen tuple source type, found non-tuple type {d}",
+                "monotype pattern invariant violated: expected tuple source type, found non-tuple type {d}",
                 .{@intFromEnum(tuple_ty)},
             ),
         };
@@ -9111,12 +9116,12 @@ pub const Lowerer = struct {
                     }
                 }
                 debugPanic(
-                    "monotype pattern invariant violated: frozen tag union source type missing payload tag",
+                    "monotype pattern invariant violated: tag union source type missing payload tag",
                     .{},
                 );
             },
             else => debugPanic(
-                "monotype pattern invariant violated: expected frozen tag union source type, found non-tag-union type {d}",
+                "monotype pattern invariant violated: expected tag union source type, found non-tag-union type {d}",
                 .{@intFromEnum(union_ty)},
             ),
         };
@@ -9138,12 +9143,12 @@ pub const Lowerer = struct {
                     }
                 }
                 debugPanic(
-                    "monotype invariant violated: frozen tag union type missing tag discriminant",
+                    "monotype invariant violated: tag union type missing tag discriminant",
                     .{},
                 );
             },
             else => debugPanic(
-                "monotype invariant violated: expected frozen tag union type for discriminant, found non-tag-union type {d}",
+                "monotype invariant violated: expected tag union type for discriminant, found non-tag-union type {d}",
                 .{@intFromEnum(union_ty)},
             ),
         };
@@ -9160,14 +9165,14 @@ pub const Lowerer = struct {
                 self.assertSortedRecordFields(fields);
                 if (field_index >= fields.len) {
                     debugPanic(
-                        "monotype pattern invariant violated: frozen record source type missing field index {d}",
+                        "monotype pattern invariant violated: record source type missing field index {d}",
                         .{field_index},
                     );
                 }
                 break :blk fields[field_index].ty;
             },
             else => debugPanic(
-                "monotype pattern invariant violated: expected frozen record source type, found non-record type {d}",
+                "monotype pattern invariant violated: expected record source type, found non-record type {d}",
                 .{@intFromEnum(record_ty)},
             ),
         };
@@ -9205,8 +9210,8 @@ pub const Lowerer = struct {
                 self.ctx.idents.getText(field.name),
             )) {
                 .lt => prev = field,
-                .eq => debugPanic("monotype invariant violated: duplicate frozen record field reached field lookup", .{}),
-                .gt => debugPanic("monotype invariant violated: frozen record fields were not pre-sorted", .{}),
+                .eq => debugPanic("monotype invariant violated: duplicate record field reached field lookup", .{}),
+                .gt => debugPanic("monotype invariant violated: record fields were not pre-sorted", .{}),
             }
         }
     }
@@ -9548,15 +9553,15 @@ pub const Lowerer = struct {
         var type_scope: TypeScope = undefined;
         try type_scope.initAll(self.allocator, self.ctx.typedCirModule(group.module_idx));
         defer type_scope.deinit();
-        var declaration_env = try self.restoreBindingEnvFromSnapshots(&type_scope, group.declaration_env);
+        var declaration_env = try self.restoreDeclarationBindingEnv(&type_scope, group.declaration_env);
         defer declaration_env.deinit();
         const scoped_expected_var = if (expected_var) |var_| blk: {
-            const frozen = try self.snapshotCheckerVarFromScope(caller_scope, var_);
+            const image = try self.captureSolvedVarImageFromScope(caller_scope, var_);
             defer {
-                var owned = frozen;
+                var owned = image;
                 owned.deinit(self.allocator);
             }
-            break :blk try self.restoreCheckerSnapshot(&type_scope, frozen);
+            break :blk try self.restoreSolvedVarImage(&type_scope, image);
         } else null;
         const letfn = try self.lowerLambdaLikeDefWithEnv(
             group.module_idx,
@@ -10253,12 +10258,12 @@ pub const Lowerer = struct {
         return out;
     }
 
-    fn snapshotBindingEnv(
+    fn captureDeclarationBindingEnv(
         self: *Lowerer,
         type_scope: *TypeScope,
         env: BindingEnv,
-    ) std.mem.Allocator.Error!SnapshotBindingEnv {
-        var out = SnapshotBindingEnv.init(self.allocator);
+    ) std.mem.Allocator.Error!DeclarationBindingEnv {
+        var out = DeclarationBindingEnv.init(self.allocator);
         errdefer {
             var iter = out.valueIterator();
             while (iter.next()) |value| {
@@ -10269,21 +10274,21 @@ pub const Lowerer = struct {
 
         var iter = env.iterator();
         while (iter.next()) |entry| {
-            const frozen_typed = if (entry.value_ptr.typed) |typed| blk: {
-                break :blk SnapshotTypedBinding{
+            const declaration_typed = if (entry.value_ptr.typed) |typed| blk: {
+                break :blk DeclarationTypedBinding{
                     .symbol = typed.symbol,
-                    .checker_var = if (typed.solved_var) |var_|
-                        try self.snapshotCheckerVarFromScope(type_scope, var_)
+                    .solved_var_image = if (typed.solved_var) |var_|
+                        try self.captureSolvedVarImageFromScope(type_scope, var_)
                     else
                         null,
                 };
             } else null;
 
             try out.put(entry.key_ptr.*, .{
-                .typed = frozen_typed,
+                .typed = declaration_typed,
                 .local_fn_source = entry.value_ptr.local_fn_source,
-                .local_fn_seed_var = if (entry.value_ptr.local_fn_seed_var) |var_|
-                    try self.snapshotCheckerVarFromScope(type_scope, var_)
+                .local_fn_seed_image = if (entry.value_ptr.local_fn_seed_var) |var_|
+                    try self.captureSolvedVarImageFromScope(type_scope, var_)
                 else
                     null,
             });
@@ -10291,21 +10296,21 @@ pub const Lowerer = struct {
         return out;
     }
 
-    fn restoreBindingEnvFromSnapshots(
+    fn restoreDeclarationBindingEnv(
         self: *Lowerer,
         type_scope: *TypeScope,
-        frozen_env: SnapshotBindingEnv,
+        declaration_env: DeclarationBindingEnv,
     ) std.mem.Allocator.Error!BindingEnv {
         var out = BindingEnv.init(self.allocator);
         errdefer out.deinit();
 
-        var iter = frozen_env.iterator();
+        var iter = declaration_env.iterator();
         while (iter.next()) |entry| {
-            const typed = if (entry.value_ptr.typed) |frozen_typed| blk: {
+            const typed = if (entry.value_ptr.typed) |declaration_typed| blk: {
                 break :blk TypedBinding{
-                    .symbol = frozen_typed.symbol,
-                    .solved_var = if (frozen_typed.checker_var) |frozen_var|
-                        try self.restoreCheckerSnapshot(type_scope, frozen_var)
+                    .symbol = declaration_typed.symbol,
+                    .solved_var = if (declaration_typed.solved_var_image) |image|
+                        try self.restoreSolvedVarImage(type_scope, image)
                     else
                         null,
                 };
@@ -10314,8 +10319,8 @@ pub const Lowerer = struct {
             try out.put(entry.key_ptr.*, .{
                 .typed = typed,
                 .local_fn_source = entry.value_ptr.local_fn_source,
-                .local_fn_seed_var = if (entry.value_ptr.local_fn_seed_var) |frozen_var|
-                    try self.restoreCheckerSnapshot(type_scope, frozen_var)
+                .local_fn_seed_var = if (entry.value_ptr.local_fn_seed_image) |image|
+                    try self.restoreSolvedVarImage(type_scope, image)
                 else
                     null,
             });

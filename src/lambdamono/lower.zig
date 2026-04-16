@@ -1133,13 +1133,13 @@ const Lowerer = struct {
         mono_cache: *lower_type.MonoCache,
         lambdas: []const solved.Type.Lambda,
     ) std.mem.Allocator.Error!type_mod.Content {
-        const frozen_lambdas = try self.types.allocator.dupe(solved.Type.Lambda, lambdas);
-        defer self.types.allocator.free(frozen_lambdas);
+        const copied_lambdas = try self.types.allocator.dupe(solved.Type.Lambda, lambdas);
+        defer self.types.allocator.free(copied_lambdas);
 
-        const out = try self.types.allocator.alloc(type_mod.Tag, frozen_lambdas.len);
+        const out = try self.types.allocator.alloc(type_mod.Tag, copied_lambdas.len);
         defer self.types.allocator.free(out);
 
-        for (frozen_lambdas, 0..) |lambda, i| {
+        for (copied_lambdas, 0..) |lambda, i| {
             const captures = self.input.types.sliceCaptures(lambda.captures);
             if (captures.len == 0) {
                 out[i] = .{

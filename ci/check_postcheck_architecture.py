@@ -33,6 +33,9 @@ RULES = (
     ("workspace-merge-flex", re.compile(r"\bmergeSourceFlexLikeIntoWorkspaceVar\b")),
     ("workspace-compute-call-result", re.compile(r"\bcomputeAppliedFunctionResultVar\b")),
     ("canonical-source-lookup", re.compile(r"\blookupFnByCanonicalSource\b")),
+    ("nullable-recorded-dispatch-lowering", re.compile(r"\)\s*std\.mem\.Allocator\.Error!\?LoweredCall\s*\{")),
+    ("nullable-attached-method-target", re.compile(r"\)\s*std\.mem\.Allocator\.Error!\?ResolvedTarget\s*\{")),
+    ("runtime-error-wrapper", re.compile(r"\bmakeRuntimeErrorExprAt\b")),
 )
 
 

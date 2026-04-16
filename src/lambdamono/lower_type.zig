@@ -280,13 +280,13 @@ fn lowerLambdaSet(
     lambdas: []const solved.Type.Lambda,
     symbols: *const symbol_mod.Store,
 ) std.mem.Allocator.Error!mono.Content {
-    const frozen_lambdas = try mono_types.allocator.dupe(solved.Type.Lambda, lambdas);
-    defer mono_types.allocator.free(frozen_lambdas);
+    const copied_lambdas = try mono_types.allocator.dupe(solved.Type.Lambda, lambdas);
+    defer mono_types.allocator.free(copied_lambdas);
 
-    const out = try mono_types.allocator.alloc(mono.Tag, frozen_lambdas.len);
+    const out = try mono_types.allocator.alloc(mono.Tag, copied_lambdas.len);
     defer mono_types.allocator.free(out);
 
-    for (frozen_lambdas, 0..) |lambda, i| {
+    for (copied_lambdas, 0..) |lambda, i| {
         const captures = try mono_types.allocator.dupe(solved.Type.Capture, types.sliceCaptures(lambda.captures));
         defer mono_types.allocator.free(captures);
         if (captures.len == 0) {

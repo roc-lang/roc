@@ -12,7 +12,7 @@ pub const SourceFn = struct {
     def_idx: can.CIR.Def.Idx,
 };
 
-pub const CheckerSnapshot = struct {
+pub const SolvedVarImage = struct {
     type_store: types.Store,
     ident_store: base.Ident.Store,
     root_var: types.Var,
@@ -27,7 +27,7 @@ pub const Pending = struct {
     source_symbol: symbol_mod.Symbol,
     source: SourceFn,
     ty: type_mod.TypeId,
-    expected_checker_snapshot: CheckerSnapshot,
+    expected_var_image: SolvedVarImage,
     specialized_symbol: symbol_mod.Symbol,
     emitted: bool = false,
 };
@@ -52,7 +52,7 @@ pub const Queue = struct {
 
     pub fn deinit(self: *Queue) void {
         for (self.pending.items) |*item| {
-            item.expected_checker_snapshot.deinit(self.allocator);
+            item.expected_var_image.deinit(self.allocator);
         }
         self.pending.deinit(self.allocator);
         self.by_key.deinit();
@@ -65,7 +65,7 @@ pub const Queue = struct {
         source_symbol: symbol_mod.Symbol,
         source: SourceFn,
         ty: type_mod.TypeId,
-        expected_checker_snapshot: CheckerSnapshot,
+        expected_var_image: SolvedVarImage,
     ) std.mem.Allocator.Error!symbol_mod.Symbol {
         const key: Key = .{
             .source_symbol = source_symbol,
@@ -76,8 +76,8 @@ pub const Queue = struct {
         }
 
         if (self.by_key.get(key)) |idx| {
-            self.pending.items[idx].expected_checker_snapshot.deinit(self.allocator);
-            self.pending.items[idx].expected_checker_snapshot = expected_checker_snapshot;
+            self.pending.items[idx].expected_var_image.deinit(self.allocator);
+            self.pending.items[idx].expected_var_image = expected_var_image;
             return self.pending.items[idx].specialized_symbol;
         }
 
@@ -91,7 +91,7 @@ pub const Queue = struct {
             .source_symbol = source_symbol,
             .source = source,
             .ty = ty,
-            .expected_checker_snapshot = expected_checker_snapshot,
+            .expected_var_image = expected_var_image,
             .specialized_symbol = specialized_symbol,
         });
         try self.by_key.put(key, self.pending.items.len - 1);
