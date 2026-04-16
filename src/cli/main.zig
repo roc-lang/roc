@@ -1841,24 +1841,40 @@ fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: [
     var cli_args_list = echo_platform.buildCliArgs(args.app_args, &roc_ops);
     var result_buf: [16]u8 align(16) = undefined;
 
-    if (args.opt.toBackend() != .interpreter) {
-        std.debug.print("Execution error: backend unavailable\n", .{});
-        std.process.exit(1);
+    switch (args.opt.toBackend()) {
+        .interpreter => compile.runner.runViaInterpreter(
+            ctx.gpa,
+            @constCast(entry.platform_env),
+            build_env.builtin_modules,
+            resolved.all_module_envs,
+            entry.app_module_env,
+            entry.entrypoint_expr,
+            &roc_ops,
+            @ptrCast(&cli_args_list),
+            @ptrCast(&result_buf),
+        ) catch |err| {
+            std.debug.print("Execution error: {}\n", .{err});
+            std.process.exit(1);
+        },
+        .dev => compile.runner.runViaDev(
+            ctx.gpa,
+            @constCast(entry.platform_env),
+            build_env.builtin_modules,
+            resolved.all_module_envs,
+            entry.app_module_env,
+            entry.entrypoint_expr,
+            &roc_ops,
+            @ptrCast(&cli_args_list),
+            @ptrCast(&result_buf),
+        ) catch |err| {
+            std.debug.print("Execution error: {}\n", .{err});
+            std.process.exit(1);
+        },
+        else => {
+            std.debug.print("Execution error: backend unavailable\n", .{});
+            std.process.exit(1);
+        },
     }
-    compile.runner.runViaInterpreter(
-        ctx.gpa,
-        @constCast(entry.platform_env),
-        build_env.builtin_modules,
-        resolved.all_module_envs,
-        entry.app_module_env,
-        entry.entrypoint_expr,
-        &roc_ops,
-        @ptrCast(&cli_args_list),
-        @ptrCast(&result_buf),
-    ) catch |err| {
-        std.debug.print("Execution error: {}\n", .{err});
-        std.process.exit(1);
-    };
 
     // Platform returns I8; bit-identical to u8 for std.process.exit
     const exit_code = result_buf[0];

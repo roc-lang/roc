@@ -298,7 +298,7 @@ const Lowerer = struct {
         defer mono_cache.deinit();
 
         for (self.entrypoints) |entry_symbol| {
-            const entry = specializations.lookupFn(self.fenv, &self.input.symbols, entry_symbol) orelse continue;
+            const entry = specializations.lookupFnExact(self.fenv, entry_symbol) orelse continue;
             switch (lower_type.lambdaRepr(&self.input.types, entry.fn_ty)) {
                 .erased => debugPanic("lambdamono.lower entrypoint specialization expected lambda set"),
                 .lset => {
@@ -383,7 +383,7 @@ const Lowerer = struct {
         for (self.entrypoints, 0..) |entry_symbol, entry_idx| {
             self.entrypoint_wrappers[entry_idx] = entry_symbol;
 
-            const entry_fn_ty = if (specializations.lookupFn(self.fenv, &self.input.symbols, entry_symbol)) |entry|
+            const entry_fn_ty = if (specializations.lookupFnExact(self.fenv, entry_symbol)) |entry|
                 entry.fn_ty
             else if (self.top_level_values.get(entry_symbol)) |source|
                 switch (source) {
@@ -416,7 +416,7 @@ const Lowerer = struct {
                 debugPanic("lambdamono.lower entrypoint wrapper arity mismatch");
             }
 
-            const needs_wrapper = if (specializations.lookupFn(self.fenv, &self.input.symbols, entry_symbol)) |_|
+            const needs_wrapper = if (specializations.lookupFnExact(self.fenv, entry_symbol)) |_|
                 arg_vars.items.len > 1
             else
                 true;
@@ -460,7 +460,7 @@ const Lowerer = struct {
             const args_span = try self.output.addTypedSymbolSpan(wrapper_args);
             var current_expr: ast.ExprId = undefined;
 
-            if (specializations.lookupFn(self.fenv, &self.input.symbols, entry_symbol)) |_| {
+            if (specializations.lookupFnExact(self.fenv, entry_symbol)) |_| {
                 var first_arg_buf = [_]ast.ExprId{arg_exprs[0]};
                 current_expr = try self.output.addExpr(.{
                     .ty = ret_exec_tys[0],
@@ -798,7 +798,7 @@ const Lowerer = struct {
 
     fn boxBoundaryBuiltinOp(self: *const Lowerer, requested_name: Symbol) ?base.LowLevel {
         if (self.boxBoundaryBuiltinOpByName(requested_name)) |op| return op;
-        const entry = specializations.lookupFn(self.fenv, &self.input.symbols, requested_name) orelse return null;
+        const entry = specializations.lookupFnExact(self.fenv, requested_name) orelse return null;
         if (self.input.store.sliceTypedSymbolSpan(entry.fn_def.captures).len != 0) return null;
         const body = self.input.store.getExpr(entry.fn_def.body);
         return switch (body.data) {
@@ -2359,12 +2359,12 @@ const Lowerer = struct {
         );
         return .{
             .proc = try specializations.specializeFnLset(
-            &self.queue,
-            self.fenv,
-            &self.input.symbols,
-            symbol,
-            fn_ty,
-            sig,
+                &self.queue,
+                self.fenv,
+                &self.input.symbols,
+                symbol,
+                fn_ty,
+                sig,
             ),
             .ret_ty = ret_ty,
         };
@@ -3648,7 +3648,7 @@ const Lowerer = struct {
             };
         }
 
-        if (specializations.lookupFn(self.fenv, &self.input.symbols, symbol)) |fn_entry| {
+        if (specializations.lookupFnExact(self.fenv, symbol)) |fn_entry| {
             return switch (lower_type.lambdaRepr(&self.input.types, instantiated_ty)) {
                 .lset => |lambdas| blk: {
                     const lambda_discriminant = self.requireLambdaDiscriminant(lambdas, symbol);
@@ -4050,6 +4050,13 @@ const Lowerer = struct {
         return null;
     }
 
+    fn directCallableSymbol(self: *const Lowerer, expr: solved.Ast.Expr) ?Symbol {
+        if (expr.data != .var_) return null;
+        const symbol = expr.data.var_;
+        if (symbol.isNone()) return null;
+        return if (specializations.lookupFnExact(self.fenv, symbol) != null) symbol else null;
+    }
+
     fn specializeCallExpr(
         self: *Lowerer,
         inst: *InstScope,
@@ -4083,6 +4090,7 @@ const Lowerer = struct {
         else
             try self.lowerExecutableTypeFromSolved(mono_cache, call_ret_source_ty);
         const lowered_func_ty = self.output.getExpr(lowered_func).ty;
+        const direct_func_symbol = self.directCallableSymbol(func_source);
         if (box_boundary) |op| {
             return .{
                 .ty = call_result_ty,
@@ -4130,10 +4138,14 @@ const Lowerer = struct {
                 var expected_arg_ty: ?type_mod.TypeId = null;
 
                 for (lambda_members, 0..) |lambda_member, i| {
+                    const specialization_symbol = if (lambda_members.len == 1)
+                        direct_func_symbol orelse lambda_member.symbol
+                    else
+                        lambda_member.symbol;
                     const sig = try self.buildLsetSpecializationSig(
                         mono_cache,
                         lambda_member.capture_ty,
-                        lambda_member.symbol,
+                        specialization_symbol,
                         func_ty,
                         call_arg_ty,
                         ret_override,
@@ -4209,7 +4221,7 @@ const Lowerer = struct {
                         &self.queue,
                         self.fenv,
                         &self.input.symbols,
-                        lambda_member.symbol,
+                        specialization_symbol,
                         func_ty,
                         sig,
                     );
@@ -4781,7 +4793,7 @@ const Lowerer = struct {
         const merged = switch (left_node) {
             .content => |left_content| switch (right_node) {
                 .content => |right_content| try self.unifyContent(left_content, right_content, visited),
-                else => debugPanic("lambdamono.lower.unify incompatible types"),
+                else => debugPanicFmt("lambdamono.lower.unify incompatible nodes: left={s} right={s}", .{ @tagName(left_node), @tagName(right_node) }),
             },
             else => debugPanic("lambdamono.lower.unify incompatible types"),
         };
@@ -4806,7 +4818,7 @@ const Lowerer = struct {
                     }
                     return .{ .primitive = prim };
                 },
-                else => debugPanic("lambdamono.lower.unify incompatible types"),
+                else => debugPanicFmt("lambdamono.lower.unify incompatible types: left={s} right={s}", .{ @tagName(left), @tagName(right) }),
             },
             .func => |func| switch (right) {
                 .func => |other| {
@@ -4819,21 +4831,21 @@ const Lowerer = struct {
                         .ret = func.ret,
                     } };
                 },
-                else => debugPanic("lambdamono.lower.unify incompatible types"),
+                else => debugPanicFmt("lambdamono.lower.unify incompatible types: left={s} right={s}", .{ @tagName(left), @tagName(right) }),
             },
             .list => |elem| switch (right) {
                 .list => |other| {
                     try self.unifyRec(elem, other, visited);
                     return .{ .list = elem };
                 },
-                else => debugPanic("lambdamono.lower.unify incompatible types"),
+                else => debugPanicFmt("lambdamono.lower.unify incompatible types: left={s} right={s}", .{ @tagName(left), @tagName(right) }),
             },
             .box => |elem| switch (right) {
                 .box => |other| {
                     try self.unifyRec(elem, other, visited);
                     return .{ .box = elem };
                 },
-                else => debugPanic("lambdamono.lower.unify incompatible types"),
+                else => debugPanicFmt("lambdamono.lower.unify incompatible types: left={s} right={s}", .{ @tagName(left), @tagName(right) }),
             },
             .tuple => |tuple| switch (right) {
                 .tuple => |other| {
@@ -4845,7 +4857,7 @@ const Lowerer = struct {
                     }
                     return .{ .tuple = tuple };
                 },
-                else => debugPanic("lambdamono.lower.unify incompatible types"),
+                else => debugPanicFmt("lambdamono.lower.unify incompatible types: left={s} right={s}", .{ @tagName(left), @tagName(right) }),
             },
             .record => |record| switch (right) {
                 .record => |other| {
@@ -4853,7 +4865,7 @@ const Lowerer = struct {
                         .fields = try self.unifyRecordFields(record.fields, other.fields, visited),
                     } };
                 },
-                else => debugPanic("lambdamono.lower.unify incompatible types"),
+                else => debugPanicFmt("lambdamono.lower.unify incompatible types: left={s} right={s}", .{ @tagName(left), @tagName(right) }),
             },
             .tag_union => |tag_union| switch (right) {
                 .tag_union => |other| {
@@ -4861,13 +4873,13 @@ const Lowerer = struct {
                         .tags = try self.unifyTags(tag_union.tags, other.tags, visited),
                     } };
                 },
-                else => debugPanic("lambdamono.lower.unify incompatible types"),
+                else => debugPanicFmt("lambdamono.lower.unify incompatible types: left={s} right={s}", .{ @tagName(left), @tagName(right) }),
             },
             .lambda_set => |lambda_set| switch (right) {
                 .lambda_set => |other| {
                     return .{ .lambda_set = try self.unifyLambdaSet(lambda_set, other, visited) };
                 },
-                else => debugPanic("lambdamono.lower.unify incompatible types"),
+                else => debugPanicFmt("lambdamono.lower.unify incompatible types: left={s} right={s}", .{ @tagName(left), @tagName(right) }),
             },
         }
     }

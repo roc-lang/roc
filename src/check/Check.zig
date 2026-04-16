@@ -118,6 +118,8 @@ import_cache: ImportCache,
 bool_var: Var,
 /// Copied Str type from Builtin module (for use in string literals, etc.)
 str_var: Var,
+/// Builtin type vars are initialized during Check.init and may be reused by later entrypoints.
+builtin_types_copied: bool,
 /// Map representation of Ident -> Var, used in checking static dispatch constraints
 ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
 /// Map representation all top level patterns, and if we've processed them yet
@@ -288,7 +290,7 @@ fn initAssumePrepared(
     );
     errdefer import_mapping.deinit();
 
-    return .{
+    const self: Self = .{
         .gpa = gpa,
         .types = types,
         .cir = cir,
@@ -320,8 +322,9 @@ fn initAssumePrepared(
         .scratch_deferred_static_dispatch_constraints = try base.Scratch(DeferredConstraintCheck).init(gpa),
         .constraint_check_stack = try std.ArrayList(Var).initCapacity(gpa, 0),
         .import_cache = ImportCache{},
-        .bool_var = undefined, // Will be initialized in copyBuiltinTypes()
-        .str_var = undefined, // Will be initialized in copyBuiltinTypes()
+        .bool_var = undefined,
+        .str_var = undefined,
+        .builtin_types_copied = false,
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
         .enclosing_func_name = null,
@@ -334,6 +337,8 @@ fn initAssumePrepared(
         .erroneous_value_patterns = .empty,
         .has_can_diagnostics = if (cir.store.scratch) |scratch| scratch.diagnostics.top() > 0 else false,
     };
+
+    return self;
 }
 
 /// Call this after Check has been stored at its final location to set up the import_mapping pointer.
@@ -1326,6 +1331,8 @@ fn copyBuiltinTypes(self: *Self) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    if (self.builtin_types_copied) return;
+
     const bool_stmt_idx = self.builtin_ctx.bool_stmt;
     const str_stmt_idx = self.builtin_ctx.str_stmt;
 
@@ -1345,6 +1352,7 @@ fn copyBuiltinTypes(self: *Self) !void {
     }
 
     // Try type is accessed via external references, no need to copy it here
+    self.builtin_types_copied = true;
 }
 
 /// Check the types for all defs in a file.
@@ -1625,6 +1633,7 @@ pub fn checkPlatformRequirements(
     // This is necessary because checkPlatformRequirements may be called with a
     // fresh Check instance that hasn't had checkFile() called on it.
     try ensureTypeStoreIsFilled(self);
+    try self.copyBuiltinTypes();
 
     // Create a solver env for type operations
     var env = try self.env_pool.acquire();
@@ -3734,11 +3743,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
                     // Create flex var with from_numeral constraint
                     const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
-                    _ = try self.unify(expr_var, flex_var, env);
-
                     const resolved = self.types.resolveVar(flex_var);
                     const constraint_range = resolved.desc.content.flex.constraints;
                     const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
+                    _ = try self.unify(expr_var, flex_var, env);
 
                     // Record this literal for deferred validation during comptime eval
                     // Use cir.gpa since deferred_numeric_literals belongs to the ModuleEnv
@@ -3776,11 +3784,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     expr_region,
                 );
                 const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
-                _ = try self.unify(expr_var, flex_var, env);
-
                 const resolved = self.types.resolveVar(flex_var);
                 const constraint_range = resolved.desc.content.flex.constraints;
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
+                _ = try self.unify(expr_var, flex_var, env);
 
                 _ = try self.cir.deferred_numeric_literals.append(self.cir.gpa, .{
                     .expr_idx = expr_idx,
@@ -3802,11 +3809,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     expr_region,
                 );
                 const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
-                _ = try self.unify(expr_var, flex_var, env);
-
                 const resolved = self.types.resolveVar(flex_var);
                 const constraint_range = resolved.desc.content.flex.constraints;
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
+                _ = try self.unify(expr_var, flex_var, env);
 
                 _ = try self.cir.deferred_numeric_literals.append(self.cir.gpa, .{
                     .expr_idx = expr_idx,
@@ -3828,11 +3834,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     expr_region,
                 );
                 const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
-                _ = try self.unify(expr_var, flex_var, env);
-
                 const resolved = self.types.resolveVar(flex_var);
                 const constraint_range = resolved.desc.content.flex.constraints;
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
+                _ = try self.unify(expr_var, flex_var, env);
 
                 _ = try self.cir.deferred_numeric_literals.append(self.cir.gpa, .{
                     .expr_idx = expr_idx,
@@ -3856,11 +3861,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     expr_region,
                 );
                 const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
-                _ = try self.unify(expr_var, flex_var, env);
-
                 const resolved = self.types.resolveVar(flex_var);
                 const constraint_range = resolved.desc.content.flex.constraints;
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
+                _ = try self.unify(expr_var, flex_var, env);
 
                 _ = try self.cir.deferred_numeric_literals.append(self.cir.gpa, .{
                     .expr_idx = expr_idx,

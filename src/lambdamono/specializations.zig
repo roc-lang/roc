@@ -135,12 +135,22 @@ pub fn buildFEnv(allocator: std.mem.Allocator, input: *const solved.Lower.Result
     return try out.toOwnedSlice(allocator);
 }
 
-pub fn lookupFn(fenv: []const FEnvEntry, symbols: *const symbol_mod.Store, name: Symbol) ?FEnvEntry {
+pub fn lookupFnExact(fenv: []const FEnvEntry, name: Symbol) ?FEnvEntry {
     for (fenv) |entry| {
         if (entry.name == name) return entry;
-        if (canonicalSourceSymbol(symbols, entry.name) == canonicalSourceSymbol(symbols, name)) return entry;
     }
     return null;
+}
+
+pub fn lookupFnByCanonicalSource(fenv: []const FEnvEntry, symbols: *const symbol_mod.Store, source_name: Symbol) ?FEnvEntry {
+    const canonical_name = canonicalSourceSymbol(symbols, source_name);
+    var match: ?FEnvEntry = null;
+    for (fenv) |entry| {
+        if (canonicalSourceSymbol(symbols, entry.name) != canonical_name) continue;
+        if (match != null) debugPanic("lambdamono.specializations.lookupFnByCanonicalSource ambiguous canonical source");
+        match = entry;
+    }
+    return match;
 }
 
 pub fn specializeFnLset(
@@ -151,7 +161,8 @@ pub fn specializeFnLset(
     requested_ty: TypeVarId,
     sig: SigKey,
 ) std.mem.Allocator.Error!Symbol {
-    const entry = lookupFn(fenv, symbols, requested_name) orelse debugPanic("lambdamono.specializations.specializeFnLset missing function");
+    const entry = lookupFnByCanonicalSource(fenv, symbols, requested_name) orelse
+        debugPanic("lambdamono.specializations.specializeFnLset missing function");
     if (queue.by_key.get(sig)) |idx| {
         return queue.items.items[idx].specialized_symbol;
     }
@@ -182,7 +193,8 @@ pub fn specializeFnErased(
     requested_ty: TypeVarId,
     sig: SigKey,
 ) std.mem.Allocator.Error!Symbol {
-    const entry = lookupFn(fenv, symbols, requested_name) orelse debugPanic("lambdamono.specializations.specializeFnErased missing function");
+    const entry = lookupFnByCanonicalSource(fenv, symbols, requested_name) orelse
+        debugPanic("lambdamono.specializations.specializeFnErased missing function");
     if (queue.by_key.get(sig)) |idx| {
         return queue.items.items[idx].specialized_symbol;
     }

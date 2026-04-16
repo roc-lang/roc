@@ -1253,8 +1253,55 @@ const ProcPass = struct {
 
         setDifferenceInPlace(&dead_owners, succ_live_owners);
         setDifferenceInPlace(&dead_owners, passed_owners);
+        try self.excludeSkippedEdgeOwnerDefs(from_stmt, original_successor, &dead_owners);
 
         return try self.emitOwnerDrops(dead_owners, successor_rewritten);
+    }
+
+    fn excludeSkippedEdgeOwnerDefs(
+        self: *ProcPass,
+        from_stmt: CFStmtId,
+        original_successor: CFStmtId,
+        dead_owners: *std.DynamicBitSetUnmanaged,
+    ) Allocator.Error!void {
+        var skipped_stmt_ids = std.ArrayListUnmanaged(CFStmtId).empty;
+        defer skipped_stmt_ids.deinit(self.allocator);
+
+        switch (self.store.getCFStmt(from_stmt)) {
+            .for_list => |for_stmt| {
+                if (for_stmt.next != original_successor) return;
+                try appendReachableStmtIds(self.allocator, self.store, &skipped_stmt_ids, for_stmt.body);
+            },
+            .switch_stmt => |sw| {
+                if (sw.default_branch == original_successor) {
+                    for (self.store.getCFSwitchBranches(sw.branches)) |branch| {
+                        try appendReachableStmtIds(self.allocator, self.store, &skipped_stmt_ids, branch.body);
+                    }
+                } else {
+                    var matched_branch = false;
+                    for (self.store.getCFSwitchBranches(sw.branches)) |branch| {
+                        if (branch.body == original_successor) {
+                            matched_branch = true;
+                            continue;
+                        }
+                        try appendReachableStmtIds(self.allocator, self.store, &skipped_stmt_ids, branch.body);
+                    }
+                    if (!matched_branch) return;
+                    try appendReachableStmtIds(self.allocator, self.store, &skipped_stmt_ids, sw.default_branch);
+                }
+            },
+            else => return,
+        }
+
+        var local_idx: usize = 0;
+        while (local_idx < dead_owners.bit_length) : (local_idx += 1) {
+            if (!dead_owners.isSet(local_idx)) continue;
+            const local: LocalId = @enumFromInt(@as(u32, @intCast(local_idx)));
+            const producer = findProducerStmt(self.store, local) orelse continue;
+            if (containsStmtId(skipped_stmt_ids.items, producer)) {
+                dead_owners.unset(local_idx);
+            }
+        }
     }
 
     fn prependTerminalDrops(self: *ProcPass, stmt_id: CFStmtId, terminal_rewritten: CFStmtId) Allocator.Error!CFStmtId {
@@ -1602,9 +1649,18 @@ fn collectReachableStmtIds(
     store: *const LirStore,
     body: CFStmtId,
 ) Allocator.Error![]CFStmtId {
-    var ordered = std.ArrayListUnmanaged(CFStmtId).empty;
-    defer ordered.deinit(allocator);
+    var out = std.ArrayListUnmanaged(CFStmtId).empty;
+    errdefer out.deinit(allocator);
+    try appendReachableStmtIds(allocator, store, &out, body);
+    return out.toOwnedSlice(allocator);
+}
 
+fn appendReachableStmtIds(
+    allocator: Allocator,
+    store: *const LirStore,
+    out: *std.ArrayListUnmanaged(CFStmtId),
+    body: CFStmtId,
+) Allocator.Error!void {
     var stack = std.ArrayListUnmanaged(CFStmtId).empty;
     defer stack.deinit(allocator);
 
@@ -1617,7 +1673,7 @@ fn collectReachableStmtIds(
         const gop = try visited.getOrPut(@intFromEnum(stmt_id));
         if (gop.found_existing) continue;
 
-        try ordered.append(allocator, stmt_id);
+        try out.append(allocator, stmt_id);
         switch (store.getCFStmt(stmt_id)) {
             .assign_symbol => |assign| try stack.append(allocator, assign.next),
             .assign_ref => |assign| try stack.append(allocator, assign.next),
@@ -1655,8 +1711,34 @@ fn collectReachableStmtIds(
             .scope_exit, .jump, .ret, .runtime_error, .crash, .loop_continue => {},
         }
     }
+}
 
-    return ordered.toOwnedSlice(allocator);
+fn findProducerStmt(store: *const LirStore, target: LocalId) ?CFStmtId {
+    for (store.cf_stmts.items, 0..) |stmt, idx| {
+        switch (stmt) {
+            .assign_symbol => |assign| if (assign.target == target) return @enumFromInt(@as(u32, @intCast(idx))),
+            .assign_ref => |assign| if (assign.target == target) return @enumFromInt(@as(u32, @intCast(idx))),
+            .assign_literal => |assign| if (assign.target == target) return @enumFromInt(@as(u32, @intCast(idx))),
+            .assign_call => |assign| if (assign.target == target) return @enumFromInt(@as(u32, @intCast(idx))),
+            .assign_call_indirect => |assign| if (assign.target == target) return @enumFromInt(@as(u32, @intCast(idx))),
+            .assign_low_level => |assign| if (assign.target == target) return @enumFromInt(@as(u32, @intCast(idx))),
+            .assign_list => |assign| if (assign.target == target) return @enumFromInt(@as(u32, @intCast(idx))),
+            .assign_struct => |assign| if (assign.target == target) return @enumFromInt(@as(u32, @intCast(idx))),
+            .assign_tag => |assign| if (assign.target == target) return @enumFromInt(@as(u32, @intCast(idx))),
+            .set_local => |assign| if (assign.target == target) return @enumFromInt(@as(u32, @intCast(idx))),
+            .for_list => |for_stmt| if (for_stmt.elem == target) return @enumFromInt(@as(u32, @intCast(idx))),
+            else => {},
+        }
+    }
+
+    return null;
+}
+
+fn containsStmtId(stmt_ids: []const CFStmtId, target: CFStmtId) bool {
+    for (stmt_ids) |stmt_id| {
+        if (stmt_id == target) return true;
+    }
+    return false;
 }
 
 

@@ -1010,20 +1010,16 @@ pub const Lowerer = struct {
         expected_var: ?Var,
     ) std.mem.Allocator.Error!symbol_mod.Symbol {
         const published_expected_ty = try self.publishMonotypeType(expected_ty);
-        const source_root_var = try self.copyTopLevelDefExprVarToScope(
-            type_scope,
-            top_level.module_idx,
-            top_level.def_idx,
-        );
+        const source_root_var = self.ctx.typedCirModule(top_level.module_idx).defType(top_level.def_idx);
         const specialization_root_var = if (expected_var) |workspace_expected_var|
             try self.bindSourceVarToExistingWorkspace(
                 top_level.module_idx,
                 type_scope,
-                self.ctx.typedCirModule(top_level.module_idx).defType(top_level.def_idx),
+                source_root_var,
                 workspace_expected_var,
             )
         else
-            source_root_var;
+            try self.scopeVar(type_scope, top_level.module_idx, source_root_var);
         const expected_checker_seed = try self.freezeCheckerVarFromScope(
             type_scope,
             specialization_root_var,
@@ -1537,10 +1533,10 @@ pub const Lowerer = struct {
     fn drainSpecializations(self: *Lowerer) std.mem.Allocator.Error!bool {
         var any_specialized = false;
         while (self.specializations.nextNeededSpecialization()) |pending_idx| {
-            const pending = self.specializations.get(pending_idx);
-            const def_id = try self.lowerSpecializedTopLevelFn(pending.*);
+            const pending = self.specializations.get(pending_idx).*;
+            const def_id = try self.lowerSpecializedTopLevelFn(pending);
             try self.program.root_defs.append(self.allocator, def_id);
-            pending.emitted = true;
+            self.specializations.get(pending_idx).emitted = true;
             any_specialized = true;
         }
         return any_specialized;
@@ -3295,6 +3291,17 @@ pub const Lowerer = struct {
                 list.elems,
             ) },
             .e_empty_list => .{ .list = ast.Span(ast.ExprId).empty() },
+            .e_tuple_access => |access| .{ .tuple_access = .{
+                .tuple = try self.lowerExprWithExpectedType(
+                    module_idx,
+                    type_scope,
+                    env,
+                    access.tuple,
+                    try self.requireExprType(module_idx, type_scope, access.tuple),
+                    try self.exprResultVar(module_idx, type_scope, env, access.tuple),
+                ),
+                .elem_index = access.elem_index,
+            } },
             .e_if => |if_expr| .{ .if_ = try self.lowerIfExpr(module_idx, type_scope, env, if_expr) },
             .e_match => |match_expr| try self.lowerMatchExprData(module_idx, type_scope, env, ty, null, match_expr),
             .e_block => |block| {
@@ -6880,7 +6887,9 @@ pub const Lowerer = struct {
             else => null,
         };
 
-        const receiver_var = if (alias_stmt) |stmt_idx| blk: {
+        const source_receiver_var = if (args.implicit_receiver) |receiver_expr_idx|
+            typed_cir_module.exprType(receiver_expr_idx)
+        else if (alias_stmt) |stmt_idx| blk: {
             const stmt = typed_cir_module.getStatement(stmt_idx);
             const type_var_anno = switch (stmt) {
                 .s_type_var_alias => |alias| alias.type_var_anno,
@@ -6890,6 +6899,10 @@ pub const Lowerer = struct {
                 ),
             };
             const source_var = typed_cir_module.typeAnnoType(type_var_anno);
+            break :blk source_var;
+        } else null;
+
+        const receiver_var = if (source_receiver_var) |source_var| blk: {
             break :blk try self.scopeVar(type_scope, module_idx, source_var);
         } else blk: {
             const receiver_expr_idx = args.implicit_receiver orelse blk_inner: {
@@ -6903,15 +6916,23 @@ pub const Lowerer = struct {
             };
             break :blk self.requireExprResultVar(module_idx, type_scope, receiver_expr_idx);
         };
-        const target = try self.resolveAttachedMethodTargetFromWorkspaceVar(
-            module_idx,
-            type_scope,
-            receiver_var,
-            method_name,
-        ) orelse {
-            return null;
+
+        const resolved_target = blk: {
+            if (source_receiver_var) |source_var| {
+                if (try self.resolveAttachedMethodTargetFromSourceVar(module_idx, source_var, method_name)) |target| {
+                    break :blk target;
+                }
+            }
+
+            const target = try self.resolveAttachedMethodTargetFromWorkspaceVar(
+                module_idx,
+                type_scope,
+                receiver_var,
+                method_name,
+            ) orelse return null;
+            break :blk target;
         };
-        const source_fn_var = try self.copyTopLevelDefExprVarToScope(type_scope, target.module_idx, target.def_idx);
+        const source_fn_var = try self.copyTopLevelDefExprVarToScope(type_scope, resolved_target.module_idx, resolved_target.def_idx);
 
         const arg_exprs = blk: {
             if (args.implicit_receiver) |receiver| {
@@ -6928,7 +6949,7 @@ pub const Lowerer = struct {
         var call_info = try self.prepareCallInfo(module_idx, type_scope, expr_idx, source_fn_var, arg_exprs);
         defer call_info.deinit(self.allocator);
 
-        const callee = try self.lowerResolvedTargetCallee(module_idx, call_info.call_scope, target, call_info.fn_ty, call_info.fn_var);
+        const callee = try self.lowerResolvedTargetCallee(module_idx, call_info.call_scope, resolved_target, call_info.fn_ty, call_info.fn_var);
 
         const lowered_args = try self.allocator.alloc(ast.ExprId, arg_exprs.len);
         defer self.allocator.free(lowered_args);
@@ -8544,6 +8565,10 @@ pub const Lowerer = struct {
                 try self.collectSolvedExprInfo(module_idx, type_scope, env, solved_module.expr(expect.body));
                 break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
+            .e_tuple_access => |access| blk: {
+                try self.collectSolvedExprInfo(module_idx, type_scope, env, solved_module.expr(access.tuple));
+                break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
+            },
             .e_dbg => |dbg| blk: {
                 try self.collectSolvedExprInfo(module_idx, type_scope, env, solved_module.expr(dbg.expr));
                 break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
@@ -8741,18 +8766,6 @@ pub const Lowerer = struct {
         var_: Var,
     ) std.mem.Allocator.Error!type_mod.TypeId {
         const resolved = type_scope.typeStoreConst().resolveVar(var_);
-        if (builtin.mode == .Debug and @intFromEnum(resolved.var_) == 80) {
-            const key_debug: TypeCloneScope.TypeKey = .{ .module_idx = module_idx, .var_ = resolved.var_ };
-            std.debug.print(
-                "monotype.lowerInstantiatedType var=80 module={d} active={any} provisional={any} cached={any}\n",
-                .{
-                    module_idx,
-                    type_scope.active_type_cache.get(key_debug),
-                    type_scope.provisional_type_cache.get(key_debug),
-                    type_scope.type_cache.get(key_debug),
-                },
-            );
-        }
         if (self.defaultNumeralPrimitiveForContent(type_scope, resolved.desc.content)) |prim| {
             return self.makePrimitiveType(prim);
         }
@@ -9316,7 +9329,7 @@ pub const Lowerer = struct {
     fn patternCanCollectStructuralBindings(self: *Lowerer, module_idx: u32, pattern_idx: CIR.Pattern.Idx) bool {
         const pattern = self.ctx.typedCirModule(module_idx).pattern(pattern_idx).data;
         return switch (pattern) {
-            .assign, .as, .underscore, .record_destructure, .tuple => true,
+            .assign, .as, .underscore, .record_destructure, .tuple, .applied_tag => true,
             .nominal => |nominal| self.patternCanCollectStructuralBindings(module_idx, nominal.backing_pattern),
             .nominal_external => |nominal| self.patternCanCollectStructuralBindings(module_idx, nominal.backing_pattern),
             else => false,
@@ -12257,6 +12270,50 @@ pub const Lowerer = struct {
         return .{
             .module_idx = resolved.module_idx,
             .def_idx = resolved.def_idx,
+        };
+    }
+
+    fn resolveAttachedMethodTargetFromSourceVar(
+        self: *Lowerer,
+        source_module_idx: u32,
+        source_var: Var,
+        method_name: base.Ident.Idx,
+    ) std.mem.Allocator.Error!?ResolvedTarget {
+        const source_module = self.ctx.typedCirModule(source_module_idx);
+        const method_name_text = source_module.getIdent(method_name);
+        const receiver = self.resolveSourceDispatchReceiverIdentity(source_module_idx, source_var) orelse return null;
+        const receiver_module = self.ctx.typedCirModule(receiver.module_idx);
+        const resolved = receiver_module.resolveAttachedMethodTargetByText(
+            receiver.type_name,
+            method_name_text,
+        ) orelse return null;
+        return .{
+            .module_idx = resolved.module_idx,
+            .def_idx = resolved.def_idx,
+        };
+    }
+
+    fn resolveSourceDispatchReceiverIdentity(
+        self: *const Lowerer,
+        source_module_idx: u32,
+        source_var: Var,
+    ) ?WorkspaceDispatchReceiverIdentity {
+        const source_module = self.ctx.typedCirModule(source_module_idx);
+        const source_store = source_module.typeStoreConst();
+        const resolved = source_store.resolveVar(source_var);
+        return switch (resolved.desc.content) {
+            .alias => |alias| .{
+                .module_idx = self.ctx.findModuleIdxByName(source_module.getIdent(alias.origin_module)),
+                .type_name = source_module.getIdent(alias.ident.ident_idx),
+            },
+            .structure => |flat| switch (flat) {
+                .nominal_type => |nominal| .{
+                    .module_idx = self.ctx.findModuleIdxByName(source_module.getIdent(nominal.origin_module)),
+                    .type_name = source_module.getIdent(nominal.ident.ident_idx),
+                },
+                else => null,
+            },
+            else => null,
         };
     }
 

@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const backend = @import("backend");
 const base = @import("base");
 const can = @import("can");
 const check = @import("check");
@@ -201,4 +202,101 @@ pub fn runViaInterpreter(
     };
 
     interp.dropValue(eval_result.value, proc.ret_layout);
+}
+
+pub fn runViaDev(
+    gpa: std.mem.Allocator,
+    entrypoint_env: *ModuleEnv,
+    builtin_modules: *const BuiltinModules,
+    all_module_envs: []*ModuleEnv,
+    app_module_env: ?*ModuleEnv,
+    entrypoint_expr: can.CIR.Expr.Idx,
+    roc_ops: *RocOps,
+    args_ptr: *anyopaque,
+    result_ptr: *anyopaque,
+) !void {
+    if (comptime builtin.target.os.tag == .freestanding) {
+        return error.CodeGenFailed;
+    }
+
+    const source_modules = try gpa.alloc(check.TypedCIR.Modules.SourceModule, all_module_envs.len);
+    defer gpa.free(source_modules);
+    for (all_module_envs, 0..) |module_env, i| {
+        source_modules[i] = .{ .precompiled = module_env };
+    }
+
+    var typed_cir_modules = try check.TypedCIR.Modules.publish(gpa, source_modules);
+    defer typed_cir_modules.deinit();
+
+    const builtin_env = builtin_modules.builtin_module.env;
+    const builtin_idx = findModuleEnvIdx(all_module_envs, builtin_env) orelse return error.BuiltinModuleNotFound;
+    const entry_idx = findModuleEnvIdx(all_module_envs, entrypoint_env) orelse return error.EntrypointModuleNotFound;
+    const app_module_idx = if (app_module_env) |app_env|
+        findModuleEnvIdx(all_module_envs, app_env)
+    else
+        null;
+
+    var mono_lowerer = try monotype.Lower.Lowerer.init(gpa, &typed_cir_modules, builtin_idx, app_module_idx);
+    defer mono_lowerer.deinit();
+    const defs = entrypoint_env.store.sliceDefs(entrypoint_env.all_defs);
+    var entry_def: ?can.CIR.Def.Idx = null;
+    for (defs) |def_idx| {
+        const def = entrypoint_env.store.getDef(def_idx);
+        if (def.expr == entrypoint_expr) {
+            entry_def = def_idx;
+            break;
+        }
+    }
+    const entry_def_idx = entry_def orelse return error.EntrypointDefNotFound;
+
+    const entry_symbol = try mono_lowerer.specializeTopLevelDef(entry_idx, entry_def_idx);
+    const mono = try mono_lowerer.run(entry_idx);
+
+    const lifted = try monotype_lifted.Lower.run(gpa, mono);
+    const solved = try lambdasolved.Lower.run(gpa, lifted);
+    const executable = try lambdamono.Lower.runWithEntrypoints(gpa, solved, &.{entry_symbol});
+    const lowered_ir = try ir.Lower.run(gpa, executable);
+
+    var lir_result = try lir.FromIr.run(
+        gpa,
+        all_module_envs,
+        builtin_env.idents.builtin_str,
+        base.target.TargetUsize.native,
+        lowered_ir,
+    );
+    defer lir_result.deinit();
+    try lir.Ownership.inferProcResultContracts(gpa, &lir_result.store, &lir_result.layouts);
+    try lir.RcInsert.run(gpa, &lir_result.store, &lir_result.layouts);
+    const proc_id = lir_result.proc_ids_by_symbol.get(entry_symbol.raw()) orelse return error.EntrypointProcNotFound;
+    const proc = lir_result.store.getProcSpec(proc_id);
+
+    const arg_locals = lir_result.store.getLocalSpan(proc.args);
+    const arg_layouts = try gpa.alloc(layout.Idx, arg_locals.len);
+    defer gpa.free(arg_layouts);
+    for (arg_locals, 0..) |local_id, i| {
+        arg_layouts[i] = lir_result.store.getLocal(local_id).layout_idx;
+    }
+
+    var codegen = try backend.HostLirCodeGen.init(
+        gpa,
+        &lir_result.store,
+        &lir_result.layouts,
+        null,
+    );
+    defer codegen.deinit();
+    try codegen.compileAllProcSpecs(lir_result.store.getProcSpecs());
+
+    const entrypoint = try codegen.generateEntrypointWrapper(
+        "roc_cli_default_app",
+        proc_id,
+        arg_layouts,
+        proc.ret_layout,
+    );
+    var executable_memory = try backend.ExecutableMemory.initWithEntryOffset(
+        codegen.getGeneratedCode(),
+        entrypoint.offset,
+    );
+    defer executable_memory.deinit();
+
+    executable_memory.callRocABI(@ptrCast(roc_ops), result_ptr, args_ptr);
 }
