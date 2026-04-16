@@ -108,7 +108,7 @@ pub const Modules = struct {
         }
     };
 
-    pub fn publish(allocator: Allocator, source_modules: []const SourceModule) Allocator.Error!Modules {
+    pub fn init(allocator: Allocator, source_modules: []const SourceModule) Allocator.Error!Modules {
         const modules = try allocator.alloc(ModuleData, source_modules.len);
         errdefer allocator.free(modules);
 

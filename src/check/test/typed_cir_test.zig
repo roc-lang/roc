@@ -16,7 +16,7 @@ test "typed CIR exposes solved vars on defs exprs and patterns" {
         test_env.takePublishedSourceModule(),
         .{ .precompiled = test_env.builtin_module.env },
     };
-    var modules = try TypedCIR.Modules.publish(std.testing.allocator, &source_modules);
+    var modules = try TypedCIR.Modules.init(std.testing.allocator, &source_modules);
     defer modules.deinit();
     const module = modules.module(0);
     const defs = test_env.module_env.store.sliceDefs(test_env.module_env.all_defs);
@@ -51,7 +51,7 @@ test "published typed CIR survives checker teardown" {
         test_env.takePublishedSourceModule(),
         .{ .precompiled = test_env.builtin_module.env },
     };
-    var modules = try TypedCIR.Modules.publish(std.testing.allocator, &source_modules);
+    var modules = try TypedCIR.Modules.init(std.testing.allocator, &source_modules);
     defer modules.deinit();
 
     const expected_name = try std.testing.allocator.dupe(u8, modules.module(0).name());

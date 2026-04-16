@@ -4330,7 +4330,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         source_modules[i] = .{ .precompiled = module_env };
     }
 
-    var typed_cir_modules = try check.TypedCIR.Modules.publish(ctx.gpa, source_modules);
+    var typed_cir_modules = try check.TypedCIR.Modules.init(ctx.gpa, source_modules);
     defer typed_cir_modules.deinit();
 
     var mono_lowerer = try monotype.Lower.Lowerer.init(ctx.gpa, &typed_cir_modules, builtin_module_idx, plat.app_module_idx);

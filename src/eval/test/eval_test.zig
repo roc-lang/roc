@@ -833,7 +833,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
                 @constCast(resources.builtin_module.env).qualified_module_ident = resources.builtin_module.env.display_module_name_idx;
             }
 
-            var typed_cir_modules = try check.TypedCIR.Modules.publish(gpa, &.{
+            var typed_cir_modules = try check.TypedCIR.Modules.init(gpa, &.{
                 .{ .precompiled = deserialized_env },
                 .{ .precompiled = resources.builtin_module.env },
             });

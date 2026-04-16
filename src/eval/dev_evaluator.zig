@@ -112,7 +112,7 @@ pub const DevEvaluator = struct {
             source_modules[i] = .{ .precompiled = env };
         }
 
-        var typed_cir_modules = try check.TypedCIR.Modules.publish(self.allocator, source_modules);
+        var typed_cir_modules = try check.TypedCIR.Modules.init(self.allocator, source_modules);
         defer typed_cir_modules.deinit();
 
         var mono_lowerer = try monotype.Lower.Lowerer.init(self.allocator, &typed_cir_modules, builtin_idx, null);

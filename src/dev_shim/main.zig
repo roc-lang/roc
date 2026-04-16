@@ -462,7 +462,7 @@ fn evaluateFromSharedMemory(entry_idx: u32, host_roc_ops: *RocOps, ret_ptr: *any
         source_modules[i] = .{ .precompiled = module_env };
     }
 
-    var typed_modules = try check.TypedCIR.Modules.publish(wrapped_allocator, source_modules);
+    var typed_modules = try check.TypedCIR.Modules.init(wrapped_allocator, source_modules);
     defer typed_modules.deinit();
 
     var mono_lowerer = try monotype.Lower.Lowerer.init(

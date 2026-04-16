@@ -135,7 +135,7 @@ pub fn runViaInterpreter(
         source_modules[i] = .{ .precompiled = module_env };
     }
 
-    var typed_cir_modules = try check.TypedCIR.Modules.publish(gpa, source_modules);
+    var typed_cir_modules = try check.TypedCIR.Modules.init(gpa, source_modules);
     defer typed_cir_modules.deinit();
 
     const builtin_env = builtin_modules.builtin_module.env;
@@ -225,7 +225,7 @@ pub fn runViaDev(
         source_modules[i] = .{ .precompiled = module_env };
     }
 
-    var typed_cir_modules = try check.TypedCIR.Modules.publish(gpa, source_modules);
+    var typed_cir_modules = try check.TypedCIR.Modules.init(gpa, source_modules);
     defer typed_cir_modules.deinit();
 
     const builtin_env = builtin_modules.builtin_module.env;

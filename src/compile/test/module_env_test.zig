@@ -518,7 +518,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
             .{ .precompiled = original_env },
             .{ .precompiled = builtin_module.env },
         };
-        var typed_cir_modules = try check.TypedCIR.Modules.publish(gpa, &source_modules);
+        var typed_cir_modules = try check.TypedCIR.Modules.init(gpa, &source_modules);
         defer typed_cir_modules.deinit();
         var lowered = try eval_pipeline.lowerTypedCIRToLir(gpa, &typed_cir_modules, &all_module_envs);
         defer lowered.deinit();
@@ -636,7 +636,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
                 .{ .precompiled = deserialized_env },
                 .{ .precompiled = builtin_module.env },
             };
-            var typed_cir_modules2 = try check.TypedCIR.Modules.publish(gpa, &source_modules2);
+            var typed_cir_modules2 = try check.TypedCIR.Modules.init(gpa, &source_modules2);
             defer typed_cir_modules2.deinit();
             var lowered2 = try eval_pipeline.lowerTypedCIRToLir(gpa, &typed_cir_modules2, &all_module_envs2);
             defer lowered2.deinit();

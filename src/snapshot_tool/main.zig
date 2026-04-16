@@ -4131,7 +4131,7 @@ fn processDevObjectSnapshot(
         source_modules[i + 1] = .{ .precompiled = mod.env };
     }
 
-    var typed_cir_modules = try typed_cir.Modules.publish(allocator, source_modules);
+    var typed_cir_modules = try typed_cir.Modules.init(allocator, source_modules);
     defer typed_cir_modules.deinit();
 
     const platform_module_idx: u32 = @intCast(platform_idx + 1);

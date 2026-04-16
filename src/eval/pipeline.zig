@@ -195,7 +195,7 @@ pub fn parseAndCanonicalizeProgramWrapped(
         } };
     }
 
-    const typed_cir_modules = try check.TypedCIR.Modules.publish(allocator, typed_cir_source_modules);
+    const typed_cir_modules = try check.TypedCIR.Modules.init(allocator, typed_cir_source_modules);
     errdefer {
         var typed_cir_modules_mut = typed_cir_modules;
         typed_cir_modules_mut.deinit();
