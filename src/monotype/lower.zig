@@ -2478,19 +2478,13 @@ pub const Lowerer = struct {
                     "monotype invariant violated: required lookup in module {d} without app module index",
                     .{module_idx},
                 );
-                const requires_items = self.ctx.typedCirModule(module_idx).requiresTypes();
-                const req_idx = lookup.requires_idx.toU32();
-                if (req_idx >= requires_items.len) {
-                    debugPanic(
-                        "monotype invariant violated: required lookup index {d} out of bounds for module {d}",
-                        .{ req_idx, module_idx },
-                    );
-                }
-                const req = requires_items[req_idx];
-                const required_name = self.ctx.typedCirModule(module_idx).getIdent(req.ident);
-                const app_def_idx = self.ctx.source_modules.resolveTopLevelDefByName(app_module_idx, required_name) orelse debugPanic(
-                    "monotype invariant violated: required lookup '{s}' missing def in app module {d}",
-                    .{ required_name, app_module_idx },
+                const resolved = self.ctx.source_modules.resolveRequiredLookupTarget(
+                    module_idx,
+                    app_module_idx,
+                    lookup.requires_idx.toU32(),
+                ) orelse debugPanic(
+                    "monotype invariant violated: unresolved required lookup index {d} for module {d} in app module {d}",
+                    .{ lookup.requires_idx.toU32(), module_idx, app_module_idx },
                 );
                 const expected_var = try self.instantiateSourceVar(
                     type_scope,
@@ -2500,7 +2494,7 @@ pub const Lowerer = struct {
                 return self.lowerResolvedTargetCallee(
                     module_idx,
                     type_scope,
-                    .{ .module_idx = app_module_idx, .def_idx = app_def_idx },
+                    .{ .module_idx = resolved.module_idx, .def_idx = resolved.def_idx },
                     ty,
                     expected_var,
                 );

@@ -80,6 +80,11 @@ pub const Modules = struct {
     allocator: Allocator,
     modules: []ModuleData,
 
+    pub const ResolvedDefTarget = struct {
+        module_idx: u32,
+        def_idx: CIR.Def.Idx,
+    };
+
     pub const ResolvedMethodTarget = struct {
         module_idx: u32,
         def_idx: CIR.Def.Idx,
@@ -198,6 +203,23 @@ pub const Modules = struct {
         def_name: []const u8,
     ) ?CIR.Def.Idx {
         return self.module(module_idx).topLevelDefByText(def_name);
+    }
+
+    pub fn resolveRequiredLookupTarget(
+        self: @This(),
+        source_module_idx: u32,
+        app_module_idx: u32,
+        requires_idx: u32,
+    ) ?ResolvedDefTarget {
+        const source_module = self.module(source_module_idx);
+        const requires_items = source_module.requiresTypes();
+        if (requires_idx >= requires_items.len) return null;
+        const required_name = source_module.getIdent(requires_items[requires_idx].ident);
+        const def_idx = self.resolveTopLevelDefByName(app_module_idx, required_name) orelse return null;
+        return .{
+            .module_idx = app_module_idx,
+            .def_idx = def_idx,
+        };
     }
 
 };
