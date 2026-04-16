@@ -1,8 +1,8 @@
-//! Specialization-local cloning of solved source vars into monotype workspaces.
+//! Specialization-local clone-inst of solved source vars into monotype scope state.
 //!
 //! This is the monotype-owned analogue of cor's clone-inst step:
 //! copy only the reachable solved source type graph needed by the current
-//! specialization into a local mutable workspace, while preserving shared
+//! specialization into local mutable scope state, while preserving shared
 //! structure through an explicit var map.
 
 const std = @import("std");
@@ -29,7 +29,7 @@ const Tag = types_mod.Tag;
 const NominalType = types_mod.NominalType;
 
 pub const VarMapping = std.AutoHashMap(Var, Var);
-pub const ScopedVarMapping = std.AutoHashMap(TypeKey, Var);
+pub const ScopedCloneMap = std.AutoHashMap(TypeKey, Var);
 
 fn copyIdent(
     source_idents: *const base.Ident.Store,
@@ -81,7 +81,7 @@ pub fn copyVarFromModule(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     source_var: Var,
-    var_mapping: *ScopedVarMapping,
+    var_mapping: *ScopedCloneMap,
     source_idents: *const base.Ident.Store,
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
@@ -138,7 +138,7 @@ fn copyContentFromModule(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     content: Content,
-    var_mapping: *ScopedVarMapping,
+    var_mapping: *ScopedCloneMap,
     source_idents: *const base.Ident.Store,
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
@@ -185,7 +185,7 @@ fn copyFlexFromModule(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     source_flex: Flex,
-    var_mapping: *ScopedVarMapping,
+    var_mapping: *ScopedCloneMap,
     source_idents: *const base.Ident.Store,
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
@@ -238,7 +238,7 @@ fn copyRigidFromModule(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     source_rigid: Rigid,
-    var_mapping: *ScopedVarMapping,
+    var_mapping: *ScopedCloneMap,
     source_idents: *const base.Ident.Store,
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
@@ -306,7 +306,7 @@ fn copyAliasFromModule(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     source_alias: Alias,
-    var_mapping: *ScopedVarMapping,
+    var_mapping: *ScopedCloneMap,
     source_idents: *const base.Ident.Store,
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
@@ -375,7 +375,7 @@ fn copyFlatTypeFromModule(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     flat_type: FlatType,
-    var_mapping: *ScopedVarMapping,
+    var_mapping: *ScopedCloneMap,
     source_idents: *const base.Ident.Store,
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
@@ -427,7 +427,7 @@ fn copyTupleFromModule(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     tuple: types_mod.Tuple,
-    var_mapping: *ScopedVarMapping,
+    var_mapping: *ScopedCloneMap,
     source_idents: *const base.Ident.Store,
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
@@ -489,7 +489,7 @@ fn copyFuncFromModule(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     func: Func,
-    var_mapping: *ScopedVarMapping,
+    var_mapping: *ScopedCloneMap,
     source_idents: *const base.Ident.Store,
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
@@ -546,7 +546,7 @@ fn copyRecordFieldsFromModule(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     fields_range: types_mod.RecordField.SafeMultiList.Range,
-    var_mapping: *ScopedVarMapping,
+    var_mapping: *ScopedCloneMap,
     source_idents: *const base.Ident.Store,
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
@@ -585,7 +585,7 @@ fn copyRecordFromModule(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     record: Record,
-    var_mapping: *ScopedVarMapping,
+    var_mapping: *ScopedCloneMap,
     source_idents: *const base.Ident.Store,
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
@@ -643,7 +643,7 @@ fn copyTagUnionFromModule(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     tag_union: TagUnion,
-    var_mapping: *ScopedVarMapping,
+    var_mapping: *ScopedCloneMap,
     source_idents: *const base.Ident.Store,
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
@@ -731,7 +731,7 @@ fn copyNominalTypeFromModule(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     source_nominal: NominalType,
-    var_mapping: *ScopedVarMapping,
+    var_mapping: *ScopedCloneMap,
     source_idents: *const base.Ident.Store,
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
@@ -810,7 +810,7 @@ fn copyStaticDispatchConstraintsFromModule(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     source_constraints: StaticDispatchConstraint.SafeList.Range,
-    var_mapping: *ScopedVarMapping,
+    var_mapping: *ScopedCloneMap,
     source_idents: *const base.Ident.Store,
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,

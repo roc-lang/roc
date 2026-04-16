@@ -101,8 +101,8 @@ const Lowerer = struct {
     }
 
     fn finish(self: *Lowerer) Result {
-        const layouts = self.input.layout_facts.graph;
-        self.input.layout_facts.graph = .{};
+        const layouts = self.input.layouts.graph;
+        self.input.layouts.graph = .{};
 
         const result = Result{
             .store = self.output,
@@ -155,26 +155,26 @@ const Lowerer = struct {
                     .name = def.bind,
                     .args = args,
                     .body = try self.lowerBlock(env, fn_def.body),
-                    .ret_layout = self.input.layout_facts.defRetLayout(def_id),
+                    .ret_layout = self.input.layouts.defRetLayout(def_id),
                 };
             },
             .hosted_fn => |hosted_fn| .{
                 .name = def.bind,
                 .args = try self.lowerTypedSymbolSpan(hosted_fn.args),
-                .ret_layout = self.input.layout_facts.defRetLayout(def_id),
+                .ret_layout = self.input.layouts.defRetLayout(def_id),
                 .hosted = hosted_fn.hosted,
             },
             .val => |expr_id| .{
                 .name = def.bind,
                 .args = try self.output.addVarSpan(&.{}),
                 .body = try self.lowerBlock(&.{}, expr_id),
-                .ret_layout = self.input.layout_facts.defRetLayout(def_id),
+                .ret_layout = self.input.layouts.defRetLayout(def_id),
             },
             .run => |run_def| .{
                 .name = def.bind,
                 .args = try self.output.addVarSpan(&.{}),
                 .body = try self.lowerBlock(&.{}, run_def.body),
-                .ret_layout = self.input.layout_facts.defRetLayout(def_id),
+                .ret_layout = self.input.layouts.defRetLayout(def_id),
                 .entry_ty = run_def.entry_ty,
             },
         };
@@ -182,7 +182,7 @@ const Lowerer = struct {
 
     fn lowerTypedSymbol(self: *Lowerer, value: lambdamono.Ast.TypedSymbol) std.mem.Allocator.Error!ast.Var {
         return .{
-            .layout = self.input.layout_facts.layoutForType(value.ty),
+            .layout = self.input.layouts.layoutForType(value.ty),
             .symbol = value.symbol,
         };
     }
@@ -273,7 +273,7 @@ const Lowerer = struct {
             .tag_payload => |tag_payload| {
                 const tag_union = try self.lowerSubexprValue(&block, env, tag_payload.tag_union);
                 if (tag_union == null) return if (block.has_term) block else debugPanic("ir.lower tag_payload missing terminator");
-                const payload_layout = self.input.layout_facts.exprTagPayloadLayout(expr_id);
+                const payload_layout = self.input.layouts.exprTagPayloadLayout(expr_id);
                 const payload_var = try self.freshVarWithLayout(payload_layout, "tag_payload");
                 try block.stmts.append(self.allocator, .{ .let_ = .{
                     .bind = payload_var,
@@ -304,7 +304,7 @@ const Lowerer = struct {
                 const payload: ?ast.Var = blk: {
                     const args = self.output.sliceVarSpan(lowered_args.?);
                     if (args.len == 0) break :blk null;
-                    const payload_layout = self.input.layout_facts.exprTagPayloadLayout(expr_id);
+                    const payload_layout = self.input.layouts.exprTagPayloadLayout(expr_id);
                     const payload_var = try self.freshVarWithLayout(
                         payload_layout,
                         "tag_payload",
@@ -329,7 +329,7 @@ const Lowerer = struct {
             .access => |access| {
                 const record = try self.lowerSubexprValue(&block, env, access.record);
                 if (record == null) return if (block.has_term) block else debugPanic("ir.lower access missing terminator");
-                const field_layout = self.input.layout_facts.exprFieldLayout(expr_id);
+                const field_layout = self.input.layouts.exprFieldLayout(expr_id);
                 const temp = try self.freshVarWithLayout(
                     field_layout,
                     "field",
@@ -346,7 +346,7 @@ const Lowerer = struct {
             .tuple_access => |tuple_access| {
                 const tuple = try self.lowerSubexprValue(&block, env, tuple_access.tuple);
                 if (tuple == null) return if (block.has_term) block else debugPanic("ir.lower tuple_access missing terminator");
-                const field_layout = self.input.layout_facts.exprFieldLayout(expr_id);
+                const field_layout = self.input.layouts.exprFieldLayout(expr_id);
                 const temp = try self.freshVarWithLayout(
                     field_layout,
                     "tuple_field",
@@ -422,7 +422,7 @@ const Lowerer = struct {
 
                 const size_var = if (packed_fn.capture_ty) |capture_ty| blk: {
                     const u32_ty = try self.input.types.internResolved(.{ .primitive = .u32 });
-                    const capture_layout = self.input.layout_facts.layoutForType(capture_ty);
+                    const capture_layout = self.input.layouts.layoutForType(capture_ty);
                     const size_var = try self.freshVar(u32_ty, "capture_size");
                     try block.stmts.append(self.allocator, .{ .let_ = .{
                         .bind = size_var,
@@ -460,7 +460,7 @@ const Lowerer = struct {
                         .func = func.?,
                         .args = args.?,
                         .capture_layout = if (call.capture_ty) |capture_ty|
-                            self.input.layout_facts.layoutForType(capture_ty)
+                            self.input.layouts.layoutForType(capture_ty)
                         else
                             null,
                     } }),
@@ -505,7 +505,7 @@ const Lowerer = struct {
     fn freshVar(self: *Lowerer, ty: lambdamono.Type.TypeId, comptime label: []const u8) std.mem.Allocator.Error!ast.Var {
         const symbol = try self.freshSymbol(label);
         return .{
-            .layout = self.input.layout_facts.layoutForType(ty),
+            .layout = self.input.layouts.layoutForType(ty),
             .symbol = symbol,
         };
     }
@@ -676,7 +676,7 @@ const Lowerer = struct {
         const cond = try self.lowerSubexprValue(block, env, cond_expr);
         if (cond == null) return;
 
-        const discr_layout = self.input.layout_facts.exprDiscriminantLayout(cond_expr);
+        const discr_layout = self.input.layouts.exprDiscriminantLayout(cond_expr);
         if (discr_layout == null) {
             const ir_branches = self.input.store.sliceBranchSpan(branches_span);
             if (ir_branches.len != 0) {
@@ -974,7 +974,7 @@ const Lowerer = struct {
         const iterable = try self.lowerSubexprValue(block, env, iterable_expr);
         if (iterable == null) return;
 
-        const elem = try self.freshVarWithLayout(self.input.layout_facts.patLayout(patt), "for_elem");
+        const elem = try self.freshVarWithLayout(self.input.layouts.patLayout(patt), "for_elem");
         const body_block = try self.lowerPatternBranchBlock(env, elem, patt, body_expr, null);
         try block.stmts.append(self.allocator, .{ .for_list = .{
             .elem = elem,
@@ -1045,7 +1045,7 @@ const Lowerer = struct {
             .tag => |tag| {
                 const args = self.input.store.slicePatSpan(tag.args);
                 if (args.len == 0) return;
-                const payload_layout = self.input.layout_facts.patTagPayloadLayout(pat_id);
+                const payload_layout = self.input.layouts.patTagPayloadLayout(pat_id);
 
                 const payload_var = try self.freshVarWithLayout(
                     payload_layout,
@@ -1060,7 +1060,7 @@ const Lowerer = struct {
                 } });
 
                 for (args, 0..) |arg_pat_id, i| {
-                    const field_layout = try self.input.layout_facts.structFieldLayout(payload_var.layout, @intCast(i));
+                    const field_layout = try self.input.layouts.structFieldLayout(payload_var.layout, @intCast(i));
                     const field_var = try self.freshVarWithLayout(
                         field_layout,
                         "pat_field",

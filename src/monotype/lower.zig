@@ -20,7 +20,7 @@ const types = @import("types");
 const instantiate = @import("types").instantiate;
 const ast = @import("ast.zig");
 const type_mod = @import("type.zig");
-const type_clone_source = @import("type_clone_source.zig");
+const clone_inst = @import("clone_inst.zig");
 const specializations_mod = @import("specializations.zig");
 const symbol_mod = @import("symbol");
 const typed_cir = check.TypedCIR;
@@ -640,7 +640,7 @@ pub const Lowerer = struct {
         type_store: *types.Store,
         ident_store: *base.Ident.Store,
         owns_state: bool,
-        copied_source_var_map: type_clone_source.ScopedVarMapping,
+        cloned_source_var_map: clone_inst.ScopedCloneMap,
         source_var_map: std.AutoHashMap(TypeKey, Var),
         instantiation_var_map: std.AutoHashMap(Var, Var),
         active_type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
@@ -731,9 +731,9 @@ pub const Lowerer = struct {
                 while (iter.next()) |entry| {
                     try self.source_var_map.put(entry.key_ptr.*, entry.value_ptr.*);
                 }
-                var copied_iter = scope.copied_source_var_map.iterator();
+                var copied_iter = scope.cloned_source_var_map.iterator();
                 while (copied_iter.next()) |entry| {
-                    try self.copied_source_var_map.put(entry.key_ptr.*, entry.value_ptr.*);
+                    try self.cloned_source_var_map.put(entry.key_ptr.*, entry.value_ptr.*);
                 }
                 var inst_iter = scope.instantiation_var_map.iterator();
                 while (inst_iter.next()) |entry| {
@@ -755,7 +755,7 @@ pub const Lowerer = struct {
             rank_behavior: Instantiator.RankBehavior,
         ) void {
             self.source_var_map = std.AutoHashMap(TypeKey, Var).init(self.allocator);
-            self.copied_source_var_map = type_clone_source.ScopedVarMapping.init(self.allocator);
+            self.cloned_source_var_map = clone_inst.ScopedCloneMap.init(self.allocator);
             self.instantiation_var_map = std.AutoHashMap(Var, Var).init(self.allocator);
             self.active_type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(self.allocator);
             self.provisional_type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(self.allocator);
@@ -805,7 +805,7 @@ pub const Lowerer = struct {
             self.provisional_type_cache.deinit();
             self.type_cache.deinit();
             self.instantiation_var_map.deinit();
-            self.copied_source_var_map.deinit();
+            self.cloned_source_var_map.deinit();
             self.source_var_map.deinit();
             if (self.owns_state) {
                 self.ident_store.deinit(self.allocator);
@@ -1643,7 +1643,7 @@ pub const Lowerer = struct {
         errdefer ident_store.deinit(self.allocator);
         var var_map = std.AutoHashMap(Var, Var).init(self.allocator);
         defer var_map.deinit();
-        const root_var = try type_clone_source.copyVar(
+        const root_var = try clone_inst.copyVar(
             source_store,
             &type_store,
             source_var,
@@ -1678,7 +1678,7 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!Var {
         var var_map = std.AutoHashMap(Var, Var).init(self.allocator);
         defer var_map.deinit();
-        const copied_root = try type_clone_source.copyVar(
+        const copied_root = try clone_inst.copyVar(
             &frozen.type_store,
             type_scope.typeStoreMut(),
             frozen.root_var,
@@ -2217,7 +2217,7 @@ pub const Lowerer = struct {
         const aligned_first_arg = self.lookupFunctionArgVarInStore(store, aligned.var_, 0);
         if ((canonical_first_arg == null) != (aligned_first_arg == null)) {
             debugPanic(
-                "monotype specialization invariant violated: function arity shape mismatch while aligning workspace vars",
+                "monotype specialization invariant violated: function arity shape mismatch while aligning scoped specialization vars",
                 .{},
             );
         }
@@ -2229,7 +2229,7 @@ pub const Lowerer = struct {
                 if (canonical_arg == null or aligned_arg == null) {
                     if (canonical_arg != aligned_arg) {
                         debugPanic(
-                            "monotype specialization invariant violated: function arity mismatch while aligning workspace vars",
+                            "monotype specialization invariant violated: function arity mismatch while aligning scoped specialization vars",
                             .{},
                         );
                     }
@@ -2238,11 +2238,11 @@ pub const Lowerer = struct {
                 try self.alignScopeVarsVisited(type_scope, canonical_arg.?, aligned_arg.?, visited);
             }
             const canonical_ret = self.lookupFunctionRetVarInStore(store, canonical.var_) orelse debugPanic(
-                "monotype specialization invariant violated: missing canonical function return while aligning workspace vars",
+                "monotype specialization invariant violated: missing canonical function return while aligning scoped specialization vars",
                 .{},
             );
             const aligned_ret = self.lookupFunctionRetVarInStore(store, aligned.var_) orelse debugPanic(
-                "monotype specialization invariant violated: missing aligned function return while aligning workspace vars",
+                "monotype specialization invariant violated: missing aligned function return while aligning scoped specialization vars",
                 .{},
             );
             try self.alignScopeVarsVisited(type_scope, canonical_ret, aligned_ret, visited);
@@ -2256,7 +2256,7 @@ pub const Lowerer = struct {
                     const aligned_args = store.sliceAliasArgs(aligned_alias);
                     if (canonical_args.len != aligned_args.len) {
                         debugPanic(
-                            "monotype specialization invariant violated: alias arg mismatch while aligning workspace vars",
+                            "monotype specialization invariant violated: alias arg mismatch while aligning scoped specialization vars",
                             .{},
                         );
                     }
@@ -2288,7 +2288,7 @@ pub const Lowerer = struct {
                                 canonical_nominal.is_opaque != aligned_nominal.is_opaque)
                             {
                                 debugPanic(
-                                    "monotype specialization invariant violated: nominal identity mismatch while aligning workspace vars",
+                                    "monotype specialization invariant violated: nominal identity mismatch while aligning scoped specialization vars",
                                     .{},
                                 );
                             }
@@ -2296,7 +2296,7 @@ pub const Lowerer = struct {
                             const aligned_args = store.sliceNominalArgs(aligned_nominal);
                             if (canonical_args.len != aligned_args.len) {
                                 debugPanic(
-                                    "monotype specialization invariant violated: nominal arg mismatch while aligning workspace vars",
+                                    "monotype specialization invariant violated: nominal arg mismatch while aligning scoped specialization vars",
                                     .{},
                                 );
                             }
@@ -2311,12 +2311,12 @@ pub const Lowerer = struct {
                             );
                         },
                         else => debugPanic(
-                            "monotype specialization invariant violated: nominal/content mismatch while aligning workspace vars",
+                            "monotype specialization invariant violated: nominal/content mismatch while aligning scoped specialization vars",
                             .{},
                         ),
                     },
                     else => debugPanic(
-                        "monotype specialization invariant violated: nominal/content mismatch while aligning workspace vars",
+                        "monotype specialization invariant violated: nominal/content mismatch while aligning scoped specialization vars",
                         .{},
                     ),
                 },
@@ -2327,7 +2327,7 @@ pub const Lowerer = struct {
                             const aligned_elems = store.sliceVars(aligned_tuple.elems);
                             if (canonical_elems.len != aligned_elems.len) {
                                 debugPanic(
-                                    "monotype specialization invariant violated: tuple arity mismatch while aligning workspace vars",
+                                    "monotype specialization invariant violated: tuple arity mismatch while aligning scoped specialization vars",
                                     .{},
                                 );
                             }
@@ -2336,12 +2336,12 @@ pub const Lowerer = struct {
                             }
                         },
                         else => debugPanic(
-                            "monotype specialization invariant violated: tuple/content mismatch while aligning workspace vars",
+                            "monotype specialization invariant violated: tuple/content mismatch while aligning scoped specialization vars",
                             .{},
                         ),
                     },
                     else => debugPanic(
-                        "monotype specialization invariant violated: tuple/content mismatch while aligning workspace vars",
+                        "monotype specialization invariant violated: tuple/content mismatch while aligning scoped specialization vars",
                         .{},
                     ),
                 },
@@ -2404,7 +2404,7 @@ pub const Lowerer = struct {
                             const canonical_residual_var = if (residual_canonical_fields.items.len == 0)
                                 try self.flattenedRecordTerminalAsVar(canonical_terminal_ext, type_scope)
                             else
-                                try self.materializeWorkspaceRecordResidualVar(
+                                try self.materializeScopedRecordResidualVar(
                                     residual_canonical_fields.items,
                                     canonical_terminal_ext,
                                     type_scope,
@@ -2412,7 +2412,7 @@ pub const Lowerer = struct {
                             const aligned_residual_var = if (residual_aligned_fields.items.len == 0)
                                 try self.flattenedRecordTerminalAsVar(aligned_terminal_ext, type_scope)
                             else
-                                try self.materializeWorkspaceRecordResidualVar(
+                                try self.materializeScopedRecordResidualVar(
                                     residual_aligned_fields.items,
                                     aligned_terminal_ext,
                                     type_scope,
@@ -2421,7 +2421,7 @@ pub const Lowerer = struct {
                         }
                     },
                     else => debugPanic(
-                        "monotype specialization invariant violated: record/content mismatch while aligning workspace vars",
+                        "monotype specialization invariant violated: record/content mismatch while aligning scoped specialization vars",
                         .{},
                     ),
                 },
@@ -2484,7 +2484,7 @@ pub const Lowerer = struct {
                             const canonical_residual_var = if (residual_canonical_fields.items.len == 0)
                                 try self.flattenedRecordTerminalAsVar(canonical_terminal_ext, type_scope)
                             else
-                                try self.materializeWorkspaceRecordResidualVar(
+                                try self.materializeScopedRecordResidualVar(
                                     residual_canonical_fields.items,
                                     canonical_terminal_ext,
                                     type_scope,
@@ -2492,7 +2492,7 @@ pub const Lowerer = struct {
                             const aligned_residual_var = if (residual_aligned_fields.items.len == 0)
                                 try self.flattenedRecordTerminalAsVar(aligned_terminal_ext, type_scope)
                             else
-                                try self.materializeWorkspaceRecordResidualVar(
+                                try self.materializeScopedRecordResidualVar(
                                     residual_aligned_fields.items,
                                     aligned_terminal_ext,
                                     type_scope,
@@ -2501,7 +2501,7 @@ pub const Lowerer = struct {
                         }
                     },
                     else => debugPanic(
-                        "monotype specialization invariant violated: open-record/content mismatch while aligning workspace vars",
+                        "monotype specialization invariant violated: open-record/content mismatch while aligning scoped specialization vars",
                         .{},
                     ),
                 },
@@ -2541,7 +2541,7 @@ pub const Lowerer = struct {
                                     const aligned_args = store.sliceVars(aligned_tag.args);
                                     if (canonical_args.len != aligned_args.len) {
                                         debugPanic(
-                                            "monotype specialization invariant violated: tag payload mismatch while aligning workspace vars",
+                                            "monotype specialization invariant violated: tag payload mismatch while aligning scoped specialization vars",
                                             .{},
                                         );
                                     }
@@ -2568,7 +2568,7 @@ pub const Lowerer = struct {
                             const canonical_residual_var = if (residual_canonical_tags.items.len == 0)
                                 canonical_terminal_ext
                             else
-                                try self.materializeWorkspaceTagUnionResidualVar(
+                                try self.materializeScopedTagUnionResidualVar(
                                     residual_canonical_tags.items,
                                     canonical_terminal_ext,
                                     type_scope,
@@ -2577,7 +2577,7 @@ pub const Lowerer = struct {
                             const aligned_residual_var = if (residual_aligned_tags.items.len == 0)
                                 aligned_terminal_ext
                             else
-                                try self.materializeWorkspaceTagUnionResidualVar(
+                                try self.materializeScopedTagUnionResidualVar(
                                     residual_aligned_tags.items,
                                     aligned_terminal_ext,
                                     type_scope,
@@ -2601,7 +2601,7 @@ pub const Lowerer = struct {
                             );
                             if (canonical_flattened.items.len != 0) {
                                 debugPanic(
-                                    "monotype specialization invariant violated: tag-union/content mismatch while aligning workspace vars",
+                                    "monotype specialization invariant violated: tag-union/content mismatch while aligning scoped specialization vars",
                                     .{},
                                 );
                             }
@@ -2609,23 +2609,23 @@ pub const Lowerer = struct {
                             switch (resolved_terminal.desc.content) {
                                 .structure => |flat| if (flat != .empty_tag_union) {
                                     debugPanic(
-                                        "monotype specialization invariant violated: tag-union/content mismatch while aligning workspace vars",
+                                        "monotype specialization invariant violated: tag-union/content mismatch while aligning scoped specialization vars",
                                         .{},
                                     );
                                 },
                                 else => debugPanic(
-                                    "monotype specialization invariant violated: tag-union/content mismatch while aligning workspace vars",
+                                    "monotype specialization invariant violated: tag-union/content mismatch while aligning scoped specialization vars",
                                     .{},
                                 ),
                             }
                         },
                         else => debugPanic(
-                            "monotype specialization invariant violated: tag-union/content mismatch while aligning workspace vars",
+                            "monotype specialization invariant violated: tag-union/content mismatch while aligning scoped specialization vars",
                             .{},
                         ),
                     },
                     else => debugPanic(
-                        "monotype specialization invariant violated: tag-union/content mismatch while aligning workspace vars",
+                        "monotype specialization invariant violated: tag-union/content mismatch while aligning scoped specialization vars",
                         .{},
                     ),
                 },
@@ -2641,14 +2641,14 @@ pub const Lowerer = struct {
                         );
                         if (aligned_flattened.items.len != 0) {
                             debugPanic(
-                                "monotype specialization invariant violated: empty-record/content mismatch while aligning workspace vars",
+                                "monotype specialization invariant violated: empty-record/content mismatch while aligning scoped specialization vars",
                                 .{},
                             );
                         }
                         try self.alignFlattenedRecordTerminal(type_scope, .empty_record, aligned_terminal_ext);
                     },
                     else => debugPanic(
-                        "monotype specialization invariant violated: empty-record/content mismatch while aligning workspace vars",
+                        "monotype specialization invariant violated: empty-record/content mismatch while aligning scoped specialization vars",
                         .{},
                     ),
                 },
@@ -2666,7 +2666,7 @@ pub const Lowerer = struct {
                             );
                             if (aligned_flattened.items.len != 0) {
                                 debugPanic(
-                                    "monotype specialization invariant violated: empty-tag-union/content mismatch while aligning workspace vars",
+                                    "monotype specialization invariant violated: empty-tag-union/content mismatch while aligning scoped specialization vars",
                                     .{},
                                 );
                             }
@@ -2674,23 +2674,23 @@ pub const Lowerer = struct {
                             switch (resolved_terminal.desc.content) {
                                 .structure => |flat| if (flat != .empty_tag_union) {
                                     debugPanic(
-                                        "monotype specialization invariant violated: empty-tag-union/content mismatch while aligning workspace vars",
+                                        "monotype specialization invariant violated: empty-tag-union/content mismatch while aligning scoped specialization vars",
                                         .{},
                                     );
                                 },
                                 else => debugPanic(
-                                    "monotype specialization invariant violated: empty-tag-union/content mismatch while aligning workspace vars",
+                                    "monotype specialization invariant violated: empty-tag-union/content mismatch while aligning scoped specialization vars",
                                     .{},
                                 ),
                             }
                         },
                         else => debugPanic(
-                            "monotype specialization invariant violated: empty-tag-union/content mismatch while aligning workspace vars",
+                            "monotype specialization invariant violated: empty-tag-union/content mismatch while aligning scoped specialization vars",
                             .{},
                         ),
                     },
                     else => debugPanic(
-                        "monotype specialization invariant violated: empty-tag-union/content mismatch while aligning workspace vars",
+                        "monotype specialization invariant violated: empty-tag-union/content mismatch while aligning scoped specialization vars",
                         .{},
                     ),
                 },
@@ -2701,19 +2701,19 @@ pub const Lowerer = struct {
                             const aligned_args = store.sliceVars(aligned_fn.args);
                             if (canonical_args.len != 0 or aligned_args.len != 0) {
                                 debugPanic(
-                                    "monotype specialization invariant violated: nullary function arg mismatch while aligning workspace vars",
+                                    "monotype specialization invariant violated: nullary function arg mismatch while aligning scoped specialization vars",
                                     .{},
                                 );
                             }
                             try self.alignScopeVarsVisited(type_scope, canonical_fn.ret, aligned_fn.ret, visited);
                         },
                         else => debugPanic(
-                            "monotype specialization invariant violated: function/content mismatch while aligning workspace vars",
+                            "monotype specialization invariant violated: function/content mismatch while aligning scoped specialization vars",
                             .{},
                         ),
                     },
                     else => debugPanic(
-                        "monotype specialization invariant violated: function/content mismatch while aligning workspace vars",
+                        "monotype specialization invariant violated: function/content mismatch while aligning scoped specialization vars",
                         .{},
                     ),
                 },
@@ -6726,7 +6726,7 @@ pub const Lowerer = struct {
                 }
             }
 
-            const target = try self.resolveAttachedMethodTargetFromWorkspaceVar(
+            const target = try self.resolveAttachedMethodTargetFromScopedVar(
                 module_idx,
                 type_scope,
                 receiver_var,
@@ -6787,7 +6787,7 @@ pub const Lowerer = struct {
             .nominal => |_| {
                 const method_name = self.ctx.typedCirModule(module_idx).commonIdents().is_eq;
                 const receiver_var = self.requireExprResultVar(module_idx, type_scope, binop.lhs);
-                const target = try self.resolveAttachedMethodTargetFromWorkspaceVar(
+                const target = try self.resolveAttachedMethodTargetFromScopedVar(
                     module_idx,
                     type_scope,
                     receiver_var,
@@ -10490,12 +10490,12 @@ pub const Lowerer = struct {
         const key = self.sourceTypeKey(source_module_idx, source_var);
         if (type_scope.source_var_map.get(key)) |scoped| return scoped;
         const source_module = self.ctx.typedCirModule(source_module_idx);
-        const copied_root = try type_clone_source.copyVarFromModule(
+        const copied_root = try clone_inst.copyVarFromModule(
             source_module_idx,
             source_module.typeStoreConst(),
             type_scope.typeStoreMut(),
             source_var,
-            &type_scope.copied_source_var_map,
+            &type_scope.cloned_source_var_map,
             source_module.identStoreConst(),
             type_scope.identStoreMut(),
             self.allocator,
@@ -10630,7 +10630,7 @@ pub const Lowerer = struct {
         }
     }
 
-    fn materializeWorkspaceTagUnionResidualVar(
+    fn materializeScopedTagUnionResidualVar(
         _: *Lowerer,
         residual_tags: []const types.Tag,
         residual_ext: Var,
@@ -10641,7 +10641,7 @@ pub const Lowerer = struct {
         return try scope_store.freshFromContentWithRank(content, types.Rank.generalized);
     }
 
-    fn materializeWorkspaceRecordResidualVar(
+    fn materializeScopedRecordResidualVar(
         _: *Lowerer,
         residual_fields: []const types.RecordField,
         terminal: FlattenedRecordTerminal,
@@ -10720,7 +10720,7 @@ pub const Lowerer = struct {
                             });
                         },
                         else => debugPanic(
-                            "monotype specialization invariant violated: empty-record/content mismatch while aligning workspace vars",
+                            "monotype specialization invariant violated: empty-record/content mismatch while aligning scoped specialization vars",
                             .{},
                         ),
                     }
@@ -10729,7 +10729,7 @@ pub const Lowerer = struct {
             .unbound => switch (aligned_terminal) {
                 .unbound => {},
                 .empty_record => debugPanic(
-                    "monotype specialization invariant violated: open-record/content mismatch while aligning workspace vars",
+                    "monotype specialization invariant violated: open-record/content mismatch while aligning scoped specialization vars",
                     .{},
                 ),
                 .var_ => |aligned_var| {
@@ -10743,7 +10743,7 @@ pub const Lowerer = struct {
                             });
                         },
                         else => debugPanic(
-                            "monotype specialization invariant violated: open-record/content mismatch while aligning workspace vars",
+                            "monotype specialization invariant violated: open-record/content mismatch while aligning scoped specialization vars",
                             .{},
                         ),
                     }
@@ -10761,7 +10761,7 @@ pub const Lowerer = struct {
                             });
                         },
                         else => debugPanic(
-                            "monotype specialization invariant violated: record extension/content mismatch while aligning workspace vars",
+                            "monotype specialization invariant violated: record extension/content mismatch while aligning scoped specialization vars",
                             .{},
                         ),
                     }
@@ -10777,7 +10777,7 @@ pub const Lowerer = struct {
                             });
                         },
                         else => debugPanic(
-                            "monotype specialization invariant violated: record extension/content mismatch while aligning workspace vars",
+                            "monotype specialization invariant violated: record extension/content mismatch while aligning scoped specialization vars",
                             .{},
                         ),
                     }
@@ -10855,27 +10855,27 @@ pub const Lowerer = struct {
                 },
                 .empty_record => .empty_record,
                 else => debugPanic(
-                    "monotype specialization invariant violated: attempted to flatten non-record workspace content as record",
+                    "monotype specialization invariant violated: attempted to flatten non-record scoped content as record",
                     .{},
                 ),
             },
             else => debugPanic(
-                "monotype specialization invariant violated: attempted to flatten non-structural workspace content as record",
+                "monotype specialization invariant violated: attempted to flatten non-structural scoped content as record",
                 .{},
             ),
         };
     }
 
-    const WorkspaceDispatchReceiverIdentity = struct {
+    const ScopedDispatchReceiverIdentity = struct {
         module_idx: u32,
         type_name: []const u8,
     };
 
-    fn resolveWorkspaceDispatchReceiverIdentity(
+    fn resolveScopedDispatchReceiverIdentity(
         self: *const Lowerer,
         type_scope: *const TypeCloneScope,
         receiver_var: Var,
-    ) ?WorkspaceDispatchReceiverIdentity {
+    ) ?ScopedDispatchReceiverIdentity {
         const resolved = type_scope.typeStoreConst().resolveVar(receiver_var);
         return switch (resolved.desc.content) {
             .alias => |alias| .{
@@ -10893,7 +10893,7 @@ pub const Lowerer = struct {
         };
     }
 
-    fn resolveAttachedMethodTargetFromWorkspaceVar(
+    fn resolveAttachedMethodTargetFromScopedVar(
         self: *Lowerer,
         source_module_idx: u32,
         type_scope: *TypeCloneScope,
@@ -10913,7 +10913,7 @@ pub const Lowerer = struct {
         const receiver_text = try receiver_writer.writeGet(receiver_var, .one_line);
         const receiver_copy = try self.allocator.dupe(u8, receiver_text);
         defer self.allocator.free(receiver_copy);
-        const receiver = self.resolveWorkspaceDispatchReceiverIdentity(type_scope, receiver_var) orelse {
+        const receiver = self.resolveScopedDispatchReceiverIdentity(type_scope, receiver_var) orelse {
             return null;
         };
         const receiver_module = self.ctx.typedCirModule(receiver.module_idx);
@@ -10953,7 +10953,7 @@ pub const Lowerer = struct {
         self: *const Lowerer,
         source_module_idx: u32,
         source_var: Var,
-    ) ?WorkspaceDispatchReceiverIdentity {
+    ) ?ScopedDispatchReceiverIdentity {
         const source_module = self.ctx.typedCirModule(source_module_idx);
         const source_store = source_module.typeStoreConst();
         const resolved = source_store.resolveVar(source_var);
@@ -10991,7 +10991,7 @@ pub const Lowerer = struct {
         };
     }
 
-    fn assertWorkspaceVarTypesEqual(
+    fn assertScopedVarTypesEqual(
         self: *Lowerer,
         module_idx: u32,
         type_scope: *TypeCloneScope,

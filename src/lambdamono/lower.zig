@@ -9,7 +9,7 @@ const type_mod = @import("type.zig");
 const symbol_mod = @import("symbol");
 const lower_type = @import("lower_type.zig");
 const specializations = @import("specializations.zig");
-const layout_facts = @import("layout_facts.zig");
+const layouts_mod = @import("layouts.zig");
 
 const Symbol = symbol_mod.Symbol;
 const TypeVarId = solved.Type.TypeVarId;
@@ -19,7 +19,7 @@ pub const Result = struct {
     root_defs: std.ArrayList(ast.DefId),
     symbols: symbol_mod.Store,
     types: type_mod.Store,
-    layout_facts: layout_facts.Facts,
+    layouts: layouts_mod.Layouts,
     strings: base.StringLiteral.Store,
     entrypoint_wrappers: []Symbol,
 
@@ -27,7 +27,7 @@ pub const Result = struct {
         self.store.deinit();
         self.root_defs.deinit(self.store.allocator);
         self.symbols.deinit();
-        self.layout_facts.deinit(self.store.allocator);
+        self.layouts.deinit(self.store.allocator);
         self.types.deinit();
         self.strings.deinit(self.store.allocator);
         if (self.entrypoint_wrappers.len > 0) {
@@ -54,13 +54,13 @@ pub fn runWithEntrypoints(
         }
     }
     try lowerer.lowerProgram();
-    var explicit_layout_facts = try layout_facts.Facts.initEmpty(allocator, &lowerer.output);
+    var explicit_layouts = try layouts_mod.Layouts.initEmpty(allocator, &lowerer.output);
     errdefer {
-        explicit_layout_facts.deinit(allocator);
+        explicit_layouts.deinit(allocator);
     }
-    try lowerer.finalizePublishedTypes(&explicit_layout_facts);
+    try lowerer.finalizeLayouts(&explicit_layouts);
     var result = try lowerer.finish();
-    result.layout_facts = explicit_layout_facts;
+    result.layouts = explicit_layouts;
     return result;
 }
 
@@ -162,7 +162,7 @@ const Lowerer = struct {
             .root_defs = self.root_defs,
             .symbols = self.input.symbols,
             .types = self.types,
-            .layout_facts = undefined,
+            .layouts = undefined,
             .strings = self.input.strings,
             .entrypoint_wrappers = self.entrypoint_wrappers,
         };
@@ -204,18 +204,18 @@ const Lowerer = struct {
         }
     }
 
-    fn finalizePublishedTypes(self: *Lowerer, facts: *layout_facts.Facts) std.mem.Allocator.Error!void {
+    fn finalizeLayouts(self: *Lowerer, layouts: *layouts_mod.Layouts) std.mem.Allocator.Error!void {
         for (self.output.typed_symbols.items, 0..) |*bind, i| {
             try self.finalizeTypedSymbol(bind);
-            try facts.recordTypedSymbol(self.allocator, &self.types, &self.input.idents, i, bind.*);
+            try layouts.recordTypedSymbol(self.allocator, &self.types, &self.input.idents, i, bind.*);
         }
         for (self.output.pats.items, 0..) |*pat, i| {
             pat.ty = try self.publishExecutableType(pat.ty);
-            try facts.recordPat(self.allocator, &self.types, &self.input.idents, &self.output, @enumFromInt(@as(u32, @intCast(i))), pat.*);
+            try layouts.recordPat(self.allocator, &self.types, &self.input.idents, &self.output, @enumFromInt(@as(u32, @intCast(i))), pat.*);
         }
         for (self.output.exprs.items, 0..) |*expr, i| {
             try self.finalizeExpr(expr, i);
-            try facts.recordExpr(self.allocator, &self.types, &self.input.idents, &self.output, @enumFromInt(@as(u32, @intCast(i))), expr.*);
+            try layouts.recordExpr(self.allocator, &self.types, &self.input.idents, &self.output, @enumFromInt(@as(u32, @intCast(i))), expr.*);
         }
         for (self.output.stmts.items) |*stmt| {
             try self.finalizeStmt(stmt);
@@ -226,18 +226,18 @@ const Lowerer = struct {
             const ret_ty = switch (def.value) {
                 .fn_ => |fn_def| self.output.getExpr(fn_def.body).ty,
                 .hosted_fn => def.result_ty orelse
-                    debugPanic("lambdamono.lower.finalizePublishedTypes hosted def missing explicit result type"),
+                    debugPanic("lambdamono.lower.finalizeLayouts hosted def missing explicit result type"),
                 .val => |expr_id| def.result_ty orelse self.output.getExpr(expr_id).ty,
                 .run => |run_def| def.result_ty orelse self.output.getExpr(run_def.body).ty,
             };
-            try facts.recordDefRet(self.allocator, &self.types, &self.input.idents, def_id, ret_ty);
+            try layouts.recordDefRet(self.allocator, &self.types, &self.input.idents, def_id, ret_ty);
         }
 
         const u32_ty = try self.types.internResolved(.{ .primitive = .u32 });
         const erased_ty = try self.types.internResolved(.{ .primitive = .erased });
         const box_erased_ty = try self.types.internResolved(.{ .box = erased_ty });
-        try facts.recordType(self.allocator, &self.types, &self.input.idents, u32_ty);
-        try facts.recordType(self.allocator, &self.types, &self.input.idents, box_erased_ty);
+        try layouts.recordType(self.allocator, &self.types, &self.input.idents, u32_ty);
+        try layouts.recordType(self.allocator, &self.types, &self.input.idents, box_erased_ty);
     }
 
     fn lowerProgram(self: *Lowerer) std.mem.Allocator.Error!void {

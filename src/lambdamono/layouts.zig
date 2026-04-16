@@ -1,4 +1,4 @@
-//! Builds the explicit logical executable-layout facts that later IR lowering
+//! Builds the explicit logical executable layouts that later IR lowering
 //! consumes. This is the one place where `lambdamono.TypeId` is lowered into
 //! the shared logical layout graph before `IR -> LIR/layout` commits physical
 //! layout exactly once.
@@ -28,7 +28,7 @@ const LayoutCache = struct {
     }
 };
 
-pub const Facts = struct {
+pub const Layouts = struct {
     graph: layout_mod.Graph,
     cache: LayoutCache,
     type_layouts: std.AutoHashMap(type_mod.TypeId, layout_mod.GraphRef),
@@ -44,8 +44,8 @@ pub const Facts = struct {
     pub fn initEmpty(
         allocator: std.mem.Allocator,
         store: *ast.Store,
-    ) std.mem.Allocator.Error!Facts {
-        const facts = Facts{
+    ) std.mem.Allocator.Error!Layouts {
+        const layouts = Layouts{
             .graph = .{},
             .cache = LayoutCache.init(allocator),
             .type_layouts = std.AutoHashMap(type_mod.TypeId, layout_mod.GraphRef).init(allocator),
@@ -58,16 +58,16 @@ pub const Facts = struct {
             .expr_tag_payload_layouts = try allocator.alloc(?layout_mod.GraphRef, store.exprs.items.len),
             .pat_tag_payload_layouts = try allocator.alloc(?layout_mod.GraphRef, store.pats.items.len),
         };
-        errdefer facts.deinit(allocator);
+        errdefer layouts.deinit(allocator);
 
-        @memset(facts.expr_field_layouts, null);
-        @memset(facts.expr_discriminant_layouts, null);
-        @memset(facts.expr_tag_payload_layouts, null);
-        @memset(facts.pat_tag_payload_layouts, null);
-        return facts;
+        @memset(layouts.expr_field_layouts, null);
+        @memset(layouts.expr_discriminant_layouts, null);
+        @memset(layouts.expr_tag_payload_layouts, null);
+        @memset(layouts.pat_tag_payload_layouts, null);
+        return layouts;
     }
 
-    pub fn deinit(self: *Facts, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *Layouts, allocator: std.mem.Allocator) void {
         allocator.free(self.pat_tag_payload_layouts);
         allocator.free(self.expr_tag_payload_layouts);
         allocator.free(self.expr_discriminant_layouts);
@@ -81,69 +81,69 @@ pub const Facts = struct {
         self.graph.deinit(allocator);
     }
 
-    pub fn layoutForType(self: *const Facts, ty: type_mod.TypeId) layout_mod.GraphRef {
-        return self.type_layouts.get(ty) orelse debugPanic("lambdamono.layout_facts.layoutForType missing lowered type");
+    pub fn layoutForType(self: *const Layouts, ty: type_mod.TypeId) layout_mod.GraphRef {
+        return self.type_layouts.get(ty) orelse debugPanic("lambdamono.layouts.layoutForType missing lowered type");
     }
 
-    pub fn exprLayout(self: *const Facts, expr_id: ast.ExprId) layout_mod.GraphRef {
+    pub fn exprLayout(self: *const Layouts, expr_id: ast.ExprId) layout_mod.GraphRef {
         return self.expr_layouts[@intFromEnum(expr_id)];
     }
 
-    pub fn patLayout(self: *const Facts, pat_id: ast.PatId) layout_mod.GraphRef {
+    pub fn patLayout(self: *const Layouts, pat_id: ast.PatId) layout_mod.GraphRef {
         return self.pat_layouts[@intFromEnum(pat_id)];
     }
 
-    pub fn typedSymbolLayout(self: *const Facts, typed_symbol_idx: usize) layout_mod.GraphRef {
+    pub fn typedSymbolLayout(self: *const Layouts, typed_symbol_idx: usize) layout_mod.GraphRef {
         return self.typed_symbol_layouts[typed_symbol_idx];
     }
 
-    pub fn defRetLayout(self: *const Facts, def_id: ast.DefId) layout_mod.GraphRef {
+    pub fn defRetLayout(self: *const Layouts, def_id: ast.DefId) layout_mod.GraphRef {
         return self.def_ret_layouts[@intFromEnum(def_id)];
     }
 
-    pub fn exprFieldLayout(self: *const Facts, expr_id: ast.ExprId) layout_mod.GraphRef {
+    pub fn exprFieldLayout(self: *const Layouts, expr_id: ast.ExprId) layout_mod.GraphRef {
         return self.expr_field_layouts[@intFromEnum(expr_id)] orelse
-            debugPanic("lambdamono.layout_facts.exprFieldLayout missing explicit field layout");
+            debugPanic("lambdamono.layouts.exprFieldLayout missing explicit field layout");
     }
 
-    pub fn exprDiscriminantLayout(self: *const Facts, expr_id: ast.ExprId) ?layout_mod.GraphRef {
+    pub fn exprDiscriminantLayout(self: *const Layouts, expr_id: ast.ExprId) ?layout_mod.GraphRef {
         return self.expr_discriminant_layouts[@intFromEnum(expr_id)];
     }
 
-    pub fn exprTagPayloadLayout(self: *const Facts, expr_id: ast.ExprId) layout_mod.GraphRef {
+    pub fn exprTagPayloadLayout(self: *const Layouts, expr_id: ast.ExprId) layout_mod.GraphRef {
         return self.expr_tag_payload_layouts[@intFromEnum(expr_id)] orelse
-            debugPanic("lambdamono.layout_facts.exprTagPayloadLayout missing explicit payload layout");
+            debugPanic("lambdamono.layouts.exprTagPayloadLayout missing explicit payload layout");
     }
 
-    pub fn patTagPayloadLayout(self: *const Facts, pat_id: ast.PatId) layout_mod.GraphRef {
+    pub fn patTagPayloadLayout(self: *const Layouts, pat_id: ast.PatId) layout_mod.GraphRef {
         return self.pat_tag_payload_layouts[@intFromEnum(pat_id)] orelse
-            debugPanic("lambdamono.layout_facts.patTagPayloadLayout missing explicit payload layout");
+            debugPanic("lambdamono.layouts.patTagPayloadLayout missing explicit payload layout");
     }
 
     pub fn recordTypedSymbol(
-        self: *Facts,
+        self: *Layouts,
         allocator: std.mem.Allocator,
         mono_types: *type_mod.Store,
         idents: *const base.Ident.Store,
         index: usize,
         value: ast.TypedSymbol,
     ) std.mem.Allocator.Error!void {
-        self.typed_symbol_layouts[index] = try self.layoutForPublishedType(allocator, mono_types, idents, value.ty);
+        self.typed_symbol_layouts[index] = try self.layoutForExecutableType(allocator, mono_types, idents, value.ty);
     }
 
     pub fn recordType(
-        self: *Facts,
+        self: *Layouts,
         allocator: std.mem.Allocator,
         mono_types: *type_mod.Store,
         idents: *const base.Ident.Store,
         ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!void {
-        const layout_ref = try self.layoutForPublishedType(allocator, mono_types, idents, ty);
+        const layout_ref = try self.layoutForExecutableType(allocator, mono_types, idents, ty);
         try self.type_layouts.put(ty, layout_ref);
     }
 
     pub fn recordExpr(
-        self: *Facts,
+        self: *Layouts,
         allocator: std.mem.Allocator,
         mono_types: *type_mod.Store,
         idents: *const base.Ident.Store,
@@ -152,7 +152,7 @@ pub const Facts = struct {
         expr: ast.Expr,
     ) std.mem.Allocator.Error!void {
         const i = @intFromEnum(expr_id);
-        self.expr_layouts[i] = try self.layoutForPublishedType(allocator, mono_types, idents, expr.ty);
+        self.expr_layouts[i] = try self.layoutForExecutableType(allocator, mono_types, idents, expr.ty);
         self.expr_discriminant_layouts[i] = try self.maybeDiscriminantLayout(self.exprLayout(expr_id));
         switch (expr.data) {
             .tag => |tag| {
@@ -201,7 +201,7 @@ pub const Facts = struct {
     }
 
     fn maybeDiscriminantLayout(
-        self: *Facts,
+        self: *Layouts,
         layout_ref: layout_mod.GraphRef,
     ) std.mem.Allocator.Error!?layout_mod.GraphRef {
         var current = layout_ref;
@@ -231,7 +231,7 @@ pub const Facts = struct {
     }
 
     pub fn recordPat(
-        self: *Facts,
+        self: *Layouts,
         allocator: std.mem.Allocator,
         mono_types: *type_mod.Store,
         idents: *const base.Ident.Store,
@@ -240,7 +240,7 @@ pub const Facts = struct {
         pat: ast.Pat,
     ) std.mem.Allocator.Error!void {
         const i = @intFromEnum(pat_id);
-        self.pat_layouts[i] = try self.layoutForPublishedType(allocator, mono_types, idents, pat.ty);
+        self.pat_layouts[i] = try self.layoutForExecutableType(allocator, mono_types, idents, pat.ty);
         switch (pat.data) {
             .tag => |tag| {
                 if (store.slicePatSpan(tag.args).len == 0) return;
@@ -251,17 +251,17 @@ pub const Facts = struct {
     }
 
     pub fn recordDefRet(
-        self: *Facts,
+        self: *Layouts,
         allocator: std.mem.Allocator,
         mono_types: *type_mod.Store,
         idents: *const base.Ident.Store,
         def_id: ast.DefId,
         ret_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!void {
-        self.def_ret_layouts[@intFromEnum(def_id)] = try self.layoutForPublishedType(allocator, mono_types, idents, ret_ty);
+        self.def_ret_layouts[@intFromEnum(def_id)] = try self.layoutForExecutableType(allocator, mono_types, idents, ret_ty);
     }
 
-    fn unwrapNominalRef(self: *Facts, ref: layout_mod.GraphRef) layout_mod.GraphRef {
+    fn unwrapNominalRef(self: *Layouts, ref: layout_mod.GraphRef) layout_mod.GraphRef {
         var current = ref;
         while (true) {
             switch (current) {
@@ -274,8 +274,8 @@ pub const Facts = struct {
         }
     }
 
-    fn layoutForPublishedType(
-        self: *Facts,
+    fn layoutForExecutableType(
+        self: *Layouts,
         allocator: std.mem.Allocator,
         mono_types: *type_mod.Store,
         idents: *const base.Ident.Store,
@@ -288,58 +288,58 @@ pub const Facts = struct {
     }
 
     fn unionPayloadLayout(
-        self: *Facts,
+        self: *Layouts,
         union_layout: layout_mod.GraphRef,
         discriminant: u16,
     ) std.mem.Allocator.Error!layout_mod.GraphRef {
         const resolved = try self.resolveUnionLayout(union_layout);
         return switch (resolved) {
-            .canonical => debugPanic("lambdamono.layout_facts.unionPayloadLayout expected local union layout"),
+            .canonical => debugPanic("lambdamono.layouts.unionPayloadLayout expected local union layout"),
             .local => |node_id| switch (self.graph.getNode(node_id)) {
                 .tag_union => |variants| self.graph.getRefs(variants)[discriminant],
-                else => debugPanic("lambdamono.layout_facts.unionPayloadLayout expected tag union layout"),
+                else => debugPanic("lambdamono.layouts.unionPayloadLayout expected tag union layout"),
             },
         };
     }
 
     pub fn structFieldLayout(
-        self: *Facts,
+        self: *Layouts,
         struct_layout: layout_mod.GraphRef,
         field_index: u16,
     ) std.mem.Allocator.Error!layout_mod.GraphRef {
         const resolved = try self.resolveStructLayout(struct_layout);
         return switch (resolved) {
-            .canonical => debugPanic("lambdamono.layout_facts.structFieldLayout expected local struct layout"),
+            .canonical => debugPanic("lambdamono.layouts.structFieldLayout expected local struct layout"),
             .local => |node_id| switch (self.graph.getNode(node_id)) {
                 .struct_ => |fields| self.graph.getFields(fields)[field_index].child,
-                else => debugPanic("lambdamono.layout_facts.structFieldLayout expected struct layout"),
+                else => debugPanic("lambdamono.layouts.structFieldLayout expected struct layout"),
             },
         };
     }
 
-    fn resolveUnionLayout(self: *Facts, layout_ref: layout_mod.GraphRef) std.mem.Allocator.Error!layout_mod.GraphRef {
+    fn resolveUnionLayout(self: *Layouts, layout_ref: layout_mod.GraphRef) std.mem.Allocator.Error!layout_mod.GraphRef {
         var current = layout_ref;
         while (true) {
             switch (current) {
-                .canonical => debugPanic("lambdamono.layout_facts.resolveUnionLayout expected local layout"),
+                .canonical => debugPanic("lambdamono.layouts.resolveUnionLayout expected local layout"),
                 .local => |node_id| switch (self.graph.getNode(node_id)) {
                     .nominal => |nominal| current = nominal,
                     .tag_union => return current,
-                    else => debugPanic("lambdamono.layout_facts.resolveUnionLayout expected nominal or tag union"),
+                    else => debugPanic("lambdamono.layouts.resolveUnionLayout expected nominal or tag union"),
                 },
             }
         }
     }
 
-    fn resolveStructLayout(self: *Facts, layout_ref: layout_mod.GraphRef) std.mem.Allocator.Error!layout_mod.GraphRef {
+    fn resolveStructLayout(self: *Layouts, layout_ref: layout_mod.GraphRef) std.mem.Allocator.Error!layout_mod.GraphRef {
         var current = layout_ref;
         while (true) {
             switch (current) {
-                .canonical => debugPanic("lambdamono.layout_facts.resolveStructLayout expected local layout"),
+                .canonical => debugPanic("lambdamono.layouts.resolveStructLayout expected local layout"),
                 .local => |node_id| switch (self.graph.getNode(node_id)) {
                     .nominal => |nominal| current = nominal,
                     .struct_ => return current,
-                    else => debugPanic("lambdamono.layout_facts.resolveStructLayout expected nominal or struct"),
+                    else => debugPanic("lambdamono.layouts.resolveStructLayout expected nominal or struct"),
                 },
             }
         }
@@ -373,7 +373,7 @@ fn lowerTypeRec(
     if (cache.active_by_type.get(keyed_ty)) |active| return active;
 
     return switch (mono_types.getTypePreservingNominal(keyed_ty)) {
-        .placeholder => debugPanic("lambdamono.layout_facts.lowerTypeRec unresolved executable type"),
+        .placeholder => debugPanic("lambdamono.layouts.lowerTypeRec unresolved executable type"),
         .link => unreachable,
         .primitive => |prim| blk: {
             const resolved: layout_mod.GraphRef = .{ .canonical = lowerPrim(prim) };
@@ -408,9 +408,9 @@ fn lowerNode(
     ty: type_mod.TypeId,
 ) std.mem.Allocator.Error!layout_mod.GraphNode {
     return switch (mono_types.getTypePreservingNominal(ty)) {
-        .placeholder => debugPanic("lambdamono.layout_facts.lowerNode unresolved executable type"),
+        .placeholder => debugPanic("lambdamono.layouts.lowerNode unresolved executable type"),
         .link => unreachable,
-        .primitive => debugPanic("lambdamono.layout_facts.lowerNode primitive should have been returned directly"),
+        .primitive => debugPanic("lambdamono.layouts.lowerNode primitive should have been returned directly"),
         .nominal => |nominal| .{ .nominal = try lowerTypeRec(allocator, mono_types, idents, graph, cache, nominal.backing) },
         .list => |elem| .{ .list = try lowerTypeRec(allocator, mono_types, idents, graph, cache, elem) },
         .box => |elem| .{ .box = try lowerTypeRec(allocator, mono_types, idents, graph, cache, elem) },
@@ -509,6 +509,6 @@ fn debugPanic(comptime msg: []const u8) noreturn {
     std.debug.panic("{s}", .{msg});
 }
 
-test "layout facts tests" {
+test "layouts tests" {
     std.testing.refAllDecls(@This());
 }
