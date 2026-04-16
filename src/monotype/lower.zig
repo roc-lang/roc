@@ -1485,7 +1485,7 @@ pub const Lowerer = struct {
         var type_scope: TypeScope = undefined;
         try type_scope.initAll(self.allocator, typed_cir_module);
         defer type_scope.deinit();
-        const specialized_checker_var = try self.materializeSpecializedTopLevelCheckerVar(&type_scope, pending);
+        const specialized_checker_var = try self.restoreCheckerSnapshot(&type_scope, pending.expected_checker_snapshot);
 
         if (solved_def.expr.data == .e_hosted_lambda) {
             return try self.lowerHostedTopLevelDefWithScope(
@@ -1592,14 +1592,6 @@ pub const Lowerer = struct {
         });
         try self.emitted_defs_by_symbol.put(bind_symbol, lowered);
         return lowered;
-    }
-
-    fn materializeSpecializedTopLevelCheckerVar(
-        self: *Lowerer,
-        type_scope: *TypeScope,
-        pending: specializations_mod.Pending,
-    ) std.mem.Allocator.Error!Var {
-        return try self.restoreCheckerSnapshot(type_scope, pending.expected_checker_snapshot);
     }
 
     fn snapshotCheckerVarFromStores(
