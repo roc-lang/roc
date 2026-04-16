@@ -9,7 +9,6 @@ const Var = types.Var;
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
-const MethodKey = ModuleEnv.MethodKey;
 const CommonIdents = ModuleEnv.CommonIdents;
 const EvaluationOrder = can.DependencyGraph.EvaluationOrder;
 const CompactWriter = collections.CompactWriter;
@@ -84,11 +83,6 @@ pub const Modules = struct {
     module_idxs_by_name: std.StringHashMapUnmanaged(u32),
 
     pub const ResolvedDefTarget = struct {
-        module_idx: u32,
-        def_idx: CIR.Def.Idx,
-    };
-
-    pub const ResolvedMethodTarget = struct {
         module_idx: u32,
         def_idx: CIR.Def.Idx,
     };
@@ -207,33 +201,6 @@ pub const Modules = struct {
         };
     }
 
-    pub fn resolveAttachedMethodTargetFromSourceVar(
-        self: @This(),
-        source_module_idx: u32,
-        source_var: Var,
-        method_name: []const u8,
-    ) ?ResolvedMethodTarget {
-        const source_module = self.module(source_module_idx);
-        const receiver = source_module.dispatchReceiverIdentity(source_var) orelse return null;
-        const defining = self.resolveExternalIdent(
-            source_module.getIdent(receiver.origin_module),
-            source_module.getIdent(receiver.type_ident),
-        ) orelse return null;
-        return self.module(defining.module_idx).resolveAttachedMethodTargetByText(
-            source_module.getIdent(receiver.type_ident),
-            method_name,
-        );
-    }
-
-    pub fn resolveAttachedMethodTarget(
-        self: @This(),
-        module_idx: u32,
-        type_ident: Ident.Idx,
-        method_ident: Ident.Idx,
-    ) ?ResolvedMethodTarget {
-        return self.module(module_idx).resolveAttachedMethodTargetByIdents(type_ident, method_ident);
-    }
-
     pub fn resolveTopLevelDefByName(
         self: @This(),
         module_idx: u32,
@@ -273,11 +240,6 @@ pub const Module = struct {
         pub fn deinit(self: *@This(), allocator: Allocator) void {
             allocator.free(self.args);
         }
-    };
-
-    pub const DispatchReceiverIdentity = struct {
-        origin_module: Ident.Idx,
-        type_ident: Ident.Idx,
     };
 
     fn env(self: @This()) *ModuleEnv {
@@ -338,17 +300,6 @@ pub const Module = struct {
 
     pub fn requiresTypes(self: @This()) []const ModuleEnv.RequiredType {
         return self.env().requires_types.items.items;
-    }
-
-    pub fn lookupMethodIdent(
-        self: @This(),
-        local_type_ident: Ident.Idx,
-        local_method_ident: Ident.Idx,
-    ) ?Ident.Idx {
-        return self.env().method_idents.get(self.env().gpa, MethodKey{
-            .type_ident = local_type_ident,
-            .method_ident = local_method_ident,
-        });
     }
 
     pub fn nodeTag(self: @This(), idx: CIR.Node.Idx) CIR.Node.Tag {
@@ -436,24 +387,6 @@ pub const Module = struct {
         return self.typeStoreConst().resolveVar(var_).var_;
     }
 
-    pub fn dispatchReceiverIdentity(self: @This(), source_var: Var) ?DispatchReceiverIdentity {
-        const resolved = self.typeStoreConst().resolveVar(source_var);
-        return switch (resolved.desc.content) {
-            .alias => |alias| .{
-                .origin_module = alias.origin_module,
-                .type_ident = alias.ident.ident_idx,
-            },
-            .structure => |flat| switch (flat) {
-                .nominal_type => |nominal| .{
-                    .origin_module = nominal.origin_module,
-                    .type_ident = nominal.ident.ident_idx,
-                },
-                else => null,
-            },
-            else => null,
-        };
-    }
-
     pub fn expr(self: @This(), idx: CIR.Expr.Idx) Expr {
         return .{
             .owner = self,
@@ -480,29 +413,6 @@ pub const Module = struct {
 
     pub fn exprIdxFromTypeVar(_: @This(), var_: Var) ?CIR.Expr.Idx {
         return @enumFromInt(@intFromEnum(ModuleEnv.nodeIdxFrom(var_)));
-    }
-
-    pub fn resolveAttachedMethodTargetByIdents(
-        self: @This(),
-        local_type_ident: Ident.Idx,
-        local_method_ident: Ident.Idx,
-    ) ?Modules.ResolvedMethodTarget {
-        const method_ident = self.lookupMethodIdent(local_type_ident, local_method_ident) orelse return null;
-        const exposed = self.env().getExposedNodeIndexById(method_ident) orelse return null;
-        return .{
-            .module_idx = self.module_idx,
-            .def_idx = @enumFromInt(@as(u32, @intCast(exposed))),
-        };
-    }
-
-    pub fn resolveAttachedMethodTargetByText(
-        self: @This(),
-        type_name: []const u8,
-        method_name: []const u8,
-    ) ?Modules.ResolvedMethodTarget {
-        const local_type_ident = self.findCommonIdent(type_name) orelse return null;
-        const local_method_ident = self.findCommonIdent(method_name) orelse return null;
-        return self.resolveAttachedMethodTargetByIdents(local_type_ident, local_method_ident);
     }
 
     pub fn getStatement(self: @This(), idx: CIR.Statement.Idx) CIR.Statement {
