@@ -10407,23 +10407,6 @@ pub const Lowerer = struct {
         return self.lookupFunctionArgVarInStore(type_scope.typeStoreConst(), fn_var, arg_index);
     }
 
-    fn requireFunctionArgVar(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeCloneScope,
-        fn_var: ?Var,
-        arg_index: usize,
-    ) std.mem.Allocator.Error!Var {
-        const function_var = fn_var orelse debugPanic(
-            "monotype invariant violated: missing specialized function var in module {d}",
-            .{module_idx},
-        );
-        return self.lookupCurriedFunctionArgVarInStore(type_scope.typeStoreConst(), function_var, arg_index) orelse debugPanic(
-            "monotype invariant violated: missing specialized function argument {d} in module {d}",
-            .{ arg_index, module_idx },
-        );
-    }
-
     fn lookupCurriedFunctionArgVarInStore(
         self: *const Lowerer,
         store: *const types.Store,
@@ -12170,40 +12153,6 @@ pub const Lowerer = struct {
         const arg_var = self.lookupCurriedFunctionArgVarInStore(type_scope.typeStoreConst(), function_var, arg_index) orelse
             debugPanic("monotype invariant violated: missing function arg {d} in module {d}", .{ arg_index, module_idx });
         return try self.instantiateVarType(module_idx, type_scope, arg_var);
-    }
-
-    fn requireFunctionRetType(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeCloneScope,
-        fn_var: ?Var,
-    ) std.mem.Allocator.Error!type_mod.TypeId {
-        const function_var = fn_var orelse debugPanic(
-            "monotype invariant violated: missing function var while requiring function return type in module {d}",
-            .{module_idx},
-        );
-        const ret_var = self.lookupFunctionRetVarInStore(type_scope.typeStoreConst(), function_var) orelse debugPanic(
-            "monotype invariant violated: missing function return var in module {d}",
-            .{module_idx},
-        );
-        return try self.instantiateVarType(module_idx, type_scope, ret_var);
-    }
-
-    fn requireCurriedFunctionFinalRetType(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeCloneScope,
-        fn_var: ?Var,
-    ) std.mem.Allocator.Error!type_mod.TypeId {
-        const function_var = fn_var orelse debugPanic(
-            "monotype invariant violated: missing function var while requiring curried final return type in module {d}",
-            .{module_idx},
-        );
-        const ret_var = self.lookupCurriedFunctionResultVarInStore(type_scope.typeStoreConst(), function_var) orelse debugPanic(
-            "monotype invariant violated: missing curried function final return var in module {d}",
-            .{module_idx},
-        );
-        return try self.instantiateVarType(module_idx, type_scope, ret_var);
     }
 
     fn functionArgCount(
