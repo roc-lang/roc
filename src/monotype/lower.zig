@@ -1,7 +1,7 @@
 //! Monotype lowering from typed CIR.
 //!
 //! This follows cor's strategy:
-//! - lower solved checker types into a monomorphic type graph
+//! - lower solved types into a monomorphic type graph
 //! - register top-level function sources once
 //! - lower top-level values/runs immediately
 //! - specialize top-level functions on demand from variable references
@@ -6003,7 +6003,7 @@ pub const Lowerer = struct {
         };
     }
 
-    fn copyTopLevelDefExprVarToScope(
+    fn instantiateTopLevelDefSourceVar(
         self: *Lowerer,
         type_scope: *TypeScope,
         source_module_idx: u32,
@@ -6054,7 +6054,7 @@ pub const Lowerer = struct {
                 "monotype static dispatch invariant violated: method call missing explicit source receiver type in module {d}",
                 .{module_idx},
             );
-        const source_fn_var = try self.copyTopLevelDefExprVarToScope(type_scope, resolved_target.module_idx, resolved_target.def_idx);
+        const source_fn_var = try self.instantiateTopLevelDefSourceVar(type_scope, resolved_target.module_idx, resolved_target.def_idx);
 
         const arg_exprs = blk: {
             if (args.implicit_receiver) |receiver| {
@@ -6112,7 +6112,7 @@ pub const Lowerer = struct {
                     source_receiver_var,
                     method_name,
                 );
-                const source_fn_var = try self.copyTopLevelDefExprVarToScope(type_scope, target.module_idx, target.def_idx);
+                const source_fn_var = try self.instantiateTopLevelDefSourceVar(type_scope, target.module_idx, target.def_idx);
                 const arg_exprs = [_]CIR.Expr.Idx{ binop.lhs, binop.rhs };
 
                 var call_info = try self.prepareCallInfo(module_idx, type_scope, expr_idx, source_fn_var, &arg_exprs);
@@ -9667,7 +9667,7 @@ pub const Lowerer = struct {
                     top_level,
                     expected_ty,
                     expected_var orelse debugPanic(
-                        "monotype specialization invariant violated: missing exact checker seed for local top-level specialization {d}",
+                        "monotype specialization invariant violated: missing exact solved seed for local top-level specialization {d}",
                         .{top_level_symbol.raw()},
                     ),
                 );
@@ -9933,7 +9933,7 @@ pub const Lowerer = struct {
                     top_level,
                     expected_ty,
                     expected_var orelse debugPanic(
-                        "monotype specialization invariant violated: missing exact checker seed for external top-level specialization {d}",
+                        "monotype specialization invariant violated: missing exact solved seed for external top-level specialization {d}",
                         .{symbol.raw()},
                     ),
                 );
@@ -9958,15 +9958,6 @@ pub const Lowerer = struct {
                 );
             }
         }
-    }
-
-    fn copyCheckerVarToScope(
-        self: *Lowerer,
-        type_scope: *TypeScope,
-        source_module_idx: u32,
-        source_var: Var,
-    ) std.mem.Allocator.Error!Var {
-        return self.instantiateSourceVar(type_scope, source_module_idx, source_var);
     }
 
     fn buildCurriedFuncType(
@@ -10066,7 +10057,7 @@ pub const Lowerer = struct {
                     top_level,
                     expected_ty,
                     expected_var orelse debugPanic(
-                        "monotype specialization invariant violated: missing exact checker seed for resolved target specialization {d}",
+                        "monotype specialization invariant violated: missing exact solved seed for resolved target specialization {d}",
                         .{source_symbol.raw()},
                     ),
                 );
