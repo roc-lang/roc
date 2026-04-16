@@ -68,7 +68,7 @@ EndOfFile,
 			(e-literal (string "hello"))))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(e-dot-access (field "inspect")
+	(e-field-access (field "inspect")
 		(receiver
 			(e-lookup-local
 				(p-assign (ident "x"))))

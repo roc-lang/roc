@@ -168,7 +168,7 @@ answer = composed([42])
 		(e-lambda
 			(args
 				(p-assign (ident "r")))
-			(e-dot-access (field "value")
+			(e-field-access (field "value")
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "r"))))))

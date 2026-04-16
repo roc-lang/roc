@@ -370,11 +370,10 @@ test "NodeStore round trip - Expressions" {
         .e_unary_not = CIR.Expr.UnaryNot.init(rand_idx(CIR.Expr.Idx)),
     });
     try expressions.append(gpa, CIR.Expr{
-        .e_dot_access = .{
+        .e_field_access = .{
             .receiver = rand_idx(CIR.Expr.Idx),
             .field_name = rand_ident_idx(),
             .field_name_region = rand_region(),
-            .args = null,
         },
     });
     try expressions.append(gpa, CIR.Expr{
@@ -441,14 +440,6 @@ test "NodeStore round trip - Expressions" {
             .patt = rand_idx(CIR.Pattern.Idx),
             .expr = rand_idx(CIR.Expr.Idx),
             .body = rand_idx(CIR.Expr.Idx),
-        },
-    });
-    try expressions.append(gpa, CIR.Expr{
-        .e_type_var_dispatch = .{
-            .type_var_alias_stmt = rand_idx(CIR.Statement.Idx),
-            .receiver_var = rand_idx(types.Var),
-            .method_name = rand_ident_idx(),
-            .args = .{ .span = .{ .start = rand.random().int(u32), .len = rand.random().int(u32) } },
         },
     });
     try expressions.append(gpa, CIR.Expr{

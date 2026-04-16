@@ -66,11 +66,6 @@ fn toVarRange(range: anytype) types.Var.SafeList.Range {
     return @as(RangeType, range);
 }
 
-/// Callback function type for checking and rendering nominal types with custom to_inspect methods.
-/// Returns the rendered string if the type has a to_inspect method, null otherwise.
-/// Ownership of the returned string is transferred to the caller.
-pub const ToInspectCallback = *const fn (ctx: *anyopaque, value: StackValue, rt_var: types.Var) ?[]u8;
-
 /// Shared rendering context that provides allocator, module environment, and runtime caches.
 pub const RenderCtx = struct {
     allocator: std.mem.Allocator,
@@ -78,11 +73,6 @@ pub const RenderCtx = struct {
     runtime_types: *types.store.Store,
     layout_store: *layout.Store,
     type_scope: *const TypeScope,
-    /// Optional callback for handling nominal types with custom to_inspect methods.
-    /// If set, this callback will be invoked when rendering nominal type values.
-    to_inspect_callback: ?ToInspectCallback = null,
-    /// Opaque context pointer passed to the to_inspect callback.
-    callback_ctx: ?*anyopaque = null,
 };
 
 fn shouldPreferIntegerLayoutRendering(ctx: *RenderCtx, rt_var: types.Var) bool {
@@ -138,7 +128,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
         }
     }
 
-    // unwrap aliases/nominals, but check for to_inspect callbacks on nominal types first
+    // unwrap aliases/nominals while preserving special Box rendering
     unwrap: while (true) {
         switch (resolved.desc.content) {
             .alias => |al| {
@@ -147,16 +137,6 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
             },
             .structure => |st| switch (st) {
                 .nominal_type => |nt| {
-                    // Check if there's a to_inspect callback for this nominal type
-                    if (ctx.to_inspect_callback) |callback| {
-                        if (ctx.callback_ctx) |cb_ctx| {
-                            // The callback returns the rendered string if the type has to_inspect,
-                            // null otherwise
-                            if (callback(cb_ctx, value, rt_var)) |rendered| {
-                                return rendered;
-                            }
-                        }
-                    }
                     // Special handling for Box before unwrapping
                     if (nt.ident.ident_idx.eql(ctx.env.idents.box)) {
                         // Use sliceNominalArgs which skips the backing var (first element)
@@ -293,7 +273,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                         try out.append(']');
                         return out.toOwnedSlice();
                     }
-                    // No custom to_inspect, unwrap to backing type
+                    // No custom rendering here; unwrap to the backing type.
                     const backing = ctx.runtime_types.getNominalBackingVar(nt);
                     resolved = ctx.runtime_types.resolveVar(backing);
                 },

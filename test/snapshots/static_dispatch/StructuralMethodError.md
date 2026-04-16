@@ -139,7 +139,7 @@ main = {
 			(s-let
 				(p-assign (ident "x"))
 				(e-empty_record))
-			(e-dot-access (field "greet")
+			(e-field-access (field "greet")
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))

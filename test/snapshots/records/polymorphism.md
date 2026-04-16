@@ -136,7 +136,7 @@ EndOfFile,
 				(p-assign (ident "make_pair")))
 			(e-tag (name "True"))
 			(e-tag (name "False"))))
-	(e-dot-access (field "to_str")
+	(e-field-access (field "to_str")
 		(receiver
 			(e-record
 				(fields

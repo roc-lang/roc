@@ -284,7 +284,7 @@ transform = |_, b| b
 		(e-lambda
 			(args
 				(p-assign (ident "record")))
-			(e-dot-access (field "other")
+			(e-field-access (field "other")
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "record"))))))

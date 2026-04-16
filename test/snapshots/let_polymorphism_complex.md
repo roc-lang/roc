@@ -1042,7 +1042,7 @@ main = |_| {
 				(p-underscore))
 			(e-block
 				(e-binop (op "add")
-					(e-dot-access (field "value")
+					(e-field-access (field "value")
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "container1")))))

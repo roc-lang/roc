@@ -189,7 +189,6 @@ fn lowerTypeRec(
                 .module_idx = nominal.module_idx,
                 .ident = nominal.ident,
                 .is_opaque = nominal.is_opaque,
-                .to_inspect_symbol = nominal.to_inspect_symbol,
                 .args = try mono_types.dupeTypeIds(lowered_args),
                 .backing = try lowerTypeRec(types, mono_types, mono_cache, nominal.backing, symbols),
             } };

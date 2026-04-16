@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Dot access expression
+description=Field access expression
 type=expr
 ~~~
 # SOURCE
@@ -8,14 +8,14 @@ type=expr
 list.map(fn)
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - can_dot_access.md:1:1:1:5
-UNDEFINED VARIABLE - can_dot_access.md:1:10:1:12
+UNDEFINED VARIABLE - can_field_access.md:1:1:1:5
+UNDEFINED VARIABLE - can_field_access.md:1:10:1:12
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `list` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**can_dot_access.md:1:1:1:5:**
+**can_field_access.md:1:1:1:5:**
 ```roc
 list.map(fn)
 ```
@@ -26,7 +26,7 @@ list.map(fn)
 Nothing is named `fn` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**can_dot_access.md:1:10:1:12:**
+**can_field_access.md:1:10:1:12:**
 ```roc
 list.map(fn)
 ```
@@ -52,7 +52,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dot-access (field "map")
+(e-field-access (field "map")
 	(receiver
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(args

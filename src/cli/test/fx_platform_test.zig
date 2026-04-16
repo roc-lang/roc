@@ -999,7 +999,7 @@ test "fx platform var with string interpolation segfault (dev backend)" {
 test "fx platform sublist method on inferred type" {
     // Regression test: Calling .sublist() method on a List(U8) from "".to_utf8()
     // causes a segfault when the variable doesn't have an explicit type annotation.
-    // Error was: "Roc crashed: Error evaluating from shared memory: InvalidMethodReceiver"
+    // Error was an old shared-memory evaluation crash
     const allocator = testing.allocator;
 
     const run_result = try util.runRoc(allocator, &.{}, "test/fx/sublist_method_segfault.roc");

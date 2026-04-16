@@ -186,7 +186,7 @@ NO CHANGE
 			(ty-lookup (name "MyType") (local))))
 	(d-let
 		(p-assign (ident "result2"))
-		(e-dot-access (field "plus")
+		(e-field-access (field "plus")
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "c"))))

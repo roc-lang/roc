@@ -109,7 +109,7 @@ match person {
 								(p-assign (ident "first_name"))))
 						(e-call
 							(e-runtime-error (tag "nested_value_not_found"))
-							(e-dot-access (field "last_name")
+							(e-field-access (field "last_name")
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "others"))))))))))))

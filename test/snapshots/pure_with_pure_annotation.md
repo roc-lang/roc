@@ -97,7 +97,7 @@ NO CHANGE
 			(args
 				(p-assign (ident "x"))
 				(p-assign (ident "y")))
-			(e-dot-access (field "x")
+			(e-field-access (field "x")
 				(receiver
 					(e-record
 						(fields

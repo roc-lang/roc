@@ -393,11 +393,11 @@ NO CHANGE
 						(e-lookup-local
 							(p-assign (ident "update_data")))))
 				(e-binop (op "add")
-					(e-dot-access (field "count")
+					(e-field-access (field "count")
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "int_container")))))
-					(e-dot-access (field "count")
+					(e-field-access (field "count")
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "str_container"))))))))))

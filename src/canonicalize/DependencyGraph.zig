@@ -187,13 +187,8 @@ fn collectExprDependencies(
             }
         },
 
-        .e_dot_access => |access| {
+        .e_field_access => |access| {
             try collectExprDependencies(cir, access.receiver, dependencies, allocator);
-            if (access.args) |args_span| {
-                for (cir.store.sliceExpr(args_span)) |arg_idx| {
-                    try collectExprDependencies(cir, arg_idx, dependencies, allocator);
-                }
-            }
         },
 
         .e_tuple_access => |tuple_access| {
@@ -309,13 +304,6 @@ fn collectExprDependencies(
         .e_for => |for_expr| {
             try collectExprDependencies(cir, for_expr.expr, dependencies, allocator);
             try collectExprDependencies(cir, for_expr.body, dependencies, allocator);
-        },
-
-        .e_type_var_dispatch => |tvd| {
-            // Collect dependencies from the arguments
-            for (cir.store.exprSlice(tvd.args)) |arg_idx| {
-                try collectExprDependencies(cir, arg_idx, dependencies, allocator);
-            }
         },
 
         .e_runtime_error => {},

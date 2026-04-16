@@ -18,7 +18,6 @@ const RocDec = builtins.dec.RocDec;
 const DataSpan = base.DataSpan;
 const Region = base.Region;
 const Ident = base.Ident;
-const FunctionArgs = base.FunctionArgs;
 
 /// When storing optional indices/values where 0 is a valid value, we add this offset
 /// to distinguish "value is 0" from "value is null". This is a common pattern when
@@ -887,21 +886,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .context = @enumFromInt(p.context),
             } };
         },
-        .expr_type_var_dispatch => {
-            const p = payload.expr_type_var_dispatch;
-            // Retrieve type var dispatch data from node and span2_data
-            const type_var_alias_stmt: CIR.Statement.Idx = @enumFromInt(p.type_var_alias_stmt);
-            const receiver_var: types.Var = @enumFromInt(p.receiver_var);
-            const method_name: base.Ident.Idx = @bitCast(p.method_name);
-            const args_span = store.span2_data.items.items[p.args_span2_idx];
-
-            return CIR.Expr{ .e_type_var_dispatch = .{
-                .type_var_alias_stmt = type_var_alias_stmt,
-                .receiver_var = receiver_var,
-                .method_name = method_name,
-                .args = .{ .span = .{ .start = args_span.start, .len = args_span.len } },
-            } };
-        },
         .expr_hosted_lambda => {
             const p = payload.expr_hosted_lambda;
             const args_span = store.span2_data.items.items[p.args_span2_idx];
@@ -945,25 +929,17 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .final_else = @enumFromInt(branches_else.node),
             } };
         },
-        .expr_dot_access => {
-            const p = payload.expr_dot_access;
-            // Read region + args from span_with_node_data
-            const region_args = store.span_with_node_data.items.items[p.region_args_idx];
+        .expr_field_access => {
+            const p = payload.expr_field_access;
+            const region_span = store.span2_data.items.items[p.field_name_region_span2_idx];
             const field_name_region = base.Region{
-                .start = .{ .offset = region_args.start },
-                .end = .{ .offset = region_args.len },
+                .start = .{ .offset = region_span.start },
+                .end = .{ .offset = region_span.len },
             };
-            const args_span = if (region_args.node != 0) blk: {
-                const packed_span = FunctionArgs.fromU32(region_args.node - OPTIONAL_VALUE_OFFSET);
-                const data_span = packed_span.toDataSpan();
-                break :blk CIR.Expr.Span{ .span = data_span };
-            } else null;
-
-            return CIR.Expr{ .e_dot_access = .{
+            return CIR.Expr{ .e_field_access = .{
                 .receiver = @enumFromInt(p.receiver),
                 .field_name = @bitCast(p.field_name),
                 .field_name_region = field_name_region,
-                .args = args_span,
             } };
         },
         .malformed => {
@@ -1989,24 +1965,17 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .backing_span2_idx = backing_span2_idx,
             } });
         },
-        .e_dot_access => |e| {
-            node.tag = .expr_dot_access;
-            // Store region + optional args in span_with_node_data
-            const region_args_idx: u32 = @intCast(store.span_with_node_data.len());
-            const packed_args: u32 = if (e.args) |args| blk: {
-                std.debug.assert(FunctionArgs.canFit(args.span));
-                const packed_span = FunctionArgs.fromDataSpanUnchecked(args.span);
-                break :blk packed_span.toU32() + OPTIONAL_VALUE_OFFSET;
-            } else 0;
-            _ = try store.span_with_node_data.append(store.gpa, .{
+        .e_field_access => |e| {
+            node.tag = .expr_field_access;
+            const span2_idx: u32 = @intCast(store.span2_data.len());
+            _ = try store.span2_data.append(store.gpa, .{
                 .start = e.field_name_region.start.offset,
                 .len = e.field_name_region.end.offset,
-                .node = packed_args,
             });
-            node.setPayload(.{ .expr_dot_access = .{
+            node.setPayload(.{ .expr_field_access = .{
                 .receiver = @intFromEnum(e.receiver),
                 .field_name = @bitCast(e.field_name),
-                .region_args_idx = region_args_idx,
+                .field_name_region_span2_idx = span2_idx,
             } });
         },
         .e_runtime_error => |e| {
@@ -2042,19 +2011,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .expr = @intFromEnum(ret.expr),
                 .lambda = @intFromEnum(ret.lambda),
                 .context = @intFromEnum(ret.context),
-            } });
-        },
-        .e_type_var_dispatch => |tvd| {
-            node.tag = .expr_type_var_dispatch;
-            // Store args span in span2_data
-            const span2_idx: u32 = @intCast(store.span2_data.len());
-            _ = try store.span2_data.append(store.gpa, .{ .start = tvd.args.span.start, .len = tvd.args.span.len });
-
-            node.setPayload(.{ .expr_type_var_dispatch = .{
-                .type_var_alias_stmt = @intFromEnum(tvd.type_var_alias_stmt),
-                .receiver_var = @intFromEnum(tvd.receiver_var),
-                .method_name = @bitCast(tvd.method_name),
-                .args_span2_idx = span2_idx,
             } });
         },
         .e_hosted_lambda => |hosted| {

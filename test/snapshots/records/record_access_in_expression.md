@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Record field access used in expressions (dot-access)
+description=Record field access used in expressions (field-access)
 type=expr
 ~~~
 # SOURCE
@@ -41,7 +41,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-binop (op "add")
-	(e-dot-access (field "age")
+	(e-field-access (field "age")
 		(receiver
 			(e-runtime-error (tag "ident_not_in_scope"))))
 	(e-num (value "5")))

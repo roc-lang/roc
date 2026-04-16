@@ -10397,7 +10397,7 @@ L2 := [DS].{
 		(e-num (value "100")))
 	(d-let
 		(p-assign (ident "d1_1"))
-		(e-dot-access (field "first")
+		(e-field-access (field "first")
 			(receiver
 				(e-runtime-error (tag "ident_not_in_scope")))))
 	(d-let
@@ -10405,7 +10405,7 @@ L2 := [DS].{
 		(e-num (value "200")))
 	(d-let
 		(p-assign (ident "d1_2"))
-		(e-dot-access (field "inner")
+		(e-field-access (field "inner")
 			(receiver
 				(e-runtime-error (tag "ident_not_in_scope")))))
 	(d-let
@@ -10413,7 +10413,7 @@ L2 := [DS].{
 		(e-num (value "300")))
 	(d-let
 		(p-assign (ident "d2_1"))
-		(e-dot-access (field "outer_val")
+		(e-field-access (field "outer_val")
 			(receiver
 				(e-runtime-error (tag "ident_not_in_scope")))))
 	(d-let
@@ -10430,7 +10430,7 @@ L2 := [DS].{
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "d2_4"))
-		(e-dot-access (field "outer_val")
+		(e-field-access (field "outer_val")
 			(receiver
 				(e-runtime-error (tag "ident_not_in_scope")))))
 	(d-let
@@ -10444,7 +10444,7 @@ L2 := [DS].{
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "d3_1"))
-		(e-dot-access (field "val1")
+		(e-field-access (field "val1")
 			(receiver
 				(e-runtime-error (tag "ident_not_in_scope")))))
 	(d-let
@@ -10458,7 +10458,7 @@ L2 := [DS].{
 		(e-num (value "30")))
 	(d-let
 		(p-assign (ident "d3_4"))
-		(e-dot-access (field "val1")
+		(e-field-access (field "val1")
 			(receiver
 				(e-runtime-error (tag "ident_not_in_scope")))))
 	(d-let
@@ -10475,7 +10475,7 @@ L2 := [DS].{
 		(e-num (value "5")))
 	(d-let
 		(p-assign (ident "d3_7"))
-		(e-dot-access (field "val1")
+		(e-field-access (field "val1")
 			(receiver
 				(e-runtime-error (tag "ident_not_in_scope")))))
 	(d-let
@@ -10552,7 +10552,7 @@ L2 := [DS].{
 		(e-num (value "5")))
 	(d-let
 		(p-assign (ident "d5_6"))
-		(e-dot-access (field "val1")
+		(e-field-access (field "val1")
 			(receiver
 				(e-runtime-error (tag "ident_not_in_scope")))))
 	(d-let

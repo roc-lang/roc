@@ -2566,17 +2566,17 @@ expect {
 					(e-match
 						(match
 							(cond
-								(e-dot-access (field "record_field")
+								(e-field-access (field "record_field")
 									(receiver
 										(e-match
 											(match
 												(cond
-													(e-dot-access (field "next_static_dispatch_method")
+													(e-field-access (field "next_static_dispatch_method")
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dot-access (field "static_dispatch_method")
+																		(e-field-access (field "static_dispatch_method")
 																			(receiver
 																				(e-match
 																					(match

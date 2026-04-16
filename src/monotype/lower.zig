@@ -199,8 +199,8 @@ const Ctx = struct {
             return self.source_module.topLevelDefByIdent(ident);
         }
 
-        pub fn methodIdentEntries(self: @This()) []const ModuleEnv.MethodIdents.Entry {
-            return self.source_module.methodIdentEntries();
+        pub fn attachedMethodIdentEntries(self: @This()) []const ModuleEnv.AttachedMethodIdents.Entry {
+            return self.source_module.attachedMethodIdentEntries();
         }
 
         pub fn sourceVarRoot(self: @This(), var_: Var) Var {
@@ -1257,7 +1257,7 @@ pub const Lowerer = struct {
         for (0..self.ctx.moduleCount()) |module_idx_usize| {
             const module_idx: u32 = @intCast(module_idx_usize);
             const typed_cir_module = self.ctx.typedCirModule(module_idx);
-            for (typed_cir_module.methodIdentEntries()) |entry| {
+            for (typed_cir_module.attachedMethodIdentEntries()) |entry| {
                 const method_def_idx = typed_cir_module.topLevelDefByIdent(entry.value) orelse debugPanic(
                     "monotype attached method invariant violated: missing top-level def for registered method in module {d}",
                     .{module_idx},
@@ -2170,14 +2170,14 @@ pub const Lowerer = struct {
         expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!u16 {
         const expr = self.ctx.typedCirModule(module_idx).expr(expr_idx).data;
-        const dot = switch (expr) {
-            .e_dot_access => |dot| dot,
-            else => debugPanic("monotype invariant violated: expected dot access for field index lookup", .{}),
+        const field_access = switch (expr) {
+            .e_field_access => |field_access| field_access,
+            else => debugPanic("monotype invariant violated: expected field access for field index lookup", .{}),
         };
-        const receiver_ty = try self.requireExprType(module_idx, type_scope, dot.receiver);
+        const receiver_ty = try self.requireExprType(module_idx, type_scope, field_access.receiver);
         return self.requireRecordFieldIndexFromMonotypeType(
             receiver_ty,
-            self.ctx.typedCirModule(module_idx).getIdent(dot.field_name),
+            self.ctx.typedCirModule(module_idx).getIdent(field_access.field_name),
         );
     }
 
@@ -2731,23 +2731,10 @@ pub const Lowerer = struct {
                 .op = .bool_not,
                 .args = try self.lowerExprSlice(module_idx, type_scope, env, &.{unary.expr}),
             } },
-            .e_dot_access => |dot| blk: {
-                if (dot.args) |_| {
-                    return self.lowerMethodCallExpr(
-                        module_idx,
-                        type_scope,
-                        env,
-                        expr.idx,
-                        try self.requireExprType(module_idx, type_scope, dot.receiver),
-                        dot.field_name,
-                        dot.receiver,
-                        typed_cir_module.sliceExpr(dot.args.?),
-                        ty,
-                    );
-                }
+            .e_field_access => |field_access| blk: {
                 break :blk .{ .access = .{
-                    .record = try self.lowerExpr(module_idx, type_scope, env, dot.receiver),
-                    .field = try self.ctx.copyExecutableIdent(module_idx, dot.field_name),
+                    .record = try self.lowerExpr(module_idx, type_scope, env, field_access.receiver),
+                    .field = try self.ctx.copyExecutableIdent(module_idx, field_access.field_name),
                     .field_index = try self.requireExprFieldIndex(module_idx, type_scope, expr.idx),
                 } };
             },
@@ -2808,17 +2795,6 @@ pub const Lowerer = struct {
                 .op = ll.op,
                 .args = try self.lowerExprList(module_idx, type_scope, env, ll.args),
             } },
-            .e_type_var_dispatch => |dispatch| return self.lowerMethodCallExpr(
-                module_idx,
-                type_scope,
-                env,
-                expr.idx,
-                try self.instantiateSourceVarType(module_idx, type_scope, dispatch.receiver_var),
-                dispatch.method_name,
-                null,
-                typed_cir_module.sliceExpr(dispatch.args),
-                ty,
-            ),
             else => debugTodoExpr(expr.data),
         };
 
@@ -6459,33 +6435,7 @@ pub const Lowerer = struct {
                     .data = .{ .var_ = symbol },
                 });
             },
-            .e_dot_access => |dot| blk: {
-                if (dot.args == null) {
-                    break :blk try self.lowerSolvedExpr(module_idx, type_scope, env, expr);
-                }
-                break :blk try self.lowerMethodCallExpr(
-                    module_idx,
-                    type_scope,
-                    env,
-                    expr.idx,
-                    try self.requireExprType(module_idx, type_scope, dot.receiver),
-                    dot.field_name,
-                    dot.receiver,
-                    typed_cir_module.sliceExpr(dot.args.?),
-                    target_ty,
-                );
-            },
-            .e_type_var_dispatch => |dispatch| try self.lowerMethodCallExpr(
-                module_idx,
-                type_scope,
-                env,
-                expr.idx,
-                try self.instantiateSourceVarType(module_idx, type_scope, dispatch.receiver_var),
-                dispatch.method_name,
-                null,
-                typed_cir_module.sliceExpr(dispatch.args),
-                target_ty,
-            ),
+            .e_field_access => |_| try self.lowerSolvedExpr(module_idx, type_scope, env, expr),
             else => try self.lowerSolvedExpr(module_idx, type_scope, env, expr),
         };
     }
@@ -7571,19 +7521,8 @@ pub const Lowerer = struct {
                 try self.collectSolvedExprInfo(module_idx, type_scope, env, solved_module.expr(unary.expr));
                 break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
-            .e_dot_access => |dot| blk: {
-                try self.collectSolvedExprInfo(module_idx, type_scope, env, solved_module.expr(dot.receiver));
-                if (dot.args) |dispatch_args| {
-                    for (typed_cir_module.sliceExpr(dispatch_args)) |arg_expr| {
-                        try self.collectSolvedExprInfo(module_idx, type_scope, env, solved_module.expr(arg_expr));
-                    }
-                }
-                break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
-            },
-            .e_type_var_dispatch => |dispatch| blk: {
-                for (typed_cir_module.sliceExpr(dispatch.args)) |arg_expr| {
-                    try self.collectSolvedExprInfo(module_idx, type_scope, env, solved_module.expr(arg_expr));
-                }
+            .e_field_access => |field_access| blk: {
+                try self.collectSolvedExprInfo(module_idx, type_scope, env, solved_module.expr(field_access.receiver));
                 break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
             .e_match => |match_expr| blk: {
@@ -8146,20 +8085,11 @@ pub const Lowerer = struct {
         try type_scope.nominal_type_cache.put(owned_key, nominal_type_id);
 
         const exec_defining_ident = try self.ctx.copyExecutableIdent(defining.module_idx, defining_ident);
-        const exec_to_inspect_ident = try self.ctx.copyExecutableIdent(
-            defining.module_idx,
-            defining_module.commonIdents().to_inspect,
-        );
         const backing_var = type_scope.typeStoreConst().getNominalBackingVar(nominal);
         return .{ .nominal = .{
             .module_idx = defining.module_idx,
             .ident = exec_defining_ident,
             .is_opaque = nominal.is_opaque,
-            .to_inspect_symbol = self.attached_methods.get(.{
-                .module_idx = defining.module_idx,
-                .type_ident = exec_defining_ident,
-                .method_ident = exec_to_inspect_ident,
-            }) orelse symbol_mod.Symbol.none,
             .args = try self.ctx.types.dupeTypeIds(lowered_args),
             .backing = try self.lowerInstantiatedType(module_idx, type_scope, backing_var),
         } };

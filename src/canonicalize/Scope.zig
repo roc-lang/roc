@@ -40,7 +40,7 @@ pub const ForwardReference = struct {
     reference_regions: std.ArrayList(Region),
 };
 
-/// Information about a type variable alias binding (for static dispatch on type vars)
+/// Information about a type variable alias binding.
 /// Example: `Thing : thing` creates an alias allowing `Thing.method(arg)` to dispatch
 /// based on what `thing` resolves to at runtime.
 pub const TypeVarAliasBinding = struct {
@@ -61,7 +61,7 @@ forward_references: std.AutoHashMapUnmanaged(Ident.Idx, ForwardReference),
 type_bindings: std.AutoHashMapUnmanaged(Ident.Idx, TypeBinding),
 /// Maps type variables to their type annotation indices
 type_vars: std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx),
-/// Maps uppercase alias names to type variable aliases (for static dispatch on type vars)
+/// Maps uppercase alias names to type variable aliases.
 /// The key is the alias name (e.g., "Thing"), the value contains the type var info
 type_var_aliases: std.AutoHashMapUnmanaged(Ident.Idx, TypeVarAliasBinding),
 /// Maps module alias names to their full module info (name + whether package-qualified)
@@ -431,7 +431,7 @@ pub fn lookupTypeVar(scope: *const Scope, name: Ident.Idx) TypeVarLookupResult {
     return TypeVarLookupResult{ .not_found = {} };
 }
 
-/// Look up a type variable alias in this scope (for static dispatch on type vars)
+/// Look up a type variable alias in this scope.
 pub fn lookupTypeVarAlias(scope: *const Scope, name: Ident.Idx) TypeVarAliasLookupResult {
     // Search by identifier equality.
     var iter = scope.type_var_aliases.iterator();
@@ -443,7 +443,7 @@ pub fn lookupTypeVarAlias(scope: *const Scope, name: Ident.Idx) TypeVarAliasLook
     return TypeVarAliasLookupResult{ .not_found = {} };
 }
 
-/// Introduce a type variable alias into this scope (for static dispatch on type vars)
+/// Introduce a type variable alias into this scope.
 pub fn introduceTypeVarAlias(
     scope: *Scope,
     gpa: std.mem.Allocator,

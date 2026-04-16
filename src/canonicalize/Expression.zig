@@ -332,21 +332,15 @@ pub const Expr = union(enum) {
     /// !True           # Unary not on literal
     /// ```
     e_unary_not: UnaryNot,
-    /// Dot access expression that represents field access or method calls.
-    /// The exact meaning is determined after type inference based on the receiver's type:
-    /// - Record field access: `person.name`
-    /// - Static Dispatch (method-style) call: `list.map(fn)` (semantically this is equal to `List.map(list, fn)`)
+    /// Field access expression.
     ///
     /// ```roc
-    /// person.name         # Record field access
-    /// list.len()          # Static Dispatch
-    /// list.map(|x| x)     # Static Dispatch version of above
+    /// person.name
     /// ```
-    e_dot_access: struct {
-        receiver: Expr.Idx, // Expression before the dot (e.g., `list` in `list.map`)
-        field_name: Ident.Idx, // Identifier after the dot (e.g., `map` in `list.map`)
-        field_name_region: base.Region, // Region of just the field/method name for error reporting
-        args: ?Expr.Span, // Optional arguments for method calls (e.g., `fn` in `list.map(fn)`)
+    e_field_access: struct {
+        receiver: Expr.Idx,
+        field_name: Ident.Idx,
+        field_name_region: base.Region,
     },
     /// Tuple element access by numeric index.
     /// Accesses an element of a tuple using dot notation with a numeric index.
@@ -447,31 +441,6 @@ pub const Expr = union(enum) {
             /// `?` suffix operator (try operator) desugaring
             try_suffix,
         };
-    },
-
-    /// Type variable dispatch expression for calling methods on type variable aliases.
-    /// This is created when the user writes `Thing.method(args)` inside a function body
-    /// where `Thing` is a type variable alias introduced by a statement like `Thing : thing`.
-    ///
-    /// The actual function to call is resolved during monomorphization once the type variable
-    /// is unified with a concrete type. For example, if `thing` resolves to `List(a)`,
-    /// then `Thing.len(x)` becomes `List.len(x)`.
-    ///
-    /// ```roc
-    /// # Static dispatch: method is resolved based on concrete type at monomorphization time
-    /// call_default = |thing|
-    ///     Thing : thing
-    ///     Thing.default()  # Calls List.default, Bool.default, etc. based on concrete type
-    /// ```
-    e_type_var_dispatch: struct {
-        /// Reference to the s_type_var_alias statement that introduced this type alias
-        type_var_alias_stmt: CIR.Statement.Idx,
-        /// The receiver type variable that this method dispatch resolves against
-        receiver_var: TypeVar,
-        /// The method name being called (e.g., "default" in Thing.default())
-        method_name: Ident.Idx,
-        /// Arguments to the method call (may be empty for no-arg methods)
-        args: Expr.Span,
     },
 
     /// For expression that iterates over a list and executes a body for each element.
@@ -1165,9 +1134,9 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .e_dot_access => |e| {
+            .e_field_access => |e| {
                 const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-dot-access");
+                try tree.pushStaticAtom("e-field-access");
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 try tree.pushStringPair("field", ir.getIdentText(e.field_name));
@@ -1178,16 +1147,6 @@ pub const Expr = union(enum) {
                 const receiver_attrs = tree.beginNode();
                 try ir.store.getExpr(e.receiver).pushToSExprTree(ir, tree, e.receiver);
                 try tree.endNode(receiver_begin, receiver_attrs);
-
-                if (e.args) |args| {
-                    const args_begin = tree.beginNode();
-                    try tree.pushStaticAtom("args");
-                    const args_attrs = tree.beginNode();
-                    for (ir.store.exprSlice(args)) |arg_idx| {
-                        try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
-                    }
-                    try tree.endNode(args_begin, args_attrs);
-                }
 
                 try tree.endNode(begin, attrs);
             },
@@ -1317,25 +1276,6 @@ pub const Expr = union(enum) {
 
                 // Add inner expression
                 try ir.store.getExpr(ret.expr).pushToSExprTree(ir, tree, ret.expr);
-
-                try tree.endNode(begin, attrs);
-            },
-            .e_type_var_dispatch => |tvd| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-type-var-dispatch");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-
-                // Add method name
-                const method_text = ir.getIdent(tvd.method_name);
-                try tree.pushStringPair("method", method_text);
-
-                const attrs = tree.beginNode();
-
-                // Add arguments if any
-                for (ir.store.exprSlice(tvd.args)) |arg_idx| {
-                    try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
-                }
 
                 try tree.endNode(begin, attrs);
             },

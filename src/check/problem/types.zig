@@ -148,7 +148,7 @@ pub const TypePair = struct {
     expected_snapshot: SnapshotContentIdx,
     actual_var: Var,
     actual_snapshot: SnapshotContentIdx,
-    /// The specific region where this constraint originated from (e.g., dot access expression)
+    /// The specific region where this constraint originated from (e.g., field access expression)
     /// If present, this region should be highlighted instead of the variable's region
     constraint_origin_var: ?Var = null,
 };

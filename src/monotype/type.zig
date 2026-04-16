@@ -3,10 +3,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
-const symbol_mod = @import("symbol");
-
-const Symbol = symbol_mod.Symbol;
-
 pub const TypeId = enum(u32) { _ };
 pub const TypeIds = []const TypeId;
 
@@ -47,7 +43,6 @@ pub const Nominal = struct {
     module_idx: u32,
     ident: base.Ident.Idx,
     is_opaque: bool,
-    to_inspect_symbol: Symbol,
     args: TypeIds,
     backing: TypeId,
 };
@@ -479,7 +474,6 @@ pub const Store = struct {
                     .module_idx = nominal.module_idx,
                     .ident = nominal.ident,
                     .is_opaque = nominal.is_opaque,
-                    .to_inspect_symbol = nominal.to_inspect_symbol,
                     .args = lowered_args,
                     .backing = try self.internTypeIdInner(nominal.backing, active),
                 } };
@@ -638,7 +632,6 @@ pub const Store = struct {
                         try self_builder.store.appendInternKeyValue(nominal.module_idx);
                         try self_builder.store.appendInternKeyValue(@as(u32, @bitCast(nominal.ident)));
                         try self_builder.store.appendInternKeyValue(@as(u8, @intFromBool(nominal.is_opaque)));
-                        try self_builder.store.appendInternKeyValue(nominal.to_inspect_symbol.raw());
                         try self_builder.store.appendInternKeyValue(@as(u32, @intCast(nominal.args.len)));
                         for (nominal.args) |arg| {
                             try self_builder.serializeType(arg);
@@ -749,7 +742,6 @@ pub const Store = struct {
                 if (nominal.module_idx != right_nominal.module_idx) break :blk false;
                 if (nominal.ident != right_nominal.ident) break :blk false;
                 if (nominal.is_opaque != right_nominal.is_opaque) break :blk false;
-                if (nominal.to_inspect_symbol != right_nominal.to_inspect_symbol) break :blk false;
                 if (nominal.args.len != right_nominal.args.len) break :blk false;
                 for (nominal.args, right_nominal.args) |left_arg, right_arg| {
                     if (!try self.equalIdsVisited(left_arg, right_arg, visited)) break :blk false;
@@ -817,7 +809,6 @@ test "nominal identity preserves generic arguments" {
         .module_idx = 7,
         .ident = foo_ident,
         .is_opaque = true,
-        .to_inspect_symbol = Symbol.none,
         .args = try store.dupeTypeIds(&.{u8_ty}),
         .backing = bool_ty,
     } });
@@ -825,7 +816,6 @@ test "nominal identity preserves generic arguments" {
         .module_idx = 7,
         .ident = foo_ident,
         .is_opaque = true,
-        .to_inspect_symbol = Symbol.none,
         .args = try store.dupeTypeIds(&.{i64_ty}),
         .backing = bool_ty,
     } });
@@ -833,7 +823,6 @@ test "nominal identity preserves generic arguments" {
         .module_idx = 7,
         .ident = foo_ident,
         .is_opaque = true,
-        .to_inspect_symbol = Symbol.none,
         .args = try store.dupeTypeIds(&.{u8_ty}),
         .backing = bool_ty,
     } });

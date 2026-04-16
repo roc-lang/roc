@@ -66,7 +66,7 @@ foo = |num| {
 				(p-assign (ident "num")))
 			(e-block
 				(s-dbg
-					(e-dot-access (field "to_str")
+					(e-field-access (field "to_str")
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "num"))))

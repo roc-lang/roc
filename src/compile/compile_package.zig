@@ -1230,7 +1230,7 @@ pub const PackageEnv = struct {
                 break :blk builtin_module_env;
             } else builtin_module_env;
 
-            // For platform type modules, set statement_idx so method lookups work correctly
+            // For platform type modules, set statement_idx so attached methods stay aligned
             const statement_idx: ?can.CIR.Statement.Idx = if (actual_env != builtin_module_env) stmt_blk: {
                 // Look up the type in the module's exposed_items to get the actual node index
                 const type_ident_in_module = actual_env.common.findIdent(base_module_name) orelse break :stmt_blk null;

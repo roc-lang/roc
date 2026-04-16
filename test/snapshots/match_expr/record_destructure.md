@@ -117,7 +117,7 @@ match ... {
 						(e-lookup-local
 							(p-assign (ident "name")))
 						(e-literal (string " is "))
-						(e-dot-access (field "to_str")
+						(e-field-access (field "to_str")
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "age"))))

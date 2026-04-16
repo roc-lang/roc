@@ -52,7 +52,7 @@ a = 0->b()
 (can-ir
 	(d-let
 		(p-assign (ident "a"))
-		(e-dot-access (field "c")
+		(e-field-access (field "c")
 			(receiver
 				(e-call
 					(e-runtime-error (tag "ident_not_in_scope"))

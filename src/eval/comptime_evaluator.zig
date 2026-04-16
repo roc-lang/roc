@@ -1368,109 +1368,13 @@ pub const ComptimeEvaluator = struct {
                 },
             };
 
-            // Step 2: Look up the from_numeral method for this nominal type
-            // Get the module where the type is defined
-            const origin_module_ident = nominal_type.origin_module;
-            const is_builtin = origin_module_ident.eql(self.env.idents.builtin_module);
-
-            const origin_env: *const ModuleEnv = if (is_builtin) blk: {
-                break :blk self.interpreter.builtin_module_env orelse {
-                    // No builtin module available (shouldn't happen in normal compilation)
-                    continue;
-                };
-            } else blk: {
-                // For user-defined types, use interpreter's module lookup
-                break :blk self.interpreter.module_envs.get(origin_module_ident) orelse {
-                    // Module not found - might be current module
-                    if (origin_module_ident.eql(self.env.qualified_module_ident)) {
-                        break :blk self.env;
-                    }
-                    // Unknown module - skip for now
-                    continue;
-                };
-            };
-
-            // Look up the method using ident indices directly via the method_idents map
-            // Pass self.env as the source since that's where the idents are from
-            const ident_in_origin = origin_env.lookupMethodIdentFromEnvConst(
-                self.env,
-                nominal_type.ident.ident_idx,
-                literal.constraint.fn_name,
-            ) orelse {
-                // Method not found - the type doesn't have a from_numeral method
-                // Use import mapping to get the user-facing display name
-                const short_type_name = import_mapping_mod.getDisplayName(
-                    self.interpreter.import_mapping,
-                    self.env.common.getIdentStore(),
-                    nominal_type.ident.ident_idx,
-                );
-                const error_msg = try self.problems.putFmtExtraString(
-                    "Type {s} does not have a from_numeral method",
-                    .{short_type_name},
-                );
-                const problem = Problem{
-                    .comptime_eval_error = .{
-                        .error_name = error_msg,
-                        .region = literal.region,
-                    },
-                };
-                _ = try self.problems.appendProblem(self.allocator, problem);
-                continue;
-            };
-
-            // Get the definition index
-            const node_idx_in_origin = origin_env.getExposedNodeIndexById(ident_in_origin) orelse {
-                // Definition not exposed - this is also an error
-                // Use import mapping to get the user-facing display name
-                const short_type_name = import_mapping_mod.getDisplayName(
-                    self.interpreter.import_mapping,
-                    self.env.common.getIdentStore(),
-                    nominal_type.ident.ident_idx,
-                );
-                const error_msg = try self.problems.putFmtExtraString(
-                    "Type {s} does not have an accessible from_numeral method",
-                    .{short_type_name},
-                );
-                const problem = Problem{
-                    .comptime_eval_error = .{
-                        .error_name = error_msg,
-                        .region = literal.region,
-                    },
-                };
-                _ = try self.problems.appendProblem(self.allocator, problem);
-                continue;
-            };
-
-            const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_origin)));
-
-            // Get num_lit_info for validation
+            const is_builtin = nominal_type.origin_module.eql(self.env.idents.builtin_module);
             const num_lit_info = literal.constraint.num_literal orelse {
-                // No NumeralInfo means this isn't a from_numeral constraint
                 continue;
             };
-
-            // Step 3: Validate the literal by invoking from_numeral
-            // All types (builtin and user-defined) use the same unified path
-            const is_valid = try self.invokeFromNumeral(
-                origin_env,
-                def_idx,
-                num_lit_info,
-                literal.region,
-                literal.type_var,
-            );
-
-            if (!is_valid) {
-                // Error already reported by invokeFromNumeral
-                // Mark this expression as failed so we skip evaluating it
-                try self.failed_literal_exprs.put(literal.expr_idx, {});
-                continue;
-            }
-
-            // Validation passed - rewrite the expression for builtin types
             if (is_builtin) {
                 try self.rewriteNumericLiteralExpr(literal.expr_idx, nominal_type.ident.ident_idx, num_lit_info);
             }
-            // For user-defined types, keep the original expression
         }
     }
 

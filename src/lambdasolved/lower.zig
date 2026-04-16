@@ -407,7 +407,6 @@ const Lowerer = struct {
                     .module_idx = nominal.module_idx,
                     .ident = nominal.ident,
                     .is_opaque = nominal.is_opaque,
-                    .to_inspect_symbol = nominal.to_inspect_symbol,
                     .args = try self.types.addTypeVarSpan(lowered_args),
                     .backing = try self.instantiateTypeRec(nominal.backing, cache),
                 } };
@@ -2404,7 +2403,6 @@ const Lowerer = struct {
                     .module_idx = nominal.module_idx,
                     .ident = nominal.ident,
                     .is_opaque = nominal.is_opaque,
-                    .to_inspect_symbol = nominal.to_inspect_symbol,
                     .args = try self.types.addTypeVarSpan(lowered_args),
                     .backing = try self.instantiateGeneralizedRec(nominal.backing, mapping),
                 } };

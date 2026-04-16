@@ -78,7 +78,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .idents = ModuleEnv.CommonIdents.find(&common),
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
         .import_mapping = types.import_mapping.ImportMapping.init(gpa),
-        .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
+        .attached_method_idents = serialized_ptr.attached_method_idents.deserializeInto(base_ptr),
         .rigid_vars = std.AutoHashMapUnmanaged(base.Ident.Idx, types.Var){},
     };
 
@@ -441,29 +441,6 @@ const MonoTestEnv = struct {
     }
 };
 
-test "cross-module mono: static dispatch lookup finds method in imported module" {
-    // Module A defines a type with a method
-    const source_a =
-        \\A := [A(U64)].{
-        \\  get_value : A -> U64
-        \\  get_value = |A.A(val)| val
-        \\}
-    ;
-    var env_a = try MonoTestEnv.init("A", source_a);
-    defer env_a.deinit();
-
-    // Verify module A has the method registered
-    const a_type_ident = env_a.module_env.common.findIdent("A");
-    try testing.expect(a_type_ident != null);
-
-    const get_value_ident = env_a.module_env.common.findIdent("get_value");
-    try testing.expect(get_value_ident != null);
-
-    // Check that the method is registered in method_idents
-    const method_lookup = env_a.module_env.lookupMethodIdent(a_type_ident.?, get_value_ident.?);
-    try testing.expect(method_lookup != null);
-}
-
 test "cross-module mono: importing module can reference methods from imported type" {
     // Module A defines a type with a method
     const source_a =
@@ -493,43 +470,6 @@ test "cross-module mono: importing module can reference methods from imported ty
     try testing.expect(a_ident_in_b != null);
 }
 
-test "cross-module mono: static dispatch method registration in type module" {
-    // This tests that when a type module defines methods, they are properly
-    // registered so that other modules can look them up for static dispatch
-
-    const source_a =
-        \\Counter := [Counter(U64)].{
-        \\  new : U64 -> Counter
-        \\  new = |n| Counter.Counter(n)
-        \\
-        \\  increment : Counter -> Counter
-        \\  increment = |Counter.Counter(n)| Counter.Counter(n + 1)
-        \\
-        \\  get : Counter -> U64
-        \\  get = |Counter.Counter(n)| n
-        \\}
-    ;
-    var env_a = try MonoTestEnv.init("Counter", source_a);
-    defer env_a.deinit();
-
-    // Verify methods are registered
-    const counter_ident = env_a.module_env.common.findIdent("Counter");
-    try testing.expect(counter_ident != null);
-
-    const new_ident = env_a.module_env.common.findIdent("new");
-    const increment_ident = env_a.module_env.common.findIdent("increment");
-    const get_ident = env_a.module_env.common.findIdent("get");
-
-    try testing.expect(new_ident != null);
-    try testing.expect(increment_ident != null);
-    try testing.expect(get_ident != null);
-
-    // Check method lookups work
-    try testing.expect(env_a.module_env.lookupMethodIdent(counter_ident.?, new_ident.?) != null);
-    try testing.expect(env_a.module_env.lookupMethodIdent(counter_ident.?, increment_ident.?) != null);
-    try testing.expect(env_a.module_env.lookupMethodIdent(counter_ident.?, get_ident.?) != null);
-}
-
 test "cross-module mono: static dispatch with chained method calls" {
     const source_a =
         \\Counter := [Counter(U64)].{
@@ -557,7 +497,7 @@ test "cross-module mono: static dispatch with chained method calls" {
     defer env_b.deinit();
 
     // Module B should have parsed and type-checked successfully
-    // This means the cross-module method resolution worked
+    // This means the cross-module nominal lookup path worked
     const main_ident = env_b.module_env.common.findIdent("main");
     try testing.expect(main_ident != null);
 }

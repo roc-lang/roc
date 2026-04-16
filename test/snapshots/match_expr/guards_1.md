@@ -104,7 +104,7 @@ describe = |value| match value {
 							(value
 								(e-string
 									(e-literal (string "positive: "))
-									(e-dot-access (field "to_str")
+									(e-field-access (field "to_str")
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "x"))))
@@ -122,7 +122,7 @@ describe = |value| match value {
 							(value
 								(e-string
 									(e-literal (string "negative: "))
-									(e-dot-access (field "to_str")
+									(e-field-access (field "to_str")
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "x"))))

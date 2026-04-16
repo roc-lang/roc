@@ -224,7 +224,7 @@ NO CHANGE
 				(fields
 					(field (name "y")
 						(e-binop (op "add")
-							(e-dot-access (field "y")
+							(e-field-access (field "y")
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "robot")))))
@@ -245,7 +245,7 @@ NO CHANGE
 				(fields
 					(field (name "y")
 						(e-binop (op "sub")
-							(e-dot-access (field "y")
+							(e-field-access (field "y")
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "robot")))))
@@ -266,7 +266,7 @@ NO CHANGE
 				(fields
 					(field (name "x")
 						(e-binop (op "add")
-							(e-dot-access (field "x")
+							(e-field-access (field "x")
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "robot")))))
@@ -287,7 +287,7 @@ NO CHANGE
 				(fields
 					(field (name "x")
 						(e-binop (op "sub")
-							(e-dot-access (field "x")
+							(e-field-access (field "x")
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "robot")))))

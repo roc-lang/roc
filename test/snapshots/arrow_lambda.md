@@ -105,7 +105,7 @@ NO CHANGE
 				(e-if
 					(if-branches
 						(if-branch
-							(e-dot-access (field "is_empty")
+							(e-field-access (field "is_empty")
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "s"))))

@@ -17,7 +17,7 @@ All paths are relative to `src/lsp/`.
 | `completion/builtins.zig` | `BUILTIN_TYPES` list (21 entries: `Str`, `List`, `Dict`, …, `Num`) and `isBuiltinType()` helper. |
 | `completion/mod.zig` | Re-exports `CompletionContext`, `detectCompletionContext`, `computeOffset`, and `CompletionBuilder`. |
 | `scope_map.zig` | Reconstructs lexical scopes from CIR so the builder can answer "which local variables are visible at byte offset X?" |
-| `cir_queries.zig` | Offset-based CIR queries. `findDotReceiverTypeVar()` finds the type of the expression to the left of a dot. `findTypeAtOffset()` returns the type at an arbitrary offset. Used as a first-pass type resolver before falling back to name-based lookup. |
+| `cir_queries.zig` | Offset-based CIR queries. `findFieldReceiverTypeVar()` finds the type of the expression to the left of a dot. `findTypeAtOffset()` returns the type at an arbitrary offset. Used as a first-pass type resolver before falling back to name-based lookup. |
 | `module_lookup.zig` | `findDefinitionByName()` — searches a `ModuleEnv`'s defs and statements for a name and returns its pattern index. Used when resolving access chains. |
 | `build_env_handle.zig` | Reference-counted wrapper around `BuildEnv`. Ensures a `BuildEnv` stays alive while snapshot or previous-build references exist. |
 | `build_session.zig` | `BuildSession` — manages a single build invocation (used at the top of `getCompletionsAtPosition`). |
@@ -74,7 +74,7 @@ The system tries three sources for a `ModuleEnv`, in order:
 
 When a snapshot or previous env is used, the flag `used_snapshot` is set to
 `true`.  This matters because CIR byte offsets from a snapshot do not match the
-current source text, so CIR-based type lookups (`findDotReceiverTypeVar`) are
+current source text, so CIR-based type lookups (`findFieldReceiverTypeVar`) are
 skipped in favour of name-based lookups.
 
 The `module_lookup_env` variable tracks which `BuildEnv` backs the chosen
@@ -155,14 +155,14 @@ every kind of completion the system can produce, grouped by context.
    `Module.value.subfield` by walking segment-by-segment through the type
    system.
 2. If that fails (common with snapshots), fall back:
-   - CIR-based: `cir_queries.findDotReceiverTypeVar()` or `findTypeAtOffset()`
+   - CIR-based: `cir_queries.findFieldReceiverTypeVar()` or `findTypeAtOffset()`
    - Name-based: `addRecordFieldCompletions(name, offset)` +
      `addMethodCompletions(name, offset)`
 3. Once a `types.Var` is in hand:
    - `addFieldsFromTypeVar()` — unwraps aliases/nominals up to 8 levels, then
      iterates record fields. Each field gets a `detail` string showing its type.
    - `addMethodsFromTypeVar()` — looks up the type's identity (alias ident or
-     nominal ident), then searches `method_idents` for matching
+     nominal ident), then scans `attached_method_idents` for matching
      `(type_ident, method_ident)` pairs. Builtin types are routed through the
      `builtin_module_env` so `Str.contains`, `List.map` etc. resolve correctly.
 
@@ -173,7 +173,7 @@ every kind of completion the system can produce, grouped by context.
 **Trigger:** `getValue().`, `Str.join(items).`, `testFunc("hi").`
 
 **What happens:**
-1. Try CIR-based lookup: `findDotReceiverTypeVar()` at `cursor_offset`, with
+1. Try CIR-based lookup: `findFieldReceiverTypeVar()` at `cursor_offset`, with
    fallback to `findTypeAtOffset(dot_offset - 1)`.
 2. If using a snapshot or CIR failed, parse the `call_chain` textually and
    resolve via `resolveAccessChainTypeVar()`, then call
@@ -297,7 +297,7 @@ From `src/canonicalize/ModuleEnv.zig`. Fields used by completions:
 | `all_defs: CIR.Def.Span` | All top-level definitions |
 | `all_statements: CIR.Statement.Span` | All top-level statements (including imports, type decls) |
 | `module_name: []const u8` | This module's name |
-| `method_idents: MethodIdents` | Maps `(type_ident, method_ident) → qualified_ident` |
+| `attached_method_idents: AttachedMethodIdents` | Maps `(type_ident, method_ident) → qualified_ident` |
 
 ### BuildEnv (abbreviated)
 
@@ -345,7 +345,7 @@ Every public `add*` method on `CompletionBuilder`:
 | `addFieldsFromTypeVar(module_env, type_var)` | Record fields from a resolved type variable (unwraps aliases/nominals). |
 | `addRecordFieldsForModuleMember(module_env, name)` | Record fields for `Module.value.` access patterns. |
 | `addMethodCompletions(module_env, name, offset)` | Methods by variable name lookup. |
-| `addMethodsFromTypeVar(module_env, type_var)` | Methods from a resolved type variable (alias ident → `method_idents` lookup). |
+| `addMethodsFromTypeVar(module_env, type_var)` | Methods from a resolved type variable's static-dispatch constraints. |
 | `addTagCompletionsForNominalType(env, name, req_mod)` | Tag constructors for a nominal type, with opaqueness checks. |
 | `addAmbientTagCompletions(module_env)` | Structural tags from the type store. |
 
@@ -367,7 +367,7 @@ Dec  Num
 
 `isBuiltinType(name)` does a case-sensitive linear scan of this list. It is
 used to:
-- Route method lookups through the builtin `ModuleEnv` instead of the user's.
+- Route attached-method metadata through the builtin `ModuleEnv` instead of the user's.
 - Add builtin module names to completion lists.
 - Recognise when `addModuleMemberCompletions` should use `builtin_module.env`.
 

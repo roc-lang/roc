@@ -117,7 +117,7 @@ test "ModuleEnv.Serialized roundtrip" {
         .idents = ModuleEnv.CommonIdents.find(&common),
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(deser_alloc, 0),
         .import_mapping = types.import_mapping.ImportMapping.init(deser_alloc),
-        .method_idents = deserialized_ptr.method_idents.deserializeInto(@intFromPtr(buffer.ptr)),
+        .attached_method_idents = deserialized_ptr.attached_method_idents.deserializeInto(@intFromPtr(buffer.ptr)),
         .rigid_vars = std.AutoHashMapUnmanaged(base.Ident.Idx, types.Var){},
     };
 

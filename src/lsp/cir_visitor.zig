@@ -191,15 +191,9 @@ pub fn CirVisitor(comptime Context: type) type {
                 .e_unary_not => |u| {
                     self.walkExpr(store, u.expr);
                 },
-                .e_dot_access => |dot| {
-                    self.walkExpr(store, dot.receiver);
+                .e_field_access => |field_access| {
+                    self.walkExpr(store, field_access.receiver);
                     if (self.stopped) return;
-                    if (dot.args) |args_span| {
-                        for (store.sliceExpr(args_span)) |arg| {
-                            self.walkExpr(store, arg);
-                            if (self.stopped) return;
-                        }
-                    }
                 },
                 .e_tuple_access => |ta| {
                     self.walkExpr(store, ta.tuple);
@@ -259,12 +253,6 @@ pub fn CirVisitor(comptime Context: type) type {
                     self.walkExpr(store, for_expr.expr);
                     if (self.stopped) return;
                     self.walkExpr(store, for_expr.body);
-                },
-                .e_type_var_dispatch => |tvd| {
-                    for (store.sliceExpr(tvd.args)) |arg| {
-                        self.walkExpr(store, arg);
-                        if (self.stopped) return;
-                    }
                 },
                 .e_hosted_lambda => |hosted| {
                     for (store.slicePatterns(hosted.args)) |arg_idx| {

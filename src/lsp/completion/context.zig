@@ -55,7 +55,7 @@ pub fn detectCompletionContext(source: []const u8, line: u32, character: u32) Co
         pos -= 1;
     }
 
-    // Check for dot immediately (no whitespace skip). Roc dot access syntax
+    // Check for dot immediately (no whitespace skip). Roc field access syntax
     // does not allow whitespace between receiver and dot (`record.field`, not
     // `record .field`), so we only recognize a dot that is directly adjacent.
     if (pos > 0 and source[pos - 1] == '.') {

@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Method call syntax with .inspect() should produce e_dot_access with args
+description=Method call syntax with .inspect() should produce e_field_access
 type=expr
 ~~~
 # SOURCE
@@ -39,7 +39,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dot-access (field "inspect")
+(e-field-access (field "inspect")
 	(receiver
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(args))

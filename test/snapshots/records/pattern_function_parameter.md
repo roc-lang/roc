@@ -68,13 +68,13 @@ NO CHANGE
 				(e-lookup-local
 					(p-assign (ident "name")))
 				(e-literal (string " ("))
-				(e-dot-access (field "toStr")
+				(e-field-access (field "toStr")
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "age"))))
 					(args))
 				(e-literal (string " years old) - Contact: "))
-				(e-dot-access (field "display")
+				(e-field-access (field "display")
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "email"))))

@@ -75,7 +75,7 @@ EndOfFile,
 				(e-lookup-local
 					(p-assign (ident "x")))
 				(e-num (value "1")))))
-	(e-dot-access (field "map")
+	(e-field-access (field "map")
 		(receiver
 			(e-lookup-local
 				(p-assign (ident "list"))))

@@ -54,7 +54,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "value")))
-			(e-dot-access (field "to_str")
+			(e-field-access (field "to_str")
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "value"))))

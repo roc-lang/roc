@@ -385,11 +385,11 @@ func = {
 							(e-num (value "100"))))))
 			(s-let
 				(p-assign (ident "chained"))
-				(e-dot-access (field "get_or")
+				(e-field-access (field "get_or")
 					(receiver
-						(e-dot-access (field "flat_map")
+						(e-field-access (field "flat_map")
 							(receiver
-								(e-dot-access (field "map")
+								(e-field-access (field "map")
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "num_container"))))

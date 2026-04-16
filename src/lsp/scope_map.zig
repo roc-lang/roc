@@ -250,8 +250,8 @@ pub const ScopeMap = struct {
                     try self.traverseExpr(module_env, field.value, scope_end, depth + 1);
                 }
             },
-            .e_dot_access => |dot| {
-                try self.traverseExpr(module_env, dot.receiver, scope_end, depth + 1);
+            .e_field_access => |field_access| {
+                try self.traverseExpr(module_env, field_access.receiver, scope_end, depth + 1);
             },
             .e_tuple_access => |ta| {
                 try self.traverseExpr(module_env, ta.tuple, scope_end, depth + 1);
@@ -317,7 +317,6 @@ pub const ScopeMap = struct {
             .e_crash,
             .e_ellipsis,
             .e_anno_only,
-            .e_type_var_dispatch,
             .e_bytes_literal,
             => {},
         }

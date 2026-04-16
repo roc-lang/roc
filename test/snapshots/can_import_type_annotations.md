@@ -436,7 +436,7 @@ combineTrys = |result1, result2|
 					(p-assign (ident "result"))
 					(e-call
 						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-dot-access (field "body")
+						(e-field-access (field "body")
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "request")))))))

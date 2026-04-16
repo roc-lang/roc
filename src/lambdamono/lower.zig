@@ -886,7 +886,6 @@ const Lowerer = struct {
                     .module_idx = nominal.module_idx,
                     .ident = nominal.ident,
                     .is_opaque = nominal.is_opaque,
-                    .to_inspect_symbol = nominal.to_inspect_symbol,
                     .args = try self.lowerSolvedNominalArgs(mono_cache, nominal.args),
                     .backing = lowered_backing,
                 } }));
@@ -926,7 +925,6 @@ const Lowerer = struct {
                     .module_idx = nominal.module_idx,
                     .ident = nominal.ident,
                     .is_opaque = nominal.is_opaque,
-                    .to_inspect_symbol = nominal.to_inspect_symbol,
                     .args = try self.lowerSolvedNominalArgs(mono_cache, nominal.args),
                     .backing = lowered_backing,
                 } }));
@@ -955,7 +953,6 @@ const Lowerer = struct {
                     .module_idx = nominal.module_idx,
                     .ident = nominal.ident,
                     .is_opaque = nominal.is_opaque,
-                    .to_inspect_symbol = nominal.to_inspect_symbol,
                     .args = nominal.args,
                     .backing = try self.eraseBoundaryExecutableType(nominal.backing),
                 },
@@ -979,7 +976,6 @@ const Lowerer = struct {
                     .module_idx = nominal.module_idx,
                     .ident = nominal.ident,
                     .is_opaque = nominal.is_opaque,
-                    .to_inspect_symbol = nominal.to_inspect_symbol,
                     .args = nominal.args,
                     .backing = try self.eraseBoundaryBoxedExecutableType(nominal.backing),
                 },
@@ -1031,7 +1027,6 @@ const Lowerer = struct {
                 .module_idx = nominal.module_idx,
                 .ident = nominal.ident,
                 .is_opaque = nominal.is_opaque,
-                .to_inspect_symbol = nominal.to_inspect_symbol,
                 .args = try self.lowerSolvedNominalArgs(mono_cache, nominal.args),
                 .backing = try self.lowerExecutableTypeWithBoxErasureRec(mono_cache, nominal.backing),
             } },
@@ -1243,7 +1238,6 @@ const Lowerer = struct {
                     .module_idx = nominal.module_idx,
                     .ident = nominal.ident,
                     .is_opaque = nominal.is_opaque,
-                    .to_inspect_symbol = nominal.to_inspect_symbol,
                     .args = try self.lowerSolvedNominalArgs(mono_cache, nominal.args),
                     .backing = lowered_backing,
                 } }));
@@ -2328,43 +2322,6 @@ const Lowerer = struct {
         return symbol;
     }
 
-    const SpecializedInspectMethod = struct {
-        proc: Symbol,
-        ret_ty: type_mod.TypeId,
-    };
-
-    fn specializeInspectMethod(
-        self: *Lowerer,
-        mono_cache: *lower_type.MonoCache,
-        symbol: Symbol,
-        arg_ty: type_mod.TypeId,
-    ) std.mem.Allocator.Error!SpecializedInspectMethod {
-        const fn_ty = self.lookupTopLevelBindType(symbol) orelse
-            debugPanic("lambdamono.lower.specializeInspectMethod missing top-level bind type for inspect method");
-        const ret_var = self.functionResultType(fn_ty) orelse
-            debugPanic("lambdamono.lower.specializeInspectMethod inspect method must be a function");
-        const ret_ty = try self.lowerExecutableTypeFromSolved(mono_cache, ret_var);
-        const sig = try self.buildLsetSpecializationSig(
-            mono_cache,
-            null,
-            symbol,
-            fn_ty,
-            arg_ty,
-            null,
-        );
-        return .{
-            .proc = try specializations.specializeFnLset(
-                &self.queue,
-                self.fenv,
-                &self.input.symbols,
-                symbol,
-                fn_ty,
-                sig,
-            ),
-            .ret_ty = ret_ty,
-        };
-    }
-
     fn lookupTopLevelBindType(self: *const Lowerer, symbol: Symbol) ?TypeVarId {
         for (self.input.store.defsSlice()) |def| {
             if (def.bind.symbol == symbol) return def.bind.ty;
@@ -2455,22 +2412,6 @@ const Lowerer = struct {
             },
             .erased_fn => self.makeStringLiteralExpr(result_ty, "<fn>"),
             .nominal => |nominal| blk: {
-                if (!nominal.to_inspect_symbol.isNone()) {
-                    const inspect_method = try self.specializeInspectMethod(
-                        mono_cache,
-                        nominal.to_inspect_symbol,
-                        value_ty,
-                    );
-                    const inspect_expr = try self.output.addExpr(.{
-                        .ty = inspect_method.ret_ty,
-                        .data = .{ .call = .{
-                            .proc = inspect_method.proc,
-                            .args = try self.output.addExprSpan(&.{value_expr}),
-                        } },
-                    });
-                    if (inspect_method.ret_ty == result_ty) break :blk inspect_expr;
-                    break :blk try self.specializeInspectValueExpr(mono_cache, inspect_expr, result_ty);
-                }
                 if (nominal.is_opaque) {
                     break :blk self.makeStringLiteralExpr(result_ty, "<opaque>");
                 }
@@ -3914,70 +3855,6 @@ const Lowerer = struct {
         return null;
     }
 
-    const AttachedMethodFnTarget = struct {
-        symbol: Symbol,
-        fn_ty: TypeVarId,
-    };
-
-    fn lookupAttachedMethodFnTarget(
-        self: *Lowerer,
-        source_symbol: Symbol,
-        expr_id: solved.Ast.ExprId,
-        arg_exprs: []const solved.Ast.ExprId,
-    ) ?AttachedMethodFnTarget {
-        if (self.lookupTopLevelFnType(source_symbol)) |fn_ty| {
-            return .{ .symbol = source_symbol, .fn_ty = fn_ty };
-        }
-
-        const expected_ret_ty = self.input.store.getExpr(expr_id).ty;
-        var fallback: ?AttachedMethodFnTarget = null;
-        for (self.input.store.defsSlice()) |def| {
-            const candidate_symbol = def.bind.symbol;
-            const same_source = candidate_symbol == source_symbol or switch (self.input.symbols.get(candidate_symbol).origin) {
-                .specialized_top_level_def => |info| info.source_symbol == source_symbol.raw(),
-                else => false,
-            };
-            if (!same_source) continue;
-
-            const candidate_fn_ty = switch (def.value) {
-                .fn_, .hosted_fn => def.bind.ty,
-                else => continue,
-            };
-            if (fallback == null) {
-                fallback = .{ .symbol = candidate_symbol, .fn_ty = candidate_fn_ty };
-            }
-
-            var current_fn_ty = candidate_fn_ty;
-            var matches = true;
-            for (arg_exprs) |arg_expr_id| {
-                const fn_parts = switch (self.input.types.getNode(self.input.types.unlinkPreservingNominal(current_fn_ty))) {
-                    .content => |content| switch (content) {
-                        .func => |func| func,
-                        else => {
-                            matches = false;
-                            break;
-                        },
-                    },
-                    .nominal => unreachable,
-                    else => {
-                        matches = false;
-                        break;
-                    },
-                };
-                if (!self.input.types.equalIds(fn_parts.arg, self.input.store.getExpr(arg_expr_id).ty)) {
-                    matches = false;
-                    break;
-                }
-                current_fn_ty = fn_parts.ret;
-            }
-            if (matches and self.input.types.equalIds(current_fn_ty, expected_ret_ty)) {
-                return .{ .symbol = candidate_symbol, .fn_ty = candidate_fn_ty };
-            }
-        }
-
-        return fallback;
-    }
-
     fn collectLsetLambdaMembersFromExecutable(
         self: *Lowerer,
         tag_union: @FieldType(type_mod.Content, "tag_union"),
@@ -4248,14 +4125,14 @@ const Lowerer = struct {
                 method_lookup.method,
             );
         } else try self.resolveAttachedMethodSymbol(inst, method_lookup.receiver_ty, method_lookup.method);
-        const method_target = self.lookupAttachedMethodFnTarget(method_symbol, expr_id, arg_exprs.items) orelse
+        const method_fn_ty = self.lookupTopLevelFnType(method_symbol) orelse
             debugPanic("lambdamono.lower.specializeMethodCallChainExpr expected top-level method function");
-        var current_fn_ty = method_target.fn_ty;
+        var current_fn_ty = method_fn_ty;
         const callable = try self.specializeVarExpr(
             inst,
             mono_cache,
             venv,
-            method_target.symbol,
+            method_symbol,
             current_fn_ty,
             try self.lowerExecutableTypeFromSolved(mono_cache, current_fn_ty),
         );
@@ -4872,7 +4749,6 @@ const Lowerer = struct {
                     .module_idx = nominal.module_idx,
                     .ident = nominal.ident,
                     .is_opaque = nominal.is_opaque,
-                    .to_inspect_symbol = nominal.to_inspect_symbol,
                     .args = try self.input.types.addTypeVarSpan(cloned_args),
                     .backing = try self.cloneInstType(inst, nominal.backing),
                 } };

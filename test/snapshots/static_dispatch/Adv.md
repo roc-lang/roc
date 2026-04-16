@@ -401,7 +401,7 @@ main = {
 								(e-literal (string "hello")))))))
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dot-access (field "update_str")
+				(e-field-access (field "update_str")
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "val"))))
@@ -422,7 +422,7 @@ main = {
 								(e-literal (string "hello")))))))
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dot-access (field "update_strr")
+				(e-field-access (field "update_strr")
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "val"))))
@@ -435,7 +435,7 @@ main = {
 		(e-block
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dot-access (field "update")
+				(e-field-access (field "update")
 					(receiver
 						(e-string
 							(e-literal (string "Hello"))))
@@ -456,9 +456,9 @@ main = {
 								(e-literal (string "hello")))))))
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dot-access (field "update_u64")
+				(e-field-access (field "update_u64")
 					(receiver
-						(e-dot-access (field "update_str")
+						(e-field-access (field "update_str")
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "val"))))
@@ -469,12 +469,12 @@ main = {
 						(e-num (value "20")))))
 			(e-tuple
 				(elems
-					(e-dot-access (field "to_str")
+					(e-field-access (field "to_str")
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "next_val"))))
 						(args))
-					(e-dot-access (field "to_u64")
+					(e-field-access (field "to_u64")
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "next_val"))))

@@ -1949,17 +1949,17 @@ expect {
 					(e-match
 						(match
 							(cond
-								(e-dot-access (field "recd")
+								(e-field-access (field "recd")
 									(receiver
 										(e-match
 											(match
 												(cond
-													(e-dot-access (field "ned")
+													(e-field-access (field "ned")
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dot-access (field "od")
+																		(e-field-access (field "od")
 																			(receiver
 																				(e-match
 																					(match

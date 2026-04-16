@@ -394,20 +394,11 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             try self.write("!");
             try self.emitExpr(unary.expr);
         },
-        .e_dot_access => |dot| {
-            try self.emitExpr(dot.receiver);
+        .e_field_access => |field_access| {
+            try self.emitExpr(field_access.receiver);
             try self.write(".");
-            const field_name = self.module_env.getIdent(dot.field_name);
+            const field_name = self.module_env.getIdent(field_access.field_name);
             try self.write(field_name);
-            if (dot.args) |args_span| {
-                try self.write("(");
-                const args = self.module_env.store.sliceExpr(args_span);
-                for (args, 0..) |arg_idx, i| {
-                    if (i > 0) try self.write(", ");
-                    try self.emitExpr(arg_idx);
-                }
-                try self.write(")");
-            }
         },
         .e_runtime_error => {
             try self.write("<runtime_error>");
@@ -472,9 +463,6 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
         },
         .e_lookup_required => {
             try self.write("<required>");
-        },
-        .e_type_var_dispatch => {
-            try self.write("<type_var_dispatch>");
         },
         .e_for => |for_expr| {
             try self.write("for ");

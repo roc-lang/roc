@@ -90,7 +90,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
 
 /// Enable inserts on a deserialized interner for runtime use.
 /// Normally deserialized interners are read-only, but the interpreter needs to
-/// insert new identifiers at runtime for type name translation and method lookup.
+/// insert new identifiers at runtime for type name translation and attached methods.
 /// This copies the deserialized data into newly allocated memory that can be grown.
 /// Call this after deserialization but before using the interner for runtime operations.
 pub fn enableRuntimeInserts(self: *SmallStringInterner, gpa: std.mem.Allocator) std.mem.Allocator.Error!void {

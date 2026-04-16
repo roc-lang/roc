@@ -274,7 +274,7 @@ match ... {
 						(e-lookup-local
 							(p-assign (ident "firstName")))
 						(e-literal (string " ("))
-						(e-dot-access (field "to_str")
+						(e-field-access (field "to_str")
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "userAge"))))

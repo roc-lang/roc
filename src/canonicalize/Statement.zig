@@ -183,16 +183,14 @@ pub const Statement = union(enum) {
         where: ?CIR.WhereClause.Span,
     },
 
-    /// A type variable alias within a block - enables static dispatch on type vars.
-    /// This binds an uppercase name to a type variable from the enclosing function signature,
-    /// allowing method calls like `Thing.method(arg)` that dispatch based on what the type
-    /// variable resolves to at runtime.
+    /// A type variable alias within a block.
+    /// This binds an uppercase name to a type variable from the enclosing function signature.
     ///
     /// ```roc
-    /// foo : thing -> Str
+    /// foo : thing -> thing
     /// foo = |arg|
     ///     Thing : thing       # Type var alias - binds `Thing` to the type variable `thing`
-    ///     Thing.something(arg) # Static dispatch using the type var alias
+    ///     arg
     /// ```
     s_type_var_alias: struct {
         /// The alias name (e.g., "Thing") - uppercase identifier

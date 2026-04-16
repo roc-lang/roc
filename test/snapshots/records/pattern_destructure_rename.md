@@ -81,7 +81,7 @@ match person {
 						(e-lookup-local
 							(p-assign (ident "userName")))
 						(e-literal (string " is "))
-						(e-dot-access (field "to_str")
+						(e-field-access (field "to_str")
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "userAge"))))

@@ -9,7 +9,7 @@
 //! - Go-to-definition (findLookupAtOffset, findDefinitionAtOffset)
 //! - Find-references (collectLookupReferences)
 //! - Document highlights (findPatternAtOffset)
-//! - Completions (findDotReceiverTypeVar)
+//! - Completions (findFieldReceiverTypeVar)
 
 const std = @import("std");
 const can = @import("can");
@@ -220,7 +220,7 @@ const FindLookupContext = struct {
             return .skip_children;
         }
 
-        // Check if this expression is a lookup or relevant dot access.
+        // Check if this expression is a lookup or relevant field access.
         // Include pending lookups so hover/definition can still resolve symbols
         // before all external resolution passes complete.
         switch (expr) {
@@ -231,10 +231,9 @@ const FindLookupContext = struct {
                     ctx.result = expr_idx;
                 }
             },
-            .e_dot_access => |dot| {
-                // Check if cursor is on the field/method name
-                if (regionContainsOffset(dot.field_name_region, ctx.target_offset)) {
-                    const size = regionSize(dot.field_name_region);
+            .e_field_access => |field_access| {
+                if (regionContainsOffset(field_access.field_name_region, ctx.target_offset)) {
+                    const size = regionSize(field_access.field_name_region);
                     if (size < ctx.best_size) {
                         ctx.best_size = size;
                         ctx.result = expr_idx;
@@ -300,17 +299,17 @@ const FindPatternContext = struct {
     }
 };
 
-/// Context for finding the type variable of a dot access receiver.
-const FindDotReceiverContext = struct {
+/// Context for finding the type variable of a field access receiver.
+const FindFieldReceiverContext = struct {
     store: *const NodeStore,
     target_offset: u32,
     best_size: u32 = std.math.maxInt(u32),
     result: ?types.Var = null,
 
     /// Pre-visit callback for expressions.
-    fn visitExprPre(ctx: *FindDotReceiverContext, _: CIR.Expr.Idx, expr: CIR.Expr) VisitAction {
+    fn visitExprPre(ctx: *FindFieldReceiverContext, _: CIR.Expr.Idx, expr: CIR.Expr) VisitAction {
         const region = switch (expr) {
-            .e_dot_access => |dot| dot.field_name_region,
+            .e_field_access => |field_access| field_access.field_name_region,
             else => return .continue_traversal,
         };
 
@@ -323,8 +322,7 @@ const FindDotReceiverContext = struct {
         const size = regionSize(region);
         if (size < ctx.best_size) {
             ctx.best_size = size;
-            // Return the type of the receiver
-            ctx.result = ModuleEnv.varFrom(expr.e_dot_access.receiver);
+            ctx.result = ModuleEnv.varFrom(expr.e_field_access.receiver);
         }
 
         return .continue_traversal;
@@ -535,19 +533,19 @@ pub fn findPatternAtOffset(module_env: *ModuleEnv, offset: u32) ?CIR.Pattern.Idx
     return ctx.result;
 }
 
-/// Find the type variable of a dot access receiver at the given offset.
+/// Find the type variable of a field access receiver at the given offset.
 ///
-/// When the cursor is on a field name in a dot access (e.g., `foo.bar`),
+/// When the cursor is on a field name in a field access (e.g., `foo.bar`),
 /// this returns the type variable of the receiver (`foo`), which is useful
-/// for providing field/method completions.
-pub fn findDotReceiverTypeVar(module_env: *ModuleEnv, offset: u32) ?types.Var {
-    var ctx = FindDotReceiverContext{
+/// for providing field completions.
+pub fn findFieldReceiverTypeVar(module_env: *ModuleEnv, offset: u32) ?types.Var {
+    var ctx = FindFieldReceiverContext{
         .store = &module_env.store,
         .target_offset = offset,
     };
 
-    var visitor = CirVisitor(FindDotReceiverContext).init(&ctx, .{
-        .visit_expr_pre = FindDotReceiverContext.visitExprPre,
+    var visitor = CirVisitor(FindFieldReceiverContext).init(&ctx, .{
+        .visit_expr_pre = FindFieldReceiverContext.visitExprPre,
     });
 
     // Walk all top-level definitions

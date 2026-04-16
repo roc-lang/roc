@@ -11,7 +11,6 @@ pub const Nominal = struct {
     module_idx: u32,
     ident: base.Ident.Idx,
     is_opaque: bool,
-    to_inspect_symbol: Symbol,
     args: Span(TypeVarId),
     backing: TypeVarId,
 };
@@ -291,7 +290,6 @@ pub const Store = struct {
                     if (left_nominal.module_idx != right_nominal.module_idx) break :blk false;
                     if (left_nominal.ident != right_nominal.ident) break :blk false;
                     if (left_nominal.is_opaque != right_nominal.is_opaque) break :blk false;
-                    if (left_nominal.to_inspect_symbol != right_nominal.to_inspect_symbol) break :blk false;
 
                     const left_args = self.sliceTypeVarSpan(left_nominal.args);
                     const right_args = self.sliceTypeVarSpan(right_nominal.args);

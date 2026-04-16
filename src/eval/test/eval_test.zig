@@ -970,12 +970,11 @@ test "nested tuple equality" {
 //     try runExpectError(code, error.StackOverflow, .no_trace);
 // }
 
-// Tests for nominal type equality (is_eq method dispatch)
-// These tests exercise dispatchNominalIsEq which resolves and calls is_eq methods on nominal types
+// Tests for nominal type equality.
 
 test "nominal type equality - Bool" {
     // Bool is a nominal type wrapping [False, True]
-    // These test that is_eq is properly dispatched for Bool
+    // These tests cover Bool equality.
     try runExpectBool("Bool.True == Bool.True", true, .no_trace);
     try runExpectBool("Bool.False == Bool.False", true, .no_trace);
     try runExpectBool("Bool.True == Bool.False", false, .no_trace);
@@ -1963,10 +1962,10 @@ test "bare underscore assignment discards expression" {
 }
 
 test "List.len returns proper U64 nominal type for method calls - regression" {
-    // Regression test for InvalidMethodReceiver when calling methods on List.len result
-    // Bug report: `n = List.len([]); _str = n.to_str()` crashed with InvalidMethodReceiver
+    // Regression test for an old method-call crash on List.len results
+    // Bug report: `n = List.len([]); _str = n.to_str()` used to crash
     // The issue was that List.len created a fresh runtime type variable instead of using
-    // the return_rt_var parameter, which prevented method resolution from finding the
+    // the return_rt_var parameter, which prevented the helper path from finding the
     // U64 nominal type information needed to look up .to_str()
     try runExpectStr(
         \\{
@@ -2017,7 +2016,7 @@ test "List.get with polymorphic numeric index - regression #8666" {
 }
 
 test "for loop element type extracted from list runtime type - regression #8664" {
-    // Regression test for InvalidMethodReceiver when calling methods on elements
+    // Regression test for an old method-call crash on elements
     // from a for loop over a list passed to an untyped function parameter.
     // The fix: extract element type from list's runtime type (e.g., List(Dec))
     // instead of using the pattern's compile-time flex variable.
@@ -2037,7 +2036,7 @@ test "for loop element type extracted from list runtime type - regression #8664"
 }
 
 test "List.get method dispatch on Try type - issue 8665" {
-    // Regression test for issue #8665: InvalidMethodReceiver crash when calling
+    // Regression test for issue #8665: old crash when calling
     // ok_or() method on the result of List.get() using dot notation.
     // The function call syntax works: Try.ok_or(List.get(list, 0), "fallback")
     // But method syntax crashes: List.get(list, 0).ok_or("fallback")
@@ -2097,7 +2096,7 @@ test "record field access with multiple string fields - regression 8648" {
 }
 
 test "method calls on numeric variables with flex types - regression" {
-    // Regression test for InvalidMethodReceiver when calling methods on numeric
+    // Regression test for an old method-call crash on numerics
     // variables that have unconstrained (flex/rigid) types at compile time.
     // Bug report: https://github.com/roc-lang/roc/issues/8663
     // The issue was that when a numeric variable's compile-time type is flex,
@@ -2955,8 +2954,7 @@ test "issue 8927: early return in method argument leaks memory" {
     // list.append(x?)), the receiver value and method function on the value
     // stack were not being decreffed, causing a memory leak.
     //
-    // The fix adds cleanup handlers for dot_access_resolve, dot_access_collect_args,
-    // and type_var_dispatch_collect_args in the early_return section.
+    // The fix adds cleanup handlers for field access in the early_return section.
     //
     // This test uses test_allocator which detects memory leaks.
     try runExpectI64(

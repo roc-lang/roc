@@ -56,7 +56,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "bytes"))
-		(e-dot-access (field "to_utf8")
+		(e-field-access (field "to_utf8")
 			(receiver
 				(e-string
 					(e-literal (string "hello"))))

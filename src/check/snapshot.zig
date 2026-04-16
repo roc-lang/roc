@@ -128,7 +128,7 @@ pub const SnapshotTag = struct {
     formatted: []const u8,
 };
 
-/// A snapshotted static dispatch constraint for method resolution.
+/// A snapshotted static dispatch constraint.
 pub const SnapshotStaticDispatchConstraint = struct {
     fn_name: Ident.Idx,
     fn_content: SnapshotContentIdx,

@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Chained record field (dot-access)
+description=Chained record field (field-access)
 type=expr
 ~~~
 # SOURCE
@@ -40,9 +40,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dot-access (field "street")
+(e-field-access (field "street")
 	(receiver
-		(e-dot-access (field "address")
+		(e-field-access (field "address")
 			(receiver
 				(e-runtime-error (tag "ident_not_in_scope"))))))
 ~~~

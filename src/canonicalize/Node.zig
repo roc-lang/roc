@@ -69,7 +69,6 @@ pub const Tag = enum {
     expr_external_lookup,
     expr_pending_lookup,
     expr_required_lookup,
-    expr_dot_access,
     expr_apply,
     expr_string,
     expr_string_segment,
@@ -106,7 +105,6 @@ pub const Tag = enum {
     expr_for,
     expr_record_builder,
     expr_return,
-    expr_type_var_dispatch,
     match_branch,
     match_branch_pattern,
     type_header,
@@ -297,7 +295,6 @@ pub const Payload = extern union {
     expr_dec: ExprDec,
     expr_dec_small: ExprDecSmall,
     expr_string: ExprString,
-    expr_dot_access: ExprDotAccess,
     expr_field_access: ExprFieldAccess,
     expr_hosted_lambda: ExprHostedLambda,
     expr_low_level: ExprLowLevel,
@@ -314,7 +311,6 @@ pub const Payload = extern union {
     expr_dbg: ExprDbg,
     expr_anno_only: ExprAnnoOnly,
     expr_return: ExprReturn,
-    expr_type_var_dispatch: ExprTypeVarDispatch,
     // === Pattern payloads ===
     pattern_identifier: PatternIdentifier,
     pattern_as: PatternAs,
@@ -604,16 +600,10 @@ pub const Payload = extern union {
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
-    pub const ExprDotAccess = extern struct {
-        receiver: u32,
-        field_name: u32,
-        region_args_idx: u32, // Index into span_with_node_data: (region_start, region_end, packed_args)
-    };
-
     pub const ExprFieldAccess = extern struct {
         receiver: u32,
         field_name: u32,
-        _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        field_name_region_span2_idx: u32,
     };
 
     pub const ExprHostedLambda = extern struct {
@@ -707,14 +697,6 @@ pub const Payload = extern union {
         expr: u32,
         lambda: u32,
         context: u32,
-    };
-
-    /// expr_type_var_dispatch: type variable method dispatch
-    pub const ExprTypeVarDispatch = extern struct {
-        type_var_alias_stmt: u32,
-        receiver_var: u32,
-        method_name: u32,
-        args_span2_idx: u32,
     };
 
     // --- Patterns ---

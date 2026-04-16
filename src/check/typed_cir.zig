@@ -285,8 +285,8 @@ pub const Module = struct {
         return self.data_store.top_level_defs_by_ident.get(ident);
     }
 
-    pub fn methodIdentEntries(self: @This()) []const ModuleEnv.MethodIdents.Entry {
-        return self.env().method_idents.entries.items;
+    pub fn attachedMethodIdentEntries(self: @This()) []const ModuleEnv.AttachedMethodIdents.Entry {
+        return self.env().attached_method_idents.entries.items;
     }
 
     pub fn exprType(_: @This(), idx: CIR.Expr.Idx) Var {

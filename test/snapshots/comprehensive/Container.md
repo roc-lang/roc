@@ -967,7 +967,7 @@ main = {
 							(e-literal (string "test")))))
 				(s-let
 					(p-assign (ident "result"))
-					(e-dot-access (field "map")
+					(e-field-access (field "map")
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "container"))))
@@ -1027,14 +1027,14 @@ main = {
 									(e-block
 										(s-let
 											(p-assign (ident "mapped"))
-											(e-dot-access (field "map")
+											(e-field-access (field "map")
 												(receiver
 													(e-lookup-local
 														(p-assign (ident "container"))))
 												(args
 													(e-lookup-local
 														(p-assign (ident "f"))))))
-										(e-dot-access (field "get_or")
+										(e-field-access (field "get_or")
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "mapped"))))
@@ -1104,7 +1104,7 @@ main = {
 					(e-num (value "5"))))
 			(s-let
 				(p-assign (ident "num_result"))
-				(e-dot-access (field "map")
+				(e-field-access (field "map")
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "num_container"))))
@@ -1118,7 +1118,7 @@ main = {
 								(e-num (value "1")))))))
 			(s-let
 				(p-assign (ident "_str_result"))
-				(e-dot-access (field "map")
+				(e-field-access (field "map")
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "str_container"))))
@@ -1130,11 +1130,11 @@ main = {
 								(p-assign (ident "s")))))))
 			(s-let
 				(p-assign (ident "chained"))
-				(e-dot-access (field "get_or")
+				(e-field-access (field "get_or")
 					(receiver
-						(e-dot-access (field "flat_map")
+						(e-field-access (field "flat_map")
 							(receiver
-								(e-dot-access (field "map")
+								(e-field-access (field "map")
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "num_container"))))
@@ -1198,7 +1198,7 @@ main = {
 						(e-lookup-local
 							(p-assign (ident "transformed"))))
 					(field (name "final")
-						(e-dot-access (field "get_or")
+						(e-field-access (field "get_or")
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "num_result"))))

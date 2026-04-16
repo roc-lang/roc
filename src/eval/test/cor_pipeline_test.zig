@@ -272,7 +272,7 @@ test "cor pipeline - polymorphic local method specialization resolves exact targ
     try expectCompiledInspect(&compiled, "(5, 108)");
 }
 
-test "cor pipeline - imported method resolution stays separate from record field access" {
+test "cor pipeline - imported attached methods stay separate from record field access" {
     var compiled = try helpers.compileInspectedProgram(
         testing.allocator,
         .module,
