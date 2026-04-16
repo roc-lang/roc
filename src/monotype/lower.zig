@@ -2698,11 +2698,7 @@ pub const Lowerer = struct {
                         env,
                         expr.idx,
                         dot.field_name,
-                    ) orelse {
-                        return self.makeRuntimeErrorExprAt(
-                            try self.lowerExprType(module_idx, type_scope, env, expr.idx, expr.data),
-                        );
-                    };
+                    );
                     return try self.program.store.addExpr(.{
                         .ty = lowered_call.result_ty,
                         .data = .{ .call = lowered_call.data },
@@ -2778,11 +2774,7 @@ pub const Lowerer = struct {
                     env,
                     expr.idx,
                     dispatch.method_name,
-                ) orelse {
-                    return self.makeRuntimeErrorExprAt(
-                        try self.lowerExprType(module_idx, type_scope, env, expr.idx, expr.data),
-                    );
-                };
+                );
                 return try self.program.store.addExpr(.{
                     .ty = lowered_call.result_ty,
                     .data = .{ .call = lowered_call.data },
@@ -6024,7 +6016,7 @@ pub const Lowerer = struct {
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
         method_name: base.Ident.Idx,
-    ) std.mem.Allocator.Error!?LoweredCall {
+    ) std.mem.Allocator.Error!LoweredCall {
         const args = self.getRecordedMethodArgs(module_idx, expr_idx, method_name);
         const typed_cir_module = self.ctx.typedCirModule(module_idx);
         const alias_stmt = switch (typed_cir_module.expr(expr_idx).data) {
@@ -6051,14 +6043,13 @@ pub const Lowerer = struct {
             break :blk source_var;
         } else null;
 
-        const source_resolved_target = if (source_receiver_var) |source_var|
+        const resolved_target = if (source_receiver_var) |source_var|
             try self.resolveAttachedMethodTargetFromSourceVar(module_idx, source_var, method_name)
         else
             debugPanic(
                 "monotype static dispatch invariant violated: method call missing explicit source receiver type in module {d}",
                 .{module_idx},
             );
-        const resolved_target = source_resolved_target orelse return null;
         const source_fn_var = try self.copyTopLevelDefExprVarToScope(type_scope, resolved_target.module_idx, resolved_target.def_idx);
 
         const arg_exprs = blk: {
@@ -6116,9 +6107,7 @@ pub const Lowerer = struct {
                     module_idx,
                     source_receiver_var,
                     method_name,
-                ) orelse {
-                    return null;
-                };
+                );
                 const source_fn_var = try self.copyTopLevelDefExprVarToScope(type_scope, target.module_idx, target.def_idx);
                 const arg_exprs = [_]CIR.Expr.Idx{ binop.lhs, binop.rhs };
 
@@ -6508,7 +6497,7 @@ pub const Lowerer = struct {
                     env,
                     expr.idx,
                     dot.field_name,
-                ) orelse break :blk try self.makeRuntimeErrorExprAt(target_ty);
+                );
                 break :blk try self.program.store.addExpr(.{
                     .ty = lowered_call.result_ty,
                     .data = .{ .call = lowered_call.data },
@@ -6521,7 +6510,7 @@ pub const Lowerer = struct {
                     env,
                     expr.idx,
                     dispatch.method_name,
-                ) orelse break :blk try self.makeRuntimeErrorExprAt(target_ty);
+                );
                 break :blk try self.program.store.addExpr(.{
                     .ty = lowered_call.result_ty,
                     .data = .{ .call = lowered_call.data },
@@ -6592,8 +6581,6 @@ pub const Lowerer = struct {
                     env,
                     call_expr_idx,
                     dot.field_name,
-                ) orelse break :blk try self.makeRuntimeErrorExprAt(
-                    try self.requireExprType(module_idx, type_scope, call_expr_idx),
                 );
                 break :blk try self.program.store.addExpr(.{
                     .ty = lowered_call.result_ty,
@@ -6607,8 +6594,6 @@ pub const Lowerer = struct {
                     env,
                     call_expr_idx,
                     dispatch.method_name,
-                ) orelse break :blk try self.makeRuntimeErrorExprAt(
-                    try self.requireExprType(module_idx, type_scope, call_expr_idx),
                 );
                 break :blk try self.program.store.addExpr(.{
                     .ty = lowered_call.result_ty,
@@ -9932,26 +9917,29 @@ pub const Lowerer = struct {
         source_module_idx: u32,
         source_var: Var,
         method_name: base.Ident.Idx,
-    ) std.mem.Allocator.Error!?ResolvedTarget {
+    ) std.mem.Allocator.Error!ResolvedTarget {
         const source_module = self.ctx.typedCirModule(source_module_idx);
         const method_name_text = source_module.getIdent(method_name);
-        const receiver = self.resolveSourceDispatchReceiverIdentity(source_module_idx, source_var) orelse return null;
+        const receiver = self.requireSourceDispatchReceiverIdentity(source_module_idx, source_var);
         const receiver_module = self.ctx.typedCirModule(receiver.module_idx);
         const resolved = receiver_module.resolveAttachedMethodTargetByText(
             receiver.type_name,
             method_name_text,
-        ) orelse return null;
+        ) orelse debugPanic(
+            "monotype static dispatch invariant violated: missing attached method {s}.{s} in module {d}",
+            .{ receiver.type_name, method_name_text, receiver.module_idx },
+        );
         return .{
             .module_idx = resolved.module_idx,
             .def_idx = resolved.def_idx,
         };
     }
 
-    fn resolveSourceDispatchReceiverIdentity(
+    fn requireSourceDispatchReceiverIdentity(
         self: *const Lowerer,
         source_module_idx: u32,
         source_var: Var,
-    ) ?DispatchReceiverIdentity {
+    ) DispatchReceiverIdentity {
         const source_module = self.ctx.typedCirModule(source_module_idx);
         const source_store = source_module.typeStoreConst();
         const resolved = source_store.resolveVar(source_var);
@@ -9965,9 +9953,15 @@ pub const Lowerer = struct {
                     .module_idx = self.ctx.findModuleIdxByName(source_module.getIdent(nominal.origin_module)),
                     .type_name = source_module.getIdent(nominal.ident.ident_idx),
                 },
-                else => null,
+                else => debugPanic(
+                    "monotype static dispatch invariant violated: source receiver var {d} is not nominal in module {d}",
+                    .{ @intFromEnum(source_var), source_module_idx },
+                ),
             },
-            else => null,
+            else => debugPanic(
+                "monotype static dispatch invariant violated: source receiver var {d} is not nominal in module {d}",
+                .{ @intFromEnum(source_var), source_module_idx },
+            ),
         };
     }
 
