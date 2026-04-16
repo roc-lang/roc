@@ -1,7 +1,7 @@
 //! Specialization-local clone-inst of solved source vars into monotype scope state.
 //!
 //! This is the monotype-owned analogue of cor's clone-inst step:
-//! copy only the reachable solved source type graph needed by the current
+//! clone only the reachable solved source type graph needed by the current
 //! specialization into local mutable scope state, while preserving shared
 //! structure through an explicit var map.
 
@@ -31,7 +31,7 @@ const NominalType = types_mod.NominalType;
 pub const VarMapping = std.AutoHashMap(Var, Var);
 pub const ScopedCloneMap = std.AutoHashMap(TypeKey, Var);
 
-fn copyIdent(
+fn cloneIdent(
     source_idents: *const base.Ident.Store,
     dest_idents: *base.Ident.Store,
     source_ident: base.Ident.Idx,
@@ -58,7 +58,7 @@ pub fn cloneVar(
     const placeholder_var = try dest_store.fresh();
     try var_mapping.put(resolved.var_, placeholder_var);
 
-    const dest_content = try copyContent(
+    const dest_content = try cloneContent(
         source_store,
         dest_store,
         resolved.desc.content,
@@ -96,7 +96,7 @@ pub fn cloneVarFromModule(
     const placeholder_var = try dest_store.fresh();
     try var_mapping.put(key, placeholder_var);
 
-    const dest_content = try copyContentFromModule(
+    const dest_content = try cloneContentFromModule(
         source_module_idx,
         source_store,
         dest_store,
@@ -115,7 +115,7 @@ pub fn cloneVarFromModule(
     return placeholder_var;
 }
 
-fn copyContent(
+fn cloneContent(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     content: Content,
@@ -125,15 +125,15 @@ fn copyContent(
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Content {
     return switch (content) {
-        .flex => |flex| .{ .flex = try copyFlex(source_store, dest_store, flex, var_mapping, source_idents, dest_idents, allocator) },
-        .rigid => |rigid| .{ .rigid = try copyRigid(source_store, dest_store, rigid, var_mapping, source_idents, dest_idents, allocator) },
-        .alias => |alias| .{ .alias = try copyAlias(source_store, dest_store, alias, var_mapping, source_idents, dest_idents, allocator) },
-        .structure => |flat_type| .{ .structure = try copyFlatType(source_store, dest_store, flat_type, var_mapping, source_idents, dest_idents, allocator) },
+        .flex => |flex| .{ .flex = try cloneFlex(source_store, dest_store, flex, var_mapping, source_idents, dest_idents, allocator) },
+        .rigid => |rigid| .{ .rigid = try cloneRigid(source_store, dest_store, rigid, var_mapping, source_idents, dest_idents, allocator) },
+        .alias => |alias| .{ .alias = try cloneAlias(source_store, dest_store, alias, var_mapping, source_idents, dest_idents, allocator) },
+        .structure => |flat_type| .{ .structure = try cloneFlatType(source_store, dest_store, flat_type, var_mapping, source_idents, dest_idents, allocator) },
         .err => .err,
     };
 }
 
-fn copyContentFromModule(
+fn cloneContentFromModule(
     source_module_idx: u32,
     source_store: *const TypesStore,
     dest_store: *TypesStore,
@@ -144,15 +144,15 @@ fn copyContentFromModule(
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Content {
     return switch (content) {
-        .flex => |flex| .{ .flex = try copyFlexFromModule(source_module_idx, source_store, dest_store, flex, var_mapping, source_idents, dest_idents, allocator) },
-        .rigid => |rigid| .{ .rigid = try copyRigidFromModule(source_module_idx, source_store, dest_store, rigid, var_mapping, source_idents, dest_idents, allocator) },
-        .alias => |alias| .{ .alias = try copyAliasFromModule(source_module_idx, source_store, dest_store, alias, var_mapping, source_idents, dest_idents, allocator) },
-        .structure => |flat_type| .{ .structure = try copyFlatTypeFromModule(source_module_idx, source_store, dest_store, flat_type, var_mapping, source_idents, dest_idents, allocator) },
+        .flex => |flex| .{ .flex = try cloneFlexFromModule(source_module_idx, source_store, dest_store, flex, var_mapping, source_idents, dest_idents, allocator) },
+        .rigid => |rigid| .{ .rigid = try cloneRigidFromModule(source_module_idx, source_store, dest_store, rigid, var_mapping, source_idents, dest_idents, allocator) },
+        .alias => |alias| .{ .alias = try cloneAliasFromModule(source_module_idx, source_store, dest_store, alias, var_mapping, source_idents, dest_idents, allocator) },
+        .structure => |flat_type| .{ .structure = try cloneFlatTypeFromModule(source_module_idx, source_store, dest_store, flat_type, var_mapping, source_idents, dest_idents, allocator) },
         .err => .err,
     };
 }
 
-fn copyFlex(
+fn cloneFlex(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     source_flex: Flex,
@@ -162,13 +162,13 @@ fn copyFlex(
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Flex {
     const translated_name = if (source_flex.name) |name_ident|
-        try copyIdent(source_idents, dest_idents, name_ident, allocator)
+        try cloneIdent(source_idents, dest_idents, name_ident, allocator)
     else
         null;
 
     return .{
         .name = translated_name,
-        .constraints = try copyStaticDispatchConstraints(
+        .constraints = try cloneStaticDispatchConstraints(
             source_store,
             dest_store,
             source_flex.constraints,
@@ -180,7 +180,7 @@ fn copyFlex(
     };
 }
 
-fn copyFlexFromModule(
+fn cloneFlexFromModule(
     source_module_idx: u32,
     source_store: *const TypesStore,
     dest_store: *TypesStore,
@@ -191,13 +191,13 @@ fn copyFlexFromModule(
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Flex {
     const translated_name = if (source_flex.name) |name_ident|
-        try copyIdent(source_idents, dest_idents, name_ident, allocator)
+        try cloneIdent(source_idents, dest_idents, name_ident, allocator)
     else
         null;
 
     return .{
         .name = translated_name,
-        .constraints = try copyStaticDispatchConstraintsFromModule(
+        .constraints = try cloneStaticDispatchConstraintsFromModule(
             source_module_idx,
             source_store,
             dest_store,
@@ -210,7 +210,7 @@ fn copyFlexFromModule(
     };
 }
 
-fn copyRigid(
+fn cloneRigid(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     source_rigid: Rigid,
@@ -220,8 +220,8 @@ fn copyRigid(
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Rigid {
     return .{
-        .name = try copyIdent(source_idents, dest_idents, source_rigid.name, allocator),
-        .constraints = try copyStaticDispatchConstraints(
+        .name = try cloneIdent(source_idents, dest_idents, source_rigid.name, allocator),
+        .constraints = try cloneStaticDispatchConstraints(
             source_store,
             dest_store,
             source_rigid.constraints,
@@ -233,7 +233,7 @@ fn copyRigid(
     };
 }
 
-fn copyRigidFromModule(
+fn cloneRigidFromModule(
     source_module_idx: u32,
     source_store: *const TypesStore,
     dest_store: *TypesStore,
@@ -244,8 +244,8 @@ fn copyRigidFromModule(
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Rigid {
     return .{
-        .name = try copyIdent(source_idents, dest_idents, source_rigid.name, allocator),
-        .constraints = try copyStaticDispatchConstraintsFromModule(
+        .name = try cloneIdent(source_idents, dest_idents, source_rigid.name, allocator),
+        .constraints = try cloneStaticDispatchConstraintsFromModule(
             source_module_idx,
             source_store,
             dest_store,
@@ -258,7 +258,7 @@ fn copyRigidFromModule(
     };
 }
 
-fn copyAlias(
+fn cloneAlias(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     source_alias: Alias,
@@ -295,13 +295,13 @@ fn copyAlias(
     }
 
     return .{
-        .ident = .{ .ident_idx = try copyIdent(source_idents, dest_idents, source_alias.ident.ident_idx, allocator) },
+        .ident = .{ .ident_idx = try cloneIdent(source_idents, dest_idents, source_alias.ident.ident_idx, allocator) },
         .vars = .{ .nonempty = try dest_store.appendVars(dest_args.items) },
-        .origin_module = try copyIdent(source_idents, dest_idents, source_alias.origin_module, allocator),
+        .origin_module = try cloneIdent(source_idents, dest_idents, source_alias.origin_module, allocator),
     };
 }
 
-fn copyAliasFromModule(
+fn cloneAliasFromModule(
     source_module_idx: u32,
     source_store: *const TypesStore,
     dest_store: *TypesStore,
@@ -341,13 +341,13 @@ fn copyAliasFromModule(
     }
 
     return .{
-        .ident = .{ .ident_idx = try copyIdent(source_idents, dest_idents, source_alias.ident.ident_idx, allocator) },
+        .ident = .{ .ident_idx = try cloneIdent(source_idents, dest_idents, source_alias.ident.ident_idx, allocator) },
         .vars = .{ .nonempty = try dest_store.appendVars(dest_args.items) },
-        .origin_module = try copyIdent(source_idents, dest_idents, source_alias.origin_module, allocator),
+        .origin_module = try cloneIdent(source_idents, dest_idents, source_alias.origin_module, allocator),
     };
 }
 
-fn copyFlatType(
+fn cloneFlatType(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     flat_type: FlatType,
@@ -357,20 +357,20 @@ fn copyFlatType(
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!FlatType {
     return switch (flat_type) {
-        .tuple => |tuple| .{ .tuple = try copyTuple(source_store, dest_store, tuple, var_mapping, source_idents, dest_idents, allocator) },
-        .nominal_type => |nominal| .{ .nominal_type = try copyNominalType(source_store, dest_store, nominal, var_mapping, source_idents, dest_idents, allocator) },
-        .fn_pure => |func| .{ .fn_pure = try copyFunc(source_store, dest_store, func, var_mapping, source_idents, dest_idents, allocator) },
-        .fn_effectful => |func| .{ .fn_effectful = try copyFunc(source_store, dest_store, func, var_mapping, source_idents, dest_idents, allocator) },
-        .fn_unbound => |func| .{ .fn_unbound = try copyFunc(source_store, dest_store, func, var_mapping, source_idents, dest_idents, allocator) },
-        .record => |record| .{ .record = try copyRecord(source_store, dest_store, record, var_mapping, source_idents, dest_idents, allocator) },
-        .tag_union => |tag_union| .{ .tag_union = try copyTagUnion(source_store, dest_store, tag_union, var_mapping, source_idents, dest_idents, allocator) },
-        .record_unbound => |fields| .{ .record_unbound = try copyRecordFields(source_store, dest_store, fields, var_mapping, source_idents, dest_idents, allocator) },
+        .tuple => |tuple| .{ .tuple = try cloneTuple(source_store, dest_store, tuple, var_mapping, source_idents, dest_idents, allocator) },
+        .nominal_type => |nominal| .{ .nominal_type = try cloneNominalType(source_store, dest_store, nominal, var_mapping, source_idents, dest_idents, allocator) },
+        .fn_pure => |func| .{ .fn_pure = try cloneFunc(source_store, dest_store, func, var_mapping, source_idents, dest_idents, allocator) },
+        .fn_effectful => |func| .{ .fn_effectful = try cloneFunc(source_store, dest_store, func, var_mapping, source_idents, dest_idents, allocator) },
+        .fn_unbound => |func| .{ .fn_unbound = try cloneFunc(source_store, dest_store, func, var_mapping, source_idents, dest_idents, allocator) },
+        .record => |record| .{ .record = try cloneRecord(source_store, dest_store, record, var_mapping, source_idents, dest_idents, allocator) },
+        .tag_union => |tag_union| .{ .tag_union = try cloneTagUnion(source_store, dest_store, tag_union, var_mapping, source_idents, dest_idents, allocator) },
+        .record_unbound => |fields| .{ .record_unbound = try cloneRecordFields(source_store, dest_store, fields, var_mapping, source_idents, dest_idents, allocator) },
         .empty_record => .empty_record,
         .empty_tag_union => .empty_tag_union,
     };
 }
 
-fn copyFlatTypeFromModule(
+fn cloneFlatTypeFromModule(
     source_module_idx: u32,
     source_store: *const TypesStore,
     dest_store: *TypesStore,
@@ -381,20 +381,20 @@ fn copyFlatTypeFromModule(
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!FlatType {
     return switch (flat_type) {
-        .tuple => |tuple| .{ .tuple = try copyTupleFromModule(source_module_idx, source_store, dest_store, tuple, var_mapping, source_idents, dest_idents, allocator) },
-        .nominal_type => |nominal| .{ .nominal_type = try copyNominalTypeFromModule(source_module_idx, source_store, dest_store, nominal, var_mapping, source_idents, dest_idents, allocator) },
-        .fn_pure => |func| .{ .fn_pure = try copyFuncFromModule(source_module_idx, source_store, dest_store, func, var_mapping, source_idents, dest_idents, allocator) },
-        .fn_effectful => |func| .{ .fn_effectful = try copyFuncFromModule(source_module_idx, source_store, dest_store, func, var_mapping, source_idents, dest_idents, allocator) },
-        .fn_unbound => |func| .{ .fn_unbound = try copyFuncFromModule(source_module_idx, source_store, dest_store, func, var_mapping, source_idents, dest_idents, allocator) },
-        .record => |record| .{ .record = try copyRecordFromModule(source_module_idx, source_store, dest_store, record, var_mapping, source_idents, dest_idents, allocator) },
-        .tag_union => |tag_union| .{ .tag_union = try copyTagUnionFromModule(source_module_idx, source_store, dest_store, tag_union, var_mapping, source_idents, dest_idents, allocator) },
-        .record_unbound => |fields| .{ .record_unbound = try copyRecordFieldsFromModule(source_module_idx, source_store, dest_store, fields, var_mapping, source_idents, dest_idents, allocator) },
+        .tuple => |tuple| .{ .tuple = try cloneTupleFromModule(source_module_idx, source_store, dest_store, tuple, var_mapping, source_idents, dest_idents, allocator) },
+        .nominal_type => |nominal| .{ .nominal_type = try cloneNominalTypeFromModule(source_module_idx, source_store, dest_store, nominal, var_mapping, source_idents, dest_idents, allocator) },
+        .fn_pure => |func| .{ .fn_pure = try cloneFuncFromModule(source_module_idx, source_store, dest_store, func, var_mapping, source_idents, dest_idents, allocator) },
+        .fn_effectful => |func| .{ .fn_effectful = try cloneFuncFromModule(source_module_idx, source_store, dest_store, func, var_mapping, source_idents, dest_idents, allocator) },
+        .fn_unbound => |func| .{ .fn_unbound = try cloneFuncFromModule(source_module_idx, source_store, dest_store, func, var_mapping, source_idents, dest_idents, allocator) },
+        .record => |record| .{ .record = try cloneRecordFromModule(source_module_idx, source_store, dest_store, record, var_mapping, source_idents, dest_idents, allocator) },
+        .tag_union => |tag_union| .{ .tag_union = try cloneTagUnionFromModule(source_module_idx, source_store, dest_store, tag_union, var_mapping, source_idents, dest_idents, allocator) },
+        .record_unbound => |fields| .{ .record_unbound = try cloneRecordFieldsFromModule(source_module_idx, source_store, dest_store, fields, var_mapping, source_idents, dest_idents, allocator) },
         .empty_record => .empty_record,
         .empty_tag_union => .empty_tag_union,
     };
 }
 
-fn copyTuple(
+fn cloneTuple(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     tuple: types_mod.Tuple,
@@ -422,7 +422,7 @@ fn copyTuple(
     return .{ .elems = try dest_store.appendVars(dest_elems.items) };
 }
 
-fn copyTupleFromModule(
+fn cloneTupleFromModule(
     source_module_idx: u32,
     source_store: *const TypesStore,
     dest_store: *TypesStore,
@@ -452,7 +452,7 @@ fn copyTupleFromModule(
     return .{ .elems = try dest_store.appendVars(dest_elems.items) };
 }
 
-fn copyFunc(
+fn cloneFunc(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     func: Func,
@@ -484,7 +484,7 @@ fn copyFunc(
     };
 }
 
-fn copyFuncFromModule(
+fn cloneFuncFromModule(
     source_module_idx: u32,
     source_store: *const TypesStore,
     dest_store: *TypesStore,
@@ -518,7 +518,7 @@ fn copyFuncFromModule(
     };
 }
 
-fn copyRecordFields(
+fn cloneRecordFields(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     fields_range: types_mod.RecordField.SafeMultiList.Range,
@@ -533,7 +533,7 @@ fn copyRecordFields(
 
     for (source_fields.items(.name), source_fields.items(.var_)) |name, var_| {
         try fresh_fields.append(allocator, .{
-            .name = try copyIdent(source_idents, dest_idents, name, allocator),
+            .name = try cloneIdent(source_idents, dest_idents, name, allocator),
             .var_ = try cloneVar(source_store, dest_store, var_, var_mapping, source_idents, dest_idents, allocator),
         });
     }
@@ -541,7 +541,7 @@ fn copyRecordFields(
     return try dest_store.appendRecordFields(fresh_fields.items);
 }
 
-fn copyRecordFieldsFromModule(
+fn cloneRecordFieldsFromModule(
     source_module_idx: u32,
     source_store: *const TypesStore,
     dest_store: *TypesStore,
@@ -557,7 +557,7 @@ fn copyRecordFieldsFromModule(
 
     for (source_fields.items(.name), source_fields.items(.var_)) |name, var_| {
         try fresh_fields.append(allocator, .{
-            .name = try copyIdent(source_idents, dest_idents, name, allocator),
+            .name = try cloneIdent(source_idents, dest_idents, name, allocator),
             .var_ = try cloneVarFromModule(source_module_idx, source_store, dest_store, var_, var_mapping, source_idents, dest_idents, allocator),
         });
     }
@@ -565,7 +565,7 @@ fn copyRecordFieldsFromModule(
     return try dest_store.appendRecordFields(fresh_fields.items);
 }
 
-fn copyRecord(
+fn cloneRecord(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     record: Record,
@@ -575,12 +575,12 @@ fn copyRecord(
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Record {
     return .{
-        .fields = try copyRecordFields(source_store, dest_store, record.fields, var_mapping, source_idents, dest_idents, allocator),
+        .fields = try cloneRecordFields(source_store, dest_store, record.fields, var_mapping, source_idents, dest_idents, allocator),
         .ext = try cloneVar(source_store, dest_store, record.ext, var_mapping, source_idents, dest_idents, allocator),
     };
 }
 
-fn copyRecordFromModule(
+fn cloneRecordFromModule(
     source_module_idx: u32,
     source_store: *const TypesStore,
     dest_store: *TypesStore,
@@ -591,12 +591,12 @@ fn copyRecordFromModule(
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Record {
     return .{
-        .fields = try copyRecordFieldsFromModule(source_module_idx, source_store, dest_store, record.fields, var_mapping, source_idents, dest_idents, allocator),
+        .fields = try cloneRecordFieldsFromModule(source_module_idx, source_store, dest_store, record.fields, var_mapping, source_idents, dest_idents, allocator),
         .ext = try cloneVarFromModule(source_module_idx, source_store, dest_store, record.ext, var_mapping, source_idents, dest_idents, allocator),
     };
 }
 
-fn copyTagUnion(
+fn cloneTagUnion(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     tag_union: TagUnion,
@@ -627,7 +627,7 @@ fn copyTagUnion(
         }
 
         try fresh_tags.append(allocator, .{
-            .name = try copyIdent(source_idents, dest_idents, name, allocator),
+            .name = try cloneIdent(source_idents, dest_idents, name, allocator),
             .args = try dest_store.appendVars(dest_args.items),
         });
     }
@@ -638,7 +638,7 @@ fn copyTagUnion(
     };
 }
 
-fn copyTagUnionFromModule(
+fn cloneTagUnionFromModule(
     source_module_idx: u32,
     source_store: *const TypesStore,
     dest_store: *TypesStore,
@@ -671,7 +671,7 @@ fn copyTagUnionFromModule(
         }
 
         try fresh_tags.append(allocator, .{
-            .name = try copyIdent(source_idents, dest_idents, name, allocator),
+            .name = try cloneIdent(source_idents, dest_idents, name, allocator),
             .args = try dest_store.appendVars(dest_args.items),
         });
     }
@@ -682,7 +682,7 @@ fn copyTagUnionFromModule(
     };
 }
 
-fn copyNominalType(
+fn cloneNominalType(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     source_nominal: NominalType,
@@ -719,14 +719,14 @@ fn copyNominalType(
     }
 
     return .{
-        .ident = .{ .ident_idx = try copyIdent(source_idents, dest_idents, source_nominal.ident.ident_idx, allocator) },
+        .ident = .{ .ident_idx = try cloneIdent(source_idents, dest_idents, source_nominal.ident.ident_idx, allocator) },
         .vars = .{ .nonempty = try dest_store.appendVars(dest_args.items) },
-        .origin_module = try copyIdent(source_idents, dest_idents, source_nominal.origin_module, allocator),
+        .origin_module = try cloneIdent(source_idents, dest_idents, source_nominal.origin_module, allocator),
         .is_opaque = source_nominal.is_opaque,
     };
 }
 
-fn copyNominalTypeFromModule(
+fn cloneNominalTypeFromModule(
     source_module_idx: u32,
     source_store: *const TypesStore,
     dest_store: *TypesStore,
@@ -766,14 +766,14 @@ fn copyNominalTypeFromModule(
     }
 
     return .{
-        .ident = .{ .ident_idx = try copyIdent(source_idents, dest_idents, source_nominal.ident.ident_idx, allocator) },
+        .ident = .{ .ident_idx = try cloneIdent(source_idents, dest_idents, source_nominal.ident.ident_idx, allocator) },
         .vars = .{ .nonempty = try dest_store.appendVars(dest_args.items) },
-        .origin_module = try copyIdent(source_idents, dest_idents, source_nominal.origin_module, allocator),
+        .origin_module = try cloneIdent(source_idents, dest_idents, source_nominal.origin_module, allocator),
         .is_opaque = source_nominal.is_opaque,
     };
 }
 
-fn copyStaticDispatchConstraints(
+fn cloneStaticDispatchConstraints(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     source_constraints: StaticDispatchConstraint.SafeList.Range,
@@ -789,7 +789,7 @@ fn copyStaticDispatchConstraints(
 
     for (source_store.sliceStaticDispatchConstraints(source_constraints)) |source_constraint| {
         var dest_constraint = source_constraint;
-        dest_constraint.fn_name = try copyIdent(source_idents, dest_idents, source_constraint.fn_name, allocator);
+        dest_constraint.fn_name = try cloneIdent(source_idents, dest_idents, source_constraint.fn_name, allocator);
         dest_constraint.fn_var = try cloneVar(
             source_store,
             dest_store,
@@ -805,7 +805,7 @@ fn copyStaticDispatchConstraints(
     return try dest_store.appendStaticDispatchConstraints(dest_constraints.items);
 }
 
-fn copyStaticDispatchConstraintsFromModule(
+fn cloneStaticDispatchConstraintsFromModule(
     source_module_idx: u32,
     source_store: *const TypesStore,
     dest_store: *TypesStore,
@@ -822,7 +822,7 @@ fn copyStaticDispatchConstraintsFromModule(
 
     for (source_store.sliceStaticDispatchConstraints(source_constraints)) |source_constraint| {
         var dest_constraint = source_constraint;
-        dest_constraint.fn_name = try copyIdent(source_idents, dest_idents, source_constraint.fn_name, allocator);
+        dest_constraint.fn_name = try cloneIdent(source_idents, dest_idents, source_constraint.fn_name, allocator);
         dest_constraint.fn_var = try cloneVarFromModule(
             source_module_idx,
             source_store,
