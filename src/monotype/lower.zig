@@ -10397,16 +10397,6 @@ pub const Lowerer = struct {
         };
     }
 
-    fn lookupFunctionArgVar(
-        self: *const Lowerer,
-        _: u32,
-        type_scope: *const TypeCloneScope,
-        fn_var: Var,
-        arg_index: usize,
-    ) ?Var {
-        return self.lookupFunctionArgVarInStore(type_scope.typeStoreConst(), fn_var, arg_index);
-    }
-
     fn lookupCurriedFunctionArgVarInStore(
         self: *const Lowerer,
         store: *const types.Store,
