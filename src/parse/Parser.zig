@@ -1709,7 +1709,6 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 };
                 self.advance();
                 const anno = try self.parseTypeAnno(.not_looking_for_args);
-                const where_clause = try self.parseWhereConstraint();
 
                 // Check if there's a .{ associated } after the type annotation
                 var associated: ?AST.Associated = null;
@@ -1734,7 +1733,6 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     .header = header,
                     .anno = anno,
                     .kind = kind,
-                    .where = where_clause,
                     .associated = associated,
                     .region = .{ .start = start, .end = self.pos },
                 } });
@@ -1831,19 +1829,13 @@ fn parseWhereConstraint(self: *Parser) Error!?AST.Collection.Idx {
             .region = diagnostic_region,
         });
         const malformed_clause = try self.store.addMalformed(AST.WhereClause.Idx, .where_expected_open_bracket, diagnostic_region);
-        const where_clauses_top = self.store.scratchWhereClauseTop();
         try self.store.addScratchWhereClause(malformed_clause);
-        const where_clauses = try self.store.whereClauseSpanFrom(where_clauses_top);
-        const coll_id = try self.store.addCollection(.collection_where_clause, .{
             .region = .{ .start = where_start, .end = self.pos },
-            .span = where_clauses.span,
         });
         return coll_id;
     };
 
-    const where_clauses_top = self.store.scratchWhereClauseTop();
 
-    // Parse comma-separated where clauses until we hit ]
     while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
         const clause = try self.parseWhereClause();
         try self.store.addScratchWhereClause(clause);
@@ -1856,10 +1848,7 @@ fn parseWhereConstraint(self: *Parser) Error!?AST.Collection.Idx {
         }
     }
 
-    const where_clauses = try self.store.whereClauseSpanFrom(where_clauses_top);
 
-    // Check if the where clause is empty
-    if (where_clauses.span.len == 0) {
         const diagnostic_region = AST.TokenizedRegion{ .start = where_start, .end = self.pos };
         try self.diagnostics.append(self.gpa, .{
             .tag = .where_expected_constraints,
@@ -1867,10 +1856,7 @@ fn parseWhereConstraint(self: *Parser) Error!?AST.Collection.Idx {
         });
         const malformed_clause = try self.store.addMalformed(AST.WhereClause.Idx, .where_expected_constraints, diagnostic_region);
         try self.store.addScratchWhereClause(malformed_clause);
-        const updated_where_clauses = try self.store.whereClauseSpanFrom(where_clauses_top);
-        const coll_id = try self.store.addCollection(.collection_where_clause, .{
             .region = .{ .start = where_start, .end = self.pos },
-            .span = updated_where_clauses.span,
         });
         return coll_id;
     }
@@ -1884,9 +1870,7 @@ fn parseWhereConstraint(self: *Parser) Error!?AST.Collection.Idx {
         });
     };
 
-    const coll_id = try self.store.addCollection(.collection_where_clause, .{
         .region = .{ .start = where_start, .end = self.pos },
-        .span = where_clauses.span,
     });
 
     return coll_id;
@@ -3446,7 +3430,6 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
         // Don't treat comma as function argument separator if followed by:
         // - CloseCurly (end of record)
         // - DoubleDot (record extension like { field: Type, ..ext })
-        // - CloseSquare (where clause)
         if (looking_for_args == .not_looking_for_args and
             (curr_is_arrow or
                 (curr == .Comma and (next_is_not_lower_ident or not_followed_by_colon or two_away_is_arrow) and next_tok != .CloseCurly and next_tok != .DoubleDot and next_tok != .CloseSquare)))
@@ -3516,7 +3499,6 @@ pub fn parseAnnoRecordField(self: *Parser) Error!AST.AnnoRecordField.Idx {
     });
 }
 
-/// Parse a where clause
 ///
 /// e.g. `a.hash : a -> U64`
 /// e.g. `a.Hasher : Type`

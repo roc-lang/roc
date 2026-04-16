@@ -298,17 +298,9 @@ pub const Module = struct {
     }
 
     pub fn exprDefaultsToDec(self: @This(), idx: CIR.Expr.Idx) bool {
-        const resolved = self.typeStoreConst().resolveVar(self.exprType(idx));
-        return switch (resolved.desc.content) {
-            .flex => |flex| blk: {
-                const constraints = self.typeStoreConst().sliceStaticDispatchConstraints(flex.constraints);
-                for (constraints) |constraint| {
-                    if (constraint.origin == .from_numeral) break :blk true;
-                }
-                break :blk false;
-            },
-            else => false,
-        };
+        _ = self;
+        _ = idx;
+        return false;
     }
 
     pub fn curriedFnShape(self: @This(), fn_var: Var) Allocator.Error!CurriedFnShape {

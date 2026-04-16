@@ -1733,7 +1733,6 @@ define_builtins! {
         29 INSPECT_DEC: "dec"
         30 INSPECT_CUSTOM: "custom"
         31 INSPECT_APPLY: "apply"
-        32 INSPECT_TO_INSPECTOR: "to_inspector"
         33 INSPECT_TO_STR: "to_str"
     }
 

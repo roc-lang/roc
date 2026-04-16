@@ -151,7 +151,6 @@ pub const Tag = enum {
     /// Example: `colors : List Color`
     /// Example: `color : { red : U8, green: U8, blue: U8 }`
     /// * main_token - lower_ident token index
-    /// * lhs - extra_data description - 1 if has where clause, 0 otherwise
     /// * rhs - extra_data index
     /// * extra_data format: [[where node index]?, type_term node index]
     type_anno,
@@ -493,8 +492,6 @@ pub const Tag = enum {
     /// Collection of record fields
     collection_record_fields,
 
-    /// Collection of where clauses
-    collection_where_clause,
 
     /// Collection of type annotations
     collection_ty_anno,

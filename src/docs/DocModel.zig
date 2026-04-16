@@ -221,7 +221,6 @@ pub const DocType = union(enum) {
     /// Type application: List(Str), Result(ok, err)
     apply: Apply,
     /// Where clause wrapping a type
-    where_clause: WhereClause,
     /// Wildcard _
     wildcard,
     /// Error/unknown type
@@ -369,7 +368,6 @@ pub const DocType = union(enum) {
                 }
                 try writer.writeAll(")");
             },
-            .where_clause => |wc| {
                 try writer.writeAll("(where ");
                 try wc.type.writeToSExpr(writer, depth);
                 for (wc.constraints) |constraint| {
@@ -453,7 +451,6 @@ pub const DocType = union(enum) {
                 }
                 gpa.free(app.args);
             },
-            .where_clause => |wc| {
                 wc.type.deinit(gpa);
                 gpa.destroy(wc.type);
                 for (wc.constraints) |constraint| {

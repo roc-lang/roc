@@ -1175,7 +1175,6 @@ Builtin :: [].{
 			shift_right_zf_by : U8, U8 -> U8
 
 			from_int_digits : List(U8) -> Try(U8, [OutOfRange, ..])
-			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str), ..])
 			from_str : Str -> Try(U8, [BadNumStr, ..])
 
 			# # List of integers beginning with this `U8` and ending with the other `U8`.
@@ -1269,7 +1268,6 @@ Builtin :: [].{
 			until = |start, end| range_until(start, end)
 
 			from_int_digits : List(U8) -> Try(I8, [OutOfRange, ..])
-			from_numeral : Numeral -> Try(I8, [InvalidNumeral(Str), ..])
 			from_str : Str -> Try(I8, [BadNumStr, ..])
 
 			# Conversions to signed integers (all safe widening)
@@ -1349,7 +1347,6 @@ Builtin :: [].{
 			until = |start, end| range_until(start, end)
 
 			from_int_digits : List(U8) -> Try(U16, [OutOfRange, ..])
-			from_numeral : Numeral -> Try(U16, [InvalidNumeral(Str), ..])
 			from_str : Str -> Try(U16, [BadNumStr, ..])
 
 			# Conversions to signed integers
@@ -1433,7 +1430,6 @@ Builtin :: [].{
 			until = |start, end| range_until(start, end)
 
 			from_int_digits : List(U8) -> Try(I16, [OutOfRange, ..])
-			from_numeral : Numeral -> Try(I16, [InvalidNumeral(Str), ..])
 			from_str : Str -> Try(I16, [BadNumStr, ..])
 
 			# Conversions to signed integers
@@ -1514,7 +1510,6 @@ Builtin :: [].{
 			until = |start, end| range_until(start, end)
 
 			from_int_digits : List(U8) -> Try(U32, [OutOfRange, ..])
-			from_numeral : Numeral -> Try(U32, [InvalidNumeral(Str), ..])
 			from_str : Str -> Try(U32, [BadNumStr, ..])
 
 			# Conversions to signed integers
@@ -1600,7 +1595,6 @@ Builtin :: [].{
 			until = |start, end| range_until(start, end)
 
 			from_int_digits : List(U8) -> Try(I32, [OutOfRange, ..])
-			from_numeral : Numeral -> Try(I32, [InvalidNumeral(Str), ..])
 			from_str : Str -> Try(I32, [BadNumStr, ..])
 
 			# Conversions to signed integers
@@ -1683,7 +1677,6 @@ Builtin :: [].{
 			until = |start, end| range_until(start, end)
 
 			from_int_digits : List(U8) -> Try(U64, [OutOfRange, ..])
-			from_numeral : Numeral -> Try(U64, [InvalidNumeral(Str), ..])
 			from_str : Str -> Try(U64, [BadNumStr, ..])
 
 			# Conversions to signed integers
@@ -1771,7 +1764,6 @@ Builtin :: [].{
 			until = |start, end| range_until(start, end)
 
 			from_int_digits : List(U8) -> Try(I64, [OutOfRange, ..])
-			from_numeral : Numeral -> Try(I64, [InvalidNumeral(Str), ..])
 			from_str : Str -> Try(I64, [BadNumStr, ..])
 
 			# Conversions to signed integers
@@ -1854,7 +1846,6 @@ Builtin :: [].{
 			until = |start, end| range_until(start, end)
 
 			from_int_digits : List(U8) -> Try(U128, [OutOfRange, ..])
-			from_numeral : Numeral -> Try(U128, [InvalidNumeral(Str), ..])
 			from_str : Str -> Try(U128, [BadNumStr, ..])
 
 			# Conversions to signed integers
@@ -1946,7 +1937,6 @@ Builtin :: [].{
 			until = |start, end| range_until(start, end)
 
 			from_int_digits : List(U8) -> Try(I128, [OutOfRange, ..])
-			from_numeral : Numeral -> Try(I128, [InvalidNumeral(Str), ..])
 			from_str : Str -> Try(I128, [BadNumStr, ..])
 
 			# Conversions to signed integers
@@ -2022,7 +2012,6 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(Dec, [OutOfRange, ..])
 			from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange, ..])
-			from_numeral : Numeral -> Try(Dec, [InvalidNumeral(Str), ..])
 			from_str : Str -> Try(Dec, [BadNumStr, ..])
 
 			# Conversions to signed integers (all lossy - truncates fractional part)
@@ -2114,7 +2103,6 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(F32, [OutOfRange, ..])
 			from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange, ..])
-			from_numeral : Numeral -> Try(F32, [InvalidNumeral(Str), ..])
 			from_str : Str -> Try(F32, [BadNumStr, ..])
 
 			# Conversions to signed integers (all lossy - truncation + range check)
@@ -2192,7 +2180,6 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(F64, [OutOfRange, ..])
 			from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange, ..])
-			from_numeral : Numeral -> Try(F64, [InvalidNumeral(Str), ..])
 			from_str : Str -> Try(F64, [BadNumStr, ..])
 
 			# Conversions to signed integers (all lossy - truncation + range check)

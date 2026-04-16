@@ -396,8 +396,6 @@ pub const Statement = union(enum) {
                     const where_begin = tree.beginNode();
                     try tree.pushStaticAtom("where");
                     const where_attrs = tree.beginNode();
-                    const where_clauses = env.store.sliceWhereClauses(where_span);
-                    for (where_clauses) |clause_idx| {
                         const clause = env.store.getWhereClause(clause_idx);
                         try clause.pushToSExprTree(env, tree, clause_idx);
                     }

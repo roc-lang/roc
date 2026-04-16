@@ -166,10 +166,8 @@ pub const CommonIdents = extern struct {
     is_negative: Ident.Idx,
     digits_before_pt: Ident.Idx,
     digits_after_pt: Ident.Idx,
-    to_inspect: Ident.Idx,
     ok: Ident.Idx,
     err: Ident.Idx,
-    from_numeral: Ident.Idx,
     true_tag: Ident.Idx,
     false_tag: Ident.Idx,
     // from_utf8 result fields
@@ -252,10 +250,8 @@ pub const CommonIdents = extern struct {
             .is_negative = try common.insertIdent(gpa, Ident.for_text("is_negative")),
             .digits_before_pt = try common.insertIdent(gpa, Ident.for_text("digits_before_pt")),
             .digits_after_pt = try common.insertIdent(gpa, Ident.for_text("digits_after_pt")),
-            .to_inspect = try common.insertIdent(gpa, Ident.for_text("to_inspect")),
             .ok = try common.insertIdent(gpa, Ident.for_text("Ok")),
             .err = try common.insertIdent(gpa, Ident.for_text("Err")),
-            .from_numeral = try common.insertIdent(gpa, Ident.for_text("from_numeral")),
             .true_tag = try common.insertIdent(gpa, Ident.for_text("True")),
             .false_tag = try common.insertIdent(gpa, Ident.for_text("False")),
             // from_utf8 result fields
@@ -341,10 +337,8 @@ pub const CommonIdents = extern struct {
             .is_negative = common.findIdent("is_negative") orelse unreachable,
             .digits_before_pt = common.findIdent("digits_before_pt") orelse unreachable,
             .digits_after_pt = common.findIdent("digits_after_pt") orelse unreachable,
-            .to_inspect = common.findIdent("to_inspect") orelse unreachable,
             .ok = common.findIdent("Ok") orelse unreachable,
             .err = common.findIdent("Err") orelse unreachable,
-            .from_numeral = common.findIdent("from_numeral") orelse unreachable,
             .true_tag = common.findIdent("True") orelse unreachable,
             .false_tag = common.findIdent("False") orelse unreachable,
             // from_utf8 result fields
@@ -442,7 +436,6 @@ defer_numeric_defaults: bool = false,
 pub const DeferredNumericLiteral = struct {
     expr_idx: CIR.Expr.Idx,
     type_var: TypeVar,
-    constraint: types_mod.StaticDispatchConstraint,
     region: Region,
 
     pub const SafeList = collections.SafeList(@This());
@@ -1517,11 +1510,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
-        .malformed_where_clause => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
             var report = Report.init(allocator, "MALFORMED WHERE CLAUSE", .runtime_error);
-            try report.document.addReflowingText("This where clause could not be parsed correctly.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
@@ -1533,7 +1524,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getLineStartsAll(),
             );
             try report.document.addLineBreak();
-            try report.document.addReflowingText("Check the syntax of your where clause.");
 
             break :blk report;
         },
@@ -1862,7 +1852,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
-        .where_clause_not_allowed_in_type_decl => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
             var report = Report.init(allocator, "WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION", .warning);
@@ -2809,7 +2798,6 @@ pub fn addMatchBranch(self: *Self, expr: CIR.Expr.Match.Branch, region: Region) 
     return expr_idx;
 }
 
-/// Add a new where clause to the node store.
 /// This function asserts that the nodes and regions are in sync.
 pub fn addWhereClause(self: *Self, expr: CIR.WhereClause, region: Region) std.mem.Allocator.Error!CIR.WhereClause.Idx {
     const expr_idx = try self.store.addWhereClause(expr, region);

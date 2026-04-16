@@ -72,8 +72,6 @@ const TwoRecordFields = types_mod.TwoRecordFields;
 const TagUnion = types_mod.TagUnion;
 const Tag = types_mod.Tag;
 const TwoTags = types_mod.TwoTags;
-const StaticDispatchConstraint = types_mod.StaticDispatchConstraint;
-const TwoStaticDispatchConstraints = types_mod.TwoStaticDispatchConstraints;
 
 const VarSafeList = Var.SafeList;
 const RecordFieldSafeMultiList = RecordField.SafeMultiList;
@@ -271,7 +269,6 @@ const Unifier = struct {
         self.types_store.union_(vars.a.var_, vars.b.var_, .{
             .content = new_content,
             .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
-            .from_numeral_origin = is_flex and (vars.a.desc.from_numeral_origin or vars.b.desc.from_numeral_origin),
         });
     }
 
@@ -284,7 +281,6 @@ const Unifier = struct {
         const var_ = try self.types_store.register(.{
             .content = new_content,
             .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
-            .from_numeral_origin = is_flex and (vars.a.desc.from_numeral_origin or vars.b.desc.from_numeral_origin),
         });
         _ = try self.scratch.fresh_vars.append(self.scratch.gpa, var_);
         return var_;
@@ -298,7 +294,6 @@ const Unifier = struct {
     fn recordDeferredConstraint(
         self: *Self,
         vars: *const ResolvedVarDescs,
-        constraints: StaticDispatchConstraint.SafeList.Range,
     ) std.mem.Allocator.Error!void {
         const dispatcher_var = self.unresolved_b orelse vars.b.var_;
         return self.recordDeferredConstraintOn(dispatcher_var, constraints);
@@ -307,7 +302,6 @@ const Unifier = struct {
     fn recordDeferredConstraintOn(
         self: *Self,
         dispatcher_var: Var,
-        constraints: StaticDispatchConstraint.SafeList.Range,
     ) std.mem.Allocator.Error!void {
         if (constraints.len() > 0) {
             _ = try self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
@@ -421,12 +415,9 @@ const Unifier = struct {
 
     // Unify flex //
 
-    /// Check if a flex var has a from_numeral constraint.
     fn flexHasFromNumeral(self: *const Self, flex: Flex) bool {
         if (flex.constraints.len() == 0) return false;
-        const constraints = self.types_store.sliceStaticDispatchConstraints(flex.constraints);
         for (constraints) |c| {
-            if (c.origin == .from_numeral) return true;
         }
         return false;
     }
@@ -438,9 +429,7 @@ const Unifier = struct {
 
         switch (b_content) {
             .flex => |b_flex| {
-                // If both have from_numeral, two vars merge into one — decrement
                 if (self.flexHasFromNumeral(a_flex) and self.flexHasFromNumeral(b_flex)) {
-                    self.types_store.from_numeral_flex_count -|= 1;
                 }
 
                 const mb_ident = blk: {
@@ -451,7 +440,6 @@ const Unifier = struct {
                     }
                 };
 
-                const merged_constraints = try self.unifyStaticDispatchConstraints(a_flex.constraints, b_flex.constraints);
                 self.merge(vars, Content{ .flex = .{
                     .name = mb_ident,
                     .constraints = merged_constraints,
@@ -459,7 +447,6 @@ const Unifier = struct {
             },
             .rigid => |b_rigid| {
                 if (self.flexHasFromNumeral(a_flex)) {
-                    self.types_store.from_numeral_flex_count -|= 1;
                 }
                 try self.recordDeferredConstraint(vars, a_flex.constraints);
                 self.merge(vars, .{ .rigid = b_rigid });
@@ -475,7 +462,6 @@ const Unifier = struct {
             },
             .structure => {
                 if (self.flexHasFromNumeral(a_flex)) {
-                    self.types_store.from_numeral_flex_count -|= 1;
                 }
                 try self.recordDeferredConstraint(vars, a_flex.constraints);
                 self.merge(vars, b_content);
@@ -494,7 +480,6 @@ const Unifier = struct {
         switch (b_content) {
             .flex => |b_flex| {
                 if (self.flexHasFromNumeral(b_flex)) {
-                    self.types_store.from_numeral_flex_count -|= 1;
                 }
                 try self.recordDeferredConstraintOn(vars.a.var_, b_flex.constraints);
                 self.merge(vars, .{ .rigid = a_rigid });
@@ -2244,11 +2229,7 @@ const Unifier = struct {
 
     // constraints //
 
-    fn unifyStaticDispatchConstraints(
         self: *Self,
-        a_constraints: StaticDispatchConstraint.SafeList.Range,
-        b_constraints: StaticDispatchConstraint.SafeList.Range,
-    ) Error!StaticDispatchConstraint.SafeList.Range {
         const a_len = a_constraints.len();
         const b_len = b_constraints.len();
 
@@ -2262,12 +2243,9 @@ const Unifier = struct {
         }
 
         // Partition constraints
-        const partitioned = try self.partitionStaticDispatchConstraints(a_constraints, b_constraints);
 
         // Unify shared constraints
         // IMPORTANT: We must use index-based iteration here, not slice-based.
-        // The unifyStaticDispatchConstraint call can recursively call back into
-        // unifyStaticDispatchConstraints, which appends to the same scratch buffer.
         // If that append causes reallocation, a cached slice would be invalidated.
         if (partitioned.in_both.len() > 0) {
             const in_both_start: usize = @intFromEnum(partitioned.in_both.start);
@@ -2275,7 +2253,6 @@ const Unifier = struct {
                 // Re-fetch on each iteration since the backing array may have moved
                 const two_constraints = self.scratch.in_both_static_dispatch_constraints.items.items[in_both_start + i];
                 // TODO: Catch type mismatch and throw a custom error message?
-                try self.unifyStaticDispatchConstraint(two_constraints.a, two_constraints.b);
             }
         }
 
@@ -2302,10 +2279,7 @@ const Unifier = struct {
     }
 
     /// Unify two constraints
-    fn unifyStaticDispatchConstraint(
         self: *Self,
-        a_constraint: StaticDispatchConstraint,
-        b_constraint: StaticDispatchConstraint,
     ) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
@@ -2332,10 +2306,6 @@ const Unifier = struct {
         try self.unifyGuarded(a_constraint.fn_var, b_constraint.fn_var);
     }
 
-    const PartitionedStaticDispatchConstraints = struct {
-        only_in_a: StaticDispatchConstraint.SafeList.Range,
-        only_in_b: StaticDispatchConstraint.SafeList.Range,
-        in_both: TwoStaticDispatchConstraints.SafeList.Range,
     };
 
     /// Given two ranges of record fields stored in `scratch.gathered_fields`, this function:
@@ -2351,23 +2321,15 @@ const Unifier = struct {
     /// * `in_both_fields`
     ///
     /// The result is a set of ranges that can be used to slice those buffers.
-    fn partitionStaticDispatchConstraints(
         self: *const Self,
-        a_constraints_range: StaticDispatchConstraint.SafeList.Range,
-        b_constraints_range: StaticDispatchConstraint.SafeList.Range,
-    ) std.mem.Allocator.Error!PartitionedStaticDispatchConstraints {
         const scratch = self.scratch;
 
         // First sort the fields
         const a_constraints = self.types_store.static_dispatch_constraints.sliceRange(a_constraints_range);
-        std.mem.sort(StaticDispatchConstraint, a_constraints, self, struct {
-            fn less(unifier: *const Self, a: StaticDispatchConstraint, b: StaticDispatchConstraint) bool {
                 return std.mem.order(u8, unifier.getTypeIdentText(a.fn_name), unifier.getTypeIdentText(b.fn_name)) == .lt;
             }
         }.less);
         const b_constraints = self.types_store.static_dispatch_constraints.sliceRange(b_constraints_range);
-        std.mem.sort(StaticDispatchConstraint, b_constraints, self, struct {
-            fn less(unifier: *const Self, a: StaticDispatchConstraint, b: StaticDispatchConstraint) bool {
                 return std.mem.order(u8, unifier.getTypeIdentText(a.fn_name), unifier.getTypeIdentText(b.fn_name)) == .lt;
             }
         }.less);
@@ -2386,7 +2348,6 @@ const Unifier = struct {
             const ord = std.mem.order(u8, self.getTypeIdentText(a_next.fn_name), self.getTypeIdentText(b_next.fn_name));
             switch (ord) {
                 .eq => {
-                    _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, TwoStaticDispatchConstraints{
                         .a = a_next,
                         .b = b_next,
                     });
@@ -2430,7 +2391,6 @@ const Unifier = struct {
 /// A list of constraint that should apply to concrete type
 pub const DeferredConstraintCheck = struct {
     var_: Var,
-    constraints: StaticDispatchConstraint.SafeList.Range,
 
     pub const SafeList = MkSafeList(@This());
 };
@@ -2521,9 +2481,6 @@ pub const Scratch = struct {
 
     // constraints
     deferred_constraints: DeferredConstraintCheck.SafeList,
-    only_in_a_static_dispatch_constraints: StaticDispatchConstraint.SafeList,
-    only_in_b_static_dispatch_constraints: StaticDispatchConstraint.SafeList,
-    in_both_static_dispatch_constraints: TwoStaticDispatchConstraints.SafeList,
 
     // occurs
     occurs_scratch: occurs.Scratch,
@@ -2553,9 +2510,6 @@ pub const Scratch = struct {
             .only_in_b_tags = try TagSafeList.initCapacity(gpa, 32),
             .in_both_tags = try TwoTagsSafeList.initCapacity(gpa, 32),
             .deferred_constraints = try DeferredConstraintCheck.SafeList.initCapacity(gpa, 32),
-            .only_in_a_static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, 32),
-            .only_in_b_static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, 32),
-            .in_both_static_dispatch_constraints = try TwoStaticDispatchConstraints.SafeList.initCapacity(gpa, 32),
             .occurs_scratch = try occurs.Scratch.init(gpa),
             .visited_vars = try VarSafeList.initCapacity(gpa, 16),
             .constraint_visited_vars = try VarSafeList.initCapacity(gpa, 16),

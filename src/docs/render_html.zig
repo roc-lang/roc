@@ -893,7 +893,6 @@ fn renderDocTypeHtml(w: Writer, ctx: *const RenderContext, doc_type: *const DocT
             }
             try w.writeAll(")");
         },
-        .where_clause => |wc| {
             try renderDocTypeHtml(w, ctx, wc.type, needs_parens);
             try w.writeAll(" <span class=\"kw\">where</span> { ");
             for (wc.constraints, 0..) |constraint, i| {

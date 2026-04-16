@@ -66,7 +66,6 @@ fn moduleIdxForEnvInternal(all_module_envs: []const *const ModuleEnv, env: *cons
 const Ident = base.Ident;
 const Var = types.Var;
 const TypeScope = types.TypeScope;
-const StaticDispatchConstraint = types.StaticDispatchConstraint;
 const Layout = layout_mod.Layout;
 const Idx = layout_mod.Idx;
 const StructField = layout_mod.StructField;
@@ -345,24 +344,6 @@ pub const Store = struct {
         self.raw_layout_placeholders.clearRetainingCapacity();
         self.work.in_progress_vars.clearRetainingCapacity();
         self.work.in_progress_nominals.clearRetainingCapacity();
-    }
-
-    /// Check if a constraint range contains a numeric constraint.
-    /// This includes from_numeral (numeric literals), desugared_binop (binary operators
-    /// like +, -, *), and desugared_unaryop (unary operators like negation).
-    /// All of these imply the type variable represents a numeric type which should
-    /// default to Dec rather than being treated as zero-sized.
-    fn hasFromNumeralConstraint(self: *const Self, constraints: StaticDispatchConstraint.SafeList.Range) bool {
-        if (constraints.isEmpty()) {
-            return false;
-        }
-        for (self.getTypesStore().sliceStaticDispatchConstraints(constraints)) |constraint| {
-            switch (constraint.origin) {
-                .from_numeral, .desugared_binop, .desugared_unaryop => return true,
-                .method_call, .where_clause => {},
-            }
-        }
-        return false;
     }
 
     /// Insert a Box layout with the given element layout.
@@ -2492,12 +2473,6 @@ pub const Store = struct {
                         // may produce a different, correct layout.
                         depends_on_unresolved_type_params = true;
 
-                        // Flex vars with a from_numeral constraint are numeric literals
-                        // that haven't been resolved to a concrete type; default to Dec.
-                        if (self.hasFromNumeralConstraint(flex.constraints)) {
-                            break :blk Layout.default_num();
-                        }
-
                         // For unconstrained flex vars inside containers (list, box),
                         // treat them as zero-sized until type scope resolves them.
                         if (self.work.pending_containers.len > 0) {
@@ -2560,14 +2535,8 @@ pub const Store = struct {
                         // with type scope mappings may produce a different, correct layout.
                         depends_on_unresolved_type_params = true;
 
-                        // Check if this rigid var has a from_numeral constraint, indicating
-                        // it's an unresolved numeric type that should default to Dec.
-                        if (self.hasFromNumeralConstraint(rigid.constraints)) {
-                            break :blk Layout.default_num();
-                        }
-
                         // For rigid vars inside containers (list, box), we need to determine
-                        // the element layout. If the rigid var has constraints, default to Dec.
+                        // the element layout.
                         if (self.work.pending_containers.len > 0) {
                             const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
                             if (pending_item.container == .box or pending_item.container == .list) {

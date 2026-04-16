@@ -1098,7 +1098,6 @@ fn extractDocType(
     const base_type = try extractDocTypeInner(&ctx, var_);
     if (base_type == null) return null;
 
-    // If there are constraints, wrap in a where clause
     if (ctx.constraints_list.items.len > 0) {
         // Deduplicate constraints by (dispatcher_var_name, fn_name)
         var unique_constraints = std.ArrayList(DocType.Constraint).empty;
@@ -1156,7 +1155,6 @@ fn extractDocType(
         // Clear the unique_constraints so the deferred free doesn't double-free
         unique_constraints.clearRetainingCapacity();
 
-        return try allocDocType(gpa, .{ .where_clause = .{
             .type = base_type.?,
             .constraints = owned_constraints,
         } });
@@ -1204,11 +1202,8 @@ fn extractDocTypeInner(
 
     switch (resolved.desc.content) {
         .flex => |flex| {
-            // Check for from_numeral constraint -> default to Dec
-            const constraints = types.sliceStaticDispatchConstraints(flex.constraints);
             var has_numeral = false;
             for (constraints) |constraint| {
-                if (constraint.origin == .from_numeral) {
                     has_numeral = true;
                     break;
                 }
@@ -1228,9 +1223,7 @@ fn extractDocTypeInner(
             else
                 try ctx.getFlexVarName(resolved.var_);
 
-            // Collect non-numeral constraints for where clause
             for (constraints) |constraint| {
-                if (constraint.origin != .from_numeral) {
                     const dispatcher_name = if (flex.name) |ident_idx| idents.getText(ident_idx) else var_name;
                     try ctx.constraints_list.append(gpa, .{
                         .dispatcher_name = dispatcher_name,
@@ -1245,8 +1238,6 @@ fn extractDocTypeInner(
         .rigid => |rigid| {
             const var_name = idents.getText(rigid.name);
 
-            // Collect constraints for where clause
-            const constraints = types.sliceStaticDispatchConstraints(rigid.constraints);
             for (constraints) |constraint| {
                 try ctx.constraints_list.append(gpa, .{
                     .dispatcher_name = var_name,
@@ -1455,9 +1446,7 @@ fn extractRecord(
                     try ctx.getFlexVarName(ext_resolved.var_);
 
                 // Collect constraints from the extension variable
-                const constraints = types.sliceStaticDispatchConstraints(flex.constraints);
                 for (constraints) |constraint| {
-                    if (constraint.origin != .from_numeral) {
                         const dispatcher_name = if (flex.name) |ident_idx| idents.getText(ident_idx) else var_name;
                         try ctx.constraints_list.append(gpa, .{
                             .dispatcher_name = dispatcher_name,
@@ -1473,7 +1462,6 @@ fn extractRecord(
             .rigid => |rigid| {
                 const var_name = idents.getText(rigid.name);
 
-                const constraints = types.sliceStaticDispatchConstraints(rigid.constraints);
                 for (constraints) |constraint| {
                     try ctx.constraints_list.append(gpa, .{
                         .dispatcher_name = var_name,
@@ -1626,7 +1614,6 @@ fn extractTagUnion(
             }
             // unnamed flex with no constraints = closed union (no extension)
 
-            const constraints = types.sliceStaticDispatchConstraints(flex.constraints);
             for (constraints) |constraint| {
                 const var_name = if (flex.name) |ident_idx| idents.getText(ident_idx) else "_";
                 try ctx.constraints_list.append(gpa, .{
@@ -1639,7 +1626,6 @@ fn extractTagUnion(
         .rigid => |rigid| {
             ext_type = try allocDocType(gpa, .{ .type_var = try gpa.dupe(u8, idents.getText(rigid.name)) });
 
-            const constraints = types.sliceStaticDispatchConstraints(rigid.constraints);
             for (constraints) |constraint| {
                 try ctx.constraints_list.append(gpa, .{
                     .dispatcher_name = idents.getText(rigid.name),

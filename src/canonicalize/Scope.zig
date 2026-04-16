@@ -41,7 +41,6 @@ pub const ForwardReference = struct {
 };
 
 /// Information about a type variable alias binding.
-/// Example: `Thing : thing` creates an alias allowing `Thing.method(arg)` to dispatch
 /// based on what `thing` resolves to at runtime.
 pub const TypeVarAliasBinding = struct {
     /// The name of the type variable being aliased (e.g., "thing")

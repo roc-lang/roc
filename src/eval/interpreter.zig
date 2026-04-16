@@ -3543,7 +3543,6 @@ pub const Interpreter = struct {
                 }
                 break :blk result;
             },
-            .num_from_numeral => args[0], // identity
 
             // ── Numeric conversions ──
             .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128 => self.numWiden(u8, args[0], ll.ret_layout),

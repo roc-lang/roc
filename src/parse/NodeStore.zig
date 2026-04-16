@@ -40,7 +40,6 @@ scratch_match_branches: base.Scratch(AST.MatchBranch.Idx),
 scratch_type_annos: base.Scratch(AST.TypeAnno.Idx),
 scratch_anno_record_fields: base.Scratch(AST.AnnoRecordField.Idx),
 scratch_exposed_items: base.Scratch(AST.ExposedItem.Idx),
-scratch_where_clauses: base.Scratch(AST.WhereClause.Idx),
 scratch_target_entries: base.Scratch(AST.TargetEntry.Idx),
 scratch_target_files: base.Scratch(AST.TargetFile.Idx),
 scratch_for_clause_type_aliases: base.Scratch(AST.ForClauseTypeAlias.Idx),
@@ -78,7 +77,6 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .scratch_type_annos = try base.Scratch(AST.TypeAnno.Idx).init(gpa),
         .scratch_anno_record_fields = try base.Scratch(AST.AnnoRecordField.Idx).init(gpa),
         .scratch_exposed_items = try base.Scratch(AST.ExposedItem.Idx).init(gpa),
-        .scratch_where_clauses = try base.Scratch(AST.WhereClause.Idx).init(gpa),
         .scratch_target_entries = try base.Scratch(AST.TargetEntry.Idx).init(gpa),
         .scratch_target_files = try base.Scratch(AST.TargetFile.Idx).init(gpa),
         .scratch_for_clause_type_aliases = try base.Scratch(AST.ForClauseTypeAlias.Idx).init(gpa),
@@ -117,7 +115,6 @@ pub fn deinit(store: *NodeStore) void {
     store.scratch_type_annos.deinit();
     store.scratch_anno_record_fields.deinit();
     store.scratch_exposed_items.deinit();
-    store.scratch_where_clauses.deinit();
     store.scratch_target_entries.deinit();
     store.scratch_target_files.deinit();
     store.scratch_for_clause_type_aliases.deinit();
@@ -137,7 +134,6 @@ pub fn emptyScratch(store: *NodeStore) void {
     store.scratch_type_annos.clearFrom(0);
     store.scratch_anno_record_fields.clearFrom(0);
     store.scratch_exposed_items.clearFrom(0);
-    store.scratch_where_clauses.clearFrom(0);
     store.scratch_target_entries.clearFrom(0);
     store.scratch_target_files.clearFrom(0);
     store.scratch_for_clause_type_aliases.clearFrom(0);
@@ -177,7 +173,6 @@ pub fn debugTo(store: *NodeStore, writer: std.io.AnyWriter) !void {
     try writer.print("Scratch type annos: {any}\n", .{store.scratch_type_annos.items});
     try writer.print("Scratch anno record fields: {any}\n", .{store.scratch_anno_record_fields.items});
     try writer.print("Scratch exposes items: {any}\n", .{store.scratch_exposed_items.items});
-    try writer.print("Scratch where clauses: {any}\n", .{store.scratch_where_clauses.items});
     try writer.print("==> IR.NodeStore DEBUG <==\n\n", .{});
 }
 
@@ -458,7 +453,6 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
                 // associated_data is [statements_start, statements_len, region_start, region_end] if has_associated == 1
                 const extra_start = @as(u32, @intCast(store.extra_data.items.len));
 
-                // Store where clause index (0 if null)
                 const where_idx = if (d.where) |w| @intFromEnum(w) else 0;
                 try store.extra_data.append(store.gpa, where_idx);
 
@@ -1352,14 +1346,12 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
         },
         .type_decl => {
             // Read where and associated from extra_data if present (main_token != 0)
-            var where_clause: ?AST.Collection.Idx = null;
             var associated: ?AST.Associated = null;
             if (node.main_token != 0) {
                 const extra_start = node.main_token;
                 // Format: [where_idx, has_associated, associated_data...]
                 const where_idx = store.extra_data.items[extra_start];
                 if (where_idx != 0) {
-                    where_clause = @enumFromInt(where_idx);
                 }
 
                 const has_associated = store.extra_data.items[extra_start + 1];
@@ -1380,20 +1372,17 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 .header = @enumFromInt(node.data.lhs),
                 .anno = @enumFromInt(node.data.rhs),
                 .kind = .alias,
-                .where = where_clause,
                 .associated = associated,
             } };
         },
         .type_decl_nominal => {
             // Read where and associated from extra_data if present (main_token != 0)
-            var where_clause: ?AST.Collection.Idx = null;
             var associated: ?AST.Associated = null;
             if (node.main_token != 0) {
                 const extra_start = node.main_token;
                 // Format: [where_idx, has_associated, associated_data...]
                 const where_idx = store.extra_data.items[extra_start];
                 if (where_idx != 0) {
-                    where_clause = @enumFromInt(where_idx);
                 }
 
                 const has_associated = store.extra_data.items[extra_start + 1];
@@ -1414,20 +1403,17 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 .header = @enumFromInt(node.data.lhs),
                 .anno = @enumFromInt(node.data.rhs),
                 .kind = .nominal,
-                .where = where_clause,
                 .associated = associated,
             } };
         },
         .type_decl_opaque => {
             // Read where and associated from extra_data if present (main_token != 0)
-            var where_clause: ?AST.Collection.Idx = null;
             var associated: ?AST.Associated = null;
             if (node.main_token != 0) {
                 const extra_start = node.main_token;
                 // Format: [where_idx, has_associated, associated_data...]
                 const where_idx = store.extra_data.items[extra_start];
                 if (where_idx != 0) {
-                    where_clause = @enumFromInt(where_idx);
                 }
 
                 const has_associated = store.extra_data.items[extra_start + 1];
@@ -1448,7 +1434,6 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 .header = @enumFromInt(node.data.lhs),
                 .anno = @enumFromInt(node.data.rhs),
                 .kind = .@"opaque",
-                .where = where_clause,
                 .associated = associated,
             } };
         },
@@ -1942,8 +1927,6 @@ pub fn getAnnoRecordField(store: *const NodeStore, anno_record_field_idx: AST.An
 }
 
 /// Get a WhereClause node from the store, using a type-safe index to the node.
-pub fn getWhereClause(store: *const NodeStore, where_clause_idx: AST.WhereClause.Idx) AST.WhereClause {
-    const node = store.nodes.get(@enumFromInt(@intFromEnum(where_clause_idx)));
     switch (node.tag) {
         .where_mod_alias => {
             return .{ .mod_alias = .{
@@ -1959,7 +1942,6 @@ pub fn getWhereClause(store: *const NodeStore, where_clause_idx: AST.WhereClause
             } };
         },
         else => {
-            std.debug.panic("Expected a valid where clause node, found {s}", .{@tagName(node.tag)});
         },
     }
 }
@@ -2492,23 +2474,18 @@ pub fn exposedItemSlice(store: *const NodeStore, span: AST.ExposedItem.Span) []A
 
 /// Returns the start position for a new Span of whereClauseIdxs in scratch
 pub fn scratchWhereClauseTop(store: *NodeStore) u32 {
-    return store.scratch_where_clauses.top();
 }
 
 /// Places a new AST.WhereClause.Idx in the scratch.
 pub fn addScratchWhereClause(store: *NodeStore, idx: AST.WhereClause.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_where_clauses.append(idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
 pub fn whereClauseSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.WhereClause.Span {
-    const end = store.scratch_where_clauses.top();
-    defer store.scratch_where_clauses.clearFrom(start);
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_where_clauses.items.items[i]));
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -2518,7 +2495,6 @@ pub fn whereClauseSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Erro
 /// Should be used wherever the scratch items will not be used,
 /// as in when parsing fails.
 pub fn clearScratchWhereClausesFrom(store: *NodeStore, start: u32) void {
-    store.scratch_where_clauses.clearFrom(start);
 }
 
 /// Returns a new WhereClause slice so that the caller can iterate through

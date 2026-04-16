@@ -502,9 +502,7 @@ pub const Interpreter = struct {
     /// Builtin types required by the interpreter (Bool, Try, etc.)
     builtins: BuiltinTypes,
     def_stack: std.array_list.Managed(DefInProgress),
-    /// Target type for num_from_numeral (set by callLowLevelBuiltinWithTargetType)
     num_literal_target_type: ?types.Var,
-    /// Last error message from num_from_numeral when payload area is too small
     last_error_message: ?[]const u8,
     /// Value being returned early from a function (set by s_return, consumed at function boundaries)
     early_return_value: ?StackValue,
@@ -1287,12 +1285,10 @@ pub const Interpreter = struct {
         return null;
     }
 
-    /// Version of callLowLevelBuiltin that also accepts a target type for operations like num_from_numeral
     pub fn callLowLevelBuiltinWithTargetType(self: *Interpreter, op: can.CIR.Expr.LowLevel, args: []StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var, target_type_var: ?types.Var) !StackValue {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        // For num_from_numeral, we need to pass the target type through a different mechanism
         // since the standard handler extracts it from the return type which has a generic parameter.
         // Store the target type temporarily so the handler can use it.
         const saved_target = self.num_literal_target_type;
@@ -1987,7 +1983,6 @@ pub const Interpreter = struct {
                         if (is_builtin_primitive) {
                             break :blk try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
                         }
-                        // User-defined opaque types without to_inspect render as <opaque>
                         break :blk try self.allocator.dupe(u8, "<opaque>");
                     } else {
                         // Nominal types render their inner value directly (no prefix)
@@ -3246,13 +3241,10 @@ pub const Interpreter = struct {
             },
 
             // Numeric parsing operations
-            .num_from_numeral => {
-                // num.from_numeral : Numeral -> Try(num, [InvalidNumeral(Str)])
                 // Numeral is { is_negative: Bool, digits_before_pt: List(U8), digits_after_pt: List(U8) }
                 std.debug.assert(args.len == 1); // expects 1 argument: Numeral record
 
                 // Return type info is required - missing it is a compiler bug
-                const result_rt_var = return_rt_var orelse debugUnreachable(roc_ops, "return type required for num_from_numeral", @src());
 
                 // Get the result layout (Try tag union)
                 const result_layout = try self.getRuntimeLayout(result_rt_var);
@@ -3829,7 +3821,6 @@ pub const Interpreter = struct {
                 }
 
                 // Unsupported result layout is a compiler bug
-                debugUnreachable(roc_ops, "unsupported result layout for num_from_numeral", @src());
             },
             .u8_from_str,
             .i8_from_str,
@@ -8645,7 +8636,6 @@ pub const Interpreter = struct {
                             // Always translate idents to the runtime_layout_store's env's ident store.
                             // This is critical because the layout store was initialized with that env,
                             // and ident comparisons in the layout store use that env's ident indices.
-                            // Note: self.env may be temporarily switched during from_numeral evaluation,
                             // so we MUST use runtime_layout_store.getMutableEnv() which remains constant.
                             const layout_env = self.runtime_layout_store.getMutableEnv().?;
                             // Compare the underlying interner pointers to detect different ident stores
@@ -8717,8 +8707,6 @@ pub const Interpreter = struct {
 
                     // Translate constraints if present
                     const rt_flex = if (flex.constraints.len() > 0) blk_flex: {
-                        const ct_constraints = module.types.sliceStaticDispatchConstraints(flex.constraints);
-                        var rt_constraints = try std.ArrayList(types.StaticDispatchConstraint).initCapacity(self.allocator, ct_constraints.len);
                         defer rt_constraints.deinit(self.allocator);
 
                         for (ct_constraints) |ct_constraint| {
@@ -8734,27 +8722,20 @@ pub const Interpreter = struct {
                             });
                         }
 
-                        const rt_constraints_range = try self.runtime_types.appendStaticDispatchConstraints(rt_constraints.items);
                         break :blk_flex types.Flex{
                             .name = rt_name,
                             .constraints = rt_constraints_range,
                         };
                     } else types.Flex{
                         .name = rt_name,
-                        .constraints = types.StaticDispatchConstraint.SafeList.Range.empty(),
                     };
 
                     const content: types.Content = .{ .flex = rt_flex };
                     const fresh_flex = try self.runtime_types.freshFromContent(content);
 
-                    // If the original flex var had a from_numeral constraint, we need to
-                    // track it in the runtime types store's from_numeral_flex_count.
                     // This ensures the count is balanced when unification later decrements it.
                     if (flex.constraints.len() > 0) {
-                        const ct_constraints = module.types.sliceStaticDispatchConstraints(flex.constraints);
                         for (ct_constraints) |ct_constraint| {
-                            if (ct_constraint.origin == .from_numeral) {
-                                self.runtime_types.from_numeral_flex_count += 1;
                                 break;
                             }
                         }
@@ -8786,8 +8767,6 @@ pub const Interpreter = struct {
 
                     // Translate constraints if present
                     const rt_rigid = if (rigid.constraints.len() > 0) blk_rigid: {
-                        const ct_constraints = module.types.sliceStaticDispatchConstraints(rigid.constraints);
-                        var rt_constraints = try std.ArrayList(types.StaticDispatchConstraint).initCapacity(self.allocator, ct_constraints.len);
                         defer rt_constraints.deinit(self.allocator);
 
                         for (ct_constraints) |ct_constraint| {
@@ -8803,14 +8782,12 @@ pub const Interpreter = struct {
                             });
                         }
 
-                        const rt_constraints_range = try self.runtime_types.appendStaticDispatchConstraints(rt_constraints.items);
                         break :blk_rigid types.Rigid{
                             .name = rt_name,
                             .constraints = rt_constraints_range,
                         };
                     } else types.Rigid{
                         .name = rt_name,
-                        .constraints = types.StaticDispatchConstraint.SafeList.Range.empty(),
                     };
 
                     const content: types.Content = .{ .rigid = rt_rigid };
@@ -8898,7 +8875,6 @@ pub const Interpreter = struct {
         // IMPORTANT: Use runtime_layout_store.getEnv()'s ident store, NOT self.env.
         // Runtime types have their idents translated to runtime_layout_store.getEnv()'s ident store
         // (see translateTypeVar). self.env may be temporarily switched during evaluation
-        // (e.g., for from_numeral), but runtime_layout_store.getEnv() remains constant.
         // Using the wrong ident store causes SmallStringInterner.getText crashes when
         // sorting tag variants by name during instantiation.
         var instantiator = types.instantiate.Instantiator{

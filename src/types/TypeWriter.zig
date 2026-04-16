@@ -63,7 +63,6 @@ scratch_tags: std.array_list.Managed(types_mod.Tag),
 import_mapping: ?*const import_mapping_mod.ImportMapping,
 /// The allocator used to create owned fields
 gpa: std.mem.Allocator,
-/// When true, flex vars with from_numeral constraint are displayed as "Dec"
 /// instead of showing the constraint. Used for MONO output.
 default_numerals_to_dec: bool = false,
 
@@ -111,7 +110,6 @@ const StaticDispatchTmp = struct {
 /// A constraint paired with its dispatcher variable (the type that has the constraint)
 const ConstraintWithDispatcher = struct {
     dispatcher_var: Var,
-    constraint: types_mod.StaticDispatchConstraint,
 };
 
 pub fn initFromParts(
@@ -161,7 +159,6 @@ pub fn setImportMapping(self: *TypeWriter, import_mapping: ?*const import_mappin
     self.import_mapping = import_mapping;
 }
 
-/// Enable defaulting of flex vars with from_numeral constraint to "Dec".
 /// Used for MONO output where we want to show concrete types.
 pub fn setDefaultNumeralsToDec(self: *TypeWriter, enabled: bool) void {
     self.default_numerals_to_dec = enabled;
@@ -235,18 +232,14 @@ pub fn writeInto(self: *TypeWriter, into: *std.array_list.Managed(u8), var_: Var
     }
 }
 
-/// Writes a type variable to the buffer WITHOUT the where clause.
 /// Use this for nested types (function arguments, record fields, etc.) where the
-/// where clause should only appear at the top level of the complete type.
 pub fn writeWithoutConstraints(self: *TypeWriter, var_: Var) std.mem.Allocator.Error!void {
     self.reset();
 
     var writer = self.buf.writer();
     try self.writeVar(&writer, var_, var_);
-    // Don't write where clause - constraints will be collected and written at the top level
 }
 
-/// Writes the where clause containing constraints to the buffer.
 /// Formats constraints in one of three styles based on line length:
 /// 1. All on same line: "where [a.plus : a -> a, b.minus : b -> b]"
 /// 2. All on next line: "\n  where [a.plus : a -> a, b.minus : b -> b]"
@@ -260,7 +253,6 @@ fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_le
     );
 
     // Pre-allocate buffer space for constraint strings.
-    // Allocate 60 bytes for a potential from_numeral constraint (common and ~60 bytes),
     // plus 30 bytes per additional constraint (estimated average).
     try self.buf_tmp.ensureUnusedCapacity(
         60 + (self.static_dispatch_constraints.items.len - 1) * 30,
@@ -391,12 +383,9 @@ fn writeVarWithContext(self: *TypeWriter, writer: *ByteWrite, var_: Var, context
 
         switch (resolved.desc.content) {
             .flex => |flex| {
-                // Check if this flex var should be defaulted to Dec (has from_numeral constraint)
-                const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
                 var has_numeral = false;
                 if (self.default_numerals_to_dec) {
                     for (constraints) |constraint| {
-                        if (constraint.origin == .from_numeral) {
                             has_numeral = true;
                             break;
                         }
@@ -415,7 +404,6 @@ fn writeVarWithContext(self: *TypeWriter, writer: *ByteWrite, var_: Var, context
                     }
 
                     for (constraints) |constraint| {
-                        try self.appendStaticDispatchConstraint(var_, constraint);
                     }
                 }
             },
@@ -425,8 +413,6 @@ fn writeVarWithContext(self: *TypeWriter, writer: *ByteWrite, var_: Var, context
                 // Useful in debugging to see if a var is rigid or not
                 // _ = try writer.print("[r-{}]", .{var_});
 
-                for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(var_, constraint);
                 }
             },
             .alias => |alias| {
@@ -636,8 +622,6 @@ fn writeRecord(self: *TypeWriter, writer: *ByteWrite, record: Record, root_var: 
 
             // Since we do not recurse above, we must capture the constraint
             // constraints directly
-            for (self.types.sliceStaticDispatchConstraints(flex.payload.constraints)) |constraint| {
-                try self.appendStaticDispatchConstraint(flex.var_, constraint);
             }
         },
         .rigid => |rigid| {
@@ -651,8 +635,6 @@ fn writeRecord(self: *TypeWriter, writer: *ByteWrite, record: Record, root_var: 
 
             // Since we do not recurse above, we must capture the constraint
             // constraints directly
-            for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                try self.appendStaticDispatchConstraint(record.ext, constraint);
             }
         },
         .unbound => |unbound_var| {
@@ -861,8 +843,6 @@ fn writeTagUnion(self: *TypeWriter, writer: *ByteWrite, tag_union: TagUnion, roo
                 }
             }
 
-            for (self.types.sliceStaticDispatchConstraints(flex.payload.constraints)) |constraint| {
-                try self.appendStaticDispatchConstraint(flex.var_, constraint);
             }
         },
         .rigid => |rigid| {
@@ -874,8 +854,6 @@ fn writeTagUnion(self: *TypeWriter, writer: *ByteWrite, tag_union: TagUnion, roo
                 try writer.writeAll(name);
             }
 
-            for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                try self.appendStaticDispatchConstraint(tag_union.ext, constraint);
             }
         },
         .empty_tag_union, .err, .invalid => {},
@@ -913,7 +891,6 @@ pub fn writeTagGet(self: *TypeWriter, tag: Tag, root_var: Var) std.mem.Allocator
 }
 
 /// Append a constraint with its dispatcher var to the list, if it doesn't already exist
-fn appendStaticDispatchConstraint(self: *TypeWriter, dispatcher_var: Var, constraint_to_add: types_mod.StaticDispatchConstraint) std.mem.Allocator.Error!void {
     for (self.static_dispatch_constraints.items) |item| {
         if (item.constraint.fn_name == constraint_to_add.fn_name and item.constraint.fn_var == constraint_to_add.fn_var) {
             return;
@@ -1012,13 +989,11 @@ fn countVar(self: *TypeWriter, search_var: Var, current_var: Var, count: *usize)
     // Then recurse
     switch (resolved.desc.content) {
         .flex => |flex| {
-            const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
             for (constraints) |constraint| {
                 try self.countVar(search_var, constraint.fn_var, count);
             }
         },
         .rigid => |rigid| {
-            const constraints = self.types.sliceStaticDispatchConstraints(rigid.constraints);
             for (constraints) |constraint| {
                 try self.countVar(search_var, constraint.fn_var, count);
             }

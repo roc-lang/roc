@@ -1285,37 +1285,6 @@ pub const ComptimeEvaluator = struct {
             },
         }
     }
-
-    /// Validates all deferred numeric literals by invoking their from_numeral constraints
-    ///
-    /// This function is called at the beginning of compile-time evaluation, after type checking
-    /// has completed. Each deferred literal contains:
-    /// - expr_idx: The CIR expression index
-    /// - type_var: The type variable the literal unified with (now concrete after unification)
-    /// - constraint: The from_numeral StaticDispatchConstraint with:
-    ///   - fn_name: "from_numeral" identifier
-    ///   - fn_var: Type variable for the function
-    ///   - num_literal: NumeralInfo with value, is_negative, is_fractional
-    /// - region: Source location for error reporting
-    ///
-    /// Implementation steps (to be completed):
-    /// 1. Resolve type_var to get the concrete nominal type (e.g., I64, U32, custom type)
-    /// 2. Look up the from_numeral definition for that type:
-    ///    - For built-in types: find in Num module (e.g., I64.from_numeral)
-    ///    - For user types: find in the type's origin module
-    /// 3. Build a Numeral value: [Self(is_negative: Bool)]
-    ///    - This is a tag union with tag "Self" and Bool payload
-    ///    - Can create synthetically or use interpreter to evaluate an e_tag expression
-    /// 4. Invoke from_numeral via interpreter:
-    ///    - Create a function call expression or use eval
-    ///    - Pass the Numeral value as argument
-    /// 5. Handle the Try result:
-    ///    - Pattern match on Ok/Err tags
-    ///    - For Ok: validation succeeded
-    ///    - For Err: extract error message string and report via self.reportProblem()
-    ///
-    /// For now, validation is skipped - literals are allowed without validation.
-    /// This preserves current behavior while the infrastructure is in place.
     fn validateDeferredNumericLiterals(self: *ComptimeEvaluator) !void {
         const literals = self.env.deferred_numeric_literals.items.items;
 
@@ -1329,10 +1298,8 @@ pub const ComptimeEvaluator = struct {
                 .structure => |flat_type| switch (flat_type) {
                     .nominal_type => |nom| nom,
                     else => {
-                        // Non-nominal types (e.g., records, tuples, functions) don't have from_numeral
                         // This is a type error - numeric literal can't be used as this type
                         const error_msg = try self.problems.putExtraString(
-                            "Numeric literal cannot be used as this type (type doesn't support from_numeral)",
                         );
                         const problem = Problem{
                             .comptime_eval_error = .{
@@ -1349,10 +1316,8 @@ pub const ComptimeEvaluator = struct {
                 else => {
                     // Non-structure types (flex, rigid, alias, etc.)
                     // If still flex, type checking didn't fully resolve it - this is OK, may resolve later
-                    // If rigid/alias, it doesn't support from_numeral
                     if (content != .flex) {
                         const error_msg = try self.problems.putExtraString(
-                            "Numeric literal cannot be used as this type (type doesn't support from_numeral)",
                         );
                         const problem = Problem{
                             .comptime_eval_error = .{
@@ -1465,247 +1430,6 @@ pub const ComptimeEvaluator = struct {
             },
         }
     }
-
-    /// Invoke a user-defined from_numeral function and check the result.
-    /// Returns true if validation passed (Ok), false if it failed (Err).
-    fn invokeFromNumeral(
-        self: *ComptimeEvaluator,
-        origin_env: *const ModuleEnv,
-        def_idx: CIR.Def.Idx,
-        num_lit_info: types_mod.NumeralInfo,
-        region: base.Region,
-        target_ct_type_var: types_mod.Var, // The compile-time type variable the literal is being converted to
-    ) !bool {
-        const roc_ops = self.get_ops();
-
-        // Look up the from_numeral function
-        const target_def = origin_env.store.getDef(def_idx);
-
-        // Save current environment and switch to origin_env BEFORE building the record
-        // This is critical because the record's field names (ident indices) must come from
-        // the same ident store that will be used when the interpreter reads them
-        const saved_env = self.interpreter.env;
-        const saved_bindings_len = self.interpreter.bindings.items.len;
-        self.interpreter.env = @constCast(origin_env);
-        defer {
-            self.interpreter.env = saved_env;
-            self.interpreter.bindings.items.len = saved_bindings_len;
-        }
-
-        // Build Numeral record: { is_negative: Bool, digits_before_pt: List(U8), digits_after_pt: List(U8) }
-        // Must be built AFTER switching to origin_env so ident indices are from the correct store
-
-        // Convert the numeric value to base-256 digits
-        // Use @abs to safely handle minimum i128 value without overflow
-        var base256_buf_before: [16]u8 = undefined;
-        var base256_buf_after: [16]u8 = undefined;
-
-        var digits_before: []const u8 = undefined;
-        var digits_after: []const u8 = undefined;
-
-        if (num_lit_info.is_fractional) {
-            // For fractional literals, value is scaled by 10^18 (Dec representation)
-            // Extract integer and fractional parts
-            const scale: u128 = 1_000_000_000_000_000_000; // 10^18
-            const abs_value: u128 = if (num_lit_info.is_u128) num_lit_info.toU128() else @abs(num_lit_info.toI128());
-            const integer_part = abs_value / scale;
-            const fractional_part = abs_value % scale;
-
-            digits_before = toBase256(integer_part, &base256_buf_before);
-
-            // Convert fractional part to base-256
-            // The fractional part is already in decimal scaled form (0 to 10^18-1)
-            // We need to convert it to base-256 fractional representation
-            if (fractional_part > 0) {
-                // Convert decimal fractional to binary fractional
-                // frac = fractional_part / 10^18
-                // We multiply by 256 repeatedly to get base-256 digits
-                var frac_num: u128 = fractional_part;
-                var frac_digits: usize = 0;
-                const max_frac_digits = 8; // Enough precision for most cases
-                while (frac_num > 0 and frac_digits < max_frac_digits) {
-                    frac_num *= 256;
-                    base256_buf_after[frac_digits] = @truncate(frac_num / scale);
-                    frac_num = frac_num % scale;
-                    frac_digits += 1;
-                }
-                digits_after = base256_buf_after[0..frac_digits];
-            } else {
-                digits_after = &[_]u8{};
-            }
-        } else {
-            // Integer literal - no fractional part
-            const abs_value: u128 = if (num_lit_info.is_u128) num_lit_info.toU128() else @abs(num_lit_info.toI128());
-            digits_before = toBase256(abs_value, &base256_buf_before);
-            digits_after = &[_]u8{};
-        }
-
-        // Build is_negative Bool
-        const bool_rt_var = try self.interpreter.getCanonicalBoolRuntimeVar();
-        const is_neg_value = try self.interpreter.pushRaw(layout_mod.Layout.int(.u8), 0, bool_rt_var);
-        if (is_neg_value.ptr) |ptr| {
-            @as(*u8, @ptrCast(@alignCast(ptr))).* = @intFromBool(num_lit_info.is_negative);
-        }
-
-        // Build digits_before_pt List(U8)
-        const before_list = try self.buildU8List(digits_before, roc_ops);
-        // Note: Don't decref these lists - ownership is transferred to the record below
-
-        // Build digits_after_pt List(U8)
-        const after_list = try self.buildU8List(digits_after, roc_ops);
-        // Note: Don't decref these lists - ownership is transferred to the record below
-
-        // Build the Numeral record
-        // Ownership of before_list and after_list is transferred to this record
-        const num_literal_record = try self.buildNumeralRecord(is_neg_value, before_list, after_list, roc_ops);
-        defer num_literal_record.decref(&self.interpreter.runtime_layout_store, roc_ops);
-
-        // Evaluate the from_numeral function to get a closure
-        const func_value = self.interpreter.eval(target_def.expr, roc_ops) catch |err| {
-            const error_msg = try self.problems.putFmtExtraString(
-                "Failed to evaluate from_numeral function: {s}",
-                .{@errorName(err)},
-            );
-            const problem = Problem{
-                .comptime_eval_error = .{
-                    .error_name = error_msg,
-                    .region = region,
-                },
-            };
-            _ = try self.problems.appendProblem(self.allocator, problem);
-            return false;
-        };
-        defer func_value.decref(&self.interpreter.runtime_layout_store, roc_ops);
-
-        // Check if func_value is a closure
-        if (func_value.layout.tag != .closure) {
-            const error_msg = try self.problems.putFmtExtraString(
-                "from_numeral is not a function",
-                .{},
-            );
-            const problem = Problem{
-                .comptime_eval_error = .{
-                    .error_name = error_msg,
-                    .region = region,
-                },
-            };
-            _ = try self.problems.appendProblem(self.allocator, problem);
-            return false;
-        }
-
-        const closure_header: *const layout_mod.Closure = @ptrCast(@alignCast(func_value.ptr.?));
-
-        // Get the parameters
-        const params = origin_env.store.slicePatterns(closure_header.params);
-        if (params.len != 1) {
-            const error_msg = try self.problems.putFmtExtraString(
-                "from_numeral has wrong number of parameters (expected 1, got {d})",
-                .{params.len},
-            );
-            const problem = Problem{
-                .comptime_eval_error = .{
-                    .error_name = error_msg,
-                    .region = region,
-                },
-            };
-            _ = try self.problems.appendProblem(self.allocator, problem);
-            return false;
-        }
-
-        // Check if this is a low-level operation (builtin type) or a user-defined function
-        const lambda_expr = origin_env.store.getExpr(closure_header.lambda_expr_idx);
-
-        // Extract low-level op from e_lambda whose body is e_run_low_level
-        const ll_op: ?CIR.Expr.LowLevel = if (lambda_expr == .e_lambda) blk: {
-            const body = origin_env.store.getExpr(lambda_expr.e_lambda.body);
-            break :blk if (body == .e_run_low_level) body.e_run_low_level.op else null;
-        } else null;
-
-        var result: eval_mod.StackValue = undefined;
-        if (ll_op) |low_level_op| {
-            // Builtin type: dispatch directly to low-level implementation
-
-            // Get return type for low-level builtin
-            // We need to translate the type variable for the result type
-            const ct_var = can.ModuleEnv.varFrom(def_idx);
-            const rt_var = try self.interpreter.translateTypeVar(@constCast(origin_env), ct_var);
-
-            // Get the return type from the function type
-            const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
-            const return_rt_var = blk: {
-                if (resolved.desc.content == .structure) {
-                    const struct_content = resolved.desc.content.structure;
-                    if (struct_content == .fn_pure or struct_content == .fn_effectful or struct_content == .fn_unbound) {
-                        const func = switch (struct_content) {
-                            .fn_pure => |f| f,
-                            .fn_effectful => |f| f,
-                            .fn_unbound => |f| f,
-                            else => unreachable,
-                        };
-                        break :blk func.ret;
-                    }
-                }
-                break :blk rt_var;
-            };
-
-            // Translate the target type variable (e.g., U8) to runtime
-            // This tells the interpreter what type the literal is being converted to
-            const target_rt_var = try self.interpreter.translateTypeVar(self.env, target_ct_type_var);
-
-            // Call the low-level builtin with our Numeral argument and target type
-            var args = [_]eval_mod.StackValue{num_literal_record};
-            result = self.interpreter.callLowLevelBuiltinWithTargetType(low_level_op, &args, roc_ops, return_rt_var, target_rt_var) catch |err| {
-                // Include crash message if available for better debugging
-                const crash_msg = self.crash.crashMessage() orelse "no crash message";
-                const error_msg = try self.problems.putFmtExtraString(
-                    "from_numeral builtin failed: {s} ({s})",
-                    .{ @errorName(err), crash_msg },
-                );
-                const problem = Problem{
-                    .comptime_eval_error = .{
-                        .error_name = error_msg,
-                        .region = region,
-                    },
-                };
-                _ = try self.problems.appendProblem(self.allocator, problem);
-                return false;
-            };
-        } else {
-            // User-defined type: bind argument and evaluate body
-            try self.interpreter.bindings.append(.{
-                .pattern_idx = params[0],
-                .value = num_literal_record,
-                .expr_idx = null, // No source expression for synthetic binding
-                .source_env = origin_env,
-            });
-            defer _ = self.interpreter.bindings.pop();
-
-            // Provide closure context
-            try self.interpreter.active_closures.append(func_value);
-            defer _ = self.interpreter.active_closures.pop();
-
-            // Call the function body
-            result = self.interpreter.eval(closure_header.body_idx, roc_ops) catch |err| {
-                const error_msg = try self.problems.putFmtExtraString(
-                    "from_numeral evaluation failed: {s}",
-                    .{@errorName(err)},
-                );
-                const problem = Problem{
-                    .comptime_eval_error = .{
-                        .error_name = error_msg,
-                        .region = region,
-                    },
-                };
-                _ = try self.problems.appendProblem(self.allocator, problem);
-                return false;
-            };
-        }
-        defer result.decref(&self.interpreter.runtime_layout_store, roc_ops);
-
-        // Check the Try result
-        return try self.checkTryResult(result, region);
-    }
-
     /// Convert a u128 value to base-256 representation (big-endian)
     /// Returns slice of the buffer containing the digits (without leading zeros)
     fn toBase256(value: u128, buf: *[16]u8) []const u8 {
@@ -1901,7 +1625,6 @@ pub const ComptimeEvaluator = struct {
             return true; // Unknown format, optimistically allow
         } else if (result.layout.tag == .tag_union) {
             // Tag union layout: payload at offset 0, discriminant at discriminant_offset
-            // For Try types from num.from_numeral, the interpreter should have stored
             // the error message in last_error_message, which was already checked above.
             // If we reach here without a last_error_message, assume it's Ok.
             return true;
@@ -1922,13 +1645,10 @@ pub const ComptimeEvaluator = struct {
         const layout_env = self.interpreter.runtime_layout_store.getEnv();
         const payload_idx = try_accessor.findFieldIndex(layout_env.idents.payload) orelse {
             // This should never happen - Try type must have a payload field
-            return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral returned malformed Try value (missing payload field)", .{});
         };
         const payload_rt_var = self.interpreter.runtime_types.fresh() catch {
-            return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral returned malformed Try value (could not create rt_var)", .{});
         };
         const payload_field = try_accessor.getFieldByIndex(payload_idx, payload_rt_var) catch {
-            return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral returned malformed Try value (could not access payload)", .{});
         };
 
         // The payload for Err is the error type: [InvalidNumeral(Str), ...]
@@ -1936,7 +1656,6 @@ pub const ComptimeEvaluator = struct {
         if (payload_field.layout.tag == .struct_) {
             // Tag union with payload - look for InvalidNumeral tag
             var err_accessor = payload_field.asRecord(&self.interpreter.runtime_layout_store) catch {
-                return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral error payload is not a valid record", .{});
             };
 
             // Check if this has a payload field (for the Str)
@@ -1962,13 +1681,11 @@ pub const ComptimeEvaluator = struct {
                 }
             }
 
-            return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral error has no string message in InvalidNumeral", .{});
         } else if (payload_field.layout.tag == .scalar and payload_field.layout.data.scalar.tag == .str) {
             // Direct Str payload (single-tag union optimized to just the payload)
             return try self.extractStrFromValue(payload_field);
         }
 
-        return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral returned unexpected error type (expected InvalidNumeral with Str payload)", .{});
     }
 
     /// Extract a Str value from a StackValue
@@ -1981,14 +1698,10 @@ pub const ComptimeEvaluator = struct {
                     // Copy the string to our allocator so we own it
                     return try self.allocator.dupe(u8, str_bytes);
                 }
-                return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral returned empty error message", .{});
             }
-            return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral error string has null pointer", .{});
         }
         if (value.layout.tag == .scalar) {
-            return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral error payload is not a string (layout tag: scalar.{s})", .{@tagName(value.layout.data.scalar.tag)});
         }
-        return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral error payload is not a string (layout tag: {s})", .{@tagName(value.layout.tag)});
     }
 
     /// Evaluates all top-level declarations in the module

@@ -194,8 +194,6 @@ pub const Tag = enum {
     diag_if_then_not_canonicalized,
     diag_if_else_not_canonicalized,
     diag_malformed_type_annotation,
-    diag_malformed_where_clause,
-    diag_where_clause_not_allowed_in_type_decl,
     diag_open_ext_not_allowed_in_type_decl,
     diag_type_module_missing_matching_type,
     diag_type_module_has_alias_not_nominal,
@@ -345,7 +343,6 @@ pub const Payload = extern union {
     record_destruct: RecordDestruct,
     match_branch: MatchBranch,
     match_branch_pattern: MatchBranchPattern,
-    where_clause: WhereClause,
     where_alias: WhereAlias,
     where_malformed: WhereMalformed,
     def: Def,
@@ -443,11 +440,9 @@ pub const Payload = extern union {
         is_opaque: u32, // 0 or 1
     };
 
-    /// statement_type_anno: annotation + name + optional where clause
     pub const StatementTypeAnno = extern struct {
         anno: u32,
         name: u32,
-        where_span2_idx_plus_one: u32, // 0 means no where clause, else index+1 into span2_data
     };
 
     /// statement_type_var_alias: alias_name + type_var_name + type_var_anno
@@ -889,7 +884,6 @@ pub const Payload = extern union {
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
-    /// where_alias: type variable alias in where clause
     pub const WhereAlias = extern struct {
         var_idx: u32,
         alias_name: u32,

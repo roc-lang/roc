@@ -76,8 +76,6 @@ pub const Context = union(enum) {
     fn_args_bound_var: FnArgsBoundVarContext,
     /// Platform requirement mismatch
     platform_requirement: PlatformRequirementContext,
-    /// Method type mismatch (where clause)
-    method_type: MethodTypeContext,
     /// `expect` statements
     expect,
     /// recursive definition mismatch
@@ -261,17 +259,6 @@ pub const Context = union(enum) {
         required_ident: Ident.Idx,
     };
 
-    /// Context for method type mismatch (where clause)
-    pub const MethodTypeContext = struct {
-        /// The dispatcher type variable
-        constraint_var: Var,
-        /// The name of the type being dispatched
-        dispatcher_name: Ident.Idx,
-        /// The method name
-        method_name: Ident.Idx,
-    };
-
-    /// Context for method type mismatch (where clause)
     pub const RecursiveDef = struct {
         /// The def name
         def_name: ?Ident.Idx,

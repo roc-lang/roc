@@ -474,7 +474,6 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .where_expected_close_bracket => {
             try report.document.addReflowingText("Expected a closing bracket ");
             try report.document.addAnnotated("]", .emphasized);
-            try report.document.addText(" after the where clause constraints.");
             try report.document.addLineBreak();
             try report.document.addText("Where clauses should look like: ");
             try report.document.addCodeBlock("where [a.method : Type]");
@@ -493,7 +492,6 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .where_expected_colon => {
             try report.document.addReflowingText("Expected a colon ");
             try report.document.addAnnotated(":", .emphasized);
-            try report.document.addText(" after the method name in this where clause constraint.");
             try report.document.addLineBreak();
             try report.document.addReflowingText("Method constraints require a colon to separate the method name from its type.");
             try report.document.addLineBreak();
@@ -2442,7 +2440,6 @@ pub const WhereClause = union(enum) {
         region: TokenizedRegion,
     },
 
-    /// Malformed where clause that failed to parse correctly.
     ///
     /// Contains diagnostic information about what went wrong during parsing.
     malformed: struct {

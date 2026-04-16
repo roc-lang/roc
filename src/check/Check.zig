@@ -25,7 +25,6 @@ const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const Region = base.Region;
 const DeferredConstraintCheck = unifier.DeferredConstraintCheck;
-const StaticDispatchConstraint = types_mod.StaticDispatchConstraint;
 const Func = types_mod.Func;
 const Var = types_mod.Var;
 const Flex = types_mod.Flex;
@@ -46,8 +45,6 @@ pub const DeferredNumericLiteral = struct {
     expr_idx: CIR.Expr.Idx,
     /// The type variable that the literal unified with
     type_var: Var,
-    /// The from_numeral constraint attached to this literal
-    constraint: StaticDispatchConstraint,
     /// Source region for error reporting
     region: Region,
 
@@ -105,7 +102,6 @@ scratch_tags: base.Scratch(types_mod.Tag),
 /// scratch record fields used to build up intermediate lists, used for various things
 scratch_record_fields: base.Scratch(types_mod.RecordField),
 /// scratch constraints used to build up intermediate lists
-scratch_static_dispatch_constraints: base.Scratch(ScratchStaticDispatchConstraint),
 /// scratch deferred constraints
 scratch_deferred_static_dispatch_constraints: base.Scratch(DeferredConstraintCheck),
 /// Stack of type variables currently being constraint-checked, used to detect recursive constraints
@@ -203,9 +199,7 @@ const ValueLookupEntry = struct {
 };
 
 /// A scratch entry for deferred constraints.
-const ScratchStaticDispatchConstraint = struct {
     var_: Var,
-    constraint: types_mod.StaticDispatchConstraint,
 };
 
 /// A constraint generated during type checking, to be checked at the end
@@ -318,7 +312,6 @@ fn initAssumePrepared(
         .scratch_vars = try base.Scratch(types_mod.Var).init(gpa),
         .scratch_tags = try base.Scratch(types_mod.Tag).init(gpa),
         .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
-        .scratch_static_dispatch_constraints = try base.Scratch(ScratchStaticDispatchConstraint).init(gpa),
         .scratch_deferred_static_dispatch_constraints = try base.Scratch(DeferredConstraintCheck).init(gpa),
         .constraint_check_stack = try std.ArrayList(Var).initCapacity(gpa, 0),
         .import_cache = ImportCache{},
@@ -726,15 +719,11 @@ fn instantiateVarHelp(
 
             const fresh_resolved = self.types.resolveVar(fresh_var);
 
-            // Track newly instantiated from_numeral flex vars so
             // finalizeNumericDefaults knows about them.
             if (fresh_resolved.desc.content == .flex) {
                 const flex = fresh_resolved.desc.content.flex;
                 if (flex.constraints.len() > 0) {
-                    const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
                     for (constraints) |c| {
-                        if (c.origin == .from_numeral) {
-                            self.types.from_numeral_flex_count += 1;
                             break;
                         }
                     }
@@ -1087,11 +1076,9 @@ fn mkDecContent(self: *Self, env: *Env) Allocator.Error!Content {
     );
 }
 
-/// Create a flex variable with a from_numeral constraint for numeric literals.
 /// This constraint will be checked during deferred constraint checking to validate
 /// that the numeric literal can be converted to the unified type.
 /// Returns the flex var which has the constraint attached, and the dispatcher var
-/// (first arg of from_numeral) is unified with the flex var so they share the same name.
 fn mkFlexWithFromNumeralConstraint(
     self: *Self,
     num_literal_info: types_mod.NumeralInfo,
@@ -1100,7 +1087,6 @@ fn mkFlexWithFromNumeralConstraint(
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const from_numeral_ident = self.cir.idents.from_numeral;
 
     // Create the flex var first - this represents the target type `a`
     const flex_rank = env.rank();
@@ -1108,7 +1094,6 @@ fn mkFlexWithFromNumeralConstraint(
     self.types.markFromNumeralOrigin(flex_var);
 
     // Create the argument type: Numeral (from Builtin.Num.Numeral)
-    // For from_numeral, the actual method signature is: Numeral -> Try(a, [InvalidNumeral(Str)])
     const numeral_content = try self.mkNumeralContent(env);
     const arg_var = try self.freshFromContent(numeral_content, env, num_literal_info.region);
 
@@ -1143,15 +1128,11 @@ fn mkFlexWithFromNumeralConstraint(
     const fn_var = try self.freshFromContent(func_content, env, num_literal_info.region);
 
     // Create the constraint with numeric literal info
-    const constraint = types_mod.StaticDispatchConstraint{
-        .fn_name = from_numeral_ident,
         .fn_var = fn_var,
-        .origin = .from_numeral,
         .num_literal = num_literal_info,
     };
 
     // Store it in the types store
-    const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
     // Update the flex var to have the constraint attached
     const flex_content = types_mod.Content{
@@ -1161,7 +1142,6 @@ fn mkFlexWithFromNumeralConstraint(
         },
     };
     try self.unifyWith(flex_var, flex_content, env);
-    self.types.from_numeral_flex_count += 1;
 
     return flex_var;
 }
@@ -1196,7 +1176,6 @@ fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
 }
 
 /// Create a nominal Try type with the given success and error types.
-/// This is used for creating Try types in function signatures (e.g., from_numeral).
 fn mkTryContent(self: *Self, ok_var: Var, err_var: Var, env: *Env) Allocator.Error!Content {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -1507,7 +1486,6 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
         // After finalizing numeric defaults, drain any remaining deferred constraints.
         if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
-            try self.checkStaticDispatchConstraints(&env, true);
         }
     }
 
@@ -1841,28 +1819,21 @@ pub fn checkPlatformRequirements(
     }
 
     // Process any deferred constraints that arose from unifying platform types with
-    // app types. Skip entries whose constraints are all from_numeral; those are
     // handled later by numeric defaulting.
     {
         var i: usize = 0;
         while (i < env.deferred_static_dispatch_constraints.items.items.len) {
             const dc = env.deferred_static_dispatch_constraints.items.items[i];
-            const constraints = self.types.sliceStaticDispatchConstraints(dc.constraints);
-            var all_from_numeral = true;
             for (constraints) |c| {
-                if (c.origin != .from_numeral) {
-                    all_from_numeral = false;
                     break;
                 }
             }
-            if (all_from_numeral) {
                 _ = env.deferred_static_dispatch_constraints.items.orderedRemove(i);
             } else {
                 i += 1;
             }
         }
         if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
-            try self.checkStaticDispatchConstraints(&env, false);
         }
     }
 }
@@ -1947,7 +1918,6 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
 
     // After finalizing numeric defaults, drain any remaining deferred constraints.
     if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
-        try self.checkStaticDispatchConstraints(&env, true);
     }
 
     // Check if the expression's type has incompatible constraints (e.g., !3)
@@ -2013,10 +1983,8 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     try self.finalizeNumericDefaultsInternal(&env);
 
     // After finalizing numeric defaults, drain any remaining deferred constraints.
-    // finalizeNumericDefaults unifies from_numeral flex vars with Dec, which can
     // leave behind deferred constraint work that still needs to be flushed.
     if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
-        try self.checkStaticDispatchConstraints(&env, true);
         try self.checkAllConstraints(&env);
     }
 
@@ -2282,11 +2250,9 @@ fn generateStandaloneTypeAnno(
     const scratch_static_dispatch_constraints_top = self.scratch_static_dispatch_constraints.top();
     defer self.scratch_static_dispatch_constraints.clearFrom(scratch_static_dispatch_constraints_top);
 
-    // Iterate over where clauses, adding them to the scratch constraint list.
     if (type_anno.where) |where_span| {
         const where_slice = self.cir.store.sliceWhereClauses(where_span);
         for (where_slice) |where_idx| {
-            try self.generateStaticDispatchConstraintFromWhere(where_idx, env);
         }
     }
 
@@ -2375,11 +2341,9 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
     const scratch_static_dispatch_constraints_top = self.scratch_static_dispatch_constraints.top();
     defer self.scratch_static_dispatch_constraints.clearFrom(scratch_static_dispatch_constraints_top);
 
-    // Iterate over where clauses, adding them to the scratch constraint list.
     if (annotation.where) |where_span| {
         const where_slice = self.cir.store.sliceWhereClauses(where_span);
         for (where_slice) |where_idx| {
-            try self.generateStaticDispatchConstraintFromWhere(where_idx, env);
         }
     }
 
@@ -2390,8 +2354,6 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
     _ = try self.unify(annotation_var, ModuleEnv.varFrom(annotation.anno), env);
 }
 
-/// Given a where clause, generate any checker-side constraints.
-fn generateStaticDispatchConstraintFromWhere(self: *Self, where_idx: CIR.WhereClause.Idx, env: *Env) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -2400,9 +2362,7 @@ fn generateStaticDispatchConstraintFromWhere(self: *Self, where_idx: CIR.WhereCl
 
     switch (where) {
         .w_alias => |alias| {
-            // Alias syntax in where clauses (e.g., `where [a.Decode]`) was used for abilities,
             // which have been removed from Roc. Emit an error.
-            _ = try self.problems.appendProblem(self.gpa, .{ .unsupported_alias_where_clause = .{
                 .alias_name = alias.alias_name,
                 .region = where_region,
             } });
@@ -2468,7 +2428,6 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 .type_decl => {},
             }
             const static_dispatch_constraints_end = self.types.static_dispatch_constraints.len();
-            const static_dispatch_constraints_range = StaticDispatchConstraint.SafeList.Range{ .start = @enumFromInt(static_dispatch_constraints_start), .count = @intCast(static_dispatch_constraints_end - static_dispatch_constraints_start) };
 
             try self.unifyWith(anno_var, .{ .rigid = Rigid{
                 .name = rigid.name,
@@ -3326,7 +3285,6 @@ fn checkPatternHelp(
         },
         // nums //
         .num_literal => |num| {
-            // For unannotated literals (.num_unbound, .int_unbound), create a flex var with from_numeral constraint
             switch (num.kind) {
                 .num_unbound, .int_unbound => {
                     // Create NumeralInfo for constraint checking
@@ -3335,7 +3293,6 @@ fn checkPatternHelp(
                         .i128 => types_mod.NumeralInfo.fromI128(num.value.toI128(), num.value.toI128() < 0, false, pattern_region),
                     };
 
-                    // Create flex var with from_numeral constraint
                     const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
                     _ = try self.unify(pattern_var, flex_var, env);
                 },
@@ -3368,7 +3325,6 @@ fn checkPatternHelp(
                 // Explicit suffix like `3.14dec` - use nominal Dec type
                 try self.unifyWith(pattern_var, try self.mkNumberTypeContent("Dec", env), env);
             } else {
-                // Unannotated decimal literal - create flex var with from_numeral constraint
                 const num_literal_info = types_mod.NumeralInfo.fromI128(
                     dec.value.num, // RocDec has .num field which is i128 scaled by 10^18
                     dec.value.num < 0,
@@ -3385,7 +3341,6 @@ fn checkPatternHelp(
                 // Explicit suffix - use nominal Dec type
                 try self.unifyWith(pattern_var, try self.mkNumberTypeContent("Dec", env), env);
             } else {
-                // Unannotated decimal literal - create flex var with from_numeral constraint
                 // SmallDecValue stores a numerator (i16) and power of ten
                 // We need to convert this to an i128 scaled by 10^18 for consistency
                 const scaled_value = @as(i128, dec.value.numerator) * std.math.pow(i128, 10, 18 - dec.value.denominator_power_of_ten);
@@ -3692,17 +3647,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_num => |num| {
             switch (num.kind) {
                 .num_unbound, .int_unbound => {
-                    // For unannotated literals, create a flex var with from_numeral constraint
                     const num_literal_info = switch (num.value.kind) {
                         .u128 => types_mod.NumeralInfo.fromU128(@bitCast(num.value.bytes), false, expr_region),
                         .i128 => types_mod.NumeralInfo.fromI128(num.value.toI128(), num.value.toI128() < 0, false, expr_region),
                     };
 
-                    // Create flex var with from_numeral constraint
                     const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
                     const resolved = self.types.resolveVar(flex_var);
                     const constraint_range = resolved.desc.content.flex.constraints;
-                    const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
                     _ = try self.unify(expr_var, flex_var, env);
 
                     // Record this literal for deferred validation during comptime eval
@@ -3743,7 +3695,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
                 const resolved = self.types.resolveVar(flex_var);
                 const constraint_range = resolved.desc.content.flex.constraints;
-                const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
                 _ = try self.unify(expr_var, flex_var, env);
 
                 _ = try self.cir.deferred_numeric_literals.append(self.cir.gpa, .{
@@ -3768,7 +3719,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
                 const resolved = self.types.resolveVar(flex_var);
                 const constraint_range = resolved.desc.content.flex.constraints;
-                const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
                 _ = try self.unify(expr_var, flex_var, env);
 
                 _ = try self.cir.deferred_numeric_literals.append(self.cir.gpa, .{
@@ -3793,7 +3743,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
                 const resolved = self.types.resolveVar(flex_var);
                 const constraint_range = resolved.desc.content.flex.constraints;
-                const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
                 _ = try self.unify(expr_var, flex_var, env);
 
                 _ = try self.cir.deferred_numeric_literals.append(self.cir.gpa, .{
@@ -3820,7 +3769,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
                 const resolved = self.types.resolveVar(flex_var);
                 const constraint_range = resolved.desc.content.flex.constraints;
-                const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
                 _ = try self.unify(expr_var, flex_var, env);
 
                 _ = try self.cir.deferred_numeric_literals.append(self.cir.gpa, .{
@@ -3833,19 +3781,16 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_typed_int => |typed_num| {
             // Typed integer literal like 123.U64
-            // Create from_numeral constraint and unify with the explicit type
             const num_literal_info = switch (typed_num.value.kind) {
                 .u128 => types_mod.NumeralInfo.fromU128(@bitCast(typed_num.value.bytes), false, expr_region),
                 .i128 => types_mod.NumeralInfo.fromI128(typed_num.value.toI128(), typed_num.value.toI128() < 0, false, expr_region),
             };
 
-            // Create flex var with from_numeral constraint
             const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
 
             // Capture the constraint BEFORE unification (unification will change the content)
             const resolved = self.types.resolveVar(flex_var);
             const constraint_range = resolved.desc.content.flex.constraints;
-            const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
 
             try self.unifyTypedLiteralWithExplicitType(
                 flex_var,
@@ -3875,13 +3820,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 expr_region,
             );
 
-            // Create flex var with from_numeral constraint
             const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
 
             // Capture the constraint BEFORE unification (unification will change the content)
             const resolved = self.types.resolveVar(flex_var);
             const constraint_range = resolved.desc.content.flex.constraints;
-            const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
 
             try self.unifyTypedLiteralWithExplicitType(
                 flex_var,
@@ -4928,7 +4871,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     }
 
     // Check any accumulated deferred constraints
-    try self.checkStaticDispatchConstraints(env, false);
 
     // If this type of expr should be generalized, generalize it!
     if (should_generalize) {
@@ -6081,7 +6023,6 @@ fn checkNominalTypeUsage(
 // validate constraints //
 
 /// Check all constraints
-/// We loop here because checkStaticDispatchConstraints and add new regular
 /// constraints.
 fn checkAllConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
@@ -6089,7 +6030,6 @@ fn checkAllConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 
     while (self.constraints.items.items.len > 0) {
         try self.checkConstraints(env);
-        try self.checkStaticDispatchConstraints(env, false);
     }
 }
 
@@ -6125,7 +6065,6 @@ fn poisonErroneousValueExprs(self: *Self) Allocator.Error!void {
 }
 
 fn resolveNumericLiteralsFromContext(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    if (self.types.from_numeral_flex_count == 0) return;
 
     const num_vars: u32 = @intCast(self.types.len());
     var i: u32 = 0;
@@ -6137,21 +6076,13 @@ fn resolveNumericLiteralsFromContext(self: *Self, env: *Env) std.mem.Allocator.E
         const flex = resolved.desc.content.flex;
         if (flex.constraints.len() == 0) continue;
 
-        const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
 
-        // Only process from_numeral flex vars.
-        var has_from_numeral = false;
         for (constraints) |c| {
-            if (c.origin == .from_numeral) {
-                has_from_numeral = true;
                 break;
             }
         }
-        if (!has_from_numeral) continue;
 
-        // Look for a desugared_binop constraint with a concrete peer argument or return type.
         for (constraints) |c| {
-            if (c.origin != .desugared_binop) continue;
             const fn_content = self.types.resolveVar(c.fn_var).desc.content;
             const func = fn_content.unwrapFunc() orelse continue;
             var found_peer = false;
@@ -6188,16 +6119,13 @@ fn resolveNumericLiteralsFromContext(self: *Self, env: *Env) std.mem.Allocator.E
     }
 
     // Process constraints generated by the unifications above.
-    // The from_numeral flex vars that were unified with concrete peers
     // now have their dispatch constraints deferred, and checkAllConstraints
     // will resolve them through the normal dispatch machinery.
     try self.checkAllConstraints(env);
 }
 
-/// Default any remaining from_numeral flex vars to Dec.
 ///
 /// By the time this runs, resolveNumericLiteralsFromContext has already
-/// unified from_numeral vars that had concrete peers in their binop
 /// constraints (e.g., U64 from List.len). The only vars still flex here
 /// are those with genuinely no numeric context, so Dec is correct.
 ///
@@ -6212,12 +6140,10 @@ pub fn finalizeNumericDefaults(self: *Self) std.mem.Allocator.Error!void {
     // After finalizing numeric defaults, resolve any remaining deferred
     // deferred constraints.
     if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
-        try self.checkStaticDispatchConstraints(&env, true);
     }
 }
 
 fn finalizeNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    if (self.types.from_numeral_flex_count == 0) return;
 
     const num_vars: u32 = @intCast(self.types.len());
     var i: u32 = 0;
@@ -6227,15 +6153,10 @@ fn finalizeNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Err
         if (resolved.desc.content != .flex) continue;
 
         const flex = resolved.desc.content.flex;
-        const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
-        var has_from_numeral = false;
         for (constraints) |c| {
-            if (c.origin == .from_numeral) {
-                has_from_numeral = true;
                 break;
             }
         }
-        if (!has_from_numeral) continue;
 
         const dec_var = try self.freshFromContent(try self.mkDecContent(env), env, Region.zero());
         _ = try self.unify(resolved.var_, dec_var, env);
@@ -6244,11 +6165,8 @@ fn finalizeNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Err
 
 fn varHasFromNumeralConstraint(self: *Self, var_: Var) bool {
     const resolved = self.types.resolveVar(var_);
-    if (resolved.desc.from_numeral_origin) return true;
     if (resolved.desc.content != .flex) return false;
-    const constraints = self.types.sliceStaticDispatchConstraints(resolved.desc.content.flex.constraints);
     for (constraints) |constraint| {
-        if (constraint.origin == .from_numeral) return true;
     }
     return false;
 }
@@ -6317,7 +6235,6 @@ fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     self.constraints.items.clearRetainingCapacity();
 }
 
-fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pass: bool) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
     _ = self;
@@ -6447,11 +6364,9 @@ fn checkFlexVarConstraintCompatibility(self: *Self, var_: Var, env: *Env, is_num
         // If either is .err, assume compatible (don't add additional errors)
         if (body.desc.content == .err or expected.desc.content == .err) return true;
 
-        const from_numeral_count = self.types.from_numeral_flex_count;
         var store_snapshot = self.types.snapshot() catch return true;
         defer {
             self.types.rollbackTo(&store_snapshot);
-            self.types.from_numeral_flex_count = from_numeral_count;
             store_snapshot.deinit(self.cir.gpa);
         }
 
@@ -6569,7 +6484,6 @@ fn varsContainError(self: *Self, vars: []const Var, visited: *std.AutoHashMap(Va
 }
 
 /// Mark a constraint function's return type as error
-fn markConstraintFunctionAsError(self: *Self, constraint: StaticDispatchConstraint, env: *Env) !void {
     const resolved_constraint = self.types.resolveVar(constraint.fn_var);
     const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
         try self.unifyWith(constraint.fn_var, .err, env);

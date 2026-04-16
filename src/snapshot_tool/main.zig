@@ -2678,7 +2678,6 @@ fn computeTransformedExprType(
 }
 
 /// Get the defaulted (monomorphized) type string for an expression.
-/// This defaults flex vars with from_numeral constraint to Dec.
 /// Uses a seen set for cycle detection.
 fn getDefaultedTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, type_var: types.Var) ![]const u8 {
     var seen = std.ArrayList(types.Var).empty;
@@ -2709,10 +2708,7 @@ fn getDefaultedTypeStringWithSeen(
 
     switch (resolved.desc.content) {
         .flex => |flex| {
-            // Check if this flex var has a from_numeral constraint
-            const constraints = can_ir.types.sliceStaticDispatchConstraints(flex.constraints);
             for (constraints) |constraint| {
-                if (constraint.origin == .from_numeral) {
                     return allocator.dupe(u8, "Dec");
                 }
             }
@@ -2722,7 +2718,6 @@ fn getDefaultedTypeStringWithSeen(
             switch (flat_type) {
                 .fn_pure, .fn_effectful, .fn_unbound => |func| {
                     // For top-level function types, let TypeWriter handle it
-                    // so that where clauses are properly included
                     if (is_top_level) {
                         // Fall through to TypeWriter at the end
                     } else {
@@ -2826,7 +2821,6 @@ fn getDefaultedTypeStringWithSeen(
     var type_writer = try can_ir.initTypeWriter();
     defer type_writer.deinit();
 
-    // Enable numeral defaulting for MONO output - flex vars with from_numeral
     // constraint should display as "Dec" instead of showing the constraint
     type_writer.setDefaultNumeralsToDec(true);
 

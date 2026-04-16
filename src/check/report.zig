@@ -724,7 +724,6 @@ pub const ReportBuilder = struct {
                         .value => self.buildInvalidNominalValue(mismatch.types),
                     },
                     .fn_args_bound_var => |ctx| self.buildIncompatibleFnArgsBoundVar(mismatch.types, ctx),
-                    .method_type => |ctx| self.buildIncompatibleMethodType(mismatch.types, ctx),
                     .expect => self.buildExpect(mismatch.types),
                     .record_access => |ctx| self.buildRecordAccess(mismatch.types, ctx),
                     .record_update => |ctx| self.buildRecordUpdate(mismatch.types, ctx),
@@ -762,7 +761,6 @@ pub const ReportBuilder = struct {
             .recursive_alias => |data| {
                 return self.buildRecursiveAliasReport(data);
             },
-            .unsupported_alias_where_clause => |data| {
                 return self.buildUnsupportedAliasWhereClauseReport(data);
             },
             .infinite_recursion => |data| {
@@ -1733,7 +1731,6 @@ pub const ReportBuilder = struct {
         return report;
     }
 
-    /// Build a report for when alias syntax is used in a where clause
     /// This syntax was used for abilities which have been removed
     fn buildUnsupportedAliasWhereClauseReport(
         self: *Self,
@@ -1743,7 +1740,6 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         try D.renderSlice(&.{
-            D.bytes("The where clause syntax"),
             D.ident(data.alias_name).withAnnotation(.type_variable),
             D.bytes("is not supported:"),
         }, self, &report);
@@ -1769,38 +1765,7 @@ pub const ReportBuilder = struct {
         return report;
     }
 
-    /// Build a report for when a method exists but its type doesn't match the where clause requirement
-    fn buildIncompatibleMethodType(
-        self: *Self,
-        types: TypePair,
-        ctx: Context.MethodTypeContext,
-    ) !Report {
-        // Note: The unifier's actual/expected are opposite to display order.
-        // We want to show "type has X" (from expected_snapshot) then "expected Y" (from actual_snapshot)
-        return try self.makeMismatchReport(
-            .{ .simple = regionIdxFrom(ctx.constraint_var) },
-            &.{
-                D.bytes("The"),
-                D.ident(ctx.method_name).withAnnotation(.inline_code),
-                D.bytes("method on"),
-                D.ident(ctx.dispatcher_name).withAnnotation(.inline_code),
-                D.bytes("has an incompatible type:"),
-            },
-            &.{
-                D.bytes("The method"),
-                D.ident(ctx.method_name).withAnnotation(.inline_code),
-                D.bytes("has the type:"),
-            },
-            types.expected_snapshot,
-            &.{D.bytes("But I need it to have the type:")},
-            types.actual_snapshot,
-            &.{
-                // TODO: Once we have nicer type diff hints, use them here
-            },
-        );
-    }
-
-    /// Build a report for when a method exists but its type doesn't match the where clause requirement
+    /// Build a report for an `expect` mismatch
     fn buildExpect(
         self: *Self,
         types: TypePair,
@@ -1952,7 +1917,6 @@ pub const ReportBuilder = struct {
         }
     }
 
-    /// Build a report for when a method exists but its type doesn't match the where clause requirement
     fn buildRecordUpdate(
         self: *Self,
         types: TypePair,
@@ -2087,7 +2051,6 @@ pub const ReportBuilder = struct {
         }
     }
 
-    /// Build a report for when a method exists but its type doesn't match the where clause requirement
     fn buildRecursiveDef(
         self: *Self,
         types: TypePair,

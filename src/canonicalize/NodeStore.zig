@@ -143,7 +143,6 @@ const Scratch = struct {
     match_branches: base.Scratch(CIR.Expr.Match.Branch.Idx),
     match_branch_patterns: base.Scratch(CIR.Expr.Match.BranchPattern.Idx),
     if_branches: base.Scratch(CIR.Expr.IfBranch.Idx),
-    where_clauses: base.Scratch(CIR.WhereClause.Idx),
     patterns: base.Scratch(CIR.Pattern.Idx),
     record_destructs: base.Scratch(CIR.Pattern.RecordDestruct.Idx),
     type_annos: base.Scratch(CIR.TypeAnno.Idx),
@@ -163,7 +162,6 @@ const Scratch = struct {
             .match_branches = try base.Scratch(CIR.Expr.Match.Branch.Idx).init(gpa),
             .match_branch_patterns = try base.Scratch(CIR.Expr.Match.BranchPattern.Idx).init(gpa),
             .if_branches = try base.Scratch(CIR.Expr.IfBranch.Idx).init(gpa),
-            .where_clauses = try base.Scratch(CIR.WhereClause.Idx).init(gpa),
             .patterns = try base.Scratch(CIR.Pattern.Idx).init(gpa),
             .record_destructs = try base.Scratch(CIR.Pattern.RecordDestruct.Idx).init(gpa),
             .type_annos = try base.Scratch(CIR.TypeAnno.Idx).init(gpa),
@@ -184,7 +182,6 @@ const Scratch = struct {
         self.match_branches.deinit();
         self.match_branch_patterns.deinit();
         self.if_branches.deinit();
-        self.where_clauses.deinit();
         self.patterns.deinit();
         self.record_destructs.deinit();
         self.type_annos.deinit();
@@ -504,7 +501,6 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
         .statement_type_anno => {
             const p = payload.statement_type_anno;
 
-            const where_clause = if (p.where_span2_idx_plus_one != 0) blk: {
                 const where_data = store.span2_data.items.items[p.where_span2_idx_plus_one - 1];
                 break :blk CIR.WhereClause.Span{ .span = DataSpan.init(where_data.start, where_data.len) };
             } else null;
@@ -513,7 +509,6 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
                 .s_type_anno = .{
                     .name = @bitCast(p.name),
                     .anno = @enumFromInt(p.anno),
-                    .where = where_clause,
                 },
             };
         },
@@ -1553,14 +1548,12 @@ pub fn getAnnotation(store: *const NodeStore, annotation: CIR.Annotation.Idx) CI
     const p = payload.annotation;
     const anno: CIR.TypeAnno.Idx = @enumFromInt(p.anno);
 
-    const where_clause = if (p.has_where == 1) blk: {
         const where_data = store.span2_data.items.items[p.where_span2_idx];
         break :blk CIR.WhereClause.Span{ .span = DataSpan.init(where_data.start, where_data.len) };
     } else null;
 
     return CIR.Annotation{
         .anno = anno,
-        .where = where_clause,
     };
 }
 
@@ -1741,11 +1734,8 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
         .s_type_anno => |s| {
             node.tag = .statement_type_anno;
 
-            const where_span2_idx_plus_one: u32 = if (s.where) |where_clause| blk: {
                 const idx: u32 = @intCast(store.span2_data.len());
                 _ = try store.span2_data.append(store.gpa, .{
-                    .start = where_clause.span.start,
-                    .len = where_clause.span.len,
                 });
                 break :blk idx + 1;
             } else 0;
@@ -2645,11 +2635,8 @@ pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.Recor
 pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base.Region) Allocator.Error!CIR.Annotation.Idx {
     var node = Node.init(.annotation);
 
-    if (annotation.where) |where_clause| {
         const where_span2_idx: u32 = @intCast(store.span2_data.len());
         _ = try store.span2_data.append(store.gpa, .{
-            .start = where_clause.span.start,
-            .len = where_clause.span.len,
         });
         node.setPayload(.{ .annotation = .{
             .anno = @intFromEnum(annotation.anno),
@@ -2917,9 +2904,7 @@ pub fn addScratchTypeAnno(store: *NodeStore, idx: CIR.TypeAnno.Idx) Allocator.Er
     try store.addScratch("type_annos", idx);
 }
 
-/// Adds a where clause to the scratch buffer.
 pub fn addScratchWhereClause(store: *NodeStore, idx: CIR.WhereClause.Idx) Allocator.Error!void {
-    try store.addScratch("where_clauses", idx);
 }
 
 /// Returns the current top of the scratch type annotations buffer.
@@ -2927,9 +2912,7 @@ pub fn scratchTypeAnnoTop(store: *NodeStore) u32 {
     return store.scratchTop("type_annos");
 }
 
-/// Returns the current top of the scratch where clauses buffer.
 pub fn scratchWhereClauseTop(store: *NodeStore) u32 {
-    return store.scratchTop("where_clauses");
 }
 
 /// Clears scratch type annotations from the given index.
@@ -2937,9 +2920,7 @@ pub fn clearScratchTypeAnnosFrom(store: *NodeStore, from: u32) void {
     store.clearScratchFrom("type_annos", from);
 }
 
-/// Clears scratch where clauses from the given index.
 pub fn clearScratchWhereClausesFrom(store: *NodeStore, from: u32) void {
-    store.clearScratchFrom("where_clauses", from);
 }
 
 /// Creates a span from the scratch type annotations starting at the given index.
@@ -2957,9 +2938,7 @@ pub fn recordFieldSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Re
     return try store.spanFrom("record_fields", CIR.RecordField.Span, start);
 }
 
-/// Returns a span from the scratch where clauses starting at the given index.
 pub fn whereClauseSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.WhereClause.Span {
-    return try store.spanFrom("where_clauses", CIR.WhereClause.Span, start);
 }
 
 /// Returns the current top of the scratch exposed items buffer.
@@ -3159,7 +3138,6 @@ pub fn sliceExposedItems(store: *const NodeStore, span: CIR.ExposedItem.Span) []
     return store.sliceFromSpan(CIR.ExposedItem.Idx, span.span);
 }
 
-/// Returns a slice of where clauses from the store.
 pub fn sliceWhereClauses(store: *const NodeStore, span: CIR.WhereClause.Span) []CIR.WhereClause.Idx {
     return store.sliceFromSpan(CIR.WhereClause.Idx, span.span);
 }
@@ -3302,12 +3280,8 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             node.tag = .diag_malformed_type_annotation;
             region = r.region;
         },
-        .malformed_where_clause => |r| {
-            node.tag = .diag_malformed_where_clause;
             region = r.region;
         },
-        .where_clause_not_allowed_in_type_decl => |r| {
-            node.tag = .diag_where_clause_not_allowed_in_type_decl;
             region = r.region;
         },
         .open_ext_not_allowed_in_type_decl => |r| {
@@ -3797,10 +3771,8 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_malformed_type_annotation => return CIR.Diagnostic{ .malformed_type_annotation = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_malformed_where_clause => return CIR.Diagnostic{ .malformed_where_clause = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_where_clause_not_allowed_in_type_decl => return CIR.Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_open_ext_not_allowed_in_type_decl => return CIR.Diagnostic{ .open_ext_not_allowed_in_type_decl = .{

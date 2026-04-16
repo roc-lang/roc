@@ -36,7 +36,6 @@ test {
     try std.testing.expectEqual(24, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to is_opaque field
-    try std.testing.expectEqual(52, @sizeOf(StaticDispatchConstraint));
     try std.testing.expectEqual(16, @sizeOf(Func));
 }
 
@@ -90,7 +89,6 @@ pub const TypeScope = struct {
 pub const Descriptor = struct {
     content: Content,
     rank: Rank,
-    from_numeral_origin: bool = false,
 };
 
 /// In general, the rank tracks the number of let-bindings a variable is "under".
@@ -232,51 +230,32 @@ pub const Content = union(enum) {
 
 // flex //
 
-/// A flex var, with optional attached constraints
+/// A flex var
 pub const Flex = struct {
     name: ?Ident.Idx,
-    constraints: StaticDispatchConstraint.SafeList.Range,
 
     pub fn init() Flex {
         return .{
             .name = null,
-            .constraints = StaticDispatchConstraint.SafeList.Range.empty(),
         };
     }
 
     pub fn withName(self: Flex, name: ?Ident.Idx) Flex {
         return .{
             .name = name,
-            .constraints = self.constraints,
-        };
-    }
-
-    pub fn withConstraints(self: Flex, constraints: StaticDispatchConstraint.SafeList.Range) Flex {
-        return .{
-            .name = self.name,
-            .constraints = constraints,
         };
     }
 };
 
 // rigid //
 
-/// A rigid var, with optional attached constraints
+/// A rigid var
 pub const Rigid = struct {
     name: Ident.Idx,
-    constraints: StaticDispatchConstraint.SafeList.Range,
 
     pub fn init(name: Ident.Idx) Rigid {
         return .{
             .name = name,
-            .constraints = StaticDispatchConstraint.SafeList.Range.empty(),
-        };
-    }
-
-    pub fn withConstraints(self: Rigid, constraints: StaticDispatchConstraint.SafeList.Range) Rigid {
-        return .{
-            .name = self.name,
-            .constraints = constraints,
         };
     }
 };
@@ -707,117 +686,6 @@ pub const TwoTags = struct {
 
 // content //
 
-/// Information about a numeric literal for from_numeral constraint checking
-///
-/// Stores the parsed numeric value and metadata needed to validate conversion
-/// to a specific numeric type at compile-time.
-pub const NumeralInfo = struct {
-    /// The parsed numeric value stored as raw bytes
-    /// For fractional literals, this is scaled by 10^18 (Dec representation)
-    bytes: [16]u8,
-
-    /// Whether the original literal was stored as u128 (for large unsigned values)
-    is_u128: bool,
-
-    /// Whether the literal was negative
-    is_negative: bool,
-
-    /// Whether the literal had a decimal point
-    is_fractional: bool,
-
-    /// Source region for error reporting
-    region: base.Region,
-
-    /// Get the value as i128 (may overflow for large u128 values)
-    pub fn toI128(self: NumeralInfo) i128 {
-        return @bitCast(self.bytes);
-    }
-
-    /// Get the value as u128
-    pub fn toU128(self: NumeralInfo) u128 {
-        return @bitCast(self.bytes);
-    }
-
-    /// Create from an i128 value
-    pub fn fromI128(val: i128, is_negative: bool, is_fractional: bool, region: base.Region) NumeralInfo {
-        return .{
-            .bytes = @bitCast(val),
-            .is_u128 = false,
-            .is_negative = is_negative,
-            .is_fractional = is_fractional,
-            .region = region,
-        };
-    }
-
-    /// Create from a u128 value
-    pub fn fromU128(val: u128, is_fractional: bool, region: base.Region) NumeralInfo {
-        return .{
-            .bytes = @bitCast(val),
-            .is_u128 = true,
-            .is_negative = false, // u128 values are never negative
-            .is_fractional = is_fractional,
-            .region = region,
-        };
-    }
-};
-
-/// Represents a constraint on a variable
-///
-/// sort  : List(a) -> List(a) where [a.ord : a -> Ord]
-///                                   ^^^^^^^^^^^^^^^
-pub const StaticDispatchConstraint = struct {
-    const Self = @This();
-
-    /// the dispatch fn name
-    fn_name: Ident.Idx,
-    /// the dispatch fn var, a function
-    fn_var: Var,
-    /// source expr var for source-site dispatches that must later resolve to an exact target
-    site_expr_var: ?Var = null,
-    /// the origin of this constraint
-    origin: Origin,
-    /// Optional numeric literal info for from_numeral constraints
-    num_literal: ?NumeralInfo = null,
-
-    /// Tracks where this constraint originated from
-    pub const Origin = enum(u4) {
-        desugared_binop, // From binary operator desugaring (e.g., +, -, *, etc.)
-        desugared_unaryop, // From uniary operator desugaring (e.g., !)
-        method_call, // From .method() syntax
-        where_clause, // From where clause in type annotation
-        from_numeral, // From numeric literal conversion
-    };
-
-    /// A safe list of constraints
-    pub const SafeList = MkSafeList(Self);
-
-    /// A safe multi list of constraints
-    pub const SafeMultiList = MkSafeMultiList(Self);
-
-    /// A function to be passed into std.mem.sort to sort fields by name
-    pub fn sortByFnNameAsc(ident_store: *const Ident.Store, a: Self, b: Self) bool {
-        return Self.orderByFnName(ident_store, a, b) == .lt;
-    }
-
-    /// Get the ordering of how a compares to b
-    pub fn orderByFnName(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
-        const a_text = store.getText(a.fn_name);
-        const b_text = store.getText(b.fn_name);
-        return std.mem.order(u8, a_text, b_text);
-    }
-};
-
-/// Two record fields
-pub const TwoStaticDispatchConstraints = struct {
-    a: StaticDispatchConstraint,
-    b: StaticDispatchConstraint,
-
-    /// A safe list of tag union fields
-    pub const SafeList = MkSafeList(@This());
-
-    /// A safe multi list of tag union fields
-    pub const SafeMultiList = MkSafeMultiList(@This());
-};
 
 /// Polarity of a type, or roughly, what side of an arrow it appears on.
 pub const Polarity = enum {

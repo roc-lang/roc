@@ -8047,15 +8047,9 @@ pub const Lowerer = struct {
     fn defaultPrimitiveForConstraints(
         _: *Lowerer,
         _: u32,
-        type_scope: *const TypeScope,
-        constraints: types.StaticDispatchConstraint.SafeList.Range,
+        _: *const TypeScope,
+        _: void,
     ) std.mem.Allocator.Error!?type_mod.Prim {
-        if (constraints.len() == 0) return null;
-
-        if (constraintsContainFromNumeral(type_scope.typeStoreConst(), constraints)) {
-            return .dec;
-        }
-
         return null;
     }
 
@@ -8080,15 +8074,6 @@ pub const Lowerer = struct {
                             flex.constraints.len(),
                         },
                     );
-                    for (type_scope.typeStoreConst().sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
-                        std.debug.print(
-                            "  constraint fn={s} origin={s}\n",
-                            .{
-                                type_scope.getIdent(constraint.fn_name),
-                                @tagName(constraint.origin),
-                            },
-                        );
-                    }
                 }
             },
             .rigid => |rigid| {
@@ -8103,15 +8088,6 @@ pub const Lowerer = struct {
                             rigid.constraints.len(),
                         },
                     );
-                    for (type_scope.typeStoreConst().sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                        std.debug.print(
-                            "  constraint fn={s} origin={s}\n",
-                            .{
-                                type_scope.getIdent(constraint.fn_name),
-                                @tagName(constraint.origin),
-                            },
-                        );
-                    }
                 }
             },
             else => {},
@@ -9972,16 +9948,6 @@ fn isBuiltinBoolTagUnionSlice(
     }
 
     return saw_true and saw_false;
-}
-
-fn constraintsContainFromNumeral(
-    type_store: *const types.Store,
-    range: types.StaticDispatchConstraint.SafeList.Range,
-) bool {
-    for (type_store.sliceStaticDispatchConstraints(range)) |constraint| {
-        if (constraint.origin == .from_numeral) return true;
-    }
-    return false;
 }
 
 fn binopToLowLevel(op: CIR.Expr.Binop.Op) base.LowLevel {

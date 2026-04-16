@@ -294,7 +294,6 @@ pub const Generalizer = struct {
                 // Here, we start at group_rank (since flex should be generalized),
                 // then we recurse into the constraints.
                 const next_rank = group_rank;
-                // for (self.store.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
                 //     next_rank = next_rank.max(try self.adjustRank(constraint.fn_var, group_rank, vars_to_generalize));
                 // }
                 return next_rank;
@@ -303,7 +302,6 @@ pub const Generalizer = struct {
                 // Here, we start at group_rank (since rigid should be generalized),
                 // then we recurse into the constraints.
                 const next_rank = group_rank;
-                // for (self.store.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
                 //     next_rank = next_rank.max(try self.adjustRank(constraint.fn_var, group_rank, vars_to_generalize));
                 // }
                 return next_rank;

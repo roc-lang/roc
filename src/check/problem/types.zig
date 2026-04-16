@@ -35,7 +35,6 @@ pub const Problem = union(enum) {
     cannot_access_opaque_nominal: CannotAccessOpaqueNominal,
     nominal_type_resolution_failed: NominalTypeResolutionFailed,
     recursive_alias: RecursiveAlias,
-    unsupported_alias_where_clause: UnsupportedAliasWhereClause,
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
     hosted_unboxed_function: HostedUnboxedFunction,
@@ -223,7 +222,6 @@ pub const RecursiveAlias = struct {
     region: base.Region,
 };
 
-/// Error when using alias syntax in where clause (e.g., `where [a.SomeAlias]`)
 /// This syntax was used for abilities which have been removed from the language
 pub const UnsupportedAliasWhereClause = struct {
     alias_name: base.Ident.Idx,

@@ -238,7 +238,6 @@ pub const TypeHeader = struct {
     }
 };
 
-/// Represents a where clause constraint in type definitions
 pub const WhereClause = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = extern struct { span: base.DataSpan };
@@ -307,13 +306,10 @@ pub const Annotation = struct {
         // Append annotation
         try env.store.getTypeAnno(annotation.anno).pushToSExprTree(env, tree, self.anno);
 
-        // Append where clause
         if (annotation.where) |where_span| {
             const where_begin = tree.beginNode();
             try tree.pushStaticAtom("where");
             const where_attrs = tree.beginNode();
-            const where_clauses = env.store.sliceWhereClauses(where_span);
-            for (where_clauses) |clause_idx| {
                 const clause = env.store.getWhereClause(clause_idx);
                 try clause.pushToSExprTree(env, tree, clause_idx);
             }

@@ -6,7 +6,6 @@
 //! - Module names and module members
 //! - Type names (for type annotations)
 //! - Record fields (for field access)
-//! - Methods (for static dispatch)
 
 const std = @import("std");
 const base = @import("base");
@@ -948,7 +947,6 @@ pub const CompletionBuilder = struct {
 
     // Method Completions
 
-    /// Add method completions for static dispatch (e.g., "value.method()").
     pub fn addMethodCompletions(
         self: *CompletionBuilder,
         module_env: *ModuleEnv,
@@ -1079,18 +1077,15 @@ pub const CompletionBuilder = struct {
         }
     }
 
-    /// Extract method names from static dispatch constraints and add them as completions.
     fn addMethodsFromConstraints(
         self: *CompletionBuilder,
         module_env: *ModuleEnv,
-        constraints: types.StaticDispatchConstraint.SafeList.Range,
     ) !void {
         if (constraints.isEmpty()) {
             self.logDebug("addMethodsFromConstraints: empty", .{});
             return;
         }
 
-        const constraints_slice = module_env.types.sliceStaticDispatchConstraints(constraints);
         self.logDebug("addMethodsFromConstraints: count={d}", .{constraints_slice.len});
         for (constraints_slice) |constraint| {
             const method_name = module_env.getIdentText(constraint.fn_name);

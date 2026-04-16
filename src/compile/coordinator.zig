@@ -1785,7 +1785,6 @@ pub const Coordinator = struct {
 
         // Add external imports and their transitive dependencies in one pass.
         // Transitive deps ensure we have access to module environments for types
-        // used in where clauses even when not directly imported by this module.
         for (mod.external_imports.items) |ext_name| {
             const ext_env = self.getExternalEnv(pkg.name, ext_name) orelse continue;
             try imported_envs.append(self.gpa, ext_env);

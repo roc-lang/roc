@@ -272,13 +272,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) !std.ArrayList(CIR.Def.Id
         }
     }
 
-    // from_numeral (all numeric types)
     for (numeric_types) |num_type| {
         var buf: [256]u8 = undefined;
 
-        const from_numeral = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.from_numeral", .{num_type});
-        if (env.common.findIdent(from_numeral)) |ident| {
-            try low_level_map.put(ident, .num_from_numeral);
         }
     }
 

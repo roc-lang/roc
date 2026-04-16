@@ -29,7 +29,6 @@ const Alias = types.Alias;
 const FlatType = types.FlatType;
 const NominalType = types.NominalType;
 const Record = types.Record;
-const StaticDispatchConstraint = types.StaticDispatchConstraint;
 
 const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
 
@@ -88,12 +87,6 @@ pub const Store = struct {
     vars: VarSafeList,
     record_fields: RecordFieldSafeMultiList,
     tags: TagSafeMultiList,
-    static_dispatch_constraints: StaticDispatchConstraint.SafeList,
-
-    /// Count of flex vars that currently have a from_numeral constraint.
-    /// Used to skip the finalization walk when no numeric defaults need resolving.
-    from_numeral_flex_count: u32,
-
     /// Init the unification table with default capacity.
     /// For production use with source files, prefer initFromSourceLen() which
     /// computes capacity based on source file size.
@@ -126,8 +119,6 @@ pub const Store = struct {
             .vars = try VarSafeList.initCapacity(gpa, child_capacity),
             .record_fields = try RecordFieldSafeMultiList.initCapacity(gpa, child_capacity),
             .tags = try TagSafeMultiList.initCapacity(gpa, child_capacity),
-            .static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, child_capacity),
-            .from_numeral_flex_count = 0,
         };
     }
 
@@ -155,7 +146,6 @@ pub const Store = struct {
         self.vars.deinit(self.gpa);
         self.record_fields.deinit(self.gpa);
         self.tags.deinit(self.gpa);
-        self.static_dispatch_constraints.deinit(self.gpa);
     }
 
     /// Clone this store into fresh owned memory.
@@ -167,8 +157,6 @@ pub const Store = struct {
             .vars = try self.vars.clone(gpa),
             .record_fields = try self.record_fields.clone(gpa),
             .tags = try self.tags.clone(gpa),
-            .static_dispatch_constraints = try self.static_dispatch_constraints.clone(gpa),
-            .from_numeral_flex_count = self.from_numeral_flex_count,
         };
     }
 
@@ -193,9 +181,6 @@ pub const Store = struct {
         record_fields_len: usize,
         /// Length of tags list at snapshot time
         tags_len: usize,
-        /// Length of static_dispatch_constraints list at snapshot time
-        static_dispatch_constraints_len: usize,
-
         /// Free the memory held by this snapshot
         pub fn deinit(self: *Snapshot, gpa: Allocator) void {
             gpa.free(self.slots_clone);
@@ -212,7 +197,6 @@ pub const Store = struct {
             .vars_len = self.vars.items.items.len,
             .record_fields_len = self.record_fields.items.len,
             .tags_len = self.tags.items.len,
-            .static_dispatch_constraints_len = self.static_dispatch_constraints.items.items.len,
         };
     }
 
@@ -234,7 +218,6 @@ pub const Store = struct {
         self.vars.items.shrinkRetainingCapacity(snap.vars_len);
         self.record_fields.items.shrinkRetainingCapacity(snap.record_fields_len);
         self.tags.items.shrinkRetainingCapacity(snap.tags_len);
-        self.static_dispatch_constraints.items.shrinkRetainingCapacity(snap.static_dispatch_constraints_len);
     }
 
     // fresh variables //
@@ -263,7 +246,6 @@ pub const Store = struct {
         const desc_idx = try self.descs.insert(self.gpa, .{
             .content = content,
             .rank = Rank.outermost,
-            .from_numeral_origin = false,
         });
         const slot_idx = try self.slots.insert(self.gpa, .{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
@@ -274,7 +256,6 @@ pub const Store = struct {
         const desc_idx = try self.descs.insert(self.gpa, .{
             .content = content,
             .rank = rank,
-            .from_numeral_origin = false,
         });
         const slot_idx = try self.slots.insert(self.gpa, .{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
@@ -294,19 +275,11 @@ pub const Store = struct {
         return Self.slotIdxToVar(slot_idx);
     }
 
-    pub fn markFromNumeralOrigin(self: *Self, var_: Var) void {
-        const resolved = self.resolveVar(var_);
-        var desc = self.descs.get(resolved.desc_idx);
-        desc.from_numeral_origin = true;
-        self.descs.set(resolved.desc_idx, desc);
-    }
-
     /// Create a new variable with the provided content assuming there is capacity
     pub fn appendFromContentAssumeCapacity(self: *Self, content: Content, rank: Rank) Var {
         const desc_idx = self.descs.appendAssumeCapacity(.{
             .content = content,
             .rank = rank,
-            .from_numeral_origin = false,
         });
         const slot_idx = self.slots.appendAssumeCapacity(.{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
@@ -633,11 +606,6 @@ pub const Store = struct {
         return try self.tags.appendSlice(self.gpa, slice);
     }
 
-    /// Append constraints to the backing list, returning the range
-    pub fn appendStaticDispatchConstraints(self: *Self, s: []const StaticDispatchConstraint) std.mem.Allocator.Error!StaticDispatchConstraint.SafeList.Range {
-        return try self.static_dispatch_constraints.appendSlice(self.gpa, s);
-    }
-
     // sub list getters //
 
     /// Given a range, get a slice of vars from the backing array
@@ -668,15 +636,6 @@ pub const Store = struct {
     /// Given a range, get a slice of tags from the backing array
     pub fn getTagsSlice(self: *const Self, range: TagSafeMultiList.Range) TagSafeMultiList.Slice {
         return self.tags.sliceRange(range);
-    }
-
-    /// Given a range, get a slice of vars from the backing array
-    pub fn sliceStaticDispatchConstraints(self: *const Self, range: StaticDispatchConstraint.SafeList.Range) []StaticDispatchConstraint {
-        return self.static_dispatch_constraints.sliceRange(range);
-    }
-
-    pub fn getStaticDispatchConstraintAt(self: *const Self, idx: usize) StaticDispatchConstraint {
-        return self.static_dispatch_constraints.items.items[idx];
     }
 
     // helpers - alias types //
@@ -914,7 +873,6 @@ pub const Store = struct {
         vars: VarSafeList.Serialized,
         record_fields: RecordFieldSafeMultiList.Serialized,
         tags: TagSafeMultiList.Serialized,
-        static_dispatch_constraints: StaticDispatchConstraint.SafeList.Serialized,
 
         /// Serialize a Store into this Serialized struct, appending data to the writer
         pub fn serialize(
@@ -929,7 +887,6 @@ pub const Store = struct {
             try self.vars.serialize(&store.vars, allocator, writer);
             try self.record_fields.serialize(&store.record_fields, allocator, writer);
             try self.tags.serialize(&store.tags, allocator, writer);
-            try self.static_dispatch_constraints.serialize(&store.static_dispatch_constraints, allocator, writer);
 
             // Set gpa to all zeros; the space needs to be here,
             // but the value will be set separately during deserialization.
@@ -948,8 +905,6 @@ pub const Store = struct {
                 .vars = self.vars.deserializeInto(base_addr),
                 .record_fields = self.record_fields.deserializeInto(base_addr),
                 .tags = self.tags.deserializeInto(base_addr),
-                .static_dispatch_constraints = self.static_dispatch_constraints.deserializeInto(base_addr),
-                .from_numeral_flex_count = 0,
             };
         }
 
@@ -963,8 +918,6 @@ pub const Store = struct {
                 .vars = try self.vars.deserializeWithCopy(base_addr, gpa),
                 .record_fields = try self.record_fields.deserializeWithCopy(base_addr, gpa),
                 .tags = try self.tags.deserializeWithCopy(base_addr, gpa),
-                .static_dispatch_constraints = try self.static_dispatch_constraints.deserializeWithCopy(base_addr, gpa),
-                .from_numeral_flex_count = 0,
             };
         }
     };
@@ -986,8 +939,6 @@ pub const Store = struct {
             .vars = (try self.vars.serialize(allocator, writer)).*,
             .record_fields = (try self.record_fields.serialize(allocator, writer)).*,
             .tags = (try self.tags.serialize(allocator, writer)).*,
-            .static_dispatch_constraints = (try self.static_dispatch_constraints.serialize(allocator, writer)).*,
-            .from_numeral_flex_count = 0,
         };
 
         return @constCast(offset_self);
@@ -1000,7 +951,6 @@ pub const Store = struct {
         self.vars.relocate(offset);
         self.record_fields.relocate(offset);
         self.tags.relocate(offset);
-        self.static_dispatch_constraints.relocate(offset);
     }
 
     /// Calculate the size needed to serialize this Store
@@ -1010,10 +960,9 @@ pub const Store = struct {
         const record_fields_size = self.record_fields.serializedSize();
         const tags_size = self.tags.serializedSize();
         const vars_size = self.vars.serializedSize();
-        const static_dispatch_constraints_size = self.static_dispatch_constraints.serializedSize();
 
         // Add alignment padding for each component
-        var total_size: usize = @sizeOf(u32) * 6; // size headers
+        var total_size: usize = @sizeOf(u32) * 5; // size headers
         total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
 
         total_size += slots_size;
@@ -1031,16 +980,13 @@ pub const Store = struct {
         total_size += vars_size;
         total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT.toByteUnits());
 
-        total_size += static_dispatch_constraints_size;
-        total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
-
         // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
         return std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT.toByteUnits());
     }
 
     /// Deserialize a Store from the provided buffer
     pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) !Self {
-        if (buffer.len < @sizeOf(u32) * 6) return error.BufferTooSmall;
+        if (buffer.len < @sizeOf(u32) * 5) return error.BufferTooSmall;
 
         var offset: usize = 0;
 
@@ -1058,9 +1004,6 @@ pub const Store = struct {
         offset += @sizeOf(u32);
 
         const vars_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
-        offset += @sizeOf(u32);
-
-        const static_dispatch_constraints_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
         offset += @sizeOf(u32);
 
         // Deserialize data
@@ -1089,11 +1032,6 @@ pub const Store = struct {
         const vars = try VarSafeList.deserializeFrom(vars_buffer, allocator);
         offset += vars_size;
 
-        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT.toByteUnits());
-        const static_dispatch_constraints_buffer = @as([]align(SERIALIZATION_ALIGNMENT.toByteUnits()) const u8, @alignCast(buffer[offset .. offset + static_dispatch_constraints_size]));
-        const static_dispatch_constraints = try StaticDispatchConstraint.SafeList.deserializeFrom(static_dispatch_constraints_buffer, allocator);
-        offset += static_dispatch_constraints_size;
-
         return Self{
             .gpa = allocator,
             .slots = slots,
@@ -1101,8 +1039,6 @@ pub const Store = struct {
             .record_fields = record_fields,
             .tags = tags,
             .vars = vars,
-            .static_dispatch_constraints = static_dispatch_constraints,
-            .from_numeral_flex_count = 0,
         };
     }
 };

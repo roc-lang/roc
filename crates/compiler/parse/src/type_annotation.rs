@@ -980,8 +980,6 @@ fn expression<'a>(
             }
         };
 
-        // Finally, try to parse a where clause if there is one.
-        // The where clause must be at least as deep as where the type annotation started.
         match implements_clause_chain().parse(arena, state.clone(), min_indent) {
             Ok((where_progress, (spaces_before, implements_chain), state)) => {
                 let region =
@@ -1004,7 +1002,6 @@ fn expression<'a>(
                 ))
             }
             Err(_) => {
-                // Ran into a problem parsing a where clause; don't suppose there is one.
                 Ok((progress, annot, state))
             }
         }

@@ -99,14 +99,12 @@ pub const Expr = union(enum) {
     },
     /// An integer literal with explicit type annotation: `123.U64`
     /// The type_name stores the type identifier (e.g., "U64", "I32")
-    /// At compile time, from_numeral is called to validate and convert the value.
     e_typed_int: struct {
         value: CIR.IntValue,
         type_name: Ident.Idx,
     },
     /// A fractional literal with explicit type annotation: `3.14.Dec`
     /// The type_name stores the type identifier (e.g., "Dec", "F64")
-    /// At compile time, from_numeral is called to validate and convert the value.
     /// The value is stored as scaled i128 (like Dec, scaled by 10^18).
     e_typed_frac: struct {
         value: CIR.IntValue,
