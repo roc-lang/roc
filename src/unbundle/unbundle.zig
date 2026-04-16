@@ -341,7 +341,7 @@ pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
         defer if (component.len > upper_buf.len and upper_component.ptr != component.ptr)
             std.heap.page_allocator.free(upper_component);
 
-        const base_name = if (std.mem.indexOfScalar(u8, upper_component, '.')) |dot_pos|
+        const base_name = if (std.mem.findScalar(u8, upper_component, '.')) |dot_pos|
             upper_component[0..dot_pos]
         else
             upper_component;

@@ -358,8 +358,8 @@ fn sendMessageToWasm(wasm_interface: *const WasmInterface, allocator: std.mem.Al
         return error.WasmReturnedInvalidPointer;
     }
 
-    const response_slice = wasm_memory_after[response_ptr..];
-    const null_terminator_idx = std.mem.indexOfScalar(u8, response_slice, 0) orelse {
+    const response_slice = wasm_memory[response_ptr..];
+    const null_terminator_idx = std.mem.findScalar(u8, response_slice, 0) orelse {
         logDebug("[ERROR] WASM returned response string without a null terminator.\n", .{});
         _ = wasm_interface.module_instance.invoke(wasm_interface.freeWasmString_handle, &[_]bytebox.Val{bytebox.Val{ .I32 = @intCast(response_ptr) }}, &[_]bytebox.Val{}, .{}) catch {};
         return error.WasmReturnedInvalidString;

@@ -280,7 +280,7 @@ fn populateAnchorMap(
         // map type-like prefixes (`Num`, `Num.U8`).
         var rel_end: usize = entry_rel_path.len;
         if (entry.kind == .value) {
-            const last_dot = std.mem.lastIndexOfScalar(u8, entry_rel_path, '.') orelse {
+            const last_dot = std.mem.findScalarLast(u8, entry_rel_path, '.') orelse {
                 try populateAnchorMap(map, gpa, arena, module_name, entry.children, entry_rel_path);
                 continue;
             };
@@ -290,7 +290,7 @@ fn populateAnchorMap(
         // Walk each `.`-separated prefix of the relative path.
         var seg_start: usize = 0;
         while (seg_start < rel_end) {
-            const next_dot = std.mem.indexOfScalarPos(u8, entry_rel_path[0..rel_end], seg_start, '.');
+            const next_dot = std.mem.findScalarPos(u8, entry_rel_path[0..rel_end], seg_start, '.');
             const seg_end = next_dot orelse rel_end;
             const short_name = entry_rel_path[seg_start..seg_end];
             const prefix_path = entry_rel_path[0..seg_end];
@@ -1218,7 +1218,7 @@ fn renderSearchTree(
 fn renderEntrySignature(w: Writer, ctx: *const RenderContext, gpa: Allocator, entry: *const DocModel.DocEntry, anchor_id: []const u8) !void {
     // Display only the identifier (last component) of the entry name
     // For "Builtin.Str.Utf8Problem.is_eq", display as "is_eq"
-    const display_name = if (std.mem.lastIndexOfScalar(u8, entry.name, '.')) |idx|
+    const display_name = if (std.mem.findScalarLast(u8, entry.name, '.')) |idx|
         entry.name[idx + 1 ..]
     else
         entry.name;
@@ -1525,7 +1525,7 @@ fn isIdentCont(c: u8) bool {
 /// `bracket_offset`). The href is still written so output is unchanged —
 /// broken-link collection is observational.
 fn writeDocRefHref(w: Writer, ctx: *const RenderContext, label: []const u8, bracket_offset: usize) !void {
-    const first_dot = std.mem.indexOfScalar(u8, label, '.');
+    const first_dot = std.mem.findScalar(u8, label, '.');
     const head = if (first_dot) |d| label[0..d] else label;
 
     // Build the anchor we are about to write into a small stack buffer so we
@@ -1646,7 +1646,7 @@ fn renderDocTypeHtml(
             .html => |html| try w.writeAll(html),
             .escaped => |text| try writeHtmlEscaped(w, text),
             .type_ref => |ref| {
-                const display_name = if (std.mem.lastIndexOfScalar(u8, ref.type_name, '.')) |idx|
+                const display_name = if (std.mem.findScalarLast(u8, ref.type_name, '.')) |idx|
                     ref.type_name[idx + 1 ..]
                 else
                     ref.type_name;
@@ -1788,6 +1788,40 @@ fn renderDocTypeHtml(
     }
 }
 
+/// Resolve a short type name to its full path within current module
+/// For example, "Dec" -> "Num.Dec"
+fn resolveTypeNameToFullPath(
+    ctx: *const RenderContext,
+    type_name: []const u8,
+) ?[]const u8 {
+    // If it already has a dot, it's a full path
+    if (std.mem.find(u8, type_name, ".") != null) {
+        return type_name;
+    }
+
+    // Search current module entries for a match
+    if (ctx.current_module_entries) |entries| {
+        for (entries) |*entry| {
+            // Check if entry.name ends with ".{type_name}"
+            // This handles cases like "Num.Dec" where type_name is "Dec"
+            if (std.mem.endsWith(u8, entry.name, type_name)) {
+                const dot_pos = entry.name.len - type_name.len;
+                if (dot_pos == 0) {
+                    // Exact match (top-level type like "Bool")
+                    return type_name;
+                } else if (dot_pos > 0 and entry.name[dot_pos - 1] == '.') {
+                    // Match after a dot (nested type like "Num.Dec")
+                    return entry.name;
+                }
+            }
+        }
+    }
+
+    // Default to original name if not found
+    return type_name;
+}
+
+
 /// Check whether a type reference is linkable.
 fn resolveTypeLink(
     ctx: *const RenderContext,
@@ -1841,7 +1875,7 @@ fn writeTypeLink(
     // path within the module (e.g. "Builtin.Num.U8"). When linking inside the
     // current module, look the head segment up in the anchor map so the link
     // resolves to the actual entry id.
-    const first_dot = std.mem.indexOfScalar(u8, type_name, '.');
+    const first_dot = std.mem.findScalar(u8, type_name, '.');
     const head = if (first_dot) |d| type_name[0..d] else type_name;
     const tail: []const u8 = if (first_dot) |d| type_name[d..] else "";
     const remapped_head: ?[]const u8 = if (is_same_module) ctx.lookupAnchorHead(head) else null;

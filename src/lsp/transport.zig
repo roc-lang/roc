@@ -54,7 +54,7 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
                 const line = maybe_line orelse return error.EndOfStream;
                 if (line.len == 0) break;
 
-                const colon_index = std.mem.indexOfScalar(u8, line, ':') orelse return error.InvalidHeader;
+                const colon_index = std.mem.findScalar(u8, line, ':') orelse return error.InvalidHeader;
                 const name = std.mem.trim(u8, line[0..colon_index], " \t");
                 const value = std.mem.trim(u8, line[(colon_index + 1)..], " \t");
 

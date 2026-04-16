@@ -3049,6 +3049,54 @@ pub const Coordinator = struct {
         }
         const diag_end = if (threads_available) self.roc_ctx.timestampNow() else 0;
 
+        // Discover imports from env.imports
+        // Pre-allocate to reduce allocation contention in multi-threaded mode
+        var local_imports = std.ArrayList(DiscoveredLocalImport).initCapacity(worker_alloc, 16) catch std.ArrayList(DiscoveredLocalImport).empty;
+        var external_imports = std.ArrayList(DiscoveredExternalImport).initCapacity(worker_alloc, 16) catch std.ArrayList(DiscoveredExternalImport).empty;
+
+        const import_count = env.imports.imports.items.items.len;
+        for (env.imports.imports.items.items[0..import_count]) |str_idx| {
+            const mod_name = env.getString(str_idx);
+
+            if (std.mem.eql(u8, mod_name, "Builtin")) continue;
+
+            // Check if qualified (external) import
+            if (std.mem.findScalar(u8, mod_name, '.') != null) {
+                external_imports.append(worker_alloc, .{
+                    .import_name = worker_alloc.dupe(u8, mod_name) catch continue,
+                }) catch {};
+            } else {
+                // Local import - but first check if this is a shorthand alias for an external module
+                // Type annotations can use unqualified names (like "Builder" instead of "pf.Builder")
+                // which adds both the qualified and unqualified import to the list.
+                // Skip the unqualified one if we already have the qualified version.
+                var is_external_alias = false;
+                for (external_imports.items) |ext| {
+                    // Check if any external import ends with .mod_name
+                    // e.g., "pf.Builder" ends with ".Builder"
+                    if (std.mem.endsWith(u8, ext.import_name, mod_name)) {
+                        const dot_idx = ext.import_name.len - mod_name.len - 1;
+                        if (dot_idx < ext.import_name.len and ext.import_name[dot_idx] == '.') {
+                            is_external_alias = true;
+                            break;
+                        }
+                    }
+                }
+                if (is_external_alias) continue;
+
+                const path = self.resolveModulePathWithAllocator(task.root_dir, mod_name, worker_alloc) catch continue;
+                local_imports.append(worker_alloc, .{
+                    .module_name = worker_alloc.dupe(u8, mod_name) catch {
+                        worker_alloc.free(path);
+                        continue;
+                    },
+                    .path = path,
+                }) catch {
+                    worker_alloc.free(path);
+                };
+            }
+        }
+
         // Free AST - deinit now handles both internal cleanup and self-destruction
         ast.deinit();
 
@@ -3059,8 +3107,8 @@ pub const Coordinator = struct {
                 .module_name = task.module_name,
                 .path = task.path,
                 .module_env = env,
-                .discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty,
-                .discovered_external_imports = std.ArrayList(DiscoveredExternalImport).empty,
+                .discovered_local_imports = local_imports,
+                .discovered_external_imports = external_imports,
                 .reports = reports,
                 .canonicalize_ns = if (threads_available) @intCast(canon_end - start_time) else 0,
                 .canonicalize_diagnostics_ns = if (threads_available) @intCast(diag_end - diag_start) else 0,

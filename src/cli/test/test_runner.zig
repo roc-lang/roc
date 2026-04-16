@@ -477,7 +477,7 @@ fn runValgrindTests(
             // For valgrind, only run tests that don't use stdin
             var valgrind_safe_count: usize = 0;
             for (specs) |spec| {
-                if (std.mem.indexOf(u8, spec.io_spec, "0<") == null and appMatchesFilter(spec.roc_file, args.app_filter)) {
+                if (std.mem.find(u8, spec.io_spec, "0<") == null and appMatchesFilter(spec.roc_file, args.app_filter)) {
                     valgrind_safe_count += 1;
                 }
             }
@@ -487,7 +487,7 @@ fn runValgrindTests(
             var test_num: usize = 0;
             for (specs) |spec| {
                 // Skip tests that use stdin
-                if (std.mem.indexOf(u8, spec.io_spec, "0<") != null) {
+                if (std.mem.find(u8, spec.io_spec, "0<") != null) {
                     continue;
                 }
 

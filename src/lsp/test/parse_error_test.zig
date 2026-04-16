@@ -41,9 +41,9 @@ test "parse errors are reported as diagnostics" {
 
         // Parse errors should mention the actual issue (unclosed string, parse error, etc.)
         const mentions_parse_issue =
-            std.mem.indexOf(u8, first_diag.message, "UNCLOSED") != null or
-            std.mem.indexOf(u8, first_diag.message, "PARSE") != null or
-            std.mem.indexOf(u8, first_diag.message, "string") != null;
+            std.mem.find(u8, first_diag.message, "UNCLOSED") != null or
+            std.mem.find(u8, first_diag.message, "PARSE") != null or
+            std.mem.find(u8, first_diag.message, "string") != null;
         try std.testing.expect(mentions_parse_issue);
     }
 }

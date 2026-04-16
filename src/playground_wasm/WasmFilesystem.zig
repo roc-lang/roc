@@ -160,7 +160,7 @@ fn listDirWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) CoreCtx.L
 }
 
 fn dirNameWasm(_: ?*anyopaque, _: std.Io, absolute_path: []const u8) ?[]const u8 {
-    if (std.mem.lastIndexOfScalar(u8, absolute_path, '/')) |last_slash| {
+    if (std.mem.findScalarLast(u8, absolute_path, '/')) |last_slash| {
         if (last_slash == 0) {
             return "/";
         }
@@ -170,7 +170,7 @@ fn dirNameWasm(_: ?*anyopaque, _: std.Io, absolute_path: []const u8) ?[]const u8
 }
 
 fn baseNameWasm(_: ?*anyopaque, _: std.Io, absolute_path: []const u8) []const u8 {
-    if (std.mem.lastIndexOfScalar(u8, absolute_path, '/')) |last_slash| {
+    if (std.mem.findScalarLast(u8, absolute_path, '/')) |last_slash| {
         return absolute_path[last_slash + 1 ..];
     }
     return absolute_path;

@@ -130,7 +130,7 @@ pub const DocumentStore = struct {
         var current_line: usize = 0;
         var index: usize = 0;
         while (current_line < line) : (current_line += 1) {
-            const newline_index = std.mem.indexOfScalarPos(u8, text, index, '\n') orelse return error.InvalidPosition;
+            const newline_index = std.mem.findScalarPos(u8, text, index, '\n') orelse return error.InvalidPosition;
             index = newline_index + 1;
         }
 

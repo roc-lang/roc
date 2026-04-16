@@ -172,7 +172,7 @@ fn platform_main() !void {
 
     // Verify the result contains the expected input
     const expected_substring = "Got the following from the host: string from host";
-    if (std.mem.indexOf(u8, result_slice, expected_substring) != null) {
+    if (std.mem.find(u8, result_slice, expected_substring) != null) {
         std.debug.print("\n\x1b[32mSUCCESS\x1b[0m: Result contains expected substring!\n", .{});
     } else {
         std.debug.print("\n\x1b[31mFAIL\x1b[0m: Result does not contain expected substring!\n", .{});

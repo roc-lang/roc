@@ -357,7 +357,10 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
     defer result = aw.toArrayList();
     try tree.toStringPretty(&aw.writer, .include_linecol);
 
-    try std.testing.expect(std.mem.indexOf(u8, result.items, "(expr") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.items, "(type") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.items, "Str") != null);
+    // Verify the output contains the type information
+    const result_str = result.items;
+
+    try testing.expect(std.mem.find(u8, result_str, "(expr") != null);
+    try testing.expect(std.mem.find(u8, result_str, "(type") != null);
+    try testing.expect(std.mem.find(u8, result_str, "Str") != null);
 }

@@ -359,7 +359,7 @@ fn cleanupLegacyPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStat
 /// New version dirs: contain hyphens like "debug-abcd1234"
 fn isLegacyHashDir(name: []const u8) bool {
     // New version directories always contain a hyphen
-    if (std.mem.indexOfScalar(u8, name, '-') != null) {
+    if (std.mem.findScalar(u8, name, '-') != null) {
         return false;
     }
 

@@ -205,7 +205,7 @@ fn hostedStdinLine(ops: *RocOps, result: *RocStr, _: *anyopaque) callconv(.c) vo
 
     // Find newline and trim it (handle both \n and \r\n)
     const line_with_newline = buffer[0..bytes_read];
-    var line = if (std.mem.indexOfScalar(u8, line_with_newline, '\n')) |newline_idx|
+    var line = if (std.mem.findScalar(u8, line_with_newline, '\n')) |newline_idx|
         line_with_newline[0..newline_idx]
     else
         line_with_newline;

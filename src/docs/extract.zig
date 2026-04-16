@@ -334,7 +334,7 @@ pub fn extractModuleDocs(
         const entry = &entries_list.items[i];
 
         // Check if this is a method (name contains ".")
-        if (std.mem.lastIndexOfScalar(u8, entry.name, '.')) |dot_idx| {
+        if (std.mem.findScalarLast(u8, entry.name, '.')) |dot_idx| {
             const parent_name = entry.name[0..dot_idx];
             const method_short_name = entry.name[dot_idx + 1 ..];
 
@@ -464,7 +464,7 @@ fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel
 
     // Also strip "Builtin." prefix from top-level entries and re-parent them.
     // Entries like "Builtin.Bool.decode" survived the earlier hierarchical pass
-    // because lastIndexOf('.') gave parent "Builtin.Bool" which didn't exist.
+    // because findLast('.') gave parent "Builtin.Bool" which didn't exist.
     // First pass: strip "Builtin." prefix from all matching entries
     const prefix = "Builtin.";
     for (entries_list.items) |*entry| {
@@ -482,7 +482,7 @@ fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel
     var j: usize = 0;
     while (j < entries_list.items.len) {
         const entry = &entries_list.items[j];
-        if (std.mem.indexOfScalar(u8, entry.name, '.')) |dot_idx| {
+        if (std.mem.findScalar(u8, entry.name, '.')) |dot_idx| {
             const parent_name = entry.name[0..dot_idx];
             const method_short_name = entry.name[dot_idx + 1 ..];
 
@@ -498,10 +498,15 @@ fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel
             if (parent_idx_opt) |parent_idx| {
                 const parent_ptr = &entries_list.items[parent_idx];
 
-                const method_entry = try moveEntryForReparenting(gpa, entry, method_short_name);
+                // Duplicate the method entry with short name
+                const short_name = try gpa.dupe(u8, method_short_name);
+
+                var method_entry = entry.*;
+                gpa.free(method_entry.name);
+                method_entry.name = short_name;
 
                 // Check if remainder has more dots — if so, use reparentDottedChildInto
-                if (std.mem.indexOfScalar(u8, method_short_name, '.')) |_| {
+                if (std.mem.findScalar(u8, method_short_name, '.')) |_| {
                     var children_list = std.ArrayList(DocModel.DocEntry).empty;
                     for (parent_ptr.children) |c| {
                         try children_list.append(gpa, c);
@@ -514,8 +519,8 @@ fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel
                 }
 
                 // Remove from top-level list (preserving source order)
-                var removed = entries_list.orderedRemove(j);
-                removed.deinit(gpa);
+                gpa.free(entry.children);
+                _ = entries_list.orderedRemove(j);
                 continue;
             }
         }
@@ -547,7 +552,7 @@ fn reparentDottedChild(
     child: DocModel.DocEntry,
 ) !void {
     // Split on first dot
-    const dot_idx = std.mem.indexOfScalar(u8, child.name, '.') orelse {
+    const dot_idx = std.mem.findScalar(u8, child.name, '.') orelse {
         // No dot — this is a direct child. Nothing to re-parent into a subgroup;
         // it stays at top level as-is (shouldn't normally happen for Builtin children).
         try entries_list.append(gpa, child);
@@ -593,7 +598,7 @@ fn reparentDottedChild(
     new_child.name = short_name;
 
     // Check if remainder still has dots (multi-level, e.g. "Dec.abs")
-    if (std.mem.indexOfScalar(u8, remainder, '.')) |_| {
+    if (std.mem.findScalar(u8, remainder, '.')) |_| {
         // Recursively place into sub-children
         // Convert parent's children to an ArrayList temporarily
         var children_list = std.ArrayList(DocModel.DocEntry).empty;
@@ -617,7 +622,7 @@ fn reparentDottedChildInto(
     children_list: *std.ArrayList(DocModel.DocEntry),
     child: DocModel.DocEntry,
 ) !void {
-    const dot_idx = std.mem.indexOfScalar(u8, child.name, '.') orelse {
+    const dot_idx = std.mem.findScalar(u8, child.name, '.') orelse {
         // Leaf — just append
         try children_list.append(gpa, child);
         return;
@@ -659,7 +664,7 @@ fn reparentDottedChildInto(
     gpa.free(child.name);
     new_child.name = short_name;
 
-    if (std.mem.indexOfScalar(u8, remainder, '.')) |_| {
+    if (std.mem.findScalar(u8, remainder, '.')) |_| {
         // Still has dots — recurse deeper
         var sub_children = std.ArrayList(DocModel.DocEntry).empty;
         for (p.children) |c| {

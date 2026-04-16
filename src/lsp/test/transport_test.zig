@@ -37,7 +37,7 @@ test "transport decodes and encodes LSP frames" {
     try transport.sendJson(response_body);
 
     const written = output_buffer[0..transport.writer.end];
-    const separator_index = std.mem.indexOf(u8, written, "\r\n\r\n") orelse unreachable;
+    const separator_index = std.mem.find(u8, written, "\r\n\r\n") orelse unreachable;
     const body = written[(separator_index + 4)..];
 
     var parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
@@ -97,8 +97,8 @@ test "transport logs traffic when debug file is provided" {
     const contents = try file_reader.interface.allocRemaining(allocator, .unlimited);
     defer allocator.free(contents);
 
-    try std.testing.expect(std.mem.indexOf(u8, contents, "OUT") != null);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"jsonrpc\"") != null);
+    try std.testing.expect(std.mem.find(u8, contents, "OUT") != null);
+    try std.testing.expect(std.mem.find(u8, contents, "\"jsonrpc\"") != null);
 }
 
 test "transport rejects oversized header lines" {

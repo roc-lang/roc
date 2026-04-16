@@ -30,7 +30,7 @@ pub fn validateUrl(url: []const u8) DownloadError![]const u8 {
     }
 
     // Extract the last path segment (should be the hash)
-    const last_slash = std.mem.lastIndexOf(u8, url, "/") orelse return error.NoHashInUrl;
+    const last_slash = std.mem.findLast(u8, url, "/") orelse return error.NoHashInUrl;
     const hash_part = url[last_slash + 1 ..];
 
     // Remove .tar.zst extension if present
