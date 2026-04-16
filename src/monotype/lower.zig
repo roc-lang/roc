@@ -8997,16 +8997,16 @@ pub const Lowerer = struct {
         source_solved_var: ?Var,
     ) ?Var {
         const root = source_solved_var orelse return null;
-        const typed_cir_module = self.ctx.typedCirModule(module_idx);
         const resolved = type_scope.typeStoreConst().resolveVar(root);
         return switch (resolved.desc.content) {
             .structure => |flat| switch (flat) {
                 .nominal_type => |nominal| blk: {
-                    if (!std.mem.eql(
-                        u8,
+                    const defining = self.ctx.source_modules.resolveExternalIdent(
+                        type_scope.getIdent(nominal.origin_module),
                         type_scope.getIdent(nominal.ident.ident_idx),
-                        typed_cir_module.getIdent(typed_cir_module.commonIdents().list),
-                    )) {
+                    ) orelse return null;
+                    const defining_module = self.ctx.typedCirModule(defining.module_idx);
+                    if (!defining.ident.eql(defining_module.commonIdents().list)) {
                         break :blk self.lookupListElemSolvedVar(module_idx, type_scope, type_scope.typeStoreConst().getNominalBackingVar(nominal));
                     }
                     const args = type_scope.typeStoreConst().sliceNominalArgs(nominal);
