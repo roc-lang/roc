@@ -2928,11 +2928,9 @@ pub const Lowerer = struct {
         errdefer self.allocator.free(arg_tys);
 
         for (arg_exprs, 0..) |arg_expr_idx, i| {
-            const expected_arg_var = try self.requireFunctionArgVar(module_idx, call_scope, cloned_fn_var, i);
-            arg_vars[i] = expected_arg_var;
-            const actual_arg_var = self.requireExprResultVar(module_idx, type_scope, arg_expr_idx);
-            try self.alignWorkspaceVarToCanonical(call_scope, actual_arg_var, expected_arg_var);
-            arg_tys[i] = try self.instantiateVarType(module_idx, call_scope, expected_arg_var);
+            const source_arg_var = self.ctx.typedCirModule(module_idx).exprType(arg_expr_idx);
+            arg_vars[i] = try self.scopeVar(call_scope, module_idx, source_arg_var);
+            arg_tys[i] = try self.instantiateSourceVarType(module_idx, call_scope, source_arg_var);
         }
 
         const fn_ty = try self.instantiateVarType(module_idx, call_scope, cloned_fn_var);
