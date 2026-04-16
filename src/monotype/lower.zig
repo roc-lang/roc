@@ -175,14 +175,6 @@ const Ctx = struct {
             return self.source_module.exprIdxFromTypeVar(var_);
         }
 
-        pub fn resolveAttachedMethodTargetByText(
-            self: @This(),
-            type_name: []const u8,
-            method_name: []const u8,
-        ) ?typed_cir.Modules.ResolvedMethodTarget {
-            return self.source_module.resolveAttachedMethodTargetByText(type_name, method_name);
-        }
-
         pub fn getStatement(self: @This(), idx: CIR.Statement.Idx) CIR.Statement {
             return self.source_module.getStatement(idx);
         }
@@ -8188,7 +8180,8 @@ pub const Lowerer = struct {
 
         const backing_var = type_scope.typeStoreConst().getNominalBackingVar(nominal);
         const to_inspect_symbol = blk: {
-            const target = defining.module.resolveAttachedMethodTargetByText(
+            const target = self.ctx.source_modules.resolveAttachedMethodTargetByName(
+                defining.module_idx,
                 defining.module.getIdent(defining_ident),
                 "to_inspect",
             ) orelse break :blk symbol_mod.Symbol.none;

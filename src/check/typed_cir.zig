@@ -183,6 +183,15 @@ pub const Modules = struct {
         );
     }
 
+    pub fn resolveAttachedMethodTargetByName(
+        self: @This(),
+        module_idx: u32,
+        type_name: []const u8,
+        method_name: []const u8,
+    ) ?ResolvedMethodTarget {
+        return self.module(module_idx).resolveAttachedMethodTargetByText(type_name, method_name);
+    }
+
     pub fn resolveTopLevelDefByName(
         self: @This(),
         module_idx: u32,
