@@ -2046,7 +2046,7 @@ pub const Lowerer = struct {
             "monotype lambda invariant violated: missing source function for curried closure type in module {d}",
             .{module_idx},
         );
-        const total_args = self.functionArgCount(module_idx, type_scope, function_var);
+        const total_args = self.functionArgCountInStore(type_scope.typeStoreConst(), function_var);
         if (next_arg_index + remaining_arity > total_args) {
             return debugPanic(
                 "monotype lambda invariant violated: lambda arg range [{d}, {d}) exceeded function arity {d} in module {d}",
@@ -12155,15 +12155,6 @@ pub const Lowerer = struct {
         return try self.instantiateVarType(module_idx, type_scope, arg_var);
     }
 
-    fn functionArgCount(
-        self: *Lowerer,
-        _: u32,
-        type_scope: *TypeCloneScope,
-        fn_var: Var,
-    ) usize {
-        return self.functionArgCountInStore(type_scope.typeStoreConst(), fn_var);
-    }
-
     fn functionArgCountInStore(
         self: *const Lowerer,
         store: *const types.Store,
@@ -12374,17 +12365,6 @@ pub const Lowerer = struct {
             .ty = self.lookupKnownSymbolType(symbol) orelse expected_ty,
             .data = .{ .var_ = symbol },
         });
-    }
-
-    fn lookupScopedFunctionArgVar(
-        self: *const Lowerer,
-        module_idx: u32,
-        type_scope: *const TypeCloneScope,
-        fn_var: Var,
-        arg_index: usize,
-    ) ?Var {
-        const scoped_fn_var = type_scope.source_var_map.get(self.sourceTypeKey(module_idx, fn_var)) orelse fn_var;
-        return self.lookupFunctionArgVar(module_idx, type_scope, scoped_fn_var, arg_index);
     }
 
     fn lookupTopLevelSymbol(self: *const Lowerer, module_idx: u32, pattern_idx: CIR.Pattern.Idx) ?symbol_mod.Symbol {
