@@ -183,6 +183,14 @@ pub const Modules = struct {
         );
     }
 
+    pub fn resolveTopLevelDefByName(
+        self: @This(),
+        module_idx: u32,
+        def_name: []const u8,
+    ) ?CIR.Def.Idx {
+        return self.module(module_idx).topLevelDefByText(def_name);
+    }
+
 };
 
 pub const Module = struct {
@@ -322,6 +330,10 @@ pub const Module = struct {
     pub fn topLevelDefByText(self: @This(), text: []const u8) ?CIR.Def.Idx {
         const ident = self.findCommonIdent(text) orelse return null;
         return self.topLevelDefByIdent(ident);
+    }
+
+    pub fn isBuiltinStrInspectDef(self: @This(), def_idx: CIR.Def.Idx) bool {
+        return self.topLevelDefByText("Builtin.Str.inspect") == def_idx;
     }
 
     pub fn exprType(_: @This(), idx: CIR.Expr.Idx) Var {

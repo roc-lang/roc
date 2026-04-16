@@ -2496,8 +2496,7 @@ pub const Lowerer = struct {
                 }
                 const req = requires_items[req_idx];
                 const required_name = self.ctx.typedCirModule(module_idx).getIdent(req.ident);
-                const app_module = self.ctx.typedCirModule(app_module_idx);
-                const app_def_idx = app_module.topLevelDefByText(required_name) orelse debugPanic(
+                const app_def_idx = self.ctx.source_modules.resolveTopLevelDefByName(app_module_idx, required_name) orelse debugPanic(
                     "monotype invariant violated: required lookup '{s}' missing def in app module {d}",
                     .{ required_name, app_module_idx },
                 );
@@ -2853,7 +2852,7 @@ pub const Lowerer = struct {
         if (module_idx != self.ctx.builtin_module_idx) return false;
 
         const typed_cir_module = self.ctx.typedCirModule(module_idx);
-        return typed_cir_module.topLevelDefByText("Builtin.Str.inspect") == def_idx;
+        return typed_cir_module.isBuiltinStrInspectDef(def_idx);
     }
 
     fn lowerNumericIntLiteralData(
