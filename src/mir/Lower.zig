@@ -7070,9 +7070,13 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
             }
             unreachable;
         };
-        const expected_arg_monotypes = try self.expectedArgMonotypesForProcInst(proc_inst_id, self.current_module_idx);
         const low_level_op = self.procInstLowLevelWrapperOp(proc_inst_id);
+        // Lower the receiver BEFORE obtaining the arg monotypes slice, because
+        // recursive lowering (e.g. nested dot access) can grow the monotype
+        // store and invalidate slices into it.
         const receiver: MIR.ExprId = if (uses_runtime_receiver) try self.lowerExpr(da.receiver) else .none;
+        const expected_arg_monotypes = try self.allocator.dupe(Monotype.Idx, try self.expectedArgMonotypesForProcInst(proc_inst_id, self.current_module_idx));
+        defer self.allocator.free(expected_arg_monotypes);
 
         const receiver_param_offset: usize = if (uses_runtime_receiver) 1 else 0;
 
@@ -7287,7 +7291,8 @@ fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR
         }
         unreachable;
     };
-    const expected_arg_monotypes = try self.expectedArgMonotypesForProcInst(proc_inst_id, self.current_module_idx);
+    const expected_arg_monotypes = try self.allocator.dupe(Monotype.Idx, try self.expectedArgMonotypesForProcInst(proc_inst_id, self.current_module_idx));
+    defer self.allocator.free(expected_arg_monotypes);
 
     const args_top = self.scratch_expr_ids.top();
     defer self.scratch_expr_ids.clearFrom(args_top);

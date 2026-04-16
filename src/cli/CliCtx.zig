@@ -22,7 +22,7 @@
 //!   }
 //!
 //!   // At top level:
-//!   var io = Io.init();
+//!   var io = Io.create(std_io);
 //!   var ctx = CliCtx.init(gpa, arena, &io, .build);
 //!   ctx.initIo();  // Initialize I/O writers after ctx is at its final location
 //!   defer ctx.deinit();

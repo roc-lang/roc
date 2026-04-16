@@ -309,7 +309,7 @@ test "libc detection integration test" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    var io = Io.init();
+    var io = Io.create(std.testing.io);
     var ctx = CliCtx.init(std.testing.allocator, arena.allocator(), &io, .build);
     ctx.initIo();
     defer ctx.deinit();
