@@ -8720,26 +8720,23 @@ pub const Lowerer = struct {
                 return std.mem.order(u8, idents.getText(a.name), idents.getText(b.name)) == .lt;
             }
         }.lessThan);
-        const canonical_len = try self.dedupeSortedLoweredTags(lowered_tags.items);
+        self.assertDistinctSortedLoweredTags(lowered_tags.items);
 
         return .{ .tag_union = .{
-            .tags = try self.ctx.types.dupeTags(lowered_tags.items[0..canonical_len]),
+            .tags = try self.ctx.types.dupeTags(lowered_tags.items),
         } };
     }
 
-    fn dedupeSortedLoweredTags(
+    fn assertDistinctSortedLoweredTags(
         self: *Lowerer,
-        tags: []type_mod.Tag,
-    ) std.mem.Allocator.Error!usize {
-        if (tags.len <= 1) return tags.len;
+        tags: []const type_mod.Tag,
+    ) void {
+        if (tags.len <= 1) return;
 
-        var write_index: usize = 1;
         var prev = tags[0];
 
         for (tags[1..]) |tag| {
             if (tag.name != prev.name) {
-                tags[write_index] = tag;
-                write_index += 1;
                 prev = tag;
                 continue;
             }
@@ -8754,9 +8751,8 @@ pub const Lowerer = struct {
                     debugPanic("monotype invariant violated: duplicate tag constructors had different payload types after row flattening", .{});
                 }
             }
+            debugPanic("monotype invariant violated: duplicate tag constructor reached monotype row flattening", .{});
         }
-
-        return write_index;
     }
 
     fn lowerRecordContent(
@@ -9860,26 +9856,14 @@ pub const Lowerer = struct {
         return switch (self.ctx.types.getType(record_ty)) {
             .record => |record| blk: {
                 const fields = record.fields;
+                self.assertSortedRecordFields(fields);
                 if (field_index >= fields.len) {
                     debugPanic(
                         "monotype pattern invariant violated: frozen record source type missing field index {d}",
                         .{field_index},
                     );
                 }
-                const sorted = self.allocator.alloc(type_mod.Field, fields.len) catch
-                    debugPanic("monotype invariant violated: failed to allocate record field ordering", .{});
-                defer self.allocator.free(sorted);
-                @memcpy(sorted, fields);
-                std.mem.sort(type_mod.Field, sorted, &self.ctx.idents, struct {
-                    fn lessThan(idents: *const base.Ident.Store, a: type_mod.Field, b: type_mod.Field) bool {
-                        return std.mem.lessThan(
-                            u8,
-                            idents.getText(a.name),
-                            idents.getText(b.name),
-                        );
-                    }
-                }.lessThan);
-                break :blk sorted[field_index].ty;
+                break :blk fields[field_index].ty;
             },
             else => debugPanic(
                 "monotype pattern invariant violated: expected frozen record source type, found non-record type {d}",
@@ -9898,25 +9882,32 @@ pub const Lowerer = struct {
             else => debugPanic("monotype invariant violated: expected record type for field index lookup", .{}),
         };
         const fields = record.fields;
-        const sorted = self.allocator.alloc(type_mod.Field, fields.len) catch
-            debugPanic("monotype invariant violated: failed to allocate record field ordering", .{});
-        defer self.allocator.free(sorted);
-        @memcpy(sorted, fields);
-        std.mem.sort(type_mod.Field, sorted, &self.ctx.idents, struct {
-            fn lessThan(idents: *const base.Ident.Store, a: type_mod.Field, b: type_mod.Field) bool {
-                return std.mem.lessThan(
-                    u8,
-                    idents.getText(a.name),
-                    idents.getText(b.name),
-                );
-            }
-        }.lessThan);
-        for (sorted, 0..) |field, i| {
+        self.assertSortedRecordFields(fields);
+        for (fields, 0..) |field, i| {
             if (std.mem.eql(u8, self.ctx.idents.getText(field.name), field_name_text)) {
                 return @intCast(i);
             }
         }
         debugPanic("monotype invariant violated: missing record field index in monotype type", .{});
+    }
+
+    fn assertSortedRecordFields(
+        self: *const Lowerer,
+        fields: []const type_mod.Field,
+    ) void {
+        if (fields.len <= 1) return;
+        var prev = fields[0];
+        for (fields[1..]) |field| {
+            switch (std.mem.order(
+                u8,
+                self.ctx.idents.getText(prev.name),
+                self.ctx.idents.getText(field.name),
+            )) {
+                .lt => prev = field,
+                .eq => debugPanic("monotype invariant violated: duplicate frozen record field reached field lookup", .{}),
+                .gt => debugPanic("monotype invariant violated: frozen record fields were not pre-sorted", .{}),
+            }
+        }
     }
 
     fn requireRecordFieldIndexForSolvedVar(
