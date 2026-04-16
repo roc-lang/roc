@@ -6790,7 +6790,7 @@ pub const Lowerer = struct {
     }
 
     fn exprVarIsErroneous(self: *Lowerer, module_idx: u32, expr_idx: CIR.Expr.Idx) bool {
-        return self.ctx.typedCirModule(module_idx).typeStoreConst().resolveVar(self.ctx.typedCirModule(module_idx).exprType(expr_idx)).desc.content == .err;
+        return self.ctx.typedCirModule(module_idx).exprHasErrType(expr_idx);
     }
 
     fn callRootCalleeIsRuntimeError(self: *const Lowerer, module_idx: u32, func_expr_idx: CIR.Expr.Idx) bool {
@@ -7859,16 +7859,8 @@ pub const Lowerer = struct {
             else => {},
         }
 
-        const resolved = self.ctx.typedCirModule(module_idx).typeStoreConst().resolveVar(self.ctx.typedCirModule(module_idx).exprType(expr_idx));
-        if (resolved.desc.content == .flex) {
-            const constraints = self.ctx.typedCirModule(module_idx).typeStoreConst().sliceStaticDispatchConstraints(
-                resolved.desc.content.flex.constraints,
-            );
-            for (constraints) |constraint| {
-                if (constraint.origin == .from_numeral) {
-                    return self.makePrimitiveType(.dec);
-                }
-            }
+        if (self.ctx.typedCirModule(module_idx).exprDefaultsToDec(expr_idx)) {
+            return self.makePrimitiveType(.dec);
         }
 
         return lowered;
@@ -9723,10 +9715,9 @@ pub const Lowerer = struct {
         source_module_idx: u32,
         source_var: Var,
     ) TypeScope.TypeKey {
-        const resolved = self.ctx.typedCirModule(source_module_idx).typeStoreConst().resolveVar(source_var);
         return .{
             .module_idx = source_module_idx,
-            .var_ = resolved.var_,
+            .var_ = self.ctx.typedCirModule(source_module_idx).sourceVarRoot(source_var),
         };
     }
 
@@ -9881,27 +9872,14 @@ pub const Lowerer = struct {
         source_var: Var,
     ) DispatchReceiverIdentity {
         const source_module = self.ctx.typedCirModule(source_module_idx);
-        const source_store = source_module.typeStoreConst();
-        const resolved = source_store.resolveVar(source_var);
-        return switch (resolved.desc.content) {
-            .alias => |alias| .{
-                .module_idx = self.ctx.findModuleIdxByName(source_module.getIdent(alias.origin_module)),
-                .type_name = source_module.getIdent(alias.ident.ident_idx),
-            },
-            .structure => |flat| switch (flat) {
-                .nominal_type => |nominal| .{
-                    .module_idx = self.ctx.findModuleIdxByName(source_module.getIdent(nominal.origin_module)),
-                    .type_name = source_module.getIdent(nominal.ident.ident_idx),
-                },
-                else => debugPanic(
-                    "monotype static dispatch invariant violated: source receiver var {d} is not nominal in module {d}",
-                    .{ @intFromEnum(source_var), source_module_idx },
-                ),
-            },
-            else => debugPanic(
+        const receiver = source_module.dispatchReceiverIdentity(source_var) orelse
+            debugPanic(
                 "monotype static dispatch invariant violated: source receiver var {d} is not nominal in module {d}",
                 .{ @intFromEnum(source_var), source_module_idx },
-            ),
+            );
+        return .{
+            .module_idx = self.ctx.findModuleIdxByName(source_module.getIdent(receiver.origin_module)),
+            .type_name = source_module.getIdent(receiver.type_ident),
         };
     }
 

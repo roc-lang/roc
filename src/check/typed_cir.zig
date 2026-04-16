@@ -155,6 +155,11 @@ pub const Module = struct {
         }
     };
 
+    pub const DispatchReceiverIdentity = struct {
+        origin_module: Ident.Idx,
+        type_ident: Ident.Idx,
+    };
+
     fn env(self: @This()) *ModuleEnv {
         return self.data_store.env;
     }
@@ -258,6 +263,24 @@ pub const Module = struct {
         return ModuleEnv.varFrom(idx);
     }
 
+    pub fn exprHasErrType(self: @This(), idx: CIR.Expr.Idx) bool {
+        return self.typeStoreConst().resolveVar(self.exprType(idx)).desc.content == .err;
+    }
+
+    pub fn exprDefaultsToDec(self: @This(), idx: CIR.Expr.Idx) bool {
+        const resolved = self.typeStoreConst().resolveVar(self.exprType(idx));
+        return switch (resolved.desc.content) {
+            .flex => |flex| blk: {
+                const constraints = self.typeStoreConst().sliceStaticDispatchConstraints(flex.constraints);
+                for (constraints) |constraint| {
+                    if (constraint.origin == .from_numeral) break :blk true;
+                }
+                break :blk false;
+            },
+            else => false,
+        };
+    }
+
     pub fn curriedFnShape(self: @This(), fn_var: Var) Allocator.Error!CurriedFnShape {
         var args = std.ArrayList(Var).empty;
         errdefer args.deinit(self.allocator);
@@ -265,6 +288,28 @@ pub const Module = struct {
         return .{
             .args = try args.toOwnedSlice(self.allocator),
             .ret = ret,
+        };
+    }
+
+    pub fn sourceVarRoot(self: @This(), var_: Var) Var {
+        return self.typeStoreConst().resolveVar(var_).var_;
+    }
+
+    pub fn dispatchReceiverIdentity(self: @This(), source_var: Var) ?DispatchReceiverIdentity {
+        const resolved = self.typeStoreConst().resolveVar(source_var);
+        return switch (resolved.desc.content) {
+            .alias => |alias| .{
+                .origin_module = alias.origin_module,
+                .type_ident = alias.ident.ident_idx,
+            },
+            .structure => |flat| switch (flat) {
+                .nominal_type => |nominal| .{
+                    .origin_module = nominal.origin_module,
+                    .type_ident = nominal.ident.ident_idx,
+                },
+                else => null,
+            },
+            else => null,
         };
     }
 
