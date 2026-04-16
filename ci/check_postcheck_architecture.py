@@ -23,6 +23,11 @@ RULES = (
     ("workspace-ret", re.compile(r"\blookupFunctionNodeRetVar\b")),
     ("workspace-curried-ret", re.compile(r"\blookupCurriedFunctionFinalRetVar\b")),
     ("workspace-call-result", re.compile(r"\bmaterializeAppliedFunctionResultVar\b")),
+    ("workspace-align", re.compile(r"\balignSourceVarWithWorkspaceVar\b")),
+    ("workspace-bind-content", re.compile(r"\bbindSourceContentToExistingWorkspace\b")),
+    ("workspace-materialize-content", re.compile(r"\bmaterializeSourceContentIntoWorkspaceVar\b")),
+    ("workspace-merge-flex", re.compile(r"\bmergeSourceFlexLikeIntoWorkspaceVar\b")),
+    ("workspace-compute-call-result", re.compile(r"\bcomputeAppliedFunctionResultVar\b")),
     ("canonical-source-lookup", re.compile(r"\blookupFnByCanonicalSource\b")),
 )
 

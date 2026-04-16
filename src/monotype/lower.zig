@@ -660,7 +660,6 @@ pub const Lowerer = struct {
         allocator: std.mem.Allocator,
         workspace: *TypeWorkspace,
         owns_workspace: bool,
-        workspace_module_idx: u32,
         copied_source_var_map: type_clone_source.ScopedVarMapping,
         source_var_map: std.AutoHashMap(TypeKey, Var),
         instantiation_var_map: std.AutoHashMap(Var, Var),
@@ -691,13 +690,11 @@ pub const Lowerer = struct {
             if (parent) |scope| {
                 self.workspace = scope.workspace;
                 self.owns_workspace = false;
-                self.workspace_module_idx = scope.workspace_module_idx;
             } else {
                 self.workspace = try allocator.create(TypeWorkspace);
                 errdefer allocator.destroy(self.workspace);
                 self.workspace.* = try TypeWorkspace.initEmpty(allocator, module);
                 self.owns_workspace = true;
-                self.workspace_module_idx = self.workspace.module_idx;
             }
 
             self.initWithRankBehavior(.ignore_rank);
@@ -2959,10 +2956,11 @@ pub const Lowerer = struct {
         };
         const applied_result_tys = try self.collectCurriedAppliedResultTypes(fn_ty, applied_arg_count);
         errdefer self.allocator.free(applied_result_tys);
-        const result_ty = if (applied_result_tys.len == 0) fn_ty else applied_result_tys[applied_result_tys.len - 1];
-
-        const call_result_var = self.requireExprResultVar(module_idx, type_scope, call_expr_idx);
-        try self.assertAppliedFunctionResultCompatible(module_idx, call_scope, call_result_var, cloned_fn_var, applied_arg_count);
+        const result_ty = try self.instantiateSourceVarType(
+            module_idx,
+            call_scope,
+            self.ctx.typedCirModule(module_idx).exprType(call_expr_idx),
+        );
 
         return .{
             .call_scope = call_scope,
@@ -12119,82 +12117,6 @@ pub const Lowerer = struct {
         };
     }
 
-    fn lookupFunctionRetVar(
-        self: *const Lowerer,
-        _: u32,
-        type_scope: *const TypeCloneScope,
-        fn_var: ?Var,
-    ) ?Var {
-        return self.lookupFunctionRetVarInStore(type_scope.typeStoreConst(), fn_var);
-    }
-
-    fn computeAppliedFunctionResultVar(
-        _: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeCloneScope,
-        fn_var: Var,
-        applied_arg_count: usize,
-        result_var: Var,
-    ) std.mem.Allocator.Error!Var {
-        var remaining = applied_arg_count;
-        var current = fn_var;
-        while (true) {
-            const resolved = type_scope.typeStoreConst().resolveVar(current);
-            switch (resolved.desc.content) {
-                .alias => |alias| {
-                    current = type_scope.typeStoreConst().getAliasBackingVar(alias);
-                },
-                .structure => |flat| switch (flat) {
-                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                        const args = type_scope.typeStoreConst().sliceVars(func.args);
-                        if (args.len == 0) {
-                            if (remaining == 1) return func.ret;
-                            if (remaining == 0) return current;
-                            debugPanic(
-                                "monotype invariant violated: attempted to apply {d} args to nullary function in module {d}",
-                                .{ remaining, module_idx },
-                            );
-                        }
-                        if (remaining < args.len) {
-                            if (remaining == 0) return current;
-
-                            const residual_args = args[remaining..];
-                            const resolved_result = type_scope.typeStoreConst().resolveVar(result_var);
-                            switch (resolved_result.desc.content) {
-                                .flex, .rigid, .err => {
-                                    const content = switch (flat) {
-                                        .fn_pure => try type_scope.typeStoreMut().mkFuncPure(residual_args, func.ret),
-                                        .fn_effectful => try type_scope.typeStoreMut().mkFuncEffectful(residual_args, func.ret),
-                                        .fn_unbound => try type_scope.typeStoreMut().mkFuncUnbound(residual_args, func.ret),
-                                        else => unreachable,
-                                    };
-                                    try type_scope.typeStoreMut().dangerousSetVarDesc(resolved_result.var_, .{
-                                        .content = content,
-                                        .rank = types.Rank.generalized,
-                                    });
-                                },
-                                else => {},
-                            }
-                            return resolved_result.var_;
-                        }
-
-                        remaining -= args.len;
-                        if (remaining == 0) return func.ret;
-                        current = func.ret;
-                    },
-                    else => debugPanic(
-                        "monotype invariant violated: attempted to compute applied-call result from non-function workspace content",
-                        .{},
-                    ),
-                },
-                else => debugPanic(
-                    "monotype invariant violated: attempted to compute applied-call result from non-structural workspace content",
-                    .{},
-                ),
-            }
-        }
-    }
-
     fn assertWorkspaceVarTypesEqual(
         self: *Lowerer,
         module_idx: u32,
@@ -12227,35 +12149,6 @@ pub const Lowerer = struct {
                 .{ module_idx, @intFromEnum(actual_var), actual_copy, @intFromEnum(expected_var), expected_copy },
             );
         }
-    }
-
-    fn assertAppliedFunctionResultCompatible(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeCloneScope,
-        result_var: Var,
-        fn_var_opt: ?Var,
-        applied_arg_count: usize,
-    ) std.mem.Allocator.Error!void {
-        const fn_var = fn_var_opt orelse debugPanic(
-            "monotype invariant violated: missing function var for applied call result in module {d}",
-            .{module_idx},
-        );
-        const total_args = self.functionArgCount(module_idx, type_scope, fn_var);
-        if (applied_arg_count > total_args) {
-            return debugPanic(
-                "monotype invariant violated: applied {d} args to function with arity {d} in module {d}",
-                .{ applied_arg_count, total_args, module_idx },
-            );
-        }
-        const expected_result_var = try self.computeAppliedFunctionResultVar(
-            module_idx,
-            type_scope,
-            fn_var,
-            applied_arg_count,
-            result_var,
-        );
-        try self.alignWorkspaceVarToCanonical(type_scope, result_var, expected_result_var);
     }
 
     fn requireFunctionArgType(
