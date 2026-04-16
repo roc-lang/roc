@@ -1793,7 +1793,7 @@ pub const Lowerer = struct {
             try self.buildRemainingCurriedClosureTypeFromFunctionType(
                 module_idx,
                 type_scope,
-                source_fn_var,
+                source_fn_shape.args,
                 next_arg_index + 1,
                 remaining_after_current,
                 source_result_ty,
@@ -1997,16 +1997,12 @@ pub const Lowerer = struct {
         self: *Lowerer,
         module_idx: u32,
         type_scope: *TypeScope,
-        source_fn_var: ?Var,
+        source_arg_vars: []const Var,
         next_arg_index: usize,
         remaining_arity: usize,
         final_result_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!type_mod.TypeId {
-        const function_var = source_fn_var orelse debugPanic(
-            "monotype lambda invariant violated: missing source function for curried closure type in module {d}",
-            .{module_idx},
-        );
-        const total_args = self.functionArgCountInStore(type_scope.typeStoreConst(), function_var);
+        const total_args = source_arg_vars.len;
         if (next_arg_index + remaining_arity > total_args) {
             return debugPanic(
                 "monotype lambda invariant violated: lambda arg range [{d}, {d}) exceeded function arity {d} in module {d}",
@@ -2021,7 +2017,11 @@ pub const Lowerer = struct {
         defer self.allocator.free(arg_tys);
 
         for (0..remaining_arity) |i| {
-            arg_tys[i] = try self.requireFunctionArgType(module_idx, type_scope, function_var, next_arg_index + i);
+            arg_tys[i] = try self.instantiateSourceVarType(
+                module_idx,
+                type_scope,
+                source_arg_vars[next_arg_index + i],
+            );
         }
 
         var actual_ret_ty = final_result_ty;
@@ -2283,18 +2283,13 @@ pub const Lowerer = struct {
 
         const applied_arg_count = blk: {
             if (arg_exprs.len != 0) break :blk arg_exprs.len;
-            const store = call_scope.typeStoreConst();
-            if (self.lookupFunctionArgVarInStore(store, cloned_fn_var, 0) == null) {
-                if (self.lookupFunctionRetVarInStore(store, cloned_fn_var) != null) break :blk 1;
-                debugPanic(
+            break :blk switch (self.ctx.types.getType(fn_ty)) {
+                .func => 1,
+                else => debugPanic(
                     "monotype invariant violated: attempted to lower a call with no args to a non-function in module {d}",
                     .{module_idx},
-                );
-            }
-            debugPanic(
-                "monotype invariant violated: attempted to lower a call with no args to a non-nullary function in module {d}",
-                .{module_idx},
-            );
+                ),
+            };
         };
         const applied_result_tys = try self.collectCurriedAppliedResultTypes(fn_ty, applied_arg_count);
         errdefer self.allocator.free(applied_result_tys);
@@ -9683,76 +9678,6 @@ pub const Lowerer = struct {
         return top_level_symbol;
     }
 
-    fn lookupFunctionArgVarInStore(
-        self: *const Lowerer,
-        store: *const types.Store,
-        fn_var: Var,
-        arg_index: usize,
-    ) ?Var {
-        const resolved = store.resolveVar(fn_var);
-        return switch (resolved.desc.content) {
-            .structure => |flat| switch (flat) {
-                .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
-                    const args = store.sliceVars(func.args);
-                    if (arg_index >= args.len) break :blk null;
-                    break :blk args[arg_index];
-                },
-                else => null,
-            },
-            .alias => |alias| self.lookupFunctionArgVarInStore(store, store.getAliasBackingVar(alias), arg_index),
-            else => null,
-        };
-    }
-
-    fn lookupCurriedFunctionArgVarInStore(
-        self: *const Lowerer,
-        store: *const types.Store,
-        fn_var: ?Var,
-        arg_index: usize,
-    ) ?Var {
-        const function_var = fn_var orelse return null;
-        if (self.lookupFunctionArgVarInStore(store, function_var, 0) == null) {
-            return null;
-        }
-
-        var remaining = arg_index;
-        var current = function_var;
-        while (true) {
-            const resolved = store.resolveVar(current);
-            const func = switch (resolved.desc.content) {
-                .structure => |flat| switch (flat) {
-                    .fn_pure, .fn_effectful, .fn_unbound => |fn_info| fn_info,
-                    else => return null,
-                },
-                .alias => |alias| {
-                    current = store.getAliasBackingVar(alias);
-                    continue;
-                },
-                else => return null,
-            };
-            const args = store.sliceVars(func.args);
-            if (remaining < args.len) return args[remaining];
-            remaining -= args.len;
-            const ret_var = func.ret;
-            if (self.lookupFunctionArgVarInStore(store, ret_var, 0) == null) return null;
-            current = ret_var;
-        }
-    }
-
-    fn lookupCurriedFunctionResultVarInStore(
-        self: *const Lowerer,
-        store: *const types.Store,
-        fn_var: ?Var,
-    ) ?Var {
-        const function_var = fn_var orelse return null;
-        var current = function_var;
-        while (true) {
-            const ret_var = self.lookupFunctionRetVarInStore(store, current) orelse return null;
-            if (self.lookupFunctionArgVarInStore(store, ret_var, 0) == null) return ret_var;
-            current = ret_var;
-        }
-    }
-
     fn lookupSpecializedExprVar(
         self: *const Lowerer,
         module_idx: u32,
@@ -9980,80 +9905,6 @@ pub const Lowerer = struct {
         };
     }
 
-
-    fn lookupFunctionRetVarInStore(
-        self: *const Lowerer,
-        store: *const types.Store,
-        fn_var: ?Var,
-    ) ?Var {
-        const var_ = fn_var orelse return null;
-        const resolved = store.resolveVar(var_);
-        return switch (resolved.desc.content) {
-            .structure => |flat| switch (flat) {
-                .fn_pure, .fn_effectful, .fn_unbound => |func| func.ret,
-                else => null,
-            },
-            .alias => |alias| self.lookupFunctionRetVarInStore(store, store.getAliasBackingVar(alias)),
-            else => null,
-        };
-    }
-    fn requireFunctionArgType(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeScope,
-        fn_var: ?Var,
-        arg_index: usize,
-    ) std.mem.Allocator.Error!type_mod.TypeId {
-        const function_var = fn_var orelse debugPanic(
-            "monotype invariant violated: missing specialized function var in module {d}",
-            .{module_idx},
-        );
-        if (self.lookupFunctionArgVarInStore(type_scope.typeStoreConst(), function_var, 0) == null) {
-            if (arg_index == 0) return self.makeUnitType();
-            return debugPanic(
-                "monotype invariant violated: missing function arg {d} in module {d}",
-                .{ arg_index, module_idx },
-            );
-        }
-        const arg_var = self.lookupCurriedFunctionArgVarInStore(type_scope.typeStoreConst(), function_var, arg_index) orelse
-            debugPanic("monotype invariant violated: missing function arg {d} in module {d}", .{ arg_index, module_idx });
-        return try self.instantiateVarType(module_idx, type_scope, arg_var);
-    }
-
-    fn functionArgCountInStore(
-        self: *const Lowerer,
-        store: *const types.Store,
-        fn_var: Var,
-    ) usize {
-        if (self.lookupFunctionArgVarInStore(store, fn_var, 0) == null) {
-            if (self.lookupFunctionRetVarInStore(store, fn_var) != null) return 1;
-            debugPanic(
-                "monotype invariant violated: attempted to read function arity from non-function content",
-                .{},
-            );
-        }
-        var count: usize = 0;
-        var current = fn_var;
-        while (true) {
-            const resolved = store.resolveVar(current);
-            const func = switch (resolved.desc.content) {
-                .structure => |flat| switch (flat) {
-                    .fn_pure, .fn_effectful, .fn_unbound => |fn_info| fn_info,
-                    else => return count,
-                },
-                .alias => |alias| {
-                    current = store.getAliasBackingVar(alias);
-                    continue;
-                },
-                else => return count,
-            };
-            const args = store.sliceVars(func.args);
-            count += args.len;
-            const ret_var = func.ret;
-            if (self.lookupFunctionArgVarInStore(store, ret_var, 0) == null) return count;
-            current = ret_var;
-        }
-    }
 
     fn lookupOrSpecializeExternal(
         self: *Lowerer,
