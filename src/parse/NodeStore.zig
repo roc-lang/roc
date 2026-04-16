@@ -936,7 +936,7 @@ pub fn addAnnoRecordField(store: *NodeStore, field: AST.AnnoRecordField) std.mem
 /// Adds a WhereClause node to the store, returning a type-safe index to the node.
 pub fn addWhereClause(store: *NodeStore, clause: AST.WhereClause) std.mem.Allocator.Error!AST.WhereClause.Idx {
     var node = Node{
-        .tag = .where_mod_method,
+        .tag = .where_mod_alias,
         .main_token = 0,
         .data = .{
             .lhs = 0,
@@ -946,16 +946,6 @@ pub fn addWhereClause(store: *NodeStore, clause: AST.WhereClause) std.mem.Alloca
     };
 
     switch (clause) {
-        .mod_method => |c| {
-            node.tag = .where_mod_method;
-            node.region = c.region;
-            node.main_token = c.var_tok;
-            const ed_start = store.extra_data.items.len;
-            try store.extra_data.append(store.gpa, c.name_tok);
-            try store.extra_data.append(store.gpa, @intFromEnum(c.args));
-            try store.extra_data.append(store.gpa, @intFromEnum(c.ret_anno));
-            node.data.lhs = @intCast(ed_start);
-        },
         .mod_alias => |c| {
             node.tag = .where_mod_alias;
             node.region = c.region;
@@ -1955,19 +1945,6 @@ pub fn getAnnoRecordField(store: *const NodeStore, anno_record_field_idx: AST.An
 pub fn getWhereClause(store: *const NodeStore, where_clause_idx: AST.WhereClause.Idx) AST.WhereClause {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(where_clause_idx)));
     switch (node.tag) {
-        .where_mod_method => {
-            const ed_start = @as(usize, @intCast(node.data.lhs));
-            const name_tok = store.extra_data.items[ed_start];
-            const args = store.extra_data.items[ed_start + 1];
-            const ret_anno = store.extra_data.items[ed_start + 2];
-            return .{ .mod_method = .{
-                .region = node.region,
-                .var_tok = node.main_token,
-                .name_tok = name_tok,
-                .args = @enumFromInt(args),
-                .ret_anno = @enumFromInt(ret_anno),
-            } };
-        },
         .where_mod_alias => {
             return .{ .mod_alias = .{
                 .region = node.region,

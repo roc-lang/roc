@@ -162,12 +162,6 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) !std.ArrayList(CIR.Def.Id
     if (env.common.findIdent("Builtin.Str.join_with")) |str_join_with_ident| {
         try low_level_map.put(str_join_with_ident, .str_join_with);
     }
-    if (env.common.findIdent("Builtin.Box.box")) |box_box_ident| {
-        try low_level_map.put(box_box_ident, .box_box);
-    }
-    if (env.common.findIdent("Builtin.Box.unbox")) |box_unbox_ident| {
-        try low_level_map.put(box_unbox_ident, .box_unbox);
-    }
     if (env.common.findIdent("Builtin.List.len")) |list_len_ident| {
         try low_level_map.put(list_len_ident, .list_len);
     }

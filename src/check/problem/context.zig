@@ -216,14 +216,6 @@ pub const Context = union(enum) {
         record_name: ?Ident.Idx,
     };
 
-    /// Context for method call type errors
-    pub const MethodCallContext = struct {
-        /// Name of the method being called
-        method_name: Ident.Idx,
-        /// The type variable of the dispatcher (receiver)
-        dispatcher_var: Var,
-    };
-
     /// Context for list element type errors
     pub const ListEntryContext = struct {
         /// 0-based index of the element

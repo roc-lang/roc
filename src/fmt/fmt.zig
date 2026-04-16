@@ -2345,62 +2345,6 @@ const Formatter = struct {
 
         const multiline = fmt.nodeWillBeMultiline(AST.WhereClause.Idx, idx);
         switch (clause) {
-            .mod_method => |c| {
-                // Format as: a.method : Type
-                try fmt.pushTokenText(c.var_tok);
-                if (multiline and try fmt.flushCommentsAfter(c.var_tok)) {
-                    fmt.curr_indent = start_indent;
-                    try fmt.pushIndent();
-                }
-                try fmt.push('.');
-                try fmt.pushTokenText(c.name_tok);
-                try fmt.pushAll(" :");
-                const args_coll = fmt.ast.store.getCollection(c.args);
-                const ret_region = fmt.nodeRegion(@intFromEnum(c.ret_anno));
-
-                fmt.curr_indent = start_indent;
-                if (args_coll.span.len > 0) {
-                    if (multiline and try fmt.flushCommentsBefore(args_coll.region.start)) {
-                        fmt.curr_indent += 1;
-                        try fmt.pushIndent();
-                    } else {
-                        try fmt.push(' ');
-                    }
-                    const args = fmt.ast.store.typeAnnoSlice(.{ .span = args_coll.span });
-                    // Format function arguments without parentheses (like regular function types)
-                    for (args, 0..) |arg_idx, i| {
-                        const arg_region = fmt.nodeRegion(@intFromEnum(arg_idx));
-                        if (multiline and i > 0) {
-                            try fmt.flushCommentsBeforeDiscard(arg_region.start);
-                            try fmt.ensureNewline();
-                            try fmt.pushIndent();
-                        }
-                        try fmt.formatTypeAnnoDiscard(arg_idx);
-                        if (i < args.len - 1) {
-                            if (multiline) {
-                                try fmt.push(',');
-                            } else {
-                                try fmt.pushAll(", ");
-                            }
-                        } else {
-                            if (multiline and try fmt.flushCommentsAfter(arg_region.end - 1)) {
-                                fmt.curr_indent += 1;
-                                try fmt.pushIndent();
-                                try fmt.pushAll("->");
-                            } else {
-                                try fmt.pushAll(" ->");
-                            }
-                        }
-                    }
-                }
-                if (multiline and try fmt.flushCommentsBefore(ret_region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                try fmt.formatTypeAnnoDiscard(c.ret_anno);
-            },
             .mod_alias => |c| {
                 // Format as: a.TypeAlias
                 try fmt.pushTokenText(c.var_tok);

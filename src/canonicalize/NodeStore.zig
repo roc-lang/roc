@@ -1159,21 +1159,6 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx)
     const payload = node.getPayload();
 
     switch (node.tag) {
-        .where_method => {
-            const p = payload.where_clause;
-            const var_ = @as(CIR.TypeAnno.Idx, @enumFromInt(p.var_idx));
-            const method_name = @as(Ident.Idx, @bitCast(p.name));
-
-            // Retrieve args span and ret from span_with_node_data
-            const args_ret = store.span_with_node_data.items.items[p.args_ret_idx];
-
-            return CIR.WhereClause{ .w_method = .{
-                .var_ = var_,
-                .method_name = method_name,
-                .args = .{ .span = .{ .start = args_ret.start, .len = args_ret.len } },
-                .ret = @enumFromInt(args_ret.node),
-            } };
-        },
         .where_alias => {
             const p = payload.where_alias;
             const var_ = @as(CIR.TypeAnno.Idx, @enumFromInt(p.var_idx));
@@ -2292,20 +2277,6 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: b
     var node = Node.init(undefined);
 
     switch (whereClause) {
-        .w_method => |where_method| {
-            node.tag = .where_method;
-            const args_ret_idx: u32 = @intCast(store.span_with_node_data.len());
-            _ = try store.span_with_node_data.append(store.gpa, .{
-                .start = where_method.args.span.start,
-                .len = where_method.args.span.len,
-                .node = @intFromEnum(where_method.ret),
-            });
-            node.setPayload(.{ .where_clause = .{
-                .var_idx = @intFromEnum(where_method.var_),
-                .name = @bitCast(where_method.method_name),
-                .args_ret_idx = args_ret_idx,
-            } });
-        },
         .w_alias => |mod_alias| {
             node.tag = .where_alias;
             node.setPayload(.{ .where_alias = .{

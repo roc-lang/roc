@@ -5,8 +5,6 @@
 //! solving, monomorphization, and final lowering.
 
 const std = @import("std");
-const base = @import("base");
-
 pub const Symbol = enum(u32) {
     _,
 
@@ -24,14 +22,6 @@ pub const Symbol = enum(u32) {
         return self == Symbol.none;
     }
 };
-
-pub const AttachedMethodKey = struct {
-    module_idx: u32,
-    type_ident: base.Ident.Idx,
-    method_ident: base.Ident.Idx,
-};
-
-pub const AttachedMethodIndex = std.AutoHashMap(AttachedMethodKey, Symbol);
 
 pub const BindingOrigin = union(enum) {
     top_level_def: struct {

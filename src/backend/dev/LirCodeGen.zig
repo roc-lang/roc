@@ -3359,7 +3359,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     std.debug.panic("UNIMPLEMENTED low-level op: {s}", .{@tagName(ll.op)});
                 },
                 .box_box => {
-                    // Box.box(value) -> Box(value): heap-allocate and copy value
+                    // Box intrinsic: heap-allocate and copy value
                     const ls = self.layout_store;
                     const ret_layout_data = ls.getLayout(ll.ret_layout);
 
@@ -3415,7 +3415,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return .{ .general_reg = heap_ptr };
                 },
                 .box_unbox => {
-                    // Box.unbox(box) -> value: dereference the box pointer
+                    // Box intrinsic: dereference the box pointer
                     const ls = self.layout_store;
                     // The argument is the Box — get its layout to find element info
                     const box_arg_layout = self.valueLayout(args[0]);

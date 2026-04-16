@@ -166,11 +166,6 @@ pub const CommonIdents = extern struct {
     is_negative: Ident.Idx,
     digits_before_pt: Ident.Idx,
     digits_after_pt: Ident.Idx,
-    box_method: Ident.Idx,
-    unbox_method: Ident.Idx,
-    // Fully qualified Box intrinsic method names
-    builtin_box_box: Ident.Idx,
-    builtin_box_unbox: Ident.Idx,
     to_inspect: Ident.Idx,
     ok: Ident.Idx,
     err: Ident.Idx,
@@ -257,11 +252,6 @@ pub const CommonIdents = extern struct {
             .is_negative = try common.insertIdent(gpa, Ident.for_text("is_negative")),
             .digits_before_pt = try common.insertIdent(gpa, Ident.for_text("digits_before_pt")),
             .digits_after_pt = try common.insertIdent(gpa, Ident.for_text("digits_after_pt")),
-            .box_method = try common.insertIdent(gpa, Ident.for_text("box")),
-            .unbox_method = try common.insertIdent(gpa, Ident.for_text("unbox")),
-            // Fully qualified Box intrinsic method names
-            .builtin_box_box = try common.insertIdent(gpa, Ident.for_text("Builtin.Box.box")),
-            .builtin_box_unbox = try common.insertIdent(gpa, Ident.for_text("Builtin.Box.unbox")),
             .to_inspect = try common.insertIdent(gpa, Ident.for_text("to_inspect")),
             .ok = try common.insertIdent(gpa, Ident.for_text("Ok")),
             .err = try common.insertIdent(gpa, Ident.for_text("Err")),
@@ -351,11 +341,6 @@ pub const CommonIdents = extern struct {
             .is_negative = common.findIdent("is_negative") orelse unreachable,
             .digits_before_pt = common.findIdent("digits_before_pt") orelse unreachable,
             .digits_after_pt = common.findIdent("digits_after_pt") orelse unreachable,
-            .box_method = common.findIdent("box") orelse unreachable,
-            .unbox_method = common.findIdent("unbox") orelse unreachable,
-            // Fully qualified Box intrinsic method names
-            .builtin_box_box = common.findIdent("Builtin.Box.box") orelse unreachable,
-            .builtin_box_unbox = common.findIdent("Builtin.Box.unbox") orelse unreachable,
             .to_inspect = common.findIdent("to_inspect") orelse unreachable,
             .ok = common.findIdent("Ok") orelse unreachable,
             .err = common.findIdent("Err") orelse unreachable,
@@ -378,16 +363,6 @@ pub const CommonIdents = extern struct {
         };
     }
 };
-
-/// Key for method identifier lookup: (type_ident, method_ident) pair.
-pub const MethodKey = packed struct(u64) {
-    type_ident: Ident.Idx,
-    method_ident: Ident.Idx,
-};
-
-/// Mapping from (type_ident, method_ident) pairs to their qualified method ident.
-/// The value is the qualified method ident (e.g., "Bool.is_eq" for type "Bool" and method "is_eq").
-pub const AttachedMethodIdents = SortedArrayBuilder(MethodKey, Ident.Idx);
 
 gpa: std.mem.Allocator,
 
@@ -457,9 +432,6 @@ deferred_numeric_literals: DeferredNumericLiteral.SafeList,
 /// Built during canonicalization when processing import statements.
 /// Example: "MyModule.Foo" -> "F" if user has `import MyModule exposing [Foo as F]`
 import_mapping: types_mod.import_mapping.ImportMapping,
-
-/// Mapping from (type_ident, method_ident) pairs to qualified method idents.
-attached_method_idents: AttachedMethodIdents,
 
 /// Whether to defer finalizing numeric defaults until after platform requirements are checked.
 /// Set to true for app modules that have platform imports, so that numeric literals can be
@@ -531,7 +503,6 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.imports.relocate(offset);
     self.store.relocate(offset);
     self.deferred_numeric_literals.relocate(offset);
-    self.attached_method_idents.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
     if (self.module_name.len > 0) {
@@ -598,7 +569,6 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .idents = idents,
         .deferred_numeric_literals = try DeferredNumericLiteral.SafeList.initCapacity(gpa, 32),
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
-        .attached_method_idents = AttachedMethodIdents.init(),
     };
 }
 
@@ -638,9 +608,6 @@ pub fn cloneForEval(self: *const Self, gpa: std.mem.Allocator) std.mem.Allocator
             try import_mapping.put(entry.key_ptr.*, entry.value_ptr.*);
         }
     }
-
-    var attached_method_idents = try self.attached_method_idents.clone(gpa);
-    errdefer attached_method_idents.deinit(gpa);
 
     var rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){};
     errdefer rigid_vars.deinit(gpa);
@@ -684,7 +651,6 @@ pub fn cloneForEval(self: *const Self, gpa: std.mem.Allocator) std.mem.Allocator
         .idents = CommonIdents.find(&common),
         .deferred_numeric_literals = deferred_numeric_literals,
         .import_mapping = import_mapping,
-        .attached_method_idents = attached_method_idents,
         .defer_numeric_defaults = self.defer_numeric_defaults,
     };
 }
@@ -701,7 +667,6 @@ pub fn deinit(self: *Self) void {
     self.imports.deinit(self.gpa);
     self.deferred_numeric_literals.deinit(self.gpa);
     self.import_mapping.deinit();
-    self.attached_method_idents.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
 
@@ -2557,10 +2522,9 @@ pub const Serialized = extern struct {
     idents: CommonIdents,
     deferred_numeric_literals: DeferredNumericLiteral.SafeList.Serialized,
     import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
-    attached_method_idents: AttachedMethodIdents.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
-    _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
+    _padding: [14]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -2608,8 +2572,6 @@ pub const Serialized = extern struct {
         self.idents = env.idents;
         // import_mapping is runtime-only and initialized fresh during deserialization
         self.import_mapping_reserved = .{ 0, 0, 0, 0, 0, 0 };
-        // Serialize attached_method_idents map
-        try self.attached_method_idents.serialize(&env.attached_method_idents, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
     }
@@ -2652,7 +2614,6 @@ pub const Serialized = extern struct {
             .idents = self.idents,
             .deferred_numeric_literals = self.deferred_numeric_literals.deserializeInto(base_addr),
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
-            .attached_method_idents = self.attached_method_idents.deserializeInto(base_addr),
             .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
         };
 
@@ -2699,7 +2660,6 @@ pub const Serialized = extern struct {
             .idents = self.idents,
             .deferred_numeric_literals = self.deferred_numeric_literals.deserializeInto(base_addr),
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
-            .attached_method_idents = self.attached_method_idents.deserializeInto(base_addr),
             .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
         };
 
@@ -3323,17 +3283,6 @@ pub fn insertQualifiedIdent(
 }
 
 /// Registers a method identifier mapping for fast index-based lookup.
-/// This should be called during canonicalization when a method is defined in an associated block.
-///
-/// Parameters:
-/// - type_ident: The type's identifier index (e.g., the ident for "Bool")
-/// - method_ident: The method's identifier index (e.g., the ident for "is_eq")
-/// - qualified_ident: The qualified method ident (e.g., "Bool.is_eq")
-pub fn registerMethodIdent(self: *Self, type_ident: Ident.Idx, method_ident: Ident.Idx, qualified_ident: Ident.Idx) !void {
-    const key = MethodKey{ .type_ident = type_ident, .method_ident = method_ident };
-    try self.attached_method_idents.put(self.gpa, key, qualified_ident);
-}
-
 /// Returns the line start positions for source code position mapping.
 /// Each element represents the byte offset where a new line begins.
 pub fn getLineStarts(self: *const Self) []const u32 {

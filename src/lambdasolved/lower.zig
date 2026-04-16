@@ -22,7 +22,6 @@ pub const Result = struct {
     types: type_mod.Store,
     strings: base.StringLiteral.Store,
     idents: base.Ident.Store,
-    attached_methods: symbol_mod.AttachedMethodIndex,
     runtime_inspect_symbols: std.AutoHashMap(Symbol, Symbol),
 
     pub fn deinit(self: *Result) void {
@@ -32,7 +31,6 @@ pub const Result = struct {
         self.types.deinit();
         self.strings.deinit(self.store.allocator);
         self.idents.deinit(self.store.allocator);
-        self.attached_methods.deinit();
         self.runtime_inspect_symbols.deinit();
     }
 };
@@ -102,7 +100,6 @@ const Lowerer = struct {
             .types = self.types,
             .strings = self.input.strings,
             .idents = self.input.idents,
-            .attached_methods = self.input.attached_methods,
             .runtime_inspect_symbols = self.input.runtime_inspect_symbols,
         };
 
@@ -112,7 +109,6 @@ const Lowerer = struct {
         self.input.symbols = symbol_mod.Store.init(self.allocator);
         self.input.strings = .{};
         self.input.idents = try base.Ident.Store.initCapacity(self.allocator, 1);
-        self.input.attached_methods = symbol_mod.AttachedMethodIndex.init(self.allocator);
         self.input.runtime_inspect_symbols = std.AutoHashMap(Symbol, Symbol).init(self.allocator);
         return result;
     }
@@ -216,11 +212,6 @@ const Lowerer = struct {
             .call => |call| .{ .call = .{
                 .func = try self.instantiateExpr(call.func),
                 .arg = try self.instantiateExpr(call.arg),
-            } },
-            .method_lookup => |method_lookup| .{ .method_lookup = .{
-                .receiver_ty = try self.instantiateType(method_lookup.receiver_ty),
-                .method = method_lookup.method,
-                .has_receiver_arg = method_lookup.has_receiver_arg,
             } },
             .inspect => |value| .{ .inspect = try self.instantiateExpr(value) },
             .low_level => |ll| .{ .low_level = .{
@@ -613,50 +604,6 @@ const Lowerer = struct {
         return fn_entry.ty;
     }
 
-    fn collectMethodCallChain(
-        self: *Lowerer,
-        expr_id: ast.ExprId,
-        args: *std.ArrayList(ast.ExprId),
-    ) std.mem.Allocator.Error!?@FieldType(ast.Expr.Data, "method_lookup") {
-        const expr = self.output.getExpr(expr_id);
-        return switch (expr.data) {
-            .call => |call| blk: {
-                const method_lookup = try self.collectMethodCallChain(call.func, args) orelse break :blk null;
-                try args.append(self.allocator, call.arg);
-                break :blk method_lookup;
-            },
-            .method_lookup => |method_lookup| method_lookup,
-            else => null,
-        };
-    }
-
-    fn inferMethodCallChainExpr(
-        self: *Lowerer,
-        venv: []const EnvEntry,
-        expr_id: ast.ExprId,
-        target_ty: TypeVarId,
-    ) std.mem.Allocator.Error!?TypeVarId {
-        var arg_exprs = std.ArrayList(ast.ExprId).empty;
-        defer arg_exprs.deinit(self.allocator);
-        const method_lookup = try self.collectMethodCallChain(expr_id, &arg_exprs) orelse return null;
-
-        var next_arg: usize = 0;
-        if (method_lookup.has_receiver_arg) {
-            if (arg_exprs.items.len == 0) {
-                return debugPanic("lambdasolved.method_call invariant violated: missing receiver arg", .{});
-            }
-            const receiver_arg_ty = try self.inferExpr(venv, arg_exprs.items[0]);
-            try self.unify(receiver_arg_ty, method_lookup.receiver_ty);
-            next_arg = 1;
-        }
-
-        for (arg_exprs.items[next_arg..]) |arg_expr_id| {
-            try self.inferExprDiscard(venv, arg_expr_id);
-        }
-
-        return target_ty;
-    }
-
     fn inferExpr(self: *Lowerer, venv: []const EnvEntry, expr_id: ast.ExprId) std.mem.Allocator.Error!TypeVarId {
         const expr = self.output.getExpr(expr_id);
         const target_ty = expr.ty;
@@ -815,9 +762,6 @@ const Lowerer = struct {
                 break :blk try self.inferExpr(rest_env, let_expr.rest);
             },
             .call => |call| blk: {
-                if (try self.inferMethodCallChainExpr(venv, expr_id, target_ty)) |inferred_method_call_ty| {
-                    break :blk inferred_method_call_ty;
-                }
                 const func_ty = try self.inferExpr(venv, call.func);
                 const arg_ty = try self.inferExpr(venv, call.arg);
                 const lset_ty = try self.types.freshUnbd();
@@ -829,7 +773,6 @@ const Lowerer = struct {
                 try self.unify(func_ty, wanted);
                 break :blk target_ty;
             },
-            .method_lookup => target_ty,
             .inspect => |value| blk: {
                 const value_ty = try self.inferExpr(venv, value);
                 try self.unify(value_ty, value_ty);
@@ -1407,7 +1350,6 @@ const Lowerer = struct {
                 self.debugCountExprSymbol(call.func, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
                 self.debugCountExprSymbol(call.arg, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
             },
-            .method_lookup => |_| {},
             .inspect => |value| self.debugCountExprSymbol(value, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr),
             .low_level => |ll| for (self.output.sliceExprSpan(ll.args)) |arg| self.debugCountExprSymbol(arg, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr),
             .when => |when_expr| {
@@ -1667,7 +1609,6 @@ const Lowerer = struct {
                     }
                 }
             },
-            .method_lookup => |_| {},
             .inspect => |value| try self.propagateExprErasure(value, venv),
             .low_level => |ll| {
                 const args = self.output.sliceExprSpan(ll.args);
@@ -2028,7 +1969,6 @@ const Lowerer = struct {
     }
 
     fn boxBoundaryBuiltinOpForSymbol(self: *Lowerer, symbol: Symbol) ?base.LowLevel {
-        if (self.boxBoundaryBuiltinOpByName(symbol)) |op| return op;
         const def_id = self.def_id_by_symbol.get(symbol) orelse return null;
         const def = self.output.getDef(def_id);
         const fn_def = switch (def.value) {
@@ -2050,25 +1990,6 @@ const Lowerer = struct {
             },
             else => null,
         };
-    }
-
-    fn boxBoundaryBuiltinOpByName(self: *Lowerer, symbol: Symbol) ?base.LowLevel {
-        var current = symbol;
-        var depth: usize = 0;
-        while (depth < 4) : (depth += 1) {
-            const entry = self.input.symbols.get(current);
-            if (!entry.name.isNone() and entry.name.idx != std.math.maxInt(u29)) {
-                const name = self.input.idents.getText(entry.name);
-                if (std.mem.eql(u8, name, "Builtin.Box.box") or std.mem.eql(u8, name, "Box.box") or std.mem.eql(u8, name, "box")) return .box_box;
-                if (std.mem.eql(u8, name, "Builtin.Box.unbox") or std.mem.eql(u8, name, "Box.unbox") or std.mem.eql(u8, name, "unbox")) return .box_unbox;
-            }
-
-            const next = sourceSymbolFromOrigin(entry.origin) orelse return null;
-            if (next == current) return null;
-            current = next;
-        }
-
-        return null;
     }
 
     fn sourceSymbolFromOrigin(origin: symbol_mod.BindingOrigin) ?Symbol {
@@ -2227,7 +2148,6 @@ const Lowerer = struct {
                 try self.collectExprEdges(call.func, edges);
                 try self.collectExprEdges(call.arg, edges);
             },
-            .method_lookup => |_| {},
             .inspect => |value| try self.collectExprEdges(value, edges),
             .low_level => |ll| for (self.output.sliceExprSpan(ll.args)) |arg| try self.collectExprEdges(arg, edges),
             .when => |when_expr| {

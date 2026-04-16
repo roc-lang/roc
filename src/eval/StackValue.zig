@@ -339,7 +339,7 @@ layout: Layout,
 ptr: ?*anyopaque,
 /// Flag to track whether the memory has been initialized
 is_initialized: bool = false,
-/// Runtime type variable for type information (used for method dispatch and constant folding)
+/// Runtime type variable for type information used during constant folding.
 rt_var: types.Var,
 /// Optional: Original tag union layout index when value was created with wider type.
 /// Used for safe refcounting when discriminant is out of range for narrowed layout.

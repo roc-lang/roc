@@ -975,9 +975,8 @@ pub const Interpreter = struct {
                     }
                     // Decref refcounted argument values (lists, strings) after binding.
                     // patternMatchesBind made copies (which incref), so we need to decref the originals.
-                    // For Box types from host memory: decref the data pointer directly without
-                    // zeroing the slot (host owns the slot memory). This fixes issue #8981 where
-                    // Box.unbox wasn't properly decrementing refcounts for boxes passed through FFI.
+                    // For boxed values from host memory: decref the data pointer directly without
+                    // zeroing the slot (host owns the slot memory). This fixes issue #8981.
                     if (arg_value.layout.tag == .box) {
                         const slot = arg_value.asBoxSlot();
                         if (slot) |s| {
@@ -6710,7 +6709,7 @@ pub const Interpreter = struct {
         }
     }
 
-    /// Evaluates the Box.box intrinsic, creating a boxed value from the input.
+    /// Evaluates the box intrinsic, creating a boxed value from the input.
     /// Returns the boxed result value. Caller is responsible for decref on arg_value.
     fn evalBoxIntrinsic(
         self: *Interpreter,
@@ -6728,7 +6727,7 @@ pub const Interpreter = struct {
         return try self.makeBoxValueFromLayout(box_layout, arg_value, roc_ops, return_rt_var);
     }
 
-    /// Evaluates the Box.unbox intrinsic, extracting the value from a box.
+    /// Evaluates the unbox intrinsic, extracting the value from a box.
     /// Returns the unboxed result value. Caller is responsible for decref on boxed_value.
     fn evalUnboxIntrinsic(
         self: *Interpreter,
@@ -6789,7 +6788,7 @@ pub const Interpreter = struct {
             return;
         }
 
-        self.triggerCrash("Box.unbox: expected box layout but got different type", false, roc_ops);
+        self.triggerCrash("unbox intrinsic: expected box layout but got different type", false, roc_ops);
         return error.TypeMismatch;
     }
 
@@ -8716,7 +8715,7 @@ pub const Interpreter = struct {
                         break :blk_name try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(source_name_str));
                     } else null;
 
-                    // Translate static dispatch constraints if present
+                    // Translate constraints if present
                     const rt_flex = if (flex.constraints.len() > 0) blk_flex: {
                         const ct_constraints = module.types.sliceStaticDispatchConstraints(flex.constraints);
                         var rt_constraints = try std.ArrayList(types.StaticDispatchConstraint).initCapacity(self.allocator, ct_constraints.len);
@@ -8785,7 +8784,7 @@ pub const Interpreter = struct {
                     const source_name_str = module.getIdent(rigid.name);
                     const rt_name = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(source_name_str));
 
-                    // Translate static dispatch constraints if present
+                    // Translate constraints if present
                     const rt_rigid = if (rigid.constraints.len() > 0) blk_rigid: {
                         const ct_constraints = module.types.sliceStaticDispatchConstraints(rigid.constraints);
                         var rt_constraints = try std.ArrayList(types.StaticDispatchConstraint).initCapacity(self.allocator, ct_constraints.len);
@@ -11242,39 +11241,10 @@ pub const Interpreter = struct {
                     }
                 }
 
-                // Handle Box.box and Box.unbox intrinsics - these are compiler-provided methods
-                // that have type annotations but no implementation bodies
                 if (func_expr_check == .e_lookup_external) {
                     const lookup = func_expr_check.e_lookup_external;
                     const target = try self.resolveExternalLookupTarget(self.env, lookup, roc_ops);
-                    if (target.def_idx) |target_def_idx| {
-                        const target_def = target.module_env.store.getDef(target_def_idx);
-                        const target_pattern = target.module_env.store.getPattern(target_def.pattern);
-                        if (target_pattern == .assign) {
-                            const method_ident = target_pattern.assign.ident;
-                            const is_box_method = method_ident.eql(target.module_env.idents.builtin_box_box);
-                            const is_unbox_method = method_ident.eql(target.module_env.idents.builtin_box_unbox);
-                            // Check if this is Box.box
-                            if (is_box_method and arg_indices.len == 1) {
-                                const arg_expr = arg_indices[0];
-                                const arg_value = try self.evalWithExpectedType(arg_expr, roc_ops, null);
-                                defer arg_value.decref(&self.runtime_layout_store, roc_ops);
-
-                                const result = try self.evalBoxIntrinsic(arg_value, expr_idx, roc_ops);
-                                try value_stack.push(result);
-                                return;
-                            }
-                            // Check if this is Box.unbox
-                            if (is_unbox_method and arg_indices.len == 1) {
-                                const arg_expr = arg_indices[0];
-                                const boxed_value = try self.evalWithExpectedType(arg_expr, roc_ops, null);
-                                defer boxed_value.decref(&self.runtime_layout_store, roc_ops);
-
-                                try self.evalUnboxIntrinsic(boxed_value, value_stack, roc_ops);
-                                return;
-                            }
-                        }
-                    }
+                    _ = target;
                 }
 
                 // Check if this is an error expression that shouldn't be called

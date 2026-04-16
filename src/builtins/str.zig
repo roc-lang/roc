@@ -394,7 +394,6 @@ pub const RocStr = extern struct {
             var string = RocStr.empty();
 
             // I believe taking this reference on the stack here is important for correctness.
-            // Doing it via a method call seemed to cause issues
             const dest_ptr = @as([*]u8, @ptrCast(&string));
             dest_ptr[@sizeOf(RocStr) - 1] = @as(u8, @intCast(new_length)) | 0b1000_0000;
 

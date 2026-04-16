@@ -619,7 +619,7 @@ test "fromTypeVar - recursive nominal type with nested Box at depth 2+ (issue #8
     //
     // Example Roc code that triggered the bug:
     //   RichDoc := [PlainText(Str), Wrapped(Box(RichDoc))]
-    //   depth2 = RichDoc.Wrapped(Box.box(RichDoc.Wrapped(Box.box(RichDoc.PlainText("two")))))
+    //   depth2 = RichDoc.Wrapped(box(RichDoc.Wrapped(box(RichDoc.PlainText("two")))))
 
     var lt: LayoutTest = undefined;
     lt.gpa = testing.allocator;
@@ -823,7 +823,7 @@ test "fromTypeVar - recursive nominal with Box has no double-boxing (issue #8916
     // Regression test for issue #8916:
     // When computing layouts for recursive nominal types like Nat := [Zero, Suc(Box(Nat))],
     // the inner Box's element layout was incorrectly being set to another Box layout
-    // instead of the tag_union layout. This caused Box.unbox to return a value with
+    // instead of the tag_union layout. This caused unbox to return a value with
     // the wrong layout, leading to incorrect pattern matching results.
     //
     // The bug was in the container finalization code: when a tag union backing a

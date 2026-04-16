@@ -232,7 +232,7 @@ pub const Content = union(enum) {
 
 // flex //
 
-/// A flex var, with optional static dispatch constraints
+/// A flex var, with optional attached constraints
 pub const Flex = struct {
     name: ?Ident.Idx,
     constraints: StaticDispatchConstraint.SafeList.Range,
@@ -261,7 +261,7 @@ pub const Flex = struct {
 
 // rigid //
 
-/// A rigid var, with optional static dispatch constraints
+/// A rigid var, with optional attached constraints
 pub const Rigid = struct {
     name: Ident.Idx,
     constraints: StaticDispatchConstraint.SafeList.Range,
@@ -761,7 +761,7 @@ pub const NumeralInfo = struct {
     }
 };
 
-/// Represents a static dispatch constraints on a variable
+/// Represents a constraint on a variable
 ///
 /// sort  : List(a) -> List(a) where [a.ord : a -> Ord]
 ///                                   ^^^^^^^^^^^^^^^
@@ -774,12 +774,12 @@ pub const StaticDispatchConstraint = struct {
     fn_var: Var,
     /// source expr var for source-site dispatches that must later resolve to an exact target
     site_expr_var: ?Var = null,
-    /// the origin of this constraint (operator, method call, or where clause)
+    /// the origin of this constraint
     origin: Origin,
     /// Optional numeric literal info for from_numeral constraints
     num_literal: ?NumeralInfo = null,
 
-    /// Tracks where a static dispatch constraint originated from
+    /// Tracks where this constraint originated from
     pub const Origin = enum(u4) {
         desugared_binop, // From binary operator desugaring (e.g., +, -, *, etc.)
         desugared_unaryop, // From uniary operator desugaring (e.g., !)
@@ -788,10 +788,10 @@ pub const StaticDispatchConstraint = struct {
         from_numeral, // From numeric literal conversion
     };
 
-    /// A safe list of static dispatch constraints
+    /// A safe list of constraints
     pub const SafeList = MkSafeList(Self);
 
-    /// A safe multi list of static dispatch constraints
+    /// A safe multi list of constraints
     pub const SafeMultiList = MkSafeMultiList(Self);
 
     /// A function to be passed into std.mem.sort to sort fields by name

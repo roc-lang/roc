@@ -468,7 +468,7 @@ const Unifier = struct {
                 if (a_flex.constraints.len() == 0) {
                     self.merge(vars, b_content);
                 } else {
-                    // Merge against backing var, so we don't loose static dispatch constraints
+                    // Merge against backing var so we do not lose attached constraints
                     const backing_var = self.types_store.getAliasBackingVar(b_alias);
                     try self.unifyGuarded(vars.a.var_, backing_var);
                 }
@@ -520,7 +520,7 @@ const Unifier = struct {
                 if (b_flex.constraints.len() == 0) {
                     self.merge(vars, Content{ .alias = a_alias });
                 } else {
-                    // Merge against backing var, so we don't loose static dispatch constraints
+                    // Merge against backing var so we do not lose attached constraints
                     try self.unifyGuarded(backing_var, vars.b.var_);
                 }
             },
@@ -2301,7 +2301,7 @@ const Unifier = struct {
         return self.types_store.static_dispatch_constraints.rangeToEnd(top);
     }
 
-    /// Unify two static dispatch constraints
+    /// Unify two constraints
     fn unifyStaticDispatchConstraint(
         self: *Self,
         a_constraint: StaticDispatchConstraint,

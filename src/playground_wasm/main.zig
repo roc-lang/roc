@@ -1048,7 +1048,6 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
                 .idents = ModuleEnv.CommonIdents.find(&common),
                 .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
                 .import_mapping = types.import_mapping.ImportMapping.init(gpa),
-                .attached_method_idents = serialized_ptr.attached_method_idents.deserializeInto(base_ptr),
                 .rigid_vars = std.AutoHashMapUnmanaged(base.Ident.Idx, types.Var){},
             };
             logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});

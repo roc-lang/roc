@@ -243,12 +243,6 @@ pub const WhereClause = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = extern struct { span: base.DataSpan };
 
-    w_method: struct {
-        var_: TypeAnno.Idx,
-        method_name: base.Ident.Idx,
-        args: TypeAnno.Span,
-        ret: TypeAnno.Idx,
-    },
     w_alias: struct {
         var_: TypeAnno.Idx,
         alias_name: base.Ident.Idx,
@@ -259,36 +253,6 @@ pub const WhereClause = union(enum) {
 
     pub fn pushToSExprTree(self: *const WhereClause, cir: anytype, tree: anytype, idx: WhereClause.Idx) !void {
         switch (self.*) {
-            .w_method => |method| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("method");
-
-                // Get the region for this WhereClause
-                const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
-                const region = cir.store.getRegionAt(node_idx);
-                try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-
-                // Add module-of and ident information
-                try cir.store.getTypeAnno(method.var_).pushToSExprTree(cir, tree, method.var_);
-
-                const method_name_str = cir.getIdent(method.method_name);
-                try tree.pushStringPair("name", method_name_str);
-
-                const attrs = tree.beginNode();
-
-                // Add actual argument types
-                const args_begin = tree.beginNode();
-                try tree.pushStaticAtom("args");
-                const args_attrs = tree.beginNode();
-                for (cir.store.sliceTypeAnnos(method.args)) |arg_idx| {
-                    try cir.store.getTypeAnno(arg_idx).pushToSExprTree(cir, tree, arg_idx);
-                }
-                try tree.endNode(args_begin, args_attrs);
-
-                // Add actual return type
-                try cir.store.getTypeAnno(method.ret).pushToSExprTree(cir, tree, method.ret);
-                try tree.endNode(begin, attrs);
-            },
             .w_alias => |alias| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("alias");

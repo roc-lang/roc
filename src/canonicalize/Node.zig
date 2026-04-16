@@ -126,7 +126,6 @@ pub const Tag = enum {
     ty_lookup_external,
     ty_malformed,
     // Where clause
-    where_method,
     where_alias,
     where_malformed,
     // Patterns

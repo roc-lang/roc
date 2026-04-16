@@ -1768,9 +1768,6 @@ fn processAssociatedItemsSecondPass(
                                     const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                                     try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
 
-                                    // Register the method ident mapping for fast index-based lookup
-                                    try self.registerAssociatedMethodIdent(parent_name, relative_parent_name, type_name, decl_ident, qualified_idx);
-
                                     // Add aliases for this item in the current (associated block) scope
                                     const def_cir = self.env.store.getDef(def_idx);
                                     const pattern_idx = def_cir.pattern;
@@ -1825,9 +1822,6 @@ fn processAssociatedItemsSecondPass(
                     const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                     try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
 
-                    // Register the method ident mapping for fast index-based lookup
-                    try self.registerAssociatedMethodIdent(parent_name, relative_parent_name, type_name, name_ident, qualified_idx);
-
                     // Pattern is now available in scope (was created in createAnnoOnlyDef)
 
                     try self.env.store.addScratchDef(def_idx);
@@ -1852,9 +1846,6 @@ fn processAssociatedItemsSecondPass(
                         // Register this associated item by its qualified name
                         const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                         try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
-
-                        // Register the method ident mapping for fast index-based lookup
-                        try self.registerAssociatedMethodIdent(parent_name, relative_parent_name, type_name, decl_ident, qualified_idx);
 
                         // Add aliases for this item in the current (associated block) scope
                         // so it can be referenced by unqualified and type-qualified names
@@ -1917,60 +1908,6 @@ fn processAssociatedItemsSecondPass(
             },
         }
     }
-}
-
-fn registerAssociatedMethodIdent(
-    self: *Self,
-    parent_name: Ident.Idx,
-    relative_parent_name: ?Ident.Idx,
-    type_name: Ident.Idx,
-    method_ident: Ident.Idx,
-    qualified_ident: Ident.Idx,
-) std.mem.Allocator.Error!void {
-    try self.env.registerMethodIdent(parent_name, method_ident, qualified_ident);
-
-    if (relative_parent_name) |relative_name| {
-        if (!relative_name.eql(parent_name)) {
-            try self.env.registerMethodIdent(relative_name, method_ident, qualified_ident);
-        }
-    }
-
-    if (!type_name.eql(parent_name) and
-        (relative_parent_name == null or !type_name.eql(relative_parent_name.?)))
-    {
-        try self.env.registerMethodIdent(type_name, method_ident, qualified_ident);
-    }
-
-    const builtin_numeric_alias = self.builtinNumericMethodAlias(type_name) orelse return;
-    if (!builtin_numeric_alias.eql(parent_name) and
-        (relative_parent_name == null or !builtin_numeric_alias.eql(relative_parent_name.?)) and
-        !builtin_numeric_alias.eql(type_name))
-    {
-        try self.env.registerMethodIdent(builtin_numeric_alias, method_ident, qualified_ident);
-    }
-}
-
-fn builtinNumericMethodAlias(self: *Self, type_name: Ident.Idx) ?Ident.Idx {
-    if (!std.mem.eql(u8, self.env.module_name, "Builtin")) return null;
-
-    if (type_name.eql(self.env.idents.u8) or
-        type_name.eql(self.env.idents.i8) or
-        type_name.eql(self.env.idents.u16) or
-        type_name.eql(self.env.idents.i16) or
-        type_name.eql(self.env.idents.u32) or
-        type_name.eql(self.env.idents.i32) or
-        type_name.eql(self.env.idents.u64) or
-        type_name.eql(self.env.idents.i64) or
-        type_name.eql(self.env.idents.u128) or
-        type_name.eql(self.env.idents.i128) or
-        type_name.eql(self.env.idents.dec) or
-        type_name.eql(self.env.idents.f32) or
-        type_name.eql(self.env.idents.f64))
-    {
-        return type_name;
-    }
-
-    return null;
 }
 
 /// Register the user-facing fully qualified name in the module scope.
@@ -7682,9 +7619,9 @@ fn canonicalizeRecordBuilder(self: *Self, rb: @TypeOf(@as(AST.Expr, undefined).r
 
     // Step 3: Look up T.map2
     const type_name_text = self.env.getIdent(type_name);
-    const map2_method_name = try self.env.insertQualifiedIdent(type_name_text, "map2");
+    const map2_name = try self.env.insertQualifiedIdent(type_name_text, "map2");
 
-    const map2_pattern_idx: ?Pattern.Idx = switch (self.scopeLookup(.ident, map2_method_name)) {
+    const map2_pattern_idx: ?Pattern.Idx = switch (self.scopeLookup(.ident, map2_name)) {
         .found => |found| found,
         .not_found => null,
     };
@@ -11377,7 +11314,6 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             const region = self.parse_ir.tokenizedRegionToRegion(type_decl.region);
 
             // Check if this is a type variable alias (e.g., `Thing : thing` where `thing` is a type var in scope)
-            // This enables static dispatch on type variables: `Thing.method(arg)`
             const is_type_var_alias = type_var_alias_check: {
                 // Must be an alias (not nominal or opaque)
                 if (type_decl.kind != .alias) break :type_var_alias_check false;
@@ -11426,7 +11362,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                     .type_var_anno = type_var_anno,
                 } }, region);
 
-                // Introduce the type var alias into scope for use in `Thing.method()` calls
+                // Introduce the type var alias into scope.
                 const current_scope = &self.scopes.items[self.scopes.items.len - 1];
                 switch (try current_scope.introduceTypeVarAlias(self.env.gpa, alias_name, type_var_ident, type_var_anno, stmt_idx, null)) {
                     .success => {},
@@ -13241,89 +13177,6 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
     const ast_where = self.parse_ir.store.getWhereClause(ast_where_idx);
 
     switch (ast_where) {
-        .mod_method => |mm| {
-            const region = self.parse_ir.tokenizedRegionToRegion(mm.region);
-
-            // Get variable being referenced
-            // where [ a.method : ... ]
-            //         ^
-            const var_name_text = self.parse_ir.resolve(mm.var_tok);
-            const var_ident = try self.env.insertIdent(Ident.for_text(var_name_text));
-
-            // Find the variable in scope
-            const var_anno_idx =
-                switch (self.scopeLookupTypeVar(var_ident)) {
-                    .found => |found_anno_idx| blk: {
-                        // Track this type variable for underscore validation
-                        try self.scratch_type_var_validation.append(var_ident);
-
-                        break :blk try self.env.addTypeAnno(.{ .rigid_var_lookup = .{
-                            .ref = found_anno_idx,
-                        } }, region);
-                    },
-                    .not_found => blk: {
-                        switch (type_anno_ctx) {
-                            // If this is an inline anno, then we can introduce the variable
-                            // into the scope
-                            .local_anno => {
-                                // Track this type variable for underscore validation
-                                try self.scratch_type_var_validation.append(var_ident);
-
-                                const new_anno_idx = try self.env.addTypeAnno(.{ .rigid_var = .{
-                                    .name = var_ident,
-                                } }, region);
-
-                                // Add to scope
-                                handleTypeVarIntroduceResult(try self.scopeIntroduceTypeVar(var_ident, new_anno_idx));
-
-                                break :blk new_anno_idx;
-                            },
-                            // Otherwise, this is malformed
-                            .type_decl_anno, .for_clause_anno => {
-                                break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type_var = .{
-                                    .name = var_ident,
-                                    .region = region,
-                                } });
-                            },
-                        }
-                    },
-                };
-
-            // Get alias being referenced
-            // where [ a.method : ... ]
-            //           ^^^^^^
-            const method_ident = blk: {
-                // Resolve alias name (remove leading dot)
-                const method_name_text = self.parse_ir.resolve(mm.name_tok);
-
-                // Remove leading dot from method name
-                const method_name_clean = if (method_name_text.len > 0 and method_name_text[0] == '.')
-                    method_name_text[1..]
-                else
-                    method_name_text;
-
-                break :blk try self.env.insertIdent(Ident.for_text(method_name_clean));
-            };
-
-            // Canonicalize argument types
-            const args_slice = self.parse_ir.store.typeAnnoSlice(.{ .span = self.parse_ir.store.getCollection(mm.args).span });
-            const args_start = self.env.store.scratchTypeAnnoTop();
-            for (args_slice) |arg_idx| {
-                const canonicalized_arg = try self.canonicalizeTypeAnno(arg_idx, type_anno_ctx);
-                try self.env.store.addScratchTypeAnno(canonicalized_arg);
-            }
-            const args_span = try self.env.store.typeAnnoSpanFrom(args_start);
-
-            // Canonicalize return type
-            const ret = try self.canonicalizeTypeAnno(mm.ret_anno, type_anno_ctx);
-
-            return try self.env.addWhereClause(WhereClause{ .w_method = .{
-                .var_ = var_anno_idx,
-                .method_name = method_ident,
-                .args = args_span,
-                .ret = ret,
-            } }, region);
-        },
         .mod_alias => |ma| {
             const region = self.parse_ir.tokenizedRegionToRegion(ma.region);
 
@@ -13501,138 +13354,14 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     const right_expr = self.parse_ir.store.getExpr(field_access.right);
     const region = self.parse_ir.tokenizedRegionToRegion(field_access.region);
 
-    // Handle method calls on module-qualified types (e.g., Stdout.line!(...))
     if (right_expr == .apply) {
-        const apply = right_expr.apply;
-        const method_expr = self.parse_ir.store.getExpr(apply.@"fn");
-        if (method_expr != .ident) {
-            // Module-qualified call with non-ident function (e.g., Module.(complex_expr)(...))
-            // This is malformed - report error
-            return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                .region = region,
-            } });
-        }
-
-        const method_ident = method_expr.ident;
-        const method_name = self.parse_ir.tokens.resolveIdentifier(method_ident.token) orelse {
-            // Couldn't resolve method name token
-            return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                .region = region,
-            } });
-        };
-
-        // Check if this is a type module (like Stdout) - look up the qualified method name directly
-        if (self.lookupAvailableModuleEnv(module_name)) |auto_imported_type| {
-            if (auto_imported_type.statement_idx != null) {
-                // This is an imported type module (like Stdout, I32, etc.)
-                // Look up the qualified method name (e.g., "Builtin.Num.I32.decode") in the module's exposed items
-                const module_env = auto_imported_type.env;
-                const module_name_text = module_env.module_name;
-                const auto_import_idx = try self.getOrCreateAutoImport(module_name_text);
-
-                // Build the FULLY qualified method name using qualified_type_ident
-                // e.g., for I32.decode: "Builtin.Num.I32" + "decode" -> "Builtin.Num.I32.decode"
-                // e.g., for Str.concat: "Builtin.Str" + "concat" -> "Builtin.Str.concat"
-                const qualified_type_text = self.env.getIdent(auto_imported_type.qualified_type_ident);
-                const method_name_text = self.env.getIdent(method_name);
-                const qualified_method_name = try self.env.insertQualifiedIdent(qualified_type_text, method_name_text);
-                const qualified_text = self.env.getIdent(qualified_method_name);
-
-                // Look up the qualified method in the module's exposed items
-                if (module_env.common.findIdent(qualified_text)) |method_ident_idx| {
-                    if (module_env.getExposedNodeIndexById(method_ident_idx)) |method_node_idx| {
-                        // Found the method! Create e_lookup_external + e_call
-                        const func_expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
-                            .module_idx = auto_import_idx,
-                            .target_node_idx = method_node_idx,
-                            .ident_idx = qualified_method_name,
-                            .region = region,
-                        } }, region);
-
-                        // Canonicalize the arguments
-                        const scratch_top = self.env.store.scratchExprTop();
-                        for (self.parse_ir.store.exprSlice(apply.args)) |arg_idx| {
-                            if (try self.canonicalizeExpr(arg_idx)) |canonicalized| {
-                                try self.env.store.addScratchExpr(canonicalized.get_idx());
-                            }
-                        }
-                        const args_span = try self.env.store.exprSpanFrom(scratch_top);
-
-                        // Create the call expression
-                        const call_expr_idx = try self.env.addExpr(CIR.Expr{
-                            .e_call = .{
-                                .func = func_expr_idx,
-                                .args = args_span,
-                                .called_via = CalledVia.apply,
-                            },
-                        }, region);
-                        return call_expr_idx;
-                    }
-                }
-
-                // Method not found in module - generate error
-                return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .nested_value_not_found = .{
-                    .parent_name = module_name,
-                    .nested_name = method_name,
-                    .region = region,
-                } });
-            }
-        }
-
-        // Module exists but is not a type module with a statement_idx - it's a regular module
-        // This means it's something like `SomeModule.someFunc(args)` where someFunc is a regular export
-        // We need to look up the function and create a call
-        const field_text = self.env.getIdent(method_name);
-        const target_node_idx_opt: ?u16 = blk: {
-            if (self.lookupAvailableModuleEnv(module_name)) |auto_imported_type| {
-                const module_env = auto_imported_type.env;
-                if (module_env.common.findIdent(field_text)) |target_ident| {
-                    break :blk module_env.getExposedNodeIndexById(target_ident);
-                } else {
-                    break :blk null;
-                }
-            } else {
-                break :blk null;
-            }
-        };
-
-        if (target_node_idx_opt) |target_node_idx| {
-            // Found the function - create a lookup and call it
-            const func_expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
-                .module_idx = import_idx,
-                .target_node_idx = target_node_idx,
-                .ident_idx = method_name,
-                .region = region,
-            } }, region);
-
-            // Canonicalize the arguments
-            const scratch_top = self.env.store.scratchExprTop();
-            for (self.parse_ir.store.exprSlice(apply.args)) |arg_idx| {
-                if (try self.canonicalizeExpr(arg_idx)) |canonicalized| {
-                    try self.env.store.addScratchExpr(canonicalized.get_idx());
-                }
-            }
-            const args_span = try self.env.store.exprSpanFrom(scratch_top);
-
-            // Create the call expression
-            const call_expr_idx = try self.env.addExpr(CIR.Expr{
-                .e_call = .{
-                    .func = func_expr_idx,
-                    .args = args_span,
-                    .called_via = CalledVia.apply,
-                },
-            }, region);
-            return call_expr_idx;
-        } else {
-            // Function not found in module
-            return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .qualified_ident_does_not_exist = .{
-                .ident = method_name,
-                .region = region,
-            } });
-        }
+        _ = import_idx;
+        return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+            .region = region,
+        } });
     }
 
-    // Handle simple field access (not a method call)
+    // Handle simple field access.
     if (right_expr != .ident) {
         // Module-qualified access with non-ident, non-apply right side - malformed
         return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{

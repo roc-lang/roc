@@ -32,7 +32,6 @@ pub const MissingPatternsRange = struct { start: usize, count: usize };
 pub const Problem = union(enum) {
     type_mismatch: TypeMismatch,
     type_apply_mismatch_arities: TypeApplyArityMismatch,
-    static_dispatch: StaticDispatch,
     cannot_access_opaque_nominal: CannotAccessOpaqueNominal,
     nominal_type_resolution_failed: NominalTypeResolutionFailed,
     recursive_alias: RecursiveAlias,
@@ -186,49 +185,6 @@ pub const UnmatchablePattern = struct {
     match_expr: CIR.Expr.Idx,
     num_branches: u32,
     problem_branch_index: u32,
-};
-
-// static dispatch //
-
-/// Error related to static dispatch
-pub const StaticDispatch = union(enum) {
-    dispatcher_not_nominal: DispatcherNotNominal,
-    dispatcher_does_not_impl_method: DispatcherDoesNotImplMethod,
-    type_does_not_support_equality: TypeDoesNotSupportEquality,
-};
-
-/// Error when you try to static dispatch on something that's not a nominal type
-pub const DispatcherNotNominal = struct {
-    dispatcher_var: Var,
-    dispatcher_snapshot: SnapshotContentIdx,
-    fn_var: Var,
-    method_name: Ident.Idx,
-};
-
-/// Error when you try to static dispatch but the dispatcher does not have that method
-pub const DispatcherDoesNotImplMethod = struct {
-    dispatcher_var: Var,
-    dispatcher_snapshot: SnapshotContentIdx,
-    dispatcher_type: DispatcherType,
-    fn_var: Var,
-    method_name: Ident.Idx,
-    origin: types_mod.StaticDispatchConstraint.Origin,
-    /// Optional numeric literal info for from_numeral constraints
-    num_literal: ?types_mod.NumeralInfo = null,
-    /// True when the dispatcher was a numeric literal that was defaulted to Dec
-    /// because no type annotation was given. Used to add explanatory text in errors.
-    defaulted_from_numeric_literal: bool = false,
-
-    /// Type of the dispatcher
-    pub const DispatcherType = enum { nominal, rigid };
-};
-
-/// Error when an anonymous type (record, tuple, tag union) doesn't support equality
-/// because one or more of its components contain types that don't have is_eq
-pub const TypeDoesNotSupportEquality = struct {
-    dispatcher_var: Var,
-    dispatcher_snapshot: SnapshotContentIdx,
-    fn_var: Var,
 };
 
 // nominal type errors //

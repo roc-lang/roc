@@ -2390,7 +2390,6 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
             self.advance();
 
             // Disallow NoSpaceDotInt after Int (ambiguous with decimal literals like 35.123)
-            // But allow NoSpaceDotLowerIdent for method calls like 35.to_str()
             if (self.peek() == .NoSpaceDotInt) {
                 return try self.pushMalformed(AST.Expr.Idx, .expr_dot_suffix_not_allowed, self.pos);
             }
@@ -2792,7 +2791,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                 } else {
                     return try self.pushMalformed(AST.Expr.Idx, .expr_arrow_expects_ident, self.pos);
                 }
-            } else { // NoSpaceDotLowerIdent
+            } else {
                 const s = self.pos;
                 self.advance();
                 const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
@@ -2801,13 +2800,11 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                     .token = s,
                     .qualifiers = empty_qualifiers,
                 } });
-                // Only parse function applications on the right side, not ? suffix
-                const ident_suffixed = try self.parseExprApplicationSuffix(s, ident);
                 expression = try self.store.addExpr(.{ .field_access = .{
                     .region = .{ .start = start, .end = self.pos },
                     .operator = start,
                     .left = expression,
-                    .right = ident_suffixed,
+                    .right = ident,
                 } });
             }
 
@@ -3539,12 +3536,12 @@ pub fn parseWhereClause(self: *Parser) Error!AST.WhereClause.Idx {
         );
     };
 
-    // Expect dot followed by method/alias name
+    // Expect dot followed by alias name
     const name_tok = self.pos;
     if (self.peek() != .NoSpaceDotLowerIdent and self.peek() != .DotLowerIdent and self.peek() != .NoSpaceDotUpperIdent and self.peek() != .DotUpperIdent) {
         return try self.pushMalformed(
             AST.WhereClause.Idx,
-            .where_expected_method_or_alias_name,
+            .where_expected_alias_name,
             start,
         );
     }
@@ -3561,55 +3558,11 @@ pub fn parseWhereClause(self: *Parser) Error!AST.WhereClause.Idx {
         } });
     }
 
-    // Expect colon
-    self.expect(.OpColon) catch {
-        return try self.pushMalformed(
-            AST.WhereClause.Idx,
-            .where_expected_colon,
-            start,
-        );
-    };
-
-    // Parse type annotation
-    const args_start = self.pos;
-    const method_type_anno = try self.parseTypeAnno(.not_looking_for_args);
-    const method_type = self.store.getTypeAnno(method_type_anno);
-
-    // Check if the type annotation is a function type
-    if (method_type == .@"fn") {
-        // Function type: extract args and return type
-        const fn_type = method_type.@"fn";
-        const args = try self.store.addCollection(
-            .collection_ty_anno,
-            .{
-                .region = .{ .start = args_start, .end = self.pos },
-                .span = fn_type.args.span,
-            },
-        );
-        return try self.store.addWhereClause(.{ .mod_method = .{
-            .region = .{ .start = start, .end = self.pos },
-            .name_tok = name_tok,
-            .var_tok = var_tok,
-            .args = args,
-            .ret_anno = fn_type.ret,
-        } });
-    } else {
-        // Non-function type: treat as zero-argument method
-        const empty_args = try self.store.addCollection(
-            .collection_ty_anno,
-            .{
-                .region = .{ .start = args_start, .end = self.pos },
-                .span = base.DataSpan.empty(),
-            },
-        );
-        return try self.store.addWhereClause(.{ .mod_method = .{
-            .region = .{ .start = start, .end = self.pos },
-            .name_tok = name_tok,
-            .var_tok = var_tok,
-            .args = empty_args,
-            .ret_anno = method_type_anno,
-        } });
-    }
+    return try self.pushMalformed(
+        AST.WhereClause.Idx,
+        .where_expected_alias_name,
+        start,
+    );
 }
 
 /// Parse a block of statements.

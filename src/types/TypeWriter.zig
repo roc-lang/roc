@@ -246,7 +246,7 @@ pub fn writeWithoutConstraints(self: *TypeWriter, var_: Var) std.mem.Allocator.E
     // Don't write where clause - constraints will be collected and written at the top level
 }
 
-/// Writes the where clause containing static dispatch constraints to the buffer.
+/// Writes the where clause containing constraints to the buffer.
 /// Formats constraints in one of three styles based on line length:
 /// 1. All on same line: "where [a.plus : a -> a, b.minus : b -> b]"
 /// 2. All on next line: "\n  where [a.plus : a -> a, b.minus : b -> b]"
@@ -266,7 +266,7 @@ fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_le
         60 + (self.static_dispatch_constraints.items.len - 1) * 30,
     );
 
-    // Iterate over static dispatch constraints, generating their string representations
+    // Iterate over constraints, generating their string representations
     // into a tmp buffer. We don't write directly to the main buffer because we need to
     // sort them alphabetically first and decide on formatting.
     //
@@ -634,7 +634,7 @@ fn writeRecord(self: *TypeWriter, writer: *ByteWrite, record: Record, root_var: 
                 }
             }
 
-            // Since don't recurse above, we must capture the static dispatch
+            // Since we do not recurse above, we must capture the constraint
             // constraints directly
             for (self.types.sliceStaticDispatchConstraints(flex.payload.constraints)) |constraint| {
                 try self.appendStaticDispatchConstraint(flex.var_, constraint);
@@ -649,7 +649,7 @@ fn writeRecord(self: *TypeWriter, writer: *ByteWrite, record: Record, root_var: 
                 try writer.writeAll(name);
             }
 
-            // Since don't recurse above, we must capture the static dispatch
+            // Since we do not recurse above, we must capture the constraint
             // constraints directly
             for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
                 try self.appendStaticDispatchConstraint(record.ext, constraint);
