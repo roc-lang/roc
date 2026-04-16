@@ -579,28 +579,6 @@ pub const Lowerer = struct {
         }
     };
 
-    const TypeWorkspace = struct {
-        module_idx: u32,
-        type_store: types.Store,
-        ident_store: base.Ident.Store,
-
-        fn initEmpty(
-            allocator: std.mem.Allocator,
-            module: Ctx.Module,
-        ) std.mem.Allocator.Error!TypeWorkspace {
-            return .{
-                .module_idx = module.source_module.module_idx,
-                .type_store = try types.Store.init(allocator),
-                .ident_store = try base.Ident.Store.initCapacity(allocator, 16),
-            };
-        }
-
-        fn deinit(self: *TypeWorkspace, allocator: std.mem.Allocator) void {
-            self.ident_store.deinit(allocator);
-            self.type_store.deinit();
-        }
-    };
-
     const TypeCloneScope = struct {
         const TypeKey = struct {
             module_idx: u32,
@@ -658,8 +636,10 @@ pub const Lowerer = struct {
         };
 
         allocator: std.mem.Allocator,
-        workspace: *TypeWorkspace,
-        owns_workspace: bool,
+        module_idx: u32,
+        type_store: *types.Store,
+        ident_store: *base.Ident.Store,
+        owns_state: bool,
         copied_source_var_map: type_clone_source.ScopedVarMapping,
         source_var_map: std.AutoHashMap(TypeKey, Var),
         instantiation_var_map: std.AutoHashMap(Var, Var),
@@ -688,13 +668,23 @@ pub const Lowerer = struct {
         ) std.mem.Allocator.Error!void {
             self.allocator = allocator;
             if (parent) |scope| {
-                self.workspace = scope.workspace;
-                self.owns_workspace = false;
+                self.module_idx = scope.module_idx;
+                self.type_store = scope.type_store;
+                self.ident_store = scope.ident_store;
+                self.owns_state = false;
             } else {
-                self.workspace = try allocator.create(TypeWorkspace);
-                errdefer allocator.destroy(self.workspace);
-                self.workspace.* = try TypeWorkspace.initEmpty(allocator, module);
-                self.owns_workspace = true;
+                self.module_idx = module.source_module.module_idx;
+                self.type_store = try allocator.create(types.Store);
+                errdefer allocator.destroy(self.type_store);
+                self.type_store.* = try types.Store.init(allocator);
+                errdefer self.type_store.deinit();
+
+                self.ident_store = try allocator.create(base.Ident.Store);
+                errdefer allocator.destroy(self.ident_store);
+                self.ident_store.* = try base.Ident.Store.initCapacity(allocator, 16);
+                errdefer self.ident_store.deinit(allocator);
+
+                self.owns_state = true;
             }
 
             self.initWithRankBehavior(.ignore_rank);
@@ -774,8 +764,8 @@ pub const Lowerer = struct {
             self.nominal_type_cache = std.StringHashMap(type_mod.TypeId).init(self.allocator);
             self.scratch_nominal_key = .empty;
             self.instantiator = .{
-                .store = &self.workspace.type_store,
-                .idents = &self.workspace.ident_store,
+                .store = self.type_store,
+                .idents = self.ident_store,
                 .var_map = &self.instantiation_var_map,
                 .current_rank = .outermost,
                 .rigid_behavior = .fresh_flex,
@@ -784,19 +774,19 @@ pub const Lowerer = struct {
         }
 
         fn typeStoreConst(self: *const TypeCloneScope) *const types.Store {
-            return &self.workspace.type_store;
+            return self.type_store;
         }
 
         fn typeStoreMut(self: *TypeCloneScope) *types.Store {
-            return &self.workspace.type_store;
+            return self.type_store;
         }
 
         fn identStoreConst(self: *const TypeCloneScope) *const base.Ident.Store {
-            return &self.workspace.ident_store;
+            return self.ident_store;
         }
 
         fn identStoreMut(self: *TypeCloneScope) *base.Ident.Store {
-            return &self.workspace.ident_store;
+            return self.ident_store;
         }
 
         fn getIdent(self: *const TypeCloneScope, idx: base.Ident.Idx) []const u8 {
@@ -817,9 +807,11 @@ pub const Lowerer = struct {
             self.instantiation_var_map.deinit();
             self.copied_source_var_map.deinit();
             self.source_var_map.deinit();
-            if (self.owns_workspace) {
-                self.workspace.deinit(self.allocator);
-                self.allocator.destroy(self.workspace);
+            if (self.owns_state) {
+                self.ident_store.deinit(self.allocator);
+                self.allocator.destroy(self.ident_store);
+                self.type_store.deinit();
+                self.allocator.destroy(self.type_store);
             }
         }
     };
