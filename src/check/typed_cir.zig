@@ -165,6 +165,24 @@ pub const Modules = struct {
         };
     }
 
+    pub fn resolveAttachedMethodTargetFromSourceVar(
+        self: @This(),
+        source_module_idx: u32,
+        source_var: Var,
+        method_name: []const u8,
+    ) ?ResolvedMethodTarget {
+        const source_module = self.module(source_module_idx);
+        const receiver = source_module.dispatchReceiverIdentity(source_var) orelse return null;
+        const defining = self.resolveExternalIdent(
+            source_module.getIdent(receiver.origin_module),
+            source_module.getIdent(receiver.type_ident),
+        ) orelse return null;
+        return self.module(defining.module_idx).resolveAttachedMethodTargetByText(
+            source_module.getIdent(receiver.type_ident),
+            method_name,
+        );
+    }
+
 };
 
 pub const Module = struct {

@@ -6014,9 +6014,20 @@ pub const Lowerer = struct {
             break :blk source_var;
         } else null;
 
-        const resolved_target = if (source_receiver_var) |source_var|
-            try self.resolveAttachedMethodTargetFromSourceVar(module_idx, source_var, method_name)
-        else
+        const resolved_target = if (source_receiver_var) |source_var| blk: {
+            const resolved = self.ctx.source_modules.resolveAttachedMethodTargetFromSourceVar(
+                module_idx,
+                source_var,
+                typed_cir_module.getIdent(method_name),
+            ) orelse debugPanic(
+                "monotype static dispatch invariant violated: missing attached method for source receiver var {d} in module {d}",
+                .{ @intFromEnum(source_var), module_idx },
+            );
+            break :blk ResolvedTarget{
+                .module_idx = resolved.module_idx,
+                .def_idx = resolved.def_idx,
+            };
+        } else
             debugPanic(
                 "monotype static dispatch invariant violated: method call missing explicit source receiver type in module {d}",
                 .{module_idx},
@@ -6074,11 +6085,18 @@ pub const Lowerer = struct {
             .nominal => |_| {
                 const method_name = self.ctx.typedCirModule(module_idx).commonIdents().is_eq;
                 const source_receiver_var = self.ctx.typedCirModule(module_idx).exprType(binop.lhs);
-                const target = try self.resolveAttachedMethodTargetFromSourceVar(
+                const resolved = self.ctx.source_modules.resolveAttachedMethodTargetFromSourceVar(
                     module_idx,
                     source_receiver_var,
-                    method_name,
+                    self.ctx.typedCirModule(module_idx).getIdent(method_name),
+                ) orelse debugPanic(
+                    "monotype static dispatch invariant violated: missing attached method for source receiver var {d} in module {d}",
+                    .{ @intFromEnum(source_receiver_var), module_idx },
                 );
+                const target: ResolvedTarget = .{
+                    .module_idx = resolved.module_idx,
+                    .def_idx = resolved.def_idx,
+                };
                 const source_fn_var = try self.instantiateTopLevelDefSourceVar(type_scope, target.module_idx, target.def_idx);
                 const arg_exprs = [_]CIR.Expr.Idx{ binop.lhs, binop.rhs };
 
@@ -9786,59 +9804,6 @@ pub const Lowerer = struct {
         }
         return buf.toOwnedSlice();
     }
-
-    const DispatchReceiverIdentity = struct {
-        module_idx: u32,
-        type_name: []const u8,
-    };
-
-    fn resolveAttachedMethodTargetFromSourceVar(
-        self: *Lowerer,
-        source_module_idx: u32,
-        source_var: Var,
-        method_name: base.Ident.Idx,
-    ) std.mem.Allocator.Error!ResolvedTarget {
-        const source_module = self.ctx.typedCirModule(source_module_idx);
-        const method_name_text = source_module.getIdent(method_name);
-        const receiver = self.requireSourceDispatchReceiverIdentity(source_module_idx, source_var);
-        const receiver_module = self.ctx.typedCirModule(receiver.module_idx);
-        const resolved = receiver_module.resolveAttachedMethodTargetByText(
-            receiver.type_name,
-            method_name_text,
-        ) orelse debugPanic(
-            "monotype static dispatch invariant violated: missing attached method {s}.{s} in module {d}",
-            .{ receiver.type_name, method_name_text, receiver.module_idx },
-        );
-        return .{
-            .module_idx = resolved.module_idx,
-            .def_idx = resolved.def_idx,
-        };
-    }
-
-    fn requireSourceDispatchReceiverIdentity(
-        self: *const Lowerer,
-        source_module_idx: u32,
-        source_var: Var,
-    ) DispatchReceiverIdentity {
-        const source_module = self.ctx.typedCirModule(source_module_idx);
-        const receiver = source_module.dispatchReceiverIdentity(source_var) orelse
-            debugPanic(
-                "monotype static dispatch invariant violated: source receiver var {d} is not nominal in module {d}",
-                .{ @intFromEnum(source_var), source_module_idx },
-            );
-        const resolved = self.ctx.source_modules.resolveExternalIdent(
-            source_module.getIdent(receiver.origin_module),
-            source_module.getIdent(receiver.type_ident),
-        ) orelse debugPanic(
-            "monotype static dispatch invariant violated: missing receiver type identity in source module {d}",
-            .{source_module_idx},
-        );
-        return .{
-            .module_idx = resolved.module_idx,
-            .type_name = source_module.getIdent(receiver.type_ident),
-        };
-    }
-
 
     fn lookupOrSpecializeExternal(
         self: *Lowerer,
