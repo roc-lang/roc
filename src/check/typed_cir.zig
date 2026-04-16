@@ -85,6 +85,11 @@ pub const Modules = struct {
         def_idx: CIR.Def.Idx,
     };
 
+    pub const ResolvedExternalIdent = struct {
+        module_idx: u32,
+        ident: Ident.Idx,
+    };
+
     pub const SourceModule = union(enum) {
         precompiled: *ModuleEnv,
         owned_checked: OwnedCheckedModule,
@@ -136,6 +141,27 @@ pub const Modules = struct {
             .allocator = self.allocator,
             .module_idx = module_idx,
             .data_store = @constCast(&self.modules[module_idx]),
+        };
+    }
+
+    pub fn moduleIdxByName(self: @This(), target_name: []const u8) ?u32 {
+        for (0..self.moduleCount()) |idx| {
+            if (std.mem.eql(u8, self.module(@intCast(idx)).name(), target_name)) return @intCast(idx);
+        }
+        return null;
+    }
+
+    pub fn resolveExternalIdent(
+        self: @This(),
+        origin_module_name: []const u8,
+        ident_text: []const u8,
+    ) ?ResolvedExternalIdent {
+        const module_idx = self.moduleIdxByName(origin_module_name) orelse return null;
+        const module_ = self.module(module_idx);
+        const ident = module_.findCommonIdent(ident_text) orelse return null;
+        return .{
+            .module_idx = module_idx,
+            .ident = ident,
         };
     }
 
@@ -199,6 +225,10 @@ pub const Module = struct {
 
     pub fn getString(self: @This(), idx: StringLiteral.Idx) []const u8 {
         return self.env().getString(idx);
+    }
+
+    pub fn findCommonIdent(self: @This(), text: []const u8) ?Ident.Idx {
+        return self.identStoreConst().findByString(text);
     }
 
     pub fn name(self: @This()) []const u8 {

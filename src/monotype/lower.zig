@@ -111,10 +111,6 @@ const Ctx = struct {
             return self.source_module.evaluationOrder();
         }
 
-        pub fn findCommonIdent(self: @This(), text: []const u8) ?Ident.Idx {
-            return self.identStoreConst().findByString(text);
-        }
-
         pub fn getIdent(self: @This(), idx: Ident.Idx) []const u8 {
             return self.identStoreConst().getText(idx);
         }
@@ -177,14 +173,6 @@ const Ctx = struct {
 
         pub fn exprIdxFromTypeVar(self: @This(), var_: Var) ?CIR.Expr.Idx {
             return self.source_module.exprIdxFromTypeVar(var_);
-        }
-
-        pub fn resolveAttachedMethodTargetByIdents(
-            self: @This(),
-            local_type_ident: Ident.Idx,
-            local_method_ident: Ident.Idx,
-        ) ?typed_cir.Modules.ResolvedMethodTarget {
-            return self.source_module.resolveAttachedMethodTargetByIdents(local_type_ident, local_method_ident);
         }
 
         pub fn resolveAttachedMethodTargetByText(
@@ -295,16 +283,6 @@ const Ctx = struct {
 
     fn moduleCount(self: *const Ctx) usize {
         return self.source_modules.moduleCount();
-    }
-
-    fn findModuleIdxByName(self: *const Ctx, target_name: []const u8) u32 {
-        for (0..self.source_modules.moduleCount()) |idx| {
-            if (std.mem.eql(u8, self.source_modules.module(@intCast(idx)).name(), target_name)) return @intCast(idx);
-        }
-        return debugPanic(
-            "monotype invariant violated: missing target module {s}",
-            .{target_name},
-        );
     }
 
     fn getTypeIdentText(self: *const Ctx, module_idx: u32, ident: base.Ident.Idx) []const u8 {
@@ -8143,9 +8121,15 @@ pub const Lowerer = struct {
         nominal_type_id: type_mod.TypeId,
         nominal: types.NominalType,
     ) std.mem.Allocator.Error!type_mod.Content {
-        const defining = try self.resolveNominalDefiningIdentity(type_scope, nominal);
+        const defining = self.ctx.source_modules.resolveExternalIdent(
+            type_scope.getIdent(nominal.origin_module),
+            type_scope.getIdent(nominal.ident.ident_idx),
+        ) orelse debugPanic(
+            "monotype.lowerNominalType missing target ident in defining module",
+            .{},
+        );
+        const defining_module = self.ctx.typedCirModule(defining.module_idx);
         const defining_ident = defining.ident;
-        const defining_module = defining.module;
 
         if (defining_ident.eql(defining_module.commonIdents().str) or defining_ident.eql(defining_module.commonIdents().builtin_str)) {
             return .{ .primitive = .str };
@@ -8200,30 +8184,6 @@ pub const Lowerer = struct {
             .args = try self.ctx.types.dupeTypeIds(lowered_args),
             .backing = try self.lowerInstantiatedType(module_idx, type_scope, backing_var),
         } };
-    }
-
-    const NominalDefiningIdentity = struct {
-        module_idx: u32,
-        module: Ctx.Module,
-        ident: base.Ident.Idx,
-    };
-
-    fn resolveNominalDefiningIdentity(
-        self: *const Lowerer,
-        type_scope: *const TypeScope,
-        nominal: types.NominalType,
-    ) std.mem.Allocator.Error!NominalDefiningIdentity {
-        const defining_module_idx = self.ctx.findModuleIdxByName(type_scope.getIdent(nominal.origin_module));
-        const defining_module = self.ctx.typedCirModule(defining_module_idx);
-        const defining_ident = defining_module.findCommonIdent(type_scope.getIdent(nominal.ident.ident_idx)) orelse debugPanic(
-            "monotype.lowerNominalType missing target ident in defining module",
-            .{},
-        );
-        return .{
-            .module_idx = defining_module_idx,
-            .module = defining_module,
-            .ident = defining_ident,
-        };
     }
 
     fn appendNominalKeyValue(
@@ -9866,8 +9826,15 @@ pub const Lowerer = struct {
                 "monotype static dispatch invariant violated: source receiver var {d} is not nominal in module {d}",
                 .{ @intFromEnum(source_var), source_module_idx },
             );
+        const resolved = self.ctx.source_modules.resolveExternalIdent(
+            source_module.getIdent(receiver.origin_module),
+            source_module.getIdent(receiver.type_ident),
+        ) orelse debugPanic(
+            "monotype static dispatch invariant violated: missing receiver type identity in source module {d}",
+            .{source_module_idx},
+        );
         return .{
-            .module_idx = self.ctx.findModuleIdxByName(source_module.getIdent(receiver.origin_module)),
+            .module_idx = resolved.module_idx,
             .type_name = source_module.getIdent(receiver.type_ident),
         };
     }

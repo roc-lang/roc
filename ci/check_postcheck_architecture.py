@@ -32,6 +32,8 @@ RULES = (
     ("workspace-materialize-content", re.compile(r"\bmaterializeSourceContentIntoWorkspaceVar\b")),
     ("workspace-merge-flex", re.compile(r"\bmergeSourceFlexLikeIntoWorkspaceVar\b")),
     ("workspace-compute-call-result", re.compile(r"\bcomputeAppliedFunctionResultVar\b")),
+    ("module-name-scan", re.compile(r"\bfindModuleIdxByName\b")),
+    ("nominal-identity-wrapper", re.compile(r"\bresolveNominalDefiningIdentity\b")),
     ("canonical-source-lookup", re.compile(r"\blookupFnByCanonicalSource\b")),
     ("nullable-recorded-dispatch-lowering", re.compile(r"\)\s*std\.mem\.Allocator\.Error!\?LoweredCall\s*\{")),
     ("nullable-attached-method-target", re.compile(r"\)\s*std\.mem\.Allocator\.Error!\?ResolvedTarget\s*\{")),
