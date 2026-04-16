@@ -580,10 +580,7 @@ pub const Lowerer = struct {
     };
 
     const TypeCloneScope = struct {
-        const TypeKey = struct {
-            module_idx: u32,
-            var_: Var,
-        };
+        const TypeKey = clone_inst.TypeKey;
         const ExprKey = struct {
             module_idx: u32,
             expr_idx: CIR.Expr.Idx,
@@ -640,8 +637,7 @@ pub const Lowerer = struct {
         type_store: *types.Store,
         ident_store: *base.Ident.Store,
         owns_state: bool,
-        cloned_source_var_map: clone_inst.ScopedCloneMap,
-        source_var_map: std.AutoHashMap(TypeKey, Var),
+        source_var_map: clone_inst.ScopedCloneMap,
         instantiation_var_map: std.AutoHashMap(Var, Var),
         active_type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
         provisional_type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
@@ -731,10 +727,6 @@ pub const Lowerer = struct {
                 while (iter.next()) |entry| {
                     try self.source_var_map.put(entry.key_ptr.*, entry.value_ptr.*);
                 }
-                var copied_iter = scope.cloned_source_var_map.iterator();
-                while (copied_iter.next()) |entry| {
-                    try self.cloned_source_var_map.put(entry.key_ptr.*, entry.value_ptr.*);
-                }
                 var inst_iter = scope.instantiation_var_map.iterator();
                 while (inst_iter.next()) |entry| {
                     try self.instantiation_var_map.put(entry.key_ptr.*, entry.value_ptr.*);
@@ -754,8 +746,7 @@ pub const Lowerer = struct {
             self: *TypeCloneScope,
             rank_behavior: Instantiator.RankBehavior,
         ) void {
-            self.source_var_map = std.AutoHashMap(TypeKey, Var).init(self.allocator);
-            self.cloned_source_var_map = clone_inst.ScopedCloneMap.init(self.allocator);
+            self.source_var_map = clone_inst.ScopedCloneMap.init(self.allocator);
             self.instantiation_var_map = std.AutoHashMap(Var, Var).init(self.allocator);
             self.active_type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(self.allocator);
             self.provisional_type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(self.allocator);
@@ -805,7 +796,6 @@ pub const Lowerer = struct {
             self.provisional_type_cache.deinit();
             self.type_cache.deinit();
             self.instantiation_var_map.deinit();
-            self.cloned_source_var_map.deinit();
             self.source_var_map.deinit();
             if (self.owns_state) {
                 self.ident_store.deinit(self.allocator);
@@ -10467,12 +10457,14 @@ pub const Lowerer = struct {
         const key = self.sourceTypeKey(source_module_idx, source_var);
         if (type_scope.source_var_map.get(key)) |scoped| return scoped;
         const source_module = self.ctx.typedCirModule(source_module_idx);
+        var clone_map = clone_inst.ScopedCloneMap.init(self.allocator);
+        defer clone_map.deinit();
         const copied_root = try clone_inst.copyVarFromModule(
             source_module_idx,
             source_module.typeStoreConst(),
             type_scope.typeStoreMut(),
             source_var,
-            &type_scope.cloned_source_var_map,
+            &clone_map,
             source_module.identStoreConst(),
             type_scope.identStoreMut(),
             self.allocator,

@@ -8,7 +8,7 @@
 const std = @import("std");
 const base = @import("base");
 const types_mod = @import("types");
-const TypeKey = struct {
+pub const TypeKey = struct {
     module_idx: u32,
     var_: Var,
 };
