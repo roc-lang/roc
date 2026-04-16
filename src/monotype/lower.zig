@@ -638,14 +638,12 @@ pub const Lowerer = struct {
         ident_store: *base.Ident.Store,
         owns_state: bool,
         source_var_map: clone_inst.ScopedCloneMap,
-        instantiation_var_map: std.AutoHashMap(Var, Var),
         active_type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
         provisional_type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
         type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
         memo: Memo,
         nominal_type_cache: std.StringHashMap(type_mod.TypeId),
         scratch_nominal_key: std.ArrayList(u8),
-        instantiator: Instantiator,
 
         fn initCloneAll(
             self: *TypeCloneScope,
@@ -683,7 +681,7 @@ pub const Lowerer = struct {
                 self.owns_state = true;
             }
 
-            self.initWithRankBehavior(.ignore_rank);
+            self.initWithRankBehavior();
             if (parent) |scope| {
                 var expr_result_iter = scope.memo.expr_result_var_map.iterator();
                 while (expr_result_iter.next()) |entry| {
@@ -727,10 +725,6 @@ pub const Lowerer = struct {
                 while (iter.next()) |entry| {
                     try self.source_var_map.put(entry.key_ptr.*, entry.value_ptr.*);
                 }
-                var inst_iter = scope.instantiation_var_map.iterator();
-                while (inst_iter.next()) |entry| {
-                    try self.instantiation_var_map.put(entry.key_ptr.*, entry.value_ptr.*);
-                }
                 var type_iter = scope.type_cache.iterator();
                 while (type_iter.next()) |entry| {
                     try self.type_cache.put(entry.key_ptr.*, entry.value_ptr.*);
@@ -742,26 +736,14 @@ pub const Lowerer = struct {
             }
         }
 
-        fn initWithRankBehavior(
-            self: *TypeCloneScope,
-            rank_behavior: Instantiator.RankBehavior,
-        ) void {
+        fn initWithRankBehavior(self: *TypeCloneScope) void {
             self.source_var_map = clone_inst.ScopedCloneMap.init(self.allocator);
-            self.instantiation_var_map = std.AutoHashMap(Var, Var).init(self.allocator);
             self.active_type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(self.allocator);
             self.provisional_type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(self.allocator);
             self.type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(self.allocator);
             self.memo = Memo.init(self.allocator);
             self.nominal_type_cache = std.StringHashMap(type_mod.TypeId).init(self.allocator);
             self.scratch_nominal_key = .empty;
-            self.instantiator = .{
-                .store = self.type_store,
-                .idents = self.ident_store,
-                .var_map = &self.instantiation_var_map,
-                .current_rank = .outermost,
-                .rigid_behavior = .fresh_flex,
-                .rank_behavior = rank_behavior,
-            };
         }
 
         fn typeStoreConst(self: *const TypeCloneScope) *const types.Store {
@@ -787,15 +769,14 @@ pub const Lowerer = struct {
         fn deinit(self: *TypeCloneScope) void {
             var nominal_keys = self.nominal_type_cache.keyIterator();
             while (nominal_keys.next()) |key_ptr| {
-                self.instantiator.store.gpa.free(key_ptr.*);
+                self.allocator.free(key_ptr.*);
             }
             self.nominal_type_cache.deinit();
-            self.scratch_nominal_key.deinit(self.instantiator.store.gpa);
+            self.scratch_nominal_key.deinit(self.allocator);
             self.memo.deinit();
             self.active_type_cache.deinit();
             self.provisional_type_cache.deinit();
             self.type_cache.deinit();
-            self.instantiation_var_map.deinit();
             self.source_var_map.deinit();
             if (self.owns_state) {
                 self.ident_store.deinit(self.allocator);
@@ -1677,7 +1658,7 @@ pub const Lowerer = struct {
             type_scope.identStoreMut(),
             self.allocator,
         );
-        return try type_scope.instantiator.instantiateVar(copied_root);
+        return try self.instantiateScopedVar(type_scope, copied_root);
     }
 
     fn lowerLambdaLikeDefWithEnv(
@@ -2287,7 +2268,7 @@ pub const Lowerer = struct {
         try call_scope.initCloneAllFromParent(self.allocator, self.ctx.typedCirModule(module_idx), type_scope, false);
         errdefer call_scope.deinit();
 
-        const cloned_fn_var = try call_scope.instantiator.instantiateVar(fn_var);
+        const cloned_fn_var = try self.instantiateScopedVar(call_scope, fn_var);
         const arg_vars = try self.allocator.alloc(Var, arg_exprs.len);
         errdefer self.allocator.free(arg_vars);
         const arg_tys = try self.allocator.alloc(type_mod.TypeId, arg_exprs.len);
@@ -9853,10 +9834,27 @@ pub const Lowerer = struct {
             type_scope.identStoreMut(),
             self.allocator,
         );
-        const scoped_root = type_scope.instantiation_var_map.get(copied_root) orelse
-            try type_scope.instantiator.instantiateVar(copied_root);
+        const scoped_root = try self.instantiateScopedVar(type_scope, copied_root);
         try self.putOrAssertSourceVarMapping(type_scope, key, scoped_root);
         return scoped_root;
+    }
+
+    fn instantiateScopedVar(
+        _: *Lowerer,
+        type_scope: *TypeCloneScope,
+        var_: Var,
+    ) std.mem.Allocator.Error!Var {
+        var var_map = std.AutoHashMap(Var, Var).init(type_scope.allocator);
+        defer var_map.deinit();
+        var instantiator = Instantiator{
+            .store = type_scope.typeStoreMut(),
+            .idents = type_scope.identStoreConst(),
+            .var_map = &var_map,
+            .current_rank = .outermost,
+            .rigid_behavior = .fresh_flex,
+            .rank_behavior = .ignore_rank,
+        };
+        return try instantiator.instantiateVar(var_);
     }
 
     fn putOrAssertSourceVarMapping(
