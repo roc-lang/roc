@@ -2106,7 +2106,7 @@ pub const Lowerer = struct {
         try self.collectSolvedExprInfo(module_idx, type_scope, env, self.ctx.typedCirModule(module_idx).expr(expr_idx));
     }
 
-    fn alignWorkspaceVarToCanonical(
+    fn alignScopeVars(
         self: *Lowerer,
         type_scope: *TypeCloneScope,
         canonical_var: Var,
@@ -2114,7 +2114,7 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!void {
         var visited = std.AutoHashMap(AlignVarPair, void).init(self.allocator);
         defer visited.deinit();
-        try self.alignWorkspaceVarToCanonicalVisited(type_scope, canonical_var, aligned_var, &visited);
+        try self.alignScopeVarsVisited(type_scope, canonical_var, aligned_var, &visited);
     }
 
     const AlignVarPair = struct {
@@ -2122,7 +2122,7 @@ pub const Lowerer = struct {
         aligned: Var,
     };
 
-    fn alignWorkspaceVarToCanonicalVisited(
+    fn alignScopeVarsVisited(
         self: *Lowerer,
         type_scope: *TypeCloneScope,
         canonical_var: Var,
@@ -2149,7 +2149,7 @@ pub const Lowerer = struct {
                         else => false,
                     };
                     if (!canonical_is_nominal) {
-                        try self.alignWorkspaceVarToCanonicalVisited(
+                        try self.alignScopeVarsVisited(
                             type_scope,
                             canonical.var_,
                             store.getNominalBackingVar(aligned_nominal),
@@ -2171,7 +2171,7 @@ pub const Lowerer = struct {
                 return;
             },
             .alias => |aligned_alias| {
-                try self.alignWorkspaceVarToCanonicalVisited(
+                try self.alignScopeVarsVisited(
                     type_scope,
                     canonical.var_,
                     store.getAliasBackingVar(aligned_alias),
@@ -2191,7 +2191,7 @@ pub const Lowerer = struct {
                 return;
             },
             .alias => |canonical_alias| {
-                try self.alignWorkspaceVarToCanonicalVisited(
+                try self.alignScopeVarsVisited(
                     type_scope,
                     store.getAliasBackingVar(canonical_alias),
                     aligned.var_,
@@ -2201,7 +2201,7 @@ pub const Lowerer = struct {
             },
             .structure => |canonical_flat| switch (canonical_flat) {
                 .nominal_type => |canonical_nominal| {
-                    try self.alignWorkspaceVarToCanonicalVisited(
+                    try self.alignScopeVarsVisited(
                         type_scope,
                         store.getNominalBackingVar(canonical_nominal),
                         aligned.var_,
@@ -2235,7 +2235,7 @@ pub const Lowerer = struct {
                     }
                     break;
                 }
-                try self.alignWorkspaceVarToCanonicalVisited(type_scope, canonical_arg.?, aligned_arg.?, visited);
+                try self.alignScopeVarsVisited(type_scope, canonical_arg.?, aligned_arg.?, visited);
             }
             const canonical_ret = self.lookupFunctionRetVarInStore(store, canonical.var_) orelse debugPanic(
                 "monotype specialization invariant violated: missing canonical function return while aligning workspace vars",
@@ -2245,7 +2245,7 @@ pub const Lowerer = struct {
                 "monotype specialization invariant violated: missing aligned function return while aligning workspace vars",
                 .{},
             );
-            try self.alignWorkspaceVarToCanonicalVisited(type_scope, canonical_ret, aligned_ret, visited);
+            try self.alignScopeVarsVisited(type_scope, canonical_ret, aligned_ret, visited);
             return;
         }
 
@@ -2261,9 +2261,9 @@ pub const Lowerer = struct {
                         );
                     }
                     for (canonical_args, aligned_args) |canonical_arg, aligned_arg| {
-                        try self.alignWorkspaceVarToCanonicalVisited(type_scope, canonical_arg, aligned_arg, visited);
+                        try self.alignScopeVarsVisited(type_scope, canonical_arg, aligned_arg, visited);
                     }
-                    try self.alignWorkspaceVarToCanonicalVisited(
+                    try self.alignScopeVarsVisited(
                         type_scope,
                         store.getAliasBackingVar(canonical_alias),
                         store.getAliasBackingVar(aligned_alias),
@@ -2271,7 +2271,7 @@ pub const Lowerer = struct {
                     );
                 },
                 else => {
-                    try self.alignWorkspaceVarToCanonicalVisited(
+                    try self.alignScopeVarsVisited(
                         type_scope,
                         store.getAliasBackingVar(canonical_alias),
                         aligned.var_,
@@ -2301,9 +2301,9 @@ pub const Lowerer = struct {
                                 );
                             }
                             for (canonical_args, aligned_args) |canonical_arg, aligned_arg| {
-                                try self.alignWorkspaceVarToCanonicalVisited(type_scope, canonical_arg, aligned_arg, visited);
+                                try self.alignScopeVarsVisited(type_scope, canonical_arg, aligned_arg, visited);
                             }
-                            try self.alignWorkspaceVarToCanonicalVisited(
+                            try self.alignScopeVarsVisited(
                                 type_scope,
                                 store.getNominalBackingVar(canonical_nominal),
                                 store.getNominalBackingVar(aligned_nominal),
@@ -2332,7 +2332,7 @@ pub const Lowerer = struct {
                                 );
                             }
                             for (canonical_elems, aligned_elems) |canonical_elem, aligned_elem| {
-                                try self.alignWorkspaceVarToCanonicalVisited(type_scope, canonical_elem, aligned_elem, visited);
+                                try self.alignScopeVarsVisited(type_scope, canonical_elem, aligned_elem, visited);
                             }
                         },
                         else => debugPanic(
@@ -2380,7 +2380,7 @@ pub const Lowerer = struct {
                                     type_scope.identStoreConst().getText(canonical_field.name),
                                     type_scope.identStoreConst().getText(aligned_field.name),
                                 )) continue;
-                                try self.alignWorkspaceVarToCanonicalVisited(type_scope, canonical_field.var_, aligned_field.var_, visited);
+                                try self.alignScopeVarsVisited(type_scope, canonical_field.var_, aligned_field.var_, visited);
                                 matched_canonical[canonical_idx] = true;
                                 matched = true;
                                 break;
@@ -2417,7 +2417,7 @@ pub const Lowerer = struct {
                                     aligned_terminal_ext,
                                     type_scope,
                                 );
-                            try self.alignWorkspaceVarToCanonicalVisited(type_scope, canonical_residual_var, aligned_residual_var, visited);
+                            try self.alignScopeVarsVisited(type_scope, canonical_residual_var, aligned_residual_var, visited);
                         }
                     },
                     else => debugPanic(
@@ -2460,7 +2460,7 @@ pub const Lowerer = struct {
                                     type_scope.identStoreConst().getText(canonical_field.name),
                                     type_scope.identStoreConst().getText(aligned_field.name),
                                 )) continue;
-                                try self.alignWorkspaceVarToCanonicalVisited(type_scope, canonical_field.var_, aligned_field.var_, visited);
+                                try self.alignScopeVarsVisited(type_scope, canonical_field.var_, aligned_field.var_, visited);
                                 matched_canonical[canonical_idx] = true;
                                 matched = true;
                                 break;
@@ -2497,7 +2497,7 @@ pub const Lowerer = struct {
                                     aligned_terminal_ext,
                                     type_scope,
                                 );
-                            try self.alignWorkspaceVarToCanonicalVisited(type_scope, canonical_residual_var, aligned_residual_var, visited);
+                            try self.alignScopeVarsVisited(type_scope, canonical_residual_var, aligned_residual_var, visited);
                         }
                     },
                     else => debugPanic(
@@ -2546,7 +2546,7 @@ pub const Lowerer = struct {
                                         );
                                     }
                                     for (canonical_args, aligned_args) |canonical_arg, aligned_arg| {
-                                        try self.alignWorkspaceVarToCanonicalVisited(type_scope, canonical_arg, aligned_arg, visited);
+                                        try self.alignScopeVarsVisited(type_scope, canonical_arg, aligned_arg, visited);
                                     }
                                     matched_canonical[canonical_idx] = true;
                                     matched = true;
@@ -2583,7 +2583,7 @@ pub const Lowerer = struct {
                                     type_scope,
                                 );
 
-                            try self.alignWorkspaceVarToCanonicalVisited(
+                            try self.alignScopeVarsVisited(
                                 type_scope,
                                 canonical_residual_var,
                                 aligned_residual_var,
@@ -2705,7 +2705,7 @@ pub const Lowerer = struct {
                                     .{},
                                 );
                             }
-                            try self.alignWorkspaceVarToCanonicalVisited(type_scope, canonical_fn.ret, aligned_fn.ret, visited);
+                            try self.alignScopeVarsVisited(type_scope, canonical_fn.ret, aligned_fn.ret, visited);
                         },
                         else => debugPanic(
                             "monotype specialization invariant violated: function/content mismatch while aligning workspace vars",
@@ -10750,7 +10750,7 @@ pub const Lowerer = struct {
                 },
             },
             .var_ => |canonical_var| switch (aligned_terminal) {
-                .var_ => |aligned_var| try self.alignWorkspaceVarToCanonical(type_scope, canonical_var, aligned_var),
+                .var_ => |aligned_var| try self.alignScopeVars(type_scope, canonical_var, aligned_var),
                 .empty_record => {
                     const resolved = type_scope.typeStoreConst().resolveVar(canonical_var);
                     switch (resolved.desc.content) {
