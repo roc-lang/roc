@@ -1614,7 +1614,7 @@ pub const Lowerer = struct {
         errdefer ident_store.deinit(self.allocator);
         var var_map = std.AutoHashMap(Var, Var).init(self.allocator);
         defer var_map.deinit();
-        const root_var = try clone_inst.copyVar(
+        const root_var = try clone_inst.cloneVar(
             source_store,
             &type_store,
             source_var,
@@ -1649,7 +1649,7 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!Var {
         var var_map = std.AutoHashMap(Var, Var).init(self.allocator);
         defer var_map.deinit();
-        const copied_root = try clone_inst.copyVar(
+        const copied_root = try clone_inst.cloneVar(
             &frozen.type_store,
             type_scope.typeStoreMut(),
             frozen.root_var,
@@ -9824,7 +9824,7 @@ pub const Lowerer = struct {
         const source_module = self.ctx.typedCirModule(source_module_idx);
         var clone_map = clone_inst.ScopedCloneMap.init(self.allocator);
         defer clone_map.deinit();
-        const copied_root = try clone_inst.copyVarFromModule(
+        const copied_root = try clone_inst.cloneVarFromModule(
             source_module_idx,
             source_module.typeStoreConst(),
             type_scope.typeStoreMut(),

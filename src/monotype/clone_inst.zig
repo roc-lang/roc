@@ -43,7 +43,7 @@ fn copyIdent(
     return try dest_idents.insert(allocator, ident_value);
 }
 
-pub fn copyVar(
+pub fn cloneVar(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     source_var: Var,
@@ -76,7 +76,7 @@ pub fn copyVar(
     return placeholder_var;
 }
 
-pub fn copyVarFromModule(
+pub fn cloneVarFromModule(
     source_module_idx: u32,
     source_store: *const TypesStore,
     dest_store: *TypesStore,
@@ -271,7 +271,7 @@ fn copyAlias(
     defer dest_args.deinit(dest_store.gpa);
 
     const origin_backing = source_store.getAliasBackingVar(source_alias);
-    try dest_args.append(dest_store.gpa, try copyVar(
+    try dest_args.append(dest_store.gpa, try cloneVar(
         source_store,
         dest_store,
         origin_backing,
@@ -283,7 +283,7 @@ fn copyAlias(
 
     const origin_args = source_store.sliceAliasArgs(source_alias);
     for (origin_args) |arg_var| {
-        try dest_args.append(dest_store.gpa, try copyVar(
+        try dest_args.append(dest_store.gpa, try cloneVar(
             source_store,
             dest_store,
             arg_var,
@@ -315,7 +315,7 @@ fn copyAliasFromModule(
     defer dest_args.deinit(dest_store.gpa);
 
     const origin_backing = source_store.getAliasBackingVar(source_alias);
-    try dest_args.append(dest_store.gpa, try copyVarFromModule(
+    try dest_args.append(dest_store.gpa, try cloneVarFromModule(
         source_module_idx,
         source_store,
         dest_store,
@@ -328,7 +328,7 @@ fn copyAliasFromModule(
 
     const origin_args = source_store.sliceAliasArgs(source_alias);
     for (origin_args) |arg_var| {
-        try dest_args.append(dest_store.gpa, try copyVarFromModule(
+        try dest_args.append(dest_store.gpa, try cloneVarFromModule(
             source_module_idx,
             source_store,
             dest_store,
@@ -408,7 +408,7 @@ fn copyTuple(
     defer dest_elems.deinit(dest_store.gpa);
 
     for (elems_slice) |elem_var| {
-        try dest_elems.append(dest_store.gpa, try copyVar(
+        try dest_elems.append(dest_store.gpa, try cloneVar(
             source_store,
             dest_store,
             elem_var,
@@ -437,7 +437,7 @@ fn copyTupleFromModule(
     defer dest_elems.deinit(dest_store.gpa);
 
     for (elems_slice) |elem_var| {
-        try dest_elems.append(dest_store.gpa, try copyVarFromModule(
+        try dest_elems.append(dest_store.gpa, try cloneVarFromModule(
             source_module_idx,
             source_store,
             dest_store,
@@ -466,7 +466,7 @@ fn copyFunc(
     defer dest_args.deinit(dest_store.gpa);
 
     for (args_slice) |arg_var| {
-        try dest_args.append(dest_store.gpa, try copyVar(
+        try dest_args.append(dest_store.gpa, try cloneVar(
             source_store,
             dest_store,
             arg_var,
@@ -479,7 +479,7 @@ fn copyFunc(
 
     return .{
         .args = try dest_store.appendVars(dest_args.items),
-        .ret = try copyVar(source_store, dest_store, func.ret, var_mapping, source_idents, dest_idents, allocator),
+        .ret = try cloneVar(source_store, dest_store, func.ret, var_mapping, source_idents, dest_idents, allocator),
         .needs_instantiation = func.needs_instantiation,
     };
 }
@@ -499,7 +499,7 @@ fn copyFuncFromModule(
     defer dest_args.deinit(dest_store.gpa);
 
     for (args_slice) |arg_var| {
-        try dest_args.append(dest_store.gpa, try copyVarFromModule(
+        try dest_args.append(dest_store.gpa, try cloneVarFromModule(
             source_module_idx,
             source_store,
             dest_store,
@@ -513,7 +513,7 @@ fn copyFuncFromModule(
 
     return .{
         .args = try dest_store.appendVars(dest_args.items),
-        .ret = try copyVarFromModule(source_module_idx, source_store, dest_store, func.ret, var_mapping, source_idents, dest_idents, allocator),
+        .ret = try cloneVarFromModule(source_module_idx, source_store, dest_store, func.ret, var_mapping, source_idents, dest_idents, allocator),
         .needs_instantiation = func.needs_instantiation,
     };
 }
@@ -534,7 +534,7 @@ fn copyRecordFields(
     for (source_fields.items(.name), source_fields.items(.var_)) |name, var_| {
         try fresh_fields.append(allocator, .{
             .name = try copyIdent(source_idents, dest_idents, name, allocator),
-            .var_ = try copyVar(source_store, dest_store, var_, var_mapping, source_idents, dest_idents, allocator),
+            .var_ = try cloneVar(source_store, dest_store, var_, var_mapping, source_idents, dest_idents, allocator),
         });
     }
 
@@ -558,7 +558,7 @@ fn copyRecordFieldsFromModule(
     for (source_fields.items(.name), source_fields.items(.var_)) |name, var_| {
         try fresh_fields.append(allocator, .{
             .name = try copyIdent(source_idents, dest_idents, name, allocator),
-            .var_ = try copyVarFromModule(source_module_idx, source_store, dest_store, var_, var_mapping, source_idents, dest_idents, allocator),
+            .var_ = try cloneVarFromModule(source_module_idx, source_store, dest_store, var_, var_mapping, source_idents, dest_idents, allocator),
         });
     }
 
@@ -576,7 +576,7 @@ fn copyRecord(
 ) std.mem.Allocator.Error!Record {
     return .{
         .fields = try copyRecordFields(source_store, dest_store, record.fields, var_mapping, source_idents, dest_idents, allocator),
-        .ext = try copyVar(source_store, dest_store, record.ext, var_mapping, source_idents, dest_idents, allocator),
+        .ext = try cloneVar(source_store, dest_store, record.ext, var_mapping, source_idents, dest_idents, allocator),
     };
 }
 
@@ -592,7 +592,7 @@ fn copyRecordFromModule(
 ) std.mem.Allocator.Error!Record {
     return .{
         .fields = try copyRecordFieldsFromModule(source_module_idx, source_store, dest_store, record.fields, var_mapping, source_idents, dest_idents, allocator),
-        .ext = try copyVarFromModule(source_module_idx, source_store, dest_store, record.ext, var_mapping, source_idents, dest_idents, allocator),
+        .ext = try cloneVarFromModule(source_module_idx, source_store, dest_store, record.ext, var_mapping, source_idents, dest_idents, allocator),
     };
 }
 
@@ -615,7 +615,7 @@ fn copyTagUnion(
         defer dest_args.deinit(dest_store.gpa);
 
         for (args_slice) |arg_var| {
-            try dest_args.append(dest_store.gpa, try copyVar(
+            try dest_args.append(dest_store.gpa, try cloneVar(
                 source_store,
                 dest_store,
                 arg_var,
@@ -634,7 +634,7 @@ fn copyTagUnion(
 
     return .{
         .tags = try dest_store.appendTags(fresh_tags.items),
-        .ext = try copyVar(source_store, dest_store, tag_union.ext, var_mapping, source_idents, dest_idents, allocator),
+        .ext = try cloneVar(source_store, dest_store, tag_union.ext, var_mapping, source_idents, dest_idents, allocator),
     };
 }
 
@@ -658,7 +658,7 @@ fn copyTagUnionFromModule(
         defer dest_args.deinit(dest_store.gpa);
 
         for (args_slice) |arg_var| {
-            try dest_args.append(dest_store.gpa, try copyVarFromModule(
+            try dest_args.append(dest_store.gpa, try cloneVarFromModule(
                 source_module_idx,
                 source_store,
                 dest_store,
@@ -678,7 +678,7 @@ fn copyTagUnionFromModule(
 
     return .{
         .tags = try dest_store.appendTags(fresh_tags.items),
-        .ext = try copyVarFromModule(source_module_idx, source_store, dest_store, tag_union.ext, var_mapping, source_idents, dest_idents, allocator),
+        .ext = try cloneVarFromModule(source_module_idx, source_store, dest_store, tag_union.ext, var_mapping, source_idents, dest_idents, allocator),
     };
 }
 
@@ -695,7 +695,7 @@ fn copyNominalType(
     defer dest_args.deinit(dest_store.gpa);
 
     const origin_backing = source_store.getNominalBackingVar(source_nominal);
-    try dest_args.append(dest_store.gpa, try copyVar(
+    try dest_args.append(dest_store.gpa, try cloneVar(
         source_store,
         dest_store,
         origin_backing,
@@ -707,7 +707,7 @@ fn copyNominalType(
 
     const origin_args = source_store.sliceNominalArgs(source_nominal);
     for (origin_args) |arg_var| {
-        try dest_args.append(dest_store.gpa, try copyVar(
+        try dest_args.append(dest_store.gpa, try cloneVar(
             source_store,
             dest_store,
             arg_var,
@@ -740,7 +740,7 @@ fn copyNominalTypeFromModule(
     defer dest_args.deinit(dest_store.gpa);
 
     const origin_backing = source_store.getNominalBackingVar(source_nominal);
-    try dest_args.append(dest_store.gpa, try copyVarFromModule(
+    try dest_args.append(dest_store.gpa, try cloneVarFromModule(
         source_module_idx,
         source_store,
         dest_store,
@@ -753,7 +753,7 @@ fn copyNominalTypeFromModule(
 
     const origin_args = source_store.sliceNominalArgs(source_nominal);
     for (origin_args) |arg_var| {
-        try dest_args.append(dest_store.gpa, try copyVarFromModule(
+        try dest_args.append(dest_store.gpa, try cloneVarFromModule(
             source_module_idx,
             source_store,
             dest_store,
@@ -790,7 +790,7 @@ fn copyStaticDispatchConstraints(
     for (source_store.sliceStaticDispatchConstraints(source_constraints)) |source_constraint| {
         var dest_constraint = source_constraint;
         dest_constraint.fn_name = try copyIdent(source_idents, dest_idents, source_constraint.fn_name, allocator);
-        dest_constraint.fn_var = try copyVar(
+        dest_constraint.fn_var = try cloneVar(
             source_store,
             dest_store,
             source_constraint.fn_var,
@@ -823,7 +823,7 @@ fn copyStaticDispatchConstraintsFromModule(
     for (source_store.sliceStaticDispatchConstraints(source_constraints)) |source_constraint| {
         var dest_constraint = source_constraint;
         dest_constraint.fn_name = try copyIdent(source_idents, dest_idents, source_constraint.fn_name, allocator);
-        dest_constraint.fn_var = try copyVarFromModule(
+        dest_constraint.fn_var = try cloneVarFromModule(
             source_module_idx,
             source_store,
             dest_store,
