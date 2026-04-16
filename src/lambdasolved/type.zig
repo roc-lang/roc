@@ -402,11 +402,11 @@ pub const Store = struct {
 
         var prev = tags[0];
         for (tags[1..]) |tag| {
-            if (@intFromEnum(tag.name) > @intFromEnum(prev.name)) {
+            if (@as(u32, @bitCast(tag.name)) > @as(u32, @bitCast(prev.name))) {
                 prev = tag;
                 continue;
             }
-            if (@intFromEnum(tag.name) < @intFromEnum(prev.name)) {
+            if (@as(u32, @bitCast(tag.name)) < @as(u32, @bitCast(prev.name))) {
                 debugPanic("lambdasolved.type tag constructors were not pre-sorted");
             }
 

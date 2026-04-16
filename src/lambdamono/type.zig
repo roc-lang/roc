@@ -278,7 +278,7 @@ pub const Store = struct {
 
         const root_content = self.types.items[@intFromEnum(root)];
         switch (root_content) {
-            .placeholder => debugPanic("lambdamono.type internTypeId encountered unresolved placeholder"),
+            .placeholder => debugPanic("lambdamono.type internTypeId encountered unresolved placeholder", .{}),
             .link => unreachable,
             else => {},
         }
@@ -538,14 +538,14 @@ pub const Store = struct {
             }
 
             if (prev.args.len != tag.args.len) {
-                debugPanic("lambdamono.type duplicate tag constructor had different arity");
+                debugPanic("lambdamono.type duplicate tag constructor had different arity", .{});
             }
             for (prev.args, tag.args) |prev_arg, tag_arg| {
                 if (!self.equalIds(prev_arg, tag_arg)) {
-                    debugPanic("lambdamono.type duplicate tag constructor had different payload types");
+                    debugPanic("lambdamono.type duplicate tag constructor had different payload types", .{});
                 }
             }
-            debugPanic("lambdamono.type duplicate tag constructor reached interning");
+            debugPanic("lambdamono.type duplicate tag constructor reached interning", .{});
         }
     }
 

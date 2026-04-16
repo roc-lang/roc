@@ -2855,7 +2855,7 @@ const Lowerer = struct {
     }
 
     fn tagUnionIsInternalLambdaSet(
-        self: *Lowerer,
+        _: *Lowerer,
         tags_span: []const type_mod.Tag,
     ) bool {
         const tags = tags_span;
@@ -3507,7 +3507,7 @@ const Lowerer = struct {
     }
 
     fn commonErasedCaptureTypeFromExecutable(
-        self: *Lowerer,
+        _: *Lowerer,
         tags_span: []const type_mod.Tag,
     ) std.mem.Allocator.Error!?type_mod.TypeId {
         const tags = tags_span;

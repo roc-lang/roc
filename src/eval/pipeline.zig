@@ -506,7 +506,7 @@ fn debugValidateMonotypeTypes(types_store: *const monotype.Type.Store) void {
                 debugAssertValidMonoTypeRef(@enumFromInt(@as(u32, @intCast(i))), "link.target", target, type_len);
             },
             .nominal => |nominal| {
-                for (types_store.sliceTypeSpan(nominal.args)) |arg| {
+                for (nominal.args) |arg| {
                     debugAssertValidMonoTypeRef(@enumFromInt(@as(u32, @intCast(i))), "nominal.arg", arg, type_len);
                 }
                 debugAssertValidMonoTypeRef(@enumFromInt(@as(u32, @intCast(i))), "nominal.backing", nominal.backing, type_len);
@@ -522,14 +522,14 @@ fn debugValidateMonotypeTypes(types_store: *const monotype.Type.Store) void {
             .box => |elem| {
                 debugAssertValidMonoTypeRef(@enumFromInt(@as(u32, @intCast(i))), "box.elem", elem, type_len);
             },
-            .tuple => |tuple| for (types_store.sliceTypeSpan(tuple)) |elem| {
+            .tuple => |tuple| for (tuple) |elem| {
                 debugAssertValidMonoTypeRef(@enumFromInt(@as(u32, @intCast(i))), "tuple.elem", elem, type_len);
             },
-            .record => |record| for (types_store.sliceFields(record.fields)) |field| {
+            .record => |record| for (record.fields) |field| {
                 debugAssertValidMonoTypeRef(@enumFromInt(@as(u32, @intCast(i))), "record.field", field.ty, type_len);
             },
-            .tag_union => |tag_union| for (types_store.sliceTags(tag_union.tags)) |tag| {
-                for (types_store.sliceTypeSpan(tag.args)) |arg| {
+            .tag_union => |tag_union| for (tag_union.tags) |tag| {
+                for (tag.args) |arg| {
                     debugAssertValidMonoTypeRef(@enumFromInt(@as(u32, @intCast(i))), "tag.arg", arg, type_len);
                 }
             },

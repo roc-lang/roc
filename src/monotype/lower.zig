@@ -177,6 +177,30 @@ const Ctx = struct {
             return self.source_module.exprIdxFromTypeVar(var_);
         }
 
+        pub fn exprNeedsInstantiation(self: @This(), idx: CIR.Expr.Idx) bool {
+            return self.source_module.exprNeedsInstantiation(idx);
+        }
+
+        pub fn exprHasErrType(self: @This(), idx: CIR.Expr.Idx) bool {
+            return self.source_module.exprHasErrType(idx);
+        }
+
+        pub fn exprDefaultsToDec(self: @This(), idx: CIR.Expr.Idx) bool {
+            return self.source_module.exprDefaultsToDec(idx);
+        }
+
+        pub fn curriedFnShape(self: @This(), fn_var: Var) std.mem.Allocator.Error!typed_cir.Module.CurriedFnShape {
+            return self.source_module.curriedFnShape(fn_var);
+        }
+
+        pub fn isBuiltinStrInspectDef(self: @This(), def_idx: CIR.Def.Idx) bool {
+            return self.source_module.isBuiltinStrInspectDef(def_idx);
+        }
+
+        pub fn sourceVarRoot(self: @This(), var_: Var) Var {
+            return self.source_module.sourceVarRoot(var_);
+        }
+
         pub fn getStatement(self: @This(), idx: CIR.Statement.Idx) CIR.Statement {
             return self.source_module.getStatement(idx);
         }
@@ -1316,8 +1340,8 @@ pub const Lowerer = struct {
                 defer type_scope.deinit();
                 var binding_env = BindingEnv.init(self.allocator);
                 defer binding_env.deinit();
-                const bind_var = solved_def.pattern.ty();
-                const bind_expected_var = try self.instantiateSourceVar(&type_scope, module_idx, bind_var);
+                const expr_var = solved_def.expr.ty();
+                const bind_expected_var = try self.instantiateSourceVar(&type_scope, module_idx, expr_var);
                 try self.collectExprInfoWithResultVar(
                     module_idx,
                     &type_scope,
@@ -1363,8 +1387,8 @@ pub const Lowerer = struct {
         defer type_scope.deinit();
         var binding_env = BindingEnv.init(self.allocator);
         defer binding_env.deinit();
-        const bind_var = solved_def.pattern.ty();
-        const bind_expected_var = try self.instantiateSourceVar(&type_scope, module_idx, bind_var);
+        const expr_var = solved_def.expr.ty();
+        const bind_expected_var = try self.instantiateSourceVar(&type_scope, module_idx, expr_var);
         try self.collectExprInfoWithResultVar(
             module_idx,
             &type_scope,
@@ -1643,14 +1667,13 @@ pub const Lowerer = struct {
         const source_expr_var = solved_expr.ty();
         const source_seed_source_var = source_seed_var orelse source_expr_var;
         _ = expected_var;
-        _ = source_expr_var;
         const typed_cir_module = self.ctx.typedCirModule(module_idx);
         const source_fn_var = source_seed_source_var;
         var source_fn_shape = try typed_cir_module.curriedFnShape(source_fn_var);
         defer source_fn_shape.deinit(self.allocator);
         const source_result_var = source_fn_shape.ret;
         const result_ty = try self.instantiateSourceVarType(module_idx, type_scope, source_result_var);
-        const result_var = source_result_var;
+        const result_var = try self.instantiateSourceVar(type_scope, module_idx, source_result_var);
 
         const lambda = switch (expr) {
             .e_lambda => |lambda| lambda,
@@ -1762,6 +1785,7 @@ pub const Lowerer = struct {
         const first_arg_ty = try self.instantiateSourceVarType(module_idx, type_scope, first_arg_source_var);
         const source_result_var = source_fn_shape.ret;
         const source_result_ty = try self.instantiateSourceVarType(module_idx, type_scope, source_result_var);
+        const scoped_result_var = try self.instantiateSourceVar(type_scope, module_idx, source_result_var);
         const remaining_after_current = remaining_arg_patterns.len - 1;
         const result_ty = if (remaining_after_current == 0)
             source_result_ty
@@ -1774,7 +1798,7 @@ pub const Lowerer = struct {
                 remaining_after_current,
                 source_result_ty,
             );
-        const final_result_var = if (remaining_after_current == 0) source_result_var else null;
+        const final_result_var = if (remaining_after_current == 0) scoped_result_var else null;
         const first_pattern = remaining_arg_patterns[0];
         const first_arg = try self.bindLambdaArg(
             module_idx,
@@ -1828,13 +1852,17 @@ pub const Lowerer = struct {
         source_fn_var: ?Var,
         next_arg_index: usize,
     ) std.mem.Allocator.Error!ast.ExprId {
+        const scoped_arg_solved_var = if (arg_solved_var) |var_|
+            try self.instantiateSourceVar(type_scope, module_idx, var_)
+        else
+            null;
         try self.collectPatternInfo(module_idx, type_scope, pattern_idx);
         try self.recordPatternStructuralInfoFromSourceType(
             module_idx,
             type_scope,
             pattern_idx,
             arg_bind.ty,
-            arg_solved_var,
+            scoped_arg_solved_var,
         );
         if (try self.patternIsIrrefutableStructural(module_idx, type_scope, pattern_idx)) {
             var body_env = try self.cloneEnv(incoming_env);
@@ -1845,7 +1873,7 @@ pub const Lowerer = struct {
                 module_idx,
                 type_scope,
                 arg_bind,
-                arg_solved_var,
+                scoped_arg_solved_var,
                 pattern_idx,
                 &body_env,
                 &binding_decls,
@@ -1896,7 +1924,7 @@ pub const Lowerer = struct {
                 expected_result_var,
                 arg_expr,
                 arg_bind.ty,
-                arg_solved_var,
+                scoped_arg_solved_var,
                 pattern_idx,
                 pattern_idx,
                 null,
@@ -1914,7 +1942,7 @@ pub const Lowerer = struct {
             type_scope,
             pattern_idx,
             arg_bind.ty,
-            arg_solved_var,
+            scoped_arg_solved_var,
             &branch_env,
             &binding_decls,
         );
@@ -2014,7 +2042,7 @@ pub const Lowerer = struct {
     }
 
     fn bindExprResultVar(
-        _: *Lowerer,
+        self: *Lowerer,
         module_idx: u32,
         type_scope: *TypeScope,
         body_expr_idx: CIR.Expr.Idx,
@@ -2028,7 +2056,21 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .expr_idx = body_expr_idx,
         };
-        if (type_scope.memo.expr_result_var_map.contains(key)) {
+        if (type_scope.memo.expr_result_var_map.get(key)) |existing| {
+            if (existing != result_var) {
+                const solved_expr = self.ctx.typedCirModule(module_idx).expr(body_expr_idx);
+                debugPanic(
+                    "monotype expr invariant violated: attempted to bind expr {d} in module {d} tag {s} source-var {d} to explicit result var {d}, but metadata already stored {d}",
+                    .{
+                        @intFromEnum(body_expr_idx),
+                        module_idx,
+                        @tagName(solved_expr.data),
+                        @intFromEnum(solved_expr.ty()),
+                        @intFromEnum(result_var),
+                        @intFromEnum(existing),
+                    },
+                );
+            }
             return;
         }
         try type_scope.memo.expr_result_var_map.put(key, result_var);
@@ -2042,11 +2084,7 @@ pub const Lowerer = struct {
         expr_idx: CIR.Expr.Idx,
         result_var: ?Var,
     ) std.mem.Allocator.Error!void {
-        const bound_result_var = if (result_var) |explicit|
-            try self.instantiateSourceVar(type_scope, module_idx, explicit)
-        else
-            null;
-        try self.bindExprResultVar(module_idx, type_scope, expr_idx, bound_result_var);
+        try self.bindExprResultVar(module_idx, type_scope, expr_idx, result_var);
         try self.collectSolvedExprInfo(module_idx, type_scope, env, self.ctx.typedCirModule(module_idx).expr(expr_idx));
     }
 
@@ -2313,9 +2351,9 @@ pub const Lowerer = struct {
             self.ctx.typedCirModule(module_idx).exprType(lambda_expr_idx),
         );
         defer lambda_shape.deinit(self.allocator);
-        const result_var = lambda_shape.ret;
+        const result_var = try self.instantiateSourceVar(type_scope, module_idx, lambda_shape.ret);
         return .{
-            .ty = try self.instantiateSourceVarType(module_idx, type_scope, result_var),
+            .ty = try self.instantiateVarType(module_idx, type_scope, result_var),
             .solved_var = result_var,
         };
     }
@@ -5991,9 +6029,7 @@ pub const Lowerer = struct {
             else => null,
         };
 
-        const source_receiver_var = if (args.implicit_receiver) |receiver_expr_idx|
-            typed_cir_module.exprType(receiver_expr_idx)
-        else if (alias_stmt) |stmt_idx| blk: {
+        const source_receiver_var = if (alias_stmt) |stmt_idx| blk: {
             const stmt = typed_cir_module.getStatement(stmt_idx);
             const type_var_anno = switch (stmt) {
                 .s_type_var_alias => |alias| alias.type_var_anno,
@@ -6004,16 +6040,27 @@ pub const Lowerer = struct {
             };
             const source_var = typed_cir_module.typeAnnoType(type_var_anno);
             break :blk source_var;
-        } else null;
+        } else if (args.implicit_receiver) |receiver_expr_idx|
+            typed_cir_module.exprType(receiver_expr_idx)
+        else
+            null;
 
         const resolved_target = if (source_receiver_var) |source_var| blk: {
+            const source_receiver_resolved = typed_cir_module.typeStoreConst().resolveVar(source_var);
             const resolved = self.ctx.source_modules.resolveAttachedMethodTargetFromSourceVar(
                 module_idx,
                 source_var,
                 typed_cir_module.getIdent(method_name),
             ) orelse debugPanic(
-                "monotype static dispatch invariant violated: missing attached method for source receiver var {d} in module {d}",
-                .{ @intFromEnum(source_var), module_idx },
+                "monotype static dispatch invariant violated: missing attached method for expr {d} source receiver var {d} in module {d} resolved-kind {s} alias-stmt {?} expr-tag {s}",
+                .{
+                    @intFromEnum(expr_idx),
+                    @intFromEnum(source_var),
+                    module_idx,
+                    @tagName(source_receiver_resolved.desc.content),
+                    alias_stmt,
+                    @tagName(typed_cir_module.expr(expr_idx).data),
+                },
             );
             break :blk ResolvedTarget{
                 .module_idx = resolved.module_idx,
@@ -6052,7 +6099,7 @@ pub const Lowerer = struct {
                 env,
                 arg_expr_idx,
                 call_info.arg_tys[i],
-                call_info.arg_vars[i],
+                try self.exprResultVar(module_idx, call_info.call_scope, env, arg_expr_idx),
             );
         }
 
@@ -6106,7 +6153,7 @@ pub const Lowerer = struct {
                         env,
                         arg_expr_idx,
                         call_info.arg_tys[i],
-                        call_info.arg_vars[i],
+                        try self.exprResultVar(module_idx, call_info.call_scope, env, arg_expr_idx),
                     );
                 }
 
@@ -6163,7 +6210,7 @@ pub const Lowerer = struct {
                 env,
                 arg_expr_idx,
                 call_info.arg_tys[i],
-                call_info.arg_vars[i],
+                try self.exprResultVar(module_idx, call_info.call_scope, env, arg_expr_idx),
             );
         }
         return .{
@@ -6511,9 +6558,21 @@ pub const Lowerer = struct {
         nominal_ty: type_mod.TypeId,
         expected_var: ?Var,
     ) std.mem.Allocator.Error!ast.ExprId {
+        const nominal_result_var = expected_var orelse try self.exprResultVar(module_idx, type_scope, env, expr_idx);
+        if (@intFromEnum(nominal_result_var) >= type_scope.typeStoreConst().len()) {
+            debugPanic(
+                "monotype nominal invariant violated: transparent nominal expr {d} in module {d} received out-of-scope result var {d} (type-store len {d})",
+                .{
+                    @intFromEnum(expr_idx),
+                    module_idx,
+                    @intFromEnum(nominal_result_var),
+                    type_scope.typeStoreConst().len(),
+                },
+            );
+        }
         const backing_var = self.resolveTransparentBackingVar(
             type_scope,
-            expected_var orelse try self.exprResultVar(module_idx, type_scope, env, expr_idx),
+            nominal_result_var,
         );
         const backing_ty = if (self.ctx.types.getType(nominal_ty) != .placeholder)
             nominal_ty
@@ -7061,11 +7120,12 @@ pub const Lowerer = struct {
         source_ty: type_mod.TypeId,
         source_solved_var: ?Var,
     ) std.mem.Allocator.Error!void {
+        const typed_cir_module = self.ctx.typedCirModule(module_idx);
+        const pattern = typed_cir_module.pattern(pattern_idx).data;
         var effective_source_ty = source_ty;
         if (source_solved_var) |var_| {
-            const pattern = self.ctx.typedCirModule(module_idx).pattern(pattern_idx).data;
             const source_kind = self.ctx.types.getTypePreservingNominal(source_ty);
-            const needs_solved_ty = switch (pattern) {
+            const needs_solved_ty = !self.ctx.types.isFullyResolved(effective_source_ty) or switch (pattern) {
                 .applied_tag => |tag| switch (source_kind) {
                     .tag_union => false,
                     .primitive => |prim| blk: {
@@ -7088,16 +7148,8 @@ pub const Lowerer = struct {
                 );
             }
         }
-        if (!self.ctx.types.isFullyResolved(effective_source_ty)) {
-            return debugPanic(
-                "monotype pattern invariant violated: structural pattern source type was not fully resolved before recording in module {d}",
-                .{module_idx},
-            );
-        }
         try self.recordPatternSourceType(module_idx, type_scope, pattern_idx, effective_source_ty);
 
-        const typed_cir_module = self.ctx.typedCirModule(module_idx);
-        const pattern = self.ctx.typedCirModule(module_idx).pattern(pattern_idx).data;
         switch (pattern) {
             .assign,
             .underscore,
@@ -7989,9 +8041,9 @@ pub const Lowerer = struct {
             return .{ .primitive = .bool };
         }
 
-        std.mem.sort(type_mod.Tag, lowered_tags.items, &self.ctx.idents, struct {
-            fn lessThan(idents: *const base.Ident.Store, a: type_mod.Tag, b: type_mod.Tag) bool {
-                return std.mem.order(u8, idents.getText(a.name), idents.getText(b.name)) == .lt;
+        std.mem.sort(type_mod.Tag, lowered_tags.items, {}, struct {
+            fn lessThan(_: void, a: type_mod.Tag, b: type_mod.Tag) bool {
+                return @as(u32, @bitCast(a.name)) < @as(u32, @bitCast(b.name));
             }
         }.lessThan);
         self.assertDistinctSortedLoweredTags(lowered_tags.items);
@@ -8002,7 +8054,7 @@ pub const Lowerer = struct {
     }
 
     fn assertDistinctSortedLoweredTags(
-        self: *Lowerer,
+        _: *Lowerer,
         tags: []const type_mod.Tag,
     ) void {
         if (tags.len <= 1) return;
@@ -8178,7 +8230,7 @@ pub const Lowerer = struct {
             const target = self.ctx.source_modules.resolveAttachedMethodTarget(
                 defining.module_idx,
                 defining_ident,
-                defining.module.commonIdents().to_inspect,
+                defining_module.commonIdents().to_inspect,
             ) orelse break :blk symbol_mod.Symbol.none;
             const symbol = self.lookupTopLevelDefSymbol(target.module_idx, target.def_idx) orelse debugPanic(
                 "monotype.lowerNominalType missing symbol for resolved to_inspect method",

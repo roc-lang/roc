@@ -455,7 +455,7 @@ pub const Store = struct {
 
         const root_content = self.types.items[@intFromEnum(root)];
         switch (root_content) {
-            .placeholder => debugPanic("monotype.type internTypeId encountered unresolved placeholder"),
+            .placeholder => debugPanic("monotype.type internTypeId encountered unresolved placeholder", .{}),
             .link => unreachable,
             else => {},
         }
@@ -699,22 +699,22 @@ pub const Store = struct {
 
         var prev = tags[0];
         for (tags[1..]) |tag| {
-            if (@intFromEnum(tag.name) > @intFromEnum(prev.name)) {
+            if (@as(u32, @bitCast(tag.name)) > @as(u32, @bitCast(prev.name))) {
                 prev = tag;
                 continue;
             }
-            if (@intFromEnum(tag.name) < @intFromEnum(prev.name)) {
-                debugPanic("monotype.type tag constructors were not pre-sorted");
+            if (@as(u32, @bitCast(tag.name)) < @as(u32, @bitCast(prev.name))) {
+                debugPanic("monotype.type tag constructors were not pre-sorted", .{});
             }
             if (prev.args.len != tag.args.len) {
-                debugPanic("monotype.type duplicate tag constructor had different arity");
+                debugPanic("monotype.type duplicate tag constructor had different arity", .{});
             }
             for (prev.args, tag.args) |prev_arg, tag_arg| {
                 if (!self.equalIds(prev_arg, tag_arg)) {
-                    debugPanic("monotype.type duplicate tag constructor had different payload types");
+                    debugPanic("monotype.type duplicate tag constructor had different payload types", .{});
                 }
             }
-            debugPanic("monotype.type duplicate tag constructor reached interning");
+            debugPanic("monotype.type duplicate tag constructor reached interning", .{});
         }
     }
 

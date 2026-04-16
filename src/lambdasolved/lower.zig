@@ -379,7 +379,7 @@ const Lowerer = struct {
         if (mono_ty == .unbd) {
             return placeholder;
         }
-        if (mono_ty == .tag_union and self.input.types.sliceTags(mono_ty.tag_union.tags).len == 0) {
+        if (mono_ty == .tag_union and mono_ty.tag_union.tags.len == 0) {
             return placeholder;
         }
 
@@ -388,7 +388,7 @@ const Lowerer = struct {
             .unbd => type_mod.Node.unbd,
             .link => unreachable,
             .nominal => |nominal| blk: {
-                const args = self.input.types.sliceTypeSpan(nominal.args);
+                const args = nominal.args;
                 const lowered_args = try self.allocator.alloc(TypeVarId, args.len);
                 defer self.allocator.free(lowered_args);
                 for (args, 0..) |arg, i| {
@@ -413,7 +413,7 @@ const Lowerer = struct {
             .list => |elem| type_mod.Node{ .content = .{ .list = try self.instantiateTypeRec(elem, cache) } },
             .box => |elem| type_mod.Node{ .content = .{ .box = try self.instantiateTypeRec(elem, cache) } },
             .tuple => |tuple| blk: {
-                const elems = self.input.types.sliceTypeSpan(tuple);
+                const elems = tuple;
                 const out = try self.allocator.alloc(TypeVarId, elems.len);
                 defer self.allocator.free(out);
                 for (elems, 0..) |elem, i| {
@@ -422,11 +422,11 @@ const Lowerer = struct {
                 break :blk type_mod.Node{ .content = .{ .tuple = try self.types.addTypeVarSpan(out) } };
             },
             .tag_union => |tag_union| blk: {
-                const tags = self.input.types.sliceTags(tag_union.tags);
+                const tags = tag_union.tags;
                 const out = try self.allocator.alloc(type_mod.Tag, tags.len);
                 defer self.allocator.free(out);
                 for (tags, 0..) |tag, i| {
-                    const arg_ids = self.input.types.sliceTypeSpan(tag.args);
+                    const arg_ids = tag.args;
                     const lowered_args = try self.allocator.alloc(TypeVarId, arg_ids.len);
                     defer self.allocator.free(lowered_args);
                     for (arg_ids, 0..) |arg_id, arg_i| {
@@ -442,7 +442,7 @@ const Lowerer = struct {
                 } } };
             },
             .record => |record| blk: {
-                const fields = self.input.types.sliceFields(record.fields);
+                const fields = record.fields;
                 const out = try self.allocator.alloc(type_mod.Field, fields.len);
                 defer self.allocator.free(out);
                 for (fields, 0..) |field, i| {
@@ -2999,8 +2999,8 @@ fn assertSortedFields(idents: *const base.Ident.Store, fields: []const type_mod.
             idents.getText(field.name),
         )) {
             .lt => prev = field,
-            .eq => debugPanic("lambdasolved lowered duplicate record field"),
-            .gt => debugPanic("lambdasolved lowered record fields were not pre-sorted"),
+            .eq => debugPanic("lambdasolved lowered duplicate record field", .{}),
+            .gt => debugPanic("lambdasolved lowered record fields were not pre-sorted", .{}),
         }
     }
 }
