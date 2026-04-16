@@ -26,6 +26,7 @@ const OwnedCheckedModule = struct {
 
 const ModuleData = struct {
     env: *ModuleEnv,
+    top_level_defs_by_ident: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Def.Idx) = .{},
     ownership: union(enum) {
         borrowed,
         owned_checked: OwnedCheckedModule,
@@ -60,6 +61,7 @@ const ModuleData = struct {
     }
 
     fn deinit(self: *ModuleData, allocator: Allocator) void {
+        self.top_level_defs_by_ident.deinit(allocator);
         switch (self.ownership) {
             .borrowed => {},
             .owned_checked => |owned| {
@@ -79,6 +81,7 @@ const ModuleData = struct {
 pub const Modules = struct {
     allocator: Allocator,
     modules: []ModuleData,
+    module_idxs_by_name: std.StringHashMapUnmanaged(u32),
 
     pub const ResolvedDefTarget = struct {
         module_idx: u32,
@@ -126,14 +129,51 @@ pub const Modules = struct {
             modules[i] = try source_module.initModuleData(allocator);
         }
 
+        var module_idxs_by_name: std.StringHashMapUnmanaged(u32) = .{};
+        errdefer module_idxs_by_name.deinit(allocator);
+
+        for (modules, 0..) |*module_data, i| {
+            const module_ = Module{
+                .allocator = allocator,
+                .module_idx = @intCast(i),
+                .data_store = module_data,
+            };
+            const module_name = module_.name();
+            const module_result = try module_idxs_by_name.getOrPut(allocator, module_name);
+            if (module_result.found_existing) {
+                std.debug.panic("typed_cir invariant violated: duplicate module name {s}", .{module_name});
+            }
+            module_result.value_ptr.* = @intCast(i);
+
+            for (module_.allDefs()) |def_idx| {
+                const def = module_.def(def_idx);
+                if (def.data.kind != .let) continue;
+                switch (def.pattern.data) {
+                    .assign => |assign| {
+                        const def_result = try module_data.top_level_defs_by_ident.getOrPut(allocator, assign.ident, def_idx);
+                        if (def_result.found_existing) {
+                            std.debug.panic(
+                                "typed_cir invariant violated: duplicate top-level def ident in module {s}",
+                                .{module_name},
+                            );
+                        }
+                        def_result.value_ptr.* = def_idx;
+                    },
+                    else => {},
+                }
+            }
+        }
+
         return .{
             .allocator = allocator,
             .modules = modules,
+            .module_idxs_by_name = module_idxs_by_name,
         };
     }
 
     pub fn deinit(self: *Modules) void {
         for (self.modules) |*module_data| module_data.deinit(self.allocator);
+        self.module_idxs_by_name.deinit(self.allocator);
         self.allocator.free(self.modules);
     }
 
@@ -150,10 +190,7 @@ pub const Modules = struct {
     }
 
     pub fn moduleIdxByName(self: @This(), target_name: []const u8) ?u32 {
-        for (0..self.moduleCount()) |idx| {
-            if (std.mem.eql(u8, self.module(@intCast(idx)).name(), target_name)) return @intCast(idx);
-        }
-        return null;
+        return self.module_idxs_by_name.get(target_name);
     }
 
     pub fn resolveExternalIdent(
@@ -347,15 +384,7 @@ pub const Module = struct {
     }
 
     pub fn topLevelDefByIdent(self: @This(), ident: Ident.Idx) ?CIR.Def.Idx {
-        for (self.allDefs()) |def_idx| {
-            const def = self.def(def_idx);
-            if (def.data.kind != .let) continue;
-            switch (def.pattern.data) {
-                .assign => |assign| if (assign.ident.eql(ident)) return def_idx,
-                else => {},
-            }
-        }
-        return null;
+        return self.data_store.top_level_defs_by_ident.get(ident);
     }
 
     pub fn topLevelDefByText(self: @This(), text: []const u8) ?CIR.Def.Idx {
