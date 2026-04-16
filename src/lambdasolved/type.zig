@@ -224,16 +224,9 @@ pub const Store = struct {
             return .{ .start = start_single, .len = 1 };
         }
 
-        const sorted = try self.allocator.dupe(Capture, values);
-        defer self.allocator.free(sorted);
-        std.mem.sort(Capture, sorted, {}, struct {
-            fn lessThan(_: void, a: Capture, b: Capture) bool {
-                return a.symbol.raw() < b.symbol.raw();
-            }
-        }.lessThan);
-
         const start: u32 = @intCast(self.captures.items.len);
-        try self.captures.appendSlice(self.allocator, sorted);
+        assertDistinctSortedCaptures(values);
+        try self.captures.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
@@ -250,16 +243,9 @@ pub const Store = struct {
             return .{ .start = start_single, .len = 1 };
         }
 
-        const sorted = try self.allocator.dupe(Lambda, values);
-        defer self.allocator.free(sorted);
-        std.mem.sort(Lambda, sorted, {}, struct {
-            fn lessThan(_: void, a: Lambda, b: Lambda) bool {
-                return a.symbol.raw() < b.symbol.raw();
-            }
-        }.lessThan);
-
         const start: u32 = @intCast(self.lambdas.items.len);
-        try self.lambdas.appendSlice(self.allocator, sorted);
+        assertDistinctSortedLambdas(values);
+        try self.lambdas.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
@@ -438,6 +424,38 @@ pub const Store = struct {
         }
     }
 };
+
+fn assertDistinctSortedCaptures(values: []const Capture) void {
+    if (values.len <= 1) return;
+
+    var prev = values[0];
+    for (values[1..]) |capture| {
+        if (capture.symbol.raw() > prev.symbol.raw()) {
+            prev = capture;
+            continue;
+        }
+        if (capture.symbol.raw() < prev.symbol.raw()) {
+            debugPanic("lambdasolved.type captures were not pre-sorted");
+        }
+        debugPanic("lambdasolved.type duplicate capture symbol reached addCaptures");
+    }
+}
+
+fn assertDistinctSortedLambdas(values: []const Lambda) void {
+    if (values.len <= 1) return;
+
+    var prev = values[0];
+    for (values[1..]) |lambda| {
+        if (lambda.symbol.raw() > prev.symbol.raw()) {
+            prev = lambda;
+            continue;
+        }
+        if (lambda.symbol.raw() < prev.symbol.raw()) {
+            debugPanic("lambdasolved.type lambdas were not pre-sorted");
+        }
+        debugPanic("lambdasolved.type duplicate lambda symbol reached addLambdas");
+    }
+}
 
 test "lambdasolved type tests" {
     std.testing.refAllDecls(@This());
