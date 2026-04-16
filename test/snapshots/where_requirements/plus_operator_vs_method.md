@@ -28,11 +28,11 @@ result2 : MyType
 result2 = c.plus(d)
 ~~~
 # EXPECTED
-MISSING METHOD - plus_operator_vs_method.md:11:11:11:16
+MISSING MEMBER - plus_operator_vs_method.md:11:11:11:16
 + - :0:0:0:0
-MISSING METHOD - plus_operator_vs_method.md:21:13:21:17
+MISSING MEMBER - plus_operator_vs_method.md:21:13:21:17
 # PROBLEMS
-**MISSING METHOD**
+**MISSING MEMBER**
 The value before this **+** operator has a type that doesn't have a **plus** method:
 **plus_operator_vs_method.md:11:11:11:16:**
 ```roc
@@ -40,25 +40,25 @@ result1 = a + b
 ```
           ^^^^^
 
-The value's type, which does not have a method named **plus**, is:
+The value's type, which does not have a member named **plus**, is:
 
     MyType
 
-**Hint:** The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
+**Hint:** The **+** operator calls a member named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
-**MISSING METHOD**
-This **plus** method is being called on a value whose type doesn't have that method:
+**MISSING MEMBER**
+This **plus** member is being used on a value whose type doesn't provide that member:
 **plus_operator_vs_method.md:21:13:21:17:**
 ```roc
 result2 = c.plus(d)
 ```
             ^^^^
 
-The value's type, which does not have a method named **plus**, is:
+The value's type, which does not have a member named **plus**, is:
 
     MyType
 
-**Hint:** For this to work, the type would need to have a method named **plus** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a member named **plus** in the type's declaration.
 
 # TOKENS
 ~~~zig

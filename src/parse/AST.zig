@@ -469,14 +469,14 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addText(".");
             try report.document.addLineBreak();
             try report.document.addText("Where clauses should look like: ");
-            try report.document.addCodeBlock("where [a.method : Type]");
+            try report.document.addCodeBlock("where [a.SomeTypeAlias]");
         },
         .where_expected_close_bracket => {
             try report.document.addReflowingText("Expected a closing bracket ");
             try report.document.addAnnotated("]", .emphasized);
             try report.document.addLineBreak();
             try report.document.addText("Where clauses should look like: ");
-            try report.document.addCodeBlock("where [a.method : Type]");
+            try report.document.addCodeBlock("where [a.SomeTypeAlias]");
         },
         .where_expected_var => {
             try report.document.addReflowingText("Expected a type variable name here.");
@@ -496,7 +496,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addReflowingText("Method constraints require a colon to separate the method name from its type.");
             try report.document.addLineBreak();
             try report.document.addText("For example: ");
-            try report.document.addCodeBlock("a.method : a -> b");
+            try report.document.addCodeBlock("a.SomeTypeAlias");
         },
         .where_expected_constraints => {
             try report.document.addReflowingText("A ");
@@ -508,7 +508,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addText("For example:");
             try report.document.addLineBreak();
             try report.document.addIndent(1);
-            try report.document.addCodeBlock("where [a.method : a -> b]");
+            try report.document.addCodeBlock("where [a.SomeTypeAlias]");
         },
         .match_branch_wrong_arrow => {
             try report.document.addReflowingText("Match branches use `=>` instead of `->`.");
@@ -2557,7 +2557,7 @@ pub const Expr = union(enum) {
         elem_token: Token.Idx,
         region: TokenizedRegion,
     },
-    local_dispatch: BinOp,
+    arrow_apply: BinOp,
     bin_op: BinOp,
     suffix_single_question: Unary,
     unary_op: Unary,
@@ -2638,7 +2638,7 @@ pub const Expr = union(enum) {
             .tuple => |e| e.region,
             .field_access => |e| e.region,
             .tuple_access => |e| e.region,
-            .local_dispatch => |e| e.region,
+            .arrow_apply => |e| e.region,
             .lambda => |e| e.region,
             .record_updater => |e| e.region,
             .bin_op => |e| e.region,
@@ -2995,9 +2995,9 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .local_dispatch => |a| {
+            .arrow_apply => |a| {
                 const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-local-dispatch");
+                try tree.pushStaticAtom("e-arrow-apply");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 const attrs = tree.beginNode();
 

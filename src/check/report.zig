@@ -1757,8 +1757,8 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
-            D.bytes("This syntax was used for abilities, which have been removed from Roc. Use method constraints like"),
-            D.bytes("where [a.methodName(args) -> ret]").withAnnotation(.inline_code),
+            D.bytes("This syntax was used for abilities, which have been removed from Roc. Use where requirements like"),
+            D.bytes("where [a.SomeTypeAlias]").withAnnotation(.inline_code),
             D.bytes("instead."),
         }, self, &report);
 
@@ -2193,11 +2193,11 @@ pub const ReportBuilder = struct {
                 }
             }
             try report.document.addAnnotated("Hint:", .emphasized);
-            try report.document.addReflowingText(" Anonymous records only have an ");
+            try report.document.addReflowingText(" Anonymous records only support ");
             try report.document.addAnnotated("is_eq", .emphasized);
-            try report.document.addReflowingText(" method if all of their fields have ");
+            try report.document.addReflowingText(" if all of their fields support ");
             try report.document.addAnnotated("is_eq", .emphasized);
-            try report.document.addReflowingText(" methods.");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
         }
     }
@@ -2243,11 +2243,11 @@ pub const ReportBuilder = struct {
                 }
             }
             try report.document.addAnnotated("Hint:", .emphasized);
-            try report.document.addReflowingText(" Tuples only have an ");
+            try report.document.addReflowingText(" Tuples only support ");
             try report.document.addAnnotated("is_eq", .emphasized);
-            try report.document.addReflowingText(" method if all of their elements have ");
+            try report.document.addReflowingText(" if all of their elements support ");
             try report.document.addAnnotated("is_eq", .emphasized);
-            try report.document.addReflowingText(" methods.");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
         }
     }
@@ -2320,11 +2320,11 @@ pub const ReportBuilder = struct {
                 }
             }
             try report.document.addAnnotated("Hint:", .emphasized);
-            try report.document.addReflowingText(" Tag unions only have an ");
+            try report.document.addReflowingText(" Tag unions only support ");
             try report.document.addAnnotated("is_eq", .emphasized);
-            try report.document.addReflowingText(" method if all of their payload types have ");
+            try report.document.addReflowingText(" if all of their payload types support ");
             try report.document.addAnnotated("is_eq", .emphasized);
-            try report.document.addReflowingText(" methods.");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
         }
     }

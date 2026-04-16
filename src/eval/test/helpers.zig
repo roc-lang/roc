@@ -794,7 +794,7 @@ pub fn runExpectTypeMismatchAndCrash(src: []const u8) !void {
     const problems = resources.checker.problems.problems.items;
     var found_dispatch_failure = false;
     for (problems) |problem| {
-        if (problem == .type_mismatch or problem == .static_dispatch) {
+        if (problem == .type_mismatch or problem == .where_requirement) {
             found_dispatch_failure = true;
             break;
         }

@@ -7078,10 +7078,10 @@ pub const Interpreter = struct {
             .assign => |_| {
                 // Bind entire value to this pattern.
                 // Prefer value_rt_var when it provides more concrete type info than value.rt_var.
-                // This is critical for method receivers on polymorphic opaque types (issue #9049):
+                // This is critical for dot-call receivers on polymorphic opaque types (issue #9049):
                 // when Container(Bool).run is called, the receiver's value_rt_var is Container(Bool)
                 // but value.rt_var might be a generic flex var. Using the concrete type ensures
-                // that field access inside the method preserves nominal types like Bool.
+                // that field access inside the callee preserves nominal types like Bool.
                 var copied = try self.pushCopy(value, roc_ops);
                 const value_resolved = self.runtime_types.resolveVar(value.rt_var);
                 const param_resolved = self.runtime_types.resolveVar(value_rt_var);
@@ -8268,7 +8268,7 @@ pub const Interpreter = struct {
                 },
                 .tag_union => |ct_tu| {
                     // For tag unions, match tags by name and propagate argument type mappings.
-                    // This is needed for methods on tag unions with type parameters, e.g.:
+                    // This is needed for associated-item calls on tag unions with type parameters, e.g.:
                     // Iter(s) :: [It(s)].{ identity = |It(s_)| It(s_) }
                     // When called with Iter(I64), we need to map s -> I64.
                     //
@@ -15925,7 +15925,7 @@ pub const Interpreter = struct {
                     }
                 }
 
-                // Route nominal equality through the centralized structural-equality dispatcher.
+                // Route nominal equality through the centralized structural-equality helper.
                 // This keeps equality behavior consistent across call sites and avoids ad-hoc
                 // polymorphic context leakage.
                 if (ba.op == .eq and

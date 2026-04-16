@@ -852,7 +852,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .expr = @enumFromInt(p.expr),
             } };
         },
-        .expr_static_dispatch,
+        .expr_arrow_apply,
         .expr_apply,
         .expr_record_update,
         .expr_suffix_single_question,
@@ -4217,7 +4217,7 @@ pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []c
                         std.debug.print("[PENDING]   Found target env: {s}\n", .{tenv.module_name});
                     }
 
-                    // For methods on opaque types, the exposed name is qualified like "Stdout.line!"
+                    // For opaque-type associated items, the exposed name is qualified like "Stdout.line!"
                     // Build the qualified name: {module_name}.{member_name}
                     var qualified_buf: [512]u8 = undefined;
                     const qualified_member_name = std.fmt.bufPrint(&qualified_buf, "{s}.{s}", .{ base_import_name, base_member_name }) catch base_member_name;
@@ -4228,7 +4228,7 @@ pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []c
 
                     // Try to resolve the pending lookup in order of preference:
                     // 1. Full member_name directly (for nested module access like "Outer.Inner.inner")
-                    // 2. Qualified name (for methods on opaque types like "Outer.method")
+                    // 2. Qualified name (for opaque associated items like "Outer.member")
                     // 3. Base member name only (for simple exports)
                     const target_node_idx_opt: ?u16 = blk: {
                         // First try the full member_name (for nested module access)
@@ -4240,7 +4240,7 @@ pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []c
                                 break :blk idx;
                             }
                         }
-                        // Try the qualified name (for methods on opaque types)
+                        // Try the qualified name (for opaque associated items)
                         if (tenv.common.findIdent(qualified_member_name)) |qident| {
                             if (tenv.getExposedNodeIndexById(qident)) |idx| {
                                 if (comptime trace_pending) {

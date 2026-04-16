@@ -20,7 +20,7 @@ main = {
 ~~~
 # EXPECTED
 TYPE MODULE MISSING MATCHING TYPE - StructuralMethodError.md:2:1:12:2
-MISSING METHOD - StructuralMethodError.md:11:7:11:12
+MISSING MEMBER - StructuralMethodError.md:11:7:11:12
 # PROBLEMS
 **TYPE MODULE MISSING MATCHING TYPE**
 Type modules must have a nominal type declaration matching the module name.
@@ -47,15 +47,15 @@ main = {
 ```
 
 
-**MISSING METHOD**
-This **greet** method is being called on a value whose type doesn't have that method:
+**MISSING MEMBER**
+This **greet** member is being used on a value whose type doesn't provide that member:
 **StructuralMethodError.md:11:7:11:12:**
 ```roc
     x.greet()
 ```
       ^^^^^
 
-The value's type, which does not have a method named **greet**, is:
+The value's type, which does not have a member named **greet**, is:
 
     {}
 

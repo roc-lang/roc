@@ -103,7 +103,7 @@ scratch_tags: base.Scratch(types_mod.Tag),
 scratch_record_fields: base.Scratch(types_mod.RecordField),
 /// scratch constraints used to build up intermediate lists
 /// scratch deferred constraints
-scratch_deferred_static_dispatch_constraints: base.Scratch(DeferredConstraintCheck),
+scratch_deferred_where_requirements: base.Scratch(DeferredConstraintCheck),
 /// Stack of type variables currently being constraint-checked, used to detect recursive constraints
 /// When a var appears in this stack while we're checking its constraints, we've detected recursion
 constraint_check_stack: std.ArrayList(Var),
@@ -312,7 +312,7 @@ fn initAssumePrepared(
         .scratch_vars = try base.Scratch(types_mod.Var).init(gpa),
         .scratch_tags = try base.Scratch(types_mod.Tag).init(gpa),
         .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
-        .scratch_deferred_static_dispatch_constraints = try base.Scratch(DeferredConstraintCheck).init(gpa),
+        .scratch_deferred_where_requirements = try base.Scratch(DeferredConstraintCheck).init(gpa),
         .constraint_check_stack = try std.ArrayList(Var).initCapacity(gpa, 0),
         .import_cache = ImportCache{},
         .bool_var = undefined,
@@ -367,8 +367,8 @@ pub fn deinit(self: *Self) void {
     self.scratch_vars.deinit();
     self.scratch_tags.deinit();
     self.scratch_record_fields.deinit();
-    self.scratch_static_dispatch_constraints.deinit();
-    self.scratch_deferred_static_dispatch_constraints.deinit();
+    self.scratch_where_requirements.deinit();
+    self.scratch_deferred_where_requirements.deinit();
     self.constraint_check_stack.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
     self.ident_to_var_map.deinit();
@@ -446,7 +446,7 @@ const Env = struct {
     /// Pool of variables created during solving, use by let-polymorphism
     var_pool: VarPool,
     /// Deferred constraints accumulated during type checking.
-    deferred_static_dispatch_constraints: DeferredConstraintCheck.SafeList,
+    deferred_where_requirements: DeferredConstraintCheck.SafeList,
 
     fn init(
         gpa: std.mem.Allocator,
@@ -458,13 +458,13 @@ const Env = struct {
 
         return .{
             .var_pool = pool,
-            .deferred_static_dispatch_constraints = try DeferredConstraintCheck.SafeList.initCapacity(gpa, 32),
+            .deferred_where_requirements = try DeferredConstraintCheck.SafeList.initCapacity(gpa, 32),
         };
     }
 
     fn deinit(self: *Env, gpa: std.mem.Allocator) void {
         self.var_pool.deinit();
-        self.deferred_static_dispatch_constraints.deinit(gpa);
+        self.deferred_where_requirements.deinit(gpa);
     }
 
     /// Resets internal state of env and set rank to generalized
@@ -472,7 +472,7 @@ const Env = struct {
         self.var_pool.current_rank = to;
         self.var_pool.clearRetainingCapacity();
         try self.var_pool.ensureRanksThrough(to);
-        self.deferred_static_dispatch_constraints.items.clearRetainingCapacity();
+        self.deferred_where_requirements.items.clearRetainingCapacity();
     }
 
     fn rank(self: *const Env) Rank {
@@ -536,7 +536,7 @@ fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) 
 
     // Copy any constraints created during unification into our own array
     for (self.unify_scratch.deferred_constraints.items.items) |deferred_constraint| {
-        _ = try env.deferred_static_dispatch_constraints.append(self.gpa, deferred_constraint);
+        _ = try env.deferred_where_requirements.append(self.gpa, deferred_constraint);
     }
 
     // Ensure arrays are in sync
@@ -1078,7 +1078,7 @@ fn mkDecContent(self: *Self, env: *Env) Allocator.Error!Content {
 
 /// This constraint will be checked during deferred constraint checking to validate
 /// that the numeric literal can be converted to the unified type.
-/// Returns the flex var which has the constraint attached, and the dispatcher var
+/// Returns the flex var which has the constraint attached, and the constrained type var
 fn mkFlexWithFromNumeralConstraint(
     self: *Self,
     num_literal_info: types_mod.NumeralInfo,
@@ -1485,7 +1485,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         try self.finalizeNumericDefaultsInternal(&env);
 
         // After finalizing numeric defaults, drain any remaining deferred constraints.
-        if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
+        if (env.deferred_where_requirements.items.items.len > 0) {
         }
     }
 
@@ -1822,18 +1822,18 @@ pub fn checkPlatformRequirements(
     // handled later by numeric defaulting.
     {
         var i: usize = 0;
-        while (i < env.deferred_static_dispatch_constraints.items.items.len) {
-            const dc = env.deferred_static_dispatch_constraints.items.items[i];
+        while (i < env.deferred_where_requirements.items.items.len) {
+            const dc = env.deferred_where_requirements.items.items[i];
             for (constraints) |c| {
                     break;
                 }
             }
-                _ = env.deferred_static_dispatch_constraints.items.orderedRemove(i);
+                _ = env.deferred_where_requirements.items.orderedRemove(i);
             } else {
                 i += 1;
             }
         }
-        if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
+        if (env.deferred_where_requirements.items.items.len > 0) {
         }
     }
 }
@@ -1917,7 +1917,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     try self.finalizeNumericDefaultsInternal(&env);
 
     // After finalizing numeric defaults, drain any remaining deferred constraints.
-    if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
+    if (env.deferred_where_requirements.items.items.len > 0) {
     }
 
     // Check if the expression's type has incompatible constraints (e.g., !3)
@@ -1984,7 +1984,7 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
 
     // After finalizing numeric defaults, drain any remaining deferred constraints.
     // leave behind deferred constraint work that still needs to be flushed.
-    if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
+    if (env.deferred_where_requirements.items.items.len > 0) {
         try self.checkAllConstraints(&env);
     }
 
@@ -2247,8 +2247,8 @@ fn generateStandaloneTypeAnno(
     self.seen_annos.clearRetainingCapacity();
 
     // Save top of scratch constraints
-    const scratch_static_dispatch_constraints_top = self.scratch_static_dispatch_constraints.top();
-    defer self.scratch_static_dispatch_constraints.clearFrom(scratch_static_dispatch_constraints_top);
+    const scratch_where_requirements_top = self.scratch_where_requirements.top();
+    defer self.scratch_where_requirements.clearFrom(scratch_where_requirements_top);
 
     if (type_anno.where) |where_span| {
         const where_slice = self.cir.store.sliceWhereClauses(where_span);
@@ -2338,8 +2338,8 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
     self.seen_annos.clearRetainingCapacity();
 
     // Save top of scratch constraints
-    const scratch_static_dispatch_constraints_top = self.scratch_static_dispatch_constraints.top();
-    defer self.scratch_static_dispatch_constraints.clearFrom(scratch_static_dispatch_constraints_top);
+    const scratch_where_requirements_top = self.scratch_where_requirements.top();
+    defer self.scratch_where_requirements.clearFrom(scratch_where_requirements_top);
 
     if (annotation.where) |where_span| {
         const where_slice = self.cir.store.sliceWhereClauses(where_span);
@@ -2413,25 +2413,25 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     return;
                 }
             }
-            const static_dispatch_constraints_start = self.types.static_dispatch_constraints.len();
+            const where_requirements_start = self.types.where_requirements.len();
             switch (ctx) {
                 .annotation => {
                     // If this an annotation, then check all where constraints
                     // and see if any reference this rigid var
-                    for (self.scratch_static_dispatch_constraints.items.items) |scratch_constraint| {
+                    for (self.scratch_where_requirements.items.items) |scratch_constraint| {
                         const resolved_scratch_var = self.types.resolveVar(scratch_constraint.var_).var_;
                         if (resolved_scratch_var == anno_var) {
-                            _ = try self.types.static_dispatch_constraints.append(self.types.gpa, scratch_constraint.constraint);
+                            _ = try self.types.where_requirements.append(self.types.gpa, scratch_constraint.constraint);
                         }
                     }
                 },
                 .type_decl => {},
             }
-            const static_dispatch_constraints_end = self.types.static_dispatch_constraints.len();
+            const where_requirements_end = self.types.where_requirements.len();
 
             try self.unifyWith(anno_var, .{ .rigid = Rigid{
                 .name = rigid.name,
-                .constraints = static_dispatch_constraints_range,
+                .constraints = where_requirements_range,
             } }, env);
         },
         .rigid_var_lookup => |rigid_lookup| {
@@ -6119,8 +6119,8 @@ fn resolveNumericLiteralsFromContext(self: *Self, env: *Env) std.mem.Allocator.E
     }
 
     // Process constraints generated by the unifications above.
-    // now have their dispatch constraints deferred, and checkAllConstraints
-    // will resolve them through the normal dispatch machinery.
+    // now have their where requirements deferred, and checkAllConstraints
+    // will resolve them through the normal requirement machinery.
     try self.checkAllConstraints(env);
 }
 
@@ -6139,7 +6139,7 @@ pub fn finalizeNumericDefaults(self: *Self) std.mem.Allocator.Error!void {
 
     // After finalizing numeric defaults, resolve any remaining deferred
     // deferred constraints.
-    if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
+    if (env.deferred_where_requirements.items.items.len > 0) {
     }
 }
 
@@ -6239,7 +6239,7 @@ fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     defer trace.end();
     _ = self;
     _ = is_numeric_default_pass;
-    env.deferred_static_dispatch_constraints.items.clearRetainingCapacity();
+    env.deferred_where_requirements.items.clearRetainingCapacity();
 }
 
 fn nominalIsBoxType(self: *Self, nominal_type: types_mod.NominalType) bool {

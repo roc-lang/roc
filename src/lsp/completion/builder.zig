@@ -1088,9 +1088,9 @@ pub const CompletionBuilder = struct {
 
         self.logDebug("addMethodsFromConstraints: count={d}", .{constraints_slice.len});
         for (constraints_slice) |constraint| {
-            const method_name = module_env.getIdentText(constraint.fn_name);
+            const member_name = module_env.getIdentText(constraint.fn_name);
 
-            if (method_name.len == 0) continue;
+            if (member_name.len == 0) continue;
 
             // Try to get detail from the constraint's function type
             var detail: ?[]const u8 = null;
@@ -1108,7 +1108,7 @@ pub const CompletionBuilder = struct {
             }
 
             const added = try self.addItem(.{
-                .label = method_name,
+                .label = member_name,
                 .kind = @intFromEnum(CompletionItemKind.method),
                 .detail = detail,
             });

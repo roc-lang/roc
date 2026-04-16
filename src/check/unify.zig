@@ -295,17 +295,17 @@ const Unifier = struct {
         self: *Self,
         vars: *const ResolvedVarDescs,
     ) std.mem.Allocator.Error!void {
-        const dispatcher_var = self.unresolved_b orelse vars.b.var_;
-        return self.recordDeferredConstraintOn(dispatcher_var, constraints);
+        const type_var = self.unresolved_b orelse vars.b.var_;
+        return self.recordDeferredConstraintOn(type_var, constraints);
     }
 
     fn recordDeferredConstraintOn(
         self: *Self,
-        dispatcher_var: Var,
+        type_var: Var,
     ) std.mem.Allocator.Error!void {
         if (constraints.len() > 0) {
             _ = try self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
-                .var_ = dispatcher_var,
+                .var_ = type_var,
                 .constraints = constraints,
             });
         }
@@ -2251,31 +2251,31 @@ const Unifier = struct {
             const in_both_start: usize = @intFromEnum(partitioned.in_both.start);
             for (0..partitioned.in_both.len()) |i| {
                 // Re-fetch on each iteration since the backing array may have moved
-                const two_constraints = self.scratch.in_both_static_dispatch_constraints.items.items[in_both_start + i];
+                const two_constraints = self.scratch.in_both_where_requirements.items.items[in_both_start + i];
                 // TODO: Catch type mismatch and throw a custom error message?
             }
         }
 
-        const top: u32 = @intCast(self.types_store.static_dispatch_constraints.len());
+        const top: u32 = @intCast(self.types_store.where_requirements.len());
 
         // Ensure we have enough memory for the new contiguous list.
         const capacity = partitioned.in_both.len() + partitioned.only_in_a.len() + partitioned.only_in_b.len();
-        try self.types_store.static_dispatch_constraints.items.ensureUnusedCapacity(
+        try self.types_store.where_requirements.items.ensureUnusedCapacity(
             self.types_store.gpa,
             capacity,
         );
 
-        for (self.scratch.in_both_static_dispatch_constraints.sliceRange(partitioned.in_both)) |two_constraints| {
-            self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(two_constraints.b);
+        for (self.scratch.in_both_where_requirements.sliceRange(partitioned.in_both)) |two_constraints| {
+            self.types_store.where_requirements.items.appendAssumeCapacity(two_constraints.b);
         }
-        for (self.scratch.only_in_a_static_dispatch_constraints.sliceRange(partitioned.only_in_a)) |only_a| {
-            self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(only_a);
+        for (self.scratch.only_in_a_where_requirements.sliceRange(partitioned.only_in_a)) |only_a| {
+            self.types_store.where_requirements.items.appendAssumeCapacity(only_a);
         }
-        for (self.scratch.only_in_b_static_dispatch_constraints.sliceRange(partitioned.only_in_b)) |only_b| {
-            self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(only_b);
+        for (self.scratch.only_in_b_where_requirements.sliceRange(partitioned.only_in_b)) |only_b| {
+            self.types_store.where_requirements.items.appendAssumeCapacity(only_b);
         }
 
-        return self.types_store.static_dispatch_constraints.rangeToEnd(top);
+        return self.types_store.where_requirements.rangeToEnd(top);
     }
 
     /// Unify two constraints
@@ -2325,19 +2325,19 @@ const Unifier = struct {
         const scratch = self.scratch;
 
         // First sort the fields
-        const a_constraints = self.types_store.static_dispatch_constraints.sliceRange(a_constraints_range);
+        const a_constraints = self.types_store.where_requirements.sliceRange(a_constraints_range);
                 return std.mem.order(u8, unifier.getTypeIdentText(a.fn_name), unifier.getTypeIdentText(b.fn_name)) == .lt;
             }
         }.less);
-        const b_constraints = self.types_store.static_dispatch_constraints.sliceRange(b_constraints_range);
+        const b_constraints = self.types_store.where_requirements.sliceRange(b_constraints_range);
                 return std.mem.order(u8, unifier.getTypeIdentText(a.fn_name), unifier.getTypeIdentText(b.fn_name)) == .lt;
             }
         }.less);
 
         // Get the start of index of the new range
-        const a_constraints_start: u32 = @intCast(scratch.only_in_a_static_dispatch_constraints.len());
-        const b_constraints_start: u32 = @intCast(scratch.only_in_b_static_dispatch_constraints.len());
-        const both_constraints_start: u32 = @intCast(scratch.in_both_static_dispatch_constraints.len());
+        const a_constraints_start: u32 = @intCast(scratch.only_in_a_where_requirements.len());
+        const b_constraints_start: u32 = @intCast(scratch.only_in_b_where_requirements.len());
+        const both_constraints_start: u32 = @intCast(scratch.in_both_where_requirements.len());
 
         // Iterate over the fields in order, grouping them
         var a_i: usize = 0;
@@ -2355,11 +2355,11 @@ const Unifier = struct {
                     b_i = b_i + 1;
                 },
                 .lt => {
-                    _ = try scratch.only_in_a_static_dispatch_constraints.append(scratch.gpa, a_next);
+                    _ = try scratch.only_in_a_where_requirements.append(scratch.gpa, a_next);
                     a_i = a_i + 1;
                 },
                 .gt => {
-                    _ = try scratch.only_in_b_static_dispatch_constraints.append(scratch.gpa, b_next);
+                    _ = try scratch.only_in_b_where_requirements.append(scratch.gpa, b_next);
                     b_i = b_i + 1;
                 },
             }
@@ -2368,22 +2368,22 @@ const Unifier = struct {
         // If b was shorter, add the extra a elems
         while (a_i < a_constraints.len) {
             const a_next = a_constraints[a_i];
-            _ = try scratch.only_in_a_static_dispatch_constraints.append(scratch.gpa, a_next);
+            _ = try scratch.only_in_a_where_requirements.append(scratch.gpa, a_next);
             a_i = a_i + 1;
         }
 
         // If a was shorter, add the extra b elems
         while (b_i < b_constraints.len) {
             const b_next = b_constraints[b_i];
-            _ = try scratch.only_in_b_static_dispatch_constraints.append(scratch.gpa, b_next);
+            _ = try scratch.only_in_b_where_requirements.append(scratch.gpa, b_next);
             b_i = b_i + 1;
         }
 
         // Return the ranges
         return .{
-            .only_in_a = scratch.only_in_a_static_dispatch_constraints.rangeToEnd(a_constraints_start),
-            .only_in_b = scratch.only_in_b_static_dispatch_constraints.rangeToEnd(b_constraints_start),
-            .in_both = scratch.in_both_static_dispatch_constraints.rangeToEnd(both_constraints_start),
+            .only_in_a = scratch.only_in_a_where_requirements.rangeToEnd(a_constraints_start),
+            .only_in_b = scratch.only_in_b_where_requirements.rangeToEnd(b_constraints_start),
+            .in_both = scratch.in_both_where_requirements.rangeToEnd(both_constraints_start),
         };
     }
 };
@@ -2528,9 +2528,9 @@ pub const Scratch = struct {
         self.only_in_b_tags.deinit(self.gpa);
         self.in_both_tags.deinit(self.gpa);
         self.deferred_constraints.deinit(self.gpa);
-        self.only_in_a_static_dispatch_constraints.deinit(self.gpa);
-        self.only_in_b_static_dispatch_constraints.deinit(self.gpa);
-        self.in_both_static_dispatch_constraints.deinit(self.gpa);
+        self.only_in_a_where_requirements.deinit(self.gpa);
+        self.only_in_b_where_requirements.deinit(self.gpa);
+        self.in_both_where_requirements.deinit(self.gpa);
         self.occurs_scratch.deinit();
         self.visited_vars.deinit(self.gpa);
         self.constraint_visited_vars.deinit(self.gpa);
@@ -2547,9 +2547,9 @@ pub const Scratch = struct {
         self.only_in_b_tags.items.clearRetainingCapacity();
         self.in_both_tags.items.clearRetainingCapacity();
         self.deferred_constraints.items.clearRetainingCapacity();
-        self.only_in_a_static_dispatch_constraints.items.clearRetainingCapacity();
-        self.only_in_b_static_dispatch_constraints.items.clearRetainingCapacity();
-        self.in_both_static_dispatch_constraints.items.clearRetainingCapacity();
+        self.only_in_a_where_requirements.items.clearRetainingCapacity();
+        self.only_in_b_where_requirements.items.clearRetainingCapacity();
+        self.in_both_where_requirements.items.clearRetainingCapacity();
         self.fresh_vars.items.clearRetainingCapacity();
         self.occurs_scratch.reset();
         self.visited_vars.items.clearRetainingCapacity();

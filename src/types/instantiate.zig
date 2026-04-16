@@ -435,7 +435,7 @@ pub const Instantiator = struct {
             const constraints_start: usize = @intFromEnum(constraints.start);
             for (0..constraints_len) |i| {
                 // Re-fetch the constraint on each iteration since the backing array may have moved
-                const constraint = self.store.static_dispatch_constraints.items.items[constraints_start + i];
+                const constraint = self.store.where_requirements.items.items[constraints_start + i];
                 try fresh_constraints.append(self.store.gpa, fresh_constraint);
             }
 

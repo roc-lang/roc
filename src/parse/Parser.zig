@@ -2750,7 +2750,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
 
                     // Only parse function applications on the right side, not ? suffix
                     const ident_suffixed = try self.parseExprApplicationSuffix(s, expr_node);
-                    expression = try self.store.addExpr(.{ .local_dispatch = .{
+                    expression = try self.store.addExpr(.{ .arrow_apply = .{
                         .region = .{ .start = start, .end = self.pos },
                         .operator = s,
                         .left = expression,
@@ -2766,7 +2766,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                     self.advance(); // consume )
                     // Allow chained application: expr->(|x| x)(extra_args)
                     const rhs_suffixed = try self.parseExprApplicationSuffix(s, inner_expr);
-                    expression = try self.store.addExpr(.{ .local_dispatch = .{
+                    expression = try self.store.addExpr(.{ .arrow_apply = .{
                         .region = .{ .start = start, .end = self.pos },
                         .operator = s,
                         .left = expression,
@@ -2792,7 +2792,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                 } });
             }
 
-            // Handle ? suffix on the entire field access / local dispatch expression.
+            // Handle ? suffix on the entire field access / arrow-apply expression.
             // This ensures `a.b()?` is parsed as `(a.b())?` rather than `a.(b()?)`.
             while (self.peek() == .NoSpaceOpQuestion) {
                 self.advance();

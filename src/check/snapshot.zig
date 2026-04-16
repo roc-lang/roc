@@ -128,9 +128,9 @@ pub const SnapshotTag = struct {
 /// A snapshotted constraint.
     fn_name: Ident.Idx,
     fn_content: SnapshotContentIdx,
-    /// The type variable that has this constraint (the dispatcher).
-    /// This is the type that the method is called on.
-    dispatcher: SnapshotContentIdx,
+    /// The type variable that has this constraint.
+    /// This is the type the requirement is attached to.
+    type_var: SnapshotContentIdx,
 };
 
 const Var = types.Var;
@@ -219,11 +219,11 @@ pub const Store = struct {
         self.content_indexes.deinit(self.gpa);
         self.record_fields.deinit(self.gpa);
         self.tags.deinit(self.gpa);
-        self.static_dispatch_constraints.deinit(self.gpa);
+        self.where_requirements.deinit(self.gpa);
         self.scratch_content.deinit();
         self.scratch_tags.deinit();
         self.scratch_record_fields.deinit();
-        self.scratch_static_dispatch_constraints.deinit();
+        self.scratch_where_requirements.deinit();
     }
 
     /// Get the pre-formatted string for a snapshot.
@@ -321,12 +321,12 @@ pub const Store = struct {
         self: *Self,
         store: *const TypesStore,
         type_writer: *TypeWriter,
-        const scratch_top = self.scratch_static_dispatch_constraints.top();
-        defer self.scratch_static_dispatch_constraints.clearFrom(scratch_top);
+        const scratch_top = self.scratch_where_requirements.top();
+        defer self.scratch_where_requirements.clearFrom(scratch_top);
 
         }
 
-        return self.static_dispatch_constraints.appendSlice(self.gpa, self.scratch_static_dispatch_constraints.sliceFromStart(scratch_top));
+        return self.where_requirements.appendSlice(self.gpa, self.scratch_where_requirements.sliceFromStart(scratch_top));
     }
 
         self: *Self,
@@ -334,8 +334,8 @@ pub const Store = struct {
         type_writer: *TypeWriter,
             .fn_name = constraint.fn_name,
             .fn_content = try self.deepCopyVarInternal(store, type_writer, constraint.fn_var),
-            // Dispatcher is set when collecting constraints during write
-            .dispatcher = undefined,
+            // The owning type var is set when collecting constraints during write
+            .type_var = undefined,
         };
     }
 
@@ -579,7 +579,7 @@ pub const Store = struct {
         return self.record_fields.sliceRange(range);
     }
 
-        return self.static_dispatch_constraints.sliceRange(range);
+        return self.where_requirements.sliceRange(range);
     }
 
     pub fn sliceTags(self: *const Self, range: SnapshotTagSafeList.Range) SnapshotTagSafeList.Slice {

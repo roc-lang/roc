@@ -900,7 +900,7 @@ fn renderDocTypeHtml(w: Writer, ctx: *const RenderContext, doc_type: *const DocT
                 try w.writeAll("<span class=\"type-var\">");
                 try writeHtmlEscaped(w, constraint.type_var);
                 try w.writeAll("</span>.");
-                try writeHtmlEscaped(w, constraint.method_name);
+                try writeHtmlEscaped(w, constraint.entry_name);
                 try w.writeAll(" : ");
                 try renderDocTypeHtml(w, ctx, constraint.signature, false);
             }

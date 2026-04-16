@@ -70,7 +70,7 @@ pub const CommonMisspellings = struct {
         .{ "Array", "Roc uses `List` for dynamic arrays, not `Array`." },
         .{ "vector", "Roc uses `List` for sequential collections, not `vector`." },
         .{ "Vec", "Roc uses `List` for sequential collections, not `Vec`." },
-        .{ "map", "Roc uses `Dict` for key-value mappings, not `map`. Also, many Roc types have a method named `map`, but that would be called using `my_val.map(...)` syntax, not `map` as a standalone function." },
+        .{ "map", "Roc uses `Dict` for key-value mappings, not `map`. Also, many Roc types have a member named `map`, but that would be called using `my_val.map(...)` syntax, not `map` as a standalone function." },
         .{ "fold_left", "Roc uses the names `fold` and `fold_rev`, not `fold_left` and `fold_right`." },
         .{ "foldLeft", "Roc uses the names `fold` and `fold_rev`, not `foldLeft` and `foldRight`." },
         .{ "foldl", "Roc uses the names `fold` and `fold_rev`, not `foldl` and `foldr`." },

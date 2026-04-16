@@ -1099,12 +1099,12 @@ fn extractDocType(
     if (base_type == null) return null;
 
     if (ctx.constraints_list.items.len > 0) {
-        // Deduplicate constraints by (dispatcher_var_name, fn_name)
+        // Deduplicate requirements by (type_var_name, fn_name)
         var unique_constraints = std.ArrayList(DocType.Constraint).empty;
         defer {
             for (unique_constraints.items) |*c| {
                 gpa.free(c.type_var);
-                gpa.free(c.method_name);
+                gpa.free(c.entry_name);
                 c.signature.deinit(gpa);
                 gpa.destroy(c.signature);
             }
@@ -1115,8 +1115,8 @@ fn extractDocType(
             // Check for duplicate
             var is_dup = false;
             for (unique_constraints.items) |existing| {
-                if (std.mem.eql(u8, existing.type_var, info.dispatcher_name) and
-                    std.mem.eql(u8, existing.method_name, info.fn_name_text))
+                if (std.mem.eql(u8, existing.type_var, info.type_var_name) and
+                    std.mem.eql(u8, existing.entry_name, info.fn_name_text))
                 {
                     is_dup = true;
                     break;
@@ -1133,18 +1133,18 @@ fn extractDocType(
                 try allocDocType(gpa, .@"error");
 
             try unique_constraints.append(gpa, .{
-                .type_var = try gpa.dupe(u8, info.dispatcher_name),
-                .method_name = try gpa.dupe(u8, info.fn_name_text),
+                .type_var = try gpa.dupe(u8, info.type_var_name),
+                .entry_name = try gpa.dupe(u8, info.fn_name_text),
                 .signature = fn_type,
             });
         }
 
-        // Sort constraints alphabetically by (type_var, method_name)
+        // Sort requirements alphabetically by (type_var, entry_name)
         std.mem.sort(DocType.Constraint, unique_constraints.items, {}, struct {
             fn lessThan(_: void, a: DocType.Constraint, b: DocType.Constraint) bool {
                 const type_cmp = std.mem.order(u8, a.type_var, b.type_var);
                 if (type_cmp != .eq) return type_cmp == .lt;
-                return std.mem.order(u8, a.method_name, b.method_name) == .lt;
+                return std.mem.order(u8, a.entry_name, b.entry_name) == .lt;
             }
         }.lessThan);
 
@@ -1164,7 +1164,7 @@ fn extractDocType(
 }
 
 const ConstraintInfo = struct {
-    dispatcher_name: []const u8, // borrowed from idents store
+    type_var_name: []const u8, // borrowed from idents store
     fn_name_text: []const u8, // borrowed from idents store
     fn_var: Var,
 };
@@ -1224,9 +1224,9 @@ fn extractDocTypeInner(
                 try ctx.getFlexVarName(resolved.var_);
 
             for (constraints) |constraint| {
-                    const dispatcher_name = if (flex.name) |ident_idx| idents.getText(ident_idx) else var_name;
+                    const type_var_name = if (flex.name) |ident_idx| idents.getText(ident_idx) else var_name;
                     try ctx.constraints_list.append(gpa, .{
-                        .dispatcher_name = dispatcher_name,
+                        .type_var_name = type_var_name,
                         .fn_name_text = idents.getText(constraint.fn_name),
                         .fn_var = constraint.fn_var,
                     });
@@ -1240,7 +1240,7 @@ fn extractDocTypeInner(
 
             for (constraints) |constraint| {
                 try ctx.constraints_list.append(gpa, .{
-                    .dispatcher_name = var_name,
+                    .type_var_name = var_name,
                     .fn_name_text = idents.getText(constraint.fn_name),
                     .fn_var = constraint.fn_var,
                 });
@@ -1447,9 +1447,9 @@ fn extractRecord(
 
                 // Collect constraints from the extension variable
                 for (constraints) |constraint| {
-                        const dispatcher_name = if (flex.name) |ident_idx| idents.getText(ident_idx) else var_name;
+                        const type_var_name = if (flex.name) |ident_idx| idents.getText(ident_idx) else var_name;
                         try ctx.constraints_list.append(gpa, .{
-                            .dispatcher_name = dispatcher_name,
+                            .type_var_name = type_var_name,
                             .fn_name_text = idents.getText(constraint.fn_name),
                             .fn_var = constraint.fn_var,
                         });
@@ -1464,7 +1464,7 @@ fn extractRecord(
 
                 for (constraints) |constraint| {
                     try ctx.constraints_list.append(gpa, .{
-                        .dispatcher_name = var_name,
+                        .type_var_name = var_name,
                         .fn_name_text = idents.getText(constraint.fn_name),
                         .fn_var = constraint.fn_var,
                     });
@@ -1617,7 +1617,7 @@ fn extractTagUnion(
             for (constraints) |constraint| {
                 const var_name = if (flex.name) |ident_idx| idents.getText(ident_idx) else "_";
                 try ctx.constraints_list.append(gpa, .{
-                    .dispatcher_name = var_name,
+                    .type_var_name = var_name,
                     .fn_name_text = idents.getText(constraint.fn_name),
                     .fn_var = constraint.fn_var,
                 });
@@ -1628,7 +1628,7 @@ fn extractTagUnion(
 
             for (constraints) |constraint| {
                 try ctx.constraints_list.append(gpa, .{
-                    .dispatcher_name = idents.getText(rigid.name),
+                    .type_var_name = idents.getText(rigid.name),
                     .fn_name_text = idents.getText(constraint.fn_name),
                     .fn_var = constraint.fn_var,
                 });

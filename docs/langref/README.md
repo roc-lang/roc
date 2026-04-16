@@ -72,7 +72,7 @@ If you're looking for a beginner tutorial, check out [roc-lang.org/tutorial](htt
     - [Opaque Nominal Types](types#opaque-nominal-types)
   - [Structural Types](types#structural-types)
   - [Type Aliases](types#type-aliases)
-- [Static Dispatch](static-dispatch)
+- [Where Requirements](static-dispatch)
   - [Methods](static-dispatch#methods)
   - [Where Clauses](static-dispatch#where-clauses)
   - [Aliases](static-dispatch#aliases)

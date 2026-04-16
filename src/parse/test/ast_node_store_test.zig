@@ -604,7 +604,7 @@ test "NodeStore round trip - Expr" {
         },
     });
     try expressions.append(gpa, AST.Expr{
-        .local_dispatch = .{
+        .arrow_apply = .{
             .left = rand_idx(AST.Expr.Idx),
             .right = rand_idx(AST.Expr.Idx),
             .operator = rand_token_idx(),

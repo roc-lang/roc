@@ -45,8 +45,8 @@ main = {
 ~~~
 # EXPECTED
 TYPE MISMATCH - Adv.md:17:28:17:31
-MISSING METHOD - Adv.md:23:17:23:28
-MISSING METHOD - Adv.md:28:21:28:27
+MISSING MEMBER - Adv.md:23:17:23:28
+MISSING MEMBER - Adv.md:28:21:28:27
 # PROBLEMS
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
@@ -60,33 +60,33 @@ Other code expects this to have the type:
 
     Str
 
-**MISSING METHOD**
-This **update_strr** method is being called on a value whose type doesn't have that method:
+**MISSING MEMBER**
+This **update_strr** member is being used on a value whose type doesn't provide that member:
 **Adv.md:23:17:23:28:**
 ```roc
 	next_val = val.update_strr(100)
 ```
 	               ^^^^^^^^^^^
 
-The value's type, which does not have a method named **update_strr**, is:
+The value's type, which does not have a member named **update_strr**, is:
 
     Adv
 
-**Hint:** For this to work, the type would need to have a method named **update_strr** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a member named **update_strr** in the type's declaration.
 
-**MISSING METHOD**
-This **update** method is being called on a value whose type doesn't have that method:
+**MISSING MEMBER**
+This **update** member is being used on a value whose type doesn't provide that member:
 **Adv.md:28:21:28:27:**
 ```roc
 	next_val = "Hello".update(100)
 ```
 	                   ^^^^^^
 
-The value's type, which does not have a method named **update**, is:
+The value's type, which does not have a member named **update**, is:
 
     Str
 
-**Hint:** For this to work, the type would need to have a method named **update** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a member named **update** in the type's declaration.
 
 # TOKENS
 ~~~zig

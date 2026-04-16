@@ -417,7 +417,7 @@ pub const Tag = enum {
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
-    local_dispatch,
+    arrow_apply,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - node index of left expression

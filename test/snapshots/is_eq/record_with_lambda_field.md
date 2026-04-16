@@ -27,7 +27,7 @@ This record does not support equality because these fields have types that don't
 
     **process**: _a -> a_
         Function equality is not supported.
-**Hint:** Anonymous records only have an **is_eq** method if all of their fields have **is_eq** methods.
+**Hint:** Anonymous records only support **is_eq** if all of their fields support **is_eq**.
 
 
 # TOKENS

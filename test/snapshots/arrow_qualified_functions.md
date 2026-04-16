@@ -42,20 +42,20 @@ EndOfFile,
 	(statements
 		(s-decl
 			(p-ident (raw "test1"))
-			(e-local-dispatch
+			(e-arrow-apply
 				(e-string
 					(e-string-part (raw "hello")))
 				(e-ident (raw "Str.is_empty"))))
 		(s-decl
 			(p-ident (raw "test2"))
-			(e-local-dispatch
+			(e-arrow-apply
 				(e-string
 					(e-string-part (raw "hello")))
 				(e-apply
 					(e-ident (raw "Str.is_empty")))))
 		(s-decl
 			(p-ident (raw "test3"))
-			(e-local-dispatch
+			(e-arrow-apply
 				(e-string
 					(e-string-part (raw "hello")))
 				(e-apply
@@ -70,23 +70,23 @@ EndOfFile,
 				(e-ident (raw "a"))))
 		(s-decl
 			(p-ident (raw "test4"))
-			(e-local-dispatch
+			(e-arrow-apply
 				(e-int (raw "10"))
 				(e-ident (raw "fn0"))))
 		(s-decl
 			(p-ident (raw "test5"))
-			(e-local-dispatch
+			(e-arrow-apply
 				(e-int (raw "10"))
 				(e-apply
 					(e-ident (raw "fn0")))))
 		(s-decl
 			(p-ident (raw "test6"))
-			(e-local-dispatch
+			(e-arrow-apply
 				(e-int (raw "42"))
 				(e-tag (raw "Ok"))))
 		(s-decl
 			(p-ident (raw "test7"))
-			(e-local-dispatch
+			(e-arrow-apply
 				(e-int (raw "42"))
 				(e-apply
 					(e-tag (raw "Ok")))))))

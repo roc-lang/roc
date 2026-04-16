@@ -44,7 +44,7 @@ EndOfFile,
 	(statements
 		(s-decl
 			(p-ident (raw "a"))
-			(e-local-dispatch
+			(e-arrow-apply
 				(e-tuple)
 				(e-apply
 					(e-apply

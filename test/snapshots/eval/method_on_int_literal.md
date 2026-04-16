@@ -8,15 +8,15 @@ type=repl
 » 35.foo()
 ~~~
 # OUTPUT
-**MISSING METHOD**
-This **foo** method is being called on a value whose type doesn't have that method:
+**MISSING MEMBER**
+This **foo** member is being used on a value whose type doesn't provide that member:
 **repl:1:4:1:7:**
 ```roc
 35.foo()
 ```
    ^^^
 
-The value's type, which does not have a method named **foo**, is:
+The value's type, which does not have a member named **foo**, is:
 
     Dec
 

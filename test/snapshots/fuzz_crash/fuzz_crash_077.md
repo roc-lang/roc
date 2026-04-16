@@ -29,7 +29,7 @@ EndOfFile,
 							(field (field "d")
 								(e-lambda
 									(args)
-									(e-local-dispatch
+									(e-arrow-apply
 										(e-block
 											(statements
 												(e-int (raw "0"))))

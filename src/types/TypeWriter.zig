@@ -52,8 +52,8 @@ next_name_index: u32,
 name_counters: std.EnumMap(TypeContext, u32),
 flex_var_names_map: std.AutoHashMap(Var, FlexVarNameRange),
 flex_var_names: std.array_list.Managed(u8),
-static_dispatch_constraints: std.array_list.Managed(ConstraintWithDispatcher),
-static_dispatch_constraints_tmp: std.array_list.Managed(StaticDispatchTmp),
+where_requirements: std.array_list.Managed(RequirementWithTypeVar),
+where_requirements_tmp: std.array_list.Managed(RequirementTmp),
 buf_tmp: std.array_list.Managed(u8),
 scratch_record_fields: std.array_list.Managed(types_mod.RecordField),
 scratch_tags: std.array_list.Managed(types_mod.Tag),
@@ -70,7 +70,7 @@ const ByteWrite = std.array_list.Managed(u8).Writer;
 
 const FlexVarNameRange = struct { start: usize, end: usize };
 
-const StaticDispatchTmp = struct {
+const RequirementTmp = struct {
     fn_name: Ident.Idx,
 
     /// Start of the type name in buf_tmp
@@ -88,7 +88,7 @@ const StaticDispatchTmp = struct {
     };
 
     /// A function to be passed into std.mem.sort to sort fields by name
-    fn sort(ctx: SortCtx, a: StaticDispatchTmp, b: StaticDispatchTmp) bool {
+    fn sort(ctx: SortCtx, a: RequirementTmp, b: RequirementTmp) bool {
         const a_type_name = ctx.buf_tmp.items[a.type_name_start..a.type_name_end];
         const b_type_name = ctx.buf_tmp.items[b.type_name_start..b.type_name_end];
         const type_ord = std.mem.order(u8, a_type_name, b_type_name);
@@ -107,9 +107,9 @@ const StaticDispatchTmp = struct {
     }
 };
 
-/// A constraint paired with its dispatcher variable (the type that has the constraint)
-const ConstraintWithDispatcher = struct {
-    dispatcher_var: Var,
+/// A constraint paired with the type variable it is attached to
+const RequirementWithTypeVar = struct {
+    type_var: Var,
 };
 
 pub fn initFromParts(
@@ -128,8 +128,8 @@ pub fn initFromParts(
         .name_counters = std.EnumMap(TypeContext, u32).init(.{}),
         .flex_var_names_map = std.AutoHashMap(Var, FlexVarNameRange).init(gpa),
         .flex_var_names = try std.array_list.Managed(u8).initCapacity(gpa, 32),
-        .static_dispatch_constraints = try std.array_list.Managed(ConstraintWithDispatcher).initCapacity(gpa, 32),
-        .static_dispatch_constraints_tmp = try std.array_list.Managed(StaticDispatchTmp).initCapacity(gpa, 32),
+        .where_requirements = try std.array_list.Managed(RequirementWithTypeVar).initCapacity(gpa, 32),
+        .where_requirements_tmp = try std.array_list.Managed(RequirementTmp).initCapacity(gpa, 32),
         .buf_tmp = try std.array_list.Managed(u8).initCapacity(gpa, 32),
         .scratch_record_fields = try std.array_list.Managed(types_mod.RecordField).initCapacity(gpa, 32),
         .scratch_tags = try std.array_list.Managed(types_mod.Tag).initCapacity(gpa, 32),
@@ -145,8 +145,8 @@ pub fn deinit(self: *TypeWriter) void {
     self.seen_count_var_occurrences.deinit();
     self.flex_var_names_map.deinit();
     self.flex_var_names.deinit();
-    self.static_dispatch_constraints.deinit();
-    self.static_dispatch_constraints_tmp.deinit();
+    self.where_requirements.deinit();
+    self.where_requirements_tmp.deinit();
     self.buf_tmp.deinit();
     self.scratch_record_fields.deinit();
     self.scratch_tags.deinit();
@@ -171,8 +171,8 @@ pub fn reset(self: *TypeWriter) void {
     self.seen_count_var_occurrences.clearRetainingCapacity();
     self.flex_var_names_map.clearRetainingCapacity();
     self.flex_var_names.clearRetainingCapacity();
-    self.static_dispatch_constraints.clearRetainingCapacity();
-    self.static_dispatch_constraints_tmp.clearRetainingCapacity();
+    self.where_requirements.clearRetainingCapacity();
+    self.where_requirements_tmp.clearRetainingCapacity();
     self.buf_tmp.clearRetainingCapacity();
     self.scratch_record_fields.clearRetainingCapacity();
     self.scratch_tags.clearRetainingCapacity();
@@ -210,7 +210,7 @@ pub fn write(self: *TypeWriter, var_: Var, format: Format) std.mem.Allocator.Err
     var writer = self.buf.writer();
     try self.writeVar(&writer, var_, var_);
 
-    if (self.static_dispatch_constraints.items.len > 0) {
+    if (self.where_requirements.items.len > 0) {
         try self.writeWhereClause(&writer, var_, self.buf.items.len, format);
     }
 }
@@ -227,7 +227,7 @@ pub fn writeInto(self: *TypeWriter, into: *std.array_list.Managed(u8), var_: Var
     try self.writeVar(&writer, var_, var_);
     const into_end = into.items.len;
 
-    if (self.static_dispatch_constraints.items.len > 0) {
+    if (self.where_requirements.items.len > 0) {
         try self.writeWhereClause(&writer, var_, into_end - into_start, format);
     }
 }
@@ -247,15 +247,15 @@ pub fn writeWithoutConstraints(self: *TypeWriter, var_: Var) std.mem.Allocator.E
 fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_len: usize, format: Format) std.mem.Allocator.Error!void {
     var tmp_writer = self.buf_tmp.writer();
 
-    // Ensure we have enough temp storage to collect dispatch constraints
-    try self.static_dispatch_constraints_tmp.ensureUnusedCapacity(
-        self.static_dispatch_constraints.items.len + 2,
+    // Ensure we have enough temp storage to collect where requirements
+    try self.where_requirements_tmp.ensureUnusedCapacity(
+        self.where_requirements.items.len + 2,
     );
 
     // Pre-allocate buffer space for constraint strings.
     // plus 30 bytes per additional constraint (estimated average).
     try self.buf_tmp.ensureUnusedCapacity(
-        60 + (self.static_dispatch_constraints.items.len - 1) * 30,
+        60 + (self.where_requirements.items.len - 1) * 30,
     );
 
     // Iterate over constraints, generating their string representations
@@ -270,11 +270,11 @@ fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_le
     // return type `f`, we find that `f` has a `not` constraint which we also need to display)
     var i: usize = 0;
     var total_constraint_len: usize = 0;
-    while (i < self.static_dispatch_constraints.items.len) : (i += 1) {
-        const item = self.static_dispatch_constraints.items[i];
+    while (i < self.where_requirements.items.len) : (i += 1) {
+        const item = self.where_requirements.items[i];
 
         const start = self.buf_tmp.items.len;
-        try self.writeVar(&tmp_writer, item.dispatcher_var, root_var);
+        try self.writeVar(&tmp_writer, item.type_var, root_var);
         const type_name_end = self.buf_tmp.items.len;
 
         try tmp_writer.writeAll(".");
@@ -286,7 +286,7 @@ fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_le
         const constraint_len = self.buf_tmp.items.len - start;
         total_constraint_len += constraint_len;
 
-        try self.static_dispatch_constraints_tmp.append(.{
+        try self.where_requirements_tmp.append(.{
             .fn_name = item.constraint.fn_name,
             .type_name_start = start,
             .type_name_end = type_name_end,
@@ -297,19 +297,19 @@ fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_le
 
     // Sort constraints alphabetically by type name first, then by function name
     std.mem.sort(
-        StaticDispatchTmp,
-        self.static_dispatch_constraints_tmp.items,
-        StaticDispatchTmp.SortCtx{
+        RequirementTmp,
+        self.where_requirements_tmp.items,
+        RequirementTmp.SortCtx{
             .buf_tmp = &self.buf_tmp,
             .idents = self.idents,
         },
-        StaticDispatchTmp.sort,
+        RequirementTmp.sort,
     );
 
     // Calculate line lengths for different formatting options
 
     // Length of all ", " between constraints
-    const separator_len = (self.static_dispatch_constraints.items.len - 1) * 2; // ", " between each
+    const separator_len = (self.where_requirements.items.len - 1) * 2; // ", " between each
 
     // Length of all constraints, separators, plus open/closing brackets
     const constraints_len_if_on_same_line = total_constraint_len + separator_len + 2; // extra two the open/closing []
@@ -322,7 +322,7 @@ fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_le
         // All constraints fit on the same line as the type
         // Example: MyType where [plus : a, a -> a, minus : a, a -> a]
         try writer.writeAll(" where [");
-        for (self.static_dispatch_constraints_tmp.items, 0..) |constraint, j| {
+        for (self.where_requirements_tmp.items, 0..) |constraint, j| {
             if (j > 0) try writer.writeAll(", ");
             try writer.writeAll(self.buf_tmp.items[constraint.start..][0..constraint.len]);
         }
@@ -332,7 +332,7 @@ fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_le
         // Example:
         //   where [plus : a, a -> a, minus : a, a -> a]
         try writer.writeAll("\n  where [");
-        for (self.static_dispatch_constraints_tmp.items, 0..) |constraint, j| {
+        for (self.where_requirements_tmp.items, 0..) |constraint, j| {
             if (j > 0) try writer.writeAll("\n     , ");
             try writer.writeAll(self.buf_tmp.items[constraint.start..][0..constraint.len]);
         }
@@ -345,7 +345,7 @@ fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_le
         //     minus : a, a -> a,
         //   ]
         try writer.writeAll("\n  where [\n    ");
-        for (self.static_dispatch_constraints_tmp.items, 0..) |constraint, j| {
+        for (self.where_requirements_tmp.items, 0..) |constraint, j| {
             if (j > 0) try writer.writeAll(",\n    ");
             try writer.writeAll(self.buf_tmp.items[constraint.start..][0..constraint.len]);
         }
@@ -890,14 +890,14 @@ pub fn writeTagGet(self: *TypeWriter, tag: Tag, root_var: Var) std.mem.Allocator
     return self.get();
 }
 
-/// Append a constraint with its dispatcher var to the list, if it doesn't already exist
-    for (self.static_dispatch_constraints.items) |item| {
+/// Append a constraint with its type variable to the list, if it doesn't already exist
+    for (self.where_requirements.items) |item| {
         if (item.constraint.fn_name == constraint_to_add.fn_name and item.constraint.fn_var == constraint_to_add.fn_var) {
             return;
         }
     }
-    try self.static_dispatch_constraints.append(.{
-        .dispatcher_var = dispatcher_var,
+    try self.where_requirements.append(.{
+        .type_var = type_var,
         .constraint = constraint_to_add,
     });
 }
