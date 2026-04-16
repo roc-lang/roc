@@ -991,8 +991,8 @@ pub const Lowerer = struct {
         expected_var: ?Var,
     ) std.mem.Allocator.Error!symbol_mod.Symbol {
         const source_root_var = self.ctx.typedCirModule(top_level.module_idx).defType(top_level.def_idx);
-        const specialization_root_var = if (expected_var) |workspace_expected_var|
-            workspace_expected_var
+        const specialization_root_var = if (expected_var) |scoped_expected_var|
+            scoped_expected_var
         else
             try self.scopeVar(type_scope, top_level.module_idx, source_root_var);
         const expected_checker_seed = try self.freezeCheckerVarFromScope(
@@ -10636,9 +10636,9 @@ pub const Lowerer = struct {
         residual_ext: Var,
         type_scope: *TypeCloneScope,
     ) std.mem.Allocator.Error!Var {
-        const workspace_store = type_scope.typeStoreMut();
-        const content = try workspace_store.mkTagUnion(residual_tags, residual_ext);
-        return try workspace_store.freshFromContentWithRank(content, types.Rank.generalized);
+        const scope_store = type_scope.typeStoreMut();
+        const content = try scope_store.mkTagUnion(residual_tags, residual_ext);
+        return try scope_store.freshFromContentWithRank(content, types.Rank.generalized);
     }
 
     fn materializeWorkspaceRecordResidualVar(
@@ -10647,15 +10647,15 @@ pub const Lowerer = struct {
         terminal: FlattenedRecordTerminal,
         type_scope: *TypeCloneScope,
     ) std.mem.Allocator.Error!Var {
-        const workspace_store = type_scope.typeStoreMut();
+        const scope_store = type_scope.typeStoreMut();
 
         const content: types.Content = switch (terminal) {
             .unbound => .{ .structure = .{
-                .record_unbound = try workspace_store.appendRecordFields(residual_fields),
+                .record_unbound = try scope_store.appendRecordFields(residual_fields),
             } },
             .empty_record, .var_ => blk: {
                 const ext_var = switch (terminal) {
-                    .empty_record => try workspace_store.freshFromContentWithRank(
+                    .empty_record => try scope_store.freshFromContentWithRank(
                         .{ .structure = .empty_record },
                         types.Rank.generalized,
                     ),
@@ -10664,14 +10664,14 @@ pub const Lowerer = struct {
                 };
                 break :blk .{ .structure = .{
                     .record = .{
-                        .fields = try workspace_store.appendRecordFields(residual_fields),
+                        .fields = try scope_store.appendRecordFields(residual_fields),
                         .ext = ext_var,
                     },
                 } };
             },
         };
 
-        return try workspace_store.freshFromContentWithRank(content, types.Rank.generalized);
+        return try scope_store.freshFromContentWithRank(content, types.Rank.generalized);
     }
 
     fn flattenedRecordTerminalAsVar(
@@ -10679,16 +10679,16 @@ pub const Lowerer = struct {
         terminal: FlattenedRecordTerminal,
         type_scope: *TypeCloneScope,
     ) std.mem.Allocator.Error!Var {
-        const workspace_store = type_scope.typeStoreMut();
+        const scope_store = type_scope.typeStoreMut();
         return switch (terminal) {
             .var_ => |var_| var_,
-            .empty_record => try workspace_store.freshFromContentWithRank(
+            .empty_record => try scope_store.freshFromContentWithRank(
                 .{ .structure = .empty_record },
                 types.Rank.generalized,
             ),
-            .unbound => try workspace_store.freshFromContentWithRank(
+            .unbound => try scope_store.freshFromContentWithRank(
                 .{ .structure = .{
-                    .record_unbound = try workspace_store.appendRecordFields(&.{}),
+                    .record_unbound = try scope_store.appendRecordFields(&.{}),
                 } },
                 types.Rank.generalized,
             ),
