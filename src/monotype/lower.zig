@@ -637,7 +637,7 @@ pub const Lowerer = struct {
         type_store: *types.Store,
         ident_store: *base.Ident.Store,
         owns_state: bool,
-        source_var_map: clone_inst.ScopedCloneMap,
+        instantiated_source_var_map: clone_inst.ScopedCloneMap,
         active_type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
         provisional_type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
         type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
@@ -721,9 +721,9 @@ pub const Lowerer = struct {
                 }
 
                 if (!inherit_specialization_state) return;
-                var iter = scope.source_var_map.iterator();
+                var iter = scope.instantiated_source_var_map.iterator();
                 while (iter.next()) |entry| {
-                    try self.source_var_map.put(entry.key_ptr.*, entry.value_ptr.*);
+                    try self.instantiated_source_var_map.put(entry.key_ptr.*, entry.value_ptr.*);
                 }
                 var type_iter = scope.type_cache.iterator();
                 while (type_iter.next()) |entry| {
@@ -737,7 +737,7 @@ pub const Lowerer = struct {
         }
 
         fn initWithRankBehavior(self: *TypeCloneScope) void {
-            self.source_var_map = clone_inst.ScopedCloneMap.init(self.allocator);
+            self.instantiated_source_var_map = clone_inst.ScopedCloneMap.init(self.allocator);
             self.active_type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(self.allocator);
             self.provisional_type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(self.allocator);
             self.type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(self.allocator);
@@ -777,7 +777,7 @@ pub const Lowerer = struct {
             self.active_type_cache.deinit();
             self.provisional_type_cache.deinit();
             self.type_cache.deinit();
-            self.source_var_map.deinit();
+            self.instantiated_source_var_map.deinit();
             if (self.owns_state) {
                 self.ident_store.deinit(self.allocator);
                 self.allocator.destroy(self.ident_store);
@@ -929,7 +929,7 @@ pub const Lowerer = struct {
         defer binding_env.deinit();
 
         const bind_var = solved_def.pattern.ty();
-        const expected_var = try self.scopeVar(&type_scope, module_idx, bind_var);
+        const expected_var = try self.instantiateSourceVar(&type_scope, module_idx, bind_var);
         try self.collectExprInfoWithResultVar(
             module_idx,
             &type_scope,
@@ -965,7 +965,7 @@ pub const Lowerer = struct {
         const specialization_root_var = if (expected_var) |scoped_expected_var|
             scoped_expected_var
         else
-            try self.scopeVar(type_scope, top_level.module_idx, source_root_var);
+            try self.instantiateSourceVar(type_scope, top_level.module_idx, source_root_var);
         const expected_checker_seed = try self.freezeCheckerVarFromScope(
             type_scope,
             specialization_root_var,
@@ -1282,7 +1282,7 @@ pub const Lowerer = struct {
         defer binding_env.deinit();
 
         const expr_var = typed_cir_module.expr(expr_idx).ty();
-        const expected_var = try self.scopeVar(&type_scope, module_idx, expr_var);
+        const expected_var = try self.instantiateSourceVar(&type_scope, module_idx, expr_var);
         try self.collectExprInfoWithResultVar(
             module_idx,
             &type_scope,
@@ -1341,7 +1341,7 @@ pub const Lowerer = struct {
                 var binding_env = BindingEnv.init(self.allocator);
                 defer binding_env.deinit();
                 const bind_var = solved_def.pattern.ty();
-                const bind_expected_var = try self.scopeVar(&type_scope, module_idx, bind_var);
+                const bind_expected_var = try self.instantiateSourceVar(&type_scope, module_idx, bind_var);
                 try self.collectExprInfoWithResultVar(
                     module_idx,
                     &type_scope,
@@ -1388,7 +1388,7 @@ pub const Lowerer = struct {
         var binding_env = BindingEnv.init(self.allocator);
         defer binding_env.deinit();
         const bind_var = solved_def.pattern.ty();
-        const bind_expected_var = try self.scopeVar(&type_scope, module_idx, bind_var);
+        const bind_expected_var = try self.instantiateSourceVar(&type_scope, module_idx, bind_var);
         try self.collectExprInfoWithResultVar(
             module_idx,
             &type_scope,
@@ -2070,7 +2070,7 @@ pub const Lowerer = struct {
         result_var: ?Var,
     ) std.mem.Allocator.Error!void {
         const bound_result_var = if (result_var) |explicit|
-            try self.scopeVar(type_scope, module_idx, explicit)
+            try self.instantiateSourceVar(type_scope, module_idx, explicit)
         else
             null;
         try self.bindExprResultVar(module_idx, type_scope, expr_idx, bound_result_var);
@@ -2276,7 +2276,7 @@ pub const Lowerer = struct {
 
         for (arg_exprs, 0..) |arg_expr_idx, i| {
             const source_arg_var = self.ctx.typedCirModule(module_idx).exprType(arg_expr_idx);
-            arg_vars[i] = try self.scopeVar(call_scope, module_idx, source_arg_var);
+            arg_vars[i] = try self.instantiateSourceVar(call_scope, module_idx, source_arg_var);
             arg_tys[i] = try self.instantiateSourceVarType(module_idx, call_scope, source_arg_var);
         }
 
@@ -2537,7 +2537,7 @@ pub const Lowerer = struct {
                     "monotype invariant violated: required lookup '{s}' missing def in app module {d}",
                     .{ required_name, app_module_idx },
                 );
-                const expected_var = try self.scopeVar(
+                const expected_var = try self.instantiateSourceVar(
                     type_scope,
                     module_idx,
                     self.ctx.typedCirModule(module_idx).exprType(expr.idx),
@@ -3517,7 +3517,7 @@ pub const Lowerer = struct {
         }
 
         const pattern_var = self.ctx.typedCirModule(module_idx).patternType(pattern_idx);
-        const scoped_var = try self.scopeVar(type_scope, module_idx, pattern_var);
+        const scoped_var = try self.instantiateSourceVar(type_scope, module_idx, pattern_var);
         return try self.patternVarIsSingleTagUnion(module_idx, type_scope, scoped_var);
     }
 
@@ -4517,7 +4517,7 @@ pub const Lowerer = struct {
             };
             if (type_scope.memo.pattern_source_type_cache.contains(key)) continue;
             const pattern_var = self.ctx.typedCirModule(module_idx).patternType(pattern_idx);
-            const scoped_var = try self.scopeVar(type_scope, module_idx, pattern_var);
+            const scoped_var = try self.instantiateSourceVar(type_scope, module_idx, pattern_var);
             const mono_ty = try self.instantiateVarType(module_idx, type_scope, scoped_var);
             try self.recordPatternSourceType(module_idx, type_scope, pattern_idx, mono_ty);
         }
@@ -5219,7 +5219,7 @@ pub const Lowerer = struct {
             try self.putLocalFnSeedBinding(env, .{
                 .module_idx = module_idx,
                 .pattern_idx = @intFromEnum(decl.pattern),
-            }, try self.scopeVar(type_scope, module_idx, typed_cir_module.expr(decl.expr).ty()));
+            }, try self.instantiateSourceVar(type_scope, module_idx, typed_cir_module.expr(decl.expr).ty()));
         }
 
         return end_idx;
@@ -6022,7 +6022,7 @@ pub const Lowerer = struct {
         def_idx: CIR.Def.Idx,
     ) std.mem.Allocator.Error!Var {
         const source_var = self.ctx.typedCirModule(source_module_idx).defType(def_idx);
-        return try self.scopeVar(type_scope, source_module_idx, source_var);
+        return try self.instantiateSourceVar(type_scope, source_module_idx, source_var);
     }
 
     fn lowerRecordedMethodCall(
@@ -6952,7 +6952,7 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         source_var: Var,
     ) std.mem.Allocator.Error!type_mod.TypeId {
-        const scoped = try self.scopeVar(type_scope, module_idx, source_var);
+        const scoped = try self.instantiateSourceVar(type_scope, module_idx, source_var);
         return try self.instantiateVarType(module_idx, type_scope, scoped);
     }
 
@@ -6971,7 +6971,7 @@ pub const Lowerer = struct {
         const lowered = try self.instantiateVarType(
             module_idx,
             type_scope,
-            try self.scopeVar(type_scope, module_idx, self.ctx.typedCirModule(module_idx).exprType(expr_idx)),
+            try self.instantiateSourceVar(type_scope, module_idx, self.ctx.typedCirModule(module_idx).exprType(expr_idx)),
         );
         const expr = self.ctx.typedCirModule(module_idx).expr(expr_idx).data;
         try type_scope.memo.expr_type_cache.put(
@@ -7777,7 +7777,7 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         pattern_idx: CIR.Pattern.Idx,
     ) std.mem.Allocator.Error!Var {
-        return try self.scopeVar(type_scope, module_idx, self.ctx.typedCirModule(module_idx).patternType(pattern_idx));
+        return try self.instantiateSourceVar(type_scope, module_idx, self.ctx.typedCirModule(module_idx).patternType(pattern_idx));
     }
 
     fn requirePatternType(
@@ -9788,7 +9788,7 @@ pub const Lowerer = struct {
         expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!Var {
         return self.lookupSpecializedExprVar(module_idx, env, expr_idx) orelse
-            try self.scopeVar(type_scope, module_idx, self.ctx.typedCirModule(module_idx).exprType(expr_idx));
+            try self.instantiateSourceVar(type_scope, module_idx, self.ctx.typedCirModule(module_idx).exprType(expr_idx));
     }
 
     fn scopedSolvedExprResultVar(
@@ -9798,10 +9798,10 @@ pub const Lowerer = struct {
         expr: typed_cir.Expr,
     ) std.mem.Allocator.Error!Var {
         return self.lookupSpecializedExprVar(expr.module().module_idx, env, expr.idx) orelse
-            try self.scopeVar(type_scope, expr.module().module_idx, expr.ty());
+            try self.instantiateSourceVar(type_scope, expr.module().module_idx, expr.ty());
     }
 
-    fn sourceTypeKey(
+    fn sourceVarKey(
         self: *const Lowerer,
         source_module_idx: u32,
         source_var: Var,
@@ -9813,14 +9813,14 @@ pub const Lowerer = struct {
         };
     }
 
-    fn scopeVar(
+    fn instantiateSourceVar(
         self: *Lowerer,
         type_scope: *TypeCloneScope,
         source_module_idx: u32,
         source_var: Var,
     ) std.mem.Allocator.Error!Var {
-        const key = self.sourceTypeKey(source_module_idx, source_var);
-        if (type_scope.source_var_map.get(key)) |scoped| return scoped;
+        const key = self.sourceVarKey(source_module_idx, source_var);
+        if (type_scope.instantiated_source_var_map.get(key)) |scoped| return scoped;
         const source_module = self.ctx.typedCirModule(source_module_idx);
         var clone_map = clone_inst.ScopedCloneMap.init(self.allocator);
         defer clone_map.deinit();
@@ -9835,7 +9835,16 @@ pub const Lowerer = struct {
             self.allocator,
         );
         const scoped_root = try self.instantiateScopedVar(type_scope, copied_root);
-        try self.putOrAssertSourceVarMapping(type_scope, key, scoped_root);
+        if (type_scope.instantiated_source_var_map.get(key)) |existing| {
+            if (existing != scoped_root) {
+                debugPanic(
+                    "monotype specialization invariant violated: conflicting instantiated source var mapping for module {d}",
+                    .{key.module_idx},
+                );
+            }
+            return existing;
+        }
+        try type_scope.instantiated_source_var_map.put(key, scoped_root);
         return scoped_root;
     }
 
@@ -9855,24 +9864,6 @@ pub const Lowerer = struct {
             .rank_behavior = .ignore_rank,
         };
         return try instantiator.instantiateVar(var_);
-    }
-
-    fn putOrAssertSourceVarMapping(
-        _: *Lowerer,
-        type_scope: *TypeCloneScope,
-        key: TypeCloneScope.TypeKey,
-        scoped_var: Var,
-    ) std.mem.Allocator.Error!void {
-        if (type_scope.source_var_map.get(key)) |existing| {
-            if (existing != scoped_var) {
-                debugPanic(
-                    "monotype specialization invariant violated: conflicting scoped source var mapping for module {d}",
-                    .{key.module_idx},
-                );
-            }
-            return;
-        }
-        try type_scope.source_var_map.put(key, scoped_var);
     }
 
     fn formatVarTextFromStore(
@@ -10123,7 +10114,7 @@ pub const Lowerer = struct {
         source_module_idx: u32,
         source_var: Var,
     ) std.mem.Allocator.Error!Var {
-        return self.scopeVar(type_scope, source_module_idx, source_var);
+        return self.instantiateSourceVar(type_scope, source_module_idx, source_var);
     }
 
     fn buildCurriedFuncType(
