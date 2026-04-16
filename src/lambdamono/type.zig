@@ -60,7 +60,7 @@ pub const Store = struct {
     types: std.ArrayList(Content),
     interned_types: std.StringHashMap(TypeId),
     scratch_intern_key: std.ArrayList(u8),
-    canonical_by_raw: std.AutoHashMap(TypeId, TypeId),
+    interned_by_raw: std.AutoHashMap(TypeId, TypeId),
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
@@ -68,7 +68,7 @@ pub const Store = struct {
             .types = .empty,
             .interned_types = std.StringHashMap(TypeId).init(allocator),
             .scratch_intern_key = .empty,
-            .canonical_by_raw = std.AutoHashMap(TypeId, TypeId).init(allocator),
+            .interned_by_raw = std.AutoHashMap(TypeId, TypeId).init(allocator),
         };
     }
 
@@ -83,7 +83,7 @@ pub const Store = struct {
         }
         self.interned_types.deinit();
         self.scratch_intern_key.deinit(self.allocator);
-        self.canonical_by_raw.deinit();
+        self.interned_by_raw.deinit();
     }
 
     pub fn addType(self: *Store, content: Content) std.mem.Allocator.Error!TypeId {
@@ -109,7 +109,7 @@ pub const Store = struct {
 
     pub fn internTypeId(self: *Store, id: TypeId) std.mem.Allocator.Error!TypeId {
         const root = self.resolveLinks(id);
-        if (self.canonical_by_raw.get(root)) |cached| return cached;
+        if (self.interned_by_raw.get(root)) |cached| return cached;
 
         var active = std.AutoHashMap(TypeId, TypeId).init(self.allocator);
         defer active.deinit();
@@ -273,7 +273,7 @@ pub const Store = struct {
         active: *std.AutoHashMap(TypeId, TypeId),
     ) std.mem.Allocator.Error!TypeId {
         const root = self.resolveLinks(raw_id);
-        if (self.canonical_by_raw.get(root)) |cached| return cached;
+        if (self.interned_by_raw.get(root)) |cached| return cached;
         if (active.get(root)) |pending| return pending;
 
         const root_content = self.types.items[@intFromEnum(root)];
@@ -284,7 +284,7 @@ pub const Store = struct {
         }
 
         try active.put(root, root);
-        const canonical_content: Content = switch (root_content) {
+        const interned_content: Content = switch (root_content) {
             .placeholder, .link => unreachable,
             .primitive => |prim| .{ .primitive = prim },
             .nominal => |nominal| blk: {
@@ -354,13 +354,13 @@ pub const Store = struct {
             },
         };
 
-        self.replaceType(root, canonical_content);
+        self.replaceType(root, interned_content);
         try self.buildCanonicalKey(root);
         if (self.lookupInternedScratchKey()) |existing| {
             if (root != existing) {
                 self.replaceType(root, .{ .link = existing });
             }
-            try self.canonical_by_raw.put(root, existing);
+            try self.interned_by_raw.put(root, existing);
             const removed = active.remove(root);
             if (comptime builtin.mode == .Debug) {
                 std.debug.assert(removed);
@@ -370,7 +370,7 @@ pub const Store = struct {
             return existing;
         }
         try self.rememberScratchInternKey(root);
-        try self.canonical_by_raw.put(root, root);
+        try self.interned_by_raw.put(root, root);
         const removed = active.remove(root);
         if (comptime builtin.mode == .Debug) {
             std.debug.assert(removed);
