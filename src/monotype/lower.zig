@@ -1551,14 +1551,14 @@ pub const Lowerer = struct {
         const source_expr_var = solved_def.expr.ty();
         _ = expected_var;
         const source_fn_var = source_expr_var;
+        var source_fn_shape = try typed_cir_module.curriedFnShape(source_fn_var);
+        defer source_fn_shape.deinit(self.allocator);
 
         const arg_patterns = self.ctx.typedCirModule(module_idx).slicePatterns(hosted.args);
-        const arg_count = self.functionArgCountInStore(typed_cir_module.typeStoreConst(), source_fn_var);
+        const arg_count = source_fn_shape.args.len;
         const arg_tys = try self.allocator.alloc(type_mod.TypeId, arg_count);
         defer self.allocator.free(arg_tys);
-        for (0..arg_count) |i| {
-            const source_arg_var = self.lookupCurriedFunctionArgVarInStore(typed_cir_module.typeStoreConst(), source_fn_var, i) orelse
-                debugPanic("monotype invariant violated: missing hosted arg {d} in module {d}", .{ i, module_idx });
+        for (source_fn_shape.args, 0..) |source_arg_var, i| {
             arg_tys[i] = try self.instantiateSourceVarType(module_idx, type_scope, source_arg_var);
         }
         const lowered_args = try self.allocator.alloc(ast.TypedSymbol, arg_count);
@@ -1570,9 +1570,7 @@ pub const Lowerer = struct {
                 try self.makeUnitArgWithType(arg_tys[i]);
         }
 
-        const source_ret_var = self.lookupFunctionRetVarInStore(typed_cir_module.typeStoreConst(), source_fn_var) orelse
-            debugPanic("monotype invariant violated: hosted top-level missing return var in module {d}", .{module_idx});
-        const bind_ty = try self.buildCurriedFuncType(arg_tys, try self.instantiateSourceVarType(module_idx, type_scope, source_ret_var));
+        const bind_ty = try self.buildCurriedFuncType(arg_tys, try self.instantiateSourceVarType(module_idx, type_scope, source_fn_shape.ret));
         const lowered = try self.program.store.addDef(.{
             .bind = .{
                 .ty = try self.ctx.types.addType(bind_ty),
@@ -1672,8 +1670,9 @@ pub const Lowerer = struct {
         _ = source_expr_var;
         const typed_cir_module = self.ctx.typedCirModule(module_idx);
         const source_fn_var = source_seed_source_var;
-        const source_result_var = self.lookupFunctionRetVarInStore(typed_cir_module.typeStoreConst(), source_fn_var) orelse
-            debugPanic("monotype lambda invariant violated: missing function return var in module {d}", .{module_idx});
+        var source_fn_shape = try typed_cir_module.curriedFnShape(source_fn_var);
+        defer source_fn_shape.deinit(self.allocator);
+        const source_result_var = source_fn_shape.ret;
         const result_ty = try self.instantiateSourceVarType(module_idx, type_scope, source_result_var);
         const result_var = source_result_var;
 
@@ -1689,7 +1688,7 @@ pub const Lowerer = struct {
         };
 
         const arg_patterns = typed_cir_module.slicePatterns(lambda.args);
-        const first_arg_source_var = self.lookupCurriedFunctionArgVarInStore(typed_cir_module.typeStoreConst(), source_fn_var, 0);
+        const first_arg_source_var = if (source_fn_shape.args.len == 0) null else source_fn_shape.args[0];
         const first_arg_ty = if (first_arg_source_var) |source_arg_var|
             try self.instantiateSourceVarType(module_idx, type_scope, source_arg_var)
         else
@@ -1773,13 +1772,19 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!ast.ExprId {
         std.debug.assert(remaining_arg_patterns.len > 0);
         const typed_cir_module = self.ctx.typedCirModule(module_idx);
-        const first_arg_source_var = self.lookupCurriedFunctionArgVarInStore(typed_cir_module.typeStoreConst(), source_fn_var, next_arg_index) orelse
-            debugPanic("monotype lambda invariant violated: missing curried arg {d} in module {d}", .{ next_arg_index, module_idx });
+        const source_fn_var_unwrapped = source_fn_var orelse
+            debugPanic("monotype lambda invariant violated: missing source function seed in module {d}", .{module_idx});
+        var source_fn_shape = try typed_cir_module.curriedFnShape(source_fn_var_unwrapped);
+        defer source_fn_shape.deinit(self.allocator);
+        if (next_arg_index >= source_fn_shape.args.len) {
+            debugPanic(
+                "monotype lambda invariant violated: missing curried arg {d} in module {d}",
+                .{ next_arg_index, module_idx },
+            );
+        }
+        const first_arg_source_var = source_fn_shape.args[next_arg_index];
         const first_arg_ty = try self.instantiateSourceVarType(module_idx, type_scope, first_arg_source_var);
-        const source_result_var = self.lookupCurriedFunctionResultVarInStore(typed_cir_module.typeStoreConst(), source_fn_var) orelse debugPanic(
-            "monotype lambda invariant violated: missing curried source function final return in module {d}",
-            .{module_idx},
-        );
+        const source_result_var = source_fn_shape.ret;
         const source_result_ty = try self.instantiateSourceVarType(module_idx, type_scope, source_result_var);
         const remaining_after_current = remaining_arg_patterns.len - 1;
         const result_ty = if (remaining_after_current == 0)
@@ -2333,11 +2338,11 @@ pub const Lowerer = struct {
         lambda_expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!ExpectedType {
         _ = env;
-        const lambda_var = self.ctx.typedCirModule(module_idx).exprType(lambda_expr_idx);
-        const result_var = self.lookupFunctionRetVarInStore(self.ctx.typedCirModule(module_idx).typeStoreConst(), lambda_var) orelse debugPanic(
-            "monotype return invariant violated: lambda {} in module {d} is missing an explicit return expectation",
-            .{ lambda_expr_idx, module_idx },
+        var lambda_shape = try self.ctx.typedCirModule(module_idx).curriedFnShape(
+            self.ctx.typedCirModule(module_idx).exprType(lambda_expr_idx),
         );
+        defer lambda_shape.deinit(self.allocator);
+        const result_var = lambda_shape.ret;
         return .{
             .ty = try self.instantiateSourceVarType(module_idx, type_scope, result_var),
             .solved_var = result_var,
@@ -3261,17 +3266,22 @@ pub const Lowerer = struct {
         const source_expr_var = self.ctx.typedCirModule(module_idx).expr(source_expr_idx).ty();
         _ = expected_var;
         const source_fn_var = source_expr_var;
+        var source_fn_shape = try typed_cir_module.curriedFnShape(source_fn_var);
+        defer source_fn_shape.deinit(self.allocator);
         const first_arg_ty = if (arg_patterns.len == 0)
             self.requireFunctionType(closure_ty).arg
-        else
+        else blk: {
+            if (source_fn_shape.args.len == 0) {
+                debugPanic("monotype closure invariant violated: missing first arg in module {d}", .{module_idx});
+            }
+            break :blk
             try self.instantiateSourceVarType(
                 module_idx,
                 scope,
-                self.lookupCurriedFunctionArgVarInStore(typed_cir_module.typeStoreConst(), source_fn_var, 0) orelse
-                    debugPanic("monotype closure invariant violated: missing first arg in module {d}", .{module_idx}),
+                source_fn_shape.args[0],
             );
-        const result_var = self.lookupFunctionRetVarInStore(typed_cir_module.typeStoreConst(), source_fn_var) orelse
-            debugPanic("monotype closure invariant violated: missing return var in module {d}", .{module_idx});
+        };
+        const result_var = source_fn_shape.ret;
         const result_ty = try self.instantiateSourceVarType(module_idx, scope, result_var);
         const first_arg_pattern = if (arg_patterns.len == 0) null else arg_patterns[0];
         const arg = if (first_arg_pattern) |pattern_idx|
@@ -3288,7 +3298,7 @@ pub const Lowerer = struct {
                 module_idx,
                 scope,
                 arg,
-                self.lookupCurriedFunctionArgVarInStore(typed_cir_module.typeStoreConst(), source_fn_var, 0),
+                if (source_fn_shape.args.len == 0) null else source_fn_shape.args[0],
                 pattern_idx,
                 &body_env,
                 &binding_decls,

@@ -146,6 +146,15 @@ pub const Module = struct {
     module_idx: u32,
     data_store: *ModuleData,
 
+    pub const CurriedFnShape = struct {
+        args: []Var,
+        ret: Var,
+
+        pub fn deinit(self: *@This(), allocator: Allocator) void {
+            allocator.free(self.args);
+        }
+    };
+
     fn env(self: @This()) *ModuleEnv {
         return self.data_store.env;
     }
@@ -249,6 +258,16 @@ pub const Module = struct {
         return ModuleEnv.varFrom(idx);
     }
 
+    pub fn curriedFnShape(self: @This(), fn_var: Var) Allocator.Error!CurriedFnShape {
+        var args = std.ArrayList(Var).empty;
+        errdefer args.deinit(self.allocator);
+        const ret = try self.appendCurriedFnArgs(&args, fn_var);
+        return .{
+            .args = try args.toOwnedSlice(self.allocator),
+            .ret = ret,
+        };
+    }
+
     pub fn expr(self: @This(), idx: CIR.Expr.Idx) Expr {
         return .{
             .owner = self,
@@ -344,6 +363,42 @@ pub const Module = struct {
 
     pub fn sliceMatchBranchPatterns(self: @This(), span: CIR.Expr.Match.BranchPattern.Span) []const CIR.Expr.Match.BranchPattern.Idx {
         return self.env().store.sliceMatchBranchPatterns(span);
+    }
+
+    fn appendCurriedFnArgs(self: @This(), args: *std.ArrayList(Var), fn_var: Var) Allocator.Error!Var {
+        const store = self.typeStoreConst();
+        var current = fn_var;
+        while (true) {
+            const resolved = store.resolveVar(current);
+            switch (resolved.desc.content) {
+                .alias => |alias| {
+                    current = store.getAliasBackingVar(alias);
+                },
+                .structure => |flat| switch (flat) {
+                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                        try args.appendSlice(self.allocator, store.sliceVars(func.args));
+                        const ret = func.ret;
+                        const ret_resolved = store.resolveVar(ret);
+                        switch (ret_resolved.desc.content) {
+                            .alias => |alias| current = store.getAliasBackingVar(alias),
+                            .structure => |ret_flat| switch (ret_flat) {
+                                .fn_pure, .fn_effectful, .fn_unbound => current = ret,
+                                else => return ret,
+                            },
+                            else => return ret,
+                        }
+                    },
+                    else => std.debug.panic(
+                        "typed_cir invariant violated: expected function type when building source function shape",
+                        .{},
+                    ),
+                },
+                else => std.debug.panic(
+                    "typed_cir invariant violated: expected function type when building source function shape",
+                    .{},
+                ),
+            }
+        }
     }
 };
 
