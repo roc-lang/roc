@@ -1092,6 +1092,26 @@ const ProcLowerer = struct {
         }
 
         if (builtin.mode == .Debug) {
+            if (self.current_expr_id) |expr_id| {
+                const expr = self.parent.input.store.getExpr(expr_id);
+                const extra = switch (expr) {
+                    .call_direct => |call| call.proc.raw(),
+                    else => 0,
+                };
+                std.debug.panic(
+                    "lir.from_ir invariant violated: no explicit bridge in proc {d} expr {d} tag {s} extra {d} from layout {d} ({s}) to layout {d} ({s})",
+                    .{
+                        @intFromEnum(self.proc_id),
+                        @intFromEnum(expr_id),
+                        @tagName(expr),
+                        extra,
+                        @intFromEnum(actual_layout),
+                        @tagName(ls.getLayout(actual_layout).tag),
+                        @intFromEnum(target_layout),
+                        @tagName(ls.getLayout(target_layout).tag),
+                    },
+                );
+            }
             std.debug.panic(
                 "lir.from_ir invariant violated: no explicit bridge in proc {d} from layout {d} ({s}) to layout {d} ({s})",
                 .{

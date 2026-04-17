@@ -64,6 +64,7 @@ pub const Queue = struct {
             const fn_def = item.specialized orelse continue;
             try out.append(allocator, .{
                 .bind = item.specialized_symbol,
+                .result_ty = item.sig.ret_ty,
                 .value = .{ .fn_ = fn_def },
             });
         }

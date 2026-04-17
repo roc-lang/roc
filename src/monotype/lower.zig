@@ -3439,6 +3439,10 @@ pub const Lowerer = struct {
         const body_result_source_var = typed_cir_module.expr(body_expr_idx).ty();
         const result_var = try self.instantiateSourceVar(scope, module_idx, body_result_source_var);
         const result_ty = try self.instantiateVarType(module_idx, scope, result_var);
+        const first_arg_solved_var = if (arg_patterns.len == 0 or source_fn_shape.args.len == 0)
+            null
+        else
+            try self.instantiateSourceVar(scope, module_idx, source_fn_shape.args[0]);
         const first_arg_pattern = if (arg_patterns.len == 0) null else arg_patterns[0];
         const arg = if (first_arg_pattern) |pattern_idx|
             try self.bindLambdaArg(module_idx, scope, pattern_idx, first_arg_ty)
@@ -3463,7 +3467,7 @@ pub const Lowerer = struct {
                 module_idx,
                 scope,
                 arg,
-                if (source_fn_shape.args.len == 0) null else source_fn_shape.args[0],
+                first_arg_solved_var,
                 pattern_idx,
                 &body_env,
                 &binding_decls,
@@ -8042,7 +8046,11 @@ pub const Lowerer = struct {
                 }
                 break :blk .unbd;
             },
-            .err => .placeholder,
+            // Checked error vars must not leak the monotype builder's internal
+            // placeholder into published program types. Preserve them as explicit
+            // unknown leaves so downstream stages can still retarget erroneous
+            // expressions without depending on builder internals.
+            .err => .unbd,
         };
 
         self.ctx.types.setType(placeholder, lowered);
@@ -8114,7 +8122,7 @@ pub const Lowerer = struct {
                     if (rigid.constraints.len() == 0) break;
                     self.debugPanicUnresolvedTypeVar(module_idx, type_scope, resolved_ext.var_);
                 },
-                .err => return .placeholder,
+                .err => return .unbd,
             }
         }
 
@@ -8220,7 +8228,7 @@ pub const Lowerer = struct {
                     if (rigid.constraints.len() == 0) break;
                     self.debugPanicUnresolvedTypeVar(module_idx, type_scope, resolved_ext.var_);
                 },
-                .err => return .placeholder,
+                .err => return .unbd,
             }
         }
 
