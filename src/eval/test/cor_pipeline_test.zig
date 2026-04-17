@@ -1004,6 +1004,63 @@ test "cor pipeline - for loop closure early return" {
     );
 }
 
+test "cor pipeline - inspect recursive nominal arithmetic expr" {
+    try expectInspectProgramWithArena(
+        .module,
+        \\Arith := [Lit(I64), Add(Arith, Arith), Mul(Arith, Arith), Neg(Arith)]
+        \\
+        \\main = Arith.Mul(
+        \\    Arith.Add(Arith.Lit(2), Arith.Lit(3)),
+        \\    Arith.Neg(Arith.Lit(4))
+        \\)
+    ,
+        &.{},
+        "Mul(Add(Lit(2), Lit(3)), Neg(Lit(4)))",
+    );
+}
+
+test "cor pipeline - inspect recursive nominal arithmetic expr dev backend" {
+    var compiled = try helpers.compileInspectedProgram(
+        testing.allocator,
+        .module,
+        \\Arith := [Lit(I64), Add(Arith, Arith), Mul(Arith, Arith), Neg(Arith)]
+        \\
+        \\main = Arith.Mul(
+        \\    Arith.Add(Arith.Lit(2), Arith.Lit(3)),
+        \\    Arith.Neg(Arith.Lit(4))
+        \\)
+    ,
+        &.{},
+    );
+    defer compiled.deinit(testing.allocator);
+
+    const actual = try helpers.devEvaluatorInspectedStr(testing.allocator, &compiled.lowered);
+    defer testing.allocator.free(actual);
+
+    try testing.expectEqualStrings("Mul(Add(Lit(2), Lit(3)), Neg(Lit(4)))", actual);
+}
+
+test "cor pipeline - inspect recursive nominal arithmetic expr wasm backend" {
+    var compiled = try helpers.compileInspectedProgram(
+        testing.allocator,
+        .module,
+        \\Arith := [Lit(I64), Add(Arith, Arith), Mul(Arith, Arith), Neg(Arith)]
+        \\
+        \\main = Arith.Mul(
+        \\    Arith.Add(Arith.Lit(2), Arith.Lit(3)),
+        \\    Arith.Neg(Arith.Lit(4))
+        \\)
+    ,
+        &.{},
+    );
+    defer compiled.deinit(testing.allocator);
+
+    const actual = try helpers.wasmEvaluatorInspectedStr(testing.allocator, &compiled.wasm_lowered);
+    defer testing.allocator.free(actual);
+
+    try testing.expectEqualStrings("Mul(Add(Lit(2), Lit(3)), Neg(Lit(4)))", actual);
+}
+
 test "cor pipeline - eval direct-only higher-order call annotated callback parameter slot" {
     const case = direct_call_cases[0];
     try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);

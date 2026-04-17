@@ -128,6 +128,10 @@ join_point_depths: std.AutoHashMap(u32, u32),
 join_point_param_locals: std.AutoHashMap(u32, []u32),
 /// Map from JoinPointId → state local selecting remainder or join body.
 join_point_state_locals: std.AutoHashMap(u32, u32),
+/// Debug-only guard for recursive statement generation.
+active_stmt_generations: std.AutoHashMap(u32, void),
+/// Debug-only count of how many times a statement has been generated.
+stmt_generation_counts: std.AutoHashMap(u32, u32),
 /// Stack of loop-continue label depths for lowering explicit LIR loop_continue.
 loop_continue_target_depths: std.ArrayList(u32),
 /// Wasm function index for imported roc_dec_mul host function.
@@ -236,6 +240,8 @@ pub fn init(allocator: Allocator, store: *const LirStore, layout_store: *const L
         .join_point_depths = std.AutoHashMap(u32, u32).init(allocator),
         .join_point_param_locals = std.AutoHashMap(u32, []u32).init(allocator),
         .join_point_state_locals = std.AutoHashMap(u32, u32).init(allocator),
+        .active_stmt_generations = std.AutoHashMap(u32, void).init(allocator),
+        .stmt_generation_counts = std.AutoHashMap(u32, u32).init(allocator),
         .loop_continue_target_depths = .empty,
     };
 }
@@ -261,6 +267,8 @@ pub fn deinit(self: *Self) void {
     }
     self.join_point_param_locals.deinit();
     self.join_point_state_locals.deinit();
+    self.active_stmt_generations.deinit();
+    self.stmt_generation_counts.deinit();
     self.loop_continue_target_depths.deinit(self.allocator);
 }
 
@@ -4884,8 +4892,164 @@ fn restoreState(self: *Self, saved: SavedState) void {
     self.current_proc_id = saved.current_proc_id;
 }
 
+fn debugIncomingStmtCount(store: *const LirStore, target: CFStmtId) u32 {
+    const target_key = @intFromEnum(target);
+    var count: u32 = 0;
+    for (store.cf_stmts.items, 0..) |stmt, stmt_index| {
+        const source_id: CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
+        if (@intFromEnum(source_id) == target_key) continue;
+        switch (stmt) {
+            .assign_symbol => |assign| {
+                if (@intFromEnum(assign.next) == target_key) count += 1;
+            },
+            .assign_ref => |assign| {
+                if (@intFromEnum(assign.next) == target_key) count += 1;
+            },
+            .assign_literal => |assign| {
+                if (@intFromEnum(assign.next) == target_key) count += 1;
+            },
+            .assign_call => |assign| {
+                if (@intFromEnum(assign.next) == target_key) count += 1;
+            },
+            .assign_call_indirect => |assign| {
+                if (@intFromEnum(assign.next) == target_key) count += 1;
+            },
+            .assign_low_level => |assign| {
+                if (@intFromEnum(assign.next) == target_key) count += 1;
+            },
+            .assign_list => |assign| {
+                if (@intFromEnum(assign.next) == target_key) count += 1;
+            },
+            .assign_struct => |assign| {
+                if (@intFromEnum(assign.next) == target_key) count += 1;
+            },
+            .assign_tag => |assign| {
+                if (@intFromEnum(assign.next) == target_key) count += 1;
+            },
+            .set_local => |assign| {
+                if (@intFromEnum(assign.next) == target_key) count += 1;
+            },
+            .debug => |debug_stmt| {
+                if (@intFromEnum(debug_stmt.next) == target_key) count += 1;
+            },
+            .expect => |expect_stmt| {
+                if (@intFromEnum(expect_stmt.next) == target_key) count += 1;
+            },
+            .incref => |inc| {
+                if (@intFromEnum(inc.next) == target_key) count += 1;
+            },
+            .decref => |dec| {
+                if (@intFromEnum(dec.next) == target_key) count += 1;
+            },
+            .free => |free_stmt| {
+                if (@intFromEnum(free_stmt.next) == target_key) count += 1;
+            },
+            .switch_stmt => |sw| {
+                if (@intFromEnum(sw.default_branch) == target_key) count += 1;
+                for (store.getCFSwitchBranches(sw.branches)) |branch| {
+                    if (@intFromEnum(branch.body) == target_key) count += 1;
+                }
+            },
+            .borrow_scope => |scope| {
+                if (@intFromEnum(scope.body) == target_key) count += 1;
+                if (@intFromEnum(scope.remainder) == target_key) count += 1;
+            },
+            .for_list => |for_stmt| {
+                if (@intFromEnum(for_stmt.body) == target_key) count += 1;
+                if (@intFromEnum(for_stmt.next) == target_key) count += 1;
+            },
+            .join => |join| {
+                if (@intFromEnum(join.body) == target_key) count += 1;
+                if (@intFromEnum(join.remainder) == target_key) count += 1;
+            },
+            .jump, .loop_continue, .scope_exit, .ret, .runtime_error, .crash => {},
+        }
+    }
+    return count;
+}
+
+fn debugPrintIncomingStmts(store: *const LirStore, target: CFStmtId) void {
+    const target_key = @intFromEnum(target);
+    std.debug.print("incoming stmt ids for {d}:\n", .{target_key});
+    for (store.cf_stmts.items, 0..) |stmt, stmt_index| {
+        const source_id: CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
+        if (@intFromEnum(source_id) == target_key) continue;
+
+        var points_to_target = false;
+        switch (stmt) {
+            .assign_symbol => |assign| points_to_target = @intFromEnum(assign.next) == target_key,
+            .assign_ref => |assign| points_to_target = @intFromEnum(assign.next) == target_key,
+            .assign_literal => |assign| points_to_target = @intFromEnum(assign.next) == target_key,
+            .assign_call => |assign| points_to_target = @intFromEnum(assign.next) == target_key,
+            .assign_call_indirect => |assign| points_to_target = @intFromEnum(assign.next) == target_key,
+            .assign_low_level => |assign| points_to_target = @intFromEnum(assign.next) == target_key,
+            .assign_list => |assign| points_to_target = @intFromEnum(assign.next) == target_key,
+            .assign_struct => |assign| points_to_target = @intFromEnum(assign.next) == target_key,
+            .assign_tag => |assign| points_to_target = @intFromEnum(assign.next) == target_key,
+            .set_local => |assign| points_to_target = @intFromEnum(assign.next) == target_key,
+            .debug => |debug_stmt| points_to_target = @intFromEnum(debug_stmt.next) == target_key,
+            .expect => |expect_stmt| points_to_target = @intFromEnum(expect_stmt.next) == target_key,
+            .incref => |inc| points_to_target = @intFromEnum(inc.next) == target_key,
+            .decref => |dec| points_to_target = @intFromEnum(dec.next) == target_key,
+            .free => |free_stmt| points_to_target = @intFromEnum(free_stmt.next) == target_key,
+            .switch_stmt => |sw| {
+                if (@intFromEnum(sw.default_branch) == target_key) {
+                    points_to_target = true;
+                } else {
+                    for (store.getCFSwitchBranches(sw.branches)) |branch| {
+                        if (@intFromEnum(branch.body) == target_key) {
+                            points_to_target = true;
+                            break;
+                        }
+                    }
+                }
+            },
+            .borrow_scope => |scope| {
+                points_to_target = @intFromEnum(scope.body) == target_key or @intFromEnum(scope.remainder) == target_key;
+            },
+            .for_list => |for_stmt| {
+                points_to_target = @intFromEnum(for_stmt.body) == target_key or @intFromEnum(for_stmt.next) == target_key;
+            },
+            .join => |join| {
+                points_to_target = @intFromEnum(join.body) == target_key or @intFromEnum(join.remainder) == target_key;
+            },
+            .jump, .loop_continue, .scope_exit, .ret, .runtime_error, .crash => {},
+        }
+
+        if (points_to_target) {
+            std.debug.print("  {d}: {s}\n", .{ @intFromEnum(source_id), @tagName(stmt) });
+        }
+    }
+}
+
 /// Generate code for a control flow statement (used in LirProcSpec bodies).
 fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
+    const stmt_key = @intFromEnum(stmt_id);
+    if (builtin.mode == .Debug) {
+        const gop = try self.stmt_generation_counts.getOrPut(stmt_key);
+        if (gop.found_existing) {
+            gop.value_ptr.* += 1;
+            if (gop.value_ptr.* > 32) {
+                const stmt = self.store.getCFStmt(stmt_id);
+                debugPrintIncomingStmts(self.store, stmt_id);
+                std.debug.panic(
+                    "WASM/codegen excessive generateCFStmt duplication on stmt {d} kind {s} count {d} incoming {d}",
+                    .{ stmt_key, @tagName(stmt), gop.value_ptr.*, debugIncomingStmtCount(self.store, stmt_id) },
+                );
+            }
+        } else {
+            gop.value_ptr.* = 1;
+        }
+        if (self.active_stmt_generations.contains(stmt_key)) {
+            std.debug.panic(
+                "WASM/codegen recursive generateCFStmt re-entry on stmt {d}",
+                .{stmt_key},
+            );
+        }
+        try self.active_stmt_generations.put(stmt_key, {});
+        defer _ = self.active_stmt_generations.remove(stmt_key);
+    }
+
     const stmt = self.store.getCFStmt(stmt_id);
     switch (stmt) {
         .assign_symbol => |assign| {
