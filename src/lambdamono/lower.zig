@@ -849,6 +849,12 @@ const Lowerer = struct {
         return specializations.makeSigKey(requested_name, arg_ty, ret_ty, captures);
     }
 
+    fn cloneFreshType(self: *Lowerer, ty: TypeVarId) std.mem.Allocator.Error!TypeVarId {
+        var inst = InstScope.init(self.allocator);
+        defer inst.deinit();
+        return self.cloneInstType(&inst, ty);
+    }
+
     fn buildErasedSpecializationSig(
         self: *Lowerer,
         mono_cache: *lower_type.MonoCache,
@@ -3940,8 +3946,8 @@ const Lowerer = struct {
     };
 
     fn lookupTopLevelFnType(self: *Lowerer, symbol: Symbol) ?TypeVarId {
-        if (specializations.lookupFnExact(self.fenv, symbol)) |fn_entry| {
-            return fn_entry.fn_ty;
+        if (sourceSymbolFromOrigin(self.input.symbols.get(symbol).origin)) |source_symbol| {
+            return self.lookupTopLevelFnType(source_symbol);
         }
         for (self.input.store.defsSlice()) |def| {
             if (def.bind.symbol != symbol) continue;
@@ -3957,10 +3963,6 @@ const Lowerer = struct {
             const matches_origin = switch (target_origin) {
                 .top_level_def => |target| switch (def_origin) {
                     .top_level_def => |candidate| candidate.module_idx == target.module_idx and candidate.def_idx == target.def_idx,
-                    else => false,
-                },
-                .specialized_top_level_def => |target| switch (def_origin) {
-                    .specialized_top_level_def => |candidate| candidate.source_symbol == target.source_symbol,
                     else => false,
                 },
                 else => false,
@@ -4467,8 +4469,7 @@ const Lowerer = struct {
         const receiver_source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, method_call.receiver);
         const target_symbol = self.findAttachedMethodTargetForInstantiatedSource(receiver_source_ty, method_call.method_name);
         const lowered_receiver = try self.specializeExpr(inst, mono_cache, venv, method_call.receiver);
-        var current_fn_ty = try self.cloneInstType(
-            inst,
+        var current_fn_ty = try self.cloneFreshType(
             self.lookupTopLevelFnType(target_symbol) orelse
                 debugPanic("lambdamono.lower.specializeMethodCallExpr missing target fn type"),
         );
@@ -4537,8 +4538,7 @@ const Lowerer = struct {
     ) std.mem.Allocator.Error!SpecializedExprLowering {
         const dispatcher_source_ty = try self.cloneInstType(inst, method_call.dispatcher_ty);
         const target_symbol = self.findAttachedMethodTargetForInstantiatedSource(dispatcher_source_ty, method_call.method_name);
-        var current_fn_ty = try self.cloneInstType(
-            inst,
+        var current_fn_ty = try self.cloneFreshType(
             self.lookupTopLevelFnType(target_symbol) orelse
                 debugPanic("lambdamono.lower.specializeTypeMethodCallExpr missing target fn type"),
         );

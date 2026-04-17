@@ -931,6 +931,32 @@ test "cor pipeline - record field access remains separate from method calls" {
     );
 }
 
+test "cor pipeline - recursive tag payload match issue 8754" {
+    try expectInspectProgram(
+        .module,
+        \\Tree := [Node(Str, List(Tree)), Text(Str), Wrapper(Tree)]
+        \\
+        \\inner : Tree
+        \\inner = Text("hello")
+        \\
+        \\wrapped : Tree
+        \\wrapped = Wrapper(inner)
+        \\
+        \\main = match wrapped {
+        \\    Wrapper(inner_tree) =>
+        \\        match inner_tree {
+        \\            Text(_) => 1
+        \\            Node(_, _) => 2
+        \\            Wrapper(_) => 3
+        \\        }
+        \\    _ => 0
+        \\}
+    ,
+        &.{},
+        "1.0",
+    );
+}
+
 test "cor pipeline - recursive lambda with record" {
     try expectInspect(
         \\{
