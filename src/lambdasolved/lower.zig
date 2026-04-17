@@ -56,6 +56,7 @@ const Lowerer = struct {
     root_defs: std.ArrayList(ast.DefId),
     types: type_mod.Store,
     def_id_by_symbol: std.AutoHashMap(Symbol, ast.DefId),
+    source_fn_capture_spans: std.AutoHashMap(Symbol, LiftedAst.Span(LiftedAst.TypedSymbol)),
     current_return_ty: ?TypeVarId,
     current_def_symbol: ?Symbol,
     current_opaque_unify: ?DebugNominalContext,
@@ -98,6 +99,7 @@ const Lowerer = struct {
             .root_defs = .empty,
             .types = type_mod.Store.init(allocator),
             .def_id_by_symbol = std.AutoHashMap(Symbol, ast.DefId).init(allocator),
+            .source_fn_capture_spans = std.AutoHashMap(Symbol, LiftedAst.Span(LiftedAst.TypedSymbol)).init(allocator),
             .current_return_ty = null,
             .current_def_symbol = null,
             .current_opaque_unify = null,
@@ -109,6 +111,7 @@ const Lowerer = struct {
 
     fn deinit(self: *Lowerer) void {
         self.def_id_by_symbol.deinit();
+        self.source_fn_capture_spans.deinit();
         self.types.deinit();
         self.root_defs.deinit(self.allocator);
         self.output.deinit();
@@ -161,14 +164,16 @@ const Lowerer = struct {
     fn instantiateDef(self: *Lowerer, def: LiftedAst.Def) std.mem.Allocator.Error!ast.DefId {
         const bind = try self.instantiateTypedSymbol(def.bind);
         return switch (def.value) {
-            .fn_ => |fn_def| self.emitDef(.{
-                .bind = bind,
-                .value = .{ .fn_ = .{
-                    .arg = try self.instantiateTypedSymbol(fn_def.arg),
-                    .captures = try self.instantiateTypedSymbolSpan(fn_def.captures),
-                    .body = try self.instantiateExpr(fn_def.body),
-                } },
-            }),
+            .fn_ => |fn_def| blk: {
+                try self.source_fn_capture_spans.put(bind.symbol, fn_def.captures);
+                break :blk self.emitDef(.{
+                    .bind = bind,
+                    .value = .{ .fn_ = .{
+                        .arg = try self.instantiateTypedSymbol(fn_def.arg),
+                        .body = try self.instantiateExpr(fn_def.body),
+                    } },
+                });
+            },
             .hosted_fn => |hosted_fn| self.emitDef(.{
                 .bind = bind,
                 .value = .{ .hosted_fn = .{
@@ -206,6 +211,18 @@ const Lowerer = struct {
             out[i] = try self.instantiateTypedSymbol(value);
         }
         return try self.output.addTypedSymbolSpan(out);
+    }
+
+    fn instantiateSourceFnCaptures(self: *Lowerer, symbol: Symbol) std.mem.Allocator.Error![]ast.TypedSymbol {
+        const span = self.source_fn_capture_spans.get(symbol) orelse
+            debugPanic("lambdasolved.instantiateSourceFnCaptures missing source capture metadata", .{});
+        const values = self.input.store.sliceTypedSymbolSpan(span);
+        const out = try self.allocator.alloc(ast.TypedSymbol, values.len);
+        errdefer self.allocator.free(out);
+        for (values, 0..) |value, i| {
+            out[i] = try self.instantiateTypedSymbol(value);
+        }
+        return out;
     }
 
     fn instantiateExpr(self: *Lowerer, expr_id: LiftedAst.ExprId) std.mem.Allocator.Error!ast.ExprId {
@@ -591,12 +608,16 @@ const Lowerer = struct {
     }
 
     fn inferFn(self: *Lowerer, venv: []const EnvEntry, fn_entry: EnvEntry, fn_def: ast.FnDef) std.mem.Allocator.Error!TypeVarId {
-        const captures = self.output.sliceTypedSymbolSpan(fn_def.captures);
+        const captures = try self.instantiateSourceFnCaptures(fn_entry.symbol);
+        defer self.allocator.free(captures);
         const captures_env = try self.allocator.alloc(EnvEntry, captures.len + 2);
         defer self.allocator.free(captures_env);
         captures_env[0] = fn_entry;
         captures_env[1] = .{ .symbol = fn_def.arg.symbol, .ty = fn_def.arg.ty };
         for (captures, 0..) |capture, i| {
+            if (self.lookupEnv(venv, capture.symbol)) |env_ty| {
+                try self.unify(capture.ty, env_ty);
+            }
             captures_env[i + 2] = .{ .symbol = capture.symbol, .ty = capture.ty };
         }
 
@@ -607,9 +628,6 @@ const Lowerer = struct {
         const previous_return_ty = self.current_return_ty;
         self.current_return_ty = fn_ret_ty;
         defer self.current_return_ty = previous_return_ty;
-
-        const body_ty = try self.inferExpr(body_env, fn_def.body);
-        try self.unify(fn_ret_ty, body_ty);
 
         const lset_captures = try self.allocator.alloc(type_mod.Capture, captures.len);
         defer self.allocator.free(lset_captures);
@@ -625,6 +643,9 @@ const Lowerer = struct {
             .ret = fn_ret_ty,
         } });
         try self.unify(fn_entry.ty, fn_ty);
+
+        const body_ty = try self.inferExpr(body_env, fn_def.body);
+        try self.unify(fn_ret_ty, body_ty);
         return fn_entry.ty;
     }
 
@@ -1402,9 +1423,11 @@ const Lowerer = struct {
         switch (def.value) {
             .fn_ => |fn_def| {
                 if (fn_def.arg.symbol == symbol) bind_count.* += 1;
-                const captures = self.output.sliceTypedSymbolSpan(fn_def.captures);
-                for (captures) |capture| {
-                    if (capture.symbol == symbol) capture_count.* += 1;
+                const capture_member = self.types.maybeLambdaMember(def.bind.ty, def.bind.symbol);
+                if (capture_member) |member| {
+                    for (member.captures) |capture| {
+                        if (capture.symbol == symbol) capture_count.* += 1;
+                    }
                 }
                 self.debugCountExprSymbol(
                     fn_def.body,
@@ -1640,7 +1663,8 @@ const Lowerer = struct {
                         .ty = fn_def.arg.ty,
                     });
                     defer if (fn_env.len != 0) self.allocator.free(fn_env);
-                    for (self.output.sliceTypedSymbolSpan(fn_def.captures)) |capture| {
+                    const member = self.types.requireLambdaMember(def.bind.ty, def.bind.symbol);
+                    for (member.captures) |capture| {
                         const next_env = try self.extendEnvOne(fn_env, .{
                             .symbol = capture.symbol,
                             .ty = capture.ty,
@@ -2161,7 +2185,7 @@ const Lowerer = struct {
             .fn_ => |fn_def| fn_def,
             else => return null,
         };
-        if (self.output.sliceTypedSymbolSpan(fn_def.captures).len != 0) return null;
+        if (!self.types.hasCapturelessLambda(def.bind.ty, def.bind.symbol)) return null;
         const body = self.output.getExpr(fn_def.body);
         return switch (body.data) {
             .low_level => |ll| blk: {

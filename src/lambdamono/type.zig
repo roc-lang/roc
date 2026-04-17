@@ -39,6 +39,7 @@ pub const Fields = []const Field;
 
 pub const Content = union(enum) {
     placeholder,
+    unbd,
     link: TypeId,
     nominal: Nominal,
     list: TypeId,
@@ -97,6 +98,7 @@ pub const Store = struct {
 
     pub fn keyId(self: *Store, id: TypeId) std.mem.Allocator.Error!TypeId {
         const root = self.resolveLinks(id);
+        if (self.containsAbstractLeaf(root)) return root;
         if (!self.isFullyResolved(root)) return root;
         return try self.internTypeId(root);
     }
@@ -108,6 +110,7 @@ pub const Store = struct {
 
     pub fn internTypeId(self: *Store, id: TypeId) std.mem.Allocator.Error!TypeId {
         const root = self.resolveLinks(id);
+        if (self.containsAbstractLeaf(root)) return root;
         if (self.interned_by_raw.get(root)) |cached| return cached;
 
         var active = std.AutoHashMap(TypeId, TypeId).init(self.allocator);
@@ -174,6 +177,12 @@ pub const Store = struct {
         return self.equalIdsVisited(left, right, &visited) catch false;
     }
 
+    pub fn containsAbstractLeaf(self: *const Store, id: TypeId) bool {
+        var visited = std.AutoHashMap(TypeId, void).init(self.allocator);
+        defer visited.deinit();
+        return self.containsAbstractLeafVisited(id, &visited) catch true;
+    }
+
     pub fn isFullyResolved(self: *const Store, id: TypeId) bool {
         var visited = std.AutoHashMap(TypeId, void).init(self.allocator);
         defer visited.deinit();
@@ -229,6 +238,7 @@ pub const Store = struct {
         try visited.put(root, {});
         return switch (self.types.items[@intFromEnum(root)]) {
             .placeholder => false,
+            .unbd => true,
             .link => unreachable,
             .primitive => true,
             .nominal => |nominal| blk: {
@@ -285,6 +295,7 @@ pub const Store = struct {
         try active.put(root, root);
         const interned_content: Content = switch (root_content) {
             .placeholder, .link => unreachable,
+            .unbd => .unbd,
             .primitive => |prim| .{ .primitive = prim },
             .nominal => |nominal| blk: {
                 const lowered_args = try self.allocator.alloc(TypeId, nominal.args.len);
@@ -452,6 +463,10 @@ pub const Store = struct {
                         try self_builder.store.appendInternKeyValue(@as(u8, 18));
                         try self_builder.store.appendInternKeyValue(self_builder.binder_ids.get(root_id).?);
                     },
+                    .unbd => {
+                        try self_builder.store.appendInternKeyValue(@as(u8, 19));
+                        try self_builder.store.appendInternKeyValue(self_builder.binder_ids.get(root_id).?);
+                    },
                     .link => unreachable,
                     .primitive => |prim| {
                         try self_builder.store.appendInternKeyValue(@as(u8, 10));
@@ -570,6 +585,7 @@ pub const Store = struct {
 
         return switch (left_content) {
             .placeholder => false,
+            .unbd => true,
             .link => unreachable,
             .primitive => |prim| prim == right_content.primitive,
             .nominal => |nominal| blk: {
@@ -621,6 +637,54 @@ pub const Store = struct {
                     }
                 }
                 break :blk true;
+            },
+        };
+    }
+
+    fn containsAbstractLeafVisited(
+        self: *const Store,
+        id: TypeId,
+        visited: *std.AutoHashMap(TypeId, void),
+    ) std.mem.Allocator.Error!bool {
+        const root = self.resolveLinks(id);
+        if (visited.contains(root)) return false;
+        try visited.put(root, {});
+
+        return switch (self.types.items[@intFromEnum(root)]) {
+            .placeholder, .unbd => true,
+            .link => unreachable,
+            .primitive => false,
+            .nominal => |nominal| blk: {
+                for (nominal.args) |arg| {
+                    if (try self.containsAbstractLeafVisited(arg, visited)) break :blk true;
+                }
+                break :blk try self.containsAbstractLeafVisited(nominal.backing, visited);
+            },
+            .list => |elem| try self.containsAbstractLeafVisited(elem, visited),
+            .box => |elem| try self.containsAbstractLeafVisited(elem, visited),
+            .erased_fn => |maybe_capture| if (maybe_capture) |capture|
+                try self.containsAbstractLeafVisited(capture, visited)
+            else
+                false,
+            .tuple => |tuple| blk: {
+                for (tuple) |elem| {
+                    if (try self.containsAbstractLeafVisited(elem, visited)) break :blk true;
+                }
+                break :blk false;
+            },
+            .record => |record| blk: {
+                for (record.fields) |field| {
+                    if (try self.containsAbstractLeafVisited(field.ty, visited)) break :blk true;
+                }
+                break :blk false;
+            },
+            .tag_union => |tag_union| blk: {
+                for (tag_union.tags) |tag| {
+                    for (tag.args) |arg| {
+                        if (try self.containsAbstractLeafVisited(arg, visited)) break :blk true;
+                    }
+                }
+                break :blk false;
             },
         };
     }

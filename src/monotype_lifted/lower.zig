@@ -871,9 +871,10 @@ const Lowerer = struct {
 
         var free_iter = free.iterator();
         while (free_iter.next()) |entry| {
-            const symbol = self.lookupRenamedSymbol(venv, entry.key_ptr.*);
+            const source_symbol = entry.key_ptr.*;
+            const symbol = self.lookupRenamedSymbol(venv, source_symbol);
             if (self.isGlobalValueSymbol(symbol)) continue;
-            try captures_map.put(symbol, entry.value_ptr.*);
+            try captures_map.put(symbol, self.lookupTypeForSymbol(source_symbol));
         }
 
         const captures = try self.allocator.alloc(ast.TypedSymbol, captures_map.count());
@@ -1222,7 +1223,12 @@ const Lowerer = struct {
             self.assertPublishedType(ty, "lifted symbol lookup");
             return ty;
         }
-        return debugPanic("monotype_lifted.lookupTypeForSymbol missing symbol type");
+        const entry = self.input.symbols.get(symbol);
+        const name = if (entry.name.isNone()) "<none>" else self.input.idents.getText(entry.name);
+        std.debug.panic(
+            "monotype_lifted.lookupTypeForSymbol missing symbol type for {d} ({s}) origin {s}",
+            .{ symbol.raw(), name, @tagName(entry.origin) },
+        );
     }
 
     fn assertPublishedType(self: *const Lowerer, ty: type_mod.TypeId, comptime site: []const u8) void {
@@ -1291,6 +1297,7 @@ const Lowerer = struct {
                 try self.collectBindingTypesExpr(when_expr.cond);
                 for (self.input.program.store.sliceBranchSpan(when_expr.branches)) |branch_id| {
                     const branch = self.input.program.store.getBranch(branch_id);
+                    try self.collectBindingTypesPat(branch.pat);
                     try self.collectBindingTypesExpr(branch.body);
                 }
             },
@@ -1312,7 +1319,23 @@ const Lowerer = struct {
             .return_ => |ret| try self.collectBindingTypesExpr(ret),
             .for_ => |for_expr| {
                 try self.collectBindingTypesExpr(for_expr.iterable);
+                try self.collectBindingTypesPat(for_expr.patt);
                 try self.collectBindingTypesExpr(for_expr.body);
+            },
+        }
+    }
+
+    fn collectBindingTypesPat(self: *Lowerer, pat_id: MonoAst.PatId) std.mem.Allocator.Error!void {
+        const pat = self.input.program.store.getPat(pat_id);
+        switch (pat.data) {
+            .var_ => |symbol| if (!symbol.isNone()) {
+                try self.binding_types.put(symbol, pat.ty);
+            },
+            .bool_lit => {},
+            .tag => |tag| {
+                for (self.input.program.store.slicePatSpan(tag.args)) |arg| {
+                    try self.collectBindingTypesPat(arg);
+                }
             },
         }
     }
@@ -1342,6 +1365,7 @@ const Lowerer = struct {
             .break_ => {},
             .for_ => |for_stmt| {
                 try self.collectBindingTypesExpr(for_stmt.iterable);
+                try self.collectBindingTypesPat(for_stmt.patt);
                 try self.collectBindingTypesExpr(for_stmt.body);
             },
             .while_ => |while_stmt| {

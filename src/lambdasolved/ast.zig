@@ -171,7 +171,6 @@ pub const Stmt = union(enum) {
 
 pub const FnDef = struct {
     arg: TypedSymbol,
-    captures: Span(TypedSymbol),
     body: ExprId,
 };
 

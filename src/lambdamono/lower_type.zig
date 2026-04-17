@@ -26,10 +26,7 @@ pub const SpecificLambdaRepr = union(enum) {
     lset: CaptureInfo,
 };
 
-pub const LambdaRepr = union(enum) {
-    lset: []const solved.Type.Lambda,
-    erased,
-};
+pub const LambdaRepr = solved.Type.LambdaRepr;
 
 pub const MonoCache = struct {
     active: std.AutoHashMap(TypeVarId, mono.TypeId),
@@ -56,37 +53,16 @@ pub fn extractFn(types: *solved.Type.Store, ty: TypeVarId) struct {
     lset: TypeVarId,
     ret: TypeVarId,
 } {
-    const id = types.unlink(ty);
-    return switch (types.getNode(id)) {
-        .content => |content| switch (content) {
-            .func => |func| .{
-                .arg = func.arg,
-                .lset = func.lset,
-                .ret = func.ret,
-            },
-            else => debugPanic("lambdamono.lower_type.extractFn expected function"),
-        },
-        else => debugPanic("lambdamono.lower_type.extractFn expected function"),
+    const shape = types.fnShape(ty);
+    return .{
+        .arg = shape.arg,
+        .lset = shape.lset,
+        .ret = shape.ret,
     };
 }
 
 pub fn lambdaRepr(types: *solved.Type.Store, ty: TypeVarId) LambdaRepr {
-    const fn_ty = extractFn(types, ty);
-    const lset = types.unlink(fn_ty.lset);
-    return switch (types.getNode(lset)) {
-        .content => |content| switch (content) {
-            .lambda_set => |span| .{ .lset = types.sliceLambdas(span) },
-            .primitive => |prim| switch (prim) {
-                .erased => .erased,
-                else => debugPanic("lambdamono.lower_type.lambdaRepr expected lambda set"),
-            },
-            else => debugPanic("lambdamono.lower_type.lambdaRepr expected lambda set"),
-        },
-        .unbd,
-        .for_a,
-        => .erased,
-        else => debugPanic("lambdamono.lower_type.lambdaRepr expected lambda set"),
-    };
+    return types.lambdaRepr(ty);
 }
 
 pub fn extractLsetFn(
@@ -99,17 +75,13 @@ pub fn extractLsetFn(
 ) std.mem.Allocator.Error!SpecificLambdaRepr {
     return switch (lambdaRepr(types, ty)) {
         .erased => debugPanic("lambdamono.lower_type.extractLsetFn attempted concrete lambda extraction from erased callable"),
-        .lset => |lambdas| blk: {
-            for (lambdas) |lambda| {
-                if (lambda.symbol != lambda_symbol) continue;
-                const captures = types.sliceCaptures(lambda.captures);
-                if (captures.len == 0) break :blk .toplevel;
-                break :blk .{ .lset = .{
-                    .captures = captures,
-                    .ty = try lowerCaptures(types, mono_types, mono_cache, captures, symbols),
-                } };
-            }
-            debugPanic("lambdamono.lower_type.extractLsetFn missing lambda in lambda set");
+        .lset => blk: {
+            const member = types.requireLambdaMember(ty, lambda_symbol);
+            if (member.captures.len == 0) break :blk .toplevel;
+            break :blk .{ .lset = .{
+                .captures = member.captures,
+                .ty = try lowerCaptures(types, mono_types, mono_cache, member.captures, symbols),
+            } };
         },
     };
 }
@@ -183,7 +155,7 @@ fn lowerTypeRec(
                 .backing = try lowerTypeRec(types, mono_types, mono_cache, nominal.backing, symbols),
             } };
         },
-        .for_a, .unbd => .{ .record = .{ .fields = &.{} } },
+        .for_a, .unbd => .unbd,
         .content => |content| switch (content) {
             .func => blk: {
                 const unit_ty = try mono_types.internResolved(.{

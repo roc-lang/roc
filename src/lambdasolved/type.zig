@@ -42,6 +42,22 @@ pub const Lambda = struct {
     captures: Span(Capture),
 };
 
+pub const FnShape = struct {
+    arg: TypeVarId,
+    lset: TypeVarId,
+    ret: TypeVarId,
+};
+
+pub const LambdaRepr = union(enum) {
+    lset: []const Lambda,
+    erased,
+};
+
+pub const LambdaMember = struct {
+    lambda: Lambda,
+    captures: []const Capture,
+};
+
 pub const Tag = struct {
     name: base.Ident.Idx,
     args: Span(TypeVarId),
@@ -274,6 +290,64 @@ pub const Store = struct {
     pub fn sliceLambdas(self: *const Store, span: Span(Lambda)) []const Lambda {
         if (span.len == 0) return &.{};
         return self.lambdas.items[span.start..][0..span.len];
+    }
+
+    pub fn fnShape(self: *Store, ty: TypeVarId) FnShape {
+        const id = self.unlink(ty);
+        return switch (self.getNode(id)) {
+            .content => |content| switch (content) {
+                .func => |func| .{
+                    .arg = func.arg,
+                    .lset = func.lset,
+                    .ret = func.ret,
+                },
+                else => debugPanic("lambdasolved.type fnShape expected function"),
+            },
+            else => debugPanic("lambdasolved.type fnShape expected function"),
+        };
+    }
+
+    pub fn lambdaRepr(self: *Store, fn_ty: TypeVarId) LambdaRepr {
+        const fn_shape = self.fnShape(fn_ty);
+        const lset = self.unlink(fn_shape.lset);
+        return switch (self.getNode(lset)) {
+            .content => |content| switch (content) {
+                .lambda_set => |span| .{ .lset = self.sliceLambdas(span) },
+                .primitive => |prim| switch (prim) {
+                    .erased => .erased,
+                    else => debugPanic("lambdasolved.type lambdaRepr expected lambda set"),
+                },
+                else => debugPanic("lambdasolved.type lambdaRepr expected lambda set"),
+            },
+            .unbd, .for_a => .erased,
+            else => debugPanic("lambdasolved.type lambdaRepr expected lambda set"),
+        };
+    }
+
+    pub fn maybeLambdaMember(self: *Store, fn_ty: TypeVarId, symbol: Symbol) ?LambdaMember {
+        return switch (self.lambdaRepr(fn_ty)) {
+            .erased => null,
+            .lset => |lambdas| {
+                for (lambdas) |lambda| {
+                    if (lambda.symbol != symbol) continue;
+                    return .{
+                        .lambda = lambda,
+                        .captures = self.sliceCaptures(lambda.captures),
+                    };
+                }
+                return null;
+            },
+        };
+    }
+
+    pub fn requireLambdaMember(self: *Store, fn_ty: TypeVarId, symbol: Symbol) LambdaMember {
+        return self.maybeLambdaMember(fn_ty, symbol) orelse
+            debugPanic("lambdasolved.type requireLambdaMember missing lambda in lambda set");
+    }
+
+    pub fn hasCapturelessLambda(self: *Store, fn_ty: TypeVarId, symbol: Symbol) bool {
+        const member = self.maybeLambdaMember(fn_ty, symbol) orelse return false;
+        return member.captures.len == 0;
     }
 
     const TypePair = struct {

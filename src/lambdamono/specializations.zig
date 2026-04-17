@@ -21,6 +21,7 @@ pub const Pending = struct {
     fn_ty: TypeVarId,
     fn_def: solved.Ast.FnDef,
     requested_ty: TypeVarId,
+    capture_bindings: []const lower_type.CaptureBinding,
     sig: SigKey,
     specialized_symbol: Symbol,
     specialized: ?ast.FnDef = null,
@@ -40,6 +41,9 @@ pub const Queue = struct {
     }
 
     pub fn deinit(self: *Queue) void {
+        for (self.items.items) |item| {
+            self.allocator.free(item.capture_bindings);
+        }
         self.items.deinit(self.allocator);
         self.by_key.deinit();
     }
@@ -149,11 +153,21 @@ pub fn specializeFnLset(
     symbols: *symbol_mod.Store,
     requested_name: Symbol,
     requested_ty: TypeVarId,
+    capture_bindings: []const lower_type.CaptureBinding,
     sig: SigKey,
 ) std.mem.Allocator.Error!Symbol {
     const entry = lookupFnExact(fenv, requested_name) orelse
         debugPanic("lambdamono.specializations.specializeFnLset missing function");
     if (queue.by_key.get(sig)) |idx| {
+        const existing = queue.items.items[idx].capture_bindings;
+        if (existing.len != capture_bindings.len) {
+            debugPanic("lambdamono.specializations.specializeFnLset capture binding count mismatch");
+        }
+        for (existing, capture_bindings) |left, right| {
+            if (left.symbol != right.symbol or left.solved_ty != right.solved_ty or left.lowered_ty != right.lowered_ty) {
+                debugPanic("lambdamono.specializations.specializeFnLset capture binding mismatch");
+            }
+        }
         return queue.items.items[idx].specialized_symbol;
     }
 
@@ -168,6 +182,7 @@ pub fn specializeFnLset(
         .fn_ty = entry.fn_ty,
         .fn_def = entry.fn_def,
         .requested_ty = requested_ty,
+        .capture_bindings = try queue.allocator.dupe(lower_type.CaptureBinding, capture_bindings),
         .sig = sig,
         .specialized_symbol = specialized_symbol,
     });
@@ -181,11 +196,21 @@ pub fn specializeFnErased(
     symbols: *symbol_mod.Store,
     requested_name: Symbol,
     requested_ty: TypeVarId,
+    capture_bindings: []const lower_type.CaptureBinding,
     sig: SigKey,
 ) std.mem.Allocator.Error!Symbol {
     const entry = lookupFnExact(fenv, requested_name) orelse
         debugPanic("lambdamono.specializations.specializeFnErased missing function");
     if (queue.by_key.get(sig)) |idx| {
+        const existing = queue.items.items[idx].capture_bindings;
+        if (existing.len != capture_bindings.len) {
+            debugPanic("lambdamono.specializations.specializeFnErased capture binding count mismatch");
+        }
+        for (existing, capture_bindings) |left, right| {
+            if (left.symbol != right.symbol or left.solved_ty != right.solved_ty or left.lowered_ty != right.lowered_ty) {
+                debugPanic("lambdamono.specializations.specializeFnErased capture binding mismatch");
+            }
+        }
         return queue.items.items[idx].specialized_symbol;
     }
 
@@ -200,6 +225,7 @@ pub fn specializeFnErased(
         .fn_ty = entry.fn_ty,
         .fn_def = entry.fn_def,
         .requested_ty = requested_ty,
+        .capture_bindings = try queue.allocator.dupe(lower_type.CaptureBinding, capture_bindings),
         .sig = sig,
         .specialized_symbol = specialized_symbol,
     });

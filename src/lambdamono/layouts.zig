@@ -374,6 +374,7 @@ fn lowerTypeRec(
 
     return switch (mono_types.getTypePreservingNominal(keyed_ty)) {
         .placeholder => debugPanic("lambdamono.layouts.lowerTypeRec unresolved executable type"),
+        .unbd => debugPanic("lambdamono.layouts.lowerTypeRec abstract executable type leaked to layouts"),
         .link => unreachable,
         .primitive => |prim| blk: {
             const resolved: layout_mod.GraphRef = .{ .canonical = lowerPrim(prim) };
@@ -409,6 +410,7 @@ fn lowerNode(
 ) std.mem.Allocator.Error!layout_mod.GraphNode {
     return switch (mono_types.getTypePreservingNominal(ty)) {
         .placeholder => debugPanic("lambdamono.layouts.lowerNode unresolved executable type"),
+        .unbd => debugPanic("lambdamono.layouts.lowerNode abstract executable type leaked to layouts"),
         .link => unreachable,
         .primitive => debugPanic("lambdamono.layouts.lowerNode primitive should have been returned directly"),
         .nominal => |nominal| .{ .nominal = try lowerTypeRec(allocator, mono_types, idents, graph, cache, nominal.backing) },
