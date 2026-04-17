@@ -1300,6 +1300,7 @@ pub const ComptimeEvaluator = struct {
                     else => {
                         // This is a type error - numeric literal can't be used as this type
                         const error_msg = try self.problems.putExtraString(
+                            "Numeric literal cannot be used as this type (type doesn't support from_numeral)",
                         );
                         const problem = Problem{
                             .comptime_eval_error = .{
@@ -1318,6 +1319,7 @@ pub const ComptimeEvaluator = struct {
                     // If still flex, type checking didn't fully resolve it - this is OK, may resolve later
                     if (content != .flex) {
                         const error_msg = try self.problems.putExtraString(
+                            "Numeric literal cannot be used as this type (type doesn't support from_numeral)",
                         );
                         const problem = Problem{
                             .comptime_eval_error = .{

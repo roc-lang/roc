@@ -80,6 +80,16 @@ pub const Expr = struct {
             field: base.Ident.Idx,
             field_index: u16,
         },
+        method_call: struct {
+            receiver: ExprId,
+            method_name: base.Ident.Idx,
+            args: Span(ExprId),
+        },
+        type_method_call: struct {
+            dispatcher_ty: TypeId,
+            method_name: base.Ident.Idx,
+            args: Span(ExprId),
+        },
         let_: struct {
             bind: TypedSymbol,
             body: ExprId,

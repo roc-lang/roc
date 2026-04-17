@@ -243,6 +243,48 @@ test "wasm list append composite empty list" {
     try testing.expectEqualStrings("1", actual);
 }
 
+test "dev generic local attached method specialization on nominal" {
+    const source =
+        \\Counter := [Counter(U64)].{
+        \\  get : Counter -> U64
+        \\  get = |Counter.Counter(n)| n
+        \\}
+        \\
+        \\read = |value| value.get()
+        \\
+        \\main = (read(Counter.Counter(5)), read(Counter.Counter(8)))
+    ;
+
+    var compiled = try helpers.compileInspectedProgram(test_allocator, .module, source, &.{});
+    defer compiled.deinit(test_allocator);
+
+    const actual = try helpers.devEvaluatorInspectedStr(test_allocator, &compiled.lowered);
+    defer test_allocator.free(actual);
+
+    try testing.expectEqualStrings("(5, 8)", actual);
+}
+
+test "wasm generic local attached method specialization on nominal" {
+    const source =
+        \\Counter := [Counter(U64)].{
+        \\  get : Counter -> U64
+        \\  get = |Counter.Counter(n)| n
+        \\}
+        \\
+        \\read = |value| value.get()
+        \\
+        \\main = (read(Counter.Counter(5)), read(Counter.Counter(8)))
+    ;
+
+    var compiled = try helpers.compileInspectedProgram(test_allocator, .module, source, &.{});
+    defer compiled.deinit(test_allocator);
+
+    const actual = try helpers.wasmEvaluatorInspectedStr(test_allocator, &compiled.wasm_lowered);
+    defer test_allocator.free(actual);
+
+    try testing.expectEqualStrings("(5, 8)", actual);
+}
+
 // Roundtrip verification tests
 // These tests verify that emitted code produces the same result as the original
 

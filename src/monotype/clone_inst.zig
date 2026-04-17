@@ -17,6 +17,7 @@ const TypesStore = types_mod.Store;
 const Var = types_mod.Var;
 const Flex = types_mod.Flex;
 const Rigid = types_mod.Rigid;
+const StaticDispatchConstraint = types_mod.StaticDispatchConstraint;
 const Content = types_mod.Content;
 const FlatType = types_mod.FlatType;
 const Alias = types_mod.Alias;
@@ -167,6 +168,7 @@ fn cloneFlex(
 
     return .{
         .name = translated_name,
+        .constraints = try cloneStaticDispatchConstraints(
             source_store,
             dest_store,
             source_flex.constraints,
@@ -195,6 +197,7 @@ fn cloneFlexFromModule(
 
     return .{
         .name = translated_name,
+        .constraints = try cloneStaticDispatchConstraintsFromModule(
             source_module_idx,
             source_store,
             dest_store,
@@ -218,6 +221,7 @@ fn cloneRigid(
 ) std.mem.Allocator.Error!Rigid {
     return .{
         .name = try cloneIdent(source_idents, dest_idents, source_rigid.name, allocator),
+        .constraints = try cloneStaticDispatchConstraints(
             source_store,
             dest_store,
             source_rigid.constraints,
@@ -241,6 +245,7 @@ fn cloneRigidFromModule(
 ) std.mem.Allocator.Error!Rigid {
     return .{
         .name = try cloneIdent(source_idents, dest_idents, source_rigid.name, allocator),
+        .constraints = try cloneStaticDispatchConstraintsFromModule(
             source_module_idx,
             source_store,
             dest_store,
@@ -768,15 +773,24 @@ fn cloneNominalTypeFromModule(
     };
 }
 
+fn cloneStaticDispatchConstraints(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
+    source_constraints: StaticDispatchConstraint.SafeList.Range,
     var_mapping: *VarMapping,
     source_idents: *const base.Ident.Store,
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!StaticDispatchConstraint.SafeList.Range {
+    if (source_constraints.len() == 0) return StaticDispatchConstraint.SafeList.Range.empty();
 
+    var dest_constraints = try std.array_list.Managed(StaticDispatchConstraint).initCapacity(
+        dest_store.gpa,
+        source_constraints.len(),
+    );
     defer dest_constraints.deinit();
 
+    for (source_store.sliceStaticDispatchConstraints(source_constraints)) |source_constraint| {
         var dest_constraint = source_constraint;
         dest_constraint.fn_name = try cloneIdent(source_idents, dest_idents, source_constraint.fn_name, allocator);
         dest_constraint.fn_var = try cloneVar(
@@ -791,18 +805,28 @@ fn cloneNominalTypeFromModule(
         try dest_constraints.append(dest_constraint);
     }
 
+    return try dest_store.appendStaticDispatchConstraints(dest_constraints.items);
 }
 
+fn cloneStaticDispatchConstraintsFromModule(
     source_module_idx: u32,
     source_store: *const TypesStore,
     dest_store: *TypesStore,
+    source_constraints: StaticDispatchConstraint.SafeList.Range,
     var_mapping: *ScopedCloneMap,
     source_idents: *const base.Ident.Store,
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!StaticDispatchConstraint.SafeList.Range {
+    if (source_constraints.len() == 0) return StaticDispatchConstraint.SafeList.Range.empty();
 
+    var dest_constraints = try std.array_list.Managed(StaticDispatchConstraint).initCapacity(
+        dest_store.gpa,
+        source_constraints.len(),
+    );
     defer dest_constraints.deinit();
 
+    for (source_store.sliceStaticDispatchConstraints(source_constraints)) |source_constraint| {
         var dest_constraint = source_constraint;
         dest_constraint.fn_name = try cloneIdent(source_idents, dest_idents, source_constraint.fn_name, allocator);
         dest_constraint.fn_var = try cloneVarFromModule(
@@ -818,4 +842,5 @@ fn cloneNominalTypeFromModule(
         try dest_constraints.append(dest_constraint);
     }
 
+    return try dest_store.appendStaticDispatchConstraints(dest_constraints.items);
 }

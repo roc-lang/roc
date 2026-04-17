@@ -253,6 +253,19 @@ pub const ScopeMap = struct {
             .e_field_access => |field_access| {
                 try self.traverseExpr(module_env, field_access.receiver, scope_end, depth + 1);
             },
+            .e_method_call => |method_call| {
+                try self.traverseExpr(module_env, method_call.receiver, scope_end, depth + 1);
+                const args = module_env.store.sliceExpr(method_call.args);
+                for (args) |arg_idx| {
+                    try self.traverseExpr(module_env, arg_idx, scope_end, depth + 1);
+                }
+            },
+            .e_type_method_call => |method_call| {
+                const args = module_env.store.sliceExpr(method_call.args);
+                for (args) |arg_idx| {
+                    try self.traverseExpr(module_env, arg_idx, scope_end, depth + 1);
+                }
+            },
             .e_tuple_access => |ta| {
                 try self.traverseExpr(module_env, ta.tuple, scope_end, depth + 1);
             },

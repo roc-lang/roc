@@ -195,6 +195,20 @@ pub fn CirVisitor(comptime Context: type) type {
                     self.walkExpr(store, field_access.receiver);
                     if (self.stopped) return;
                 },
+                .e_method_call => |method_call| {
+                    self.walkExpr(store, method_call.receiver);
+                    if (self.stopped) return;
+                    for (store.sliceExpr(method_call.args)) |arg| {
+                        self.walkExpr(store, arg);
+                        if (self.stopped) return;
+                    }
+                },
+                .e_type_method_call => |method_call| {
+                    for (store.sliceExpr(method_call.args)) |arg| {
+                        self.walkExpr(store, arg);
+                        if (self.stopped) return;
+                    }
+                },
                 .e_tuple_access => |ta| {
                     self.walkExpr(store, ta.tuple);
                 },

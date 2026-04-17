@@ -58,7 +58,7 @@ pub const AST_PATTERN_NODE_COUNT = 15;
 /// Count of the type annotation nodes in the AST
 pub const AST_TYPE_ANNO_NODE_COUNT = 11;
 /// Count of the expression nodes in the AST
-pub const AST_EXPR_NODE_COUNT = 26;
+pub const AST_EXPR_NODE_COUNT = 27;
 
 /// Initialize the store with an assumed capacity to
 /// ensure resizing of underlying data structures happens
@@ -726,6 +726,16 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.main_token = fa.operator;
             node.data.lhs = @intFromEnum(fa.left);
             node.data.rhs = @intFromEnum(fa.right);
+        },
+        .method_call => |mc| {
+            node.tag = .method_call;
+            node.region = mc.region;
+            node.main_token = mc.method_token;
+            node.data.lhs = @intFromEnum(mc.receiver);
+            const args_data_idx = store.extra_data.items.len;
+            try store.extra_data.append(store.gpa, mc.args.span.start);
+            try store.extra_data.append(store.gpa, mc.args.span.len);
+            node.data.rhs = @as(u32, @intCast(args_data_idx));
         },
         .tuple_access => |ta| {
             node.tag = .tuple_access;
@@ -1753,6 +1763,18 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .left = @enumFromInt(node.data.lhs),
                 .right = @enumFromInt(node.data.rhs),
                 .operator = node.main_token,
+                .region = node.region,
+            } };
+        },
+        .method_call => {
+            const args_data_idx = node.data.rhs;
+            return .{ .method_call = .{
+                .receiver = @enumFromInt(node.data.lhs),
+                .method_token = node.main_token,
+                .args = .{ .span = .{
+                    .start = store.extra_data.items[args_data_idx],
+                    .len = store.extra_data.items[args_data_idx + 1],
+                } },
                 .region = node.region,
             } };
         },

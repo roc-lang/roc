@@ -290,7 +290,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 73;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 45;
+pub const MODULEENV_EXPR_NODE_COUNT = 46;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 17;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -936,6 +936,30 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .field_name_region = field_name_region,
             } };
         },
+        .expr_method_call => {
+            const p = payload.expr_method_call;
+            const args_span = store.span2_data.items.items[p.args_span2_idx];
+            return CIR.Expr{ .e_method_call = .{
+                .receiver = @enumFromInt(p.receiver),
+                .method_name = @bitCast(p.method_name),
+                .args = .{ .span = .{
+                    .start = args_span.start,
+                    .len = args_span.len,
+                } },
+            } };
+        },
+        .expr_type_method_call => {
+            const p = payload.expr_type_method_call;
+            const args_span = store.span2_data.items.items[p.args_span2_idx];
+            return CIR.Expr{ .e_type_method_call = .{
+                .type_var_alias_stmt = @enumFromInt(p.type_var_alias_stmt),
+                .method_name = @bitCast(p.method_name),
+                .args = .{ .span = .{
+                    .start = args_span.start,
+                    .len = args_span.len,
+                } },
+            } };
+        },
         .malformed => {
             const p = payload.diag_single_value;
             return CIR.Expr{ .e_runtime_error = .{
@@ -1461,7 +1485,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
             const p = payload.ty_tag_union;
             return CIR.TypeAnno{ .tag_union = .{
                 .tags = .{ .span = .{ .start = p.tags_start, .len = p.tags_len } },
-                .ext = if (p.ext_plus_one != 0) @enumFromInt(p.ext_plus_one - OPTIONAL_VALUE_OFFSET) else null,
+                .ext = if (p.ext_plus_one != 0) @enumFromInt(p.ext_plus_one - 1) else null,
             } };
         },
         .ty_tag => {
@@ -1482,7 +1506,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
             return CIR.TypeAnno{
                 .record = .{
                     .fields = .{ .span = .{ .start = p.fields_start, .len = p.fields_len } },
-                    .ext = if (p.ext_plus_one != 0) @enumFromInt(p.ext_plus_one - OPTIONAL_VALUE_OFFSET) else null,
+                    .ext = if (p.ext_plus_one != 0) @enumFromInt(p.ext_plus_one - 1) else null,
                 },
             };
         },
@@ -1970,6 +1994,32 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .receiver = @intFromEnum(e.receiver),
                 .field_name = @bitCast(e.field_name),
                 .field_name_region_span2_idx = span2_idx,
+            } });
+        },
+        .e_method_call => |e| {
+            node.tag = .expr_method_call;
+            const args_span2_idx: u32 = @intCast(store.span2_data.len());
+            _ = try store.span2_data.append(store.gpa, .{
+                .start = e.args.span.start,
+                .len = e.args.span.len,
+            });
+            node.setPayload(.{ .expr_method_call = .{
+                .receiver = @intFromEnum(e.receiver),
+                .method_name = @bitCast(e.method_name),
+                .args_span2_idx = args_span2_idx,
+            } });
+        },
+        .e_type_method_call => |e| {
+            node.tag = .expr_type_method_call;
+            const args_span2_idx: u32 = @intCast(store.span2_data.len());
+            _ = try store.span2_data.append(store.gpa, .{
+                .start = e.args.span.start,
+                .len = e.args.span.len,
+            });
+            node.setPayload(.{ .expr_type_method_call = .{
+                .type_var_alias_stmt = @intFromEnum(e.type_var_alias_stmt),
+                .method_name = @bitCast(e.method_name),
+                .args_span2_idx = args_span2_idx,
             } });
         },
         .e_runtime_error => |e| {
@@ -2563,7 +2613,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
             node.setPayload(.{ .ty_tag_union = .{
                 .tags_start = tu.tags.span.start,
                 .tags_len = tu.tags.span.len,
-                .ext_plus_one = if (tu.ext) |ext| @intFromEnum(ext) + OPTIONAL_VALUE_OFFSET else 0,
+                .ext_plus_one = if (tu.ext) |ext| @intFromEnum(ext) + 1 else 0,
             } });
         },
         .tag => |t| {
@@ -2586,7 +2636,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
             node.setPayload(.{ .ty_record = .{
                 .fields_start = r.fields.span.start,
                 .fields_len = r.fields.span.len,
-                .ext_plus_one = if (r.ext) |ext| @intFromEnum(ext) + OPTIONAL_VALUE_OFFSET else 0,
+                .ext_plus_one = if (r.ext) |ext| @intFromEnum(ext) + 1 else 0,
             } });
         },
         .@"fn" => |f| {

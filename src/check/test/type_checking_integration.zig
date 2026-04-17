@@ -3916,8 +3916,8 @@ test "check type - try return with match and error propagation should type-check
 test "check type - try operator on method call should apply to whole expression (#8646)" {
     // Regression test for https://github.com/roc-lang/roc/issues/8646
     // The `?` suffix on `strings.first()` should apply to the entire method call expression,
-    // not just to the right side of the field access. Previously, the parser was attaching
-    // `?` to `first()` before creating the field_access node, causing a type mismatch error
+    // not just to the callee fragment. Previously, the parser was attaching
+    // `?` to `first()` before creating the method_call node, causing a type mismatch error
     // that expected `{ unknown: _field }`.
     const source =
         \\question_fail : List(Str) -> Try(Str, _)

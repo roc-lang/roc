@@ -2801,26 +2801,28 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                     .token = s,
                     .qualifiers = empty_qualifiers,
                 } });
-                // Only parse function applications on the right side, not ? suffix
-                const ident_suffixed = try self.parseExprApplicationSuffix(s, ident);
-                expression = try self.store.addExpr(.{ .field_access = .{
-                    .region = .{ .start = start, .end = self.pos },
-                    .operator = start,
-                    .left = expression,
-                    .right = ident_suffixed,
-                } });
+                if (self.peek() == .NoSpaceOpenRound) {
+                    if (try self.parseExprArgsSuffix(s)) |args| {
+                        expression = try self.store.addExpr(.{ .method_call = .{
+                            .receiver = expression,
+                            .method_token = s,
+                            .args = args,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                    } else {
+                        expression = try self.pushMalformed(AST.Expr.Idx, .expected_expr_apply_close_round, s);
+                    }
+                } else {
+                    expression = try self.store.addExpr(.{ .field_access = .{
+                        .region = .{ .start = start, .end = self.pos },
+                        .operator = start,
+                        .left = expression,
+                        .right = ident,
+                    } });
+                }
             }
 
-            // Handle ? suffix on the entire field access / arrow call expression.
-            // This ensures `a.b()?` is parsed as `(a.b())?` rather than `a.(b()?)`.
-            while (self.peek() == .NoSpaceOpQuestion) {
-                self.advance();
-                expression = try self.store.addExpr(.{ .suffix_single_question = .{
-                    .expr = expression,
-                    .operator = start,
-                    .region = .{ .start = start, .end = self.pos },
-                } });
-            }
+            expression = try self.parseExprSuffix(start, expression);
         }
         while (getTokenBP(self.peek())) |bp| {
             if (bp.left < min_bp) {
@@ -2929,6 +2931,24 @@ fn parseExprApplicationSuffix(self: *Parser, start: u32, e: AST.Expr.Idx) Error!
         });
     }
     return expression;
+}
+
+fn parseExprArgsSuffix(self: *Parser, _: u32) Error!?AST.Expr.Span {
+    std.debug.assert(self.peek() == .NoSpaceOpenRound);
+
+    self.advance();
+    const scratch_top = self.store.scratchExprTop();
+    self.parseCollectionSpan(AST.Expr.Idx, .CloseRound, NodeStore.addScratchExpr, parseExpr) catch |err| {
+        switch (err) {
+            error.ExpectedNotFound => {
+                self.store.clearScratchExprsFrom(scratch_top);
+                return null;
+            },
+            error.OutOfMemory => return error.OutOfMemory,
+            error.TooNested => return error.TooNested,
+        }
+    };
+    return try self.store.exprSpanFrom(scratch_top);
 }
 
 /// todo

@@ -342,6 +342,27 @@ pub const Expr = union(enum) {
         field_name: Ident.Idx,
         field_name_region: base.Region,
     },
+    /// Method call expression.
+    ///
+    /// ```roc
+    /// list.map(transform)
+    /// ```
+    e_method_call: struct {
+        receiver: Expr.Idx,
+        method_name: Ident.Idx,
+        args: Expr.Span,
+    },
+    /// Method call expression rooted in a type-var alias namespace.
+    ///
+    /// ```roc
+    /// Fmt : fmt
+    /// Fmt.decode_str(format, source)
+    /// ```
+    e_type_method_call: struct {
+        type_var_alias_stmt: CIR.Statement.Idx,
+        method_name: Ident.Idx,
+        args: Expr.Span,
+    },
     /// Tuple element access by numeric index.
     /// Accesses an element of a tuple using dot notation with a numeric index.
     ///
@@ -1147,6 +1168,50 @@ pub const Expr = union(enum) {
                 const receiver_attrs = tree.beginNode();
                 try ir.store.getExpr(e.receiver).pushToSExprTree(ir, tree, e.receiver);
                 try tree.endNode(receiver_begin, receiver_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_method_call => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-method-call");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("method", ir.getIdentText(e.method_name));
+                const attrs = tree.beginNode();
+
+                const receiver_begin = tree.beginNode();
+                try tree.pushStaticAtom("receiver");
+                const receiver_attrs = tree.beginNode();
+                try ir.store.getExpr(e.receiver).pushToSExprTree(ir, tree, e.receiver);
+                try tree.endNode(receiver_begin, receiver_attrs);
+
+                const args_begin = tree.beginNode();
+                try tree.pushStaticAtom("args");
+                const args_attrs = tree.beginNode();
+                for (ir.store.sliceExpr(e.args)) |arg_idx| {
+                    try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
+                }
+                try tree.endNode(args_begin, args_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_type_method_call => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-type-method-call");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("method", ir.getIdentText(e.method_name));
+                const attrs = tree.beginNode();
+
+                try tree.pushU64Pair("type-var-alias-stmt", @intFromEnum(e.type_var_alias_stmt));
+
+                const args_begin = tree.beginNode();
+                try tree.pushStaticAtom("args");
+                const args_attrs = tree.beginNode();
+                for (ir.store.sliceExpr(e.args)) |arg_idx| {
+                    try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
+                }
+                try tree.endNode(args_begin, args_attrs);
 
                 try tree.endNode(begin, attrs);
             },

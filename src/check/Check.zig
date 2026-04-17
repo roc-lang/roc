@@ -4823,6 +4823,67 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             } });
             _ = try self.unify(expr_var, record_field_var, env);
         },
+        .e_method_call => |method_call| {
+            does_fx = try self.checkExpr(method_call.receiver, env, .no_expectation) or does_fx;
+            const receiver_var = ModuleEnv.varFrom(method_call.receiver);
+            var did_err = self.types.resolveVar(receiver_var).desc.content == .err;
+
+            const arg_expr_idxs = self.cir.store.sliceExpr(method_call.args);
+            const arg_vars = try self.gpa.alloc(Var, arg_expr_idxs.len);
+            defer self.gpa.free(arg_vars);
+
+            for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
+                self.checking_call_arg = true;
+                does_fx = try self.checkExpr(arg_expr_idx, env, .no_expectation) or does_fx;
+                const arg_var = ModuleEnv.varFrom(arg_expr_idx);
+                arg_vars[i] = arg_var;
+                did_err = did_err or (self.types.resolveVar(arg_var).desc.content == .err);
+            }
+
+            if (did_err) {
+                try self.unifyWith(expr_var, .err, env);
+            } else {
+                try self.mkMethodCallConstraint(
+                    receiver_var,
+                    arg_vars,
+                    expr_var,
+                    method_call.method_name,
+                    env,
+                    expr_region,
+                    expr_idx,
+                );
+            }
+        },
+        .e_type_method_call => |method_call| {
+            const arg_expr_idxs = self.cir.store.sliceExpr(method_call.args);
+            const arg_vars = try self.gpa.alloc(Var, arg_expr_idxs.len);
+            defer self.gpa.free(arg_vars);
+
+            var did_err = false;
+            for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
+                self.checking_call_arg = true;
+                does_fx = try self.checkExpr(arg_expr_idx, env, .no_expectation) or does_fx;
+                const arg_var = ModuleEnv.varFrom(arg_expr_idx);
+                arg_vars[i] = arg_var;
+                did_err = did_err or (self.types.resolveVar(arg_var).desc.content == .err);
+            }
+
+            if (did_err) {
+                try self.unifyWith(expr_var, .err, env);
+            } else {
+                const type_var_alias_stmt = self.cir.store.getStatement(method_call.type_var_alias_stmt);
+                const dispatcher_var = ModuleEnv.varFrom(type_var_alias_stmt.s_type_var_alias.type_var_anno);
+                try self.mkTypeMethodCallConstraint(
+                    dispatcher_var,
+                    arg_vars,
+                    expr_var,
+                    method_call.method_name,
+                    env,
+                    expr_region,
+                    expr_idx,
+                );
+            }
+        },
         .e_crash => {
             try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
         },
@@ -6262,6 +6323,79 @@ fn mkUnaryOp(
     );
 
     _ = try self.unify(constrained_var, arg_var, env);
+}
+
+fn mkMethodCallConstraint(
+    self: *Self,
+    receiver_var: Var,
+    arg_vars: []const Var,
+    ret_var: Var,
+    method_name: Ident.Idx,
+    env: *Env,
+    region: Region,
+    method_expr_idx: CIR.Expr.Idx,
+) Allocator.Error!void {
+    const all_args = try self.gpa.alloc(Var, arg_vars.len + 1);
+    defer self.gpa.free(all_args);
+    all_args[0] = receiver_var;
+    @memcpy(all_args[1..], arg_vars);
+
+    const args_range = try self.types.appendVars(all_args);
+    const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+        .args = args_range,
+        .ret = ret_var,
+        .needs_instantiation = false,
+    } } }, env, region);
+
+    const constraint = StaticDispatchConstraint{
+        .fn_name = method_name,
+        .fn_var = constraint_fn_var,
+        .site_expr_var = ModuleEnv.varFrom(method_expr_idx),
+        .origin = .method_call,
+    };
+    const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+
+    const constrained_var = try self.freshFromContent(
+        .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
+        env,
+        region,
+    );
+
+    _ = try self.unify(constrained_var, receiver_var, env);
+}
+
+fn mkTypeMethodCallConstraint(
+    self: *Self,
+    dispatcher_var: Var,
+    arg_vars: []const Var,
+    ret_var: Var,
+    method_name: Ident.Idx,
+    env: *Env,
+    region: Region,
+    method_expr_idx: CIR.Expr.Idx,
+) Allocator.Error!void {
+    const args_range = try self.types.appendVars(arg_vars);
+    const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+        .args = args_range,
+        .ret = ret_var,
+        .needs_instantiation = false,
+    } } }, env, region);
+
+    const constraint = StaticDispatchConstraint{
+        .fn_name = method_name,
+        .fn_var = constraint_fn_var,
+        .site_expr_var = ModuleEnv.varFrom(method_expr_idx),
+        .origin = .method_call,
+    };
+    const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+
+    const constrained_var = try self.freshFromContent(
+        .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
+        env,
+        region,
+    );
+
+    _ = try self.unify(constrained_var, dispatcher_var, env);
 }
 
 // problems //

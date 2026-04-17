@@ -1191,6 +1191,30 @@ const Formatter = struct {
                 try fmt.push('.');
                 try fmt.formatExprInnerDiscard(fa.right, .no_indent_on_access);
             },
+            .method_call => |mc| {
+                // Check if left side is an arrow_call with a plain ident or tag
+                // e.g., `0->M .c()` should format as multiline to avoid ambiguity with qualified ident
+                const left_expr = fmt.ast.store.getExpr(mc.receiver);
+                const needs_newline_before_dot = if (left_expr == .arrow_call) blk: {
+                    const ld = left_expr.arrow_call;
+                    const ld_right = fmt.ast.store.getExpr(ld.right);
+                    break :blk ld_right == .ident or ld_right == .tag;
+                } else false;
+
+                try fmt.formatExprDiscard(mc.receiver);
+                if (needs_newline_before_dot) {
+                    // Force newline to disambiguate from qualified identifier.
+                    fmt.curr_indent += 1;
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
+                } else if (multiline and try fmt.flushCommentsBefore(mc.method_token)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                }
+                try fmt.push('.');
+                try fmt.pushTokenText(mc.method_token);
+                try fmt.formatCollection(mc.region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(mc.args), Formatter.formatExpr);
+            },
             .arrow_call => |ld| {
                 try fmt.formatExprDiscard(ld.left);
                 if (multiline and try fmt.flushCommentsBefore(ld.operator)) {
@@ -2800,6 +2824,13 @@ const Formatter = struct {
                         }
 
                         return fmt.nodeWillBeMultiline(AST.Expr.Idx, f.right);
+                    },
+                    .method_call => |m| {
+                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, m.receiver)) {
+                            return true;
+                        }
+
+                        return fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(m.args));
                     },
                     .lambda => |l| {
                         if (fmt.nodeWillBeMultiline(AST.Expr.Idx, l.body)) {

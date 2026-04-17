@@ -191,6 +191,19 @@ fn collectExprDependencies(
             try collectExprDependencies(cir, access.receiver, dependencies, allocator);
         },
 
+        .e_method_call => |call| {
+            try collectExprDependencies(cir, call.receiver, dependencies, allocator);
+            for (cir.store.sliceExpr(call.args)) |arg_idx| {
+                try collectExprDependencies(cir, arg_idx, dependencies, allocator);
+            }
+        },
+
+        .e_type_method_call => |call| {
+            for (cir.store.sliceExpr(call.args)) |arg_idx| {
+                try collectExprDependencies(cir, arg_idx, dependencies, allocator);
+            }
+        },
+
         .e_tuple_access => |tuple_access| {
             try collectExprDependencies(cir, tuple_access.tuple, dependencies, allocator);
         },

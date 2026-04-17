@@ -120,7 +120,4 @@ test "eval tests" {
     std.testing.refAllDecls(@import("test/helpers.zig"));
     std.testing.refAllDecls(@import("pipeline.zig"));
     std.testing.refAllDecls(@import("wasm_evaluator.zig"));
-    std.testing.refAllDecls(@import("wasm_runner.zig"));
-    std.testing.refAllDecls(@import("test/cor_pipeline_test.zig"));
-    std.testing.refAllDecls(@import("test/stack_test.zig"));
 }

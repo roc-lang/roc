@@ -2214,6 +2214,94 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "(5, 8)" },
     },
+    .{
+        .name = "inspect: generic local attached method specialization picks different nominal targets",
+        .source_kind = .module,
+        .source =
+        \\Box := [Box(U64)].{
+        \\  get : Box -> U64
+        \\  get = |Box.Box(n)| n
+        \\}
+        \\
+        \\Count := [Count(U64)].{
+        \\  get : Count -> U64
+        \\  get = |Count.Count(n)| n + 100
+        \\}
+        \\
+        \\read = |value| value.get()
+        \\
+        \\main = (read(Box.Box(5)), read(Count.Count(8)))
+        ,
+        .expected = .{ .inspect_str = "(5, 108)" },
+    },
+    .{
+        .name = "inspect: cross-module attached method specialization on imported nominal",
+        .source_kind = .module,
+        .source =
+        \\import CounterMod
+        \\
+        \\main = CounterMod.Counter(41).get()
+        ,
+        .imports = &.{.{
+            .name = "CounterMod",
+            .source =
+            \\Counter := [Counter(U64)].{
+            \\  get : Counter -> U64
+            \\  get = |Counter.Counter(n)| n
+            \\}
+            ,
+        }},
+        .expected = .{ .inspect_str = "41" },
+    },
+    .{
+        .name = "inspect: cross-module polymorphic attached method specialization from helper module",
+        .source_kind = .module,
+        .source =
+        \\import BoxMod
+        \\import CountMod
+        \\import Helpers
+        \\
+        \\main = (Helpers.read(BoxMod.Box(5)), Helpers.read(CountMod.Count(8)))
+        ,
+        .imports = &.{
+            .{
+                .name = "BoxMod",
+                .source =
+                \\Box := [Box(U64)].{
+                \\  get : Box -> U64
+                \\  get = |Box.Box(n)| n
+                \\}
+                ,
+            },
+            .{
+                .name = "CountMod",
+                .source =
+                \\Count := [Count(U64)].{
+                \\  get : Count -> U64
+                \\  get = |Count.Count(n)| n + 100
+                \\}
+                ,
+            },
+            .{
+                .name = "Helpers",
+                .source =
+                \\read = |value| value.get()
+                ,
+            },
+        },
+        .expected = .{ .inspect_str = "(5, 108)" },
+    },
+    .{
+        .name = "inspect: record field access remains separate from method calls",
+        .source =
+        \\{
+        \\    record = { get: |n| n + 1, value: 41 }
+        \\    getter = record.get
+        \\    getter(record.value)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "42.0" },
+    },
     .{ .name = "inspect: empty record literal", .source = "{}", .expected = .{ .inspect_str = "{}" } },
     .{ .name = "inspect: decimal literal one eighth", .source = "0.125", .expected = .{ .inspect_str = "0.125" } },
     .{ .name = "inspect: decimal addition one tenth plus two tenths", .source = "0.1 + 0.2", .expected = .{ .inspect_str = "0.3" } },

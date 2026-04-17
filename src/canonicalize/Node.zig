@@ -65,6 +65,8 @@ pub const Tag = enum {
     record_field,
     record_destruct,
     expr_field_access,
+    expr_method_call,
+    expr_type_method_call,
     expr_static_dispatch,
     expr_external_lookup,
     expr_pending_lookup,
@@ -296,6 +298,8 @@ pub const Payload = extern union {
     expr_dec_small: ExprDecSmall,
     expr_string: ExprString,
     expr_field_access: ExprFieldAccess,
+    expr_method_call: ExprMethodCall,
+    expr_type_method_call: ExprTypeMethodCall,
     expr_hosted_lambda: ExprHostedLambda,
     expr_low_level: ExprLowLevel,
     expr_run_low_level: ExprRunLowLevel,
@@ -604,6 +608,18 @@ pub const Payload = extern union {
         receiver: u32,
         field_name: u32,
         field_name_region_span2_idx: u32,
+    };
+
+    pub const ExprMethodCall = extern struct {
+        receiver: u32,
+        method_name: u32,
+        args_span2_idx: u32,
+    };
+
+    pub const ExprTypeMethodCall = extern struct {
+        type_var_alias_stmt: u32,
+        method_name: u32,
+        args_span2_idx: u32,
     };
 
     pub const ExprHostedLambda = extern struct {
@@ -1007,6 +1023,6 @@ pub const Payload = extern union {
 
     // Compile-time size verification
     comptime {
-        std.debug.assert(@sizeOf(Payload) == 16);
+        std.debug.assert(@sizeOf(Payload) == 12);
     }
 };

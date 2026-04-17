@@ -5023,6 +5023,36 @@ pub fn canonicalizeExpr(
                 return can_expr;
             }
 
+            if (ast_fn == .ident) {
+                const ident_expr = ast_fn.ident;
+                const qualifier_tokens = self.parse_ir.store.tokenSlice(ident_expr.qualifiers);
+                if (qualifier_tokens.len == 1) {
+                    const qualifier_tok = @as(Token.Idx, @intCast(qualifier_tokens[0]));
+                    if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok)) |alias_name| {
+                        if (self.lookupTypeVarAliasBinding(alias_name)) |binding| {
+                            if (self.parse_ir.tokens.resolveIdentifier(ident_expr.token)) |method_name| {
+                                const scratch_top = self.env.store.scratchExprTop();
+                                const args_slice = self.parse_ir.store.exprSlice(e.args);
+                                for (args_slice) |arg| {
+                                    if (try self.canonicalizeExpr(arg)) |can_arg| {
+                                        try self.env.store.addScratchExpr(can_arg.idx);
+                                    }
+                                }
+                                const args_span = try self.env.store.exprSpanFrom(scratch_top);
+                                const expr_idx = try self.env.addExpr(CIR.Expr{
+                                    .e_type_method_call = .{
+                                        .type_var_alias_stmt = binding.statement_idx,
+                                        .method_name = method_name,
+                                        .args = args_span,
+                                    },
+                                }, region);
+                                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+                            }
+                        }
+                    }
+                }
+            }
+
             // Not a tag application, proceed with normal function call
             // Mark the start of scratch expressions
             const free_vars_start = self.scratch_free_vars.top();
@@ -5094,6 +5124,19 @@ pub fn canonicalizeExpr(
 
                     const qualifier_tok = @as(Token.Idx, @intCast(qualifier_tokens[0]));
                     if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok)) |module_alias| {
+                        if (qualifier_tokens.len == 1) {
+                            if (self.lookupTypeVarAliasBinding(module_alias)) |binding| {
+                                const expr_idx = try self.env.addExpr(CIR.Expr{
+                                    .e_type_method_call = .{
+                                        .type_var_alias_stmt = binding.statement_idx,
+                                        .method_name = ident,
+                                        .args = .{ .span = DataSpan.empty() },
+                                    },
+                                }, region);
+                                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+                            }
+                        }
+
                         // Check if this is a module alias, or an auto-imported module
                         const module_info: ?Scope.ModuleAliasInfo = self.scopeLookupModule(module_alias) orelse blk: {
                             // Not in scope, check if it's an auto-imported module
@@ -6261,6 +6304,23 @@ pub fn canonicalizeExpr(
 
             // Regular field access canonicalization
             const expr_idx = (try self.canonicalizeRegularFieldAccess(field_access)) orelse return null;
+            const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+            return CanonicalizedExpr{
+                .idx = expr_idx,
+                .free_vars = free_vars_span,
+            };
+        },
+        .method_call => |method_call| {
+            const free_vars_start = self.scratch_free_vars.top();
+
+            if (try self.tryModuleQualifiedMethodCall(method_call)) |expr_idx| {
+                return CanonicalizedExpr{
+                    .idx = expr_idx,
+                    .free_vars = self.scratch_free_vars.spanFrom(free_vars_start),
+                };
+            }
+
+            const expr_idx = (try self.canonicalizeMethodCall(method_call)) orelse return null;
             const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
             return CanonicalizedExpr{
                 .idx = expr_idx,
@@ -12922,6 +12982,20 @@ fn scopeLookupTypeBinding(self: *Self, ident_idx: Ident.Idx) ?TypeBindingLocatio
     return null;
 }
 
+fn lookupTypeVarAliasBinding(self: *const Self, alias_name: Ident.Idx) ?Scope.TypeVarAliasBinding {
+    var i = self.scopes.items.len;
+    while (i > 0) {
+        i -= 1;
+        const scope = &self.scopes.items[i];
+        switch (scope.lookupTypeVarAlias(alias_name)) {
+            .found => |binding| return binding,
+            .not_found => continue,
+        }
+    }
+
+    return null;
+}
+
 /// Look up a module alias in the scope hierarchy
 fn scopeLookupModule(self: *const Self, alias_name: Ident.Idx) ?Scope.ModuleAliasInfo {
     // Search from innermost to outermost scope
@@ -13502,7 +13576,6 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     const region = self.parse_ir.tokenizedRegionToRegion(field_access.region);
 
     if (right_expr == .apply) {
-        _ = import_idx;
         return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
             .region = region,
         } });
@@ -13625,6 +13698,61 @@ fn canonicalizeRegularFieldAccess(self: *Self, field_access: AST.BinOp) std.mem.
 
     const expr_idx = try self.env.addExpr(field_access_expr, self.parse_ir.tokenizedRegionToRegion(field_access.region));
     return expr_idx;
+}
+
+fn canonicalizeMethodCall(self: *Self, method_call: @FieldType(AST.Expr, "method_call")) std.mem.Allocator.Error!?Expr.Idx {
+    const receiver_idx = try self.canonicalizeExpr(method_call.receiver) orelse return null;
+    const scratch_top = self.env.store.scratchExprTop();
+    for (self.parse_ir.store.exprSlice(method_call.args)) |arg_idx| {
+        if (try self.canonicalizeExpr(arg_idx)) |can_arg| {
+            try self.env.store.addScratchExpr(can_arg.idx);
+        }
+    }
+    const args_span = try self.env.store.exprSpanFrom(scratch_top);
+    return try self.env.addExpr(CIR.Expr{
+        .e_method_call = .{
+            .receiver = receiver_idx.idx,
+            .method_name = try self.resolveIdentOrFallback(method_call.method_token),
+            .args = args_span,
+        },
+    }, self.parse_ir.tokenizedRegionToRegion(method_call.region));
+}
+
+fn tryModuleQualifiedMethodCall(self: *Self, method_call: @FieldType(AST.Expr, "method_call")) std.mem.Allocator.Error!?Expr.Idx {
+    const receiver_expr = self.parse_ir.store.getExpr(method_call.receiver);
+    const receiver_token, const receiver_qualifiers = switch (receiver_expr) {
+        .ident => |ident| .{ ident.token, ident.qualifiers },
+        .tag => |tag| .{ tag.token, tag.qualifiers },
+        else => return null,
+    };
+    const module_alias = self.parse_ir.tokens.resolveIdentifier(receiver_token) orelse return null;
+    const is_namespace_style =
+        receiver_expr == .tag or
+        self.scopeLookupModule(module_alias) != null or
+        self.hasAvailableModuleEnv(module_alias) or
+        self.scopeLookupTypeBinding(module_alias) != null;
+    if (!is_namespace_style) return null;
+
+    const scratch_top = self.parse_ir.store.scratchTokenTop();
+    for (self.parse_ir.store.tokenSlice(receiver_qualifiers)) |qual_tok| {
+        try self.parse_ir.store.addScratchToken(qual_tok);
+    }
+    try self.parse_ir.store.addScratchToken(receiver_token);
+    const qualifiers = try self.parse_ir.store.tokenSpanFrom(scratch_top);
+
+    const qualified_ident_idx = try self.parse_ir.store.addExpr(.{ .ident = .{
+        .token = method_call.method_token,
+        .qualifiers = qualifiers,
+        .region = method_call.region,
+    } });
+    const qualified_apply_idx = try self.parse_ir.store.addExpr(.{ .apply = .{
+        .@"fn" = qualified_ident_idx,
+        .args = method_call.args,
+        .region = method_call.region,
+    } });
+
+    const can_expr = try self.canonicalizeExpr(qualified_apply_idx) orelse return null;
+    return can_expr.idx;
 }
 
 /// Canonicalize the receiver (left side) of field access.

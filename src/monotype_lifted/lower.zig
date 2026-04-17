@@ -28,6 +28,7 @@ pub const Result = struct {
     types: type_mod.Store,
     strings: base.StringLiteral.Store,
     idents: base.Ident.Store,
+    attached_method_index: symbol_mod.AttachedMethodIndex,
     runtime_inspect_symbols: std.AutoHashMap(Symbol, Symbol),
 
     pub fn deinit(self: *Result) void {
@@ -37,6 +38,7 @@ pub const Result = struct {
         self.types.deinit();
         self.strings.deinit(self.store.allocator);
         self.idents.deinit(self.store.allocator);
+        self.attached_method_index.deinit();
         self.runtime_inspect_symbols.deinit();
     }
 };
@@ -115,6 +117,7 @@ const Lowerer = struct {
             .types = self.input.types,
             .strings = self.input.strings,
             .idents = self.input.idents,
+            .attached_method_index = self.input.attached_method_index,
             .runtime_inspect_symbols = self.input.runtime_inspect_symbols,
         };
 
@@ -124,6 +127,7 @@ const Lowerer = struct {
         self.input.types = type_mod.Store.init(self.allocator);
         self.input.strings = .{};
         self.input.idents = try base.Ident.Store.initCapacity(self.allocator, 1);
+        self.input.attached_method_index = symbol_mod.AttachedMethodIndex.init(self.allocator);
         self.input.runtime_inspect_symbols = std.AutoHashMap(Symbol, Symbol).init(self.allocator);
         return result;
     }
@@ -279,6 +283,26 @@ const Lowerer = struct {
                         .record = try self.lowerExprInto(&lowered.lifted_defs, venv, access.record),
                         .field = access.field,
                         .field_index = access.field_index,
+                    } },
+                });
+            },
+            .method_call => |method_call| {
+                lowered.expr = try self.output.addExpr(.{
+                    .ty = expr.ty,
+                    .data = .{ .method_call = .{
+                        .receiver = try self.lowerExprInto(&lowered.lifted_defs, venv, method_call.receiver),
+                        .method_name = method_call.method_name,
+                        .args = try self.lowerExprSpan(&lowered.lifted_defs, venv, method_call.args),
+                    } },
+                });
+            },
+            .type_method_call => |method_call| {
+                lowered.expr = try self.output.addExpr(.{
+                    .ty = expr.ty,
+                    .data = .{ .type_method_call = .{
+                        .dispatcher_ty = method_call.dispatcher_ty,
+                        .method_name = method_call.method_name,
+                        .args = try self.lowerExprSpan(&lowered.lifted_defs, venv, method_call.args),
                     } },
                 });
             },
@@ -893,6 +917,17 @@ const Lowerer = struct {
                 }
             },
             .access => |access| try self.collectFreeVarsExpr(access.record, bound, free),
+            .method_call => |method_call| {
+                try self.collectFreeVarsExpr(method_call.receiver, bound, free);
+                for (self.input.program.store.sliceExprSpan(method_call.args)) |arg| {
+                    try self.collectFreeVarsExpr(arg, bound, free);
+                }
+            },
+            .type_method_call => |method_call| {
+                for (self.input.program.store.sliceExprSpan(method_call.args)) |arg| {
+                    try self.collectFreeVarsExpr(arg, bound, free);
+                }
+            },
             .let_ => |let_expr| switch (let_expr.def) {
                 .let_val => |let_val| {
                     try self.collectFreeVarsExpr(let_val.body, bound, free);
@@ -1214,6 +1249,17 @@ const Lowerer = struct {
                 }
             },
             .access => |access| try self.collectBindingTypesExpr(access.record),
+            .method_call => |method_call| {
+                try self.collectBindingTypesExpr(method_call.receiver);
+                for (self.input.program.store.sliceExprSpan(method_call.args)) |arg| {
+                    try self.collectBindingTypesExpr(arg);
+                }
+            },
+            .type_method_call => |method_call| {
+                for (self.input.program.store.sliceExprSpan(method_call.args)) |arg| {
+                    try self.collectBindingTypesExpr(arg);
+                }
+            },
             .let_ => |let_expr| switch (let_expr.def) {
                 .let_val => |let_val| {
                     try self.binding_types.put(let_val.bind.symbol, let_val.bind.ty);

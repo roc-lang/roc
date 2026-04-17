@@ -2007,6 +2007,8 @@ const Lowerer = struct {
                 };
             },
             .call => |call| try self.specializeCallExpr(inst, mono_cache, venv, expr_id, call),
+            .method_call => |method_call| try self.specializeMethodCallExpr(inst, mono_cache, venv, method_call),
+            .type_method_call => |method_call| try self.specializeTypeMethodCallExpr(inst, mono_cache, venv, method_call),
             .inspect => unreachable,
             .low_level => |ll| blk: {
                 const lowered_args = switch (ll.op) {
@@ -3772,6 +3774,28 @@ const Lowerer = struct {
                 else => null,
             };
         }
+
+        const target_origin = self.input.symbols.get(symbol).origin;
+        for (self.input.store.defsSlice()) |def| {
+            const def_origin = self.input.symbols.get(def.bind.symbol).origin;
+            const matches_origin = switch (target_origin) {
+                .top_level_def => |target| switch (def_origin) {
+                    .top_level_def => |candidate| candidate.module_idx == target.module_idx and candidate.def_idx == target.def_idx,
+                    else => false,
+                },
+                .specialized_top_level_def => |target| switch (def_origin) {
+                    .specialized_top_level_def => |candidate| candidate.source_symbol == target.source_symbol,
+                    else => false,
+                },
+                else => false,
+            };
+            if (!matches_origin) continue;
+            return switch (def.value) {
+                .fn_, .hosted_fn => def.bind.ty,
+                else => null,
+            };
+        }
+
         return null;
     }
 
@@ -4003,6 +4027,303 @@ const Lowerer = struct {
         const symbol = expr.data.var_;
         if (symbol.isNone()) return null;
         return if (specializations.lookupFnExact(self.fenv, symbol) != null) symbol else null;
+    }
+
+    fn instantiatedSourceTypeForExpr(
+        self: *Lowerer,
+        inst: *InstScope,
+        venv: []const EnvEntry,
+        expr_id: solved.Ast.ExprId,
+    ) std.mem.Allocator.Error!TypeVarId {
+        const expr = self.input.store.getExpr(expr_id);
+        if (expr.data == .var_) {
+            if (self.lookupEnvEntry(venv, expr.data.var_)) |entry| {
+                return entry.ty;
+            }
+        }
+        return try self.cloneInstType(inst, expr.ty);
+    }
+
+    fn primitiveMethodTypeMatches(self: *const Lowerer, prim: type_mod.Prim, type_ident: base.Ident.Idx) bool {
+        const text = self.input.idents.getText(type_ident);
+        return switch (prim) {
+            .bool => std.mem.eql(u8, text, "Bool") or std.mem.eql(u8, text, "Builtin.Bool"),
+            .str => std.mem.eql(u8, text, "Str") or std.mem.eql(u8, text, "Builtin.Str"),
+            .u8 => std.mem.eql(u8, text, "U8") or std.mem.eql(u8, text, "Num.U8") or std.mem.eql(u8, text, "Builtin.Num.U8"),
+            .i8 => std.mem.eql(u8, text, "I8") or std.mem.eql(u8, text, "Num.I8") or std.mem.eql(u8, text, "Builtin.Num.I8"),
+            .u16 => std.mem.eql(u8, text, "U16") or std.mem.eql(u8, text, "Num.U16") or std.mem.eql(u8, text, "Builtin.Num.U16"),
+            .i16 => std.mem.eql(u8, text, "I16") or std.mem.eql(u8, text, "Num.I16") or std.mem.eql(u8, text, "Builtin.Num.I16"),
+            .u32 => std.mem.eql(u8, text, "U32") or std.mem.eql(u8, text, "Num.U32") or std.mem.eql(u8, text, "Builtin.Num.U32"),
+            .i32 => std.mem.eql(u8, text, "I32") or std.mem.eql(u8, text, "Num.I32") or std.mem.eql(u8, text, "Builtin.Num.I32"),
+            .u64 => std.mem.eql(u8, text, "U64") or std.mem.eql(u8, text, "Num.U64") or std.mem.eql(u8, text, "Builtin.Num.U64"),
+            .i64 => std.mem.eql(u8, text, "I64") or std.mem.eql(u8, text, "Num.I64") or std.mem.eql(u8, text, "Builtin.Num.I64"),
+            .u128 => std.mem.eql(u8, text, "U128") or std.mem.eql(u8, text, "Num.U128") or std.mem.eql(u8, text, "Builtin.Num.U128"),
+            .i128 => std.mem.eql(u8, text, "I128") or std.mem.eql(u8, text, "Num.I128") or std.mem.eql(u8, text, "Builtin.Num.I128"),
+            .f32 => std.mem.eql(u8, text, "F32") or std.mem.eql(u8, text, "Num.F32") or std.mem.eql(u8, text, "Builtin.Num.F32"),
+            .f64 => std.mem.eql(u8, text, "F64") or std.mem.eql(u8, text, "Num.F64") or std.mem.eql(u8, text, "Builtin.Num.F64"),
+            .dec => std.mem.eql(u8, text, "Dec") or std.mem.eql(u8, text, "Num.Dec") or std.mem.eql(u8, text, "Builtin.Num.Dec"),
+            .erased => false,
+        };
+    }
+
+    fn findPrimitiveAttachedMethodTarget(self: *Lowerer, prim: type_mod.Prim, method_name: base.Ident.Idx) Symbol {
+        var iter = self.input.attached_method_index.iterator();
+        var matched: ?Symbol = null;
+        while (iter.next()) |entry| {
+            const key = entry.key_ptr.*;
+            if (key.method_ident != method_name) continue;
+            if (!self.primitiveMethodTypeMatches(prim, key.type_ident)) continue;
+            if (matched) |existing| {
+                if (existing != entry.value_ptr.*) {
+                    const type_text = self.input.idents.getText(key.type_ident);
+                    const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
+                    debugPanicFmt(
+                        "lambdamono.lower.findPrimitiveAttachedMethodTarget found multiple targets for {s}.{s}",
+                        .{ type_text, method_text },
+                    );
+                }
+            } else {
+                matched = entry.value_ptr.*;
+            }
+        }
+
+        return matched orelse {
+            const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
+            debugPanicFmt(
+                "lambdamono.lower.findPrimitiveAttachedMethodTarget missing attached method target for primitive {s}.{s}",
+                .{ @tagName(prim), method_text },
+            );
+        };
+    }
+
+    fn findAttachedMethodTargetForInstantiatedSource(self: *Lowerer, receiver_ty: TypeVarId, method_name: base.Ident.Idx) Symbol {
+        const root = self.input.types.unlink(receiver_ty);
+        const node = self.input.types.getNode(root);
+        const nominal = switch (node) {
+            .nominal => |nominal| nominal,
+            .content => |content| switch (content) {
+                .primitive => |prim| return self.findPrimitiveAttachedMethodTarget(prim, method_name),
+                else => {
+                    const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
+                    debugPanicFmt(
+                        "lambdamono.lower.findAttachedMethodTarget expected nominal or primitive receiver for method {s}",
+                        .{method_text},
+                    );
+                },
+            },
+            else => {
+                const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
+                debugPanicFmt(
+                    "lambdamono.lower.findAttachedMethodTarget expected resolved receiver for method {s}",
+                    .{method_text},
+                );
+            },
+        };
+        const key = symbol_mod.AttachedMethodKey{
+            .module_idx = nominal.module_idx,
+            .type_ident = nominal.ident,
+            .method_ident = method_name,
+        };
+        return self.input.attached_method_index.get(key) orelse {
+            const type_text = if (nominal.ident.isNone()) "<none>" else self.input.idents.getText(nominal.ident);
+            const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
+            debugPanicFmt(
+                "lambdamono.lower.findAttachedMethodTarget missing attached method target for {s}.{s}",
+                .{ type_text, method_text },
+            );
+        };
+    }
+
+    fn applyExactTopLevelFunctionArg(
+        self: *Lowerer,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        target_symbol: Symbol,
+        current_fn_ty: TypeVarId,
+        arg_expr: ast.ExprId,
+        arg_source_ty: TypeVarId,
+        result_source_ty: TypeVarId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        const arg_exec_ty = self.output.getExpr(arg_expr).ty;
+        const result_exec_ty = try self.lowerExecutableTypeFromSolved(mono_cache, result_source_ty);
+        const ret_override: ?type_mod.TypeId = if (self.containsErasedFn(result_exec_ty) and
+            self.erasedFnCaptureType(result_exec_ty) != null)
+            result_exec_ty
+        else
+            null;
+
+        return switch (lower_type.lambdaRepr(&self.input.types, current_fn_ty)) {
+            .lset => blk: {
+                const sig = try self.buildLsetSpecializationSig(
+                    mono_cache,
+                    null,
+                    target_symbol,
+                    current_fn_ty,
+                    arg_exec_ty,
+                    ret_override,
+                );
+                var final_arg = arg_expr;
+                if (!self.types.equalIds(arg_exec_ty, sig.arg_ty) and self.containsErasedFn(sig.arg_ty)) {
+                    final_arg = try self.bridgeExprToExpectedType(
+                        inst,
+                        mono_cache,
+                        arg_source_ty,
+                        arg_expr,
+                        sig.arg_ty,
+                    );
+                }
+
+                var call_expr = try self.output.addExpr(.{
+                    .ty = sig.ret_ty,
+                    .data = .{ .call = .{
+                        .proc = if (self.isHostedFunctionSymbol(target_symbol))
+                            target_symbol
+                        else
+                            try specializations.specializeFnLset(
+                                &self.queue,
+                                self.fenv,
+                                &self.input.symbols,
+                                target_symbol,
+                                current_fn_ty,
+                                sig,
+                            ),
+                        .args = try self.output.addExprSpan(&.{final_arg}),
+                    } },
+                });
+                if (!self.types.equalIds(sig.ret_ty, result_exec_ty)) {
+                    call_expr = try self.bridgeExprToExpectedType(
+                        inst,
+                        mono_cache,
+                        result_source_ty,
+                        call_expr,
+                        result_exec_ty,
+                    );
+                }
+                break :blk call_expr;
+            },
+            .erased => debugPanic("lambdamono.lower.applyExactTopLevelFunctionArg unexpected erased exact method target"),
+        };
+    }
+
+    fn specializeMethodCallExpr(
+        self: *Lowerer,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        venv: []const EnvEntry,
+        method_call: @FieldType(solved.Ast.Expr.Data, "method_call"),
+    ) std.mem.Allocator.Error!SpecializedExprLowering {
+        const receiver_source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, method_call.receiver);
+        const target_symbol = self.findAttachedMethodTargetForInstantiatedSource(receiver_source_ty, method_call.method_name);
+        const lowered_receiver = try self.specializeExpr(inst, mono_cache, venv, method_call.receiver);
+        var current_fn_ty = try self.cloneInstType(
+            inst,
+            self.lookupTopLevelFnType(target_symbol) orelse
+                debugPanic("lambdamono.lower.specializeMethodCallExpr missing target fn type"),
+        );
+        const first_fn = lower_type.extractFn(&self.input.types, current_fn_ty);
+        var current_expr = try self.applyExactTopLevelFunctionArg(
+            inst,
+            mono_cache,
+            target_symbol,
+            current_fn_ty,
+            lowered_receiver,
+            receiver_source_ty,
+            first_fn.ret,
+        );
+        current_fn_ty = first_fn.ret;
+
+        for (self.input.store.sliceExprSpan(method_call.args)) |arg_expr_id| {
+            const lowered_arg = try self.specializeExpr(inst, mono_cache, venv, arg_expr_id);
+            const fn_parts = lower_type.extractFn(&self.input.types, current_fn_ty);
+            current_expr = try self.applyFuncValue(
+                mono_cache,
+                current_expr,
+                current_fn_ty,
+                self.output.getExpr(current_expr).ty,
+                lowered_arg,
+                try self.lowerExecutableTypeFromSolved(mono_cache, fn_parts.ret),
+            );
+            current_fn_ty = fn_parts.ret;
+        }
+
+        const final_expr = self.output.getExpr(current_expr);
+        return .{
+            .ty = final_expr.ty,
+            .data = final_expr.data,
+        };
+    }
+
+    fn specializeTypeMethodCallExpr(
+        self: *Lowerer,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        venv: []const EnvEntry,
+        method_call: @FieldType(solved.Ast.Expr.Data, "type_method_call"),
+    ) std.mem.Allocator.Error!SpecializedExprLowering {
+        const dispatcher_source_ty = try self.cloneInstType(inst, method_call.dispatcher_ty);
+        const target_symbol = self.findAttachedMethodTargetForInstantiatedSource(dispatcher_source_ty, method_call.method_name);
+        var current_fn_ty = try self.cloneInstType(
+            inst,
+            self.lookupTopLevelFnType(target_symbol) orelse
+                debugPanic("lambdamono.lower.specializeTypeMethodCallExpr missing target fn type"),
+        );
+
+        if (self.input.store.sliceExprSpan(method_call.args).len == 0) {
+            const first_fn = lower_type.extractFn(&self.input.types, current_fn_ty);
+            const unit_ty = try self.lowerExecutableTypeFromSolved(mono_cache, first_fn.arg);
+            const unit_expr = try self.output.addExpr(.{
+                .ty = unit_ty,
+                .data = .unit,
+            });
+            const call_expr = try self.applyExactTopLevelFunctionArg(
+                inst,
+                mono_cache,
+                target_symbol,
+                current_fn_ty,
+                unit_expr,
+                first_fn.arg,
+                first_fn.ret,
+            );
+            const final_expr = self.output.getExpr(call_expr);
+            return .{
+                .ty = final_expr.ty,
+                .data = final_expr.data,
+            };
+        }
+
+        var current_expr: ?ast.ExprId = null;
+        for (self.input.store.sliceExprSpan(method_call.args), 0..) |arg_expr_id, i| {
+            const lowered_arg = try self.specializeExpr(inst, mono_cache, venv, arg_expr_id);
+            const fn_parts = lower_type.extractFn(&self.input.types, current_fn_ty);
+            if (i == 0) {
+                current_expr = try self.applyExactTopLevelFunctionArg(
+                    inst,
+                    mono_cache,
+                    target_symbol,
+                    current_fn_ty,
+                    lowered_arg,
+                    try self.cloneInstType(inst, self.input.store.getExpr(arg_expr_id).ty),
+                    fn_parts.ret,
+                );
+            } else {
+                current_expr = try self.applyFuncValue(
+                    mono_cache,
+                    current_expr.?,
+                    current_fn_ty,
+                    self.output.getExpr(current_expr.?).ty,
+                    lowered_arg,
+                    try self.lowerExecutableTypeFromSolved(mono_cache, fn_parts.ret),
+                );
+            }
+            current_fn_ty = fn_parts.ret;
+        }
+
+        const final_expr = self.output.getExpr(current_expr orelse
+            debugPanic("lambdamono.lower.specializeTypeMethodCallExpr expected at least one rewritten arg"));
+        return .{
+            .ty = final_expr.ty,
+            .data = final_expr.data,
+        };
     }
 
     fn specializeCallExpr(

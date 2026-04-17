@@ -1,3 +1,4 @@
 test {
-    _ = @import("test/eval_test.zig");
+    _ = @import("test/RuntimeHostEnv.zig");
+    _ = @import("test/TestEnv.zig");
 }

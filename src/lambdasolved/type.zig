@@ -152,7 +152,7 @@ pub const Store = struct {
                     rewritten.backing = terminal;
                     self.setNode(id, .{ .nominal = rewritten });
                 }
-                break :blk terminal;
+                break :blk id;
             },
             else => id,
         };
@@ -165,6 +165,29 @@ pub const Store = struct {
                 const terminal = self.unlinkPreservingNominal(next);
                 if (terminal != next) {
                     self.setNode(id, .{ .link = terminal });
+                }
+                break :blk terminal;
+            },
+            else => id,
+        };
+    }
+
+    pub fn unlinkErasingNominal(self: *Store, id: TypeVarId) TypeVarId {
+        const node = self.getNode(id);
+        return switch (node) {
+            .link => |next| blk: {
+                const terminal = self.unlinkErasingNominal(next);
+                if (terminal != next) {
+                    self.setNode(id, .{ .link = terminal });
+                }
+                break :blk terminal;
+            },
+            .nominal => |nominal| blk: {
+                const terminal = self.unlinkErasingNominal(nominal.backing);
+                if (terminal != nominal.backing) {
+                    var rewritten = nominal;
+                    rewritten.backing = terminal;
+                    self.setNode(id, .{ .nominal = rewritten });
                 }
                 break :blk terminal;
             },

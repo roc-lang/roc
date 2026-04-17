@@ -22,6 +22,7 @@ pub const Result = struct {
     types: type_mod.Store,
     strings: base.StringLiteral.Store,
     idents: base.Ident.Store,
+    attached_method_index: symbol_mod.AttachedMethodIndex,
     runtime_inspect_symbols: std.AutoHashMap(Symbol, Symbol),
 
     pub fn deinit(self: *Result) void {
@@ -31,6 +32,7 @@ pub const Result = struct {
         self.types.deinit();
         self.strings.deinit(self.store.allocator);
         self.idents.deinit(self.store.allocator);
+        self.attached_method_index.deinit();
         self.runtime_inspect_symbols.deinit();
     }
 };
@@ -54,6 +56,9 @@ const Lowerer = struct {
     def_id_by_symbol: std.AutoHashMap(Symbol, ast.DefId),
     current_return_ty: ?TypeVarId,
     current_def_symbol: ?Symbol,
+    current_opaque_unify: ?DebugNominalContext,
+    current_expr_id: ?ast.ExprId,
+    current_call_context: ?DebugCallContext,
     runtime_error_msg: ?base.StringLiteral.Idx,
 
     const EnvEntry = struct {
@@ -64,6 +69,19 @@ const Lowerer = struct {
     const TypePair = struct {
         left: TypeVarId,
         right: TypeVarId,
+    };
+
+    const DebugNominalContext = struct {
+        left: []const u8,
+        right: []const u8,
+    };
+
+    const DebugCallContext = struct {
+        func_expr: []const u8,
+        arg_expr: []const u8,
+        func_ty: []const u8,
+        arg_ty: []const u8,
+        target_ty: []const u8,
     };
 
     const SccGroup = struct {
@@ -80,6 +98,9 @@ const Lowerer = struct {
             .def_id_by_symbol = std.AutoHashMap(Symbol, ast.DefId).init(allocator),
             .current_return_ty = null,
             .current_def_symbol = null,
+            .current_opaque_unify = null,
+            .current_expr_id = null,
+            .current_call_context = null,
             .runtime_error_msg = null,
         };
     }
@@ -100,6 +121,7 @@ const Lowerer = struct {
             .types = self.types,
             .strings = self.input.strings,
             .idents = self.input.idents,
+            .attached_method_index = self.input.attached_method_index,
             .runtime_inspect_symbols = self.input.runtime_inspect_symbols,
         };
 
@@ -109,6 +131,7 @@ const Lowerer = struct {
         self.input.symbols = symbol_mod.Store.init(self.allocator);
         self.input.strings = .{};
         self.input.idents = try base.Ident.Store.initCapacity(self.allocator, 1);
+        self.input.attached_method_index = symbol_mod.AttachedMethodIndex.init(self.allocator);
         self.input.runtime_inspect_symbols = std.AutoHashMap(Symbol, Symbol).init(self.allocator);
         return result;
     }
@@ -203,6 +226,16 @@ const Lowerer = struct {
                 .record = try self.instantiateExpr(access.record),
                 .field = access.field,
                 .field_index = access.field_index,
+            } },
+            .method_call => |method_call| .{ .method_call = .{
+                .receiver = try self.instantiateExpr(method_call.receiver),
+                .method_name = method_call.method_name,
+                .args = try self.instantiateExprSpan(method_call.args),
+            } },
+            .type_method_call => |method_call| .{ .type_method_call = .{
+                .dispatcher_ty = try self.instantiateType(method_call.dispatcher_ty),
+                .method_name = method_call.method_name,
+                .args = try self.instantiateExprSpan(method_call.args),
             } },
             .let_ => |let_expr| .{ .let_ = .{
                 .bind = try self.instantiateTypedSymbol(let_expr.bind),
@@ -394,12 +427,13 @@ const Lowerer = struct {
                 for (args, 0..) |arg, i| {
                     lowered_args[i] = try self.instantiateTypeRec(arg, cache);
                 }
+                const lowered_backing = try self.instantiateTypeRec(nominal.backing, cache);
                 break :blk type_mod.Node{ .nominal = .{
                     .module_idx = nominal.module_idx,
                     .ident = nominal.ident,
                     .is_opaque = nominal.is_opaque,
                     .args = try self.types.addTypeVarSpan(lowered_args),
-                    .backing = try self.instantiateTypeRec(nominal.backing, cache),
+                    .backing = lowered_backing,
                 } };
             },
             .func => |func| blk: {
@@ -605,6 +639,10 @@ const Lowerer = struct {
     }
 
     fn inferExpr(self: *Lowerer, venv: []const EnvEntry, expr_id: ast.ExprId) std.mem.Allocator.Error!TypeVarId {
+        const previous_expr = self.current_expr_id;
+        self.current_expr_id = expr_id;
+        defer self.current_expr_id = previous_expr;
+
         const expr = self.output.getExpr(expr_id);
         const target_ty = expr.ty;
 
@@ -739,7 +777,7 @@ const Lowerer = struct {
                 const record_ty = try self.inferExpr(venv, access.record);
                 const subject_ty = self.output.getExpr(access.record).ty;
                 try self.unify(record_ty, subject_ty);
-                const subject_root = self.types.unlink(subject_ty);
+                const subject_root = self.types.unlinkErasingNominal(subject_ty);
                 const subject_node = self.types.getNode(subject_root);
                 const fields = switch (subject_node) {
                     .content => |content| switch (content) {
@@ -754,6 +792,22 @@ const Lowerer = struct {
                 try self.unify(target_ty, field_ty);
                 break :blk target_ty;
             },
+            .method_call => |method_call| blk: {
+                const receiver_ty = try self.inferExpr(venv, method_call.receiver);
+                try self.unify(receiver_ty, self.output.getExpr(method_call.receiver).ty);
+                for (self.output.sliceExprSpan(method_call.args)) |arg| {
+                    const arg_ty = try self.inferExpr(venv, arg);
+                    try self.unify(arg_ty, self.output.getExpr(arg).ty);
+                }
+                break :blk target_ty;
+            },
+            .type_method_call => |method_call| blk: {
+                for (self.output.sliceExprSpan(method_call.args)) |arg| {
+                    const arg_ty = try self.inferExpr(venv, arg);
+                    try self.unify(arg_ty, self.output.getExpr(arg).ty);
+                }
+                break :blk target_ty;
+            },
             .let_ => |let_expr| blk: {
                 const body_ty = try self.inferExpr(venv, let_expr.body);
                 try self.unify(body_ty, let_expr.bind.ty);
@@ -762,6 +816,27 @@ const Lowerer = struct {
                 break :blk try self.inferExpr(rest_env, let_expr.rest);
             },
             .call => |call| blk: {
+                const previous_call_context = self.current_call_context;
+                if (builtin.mode == .Debug) {
+                    self.current_call_context = .{
+                        .func_expr = @tagName(self.output.getExpr(call.func).data),
+                        .arg_expr = @tagName(self.output.getExpr(call.arg).data),
+                        .func_ty = try self.allocator.dupe(u8, "<pending>"),
+                        .arg_ty = try self.allocator.dupe(u8, "<pending>"),
+                        .target_ty = try self.allocator.dupe(u8, "<pending>"),
+                    };
+                }
+                defer {
+                    if (builtin.mode == .Debug) {
+                        if (self.current_call_context) |ctx| {
+                            self.allocator.free(ctx.func_ty);
+                            self.allocator.free(ctx.arg_ty);
+                            self.allocator.free(ctx.target_ty);
+                        }
+                    }
+                    self.current_call_context = previous_call_context;
+                }
+
                 const func_ty = try self.inferExpr(venv, call.func);
                 const arg_ty = try self.inferExpr(venv, call.arg);
                 const lset_ty = try self.types.freshUnbd();
@@ -770,6 +845,20 @@ const Lowerer = struct {
                     .lset = lset_ty,
                     .ret = target_ty,
                 } });
+                if (builtin.mode == .Debug) {
+                    const func_ty_text = self.debugTypeSummary(func_ty);
+                    defer if (func_ty_text.owned) self.allocator.free(func_ty_text.text);
+                    const arg_ty_text = self.debugTypeSummary(arg_ty);
+                    defer if (arg_ty_text.owned) self.allocator.free(arg_ty_text.text);
+                    const target_ty_text = self.debugTypeSummary(target_ty);
+                    defer if (target_ty_text.owned) self.allocator.free(target_ty_text.text);
+                    self.allocator.free(self.current_call_context.?.func_ty);
+                    self.allocator.free(self.current_call_context.?.arg_ty);
+                    self.allocator.free(self.current_call_context.?.target_ty);
+                    self.current_call_context.?.func_ty = try self.allocator.dupe(u8, func_ty_text.text);
+                    self.current_call_context.?.arg_ty = try self.allocator.dupe(u8, arg_ty_text.text);
+                    self.current_call_context.?.target_ty = try self.allocator.dupe(u8, target_ty_text.text);
+                }
                 try self.unify(func_ty, wanted);
                 break :blk target_ty;
             },
@@ -912,7 +1001,7 @@ const Lowerer = struct {
                 const union_ty = try self.inferExpr(venv, tag_payload.tag_union);
                 const subject_ty = self.output.getExpr(tag_payload.tag_union).ty;
                 try self.unify(union_ty, subject_ty);
-                const subject_root = self.types.unlink(subject_ty);
+                const subject_root = self.types.unlinkErasingNominal(subject_ty);
                 const subject_node = self.types.getNode(subject_root);
                 const payload_ty = switch (subject_node) {
                     .content => |content| switch (content) {
@@ -938,7 +1027,7 @@ const Lowerer = struct {
                 const tuple_ty = try self.inferExpr(venv, tuple_access.tuple);
                 const subject_ty = self.output.getExpr(tuple_access.tuple).ty;
                 try self.unify(tuple_ty, subject_ty);
-                const subject_root = self.types.unlink(subject_ty);
+                const subject_root = self.types.unlinkErasingNominal(subject_ty);
                 const subject_node = self.types.getNode(subject_root);
                 const elems = switch (subject_node) {
                     .content => |content| switch (content) {
@@ -1025,14 +1114,50 @@ const Lowerer = struct {
         switch (left_node) {
             .unbd => return true,
             .for_a => return debugPanic("lambdasolved.compatibility generalized type without instantiation", .{}),
-            .link, .nominal => unreachable,
+            .link => unreachable,
+            .nominal => |left_nominal| switch (right_node) {
+                .unbd => return true,
+                .for_a => return debugPanic("lambdasolved.compatibility generalized type without instantiation", .{}),
+                .link => unreachable,
+                .nominal => |right_nominal| {
+                    if (left_nominal.module_idx != right_nominal.module_idx) return false;
+                    if (left_nominal.ident != right_nominal.ident) return false;
+                    if (left_nominal.is_opaque != right_nominal.is_opaque) return false;
+
+                    const left_args = self.types.sliceTypeVarSpan(left_nominal.args);
+                    const right_args = self.types.sliceTypeVarSpan(right_nominal.args);
+                    if (left_args.len != right_args.len) return false;
+                    for (left_args, 0..) |left_arg, i| {
+                        if (!self.typesCompatibleRec(left_arg, right_args[i], visited)) return false;
+                    }
+
+                    return self.typesCompatibleRec(left_nominal.backing, right_nominal.backing, visited);
+                },
+                .content => |right_content| return self.nominalBackingCompatible(left_nominal.backing, right_content, visited),
+            },
             .content => |left_content| switch (right_node) {
                 .unbd => return true,
                 .for_a => return debugPanic("lambdasolved.compatibility generalized type without instantiation", .{}),
-                .link, .nominal => unreachable,
+                .link => unreachable,
+                .nominal => |right_nominal| return self.nominalBackingCompatible(right_nominal.backing, left_content, visited),
                 .content => |right_content| return self.contentsCompatible(left_content, right_content, visited),
             },
         }
+    }
+
+    fn nominalBackingCompatible(
+        self: *Lowerer,
+        backing_ty: TypeVarId,
+        content: type_mod.Content,
+        visited: *std.ArrayList(TypePair),
+    ) bool {
+        const backing_root = self.types.unlinkErasingNominal(backing_ty);
+        return switch (self.types.getNode(backing_root)) {
+            .content => |backing_content| self.contentsCompatible(backing_content, content, visited),
+            .unbd => true,
+            .for_a => debugPanic("lambdasolved.compatibility generalized type without instantiation", .{}),
+            .link, .nominal => unreachable,
+        };
     }
 
     fn contentsCompatible(self: *Lowerer, left: type_mod.Content, right: type_mod.Content, visited: *std.ArrayList(TypePair)) bool {
@@ -1341,6 +1466,17 @@ const Lowerer = struct {
                 }
             },
             .access => |access| self.debugCountExprSymbol(access.record, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr),
+            .method_call => |method_call| {
+                self.debugCountExprSymbol(method_call.receiver, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+                for (self.output.sliceExprSpan(method_call.args)) |arg| {
+                    self.debugCountExprSymbol(arg, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+                }
+            },
+            .type_method_call => |method_call| {
+                for (self.output.sliceExprSpan(method_call.args)) |arg| {
+                    self.debugCountExprSymbol(arg, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+                }
+            },
             .let_ => |let_expr| {
                 if (let_expr.bind.symbol == symbol) bind_count.* += 1;
                 self.debugCountExprSymbol(let_expr.body, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
@@ -1449,6 +1585,7 @@ const Lowerer = struct {
     fn isPrimitiveBoolType(self: *Lowerer, ty: TypeVarId) std.mem.Allocator.Error!bool {
         const root = self.types.unlink(ty);
         return switch (self.types.getNode(root)) {
+            .nominal => |nominal| try self.isPrimitiveBoolType(nominal.backing),
             .content => |content| switch (content) {
                 .primitive => |prim| prim == .bool,
                 else => false,
@@ -1456,7 +1593,7 @@ const Lowerer = struct {
             .unbd,
             .for_a,
             => false,
-            .link, .nominal => unreachable,
+            .link => unreachable,
         };
     }
 
@@ -1577,6 +1714,17 @@ const Lowerer = struct {
                 } });
             },
             .access => |access| try self.propagateExprErasure(access.record, venv),
+            .method_call => |method_call| {
+                try self.propagateExprErasure(method_call.receiver, venv);
+                for (self.output.sliceExprSpan(method_call.args)) |arg| {
+                    try self.propagateExprErasure(arg, venv);
+                }
+            },
+            .type_method_call => |method_call| {
+                for (self.output.sliceExprSpan(method_call.args)) |arg| {
+                    try self.propagateExprErasure(arg, venv);
+                }
+            },
             .let_ => |*let_expr| {
                 try self.propagateExprErasure(let_expr.body, venv);
                 let_expr.bind.ty = self.output.getExpr(let_expr.body).ty;
@@ -1948,11 +2096,13 @@ const Lowerer = struct {
     fn lambdaSetIsErased(self: *Lowerer, lset_ty: TypeVarId) bool {
         const id = self.types.unlink(lset_ty);
         return switch (self.types.getNode(id)) {
+            .nominal => |nominal| self.lambdaSetIsErased(nominal.backing),
             .content => |content| switch (content) {
                 .primitive => |prim| prim == .erased,
                 else => false,
             },
-            else => false,
+            .unbd, .for_a => false,
+            .link => unreachable,
         };
     }
 
@@ -2140,6 +2290,17 @@ const Lowerer = struct {
             .tag => |tag| for (self.output.sliceExprSpan(tag.args)) |arg| try self.collectExprEdges(arg, edges),
             .record => |fields| for (self.output.sliceFieldExprSpan(fields)) |field| try self.collectExprEdges(field.value, edges),
             .access => |access| try self.collectExprEdges(access.record, edges),
+            .method_call => |method_call| {
+                try self.collectExprEdges(method_call.receiver, edges);
+                for (self.output.sliceExprSpan(method_call.args)) |arg| {
+                    try self.collectExprEdges(arg, edges);
+                }
+            },
+            .type_method_call => |method_call| {
+                for (self.output.sliceExprSpan(method_call.args)) |arg| {
+                    try self.collectExprEdges(arg, edges);
+                }
+            },
             .let_ => |let_expr| {
                 try self.collectExprEdges(let_expr.body, edges);
                 try self.collectExprEdges(let_expr.rest, edges);
@@ -2244,7 +2405,13 @@ const Lowerer = struct {
         return switch (self.types.getNode(id)) {
             .unbd => false,
             .for_a => true,
-            .link, .nominal => unreachable,
+            .link => unreachable,
+            .nominal => |nominal| blk: {
+                for (self.types.sliceTypeVarSpan(nominal.args)) |arg| {
+                    if (try self.isGeneralizedRec(arg, visited)) break :blk true;
+                }
+                break :blk try self.isGeneralizedRec(nominal.backing, visited);
+            },
             .content => |content| switch (content) {
                 .primitive => false,
                 .func => |func| try self.isGeneralizedRec(func.arg, visited) or
@@ -2441,7 +2608,13 @@ const Lowerer = struct {
 
         return switch (self.types.getNode(id)) {
             .unbd, .for_a => false,
-            .link, .nominal => unreachable,
+            .link => unreachable,
+            .nominal => |nominal| blk: {
+                for (self.types.sliceTypeVarSpan(nominal.args)) |arg| {
+                    if (try self.occursRec(needle, arg, visited)) break :blk true;
+                }
+                break :blk try self.occursRec(needle, nominal.backing, visited);
+            },
             .content => |content| switch (content) {
                 .primitive => false,
                 .func => |func| try self.occursRec(needle, func.arg, visited) or
@@ -2500,7 +2673,13 @@ const Lowerer = struct {
                 self.types.setNode(id, .for_a);
             },
             .for_a => {},
-            .link, .nominal => unreachable,
+            .link => unreachable,
+            .nominal => |nominal| {
+                for (self.types.sliceTypeVarSpan(nominal.args)) |arg| {
+                    try self.generalizeRec(venv, arg, visited);
+                }
+                try self.generalizeRec(venv, nominal.backing, visited);
+            },
             .content => |content| switch (content) {
                 .primitive => {},
                 .func => |func| {
@@ -2557,25 +2736,126 @@ const Lowerer = struct {
         }
         try visited.append(self.allocator, .{ .left = l, .right = r });
 
-        const next_node: type_mod.Node = switch (self.types.getNode(l)) {
-            .unbd => self.types.getNode(r),
+        switch (self.types.getNode(l)) {
+            .unbd => {
+                if (self.occurs(l, r)) {
+                    if (builtin.mode == .Debug) {
+                        const left_text = self.debugTypeSummary(l);
+                        defer if (left_text.owned) self.allocator.free(left_text.text);
+                        const right_text = self.debugTypeSummary(r);
+                        defer if (right_text.owned) self.allocator.free(right_text.text);
+                        const current_def_name = if (self.current_def_symbol) |def_symbol| blk: {
+                            const entry = self.input.symbols.get(def_symbol);
+                            break :blk if (entry.name.isNone()) "<none>" else self.input.idents.getText(entry.name);
+                        } else "<none>";
+                        const current_def_raw = if (self.current_def_symbol) |def_symbol| def_symbol.raw() else std.math.maxInt(u32);
+                        std.debug.panic(
+                            "lambdasolved.unify occurs check failed\ndef={s}\ndef_raw={d}\nleft={s}\nright={s}",
+                            .{ current_def_name, current_def_raw, left_text.text, right_text.text },
+                        );
+                    }
+                    return debugPanic("lambdasolved.unify occurs check failed", .{});
+                }
+                self.types.setNode(l, .{ .link = r });
+                return;
+            },
             .for_a => {
                 return debugPanic("lambdasolved.unify generalized type without instantiation", .{});
             },
-            .link, .nominal => unreachable,
-            .content => |left_content| switch (self.types.getNode(r)) {
-                .unbd => type_mod.Node{ .content = left_content },
+            .link => unreachable,
+            .nominal => |left_nominal| switch (self.types.getNode(r)) {
+                .unbd => {
+                    if (self.occurs(r, l)) {
+                        if (builtin.mode == .Debug) {
+                            const left_text = self.debugTypeSummary(l);
+                            defer if (left_text.owned) self.allocator.free(left_text.text);
+                            const right_text = self.debugTypeSummary(r);
+                            defer if (right_text.owned) self.allocator.free(right_text.text);
+                            const current_def_name = if (self.current_def_symbol) |def_symbol| blk: {
+                                const entry = self.input.symbols.get(def_symbol);
+                                break :blk if (entry.name.isNone()) "<none>" else self.input.idents.getText(entry.name);
+                            } else "<none>";
+                            const current_def_raw = if (self.current_def_symbol) |def_symbol| def_symbol.raw() else std.math.maxInt(u32);
+                            std.debug.panic(
+                                "lambdasolved.unify occurs check failed\ndef={s}\ndef_raw={d}\nleft={s}\nright={s}",
+                                .{ current_def_name, current_def_raw, left_text.text, right_text.text },
+                            );
+                        }
+                        return debugPanic("lambdasolved.unify occurs check failed", .{});
+                    }
+                    self.types.setNode(r, .{ .link = l });
+                    return;
+                },
                 .for_a => {
                     return debugPanic("lambdasolved.unify generalized type without instantiation", .{});
                 },
-                .link, .nominal => unreachable,
-                .content => |right_content| try self.unifyContent(left_content, right_content, visited),
-            },
-        };
+                .link => unreachable,
+                .nominal => |right_nominal| {
+                    if (left_nominal.module_idx != right_nominal.module_idx or
+                        left_nominal.ident != right_nominal.ident or
+                        left_nominal.is_opaque != right_nominal.is_opaque)
+                    {
+                        return debugPanic("lambdasolved.unify incompatible nominal types", .{});
+                    }
 
-        const merged = try self.types.fresh(next_node);
-        self.types.setNode(l, .{ .link = merged });
-        self.types.setNode(r, .{ .link = merged });
+                    const left_args = self.types.sliceTypeVarSpan(left_nominal.args);
+                    const right_args = self.types.sliceTypeVarSpan(right_nominal.args);
+                    if (left_args.len != right_args.len) {
+                        return debugPanic("lambdasolved.unify nominal arity mismatch", .{});
+                    }
+
+                    for (left_args, 0..) |left_arg, i| {
+                        try self.unifyRec(left_arg, right_args[i], visited);
+                    }
+                    try self.unifyRec(left_nominal.backing, right_nominal.backing, visited);
+                    self.types.setNode(l, .{ .link = r });
+                    return;
+                },
+                .content => {
+                    try self.unifyRec(left_nominal.backing, r, visited);
+                    return;
+                },
+            },
+            .content => |left_content| switch (self.types.getNode(r)) {
+                .unbd => {
+                    if (self.occurs(r, l)) {
+                        if (builtin.mode == .Debug) {
+                            const left_text = self.debugTypeSummary(l);
+                            defer if (left_text.owned) self.allocator.free(left_text.text);
+                            const right_text = self.debugTypeSummary(r);
+                            defer if (right_text.owned) self.allocator.free(right_text.text);
+                            const current_def_name = if (self.current_def_symbol) |def_symbol| blk: {
+                                const entry = self.input.symbols.get(def_symbol);
+                                break :blk if (entry.name.isNone()) "<none>" else self.input.idents.getText(entry.name);
+                            } else "<none>";
+                            const current_def_raw = if (self.current_def_symbol) |def_symbol| def_symbol.raw() else std.math.maxInt(u32);
+                            std.debug.panic(
+                                "lambdasolved.unify occurs check failed\ndef={s}\ndef_raw={d}\nleft={s}\nright={s}",
+                                .{ current_def_name, current_def_raw, left_text.text, right_text.text },
+                            );
+                        }
+                        return debugPanic("lambdasolved.unify occurs check failed", .{});
+                    }
+                    self.types.setNode(r, .{ .link = l });
+                    return;
+                },
+                .for_a => {
+                    return debugPanic("lambdasolved.unify generalized type without instantiation", .{});
+                },
+                .link => unreachable,
+                .nominal => |right_nominal| {
+                    try self.unifyRec(l, right_nominal.backing, visited);
+                    return;
+                },
+                .content => |right_content| {
+                    const next_node = try self.unifyContent(left, left_content, right, right_content, visited);
+                    const merged = try self.types.fresh(next_node);
+                    self.types.setNode(l, .{ .link = merged });
+                    self.types.setNode(r, .{ .link = merged });
+                    return;
+                },
+            },
+        }
     }
 
     const DebugTypeText = struct {
@@ -2583,63 +2863,64 @@ const Lowerer = struct {
         owned: bool,
     };
 
-    fn debugTypeText(self: *Lowerer, ty: TypeVarId) DebugTypeText {
+    fn debugTypeSummary(self: *Lowerer, ty: TypeVarId) DebugTypeText {
         if (builtin.mode != .Debug) unreachable;
 
         var out = std.ArrayList(u8).empty;
-        self.debugWriteType(&out, ty) catch return .{ .text = "<oom>", .owned = false };
+        self.debugWriteTypeSummary(&out, ty, 2) catch return .{ .text = "<oom>", .owned = false };
         const text = out.toOwnedSlice(self.allocator) catch return .{ .text = "<oom>", .owned = false };
         return .{ .text = text, .owned = true };
     }
 
-    fn debugWriteType(self: *Lowerer, out: *std.ArrayList(u8), ty: TypeVarId) std.mem.Allocator.Error!void {
+    fn debugWriteTypeSummary(self: *Lowerer, out: *std.ArrayList(u8), ty: TypeVarId, depth: u8) std.mem.Allocator.Error!void {
         const id = self.types.unlinkPreservingNominal(ty);
         switch (self.types.getNode(id)) {
             .link => unreachable,
             .unbd => try out.writer(self.allocator).print("?{}", .{@intFromEnum(id)}),
             .for_a => try out.writer(self.allocator).print("forall{}", .{@intFromEnum(id)}),
             .nominal => |nominal| {
-                const name = self.input.idents.getText(nominal.ident);
-                try out.writer(self.allocator).print("{s}", .{name});
+                try out.appendSlice(self.allocator, self.input.idents.getText(nominal.ident));
+                if (depth == 0) return;
                 const args = self.types.sliceTypeVarSpan(nominal.args);
                 if (args.len != 0) {
                     try out.append(self.allocator, '(');
                     for (args, 0..) |arg, i| {
                         if (i != 0) try out.appendSlice(self.allocator, ", ");
-                        try self.debugWriteType(out, arg);
+                        try self.debugWriteTypeSummary(out, arg, depth - 1);
                     }
                     try out.append(self.allocator, ')');
-                }
-                if (!nominal.is_opaque) {
-                    try out.appendSlice(self.allocator, " := ");
-                    try self.debugWriteType(out, nominal.backing);
                 }
             },
             .content => |content| switch (content) {
                 .primitive => |prim| try out.appendSlice(self.allocator, @tagName(prim)),
                 .list => |elem| {
                     try out.appendSlice(self.allocator, "List(");
-                    try self.debugWriteType(out, elem);
+                    if (depth == 0) {
+                        try out.appendSlice(self.allocator, "...");
+                    } else {
+                        try self.debugWriteTypeSummary(out, elem, depth - 1);
+                    }
                     try out.append(self.allocator, ')');
                 },
                 .box => |elem| {
                     try out.appendSlice(self.allocator, "Box(");
-                    try self.debugWriteType(out, elem);
-                    try out.append(self.allocator, ')');
-                },
-                .tuple => |elems| {
-                    try out.append(self.allocator, '(');
-                    for (self.types.sliceTypeVarSpan(elems), 0..) |elem, i| {
-                        if (i != 0) try out.appendSlice(self.allocator, ", ");
-                        try self.debugWriteType(out, elem);
+                    if (depth == 0) {
+                        try out.appendSlice(self.allocator, "...");
+                    } else {
+                        try self.debugWriteTypeSummary(out, elem, depth - 1);
                     }
                     try out.append(self.allocator, ')');
                 },
+                .tuple => |_| try out.appendSlice(self.allocator, "Tuple"),
                 .func => |func| {
-                    try out.append(self.allocator, '(');
-                    try self.debugWriteType(out, func.arg);
-                    try out.appendSlice(self.allocator, " -> ");
-                    try self.debugWriteType(out, func.ret);
+                    try out.appendSlice(self.allocator, "Fn(");
+                    if (depth == 0) {
+                        try out.appendSlice(self.allocator, "...");
+                    } else {
+                        try self.debugWriteTypeSummary(out, func.arg, depth - 1);
+                        try out.appendSlice(self.allocator, " -> ");
+                        try self.debugWriteTypeSummary(out, func.ret, depth - 1);
+                    }
                     try out.append(self.allocator, ')');
                 },
                 .tag_union => |tag_union| {
@@ -2648,59 +2929,70 @@ const Lowerer = struct {
                     for (tags, 0..) |tag, i| {
                         if (i != 0) try out.appendSlice(self.allocator, ", ");
                         try out.appendSlice(self.allocator, self.input.idents.getText(tag.name));
-                        const args = self.types.sliceTypeVarSpan(tag.args);
-                        if (args.len != 0) {
-                            try out.append(self.allocator, '(');
-                            for (args, 0..) |arg, arg_i| {
-                                if (arg_i != 0) try out.appendSlice(self.allocator, ", ");
-                                try self.debugWriteType(out, arg);
-                            }
-                            try out.append(self.allocator, ')');
-                        }
                     }
                     try out.append(self.allocator, ']');
                 },
-                .record => |record| {
-                    const fields = self.types.sliceFields(record.fields);
-                    try out.append(self.allocator, '{');
-                    for (fields, 0..) |field, i| {
-                        if (i != 0) try out.appendSlice(self.allocator, ", ");
-                        try out.appendSlice(self.allocator, self.input.idents.getText(field.name));
-                        try out.appendSlice(self.allocator, ": ");
-                        try self.debugWriteType(out, field.ty);
-                    }
-                    try out.append(self.allocator, '}');
-                },
-                .lambda_set => |lset| {
-                    const lambdas = self.types.sliceLambdas(lset);
-                    try out.appendSlice(self.allocator, "LambdaSet(");
-                    for (lambdas, 0..) |lambda, i| {
-                        if (i != 0) try out.appendSlice(self.allocator, ", ");
-                        const entry = self.input.symbols.get(lambda.symbol);
-                        if (entry.name.isNone()) {
-                            try out.writer(self.allocator).print("#{}", .{lambda.symbol.raw()});
-                        } else {
-                            try out.appendSlice(self.allocator, self.input.idents.getText(entry.name));
-                        }
-                    }
-                    try out.append(self.allocator, ')');
-                },
+                .record => |_| try out.appendSlice(self.allocator, "Record"),
+                .lambda_set => |_| try out.appendSlice(self.allocator, "LambdaSet"),
             },
         }
     }
 
-    fn unifyContent(self: *Lowerer, left: type_mod.Content, right: type_mod.Content, visited: *std.ArrayList(TypePair)) std.mem.Allocator.Error!type_mod.Node {
+    fn unifyContent(
+        self: *Lowerer,
+        left_ty: TypeVarId,
+        left: type_mod.Content,
+        right_ty: TypeVarId,
+        right: type_mod.Content,
+        visited: *std.ArrayList(TypePair),
+    ) std.mem.Allocator.Error!type_mod.Node {
         if (@as(std.meta.Tag(type_mod.Content), left) != @as(std.meta.Tag(type_mod.Content), right)) {
             if (builtin.mode == .Debug) {
-                const left_text = self.debugTypeText(try self.types.fresh(.{ .content = left }));
+                const left_text = self.debugTypeSummary(left_ty);
                 defer if (left_text.owned) self.allocator.free(left_text.text);
-                const right_text = self.debugTypeText(try self.types.fresh(.{ .content = right }));
+                const right_text = self.debugTypeSummary(right_ty);
                 defer if (right_text.owned) self.allocator.free(right_text.text);
+                const current_def_name = current_def_blk: {
+                    if (self.current_def_symbol) |def_symbol| {
+                        const def_entry = self.input.symbols.get(def_symbol);
+                        break :current_def_blk if (def_entry.name.isNone()) "<none>" else self.input.idents.getText(def_entry.name);
+                    }
+                    break :current_def_blk "<none>";
+                };
+                const current_def_raw = if (self.current_def_symbol) |def_symbol| def_symbol.raw() else std.math.maxInt(u32);
+                const current_def_origin = current_def_origin_blk: {
+                    if (self.current_def_symbol) |def_symbol| {
+                        break :current_def_origin_blk @tagName(self.input.symbols.get(def_symbol).origin);
+                    }
+                    break :current_def_origin_blk "<none>";
+                };
+                const current_expr_tag = if (self.current_expr_id) |expr_id|
+                    @tagName(self.output.getExpr(expr_id).data)
+                else
+                    "<none>";
+                const opaque_left = if (self.current_opaque_unify) |ctx| ctx.left else "<none>";
+                const opaque_right = if (self.current_opaque_unify) |ctx| ctx.right else "<none>";
+                const call_func_expr = if (self.current_call_context) |ctx| ctx.func_expr else "<none>";
+                const call_arg_expr = if (self.current_call_context) |ctx| ctx.arg_expr else "<none>";
+                const call_func_ty = if (self.current_call_context) |ctx| ctx.func_ty else "<none>";
+                const call_arg_ty = if (self.current_call_context) |ctx| ctx.arg_ty else "<none>";
+                const call_target_ty = if (self.current_call_context) |ctx| ctx.target_ty else "<none>";
                 std.debug.panic(
-                    "lambdasolved.unify incompatible types {s} vs {s}\nleft={s}\nright={s}",
+                    "lambdasolved.unify incompatible types {s} vs {s}\ndef={s}\ndef_raw={d}\ndef_origin={s}\nexpr={s}\nopaque_left={s}\nopaque_right={s}\ncall_func_expr={s}\ncall_arg_expr={s}\ncall_func_ty={s}\ncall_arg_ty={s}\ncall_target_ty={s}\nleft={s}\nright={s}",
                     .{
                         @tagName(left),
                         @tagName(right),
+                        current_def_name,
+                        current_def_raw,
+                        current_def_origin,
+                        current_expr_tag,
+                        opaque_left,
+                        opaque_right,
+                        call_func_expr,
+                        call_arg_expr,
+                        call_func_ty,
+                        call_arg_ty,
+                        call_target_ty,
                         left_text.text,
                         right_text.text,
                     },
@@ -2880,12 +3172,14 @@ const Lowerer = struct {
     fn unlinkToLambdaSet(self: *Lowerer, ty: TypeVarId) ?TypeVarId {
         const id = self.types.unlink(ty);
         return switch (self.types.getNode(id)) {
+            .nominal => |nominal| self.unlinkToLambdaSet(nominal.backing),
             .content => |content| switch (content) {
                 .func => |func| self.unlinkToLambdaSet(func.lset),
                 .lambda_set => id,
                 else => null,
             },
-            else => null,
+            .unbd, .for_a => null,
+            .link => unreachable,
         };
     }
 

@@ -112,7 +112,7 @@ pub const Store = struct {
 
     pub fn keyId(self: *Store, id: TypeId) std.mem.Allocator.Error!TypeId {
         const root = self.resolveLinks(id);
-        if (!self.isFullyResolved(root)) return root;
+        if (self.containsAbstractLeaf(root)) return root;
         return try self.internTypeId(root);
     }
 
@@ -831,19 +831,35 @@ test "nominal identity preserves generic arguments" {
     try std.testing.expect(!store.equalIds(foo_u8, foo_i64));
 }
 
-test "keyId does not intern unresolved placeholders" {
+test "keyId does not intern abstract leaves" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const arg_ty = try store.addType(.placeholder);
-    const ret_ty = try store.addType(.placeholder);
-    const func_ty = try store.addType(.{ .func = .{
-        .arg = arg_ty,
-        .ret = ret_ty,
-    } });
+    {
+        const arg_ty = try store.addType(.placeholder);
+        const ret_ty = try store.addType(.placeholder);
+        const func_ty = try store.addType(.{ .func = .{
+            .arg = arg_ty,
+            .ret = ret_ty,
+        } });
 
-    try std.testing.expect(try store.keyId(func_ty) == func_ty);
-    try std.testing.expect(store.containsAbstractLeaf(func_ty));
+        try std.testing.expect(try store.keyId(func_ty) == func_ty);
+        try std.testing.expect(store.containsAbstractLeaf(func_ty));
+    }
+
+    {
+        const arg_ty = try store.addType(.unbd);
+        const ret_ty = try store.addType(.unbd);
+        const func_ty = try store.addType(.{ .func = .{
+            .arg = arg_ty,
+            .ret = ret_ty,
+        } });
+
+        try std.testing.expect(try store.keyId(arg_ty) == arg_ty);
+        try std.testing.expect(try store.keyId(ret_ty) == ret_ty);
+        try std.testing.expect(try store.keyId(func_ty) == func_ty);
+        try std.testing.expect(store.containsAbstractLeaf(func_ty));
+    }
 }
 
 fn debugPanic(comptime fmt: []const u8, args: anytype) noreturn {

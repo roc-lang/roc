@@ -400,6 +400,30 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             const field_name = self.module_env.getIdent(field_access.field_name);
             try self.write(field_name);
         },
+        .e_method_call => |method_call| {
+            try self.emitExpr(method_call.receiver);
+            try self.write(".");
+            try self.write(self.module_env.getIdent(method_call.method_name));
+            try self.write("(");
+            const args = self.module_env.store.sliceExpr(method_call.args);
+            for (args, 0..) |arg_idx, i| {
+                if (i != 0) try self.write(", ");
+                try self.emitExpr(arg_idx);
+            }
+            try self.write(")");
+        },
+        .e_type_method_call => |method_call| {
+            try self.writer().print("__type_var_alias_{d}__", .{@intFromEnum(method_call.type_var_alias_stmt)});
+            try self.write(".");
+            try self.write(self.module_env.getIdent(method_call.method_name));
+            try self.write("(");
+            const args = self.module_env.store.sliceExpr(method_call.args);
+            for (args, 0..) |arg_idx, i| {
+                if (i != 0) try self.write(", ");
+                try self.emitExpr(arg_idx);
+            }
+            try self.write(")");
+        },
         .e_runtime_error => {
             try self.write("<runtime_error>");
         },

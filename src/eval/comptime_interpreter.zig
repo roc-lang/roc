@@ -3241,10 +3241,12 @@ pub const Interpreter = struct {
             },
 
             // Numeric parsing operations
+            .num_from_numeral => {
                 // Numeral is { is_negative: Bool, digits_before_pt: List(U8), digits_after_pt: List(U8) }
                 std.debug.assert(args.len == 1); // expects 1 argument: Numeral record
 
                 // Return type info is required - missing it is a compiler bug
+                const result_rt_var = return_rt_var orelse debugUnreachable(roc_ops, "return type required for num_from_numeral", @src());
 
                 // Get the result layout (Try tag union)
                 const result_layout = try self.getRuntimeLayout(result_rt_var);
@@ -5148,6 +5150,25 @@ pub const Interpreter = struct {
                 }
                 return false;
             },
+            .e_method_call => |method_call| {
+                if (self.conditionInvolvesMutableVariable(method_call.receiver)) {
+                    return true;
+                }
+                for (self.env.store.sliceExpr(method_call.args)) |arg| {
+                    if (self.conditionInvolvesMutableVariable(arg)) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            .e_type_method_call => |method_call| {
+                for (self.env.store.sliceExpr(method_call.args)) |arg| {
+                    if (self.conditionInvolvesMutableVariable(arg)) {
+                        return true;
+                    }
+                }
+                return false;
+            },
 
             // Literals and other expressions don't involve mutable variables
             .e_num,
@@ -5985,8 +6006,6 @@ pub const Interpreter = struct {
             return true;
         }
 
-        _ = nom;
-        _ = roc_ops;
         return error.NotImplemented;
     }
 
@@ -8195,7 +8214,6 @@ pub const Interpreter = struct {
 
         // If the CT type is a flex var, add the mapping directly
         if (ct_resolved.desc.content == .flex) {
-            const flex = ct_resolved.desc.content.flex;
             const flex_key = ModuleVarKey{ .module = module, .var_ = ct_resolved.var_ };
 
             // Check if we've already mapped this flex var (cycle detection)
@@ -8705,8 +8723,10 @@ pub const Interpreter = struct {
                         break :blk_name try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(source_name_str));
                     } else null;
 
-                    // Translate constraints if present
+                    // Translate static dispatch constraints if present
                     const rt_flex = if (flex.constraints.len() > 0) blk_flex: {
+                        const ct_constraints = module.types.sliceStaticDispatchConstraints(flex.constraints);
+                        var rt_constraints = try std.ArrayList(types.StaticDispatchConstraint).initCapacity(self.allocator, ct_constraints.len);
                         defer rt_constraints.deinit(self.allocator);
 
                         for (ct_constraints) |ct_constraint| {
@@ -8722,20 +8742,27 @@ pub const Interpreter = struct {
                             });
                         }
 
+                        const rt_constraints_range = try self.runtime_types.appendStaticDispatchConstraints(rt_constraints.items);
                         break :blk_flex types.Flex{
                             .name = rt_name,
                             .constraints = rt_constraints_range,
                         };
                     } else types.Flex{
                         .name = rt_name,
+                        .constraints = types.StaticDispatchConstraint.SafeList.Range.empty(),
                     };
 
                     const content: types.Content = .{ .flex = rt_flex };
                     const fresh_flex = try self.runtime_types.freshFromContent(content);
 
+                    // If the original flex var had a from_numeral constraint, we need to
+                    // track it in the runtime types store's from_numeral_flex_count.
                     // This ensures the count is balanced when unification later decrements it.
                     if (flex.constraints.len() > 0) {
+                        const ct_constraints = module.types.sliceStaticDispatchConstraints(flex.constraints);
                         for (ct_constraints) |ct_constraint| {
+                            if (ct_constraint.origin == .from_numeral) {
+                                self.runtime_types.from_numeral_flex_count += 1;
                                 break;
                             }
                         }
@@ -8765,8 +8792,10 @@ pub const Interpreter = struct {
                     const source_name_str = module.getIdent(rigid.name);
                     const rt_name = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(source_name_str));
 
-                    // Translate constraints if present
+                    // Translate static dispatch constraints if present
                     const rt_rigid = if (rigid.constraints.len() > 0) blk_rigid: {
+                        const ct_constraints = module.types.sliceStaticDispatchConstraints(rigid.constraints);
+                        var rt_constraints = try std.ArrayList(types.StaticDispatchConstraint).initCapacity(self.allocator, ct_constraints.len);
                         defer rt_constraints.deinit(self.allocator);
 
                         for (ct_constraints) |ct_constraint| {
@@ -8782,12 +8811,14 @@ pub const Interpreter = struct {
                             });
                         }
 
+                        const rt_constraints_range = try self.runtime_types.appendStaticDispatchConstraints(rt_constraints.items);
                         break :blk_rigid types.Rigid{
                             .name = rt_name,
                             .constraints = rt_constraints_range,
                         };
                     } else types.Rigid{
                         .name = rt_name,
+                        .constraints = types.StaticDispatchConstraint.SafeList.Range.empty(),
                     };
 
                     const content: types.Content = .{ .rigid = rt_rigid };
@@ -11587,6 +11618,12 @@ pub const Interpreter = struct {
                     .expr_idx = field_access.receiver,
                     .expected_rt_var = null,
                 } });
+            },
+            .e_method_call => {
+                std.debug.panic("eval invariant violated: unresolved method call reached comptime interpreter", .{});
+            },
+            .e_type_method_call => {
+                std.debug.panic("eval invariant violated: unresolved type method call reached comptime interpreter", .{});
             },
 
             // If we reach here, there's a new expression type that hasn't been added.
