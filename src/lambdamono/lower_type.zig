@@ -225,6 +225,9 @@ fn lowerTypeRec(
                 const tags = types.sliceTags(tag_union.tags);
                 const out = try mono_types.allocator.alloc(mono.Tag, tags.len);
                 defer mono_types.allocator.free(out);
+                defer for (out[0..tags.len]) |tag| {
+                    if (tag.args.len > 0) mono_types.allocator.free(tag.args);
+                };
                 for (tags, 0..) |tag, i| {
                     const args = types.sliceTypeVarSpan(tag.args);
                     const lowered_args = try mono_types.allocator.alloc(mono.TypeId, args.len);
@@ -274,6 +277,9 @@ fn lowerLambdaSet(
 
     const out = try mono_types.allocator.alloc(mono.Tag, copied_lambdas.len);
     defer mono_types.allocator.free(out);
+    defer for (out[0..copied_lambdas.len]) |tag| {
+        if (tag.args.len > 0) mono_types.allocator.free(tag.args);
+    };
 
     for (copied_lambdas, 0..) |lambda, i| {
         const captures = try mono_types.allocator.dupe(solved.Type.Capture, types.sliceCaptures(lambda.captures));

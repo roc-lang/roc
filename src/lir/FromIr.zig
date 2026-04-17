@@ -768,6 +768,75 @@ const ProcLowerer = struct {
         return false;
     }
 
+    const LayoutPair = struct {
+        left: layout_mod.Idx,
+        right: layout_mod.Idx,
+    };
+
+    fn layoutsStructurallyEqual(self: *const ProcLowerer, left: layout_mod.Idx, right: layout_mod.Idx) std.mem.Allocator.Error!bool {
+        var seen = std.ArrayList(LayoutPair).empty;
+        defer seen.deinit(self.parent.allocator);
+        return self.layoutsStructurallyEqualRec(left, right, &seen);
+    }
+
+    fn layoutsStructurallyEqualRec(
+        self: *const ProcLowerer,
+        left: layout_mod.Idx,
+        right: layout_mod.Idx,
+        seen: *std.ArrayList(LayoutPair),
+    ) std.mem.Allocator.Error!bool {
+        if (left == right) return true;
+        for (seen.items) |pair| {
+            if (pair.left == left and pair.right == right) return true;
+        }
+        try seen.append(self.parent.allocator, .{ .left = left, .right = right });
+
+        const ls = &self.parent.layouts;
+        const left_val = ls.getLayout(left);
+        const right_val = ls.getLayout(right);
+        if (left_val.tag != right_val.tag) return false;
+
+        return switch (left_val.tag) {
+            .scalar => left_val.eql(right_val),
+            .zst, .box_of_zst, .list_of_zst => true,
+            .box => try self.layoutsStructurallyEqualRec(left_val.data.box, right_val.data.box, seen),
+            .list => try self.layoutsStructurallyEqualRec(left_val.data.list, right_val.data.list, seen),
+            .closure => try self.layoutsStructurallyEqualRec(
+                left_val.data.closure.captures_layout_idx,
+                right_val.data.closure.captures_layout_idx,
+                seen,
+            ),
+            .struct_ => blk: {
+                const left_info = ls.getStructInfo(left_val);
+                const right_info = ls.getStructInfo(right_val);
+                if (left_info.fields.len != right_info.fields.len) break :blk false;
+                for (0..left_info.fields.len) |i| {
+                    const left_field = left_info.fields.get(@intCast(i));
+                    const right_field = right_info.fields.get(@intCast(i));
+                    if (left_field.index != right_field.index) break :blk false;
+                    if (!try self.layoutsStructurallyEqualRec(left_field.layout, right_field.layout, seen)) {
+                        break :blk false;
+                    }
+                }
+                break :blk true;
+            },
+            .tag_union => blk: {
+                const left_info = ls.getTagUnionInfo(left_val);
+                const right_info = ls.getTagUnionInfo(right_val);
+                if (left_info.variants.len != right_info.variants.len) break :blk false;
+                if (left_info.data.discriminant_size != right_info.data.discriminant_size) break :blk false;
+                for (0..left_info.variants.len) |i| {
+                    const left_variant = left_info.variants.get(@intCast(i));
+                    const right_variant = right_info.variants.get(@intCast(i));
+                    if (!try self.layoutsStructurallyEqualRec(left_variant.payload_layout, right_variant.payload_layout, seen)) {
+                        break :blk false;
+                    }
+                }
+                break :blk true;
+            },
+        };
+    }
+
     fn structFieldLayoutRef(
         self: *ProcLowerer,
         ref: ir.Layout.Ref,
@@ -953,6 +1022,10 @@ const ProcLowerer = struct {
             !isListLayout(actual) and
             !isListLayout(target))
         {
+            return try self.addAssignRef(target_local, .fresh, .{ .nominal = .{ .backing_ref = source_local } }, next);
+        }
+
+        if (actual_is_box and target_is_box and try self.layoutsStructurallyEqual(actual_layout, target_layout)) {
             return try self.addAssignRef(target_local, .fresh, .{ .nominal = .{ .backing_ref = source_local } }, next);
         }
 

@@ -8102,6 +8102,9 @@ pub const Lowerer = struct {
             }
         }.lessThan);
         self.assertDistinctSortedLoweredTags(lowered_tags.items);
+        defer for (lowered_tags.items) |tag| {
+            if (tag.args.len > 0) self.ctx.types.allocator.free(tag.args);
+        };
 
         return .{ .tag_union = .{
             .tags = try self.ctx.types.dupeTags(lowered_tags.items),

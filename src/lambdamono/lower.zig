@@ -1151,6 +1151,9 @@ const Lowerer = struct {
                     const tags = self.input.types.sliceTags(tag_union.tags);
                     const out = try self.types.allocator.alloc(type_mod.Tag, tags.len);
                     defer self.types.allocator.free(out);
+                    defer for (out[0..tags.len]) |tag| {
+                        if (tag.args.len > 0) self.types.allocator.free(tag.args);
+                    };
                     for (tags, 0..) |tag, i| {
                         const args = self.input.types.sliceTypeVarSpan(tag.args);
                         const lowered_args = try self.types.allocator.alloc(type_mod.TypeId, args.len);
@@ -1198,6 +1201,9 @@ const Lowerer = struct {
 
         const out = try self.types.allocator.alloc(type_mod.Tag, copied_lambdas.len);
         defer self.types.allocator.free(out);
+        defer for (out[0..copied_lambdas.len]) |tag| {
+            if (tag.args.len > 0) self.types.allocator.free(tag.args);
+        };
 
         for (copied_lambdas, 0..) |lambda, i| {
             const captures = self.input.types.sliceCaptures(lambda.captures);
