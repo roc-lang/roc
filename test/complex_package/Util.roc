@@ -3,34 +3,34 @@
 
 Util :: [].{
 
-    ## Remove leading and trailing whitespace from every string in a list.
-    trim_all : List(Str) -> List(Str)
-    trim_all = |strings|
-        strings.map(Str.trim)
+	## Remove leading and trailing whitespace from every string in a list.
+	trim_all : List(Str) -> List(Str)
+	trim_all = |strings|
+		strings.map(Str.trim)
 
-    ## Wrap a string with a prefix and suffix.
-    surround : Str, Str, Str -> Str
-    surround = |str, prefix, suffix|
-        "${prefix}${str}${suffix}"
+	## Wrap a string with a prefix and suffix.
+	surround : Str, Str, Str -> Str
+	surround = |str, prefix, suffix|
+		"${prefix}${str}${suffix}"
 
-    ## Filter out empty strings from a list.
-    non_empty : List(Str) -> List(Str)
-    non_empty = |strings|
-        strings.keep_if(|s| s != "")
+	## Filter out empty strings from a list.
+	non_empty : List(Str) -> List(Str)
+	non_empty = |strings|
+		strings.keep_if(|s| s != "")
 
-    ## Sum a list of integers.
-    sum : List(I64) -> I64
-    sum = |nums|
-        nums.fold(0, |acc, n| acc + n)
+	## Sum a list of integers.
+	sum : List(I64) -> I64
+	sum = |nums|
+		nums.fold(0, |acc, n| acc + n)
 
-    ## Join strings with a separator.
-    join_with : List(Str), Str -> Str
-    join_with = |strings, sep|
-        match strings {
-            [] => ""
-            [first, .. as rest] =>
-                rest.fold(first, |acc, s| "${acc}${sep}${s}")
-        }
+	## Join strings with a separator.
+	join_with : List(Str), Str -> Str
+	join_with = |strings, sep|
+		match strings {
+			[] => ""
+			[first, .. as rest] =>
+				rest.fold(first, |acc, s| "${acc}${sep}${s}")
+			}
 }
 
 # Tests

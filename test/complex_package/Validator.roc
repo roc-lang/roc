@@ -4,78 +4,81 @@
 import Util
 
 Validator := [
-    NotEmpty(Str),
-    MinLength(Str, U64),
-    MaxLength(Str, U64),
-    MatchesAny(Str, List(Str)),
+	NotEmpty(Str),
+	MinLength(Str, U64),
+	MaxLength(Str, U64),
+	MatchesAny(Str, List(Str)),
 ].{
 
-    ## Validate that a string is not empty (after trimming).
-    not_empty : Str -> Validator
-    not_empty = |field_name| NotEmpty(field_name)
+	## Validate that a string is not empty (after trimming).
+	not_empty : Str -> Validator
+	not_empty = |field_name| NotEmpty(field_name)
 
-    ## Validate that a string has at least n characters.
-    min_length : Str, U64 -> Validator
-    min_length = |field_name, min| MinLength(field_name, min)
+	## Validate that a string has at least n characters.
+	min_length : Str, U64 -> Validator
+	min_length = |field_name, min| MinLength(field_name, min)
 
-    ## Validate that a string has at most n characters.
-    max_length : Str, U64 -> Validator
-    max_length = |field_name, max| MaxLength(field_name, max)
+	## Validate that a string has at most n characters.
+	max_length : Str, U64 -> Validator
+	max_length = |field_name, max| MaxLength(field_name, max)
 
-    ## Validate that a string matches one of the allowed values.
-    matches_any : Str, List(Str) -> Validator
-    matches_any = |field_name, allowed| MatchesAny(field_name, allowed)
+	## Validate that a string matches one of the allowed values.
+	matches_any : Str, List(Str) -> Validator
+	matches_any = |field_name, allowed| MatchesAny(field_name, allowed)
 
-    ## Run a single validator on a value.
-    run : Validator, Str -> Try(Str, Str)
-    run = |validator, val| {
-        # Pre-compute values to avoid calling imported functions inside match branches
-        trimmed_val = Util.trim_all([val])
-        is_trimmed_empty = trimmed_val == [""]
-        val_len = val.to_utf8().len()
+	## Run a single validator on a value.
+	run : Validator, Str -> Try(Str, Str)
+	run = |validator, val| {
+		# Pre-compute values to avoid calling imported functions inside match branches
+		trimmed_val = Util.trim_all([val])
+		is_trimmed_empty = trimmed_val == [""]
+		val_len = val.to_utf8().len()
 
-        match validator {
-            NotEmpty(name) =>
-                if is_trimmed_empty
-                    Err("${name} must not be empty")
-                else
-                    Ok(val)
+		match validator {
+			NotEmpty(name) =>
+				if is_trimmed_empty
+					Err("${name} must not be empty")
+				else
+					Ok(val)
 
-            MinLength(name, min) =>
-                if val_len >= min
-                    Ok(val)
-                else
-                    Err("${name} must be at least ${min.to_str()} characters")
+			MinLength(name, min) =>
+				if val_len >= min
+					Ok(val)
+				else
+					Err("${name} must be at least ${min.to_str()} characters")
 
-            MaxLength(name, max) =>
-                if val_len <= max
-                    Ok(val)
-                else
-                    Err("${name} must be at most ${max.to_str()} characters")
+			MaxLength(name, max) =>
+				if val_len <= max
+					Ok(val)
+				else
+					Err("${name} must be at most ${max.to_str()} characters")
 
-            MatchesAny(name, allowed) =>
-                if allowed.keep_if(|s| s != "").contains(val)
-                    Ok(val)
-                else
-                    Err("${name} must be one of: ${Util.join_with(allowed.keep_if(|s| s != ""), ", ")}")
-        }
-    }
+			MatchesAny(name, allowed) =>
+				if allowed.keep_if(|s| s != "").contains(val)
+					Ok(val)
+				else
+					Err("${name} must be one of: ${Util.join_with(allowed.keep_if(|s| s != ""), ", ")}")
+			}
+	}
 
-    ## Run multiple validators on the same value, collecting all errors.
-    run_all : List(Validator), Str -> Try(Str, List(Str))
-    run_all = |validators, val| {
-        errors =
-            validators.fold([], |acc, validator|
-                match run(validator, val) {
-                    Ok(_) => acc
-                    Err(msg) => acc.append(msg)
-                })
+	## Run multiple validators on the same value, collecting all errors.
+	run_all : List(Validator), Str -> Try(Str, List(Str))
+	run_all = |validators, val| {
+		errors = 
+			validators.fold(
+				[],
+				|acc, validator|
+					match run(validator, val) {
+						Ok(_) => acc
+						Err(msg) => acc.append(msg)
+					},
+			)
 
-        if errors.is_empty()
-            Ok(val)
-        else
-            Err(errors)
-    }
+		if errors.is_empty()
+			Ok(val)
+		else
+			Err(errors)
+	}
 }
 
 # Tests

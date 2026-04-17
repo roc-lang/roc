@@ -1,11 +1,13 @@
-package [
-    Pipeline,
-    Field,
-    Transform,
-    Validator,
-    Util,
-    Taxonomy,
-] {}
+package
+	[
+		Pipeline,
+		Field,
+		Transform,
+		Validator,
+		Util,
+		Taxonomy,
+	]
+	{}
 
 import Pipeline
 import Field
