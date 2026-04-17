@@ -6122,7 +6122,10 @@ pub const Lowerer = struct {
 
         const operand_ty = try self.requireExprType(module_idx, type_scope, binop.lhs);
         switch (self.ctx.types.getTypePreservingNominal(operand_ty)) {
-            .nominal => |_| {
+            .nominal => |nominal| {
+                if (!try self.nominalHasAttachedMethod(nominal, module_idx, self.ctx.typedCirModule(module_idx).commonIdents().is_eq)) {
+                    return null;
+                }
                 const bool_ty = try self.makePrimitiveType(.bool);
                 const eq_expr = try self.lowerMethodCallExpr(
                     module_idx,
@@ -6139,6 +6142,21 @@ pub const Lowerer = struct {
             },
             else => return null,
         }
+    }
+
+    fn nominalHasAttachedMethod(
+        self: *Lowerer,
+        nominal: @FieldType(type_mod.Content, "nominal"),
+        method_module_idx: u32,
+        method_name: base.Ident.Idx,
+    ) std.mem.Allocator.Error!bool {
+        try self.buildAttachedMethodIndex();
+        const method_ident = try self.ctx.copyExecutableIdent(method_module_idx, method_name);
+        return self.attached_method_index.contains(.{
+            .module_idx = nominal.module_idx,
+            .type_ident = nominal.ident,
+            .method_ident = method_ident,
+        });
     }
 
     fn lowerMethodCallExpr(

@@ -400,7 +400,7 @@ fn hasAnySkip(skip: TestCase.Skip) bool {
 
 fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase) !TestOutcome {
     return switch (tc.expected) {
-        .inspect_str => runInspectTest(allocator, tc.name, tc.source_kind, tc.source, tc.imports, tc.expected, tc.skip),
+        .inspect_str => runInspectTest(allocator, tc.source_kind, tc.source, tc.imports, tc.expected, tc.skip),
         .problem => runTestProblem(allocator, tc.source_kind, tc.source, tc.imports),
         .crash => runCrashTest(allocator, tc.source_kind, tc.source, tc.imports, tc.skip, false),
         .problem_and_crash => runCrashTest(allocator, tc.source_kind, tc.source, tc.imports, tc.skip, true),
@@ -409,7 +409,6 @@ fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase) !TestOutcome {
 
 fn runInspectTest(
     allocator: std.mem.Allocator,
-    test_name: []const u8,
     source_kind: helpers.SourceKind,
     src: []const u8,
     imports: []const helpers.ModuleSource,
