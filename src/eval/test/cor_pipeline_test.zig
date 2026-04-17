@@ -200,6 +200,7 @@ const DirectCallCase = struct {
     name: []const u8,
     source_kind: helpers.SourceKind = .module,
     source: []const u8,
+    imports: []const helpers.ModuleSource = &.{},
     expected: []const u8,
     executable_direct_calls: usize,
     lir_direct_calls: usize,
@@ -247,6 +248,93 @@ const annotated_local_binding_source =
     \\        f(41.I64)
     \\    }
 ;
+
+const cross_module_annotated_callback_param_source =
+    \\import Helpers
+    \\
+    \\main = Helpers.apply(|n| n + 1.I64, 41.I64)
+;
+
+const cross_module_annotated_callback_param_imports = [_]helpers.ModuleSource{
+    .{
+        .name = "Helpers",
+        .source =
+        \\module [apply]
+        \\
+        \\apply : (I64 -> I64), I64 -> I64
+        \\apply = |f, x| f(x)
+        ,
+    },
+};
+
+const cross_module_annotated_return_source =
+    \\import Makers
+    \\
+    \\main = Makers.make_adder(1.I64)(41.I64)
+;
+
+const cross_module_annotated_return_imports = [_]helpers.ModuleSource{
+    .{
+        .name = "Makers",
+        .source =
+        \\module [make_adder]
+        \\
+        \\make_adder : I64 -> (I64 -> I64)
+        \\make_adder = |n| |x| x + n
+        ,
+    },
+};
+
+const cross_module_abstract_apply_source =
+    \\import Helpers
+    \\
+    \\main = Helpers.apply(|n| n + 1.I64, 41.I64)
+;
+
+const cross_module_abstract_apply_imports = [_]helpers.ModuleSource{
+    .{
+        .name = "Helpers",
+        .source =
+        \\module [apply]
+        \\
+        \\apply = |f, x| f(x)
+        ,
+    },
+};
+
+const cross_module_nested_bridge_source =
+    \\import Helpers
+    \\
+    \\main = Helpers.bridge(|n| n + 1.I64)(41.I64)
+;
+
+const cross_module_nested_bridge_imports = [_]helpers.ModuleSource{
+    .{
+        .name = "Helpers",
+        .source =
+        \\module [bridge]
+        \\
+        \\bridge = |f| (|x| f(x))
+        ,
+    },
+};
+
+const cross_module_apply_twice_source =
+    \\import Helpers
+    \\
+    \\main = Helpers.twice(|n| n + 1.I64, 40.I64)
+;
+
+const cross_module_apply_twice_imports = [_]helpers.ModuleSource{
+    .{
+        .name = "Helpers",
+        .source =
+        \\module [twice]
+        \\
+        \\twice = |f, x| f(f(x))
+        ,
+    },
+};
 
 const direct_call_cases = [_]DirectCallCase{
     .{
@@ -304,6 +392,46 @@ const direct_call_cases = [_]DirectCallCase{
         .expected = "42",
         .executable_direct_calls = 4,
         .lir_direct_calls = 6,
+    },
+    .{
+        .name = "cross-module annotated callback parameter slot",
+        .source = cross_module_annotated_callback_param_source,
+        .imports = &cross_module_annotated_callback_param_imports,
+        .expected = "42",
+        .executable_direct_calls = 4,
+        .lir_direct_calls = 6,
+    },
+    .{
+        .name = "cross-module annotated function return slot",
+        .source = cross_module_annotated_return_source,
+        .imports = &cross_module_annotated_return_imports,
+        .expected = "42",
+        .executable_direct_calls = 2,
+        .lir_direct_calls = 4,
+    },
+    .{
+        .name = "cross-module abstract higher-order apply",
+        .source = cross_module_abstract_apply_source,
+        .imports = &cross_module_abstract_apply_imports,
+        .expected = "42",
+        .executable_direct_calls = 4,
+        .lir_direct_calls = 6,
+    },
+    .{
+        .name = "cross-module nested higher-order bridge",
+        .source = cross_module_nested_bridge_source,
+        .imports = &cross_module_nested_bridge_imports,
+        .expected = "42",
+        .executable_direct_calls = 4,
+        .lir_direct_calls = 6,
+    },
+    .{
+        .name = "cross-module apply twice",
+        .source = cross_module_apply_twice_source,
+        .imports = &cross_module_apply_twice_imports,
+        .expected = "42",
+        .executable_direct_calls = 6,
+        .lir_direct_calls = 8,
     },
 };
 
@@ -716,82 +844,132 @@ test "cor pipeline - for loop closure early return" {
 
 test "cor pipeline - eval direct-only higher-order call annotated callback parameter slot" {
     const case = direct_call_cases[0];
-    try expectInspectProgramWithArena(case.source_kind, case.source, &.{}, case.expected);
+    try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);
 }
 
 test "cor pipeline - lowering direct-only higher-order call annotated callback parameter slot" {
     const case = direct_call_cases[0];
-    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, &.{}, case.executable_direct_calls, case.lir_direct_calls);
+    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
 }
 
 test "cor pipeline - eval direct-only higher-order call annotated function return slot" {
     const case = direct_call_cases[1];
-    try expectInspectProgramWithArena(case.source_kind, case.source, &.{}, case.expected);
+    try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);
 }
 
 test "cor pipeline - lowering direct-only higher-order call annotated function return slot" {
     const case = direct_call_cases[1];
-    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, &.{}, case.executable_direct_calls, case.lir_direct_calls);
+    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
 }
 
 test "cor pipeline - eval direct-only higher-order call abstract higher-order apply" {
     const case = direct_call_cases[2];
-    try expectInspectProgramWithArena(case.source_kind, case.source, &.{}, case.expected);
+    try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);
 }
 
 test "cor pipeline - lowering direct-only higher-order call abstract higher-order apply" {
     const case = direct_call_cases[2];
-    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, &.{}, case.executable_direct_calls, case.lir_direct_calls);
+    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
 }
 
 test "cor pipeline - eval direct-only higher-order call nested polymorphic helper" {
     const case = direct_call_cases[3];
-    try expectInspectProgramWithArena(case.source_kind, case.source, &.{}, case.expected);
+    try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);
 }
 
 test "cor pipeline - lowering direct-only higher-order call nested polymorphic helper" {
     const case = direct_call_cases[3];
-    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, &.{}, case.executable_direct_calls, case.lir_direct_calls);
+    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
 }
 
 test "cor pipeline - eval direct-only higher-order call apply twice" {
     const case = direct_call_cases[4];
-    try expectInspectProgramWithArena(case.source_kind, case.source, &.{}, case.expected);
+    try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);
 }
 
 test "cor pipeline - lowering direct-only higher-order call apply twice" {
     const case = direct_call_cases[4];
-    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, &.{}, case.executable_direct_calls, case.lir_direct_calls);
+    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
 }
 
 test "cor pipeline - eval direct-only higher-order call annotated local binding" {
     const case = direct_call_cases[5];
-    try expectInspectProgramWithArena(case.source_kind, case.source, &.{}, case.expected);
+    try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);
 }
 
 test "cor pipeline - lowering direct-only higher-order call annotated local binding" {
     const case = direct_call_cases[5];
-    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, &.{}, case.executable_direct_calls, case.lir_direct_calls);
+    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
 }
 
 test "cor pipeline - eval direct-only higher-order call annotated return of concrete lambda" {
     const case = direct_call_cases[6];
-    try expectInspectProgramWithArena(case.source_kind, case.source, &.{}, case.expected);
+    try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);
 }
 
 test "cor pipeline - lowering direct-only higher-order call annotated return of concrete lambda" {
     const case = direct_call_cases[6];
-    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, &.{}, case.executable_direct_calls, case.lir_direct_calls);
+    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
 }
 
 test "cor pipeline - eval direct-only higher-order call passing concrete lambda to annotated callback parameter" {
     const case = direct_call_cases[7];
-    try expectInspectProgramWithArena(case.source_kind, case.source, &.{}, case.expected);
+    try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);
 }
 
 test "cor pipeline - lowering direct-only higher-order call passing concrete lambda to annotated callback parameter" {
     const case = direct_call_cases[7];
-    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, &.{}, case.executable_direct_calls, case.lir_direct_calls);
+    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
+}
+
+test "cor pipeline - eval direct-only higher-order call cross-module annotated callback parameter slot" {
+    const case = direct_call_cases[8];
+    try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);
+}
+
+test "cor pipeline - lowering direct-only higher-order call cross-module annotated callback parameter slot" {
+    const case = direct_call_cases[8];
+    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
+}
+
+test "cor pipeline - eval direct-only higher-order call cross-module annotated function return slot" {
+    const case = direct_call_cases[9];
+    try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);
+}
+
+test "cor pipeline - lowering direct-only higher-order call cross-module annotated function return slot" {
+    const case = direct_call_cases[9];
+    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
+}
+
+test "cor pipeline - eval direct-only higher-order call cross-module abstract higher-order apply" {
+    const case = direct_call_cases[10];
+    try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);
+}
+
+test "cor pipeline - lowering direct-only higher-order call cross-module abstract higher-order apply" {
+    const case = direct_call_cases[10];
+    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
+}
+
+test "cor pipeline - eval direct-only higher-order call cross-module nested higher-order bridge" {
+    const case = direct_call_cases[11];
+    try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);
+}
+
+test "cor pipeline - lowering direct-only higher-order call cross-module nested higher-order bridge" {
+    const case = direct_call_cases[11];
+    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
+}
+
+test "cor pipeline - eval direct-only higher-order call cross-module apply twice" {
+    const case = direct_call_cases[12];
+    try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);
+}
+
+test "cor pipeline - lowering direct-only higher-order call cross-module apply twice" {
+    const case = direct_call_cases[12];
+    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
 }
 
 test "cor pipeline - boxed lambda lowering uses erased indirect-call path" {

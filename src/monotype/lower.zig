@@ -2363,11 +2363,6 @@ pub const Lowerer = struct {
         }
 
         const inferred_fn_ty = try self.instantiateVarType(module_idx, call_scope, cloned_fn_var);
-        const result_ty = try self.instantiateSourceVarType(
-            module_idx,
-            call_scope,
-            self.ctx.typedCirModule(module_idx).exprType(call_expr_idx),
-        );
         try self.finalizeExprTypes(module_idx, call_scope);
         try self.finalizePatternTypes(module_idx, call_scope);
 
@@ -2381,14 +2376,22 @@ pub const Lowerer = struct {
                 ),
             };
         };
+        const call_result_ty = try self.requireExprType(module_idx, call_scope, call_expr_idx);
         const fn_ty = if (self.ctx.types.getType(inferred_fn_ty) == .func)
             inferred_fn_ty
         else
             try self.ctx.types.addType(
-                try self.buildCurriedFuncType(arg_tys, result_ty),
+                try self.buildCurriedFuncType(arg_tys, call_result_ty),
             );
         const applied_result_tys = try self.collectCurriedAppliedResultTypes(fn_ty, applied_arg_count);
         errdefer self.allocator.free(applied_result_tys);
+        const result_ty = switch (self.ctx.types.getType(call_result_ty)) {
+            .placeholder, .unbd => if (applied_result_tys.len != 0)
+                applied_result_tys[applied_result_tys.len - 1]
+            else
+                call_result_ty,
+            else => call_result_ty,
+        };
 
         return .{
             .call_scope = call_scope,
