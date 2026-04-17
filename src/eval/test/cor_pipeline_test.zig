@@ -3,15 +3,18 @@
 const std = @import("std");
 const base = @import("base");
 const can = @import("can");
-const eval = @import("eval");
 const backend = @import("backend");
 const builtins = @import("builtins");
 const collections = @import("collections");
+const monotype = @import("monotype");
+const monotype_lifted = @import("monotype_lifted");
+const lambdasolved = @import("lambdasolved");
+const lambdamono = @import("lambdamono");
+const Interpreter = @import("../interpreter.zig").Interpreter;
+const RuntimeHostEnv = @import("RuntimeHostEnv.zig");
 const helpers = @import("helpers.zig");
 
 const testing = std.testing;
-const Interpreter = eval.Interpreter;
-const RuntimeHostEnv = eval.RuntimeHostEnv;
 const HostLirCodeGen = backend.HostLirCodeGen;
 const ExecutableMemory = backend.ExecutableMemory;
 fn expectInspect(comptime source: []const u8, expected: []const u8) !void {
@@ -35,6 +38,21 @@ fn expectInspectProgram(
     try testing.expectEqualStrings(expected, actual);
 }
 
+fn expectInspectProgramWithArena(
+    source_kind: helpers.SourceKind,
+    source: []const u8,
+    imports: []const helpers.ModuleSource,
+    expected: []const u8,
+) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const arena_allocator = arena.allocator();
+    var compiled = try helpers.compileInspectedProgram(arena_allocator, source_kind, source, imports);
+    const actual = try helpers.lirInterpreterInspectedStr(arena_allocator, &compiled.lowered);
+    try testing.expectEqualStrings(expected, actual);
+}
+
 fn countLowLevelOp(compiled: *const helpers.CompiledInspectedExpr, op: base.LowLevel) usize {
     var count: usize = 0;
     for (compiled.lowered.lir_result.store.cf_stmts.items) |stmt| {
@@ -48,7 +66,18 @@ fn countLowLevelOp(compiled: *const helpers.CompiledInspectedExpr, op: base.LowL
     return count;
 }
 
-fn countIndirectCalls(compiled: *const helpers.CompiledInspectedExpr) usize {
+fn countDirectCalls(compiled: *const helpers.CompiledProgram) usize {
+    var count: usize = 0;
+    for (compiled.lowered.lir_result.store.cf_stmts.items) |stmt| {
+        switch (stmt) {
+            .assign_call => count += 1,
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn countIndirectCalls(compiled: *const helpers.CompiledProgram) usize {
     var count: usize = 0;
     for (compiled.lowered.lir_result.store.cf_stmts.items) |stmt| {
         switch (stmt) {
@@ -58,6 +87,225 @@ fn countIndirectCalls(compiled: *const helpers.CompiledInspectedExpr) usize {
     }
     return count;
 }
+
+const CompiledExecutableProgram = struct {
+    resources: helpers.ParsedResources,
+    executable: lambdamono.Lower.Result,
+
+    pub fn deinit(self: *CompiledExecutableProgram, allocator: std.mem.Allocator) void {
+        self.executable.deinit();
+        helpers.cleanupParseAndCanonical(allocator, self.resources);
+    }
+};
+
+fn compileExecutableProgram(
+    allocator: std.mem.Allocator,
+    source_kind: helpers.SourceKind,
+    source: []const u8,
+    imports: []const helpers.ModuleSource,
+) !CompiledExecutableProgram {
+    var resources = try helpers.parseAndCanonicalizeProgram(allocator, source_kind, source, imports);
+    errdefer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, &resources.typed_cir_modules, 1, null);
+    defer mono_lowerer.deinit();
+    const mono = try mono_lowerer.run(0);
+    const lifted = try monotype_lifted.Lower.run(allocator, mono);
+    const solved = try lambdasolved.Lower.run(allocator, lifted);
+    const executable = try lambdamono.Lower.run(allocator, solved);
+
+    return .{
+        .resources = resources,
+        .executable = executable,
+    };
+}
+
+fn countExecutableDirectCalls(executable: *const lambdamono.Lower.Result) usize {
+    var count: usize = 0;
+    for (executable.store.exprs.items) |expr| {
+        switch (expr.data) {
+            .call => count += 1,
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn countExecutableIndirectCalls(executable: *const lambdamono.Lower.Result) usize {
+    var count: usize = 0;
+    for (executable.store.exprs.items) |expr| {
+        switch (expr.data) {
+            .call_indirect => count += 1,
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn countExecutablePackedFns(executable: *const lambdamono.Lower.Result) usize {
+    var count: usize = 0;
+    for (executable.store.exprs.items) |expr| {
+        switch (expr.data) {
+            .packed_fn => count += 1,
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn countExecutableErasedFnTypes(executable: *const lambdamono.Lower.Result) usize {
+    var count: usize = 0;
+    for (executable.types.types.items) |content| {
+        switch (content) {
+            .erased_fn => count += 1,
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn expectDirectOnlyLoweringProgram(
+    source_kind: helpers.SourceKind,
+    source: []const u8,
+    imports: []const helpers.ModuleSource,
+    expected_executable_direct_calls: usize,
+    expected_lir_direct_calls: usize,
+) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const arena_allocator = arena.allocator();
+    var executable = try compileExecutableProgram(arena_allocator, source_kind, source, imports);
+    defer executable.deinit(arena_allocator);
+
+    const executable_direct = countExecutableDirectCalls(&executable.executable);
+    const executable_indirect = countExecutableIndirectCalls(&executable.executable);
+    const executable_packed = countExecutablePackedFns(&executable.executable);
+    const executable_erased = countExecutableErasedFnTypes(&executable.executable);
+
+    var compiled = try helpers.compileProgram(arena_allocator, source_kind, source, imports);
+    defer compiled.deinit(arena_allocator);
+
+    const lir_direct = countDirectCalls(&compiled);
+    const lir_indirect = countIndirectCalls(&compiled);
+    try testing.expectEqual(expected_executable_direct_calls, executable_direct);
+    try testing.expectEqual(@as(usize, 0), executable_indirect);
+    try testing.expectEqual(@as(usize, 0), executable_packed);
+    try testing.expectEqual(@as(usize, 0), executable_erased);
+    try testing.expectEqual(expected_lir_direct_calls, lir_direct);
+    try testing.expectEqual(@as(usize, 0), lir_indirect);
+}
+
+const DirectCallCase = struct {
+    name: []const u8,
+    source_kind: helpers.SourceKind = .module,
+    source: []const u8,
+    expected: []const u8,
+    executable_direct_calls: usize,
+    lir_direct_calls: usize,
+};
+
+const annotated_callback_param_source =
+    \\apply : (I64 -> I64), I64 -> I64
+    \\apply = |f, x| f(x)
+    \\
+    \\main = apply(|n| n + 1.I64, 41.I64)
+;
+
+const annotated_return_source =
+    \\make_adder : I64 -> (I64 -> I64)
+    \\make_adder = |n| |x| x + n
+    \\
+    \\main = make_adder(1.I64)(41.I64)
+;
+
+const abstract_apply_source =
+    \\main =
+    \\    {
+    \\        apply = |f, x| f(x)
+    \\        apply(|n| n + 1.I64, 41.I64)
+    \\    }
+;
+
+const nested_polymorphic_helper_source =
+    \\main = ((|f| (|x| f(x)))(|n| n + 1.I64))(41.I64)
+;
+
+const apply_twice_source =
+    \\main =
+    \\    {
+    \\        twice = |f, x| f(f(x))
+    \\        twice(|n| n + 1.I64, 40.I64)
+    \\    }
+;
+
+const annotated_local_binding_source =
+    \\main =
+    \\    {
+    \\        f : I64 -> I64
+    \\        f = |x| x + 1.I64
+    \\        f(41.I64)
+    \\    }
+;
+
+const direct_call_cases = [_]DirectCallCase{
+    .{
+        .name = "annotated callback parameter slot",
+        .source = annotated_callback_param_source,
+        .expected = "42",
+        .executable_direct_calls = 4,
+        .lir_direct_calls = 6,
+    },
+    .{
+        .name = "annotated function return slot",
+        .source = annotated_return_source,
+        .expected = "42",
+        .executable_direct_calls = 2,
+        .lir_direct_calls = 4,
+    },
+    .{
+        .name = "abstract higher-order apply",
+        .source = abstract_apply_source,
+        .expected = "42",
+        .executable_direct_calls = 4,
+        .lir_direct_calls = 6,
+    },
+    .{
+        .name = "nested polymorphic helper",
+        .source = nested_polymorphic_helper_source,
+        .expected = "42",
+        .executable_direct_calls = 4,
+        .lir_direct_calls = 6,
+    },
+    .{
+        .name = "apply twice",
+        .source = apply_twice_source,
+        .expected = "42",
+        .executable_direct_calls = 6,
+        .lir_direct_calls = 8,
+    },
+    .{
+        .name = "annotated local binding",
+        .source = annotated_local_binding_source,
+        .expected = "42",
+        .executable_direct_calls = 1,
+        .lir_direct_calls = 2,
+    },
+    .{
+        .name = "annotated return of concrete lambda",
+        .source = annotated_return_source,
+        .expected = "42",
+        .executable_direct_calls = 2,
+        .lir_direct_calls = 4,
+    },
+    .{
+        .name = "passing concrete lambda to annotated callback parameter",
+        .source = annotated_callback_param_source,
+        .expected = "42",
+        .executable_direct_calls = 4,
+        .lir_direct_calls = 6,
+    },
+};
 
 fn countHostedProcSpecs(compiled: *const helpers.CompiledProgram) usize {
     var count: usize = 0;
@@ -134,7 +382,7 @@ fn runModuleWithInterpreter(
     );
     defer interp.deinit();
 
-    try interp.eval(.{ .proc_id = compiled.lowered.main_proc });
+    _ = try interp.eval(.{ .proc_id = compiled.lowered.main_proc });
     return try runtime_env.snapshot(allocator);
 }
 
@@ -247,7 +495,7 @@ test "cor pipeline - generic local attached method specialization on nominal" {
         \\read = |value| value.get()
         \\
         \\main = (read(Counter.Counter(5)), read(Counter.Counter(8)))
-        ,
+    ,
         &.{},
         "(5, 8)",
     );
@@ -269,7 +517,7 @@ test "cor pipeline - generic local attached method specialization on nominal wit
         \\read = |value| value.get()
         \\
         \\main = (read(Counter.Counter(5)), read(Counter.Counter(8)))
-        ,
+    ,
         &.{},
     );
     defer compiled.deinit(allocator);
@@ -290,7 +538,7 @@ test "cor pipeline - generic local attached method specialization on nominal dev
         \\read = |value| value.get()
         \\
         \\main = (read(Counter.Counter(5)), read(Counter.Counter(8)))
-        ,
+    ,
         &.{},
     );
     defer compiled.deinit(testing.allocator);
@@ -313,7 +561,7 @@ test "cor pipeline - generic local attached method specialization on nominal was
         \\read = |value| value.get()
         \\
         \\main = (read(Counter.Counter(5)), read(Counter.Counter(8)))
-        ,
+    ,
         &.{},
     );
     defer compiled.deinit(testing.allocator);
@@ -340,7 +588,7 @@ test "cor pipeline - generic local attached method specialization picks differen
         \\read = |value| value.get()
         \\
         \\main = (read(Box.Box(5)), read(Count.Count(8)))
-        ,
+    ,
         &.{},
         "(5, 108)",
     );
@@ -352,7 +600,7 @@ test "cor pipeline - cross-module attached method specialization on imported nom
         \\import CounterMod
         \\
         \\main = CounterMod.Counter(41).get()
-        ,
+    ,
         &.{.{
             .name = "CounterMod",
             .source =
@@ -374,7 +622,7 @@ test "cor pipeline - cross-module polymorphic attached method specialization fro
         \\import Helpers
         \\
         \\main = (Helpers.read(BoxMod.Box(5)), Helpers.read(CountMod.Count(8)))
-        ,
+    ,
         &.{
             .{
                 .name = "BoxMod",
@@ -413,7 +661,7 @@ test "cor pipeline - record field access remains separate from method calls" {
         \\    getter = record.get
         \\    getter(record.value)
         \\}
-        ,
+    ,
         &.{},
         "42.0",
     );
@@ -466,6 +714,86 @@ test "cor pipeline - for loop closure early return" {
     );
 }
 
+test "cor pipeline - eval direct-only higher-order call annotated callback parameter slot" {
+    const case = direct_call_cases[0];
+    try expectInspectProgramWithArena(case.source_kind, case.source, &.{}, case.expected);
+}
+
+test "cor pipeline - lowering direct-only higher-order call annotated callback parameter slot" {
+    const case = direct_call_cases[0];
+    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, &.{}, case.executable_direct_calls, case.lir_direct_calls);
+}
+
+test "cor pipeline - eval direct-only higher-order call annotated function return slot" {
+    const case = direct_call_cases[1];
+    try expectInspectProgramWithArena(case.source_kind, case.source, &.{}, case.expected);
+}
+
+test "cor pipeline - lowering direct-only higher-order call annotated function return slot" {
+    const case = direct_call_cases[1];
+    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, &.{}, case.executable_direct_calls, case.lir_direct_calls);
+}
+
+test "cor pipeline - eval direct-only higher-order call abstract higher-order apply" {
+    const case = direct_call_cases[2];
+    try expectInspectProgramWithArena(case.source_kind, case.source, &.{}, case.expected);
+}
+
+test "cor pipeline - lowering direct-only higher-order call abstract higher-order apply" {
+    const case = direct_call_cases[2];
+    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, &.{}, case.executable_direct_calls, case.lir_direct_calls);
+}
+
+test "cor pipeline - eval direct-only higher-order call nested polymorphic helper" {
+    const case = direct_call_cases[3];
+    try expectInspectProgramWithArena(case.source_kind, case.source, &.{}, case.expected);
+}
+
+test "cor pipeline - lowering direct-only higher-order call nested polymorphic helper" {
+    const case = direct_call_cases[3];
+    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, &.{}, case.executable_direct_calls, case.lir_direct_calls);
+}
+
+test "cor pipeline - eval direct-only higher-order call apply twice" {
+    const case = direct_call_cases[4];
+    try expectInspectProgramWithArena(case.source_kind, case.source, &.{}, case.expected);
+}
+
+test "cor pipeline - lowering direct-only higher-order call apply twice" {
+    const case = direct_call_cases[4];
+    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, &.{}, case.executable_direct_calls, case.lir_direct_calls);
+}
+
+test "cor pipeline - eval direct-only higher-order call annotated local binding" {
+    const case = direct_call_cases[5];
+    try expectInspectProgramWithArena(case.source_kind, case.source, &.{}, case.expected);
+}
+
+test "cor pipeline - lowering direct-only higher-order call annotated local binding" {
+    const case = direct_call_cases[5];
+    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, &.{}, case.executable_direct_calls, case.lir_direct_calls);
+}
+
+test "cor pipeline - eval direct-only higher-order call annotated return of concrete lambda" {
+    const case = direct_call_cases[6];
+    try expectInspectProgramWithArena(case.source_kind, case.source, &.{}, case.expected);
+}
+
+test "cor pipeline - lowering direct-only higher-order call annotated return of concrete lambda" {
+    const case = direct_call_cases[6];
+    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, &.{}, case.executable_direct_calls, case.lir_direct_calls);
+}
+
+test "cor pipeline - eval direct-only higher-order call passing concrete lambda to annotated callback parameter" {
+    const case = direct_call_cases[7];
+    try expectInspectProgramWithArena(case.source_kind, case.source, &.{}, case.expected);
+}
+
+test "cor pipeline - lowering direct-only higher-order call passing concrete lambda to annotated callback parameter" {
+    const case = direct_call_cases[7];
+    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, &.{}, case.executable_direct_calls, case.lir_direct_calls);
+}
+
 test "cor pipeline - boxed lambda lowering uses erased indirect-call path" {
     var compiled = try helpers.compileInspectedExpr(
         testing.allocator,
@@ -499,7 +827,7 @@ test "cor pipeline - echo hosted proc metadata reaches lir" {
         \\main! = |_args| {
         \\    echo!("Hello from hosted")
         \\}
-        ,
+    ,
         &.{},
     );
     defer compiled.deinit(testing.allocator);
@@ -530,7 +858,7 @@ test "cor pipeline - echo hosted proc call reaches interpreter and dev backend" 
         \\    echo!("Hello from hosted")
         \\    echo!("Again")
         \\}
-        ,
+    ,
         &.{},
     );
     defer compiled.deinit(testing.allocator);
@@ -562,7 +890,7 @@ test "cor pipeline - hosted function can flow as a first-class argument" {
         \\main! = || {
         \\    ["hello"].for_each!(Platform.line!)
         \\}
-        ,
+    ,
         &.{.{
             .name = "Platform",
             .source =
@@ -599,7 +927,7 @@ test "cor pipeline - hosted function survives boxed indirect-call round trip" {
         \\    f("hello")
         \\    f("again")
         \\}
-        ,
+    ,
         &.{.{
             .name = "Platform",
             .source =
@@ -644,7 +972,7 @@ test "cor pipeline - boxed lambda round trip through host boundary" {
         \\    Platform.line!(I64.to_str(f(1)))
         \\    Platform.line!(I64.to_str(f(2)))
         \\}
-        ,
+    ,
         &.{.{
             .name = "Platform",
             .source =
@@ -685,7 +1013,7 @@ test "cor pipeline - zero-arg hosted proc call reaches host abi" {
         \\    Platform.tick!()
         \\    Platform.tick!()
         \\}
-        ,
+    ,
         &.{.{
             .name = "Platform",
             .source =
@@ -722,7 +1050,7 @@ test "cor pipeline - multi-arg hosted proc call preserves argument marshaling" {
         \\main! = || {
         \\    Platform.pair!("left", "right")
         \\}
-        ,
+    ,
         &.{.{
             .name = "Platform",
             .source =

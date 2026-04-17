@@ -923,7 +923,6 @@ const Lowerer = struct {
                     .num_div_trunc_by,
                     .num_rem_by,
                     .num_mod_by,
-                    .num_abs_diff,
                     .num_pow,
                     => {
                         if (args.len != 2) return debugPanic("lambdasolved.low_level binary numeric op expected two args", .{});
@@ -931,6 +930,13 @@ const Lowerer = struct {
                         const rhs_ty = try self.inferExpr(venv, args[1]);
                         try self.unify(lhs_ty, rhs_ty);
                         try self.unify(target_ty, lhs_ty);
+                    },
+                    .num_abs_diff => {
+                        if (args.len != 2) return debugPanic("lambdasolved.low_level binary numeric op expected two args", .{});
+                        const lhs_ty = try self.inferExpr(venv, args[0]);
+                        const rhs_ty = try self.inferExpr(venv, args[1]);
+                        try self.unify(lhs_ty, rhs_ty);
+                        try self.unify(target_ty, try self.absDiffResultType(lhs_ty));
                     },
                     else => {
                         for (args) |arg| {
@@ -1580,6 +1586,26 @@ const Lowerer = struct {
 
     fn freshPrimitiveType(self: *Lowerer, prim: type_mod.Prim) std.mem.Allocator.Error!TypeVarId {
         return try self.types.freshContent(.{ .primitive = prim });
+    }
+
+    fn absDiffResultType(self: *Lowerer, ty: TypeVarId) std.mem.Allocator.Error!TypeVarId {
+        const root = self.types.unlinkPreservingNominal(ty);
+        return switch (self.types.getNode(root)) {
+            .nominal => |nominal| try self.absDiffResultType(nominal.backing),
+            .content => |content| switch (content) {
+                .primitive => |prim| switch (prim) {
+                    .i8 => try self.freshPrimitiveType(.u8),
+                    .i16 => try self.freshPrimitiveType(.u16),
+                    .i32 => try self.freshPrimitiveType(.u32),
+                    .i64 => try self.freshPrimitiveType(.u64),
+                    .i128 => try self.freshPrimitiveType(.u128),
+                    else => ty,
+                },
+                else => ty,
+            },
+            .unbd, .for_a => ty,
+            .link => unreachable,
+        };
     }
 
     fn isPrimitiveBoolType(self: *Lowerer, ty: TypeVarId) std.mem.Allocator.Error!bool {
@@ -3005,10 +3031,54 @@ const Lowerer = struct {
                 if (prim != right.primitive) {
                     if (prim == .dec) break :blk .{ .content = .{ .primitive = right.primitive } };
                     if (right.primitive == .dec) break :blk .{ .content = .{ .primitive = prim } };
-                    std.debug.panic(
-                        "lambdasolved.unify incompatible primitives {s} vs {s}",
-                        .{ @tagName(prim), @tagName(right.primitive) },
-                    );
+                    if (builtin.mode == .Debug) {
+                        const left_text = self.debugTypeSummary(left_ty);
+                        defer if (left_text.owned) self.allocator.free(left_text.text);
+                        const right_text = self.debugTypeSummary(right_ty);
+                        defer if (right_text.owned) self.allocator.free(right_text.text);
+                        const current_def_name = current_def_blk: {
+                            if (self.current_def_symbol) |def_symbol| {
+                                const def_entry = self.input.symbols.get(def_symbol);
+                                break :current_def_blk if (def_entry.name.isNone()) "<none>" else self.input.idents.getText(def_entry.name);
+                            }
+                            break :current_def_blk "<none>";
+                        };
+                        const current_def_raw = if (self.current_def_symbol) |def_symbol| def_symbol.raw() else std.math.maxInt(u32);
+                        const current_def_origin = current_def_origin_blk: {
+                            if (self.current_def_symbol) |def_symbol| {
+                                break :current_def_origin_blk @tagName(self.input.symbols.get(def_symbol).origin);
+                            }
+                            break :current_def_origin_blk "<none>";
+                        };
+                        const current_expr_tag = if (self.current_expr_id) |expr_id|
+                            @tagName(self.output.getExpr(expr_id).data)
+                        else
+                            "<none>";
+                        const current_expr_raw = if (self.current_expr_id) |expr_id|
+                            @intFromEnum(expr_id)
+                        else
+                            std.math.maxInt(u32);
+                        const current_ll_op = if (self.current_expr_id) |expr_id| switch (self.output.getExpr(expr_id).data) {
+                            .low_level => |ll| @tagName(ll.op),
+                            else => "<none>",
+                        } else "<none>";
+                        std.debug.panic(
+                            "lambdasolved.unify incompatible primitives {s} vs {s}\ndef={s}\ndef_raw={d}\ndef_origin={s}\nexpr={s}\nexpr_raw={d}\nll_op={s}\nleft={s}\nright={s}",
+                            .{
+                                @tagName(prim),
+                                @tagName(right.primitive),
+                                current_def_name,
+                                current_def_raw,
+                                current_def_origin,
+                                current_expr_tag,
+                                current_expr_raw,
+                                current_ll_op,
+                                left_text.text,
+                                right_text.text,
+                            },
+                        );
+                    }
+                    unreachable;
                 }
                 break :blk .{ .content = .{ .primitive = prim } };
             },

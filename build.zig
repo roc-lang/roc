@@ -3047,6 +3047,8 @@ pub fn build(b: *std.Build) void {
     });
     configureBackend(cor_pipeline_test, target);
     roc_modules.addModuleDependencies(cor_pipeline_test, .eval);
+    cor_pipeline_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    cor_pipeline_test.root_module.addImport("bytebox", bytebox.module("bytebox"));
     cor_pipeline_test.root_module.addImport("check_test_env", check_test_env_module);
     cor_pipeline_test.step.dependOn(&write_compiled_builtins.step);
 

@@ -1739,9 +1739,6 @@ pub const Lowerer = struct {
         const source_fn_var = source_seed_source_var;
         var source_fn_shape = try typed_cir_module.curriedFnShape(source_fn_var);
         defer source_fn_shape.deinit(self.allocator);
-        const source_result_var = source_fn_shape.ret;
-        const result_ty = try self.instantiateSourceVarType(module_idx, type_scope, source_result_var);
-        const result_var = try self.instantiateSourceVar(type_scope, module_idx, source_result_var);
 
         const lambda = switch (expr) {
             .e_lambda => |lambda| lambda,
@@ -1753,6 +1750,9 @@ pub const Lowerer = struct {
             .e_hosted_lambda => debugPanic("monotype invariant violated: hosted top-level proc escaped into lambda lowering", .{}),
             else => unreachable,
         };
+        const body_result_source_var = typed_cir_module.expr(lambda.body).ty();
+        const result_ty = try self.instantiateSourceVarType(module_idx, type_scope, body_result_source_var);
+        const result_var = try self.instantiateSourceVar(type_scope, module_idx, body_result_source_var);
 
         const arg_patterns = typed_cir_module.slicePatterns(lambda.args);
         const first_arg_source_var = if (source_fn_shape.args.len == 0) null else source_fn_shape.args[0];
@@ -2362,13 +2362,18 @@ pub const Lowerer = struct {
             arg_tys[i] = try self.instantiateSourceVarType(module_idx, call_scope, source_arg_var);
         }
 
-        const fn_ty = try self.instantiateVarType(module_idx, call_scope, cloned_fn_var);
+        const inferred_fn_ty = try self.instantiateVarType(module_idx, call_scope, cloned_fn_var);
+        const result_ty = try self.instantiateSourceVarType(
+            module_idx,
+            call_scope,
+            self.ctx.typedCirModule(module_idx).exprType(call_expr_idx),
+        );
         try self.finalizeExprTypes(module_idx, call_scope);
         try self.finalizePatternTypes(module_idx, call_scope);
 
         const applied_arg_count = blk: {
             if (arg_exprs.len != 0) break :blk arg_exprs.len;
-            break :blk switch (self.ctx.types.getType(fn_ty)) {
+            break :blk switch (self.ctx.types.getType(inferred_fn_ty)) {
                 .func => 1,
                 else => debugPanic(
                     "monotype invariant violated: attempted to lower a call with no args to a non-function in module {d}",
@@ -2376,13 +2381,14 @@ pub const Lowerer = struct {
                 ),
             };
         };
+        const fn_ty = if (self.ctx.types.getType(inferred_fn_ty) == .func)
+            inferred_fn_ty
+        else
+            try self.ctx.types.addType(
+                try self.buildCurriedFuncType(arg_tys, result_ty),
+            );
         const applied_result_tys = try self.collectCurriedAppliedResultTypes(fn_ty, applied_arg_count);
         errdefer self.allocator.free(applied_result_tys);
-        const result_ty = try self.instantiateSourceVarType(
-            module_idx,
-            call_scope,
-            self.ctx.typedCirModule(module_idx).exprType(call_expr_idx),
-        );
 
         return .{
             .call_scope = call_scope,
@@ -3382,8 +3388,9 @@ pub const Lowerer = struct {
                 source_fn_shape.args[0],
             );
         };
-        const result_var = source_fn_shape.ret;
-        const result_ty = try self.instantiateSourceVarType(module_idx, scope, result_var);
+        const body_result_source_var = typed_cir_module.expr(body_expr_idx).ty();
+        const result_var = try self.instantiateSourceVar(scope, module_idx, body_result_source_var);
+        const result_ty = try self.instantiateVarType(module_idx, scope, result_var);
         const first_arg_pattern = if (arg_patterns.len == 0) null else arg_patterns[0];
         const arg = if (first_arg_pattern) |pattern_idx|
             try self.bindLambdaArg(module_idx, scope, pattern_idx, first_arg_ty)
@@ -7912,7 +7919,7 @@ pub const Lowerer = struct {
         if (type_scope.active_type_cache.get(key)) |active| return active;
         if (type_scope.type_cache.get(key)) |cached| return cached;
         if (type_scope.provisional_type_cache.get(key)) |provisional| {
-            if (!self.ctx.types.containsAbstractLeaf(provisional)) {
+            if (!self.ctx.types.containsAbstractLeaf(provisional) and !self.ctx.types.containsFunctionLeaf(provisional)) {
                 const canonical = try self.ctx.types.internTypeId(provisional);
                 _ = type_scope.provisional_type_cache.remove(key);
                 try type_scope.type_cache.put(key, canonical);
@@ -7975,7 +7982,7 @@ pub const Lowerer = struct {
         }
 
         _ = type_scope.active_type_cache.remove(key);
-        if (!self.ctx.types.containsAbstractLeaf(placeholder)) {
+        if (!self.ctx.types.containsAbstractLeaf(placeholder) and !self.ctx.types.containsFunctionLeaf(placeholder)) {
             const canonical = try self.ctx.types.internTypeId(placeholder);
             try type_scope.type_cache.put(key, canonical);
             return canonical;
@@ -9646,13 +9653,13 @@ pub const Lowerer = struct {
     }
 
     fn argTypeKeysEqual(
-        _: *Lowerer,
+        self: *Lowerer,
         left: []const type_mod.TypeId,
         right: []const type_mod.TypeId,
     ) bool {
         if (left.len != right.len) return false;
         for (left, right) |left_ty, right_ty| {
-            if (left_ty != right_ty) return false;
+            if (!self.ctx.types.equalIds(left_ty, right_ty)) return false;
         }
         return true;
     }
@@ -9884,7 +9891,10 @@ pub const Lowerer = struct {
     fn requireFunctionType(self: *Lowerer, fn_ty: type_mod.TypeId) @FieldType(type_mod.Content, "func") {
         return switch (self.ctx.types.getType(fn_ty)) {
             .func => |func| func,
-            else => debugPanic("monotype invariant violated: attempted to use non-function type {d} as function", .{@intFromEnum(fn_ty)}),
+            else => |content| debugPanic(
+                "monotype invariant violated: attempted to use non-function type {d} ({s}) as function",
+                .{ @intFromEnum(fn_ty), @tagName(content) },
+            ),
         };
     }
 

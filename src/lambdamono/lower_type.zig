@@ -114,16 +114,6 @@ pub fn extractLsetFn(
     };
 }
 
-pub fn lowerType(
-    types: *solved.Type.Store,
-    mono_types: *mono.Store,
-    mono_cache: *MonoCache,
-    ty: TypeVarId,
-    symbols: *const symbol_mod.Store,
-) std.mem.Allocator.Error!mono.TypeId {
-    return try lowerTypeRec(types, mono_types, mono_cache, ty, symbols);
-}
-
 pub fn lowerCaptureBindings(
     _: *solved.Type.Store,
     mono_types: *mono.Store,

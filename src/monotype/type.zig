@@ -112,8 +112,14 @@ pub const Store = struct {
 
     pub fn keyId(self: *Store, id: TypeId) std.mem.Allocator.Error!TypeId {
         const root = self.resolveLinks(id);
-        if (self.containsAbstractLeaf(root)) return root;
+        if (self.containsAbstractLeaf(root) or self.containsFunctionLeaf(root)) return root;
         return try self.internTypeId(root);
+    }
+
+    pub fn structuralKeyOwned(self: *Store, id: TypeId) std.mem.Allocator.Error![]const u8 {
+        const root = self.resolveLinks(id);
+        try self.buildCanonicalKey(root);
+        return try self.allocator.dupe(u8, self.scratch_intern_key.items);
     }
 
     /// Convenience for callers creating an already-resolved one-off type.
@@ -124,6 +130,7 @@ pub const Store = struct {
 
     pub fn internTypeId(self: *Store, id: TypeId) std.mem.Allocator.Error!TypeId {
         const root = self.resolveLinks(id);
+        if (self.containsAbstractLeaf(root) or self.containsFunctionLeaf(root)) return root;
         if (self.interned_by_raw.get(root)) |cached| return cached;
 
         var active = std.AutoHashMap(TypeId, TypeId).init(self.allocator);
@@ -200,6 +207,12 @@ pub const Store = struct {
         var visited = std.AutoHashMap(TypeId, void).init(self.allocator);
         defer visited.deinit();
         return self.containsAbstractLeafVisited(id, &visited) catch true;
+    }
+
+    pub fn containsFunctionLeaf(self: *const Store, id: TypeId) bool {
+        var visited = std.AutoHashMap(TypeId, void).init(self.allocator);
+        defer visited.deinit();
+        return self.containsFunctionLeafVisited(id, &visited) catch true;
     }
 
     pub fn isFullyResolved(self: *const Store, id: TypeId) bool {
@@ -387,6 +400,50 @@ pub const Store = struct {
             .record => |record| blk: {
                 for (record.fields) |field| {
                     if (try self.containsAbstractLeafVisited(field.ty, visited)) break :blk true;
+                }
+                break :blk false;
+            },
+        };
+    }
+
+    fn containsFunctionLeafVisited(
+        self: *const Store,
+        id: TypeId,
+        visited: *std.AutoHashMap(TypeId, void),
+    ) std.mem.Allocator.Error!bool {
+        const root = self.resolveLinks(id);
+        if (visited.contains(root)) return false;
+        try visited.put(root, {});
+
+        return switch (self.types.items[@intFromEnum(root)]) {
+            .placeholder, .unbd, .primitive => false,
+            .link => unreachable,
+            .func => true,
+            .nominal => |nominal| {
+                for (nominal.args) |arg| {
+                    if (try self.containsFunctionLeafVisited(arg, visited)) return true;
+                }
+                return try self.containsFunctionLeafVisited(nominal.backing, visited);
+            },
+            .list => |elem| try self.containsFunctionLeafVisited(elem, visited),
+            .box => |elem| try self.containsFunctionLeafVisited(elem, visited),
+            .tuple => |tuple| blk: {
+                for (tuple) |elem| {
+                    if (try self.containsFunctionLeafVisited(elem, visited)) break :blk true;
+                }
+                break :blk false;
+            },
+            .tag_union => |tag_union| blk: {
+                for (tag_union.tags) |tag| {
+                    for (tag.args) |arg| {
+                        if (try self.containsFunctionLeafVisited(arg, visited)) break :blk true;
+                    }
+                }
+                break :blk false;
+            },
+            .record => |record| blk: {
+                for (record.fields) |field| {
+                    if (try self.containsFunctionLeafVisited(field.ty, visited)) break :blk true;
                 }
                 break :blk false;
             },
@@ -860,6 +917,52 @@ test "keyId does not intern abstract leaves" {
         try std.testing.expect(try store.keyId(func_ty) == func_ty);
         try std.testing.expect(store.containsAbstractLeaf(func_ty));
     }
+}
+
+test "keyId does not intern concrete function shapes" {
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const i64_ty = try store.internResolved(.{ .primitive = .i64 });
+    const fn_a = try store.addType(.{ .func = .{
+        .arg = i64_ty,
+        .ret = i64_ty,
+    } });
+    const fn_b = try store.addType(.{ .func = .{
+        .arg = i64_ty,
+        .ret = i64_ty,
+    } });
+
+    try std.testing.expect(store.containsFunctionLeaf(fn_a));
+    try std.testing.expect(store.containsFunctionLeaf(fn_b));
+    try std.testing.expect(try store.keyId(fn_a) == fn_a);
+    try std.testing.expect(try store.keyId(fn_b) == fn_b);
+    try std.testing.expect(fn_a != fn_b);
+}
+
+test "keyId does not intern containers with function leaves" {
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const i64_ty = try store.internResolved(.{ .primitive = .i64 });
+    const fn_ty = try store.addType(.{ .func = .{
+        .arg = i64_ty,
+        .ret = i64_ty,
+    } });
+    const record_a = try store.addType(.{ .record = .{ .fields = try store.dupeFields(&.{.{
+        .name = base.Ident.Idx.NONE,
+        .ty = fn_ty,
+    }}) } });
+    const record_b = try store.addType(.{ .record = .{ .fields = try store.dupeFields(&.{.{
+        .name = base.Ident.Idx.NONE,
+        .ty = fn_ty,
+    }}) } });
+
+    try std.testing.expect(store.containsFunctionLeaf(record_a));
+    try std.testing.expect(store.containsFunctionLeaf(record_b));
+    try std.testing.expect(try store.keyId(record_a) == record_a);
+    try std.testing.expect(try store.keyId(record_b) == record_b);
+    try std.testing.expect(record_a != record_b);
 }
 
 fn debugPanic(comptime fmt: []const u8, args: anytype) noreturn {

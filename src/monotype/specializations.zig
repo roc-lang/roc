@@ -27,6 +27,7 @@ pub const Pending = struct {
     source_symbol: symbol_mod.Symbol,
     source: SourceFn,
     ty: type_mod.TypeId,
+    key_bytes: []const u8,
     expected_var_image: SolvedVarImage,
     specialized_symbol: symbol_mod.Symbol,
     emitted: bool = false,
@@ -35,23 +36,19 @@ pub const Pending = struct {
 pub const Queue = struct {
     allocator: std.mem.Allocator,
     pending: std.ArrayList(Pending),
-    by_key: std.AutoHashMap(Key, usize),
-
-    const Key = struct {
-        source_symbol: symbol_mod.Symbol,
-        ty: type_mod.TypeId,
-    };
+    by_key: std.StringHashMap(usize),
 
     pub fn init(allocator: std.mem.Allocator) Queue {
         return .{
             .allocator = allocator,
             .pending = .empty,
-            .by_key = std.AutoHashMap(Key, usize).init(allocator),
+            .by_key = std.StringHashMap(usize).init(allocator),
         };
     }
 
     pub fn deinit(self: *Queue) void {
         for (self.pending.items) |*item| {
+            self.allocator.free(item.key_bytes);
             item.expected_var_image.deinit(self.allocator);
         }
         self.pending.deinit(self.allocator);
@@ -67,15 +64,14 @@ pub const Queue = struct {
         ty: type_mod.TypeId,
         expected_var_image: SolvedVarImage,
     ) std.mem.Allocator.Error!symbol_mod.Symbol {
-        const key: Key = .{
-            .source_symbol = source_symbol,
-            .ty = ty,
-        };
+        const key = try self.makeKey(mono_types, source_symbol, ty);
+        errdefer self.allocator.free(key);
         if (comptime builtin.mode == .Debug) {
             std.debug.assert(try mono_types.keyId(ty) == ty);
         }
 
         if (self.by_key.get(key)) |idx| {
+            self.allocator.free(key);
             self.pending.items[idx].expected_var_image.deinit(self.allocator);
             self.pending.items[idx].expected_var_image = expected_var_image;
             return self.pending.items[idx].specialized_symbol;
@@ -91,6 +87,7 @@ pub const Queue = struct {
             .source_symbol = source_symbol,
             .source = source,
             .ty = ty,
+            .key_bytes = key,
             .expected_var_image = expected_var_image,
             .specialized_symbol = specialized_symbol,
         });
@@ -107,6 +104,23 @@ pub const Queue = struct {
 
     pub fn get(self: *Queue, idx: usize) *Pending {
         return &self.pending.items[idx];
+    }
+
+    fn makeKey(
+        self: *Queue,
+        mono_types: *type_mod.Store,
+        source_symbol: symbol_mod.Symbol,
+        ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error![]const u8 {
+        const ty_key = try mono_types.structuralKeyOwned(ty);
+        defer mono_types.allocator.free(ty_key);
+
+        const source_raw: u32 = @intFromEnum(source_symbol);
+        const prefix_len = @sizeOf(u32);
+        const key = try self.allocator.alloc(u8, prefix_len + ty_key.len);
+        @memcpy(key[0..prefix_len], std.mem.asBytes(&source_raw));
+        @memcpy(key[prefix_len..], ty_key);
+        return key;
     }
 };
 
