@@ -7127,20 +7127,14 @@ fn generateDocs(
     // If the path contains "platform", we're documenting a platform directly
     const is_documenting_platform = std.mem.indexOf(u8, module_path, "platform") != null;
 
-    // Determine the root package name from the module path
-    // Extract basename without extension (e.g., "app.roc" -> "app")
-    const basename = std.fs.path.basename(module_path);
-    const pkg_name = if (std.mem.endsWith(u8, basename, ".roc"))
-        try ctx.gpa.dupe(u8, basename[0 .. basename.len - 4])
-    else
-        try ctx.gpa.dupe(u8, basename);
-
     // Collect ModuleDocs from all compiled modules
     var module_docs_list = std.ArrayList(DocModel.ModuleDocs).empty;
     defer {
         for (module_docs_list.items) |*mod| mod.deinit(ctx.gpa);
         module_docs_list.deinit(ctx.gpa);
     }
+
+    var is_package = false;
 
     var sched_iter = build_env.schedulers.iterator();
     while (sched_iter.next()) |sched_entry| {
@@ -7152,6 +7146,13 @@ fn generateDocs(
                 // Skip platform main.roc modules when documenting an app
                 // Platform modules are still included when documenting a platform directly
                 if (mod_env.module_kind == .platform and !is_documenting_platform) {
+                    continue;
+                }
+
+                // Skip package definition files — they just declare which modules
+                // are exposed and don't contain docs of their own.
+                if (mod_env.module_kind == .package) {
+                    is_package = true;
                     continue;
                 }
 
@@ -7167,23 +7168,19 @@ fn generateDocs(
         }
     }
 
-    // Extract documentation from the Builtin module.
-    // The Builtin module is special — it's pre-compiled and lives in build_env.builtin_modules.
-    {
-        const builtin_env = build_env.builtin_modules.builtin_module.env;
-
-        const builtin_docs = extract.extractModuleDocs(ctx.gpa, builtin_env, "Builtin") catch |err| blk: {
-            std.debug.print("Warning: failed to extract docs for Builtin module: {}\n", .{err});
-            break :blk null;
-        };
-
-        if (builtin_docs) |b_docs| {
-            module_docs_list.append(ctx.gpa, b_docs) catch {
-                var d = b_docs;
-                d.deinit(ctx.gpa);
-            };
-        }
-    }
+    // Determine the package name for the docs header.
+    // For packages, use the parent directory name (e.g., "my_parser" from "my_parser/main.roc")
+    // since the entry file is just a package definition.
+    // For apps/platforms, use the filename without extension (e.g., "app" from "app.roc").
+    const pkg_name = if (is_package)
+        try ctx.gpa.dupe(u8, std.fs.path.basename(std.fs.path.dirname(module_path) orelse "."))
+    else blk: {
+        const basename = std.fs.path.basename(module_path);
+        break :blk if (std.mem.endsWith(u8, basename, ".roc"))
+            try ctx.gpa.dupe(u8, basename[0 .. basename.len - 4])
+        else
+            try ctx.gpa.dupe(u8, basename);
+    };
 
     const modules_slice = module_docs_list.toOwnedSlice(ctx.gpa) catch return;
 
@@ -7192,6 +7189,9 @@ fn generateDocs(
         .modules = modules_slice,
     };
     defer package_docs.deinit(ctx.gpa);
+
+    // Remove existing output directory to ensure a clean build
+    try std.fs.cwd().deleteTree(base_output_dir);
 
     // Create output directory
     std.fs.cwd().makePath(base_output_dir) catch |err| switch (err) {
