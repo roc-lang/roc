@@ -14,16 +14,6 @@ Field := {
     validators : List(Validator.Validator),
 }.{
 
-    ## Create a new field with a name and value.
-    new : Str, Str -> Field
-    new = |name, value|
-        {
-            name: name,
-            value: value,
-            is_required: Bool.False,
-            validators: [],
-        }
-
     ## Mark a field as required and add a not-empty validator.
     required : Field -> Field
     required = |field|
@@ -66,23 +56,23 @@ Field := {
 # Tests
 
 expect {
-    f = Field.new("email", "test@example.com").required()
+    f = Field.required({ name: "email", value: "test@example.com", is_required: Bool.False, validators: [] })
     Field.validate(f) == Ok("test@example.com")
 }
 
 expect {
-    f = Field.new("email", "  ").required()
+    f = Field.required({ name: "email", value: "  ", is_required: Bool.False, validators: [] })
     Field.validate(f) == Err("email must not be empty")
 }
 
 expect {
-    f = Field.new("note", "")
+    f = { name: "note", value: "", is_required: Bool.False, validators: [] }
     Field.validate(f) == Ok("")
 }
 
 expect {
-    f1 = Field.new("name", "Alice").required()
-    f2 = Field.new("email", "").required()
+    f1 = Field.required({ name: "name", value: "Alice", is_required: Bool.False, validators: [] })
+    f2 = Field.required({ name: "email", value: "", is_required: Bool.False, validators: [] })
     r1 = Field.validate(f1)
     r2 = Field.validate(f2)
     r1 == Ok("Alice") and r2 == Err("email must not be empty")

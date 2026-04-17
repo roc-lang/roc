@@ -12,10 +12,6 @@ Taxonomy :: [].{
                             name : Str,
                             common_name : Str,
                         }.{
-                            new : Str, Str -> Species
-                            new = |name, common_name|
-                                { name, common_name }
-
                             display : Species -> Str
                             display = |species|
                                 "${species.name} (${species.common_name})"
@@ -30,18 +26,18 @@ Taxonomy :: [].{
 }
 
 expect {
-    wolf = Taxonomy.Domain.Kingdom.Phylum.Class.Order.Species.new("Canis lupus", "Gray Wolf")
+    wolf = { name: "Canis lupus", common_name: "Gray Wolf" }
     Taxonomy.Domain.Kingdom.Phylum.Class.Order.Species.display(wolf) == "Canis lupus (Gray Wolf)"
 }
 
 expect {
-    a = Taxonomy.Domain.Kingdom.Phylum.Class.Order.Species.new("Canis lupus", "Gray Wolf")
-    b = Taxonomy.Domain.Kingdom.Phylum.Class.Order.Species.new("Canis lupus", "Gray Wolf")
+    a = { name: "Canis lupus", common_name: "Gray Wolf" }
+    b = { name: "Canis lupus", common_name: "Gray Wolf" }
     a == b
 }
 
 expect {
-    a = Taxonomy.Domain.Kingdom.Phylum.Class.Order.Species.new("Canis lupus", "Gray Wolf")
-    b = Taxonomy.Domain.Kingdom.Phylum.Class.Order.Species.new("Felis catus", "Domestic Cat")
+    a = { name: "Canis lupus", common_name: "Gray Wolf" }
+    b = { name: "Felis catus", common_name: "Domestic Cat" }
     a != b
 }

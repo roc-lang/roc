@@ -16,14 +16,6 @@ Pipeline := {
     transforms : List(Transform.Transform),
 }.{
 
-    ## Create an empty pipeline.
-    new : {} -> Pipeline
-    new = |{}|
-        {
-            fields: [],
-            transforms: [],
-        }
-
     ## Add a field to the pipeline.
     add_field : Pipeline, Field.Field -> Pipeline
     add_field = |pipeline, f|
