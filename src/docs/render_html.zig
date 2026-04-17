@@ -228,7 +228,7 @@ fn writeModulePageToDir(ctx: *const RenderContext, gpa: Allocator, dir: std.fs.D
         if (entry_tree.collapsed_entry) |entry| entry.doc_comment else null;
     if (doc_comment) |doc| {
         try w.writeAll("        <div class=\"module-doc\">\n");
-        try renderDocComment(w, doc);
+        try renderDocComment(w, ctx, doc);
         try w.writeAll("        </div>\n");
     }
 
@@ -571,7 +571,7 @@ fn renderEntryTree(
             if (entry.doc_comment) |doc| {
                 try writeIndent(w, base + 1);
                 try w.writeAll("<div class=\"entry-doc\">\n");
-                try renderDocComment(w, doc);
+                try renderDocComment(w, ctx, doc);
                 try writeIndent(w, base + 1);
                 try w.writeAll("</div>\n");
             }
@@ -904,19 +904,19 @@ fn renderEntrySignature(w: Writer, ctx: *const RenderContext, entry: *const DocM
     }
 }
 
-fn renderDocComment(w: Writer, doc: []const u8) !void {
+fn renderDocComment(w: Writer, ctx: *const RenderContext, doc: []const u8) !void {
     var pos: usize = 0;
 
     while (true) {
         const fence_pos = findCodeFence(doc, pos) orelse {
             // No more code fences; render the rest as paragraphs
-            try renderParagraphs(w, doc[pos..]);
+            try renderParagraphs(w, ctx, doc[pos..]);
             break;
         };
 
         // Render text before the code fence as paragraphs
         if (fence_pos > pos) {
-            try renderParagraphs(w, doc[pos..fence_pos]);
+            try renderParagraphs(w, ctx, doc[pos..fence_pos]);
         }
 
         // Skip past the opening fence line (```roc, ```, etc.)
@@ -976,7 +976,7 @@ fn skipLine(doc: []const u8, pos: usize) usize {
 }
 
 /// Splits `text` on blank lines and emits each non-empty paragraph as a `<p>` element.
-fn renderParagraphs(w: Writer, text: []const u8) !void {
+fn renderParagraphs(w: Writer, ctx: *const RenderContext, text: []const u8) !void {
     var start: usize = 0;
     var i: usize = 0;
     while (i < text.len) {
@@ -985,7 +985,7 @@ fn renderParagraphs(w: Writer, text: []const u8) !void {
             const para = std.mem.trim(u8, text[start..i], " \t\n\r");
             if (para.len > 0) {
                 try w.writeAll("                <p>");
-                try writeDocText(w, para);
+                try writeDocText(w, ctx, para);
                 try w.writeAll("</p>\n");
             }
             // Skip past all consecutive blank lines
@@ -1001,13 +1001,16 @@ fn renderParagraphs(w: Writer, text: []const u8) !void {
     const para = std.mem.trim(u8, text[start..], " \t\n\r");
     if (para.len > 0) {
         try w.writeAll("                <p>");
-        try writeDocText(w, para);
+        try writeDocText(w, ctx, para);
         try w.writeAll("</p>\n");
     }
 }
 
-/// Writes HTML-escaped text, rendering `inline code` spans as <code> elements.
-fn writeDocText(w: Writer, text: []const u8) !void {
+/// Writes HTML-escaped text, rendering `inline code` spans as <code> elements,
+/// [label](url) markdown links as <a href> elements, and [ref] shorthand links
+/// to other doc entries (e.g. [Str], [Str.reserve]) as same-page or cross-module
+/// anchors.
+fn writeDocText(w: Writer, ctx: *const RenderContext, text: []const u8) !void {
     var i: usize = 0;
     var plain_start: usize = 0;
     while (i < text.len) {
@@ -1029,12 +1032,155 @@ fn writeDocText(w: Writer, text: []const u8) !void {
                 try writeHtmlEscaped(w, text[code_start - 1 .. i]);
             }
             plain_start = i;
+        } else if (text[i] == '[') {
+            if (parseMarkdownLink(text, i)) |link| {
+                try writeHtmlEscaped(w, text[plain_start..i]);
+                try w.writeAll("<a href=\"");
+                try writeHtmlEscaped(w, link.url);
+                try w.writeAll("\">");
+                // Recurse so inline code inside the label still renders
+                try writeDocText(w, ctx, link.label);
+                try w.writeAll("</a>");
+                i = link.end;
+                plain_start = i;
+            } else if (parseDocRef(text, i)) |ref| {
+                try writeHtmlEscaped(w, text[plain_start..i]);
+                try w.writeAll("<a href=\"");
+                try writeDocRefHref(w, ctx, ref.label);
+                try w.writeAll("\">");
+                try writeHtmlEscaped(w, ref.label);
+                try w.writeAll("</a>");
+                i = ref.end;
+                plain_start = i;
+            } else {
+                i += 1;
+            }
         } else {
             i += 1;
         }
     }
     // Flush any remaining plain text
     try writeHtmlEscaped(w, text[plain_start..]);
+}
+
+const MarkdownLink = struct {
+    label: []const u8,
+    url: []const u8,
+    end: usize,
+};
+
+/// Parses a `[label](url)` markdown link starting at `start`, which must point
+/// to `[`. Returns null if the pattern doesn't match — in that case the caller
+/// should treat the `[` as literal text.
+fn parseMarkdownLink(text: []const u8, start: usize) ?MarkdownLink {
+    std.debug.assert(text[start] == '[');
+    var j = start + 1;
+    while (j < text.len and text[j] != ']') {
+        if (text[j] == '\n') return null;
+        j += 1;
+    }
+    if (j >= text.len) return null;
+    const label_end = j;
+    if (label_end + 1 >= text.len or text[label_end + 1] != '(') return null;
+    var k = label_end + 2;
+    while (k < text.len and text[k] != ')') {
+        if (text[k] == '\n') return null;
+        k += 1;
+    }
+    if (k >= text.len) return null;
+    return .{
+        .label = text[start + 1 .. label_end],
+        .url = text[label_end + 2 .. k],
+        .end = k + 1,
+    };
+}
+
+const DocRef = struct {
+    label: []const u8,
+    end: usize,
+};
+
+/// Parses a shorthand `[Name]` or `[Name.member]` reference to another doc
+/// entry. The label must be a (possibly dotted) identifier, and the closing
+/// bracket must NOT be followed by `(` — that case is handled by
+/// `parseMarkdownLink`. Returns null otherwise.
+fn parseDocRef(text: []const u8, start: usize) ?DocRef {
+    std.debug.assert(text[start] == '[');
+    const label_start = start + 1;
+    if (label_start >= text.len) return null;
+    if (!isIdentStart(text[label_start])) return null;
+    var j = label_start + 1;
+    while (j < text.len and text[j] != ']') {
+        const c = text[j];
+        if (c == '.') {
+            // A dot must be followed by an identifier start char
+            if (j + 1 >= text.len or !isIdentStart(text[j + 1])) return null;
+        } else if (!isIdentCont(c)) {
+            return null;
+        }
+        j += 1;
+    }
+    if (j >= text.len) return null;
+    // Reject if followed by '(' — that's a markdown link, handled elsewhere.
+    if (j + 1 < text.len and text[j + 1] == '(') return null;
+    return .{
+        .label = text[label_start..j],
+        .end = j + 1,
+    };
+}
+
+fn isIdentStart(c: u8) bool {
+    return (c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z') or c == '_';
+}
+
+fn isIdentCont(c: u8) bool {
+    return isIdentStart(c) or (c >= '0' and c <= '9');
+}
+
+/// Writes the href for a shorthand doc reference like `Str` or `Str.reserve`.
+/// If the label's first segment names a known module, the link points at that
+/// module's page; otherwise it falls back to an anchor on the current page.
+fn writeDocRefHref(w: Writer, ctx: *const RenderContext, label: []const u8) !void {
+    const first_dot = std.mem.indexOfScalar(u8, label, '.');
+    const head = if (first_dot) |d| label[0..d] else label;
+
+    if (ctx.known_modules.contains(head)) {
+        const is_same_module = if (ctx.current_module) |cur|
+            std.mem.eql(u8, head, cur)
+        else
+            false;
+
+        if (is_same_module) {
+            // Same-page anchor. Entry ids are prefixed with the module name.
+            try w.writeAll("#");
+            try writeHtmlEscaped(w, head);
+            if (first_dot) |d| {
+                try writeHtmlEscaped(w, label[d..]);
+            }
+            return;
+        }
+
+        // Cross-module link.
+        if (ctx.current_module) |_| {
+            try w.writeAll("../");
+        }
+        try writeHtmlEscaped(w, head);
+        try w.writeAll("/");
+        if (first_dot != null) {
+            try w.writeAll("#");
+            try writeHtmlEscaped(w, label);
+        }
+        return;
+    }
+
+    // Not a known module — treat as a reference relative to the current
+    // module. Entry ids are `<module>.<label>`.
+    try w.writeAll("#");
+    if (ctx.current_module) |cur| {
+        try writeHtmlEscaped(w, cur);
+        try w.writeAll(".");
+    }
+    try writeHtmlEscaped(w, label);
 }
 
 fn renderDocTypeHtml(w: Writer, ctx: *const RenderContext, doc_type: *const DocType, needs_parens: bool) !void {
