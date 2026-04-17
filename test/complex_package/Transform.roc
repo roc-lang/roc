@@ -9,19 +9,6 @@ Transform := [
 	Wrap(Str, Str),
 	Prefix(Str),
 ].{
-
-	## Create a transform that converts to uppercase.
-	uppercase : {} -> Transform
-	uppercase = |{}| Uppercase
-
-	## Create a transform that wraps the string with a prefix and suffix.
-	wrap : Str, Str -> Transform
-	wrap = |prefix_str, suffix_str| Wrap(prefix_str, suffix_str)
-
-	## Create a transform that adds a prefix.
-	prefix : Str -> Transform
-	prefix = |p| Prefix(p)
-
 	## Apply a transform to a value.
 	apply : Transform, Str -> Str
 	apply = |transform, val|
@@ -45,16 +32,16 @@ Transform := [
 
 # Tests
 
-expect Transform.apply(Transform.uppercase({}), "hello") == "HELLO"
-expect Transform.apply(Transform.uppercase({}), "Hello World") == "HELLO WORLD"
+expect Transform.apply(Uppercase, "hello") == "HELLO"
+expect Transform.apply(Uppercase, "Hello World") == "HELLO WORLD"
 
-expect Transform.apply(Transform.wrap("[", "]"), "item") == "[item]"
-expect Transform.apply(Transform.wrap("<b>", "</b>"), "bold") == "<b>bold</b>"
+expect Transform.apply(Wrap("[", "]"), "item") == "[item]"
+expect Transform.apply(Wrap("<b>", "</b>"), "bold") == "<b>bold</b>"
 
-expect Transform.apply(Transform.prefix(">> "), "line") == ">> line"
+expect Transform.apply(Prefix(">> "), "line") == ">> line"
 
 expect {
-	transforms = [Transform.prefix("hello "), Transform.uppercase({}), Transform.wrap("<", ">")]
+	transforms = [Prefix("hello "), Uppercase, Wrap("<", ">")]
 	Transform.apply_all(transforms, "world") == "<HELLO WORLD>"
 }
 
