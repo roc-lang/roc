@@ -10204,13 +10204,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             self.codegen.freeGeneral(cond_reg);
 
-            // Jump over abort call if condition is true (non-zero)
+            // Jump over the failure-report call if the condition is true (non-zero).
             const skip_patch = try self.codegen.emitCondJump(condNotEqual());
 
-            // Condition was false: call roc_crashed via RocOps, then trap.
-            // This path must be terminal even if roc_crashed were to return.
-            try self.emitRocCrash("expect failed");
-            try self.emitTrap();
+            // Condition was false: report via roc_expect_failed and fall through.
+            try self.emitRocExpectFailed("expect failed");
 
             // Patch the skip jump to land here
             self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
@@ -10219,14 +10217,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return try self.generateExpr(expect_expr.body);
         }
 
-        /// Emit a roc_crashed call via RocOps with a static message.
-        /// Used for runtime_error expressions (dead code paths that should
-        /// never execute, e.g. the Err branch of `?` at the top level).
-        ///
-        /// The message bytes are stored on the stack so that this works in both
-        /// native execution and object file modes (compile-time pointers are
-        /// invalid in the final executable).
-        fn emitRocCrash(self: *Self, msg: []const u8) Allocator.Error!void {
+        /// Emit a call to a RocOps (RocCrashed and RocExpectFailed share this layout). `fn_offset` is the byte offset
+        /// of the function pointer inside the RocOps struct.
+        fn emitRocOpsMsgCall(self: *Self, msg: []const u8, fn_offset: i32) Allocator.Error!void {
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
             // Allocate stack space for the message bytes
@@ -10278,10 +10271,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emit.movMemReg(.w64, base_reg, crashed_slot + 8, tmp);
                 }
 
-                // Load roc_crashed fn pointer from RocOps offset 48
-                // Use a register that won't conflict with CallBuilder's SCRATCH_REG
+                // Load fn pointer from RocOps struct according to the fn_offset
                 const fn_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
-                try self.emitLoad(.w64, fn_ptr_reg, roc_ops_reg, 48);
+                try self.emitLoad(.w64, fn_ptr_reg, roc_ops_reg, fn_offset);
 
                 // Use CallBuilder for args and call
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -10291,6 +10283,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 self.codegen.freeGeneral(tmp);
             }
+        }
+
+        /// Emit a roc_crashed call via RocOps with a static message.
+        /// Used for runtime_error expressions (dead code paths that should
+        /// never execute, e.g. the Err branch of `?` at the top level).
+        ///
+        /// The message bytes are stored on the stack so that this works in both
+        /// native execution and object file modes (compile-time pointers are
+        /// invalid in the final executable).
+        fn emitRocCrash(self: *Self, msg: []const u8) Allocator.Error!void {
+            try self.emitRocOpsMsgCall(msg, 48);
+        }
+
+        /// Emit a roc_expect_failed call via RocOps with a static message.
+        fn emitRocExpectFailed(self: *Self, msg: []const u8) Allocator.Error!void {
+            try self.emitRocOpsMsgCall(msg, 40);
         }
 
         /// Emit a hardware trap instruction (ud2 on x86_64, brk on aarch64).

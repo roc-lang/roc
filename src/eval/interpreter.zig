@@ -5596,9 +5596,6 @@ pub const Interpreter = struct {
             .len = source_bytes.len,
         };
         roc_ops.roc_expect_failed(&expect_args, roc_ops.env);
-
-        // Also pass raw source bytes to crash - host handles formatting
-        roc_ops.crash(source_bytes);
     }
 
     /// Handle completion of a for loop/expression.
@@ -19807,7 +19804,6 @@ pub const Interpreter = struct {
                 const is_true = self.boolValueEquals(true, cond_val, roc_ops);
                 if (!is_true) {
                     self.handleExpectFailure(ec.body_expr, roc_ops);
-                    return error.Crash;
                 }
                 // Continue with remaining statements
                 if (ec.remaining_stmts.len == 0) {
