@@ -196,6 +196,36 @@ fn expectDirectOnlyLoweringProgram(
     try testing.expectEqual(@as(usize, 0), lir_indirect);
 }
 
+fn expectErasedLoweringProgram(
+    source_kind: helpers.SourceKind,
+    source: []const u8,
+    imports: []const helpers.ModuleSource,
+    expected_executable_indirect_calls: usize,
+    expected_executable_packed_fns: usize,
+    expected_executable_erased_fn_types: usize,
+    expected_lir_indirect_calls: usize,
+) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const arena_allocator = arena.allocator();
+    var executable = try compileExecutableProgram(arena_allocator, source_kind, source, imports);
+    defer executable.deinit(arena_allocator);
+
+    const executable_indirect = countExecutableIndirectCalls(&executable.executable);
+    const executable_packed = countExecutablePackedFns(&executable.executable);
+    const executable_erased = countExecutableErasedFnTypes(&executable.executable);
+
+    var compiled = try helpers.compileProgram(arena_allocator, source_kind, source, imports);
+    defer compiled.deinit(arena_allocator);
+
+    const lir_indirect = countIndirectCalls(&compiled);
+    try testing.expectEqual(expected_executable_indirect_calls, executable_indirect);
+    try testing.expectEqual(expected_executable_packed_fns, executable_packed);
+    try testing.expectEqual(expected_executable_erased_fn_types, executable_erased);
+    try testing.expectEqual(expected_lir_indirect_calls, lir_indirect);
+}
+
 const DirectCallCase = struct {
     name: []const u8,
     source_kind: helpers.SourceKind = .module,
@@ -246,6 +276,57 @@ const annotated_local_binding_source =
     \\        f : I64 -> I64
     \\        f = |x| x + 1.I64
     \\        f(41.I64)
+    \\    }
+;
+
+const captured_callback_param_source =
+    \\main =
+    \\    {
+    \\        apply = |f, x| f(x)
+    \\        y = 10.I64
+    \\        apply(|x| x + y, 32.I64)
+    \\    }
+;
+
+const cross_module_captured_callback_param_source =
+    \\import Helpers
+    \\
+    \\main =
+    \\    {
+    \\        y = 10.I64
+    \\        Helpers.apply(|x| x + y, 32.I64)
+    \\    }
+;
+
+const cross_module_captured_callback_param_imports = [_]helpers.ModuleSource{
+    .{
+        .name = "Helpers",
+        .source =
+        \\module [apply]
+        \\
+        \\apply = |f, x| f(x)
+        ,
+    },
+};
+
+const two_callback_params_source =
+    \\main =
+    \\    {
+    \\        combine = |f, g, x| f(x) + g(x)
+    \\        a = 10.I64
+    \\        b = 20.I64
+    \\        combine(|x| x + a, |x| x + b, 6.I64)
+    \\    }
+;
+
+const record_field_closure_extraction_source =
+    \\main =
+    \\    {
+    \\        a = 10.I64
+    \\        b = 20.I64
+    \\        rec = { add_a: |x| x + a, add_b: |x| x + b }
+    \\        add_a = rec.add_a
+    \\        add_a(32.I64)
     \\    }
 ;
 
@@ -380,6 +461,13 @@ const direct_call_cases = [_]DirectCallCase{
         .lir_direct_calls = 2,
     },
     .{
+        .name = "passing captured closure to callback parameter",
+        .source = captured_callback_param_source,
+        .expected = "42",
+        .executable_direct_calls = 4,
+        .lir_direct_calls = 6,
+    },
+    .{
         .name = "annotated return of concrete lambda",
         .source = annotated_return_source,
         .expected = "42",
@@ -433,6 +521,54 @@ const direct_call_cases = [_]DirectCallCase{
         .executable_direct_calls = 6,
         .lir_direct_calls = 8,
     },
+    .{
+        .name = "cross-module passing captured closure to callback parameter",
+        .source = cross_module_captured_callback_param_source,
+        .imports = &cross_module_captured_callback_param_imports,
+        .expected = "42",
+        .executable_direct_calls = 4,
+        .lir_direct_calls = 6,
+    },
+    .{
+        .name = "two callback params with different captures",
+        .source = two_callback_params_source,
+        .expected = "42",
+        .executable_direct_calls = 7,
+        .lir_direct_calls = 10,
+    },
+    .{
+        .name = "record field closure extraction then call",
+        .source = record_field_closure_extraction_source,
+        .expected = "42",
+        .executable_direct_calls = 1,
+        .lir_direct_calls = 2,
+    },
+};
+
+const ErasedCallCase = struct {
+    source_kind: helpers.SourceKind,
+    source: []const u8,
+    imports: []const helpers.ModuleSource = &.{},
+    expected_executable_indirect_calls: usize,
+    expected_executable_packed_fns: usize,
+    expected_executable_erased_fn_types: usize,
+    expected_lir_indirect_calls: usize,
+};
+
+const boxed_lambda_round_trip_erased_case = ErasedCallCase{
+    .source_kind = .expr,
+    .source =
+    \\{
+    \\    wrap = |boxed| { value: boxed }
+    \\    unwrap = |record| record.value
+    \\    f = Box.unbox(unwrap(wrap(Box.box(|x| x + 1.I64))))
+    \\    f(41.I64)
+    \\}
+    ,
+    .expected_executable_indirect_calls = 1,
+    .expected_executable_packed_fns = 1,
+    .expected_executable_erased_fn_types = 1,
+    .expected_lir_indirect_calls = 2,
 };
 
 fn countHostedProcSpecs(compiled: *const helpers.CompiledProgram) usize {
@@ -902,79 +1038,123 @@ test "cor pipeline - lowering direct-only higher-order call annotated local bind
     try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
 }
 
-test "cor pipeline - eval direct-only higher-order call annotated return of concrete lambda" {
+test "cor pipeline - eval direct-only higher-order call passing captured closure to callback parameter" {
     const case = direct_call_cases[6];
+    try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);
+}
+
+test "cor pipeline - lowering direct-only higher-order call passing captured closure to callback parameter" {
+    const case = direct_call_cases[6];
+    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
+}
+
+test "cor pipeline - eval direct-only higher-order call annotated return of concrete lambda" {
+    const case = direct_call_cases[7];
     try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);
 }
 
 test "cor pipeline - lowering direct-only higher-order call annotated return of concrete lambda" {
-    const case = direct_call_cases[6];
+    const case = direct_call_cases[7];
     try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
 }
 
 test "cor pipeline - eval direct-only higher-order call passing concrete lambda to annotated callback parameter" {
-    const case = direct_call_cases[7];
+    const case = direct_call_cases[8];
     try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);
 }
 
 test "cor pipeline - lowering direct-only higher-order call passing concrete lambda to annotated callback parameter" {
-    const case = direct_call_cases[7];
+    const case = direct_call_cases[8];
     try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
 }
 
 test "cor pipeline - eval direct-only higher-order call cross-module annotated callback parameter slot" {
-    const case = direct_call_cases[8];
+    const case = direct_call_cases[9];
     try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);
 }
 
 test "cor pipeline - lowering direct-only higher-order call cross-module annotated callback parameter slot" {
-    const case = direct_call_cases[8];
+    const case = direct_call_cases[9];
     try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
 }
 
 test "cor pipeline - eval direct-only higher-order call cross-module annotated function return slot" {
-    const case = direct_call_cases[9];
+    const case = direct_call_cases[10];
     try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);
 }
 
 test "cor pipeline - lowering direct-only higher-order call cross-module annotated function return slot" {
-    const case = direct_call_cases[9];
+    const case = direct_call_cases[10];
     try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
 }
 
 test "cor pipeline - eval direct-only higher-order call cross-module abstract higher-order apply" {
-    const case = direct_call_cases[10];
+    const case = direct_call_cases[11];
     try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);
 }
 
 test "cor pipeline - lowering direct-only higher-order call cross-module abstract higher-order apply" {
-    const case = direct_call_cases[10];
+    const case = direct_call_cases[11];
     try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
 }
 
 test "cor pipeline - eval direct-only higher-order call cross-module nested higher-order bridge" {
-    const case = direct_call_cases[11];
+    const case = direct_call_cases[12];
     try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);
 }
 
 test "cor pipeline - lowering direct-only higher-order call cross-module nested higher-order bridge" {
-    const case = direct_call_cases[11];
+    const case = direct_call_cases[12];
     try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
 }
 
 test "cor pipeline - eval direct-only higher-order call cross-module apply twice" {
-    const case = direct_call_cases[12];
+    const case = direct_call_cases[13];
     try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);
 }
 
 test "cor pipeline - lowering direct-only higher-order call cross-module apply twice" {
-    const case = direct_call_cases[12];
+    const case = direct_call_cases[13];
+    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
+}
+
+test "cor pipeline - eval direct-only higher-order call cross-module passing captured closure to callback parameter" {
+    const case = direct_call_cases[14];
+    try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);
+}
+
+test "cor pipeline - lowering direct-only higher-order call cross-module passing captured closure to callback parameter" {
+    const case = direct_call_cases[14];
+    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
+}
+
+test "cor pipeline - eval direct-only higher-order call two callback params with different captures" {
+    const case = direct_call_cases[15];
+    try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);
+}
+
+test "cor pipeline - lowering direct-only higher-order call two callback params with different captures" {
+    const case = direct_call_cases[15];
+    try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
+}
+
+test "cor pipeline - eval direct-only higher-order call record field closure extraction then call" {
+    const case = direct_call_cases[16];
+    try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);
+}
+
+test "cor pipeline - lowering direct-only higher-order call record field closure extraction then call" {
+    const case = direct_call_cases[16];
     try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
 }
 
 test "cor pipeline - boxed lambda lowering uses erased indirect-call path" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const arena_allocator = arena.allocator();
     var compiled = try helpers.compileInspectedExpr(
-        testing.allocator,
+        arena_allocator,
         \\{
         \\    wrap = |boxed| { value: boxed }
         \\    unwrap = |record| record.value
@@ -983,15 +1163,23 @@ test "cor pipeline - boxed lambda lowering uses erased indirect-call path" {
         \\}
         ,
     );
-    defer compiled.deinit(testing.allocator);
+    defer compiled.deinit(arena_allocator);
 
-    const actual = try helpers.lirInterpreterInspectedStr(testing.allocator, &compiled.lowered);
-    defer testing.allocator.free(actual);
+    const actual = try helpers.lirInterpreterInspectedStr(arena_allocator, &compiled.lowered);
     try testing.expectEqualStrings("42", actual);
 
     try testing.expect(countIndirectCalls(&compiled) >= 1);
     try testing.expect(countLowLevelOp(&compiled, .box_box) >= 1);
     try testing.expect(countLowLevelOp(&compiled, .box_unbox) >= 1);
+    try expectErasedLoweringProgram(
+        boxed_lambda_round_trip_erased_case.source_kind,
+        boxed_lambda_round_trip_erased_case.source,
+        boxed_lambda_round_trip_erased_case.imports,
+        boxed_lambda_round_trip_erased_case.expected_executable_indirect_calls,
+        boxed_lambda_round_trip_erased_case.expected_executable_packed_fns,
+        boxed_lambda_round_trip_erased_case.expected_executable_erased_fn_types,
+        boxed_lambda_round_trip_erased_case.expected_lir_indirect_calls,
+    );
 }
 
 test "cor pipeline - canonical hosted lambda fact has no fake body field" {
@@ -1072,6 +1260,8 @@ test "cor pipeline - hosted function can flow as a first-class argument" {
         &.{.{
             .name = "Platform",
             .source =
+            \\module [line!]
+            \\
             \\line! : Str => {}
             ,
         }},
@@ -1116,7 +1306,6 @@ test "cor pipeline - hosted function survives boxed indirect-call round trip" {
     defer compiled.deinit(testing.allocator);
 
     try testing.expect(countIndirectCalls(&compiled) >= 1);
-
     var interp_run = try runModuleWithInterpreter(testing.allocator, &compiled, &hosted_fns);
     defer interp_run.deinit(testing.allocator);
     try testing.expectEqual(RuntimeHostEnv.Termination.returned, interp_run.termination);
@@ -1154,6 +1343,8 @@ test "cor pipeline - boxed lambda round trip through host boundary" {
         &.{.{
             .name = "Platform",
             .source =
+            \\module [line!, identity!]
+            \\
             \\line! : Str => {}
             \\identity! : Box(I64 -> I64) -> Box(I64 -> I64) => {}
             ,
@@ -1162,7 +1353,6 @@ test "cor pipeline - boxed lambda round trip through host boundary" {
     defer compiled.deinit(testing.allocator);
 
     try testing.expect(countIndirectCalls(&compiled) >= 1);
-
     var interp_run = try runModuleWithInterpreter(testing.allocator, &compiled, &hosted_fns);
     defer interp_run.deinit(testing.allocator);
     try testing.expectEqual(RuntimeHostEnv.Termination.returned, interp_run.termination);
