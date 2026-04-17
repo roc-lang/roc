@@ -4968,9 +4968,9 @@ fn debugIncomingStmtCount(store: *const LirStore, target: CFStmtId) u32 {
     return count;
 }
 
-fn debugPrintIncomingStmts(store: *const LirStore, target: CFStmtId) void {
+fn debugPrintIncomingStmtsWithIndent(store: *const LirStore, target: CFStmtId, indent: []const u8, remaining_depth: u8) void {
     const target_key = @intFromEnum(target);
-    std.debug.print("incoming stmt ids for {d}:\n", .{target_key});
+    std.debug.print("{s}incoming stmt ids for {d}:\n", .{ indent, target_key });
     for (store.cf_stmts.items, 0..) |stmt, stmt_index| {
         const source_id: CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
         if (@intFromEnum(source_id) == target_key) continue;
@@ -5017,9 +5017,16 @@ fn debugPrintIncomingStmts(store: *const LirStore, target: CFStmtId) void {
         }
 
         if (points_to_target) {
-            std.debug.print("  {d}: {s}\n", .{ @intFromEnum(source_id), @tagName(stmt) });
+            std.debug.print("{s}  {d}: {s}\n", .{ indent, @intFromEnum(source_id), @tagName(stmt) });
+            if (remaining_depth > 0) {
+                debugPrintIncomingStmtsWithIndent(store, source_id, "        ", remaining_depth - 1);
+            }
         }
     }
+}
+
+fn debugPrintIncomingStmts(store: *const LirStore, target: CFStmtId) void {
+    debugPrintIncomingStmtsWithIndent(store, target, "", 5);
 }
 
 /// Generate code for a control flow statement (used in LirProcSpec bodies).

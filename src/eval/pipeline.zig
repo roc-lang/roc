@@ -435,6 +435,7 @@ pub fn lowerTypedCIRToLirForTarget(
     errdefer lowered_lir.deinit();
     try lir.Ownership.inferProcResultContracts(allocator, &lowered_lir.store, &lowered_lir.layouts);
     try lir.RcInsert.run(allocator, &lowered_lir.store, &lowered_lir.layouts);
+    try lir.SharedSwitchTail.run(allocator, &lowered_lir.store);
     if (lowered_lir.root_procs.items.len == 0) return error.NoRootProc;
     return .{
         .lir_result = lowered_lir,

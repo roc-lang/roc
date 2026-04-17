@@ -9,32 +9,92 @@ const Allocator = std.mem.Allocator;
 const CFStmt = LIR.CFStmt;
 const CFStmtId = LIR.CFStmtId;
 const CFSwitchBranch = LIR.CFSwitchBranch;
-const CFSwitchBranchSpan = LIR.CFSwitchBranchSpan;
 const JoinPointId = LIR.JoinPointId;
 
 pub const Pass = struct {
     store: *LirStore,
     allocator: Allocator,
     rewritten_stmt_ids: std.AutoHashMap(u32, CFStmtId),
+    incoming_counts: std.AutoHashMap(u32, u32),
     next_join_id: u32,
 
     pub fn init(store: *LirStore, allocator: Allocator) Pass {
-        return .{
+        var pass: Pass = .{
             .store = store,
             .allocator = allocator,
             .rewritten_stmt_ids = std.AutoHashMap(u32, CFStmtId).init(allocator),
+            .incoming_counts = std.AutoHashMap(u32, u32).init(allocator),
             .next_join_id = nextJoinId(store),
         };
+        pass.buildIncomingCounts() catch unreachable;
+        return pass;
     }
 
     pub fn deinit(self: *Pass) void {
         self.rewritten_stmt_ids.deinit();
+        self.incoming_counts.deinit();
     }
 
     fn nextJoin(self: *Pass) JoinPointId {
         const id: JoinPointId = @enumFromInt(self.next_join_id);
         self.next_join_id += 1;
         return id;
+    }
+
+    fn incrementIncomingCount(self: *Pass, target: CFStmtId) Allocator.Error!void {
+        const gop = try self.incoming_counts.getOrPut(@intFromEnum(target));
+        if (gop.found_existing) {
+            gop.value_ptr.* += 1;
+        } else {
+            gop.value_ptr.* = 1;
+        }
+    }
+
+    fn buildIncomingCounts(self: *Pass) Allocator.Error!void {
+        const original_stmt_count = self.store.cf_stmts.items.len;
+        for (0..original_stmt_count) |stmt_index| {
+            const stmt_id: CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
+            switch (self.store.getCFStmt(stmt_id)) {
+                .assign_symbol => |assign| try self.incrementIncomingCount(assign.next),
+                .assign_ref => |assign| try self.incrementIncomingCount(assign.next),
+                .assign_literal => |assign| try self.incrementIncomingCount(assign.next),
+                .assign_call => |assign| try self.incrementIncomingCount(assign.next),
+                .assign_call_indirect => |assign| try self.incrementIncomingCount(assign.next),
+                .assign_low_level => |assign| try self.incrementIncomingCount(assign.next),
+                .assign_list => |assign| try self.incrementIncomingCount(assign.next),
+                .assign_struct => |assign| try self.incrementIncomingCount(assign.next),
+                .assign_tag => |assign| try self.incrementIncomingCount(assign.next),
+                .set_local => |assign| try self.incrementIncomingCount(assign.next),
+                .debug => |debug_stmt| try self.incrementIncomingCount(debug_stmt.next),
+                .expect => |expect_stmt| try self.incrementIncomingCount(expect_stmt.next),
+                .incref => |inc| try self.incrementIncomingCount(inc.next),
+                .decref => |dec| try self.incrementIncomingCount(dec.next),
+                .free => |free_stmt| try self.incrementIncomingCount(free_stmt.next),
+                .switch_stmt => |switch_stmt| {
+                    try self.incrementIncomingCount(switch_stmt.default_branch);
+                    for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
+                        try self.incrementIncomingCount(branch.body);
+                    }
+                },
+                .borrow_scope => |scope| {
+                    try self.incrementIncomingCount(scope.body);
+                    try self.incrementIncomingCount(scope.remainder);
+                },
+                .for_list => |for_stmt| {
+                    try self.incrementIncomingCount(for_stmt.body);
+                    try self.incrementIncomingCount(for_stmt.next);
+                },
+                .join => |join| {
+                    try self.incrementIncomingCount(join.body);
+                    try self.incrementIncomingCount(join.remainder);
+                },
+                .jump, .loop_continue, .scope_exit, .ret, .runtime_error, .crash => {},
+            }
+        }
+    }
+
+    fn hasMultipleIncoming(self: *const Pass, stmt_id: CFStmtId) bool {
+        return (self.incoming_counts.get(@intFromEnum(stmt_id)) orelse 0) > 1;
     }
 
     fn cloneLinearWithNext(self: *Pass, stmt: CFStmt, next: CFStmtId) Allocator.Error!CFStmtId {
@@ -173,38 +233,7 @@ pub const Pass = struct {
         return chain.toOwnedSlice(self.allocator);
     }
 
-    fn findCommonLinearSuffix(self: *Pass, stmt_ids: []const CFStmtId) Allocator.Error!?CFStmtId {
-        if (stmt_ids.len < 2) return null;
-
-        var chains = std.ArrayList([]CFStmtId).empty;
-        defer {
-            for (chains.items) |chain| self.allocator.free(chain);
-            chains.deinit(self.allocator);
-        }
-
-        var min_len: usize = std.math.maxInt(usize);
-        for (stmt_ids) |stmt_id| {
-            const chain = try self.collectLinearChain(stmt_id);
-            min_len = @min(min_len, chain.len);
-            try chains.append(self.allocator, chain);
-        }
-
-        if (min_len == 0) return null;
-
-        var suffix_len: usize = 0;
-        while (suffix_len < min_len) : (suffix_len += 1) {
-            const expected = chains.items[0][chains.items[0].len - 1 - suffix_len];
-            for (chains.items[1..]) |chain| {
-                if (chain[chain.len - 1 - suffix_len] != expected) {
-                    return if (suffix_len == 0) null else chains.items[0][chains.items[0].len - suffix_len];
-                }
-            }
-        }
-
-        return chains.items[0][chains.items[0].len - suffix_len];
-    }
-
-    fn rewritePrefixUntil(self: *Pass, stmt_id: CFStmtId, stop_id: CFStmtId, join_id: JoinPointId) Allocator.Error!CFStmtId {
+    fn rewritePrefixUntil(self: *Pass, stmt_id: CFStmtId, stop_id: CFStmtId, join_id: JoinPointId, clone_suffix: bool) Allocator.Error!CFStmtId {
         if (stmt_id == stop_id) {
             return self.store.addCFStmt(.{ .jump = .{
                 .target = join_id,
@@ -214,97 +243,179 @@ pub const Pass = struct {
 
         const stmt = self.store.getCFStmt(stmt_id);
         const next = linearNext(stmt) orelse unreachable;
-        const rewritten_next = try self.rewritePrefixUntil(next, stop_id, join_id);
+        const rewritten_next = try self.rewritePrefixUntil(next, stop_id, join_id, clone_suffix);
         return self.cloneLinearWithNext(stmt, rewritten_next);
     }
 
-    fn rewriteSwitch(self: *Pass, switch_stmt: @FieldType(CFStmt, "switch_stmt")) Allocator.Error!CFStmtId {
-        var branch_entries = std.ArrayList(CFStmtId).empty;
-        defer branch_entries.deinit(self.allocator);
+    fn rewriteSwitch(self: *Pass, switch_stmt: @FieldType(CFStmt, "switch_stmt"), clone_suffix: bool) Allocator.Error!CFStmtId {
+        const original_branches = self.store.getCFSwitchBranches(switch_stmt.branches);
+        const branch_snapshot = try self.allocator.dupe(CFSwitchBranch, original_branches);
+        defer self.allocator.free(branch_snapshot);
 
-        for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
-            try branch_entries.append(self.allocator, branch.body);
+        const entry_count = branch_snapshot.len + 1;
+        const entry_starts = try self.allocator.alloc(CFStmtId, entry_count);
+        defer self.allocator.free(entry_starts);
+
+        for (branch_snapshot, 0..) |branch, i| {
+            entry_starts[i] = branch.body;
         }
-        try branch_entries.append(self.allocator, switch_stmt.default_branch);
+        entry_starts[branch_snapshot.len] = switch_stmt.default_branch;
 
-        if (try self.findCommonLinearSuffix(branch_entries.items)) |shared_start| {
-            const join_id = self.nextJoin();
-            const initial_jump = try self.store.addCFStmt(.{ .jump = .{
-                .target = join_id,
-                .args = LIR.LocalSpan.empty(),
-            } });
+        const chains = try self.allocator.alloc([]CFStmtId, entry_count);
+        defer {
+            for (chains) |chain| self.allocator.free(chain);
+            self.allocator.free(chains);
+        }
 
-            var rewritten_branches = std.ArrayList(CFSwitchBranch).empty;
-            defer rewritten_branches.deinit(self.allocator);
+        var shared_counts = std.AutoHashMap(u32, u32).init(self.allocator);
+        defer shared_counts.deinit();
 
-            for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
-                try rewritten_branches.append(self.allocator, .{
-                    .value = branch.value,
-                    .body = try self.rewritePrefixUntil(branch.body, shared_start, join_id),
-                });
+        for (entry_starts, 0..) |entry_start, i| {
+            const chain = try self.collectLinearChain(entry_start);
+            chains[i] = chain;
+            for (chain) |stmt_id| {
+                const gop = try shared_counts.getOrPut(@intFromEnum(stmt_id));
+                if (gop.found_existing) {
+                    gop.value_ptr.* += 1;
+                } else {
+                    gop.value_ptr.* = 1;
+                }
             }
+        }
 
-            const rewritten_default = try self.rewritePrefixUntil(switch_stmt.default_branch, shared_start, join_id);
-            const branch_span = try self.store.addCFSwitchBranches(rewritten_branches.items);
-            const rewritten_switch = try self.store.addCFStmt(.{ .switch_stmt = .{
-                .cond = switch_stmt.cond,
-                .branches = branch_span,
-                .default_branch = rewritten_default,
-            } });
+        const first_shared_starts = try self.allocator.alloc(?CFStmtId, entry_count);
+        defer self.allocator.free(first_shared_starts);
 
-            const rewritten_body = try self.rewriteStmt(shared_start);
-            return self.store.addCFStmt(.{ .join = .{
-                .id = join_id,
-                .params = LIR.LocalSpan.empty(),
-                .body = rewritten_body,
-                .remainder = rewritten_switch,
-            } });
+        for (chains, 0..) |chain, i| {
+            first_shared_starts[i] = null;
+            for (chain) |stmt_id| {
+                const count = shared_counts.get(@intFromEnum(stmt_id)) orelse unreachable;
+                if (count >= 2) {
+                    first_shared_starts[i] = stmt_id;
+                    break;
+                }
+            }
+        }
+
+        const SharedGroup = struct {
+            start: CFStmtId,
+            join_id: JoinPointId,
+            body: CFStmtId,
+        };
+
+        var shared_groups = std.ArrayList(SharedGroup).empty;
+        defer shared_groups.deinit(self.allocator);
+
+        for (first_shared_starts) |maybe_start| {
+            const shared_start = maybe_start orelse continue;
+
+            var already_recorded = false;
+            for (shared_groups.items) |group| {
+                if (group.start == shared_start) {
+                    already_recorded = true;
+                    break;
+                }
+            }
+            if (already_recorded) continue;
+
+            var group_size: usize = 0;
+            for (first_shared_starts) |candidate| {
+                if (candidate != null and candidate.? == shared_start) {
+                    group_size += 1;
+                }
+            }
+            if (group_size < 2) continue;
+
+            try shared_groups.append(self.allocator, .{
+                .start = shared_start,
+                .join_id = self.nextJoin(),
+                .body = try self.rewriteStmtWithCloneMode(shared_start, false),
+            });
         }
 
         var rewritten_branches = std.ArrayList(CFSwitchBranch).empty;
         defer rewritten_branches.deinit(self.allocator);
 
-        for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
+        for (branch_snapshot, 0..) |branch, i| {
+            var rewritten_body: ?CFStmtId = null;
+            if (first_shared_starts[i]) |shared_start| {
+                for (shared_groups.items) |group| {
+                    if (group.start == shared_start) {
+                        rewritten_body = try self.rewritePrefixUntil(branch.body, shared_start, group.join_id, clone_suffix);
+                        break;
+                    }
+                }
+            }
+
             try rewritten_branches.append(self.allocator, .{
                 .value = branch.value,
-                .body = try self.rewriteStmt(branch.body),
+                .body = rewritten_body orelse try self.rewriteStmtWithCloneMode(branch.body, clone_suffix),
             });
         }
 
         const branch_span = try self.store.addCFSwitchBranches(rewritten_branches.items);
-        return self.store.addCFStmt(.{ .switch_stmt = .{
+        const default_index = branch_snapshot.len;
+        var rewritten_default: ?CFStmtId = null;
+        if (first_shared_starts[default_index]) |shared_start| {
+            for (shared_groups.items) |group| {
+                if (group.start == shared_start) {
+                    rewritten_default = try self.rewritePrefixUntil(switch_stmt.default_branch, shared_start, group.join_id, clone_suffix);
+                    break;
+                }
+            }
+        }
+
+        var rewritten_stmt = try self.store.addCFStmt(.{ .switch_stmt = .{
             .cond = switch_stmt.cond,
             .branches = branch_span,
-            .default_branch = try self.rewriteStmt(switch_stmt.default_branch),
+            .default_branch = rewritten_default orelse try self.rewriteStmtWithCloneMode(switch_stmt.default_branch, clone_suffix),
         } });
+
+        for (shared_groups.items) |group| {
+            rewritten_stmt = try self.store.addCFStmt(.{ .join = .{
+                .id = group.join_id,
+                .params = LIR.LocalSpan.empty(),
+                .body = group.body,
+                .remainder = rewritten_stmt,
+            } });
+        }
+
+        return rewritten_stmt;
     }
 
     fn rewriteStmt(self: *Pass, stmt_id: CFStmtId) Allocator.Error!CFStmtId {
+        return self.rewriteStmtWithCloneMode(stmt_id, false);
+    }
+
+    fn rewriteStmtWithCloneMode(self: *Pass, stmt_id: CFStmtId, clone_suffix: bool) Allocator.Error!CFStmtId {
+        const must_clone = clone_suffix or self.hasMultipleIncoming(stmt_id);
         const stmt_key = @intFromEnum(stmt_id);
-        if (self.rewritten_stmt_ids.get(stmt_key)) |rewritten| return rewritten;
+        if (!must_clone) {
+            if (self.rewritten_stmt_ids.get(stmt_key)) |rewritten| return rewritten;
+        }
 
         const stmt = self.store.getCFStmt(stmt_id);
         const rewritten = switch (stmt) {
-            .assign_symbol => |assign| try self.cloneLinearWithNext(stmt, try self.rewriteStmt(assign.next)),
-            .assign_ref => |assign| try self.cloneLinearWithNext(stmt, try self.rewriteStmt(assign.next)),
-            .assign_literal => |assign| try self.cloneLinearWithNext(stmt, try self.rewriteStmt(assign.next)),
-            .assign_call => |assign| try self.cloneLinearWithNext(stmt, try self.rewriteStmt(assign.next)),
-            .assign_call_indirect => |assign| try self.cloneLinearWithNext(stmt, try self.rewriteStmt(assign.next)),
-            .assign_low_level => |assign| try self.cloneLinearWithNext(stmt, try self.rewriteStmt(assign.next)),
-            .assign_list => |assign| try self.cloneLinearWithNext(stmt, try self.rewriteStmt(assign.next)),
-            .assign_struct => |assign| try self.cloneLinearWithNext(stmt, try self.rewriteStmt(assign.next)),
-            .assign_tag => |assign| try self.cloneLinearWithNext(stmt, try self.rewriteStmt(assign.next)),
-            .set_local => |assign| try self.cloneLinearWithNext(stmt, try self.rewriteStmt(assign.next)),
-            .debug => |debug_stmt| try self.cloneLinearWithNext(stmt, try self.rewriteStmt(debug_stmt.next)),
-            .expect => |expect_stmt| try self.cloneLinearWithNext(stmt, try self.rewriteStmt(expect_stmt.next)),
-            .incref => |inc| try self.cloneLinearWithNext(stmt, try self.rewriteStmt(inc.next)),
-            .decref => |dec| try self.cloneLinearWithNext(stmt, try self.rewriteStmt(dec.next)),
-            .free => |free_stmt| try self.cloneLinearWithNext(stmt, try self.rewriteStmt(free_stmt.next)),
-            .switch_stmt => |switch_stmt| try self.rewriteSwitch(switch_stmt),
+            .assign_symbol => |assign| try self.cloneLinearWithNext(stmt, try self.rewriteStmtWithCloneMode(assign.next, must_clone)),
+            .assign_ref => |assign| try self.cloneLinearWithNext(stmt, try self.rewriteStmtWithCloneMode(assign.next, must_clone)),
+            .assign_literal => |assign| try self.cloneLinearWithNext(stmt, try self.rewriteStmtWithCloneMode(assign.next, must_clone)),
+            .assign_call => |assign| try self.cloneLinearWithNext(stmt, try self.rewriteStmtWithCloneMode(assign.next, must_clone)),
+            .assign_call_indirect => |assign| try self.cloneLinearWithNext(stmt, try self.rewriteStmtWithCloneMode(assign.next, must_clone)),
+            .assign_low_level => |assign| try self.cloneLinearWithNext(stmt, try self.rewriteStmtWithCloneMode(assign.next, must_clone)),
+            .assign_list => |assign| try self.cloneLinearWithNext(stmt, try self.rewriteStmtWithCloneMode(assign.next, must_clone)),
+            .assign_struct => |assign| try self.cloneLinearWithNext(stmt, try self.rewriteStmtWithCloneMode(assign.next, must_clone)),
+            .assign_tag => |assign| try self.cloneLinearWithNext(stmt, try self.rewriteStmtWithCloneMode(assign.next, must_clone)),
+            .set_local => |assign| try self.cloneLinearWithNext(stmt, try self.rewriteStmtWithCloneMode(assign.next, must_clone)),
+            .debug => |debug_stmt| try self.cloneLinearWithNext(stmt, try self.rewriteStmtWithCloneMode(debug_stmt.next, must_clone)),
+            .expect => |expect_stmt| try self.cloneLinearWithNext(stmt, try self.rewriteStmtWithCloneMode(expect_stmt.next, must_clone)),
+            .incref => |inc| try self.cloneLinearWithNext(stmt, try self.rewriteStmtWithCloneMode(inc.next, must_clone)),
+            .decref => |dec| try self.cloneLinearWithNext(stmt, try self.rewriteStmtWithCloneMode(dec.next, must_clone)),
+            .free => |free_stmt| try self.cloneLinearWithNext(stmt, try self.rewriteStmtWithCloneMode(free_stmt.next, must_clone)),
+            .switch_stmt => |switch_stmt| try self.rewriteSwitch(switch_stmt, must_clone),
             .borrow_scope => |scope| try self.store.addCFStmt(.{ .borrow_scope = .{
                 .id = scope.id,
-                .body = try self.rewriteStmt(scope.body),
-                .remainder = try self.rewriteStmt(scope.remainder),
+                .body = try self.rewriteStmtWithCloneMode(scope.body, must_clone),
+                .remainder = try self.rewriteStmtWithCloneMode(scope.remainder, must_clone),
             } }),
             .for_list => |for_stmt| try self.store.addCFStmt(.{ .for_list = .{
                 .elem = for_stmt.elem,
@@ -312,19 +423,21 @@ pub const Pass = struct {
                 .elem_ownership = for_stmt.elem_ownership,
                 .iterable = for_stmt.iterable,
                 .iterable_elem_layout = for_stmt.iterable_elem_layout,
-                .body = try self.rewriteStmt(for_stmt.body),
-                .next = try self.rewriteStmt(for_stmt.next),
+                .body = try self.rewriteStmtWithCloneMode(for_stmt.body, must_clone),
+                .next = try self.rewriteStmtWithCloneMode(for_stmt.next, must_clone),
             } }),
             .join => |join| try self.store.addCFStmt(.{ .join = .{
                 .id = join.id,
                 .params = join.params,
-                .body = try self.rewriteStmt(join.body),
-                .remainder = try self.rewriteStmt(join.remainder),
+                .body = try self.rewriteStmtWithCloneMode(join.body, must_clone),
+                .remainder = try self.rewriteStmtWithCloneMode(join.remainder, must_clone),
             } }),
             .jump, .ret, .runtime_error, .crash, .loop_continue, .scope_exit => stmt_id,
         };
 
-        try self.rewritten_stmt_ids.put(stmt_key, rewritten);
+        if (!must_clone) {
+            try self.rewritten_stmt_ids.put(stmt_key, rewritten);
+        }
         return rewritten;
     }
 };
