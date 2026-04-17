@@ -432,7 +432,30 @@ pub const Pass = struct {
                 .body = try self.rewriteStmtWithCloneMode(join.body, must_clone),
                 .remainder = try self.rewriteStmtWithCloneMode(join.remainder, must_clone),
             } }),
-            .jump, .ret, .runtime_error, .crash, .loop_continue, .scope_exit => stmt_id,
+            .jump => |jump| if (must_clone)
+                try self.store.addCFStmt(.{ .jump = jump })
+            else
+                stmt_id,
+            .ret => |ret| if (must_clone)
+                try self.store.addCFStmt(.{ .ret = ret })
+            else
+                stmt_id,
+            .runtime_error => if (must_clone)
+                try self.store.addCFStmt(.runtime_error)
+            else
+                stmt_id,
+            .crash => |crash| if (must_clone)
+                try self.store.addCFStmt(.{ .crash = crash })
+            else
+                stmt_id,
+            .loop_continue => if (must_clone)
+                try self.store.addCFStmt(.loop_continue)
+            else
+                stmt_id,
+            .scope_exit => |scope_exit| if (must_clone)
+                try self.store.addCFStmt(.{ .scope_exit = scope_exit })
+            else
+                stmt_id,
         };
 
         if (!must_clone) {

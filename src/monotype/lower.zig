@@ -3445,7 +3445,16 @@ pub const Lowerer = struct {
         else
             try self.makeUnitArgWithType(first_arg_ty);
 
-        var body_env = try self.cloneEnv(env);
+        var captured_env = try self.captureDeclarationBindingEnv(type_scope, env);
+        defer {
+            var iter = captured_env.valueIterator();
+            while (iter.next()) |value| {
+                value.deinit(self.allocator);
+            }
+            captured_env.deinit();
+        }
+
+        var body_env = try self.restoreDeclarationBindingEnv(scope, captured_env);
         defer body_env.deinit();
         var binding_decls = std.ArrayList(BindingDecl).empty;
         defer binding_decls.deinit(self.allocator);
@@ -7004,10 +7013,27 @@ pub const Lowerer = struct {
         };
         if (type_scope.memo.expr_type_cache.contains(key)) return;
 
+        const result_var = self.requireExprResultVar(module_idx, type_scope, expr_idx);
+        if (comptime builtin.mode == .Debug) {
+            if (@intFromEnum(result_var) >= type_scope.typeStoreConst().len()) {
+                const expr = self.ctx.typedCirModule(module_idx).expr(expr_idx);
+                debugPanic(
+                    "monotype expr invariant violated: expr {d} tag {s} recorded out-of-scope result var {d} (type-store len {d}, source expr var {d})",
+                    .{
+                        @intFromEnum(expr_idx),
+                        @tagName(expr.data),
+                        @intFromEnum(result_var),
+                        type_scope.typeStoreConst().len(),
+                        @intFromEnum(expr.ty()),
+                    },
+                );
+            }
+        }
+
         const lowered = try self.instantiateVarType(
             module_idx,
             type_scope,
-            try self.instantiateSourceVar(type_scope, module_idx, self.ctx.typedCirModule(module_idx).exprType(expr_idx)),
+            result_var,
         );
         const expr = self.ctx.typedCirModule(module_idx).expr(expr_idx).data;
         try type_scope.memo.expr_type_cache.put(

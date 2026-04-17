@@ -204,7 +204,6 @@ pub fn devEvaluatorInspectedStr(
     allocator: std.mem.Allocator,
     lowered: *const LoweredProgram,
 ) ![]u8 {
-    std.debug.print("devEvaluatorInspectedStr: init codegen\n", .{});
     var codegen = try HostLirCodeGen.init(
         allocator,
         &lowered.lir_result.store,
@@ -212,18 +211,15 @@ pub fn devEvaluatorInspectedStr(
         null,
     );
     defer codegen.deinit();
-    std.debug.print("devEvaluatorInspectedStr: compile procs\n", .{});
     try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
 
     const proc = lowered.lir_result.store.getProcSpec(lowered.main_proc);
-    std.debug.print("devEvaluatorInspectedStr: entry wrapper\n", .{});
     const entrypoint = try codegen.generateEntrypointWrapper(
         "roc_eval_test_main",
         lowered.main_proc,
         &.{},
         proc.ret_layout,
     );
-    std.debug.print("devEvaluatorInspectedStr: executable memory\n", .{});
     var exec_mem = try ExecutableMemory.initWithEntryOffset(
         codegen.getGeneratedCode(),
         entrypoint.offset,
@@ -251,9 +247,7 @@ pub fn devEvaluatorInspectedStr(
         return error.Crash;
     }
 
-    std.debug.print("devEvaluatorInspectedStr: call roc abi\n", .{});
     exec_mem.callRocABI(@ptrCast(runtime_env.get_ops()), @ptrCast(ret_buf.ptr), null);
-    std.debug.print("devEvaluatorInspectedStr: copy returned str\n", .{});
 
     switch (runtime_env.crashState()) {
         .did_not_crash => {},
