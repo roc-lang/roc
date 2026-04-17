@@ -246,6 +246,11 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(gpa, CIR.Expr{
+        .e_bytes_literal = .{
+            .literal = rand_idx(StringLiteral.Idx),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
         .e_lookup_local = .{
             .pattern_idx = rand_idx(CIR.Pattern.Idx),
         },
@@ -377,6 +382,20 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(gpa, CIR.Expr{
+        .e_method_call = .{
+            .receiver = rand_idx(CIR.Expr.Idx),
+            .method_name = rand_ident_idx(),
+            .args = CIR.Expr.Span{ .span = rand_span() },
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_type_method_call = .{
+            .type_var_alias_stmt = rand_idx(CIR.Statement.Idx),
+            .method_name = rand_ident_idx(),
+            .args = CIR.Expr.Span{ .span = rand_span() },
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
         .e_runtime_error = .{
             .diagnostic = rand_idx(CIR.Diagnostic.Idx),
         },
@@ -397,12 +416,6 @@ test "NodeStore round trip - Expressions" {
     try expressions.append(gpa, CIR.Expr{
         .e_expect = .{
             .body = rand_idx(CIR.Expr.Idx),
-        },
-    });
-    try expressions.append(gpa, CIR.Expr{
-        .e_dec = .{
-            .value = RocDec{ .num = 123456789 },
-            .has_suffix = false,
         },
     });
     try expressions.append(gpa, CIR.Expr{

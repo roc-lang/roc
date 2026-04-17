@@ -325,6 +325,74 @@ pub const Module = struct {
         };
     }
 
+    pub fn lambdaFnShape(self: @This(), fn_var: Var, explicit_arg_count: usize) Allocator.Error!CurriedFnShape {
+        var args = std.ArrayList(Var).empty;
+        errdefer args.deinit(self.allocator);
+
+        const store = self.typeStoreConst();
+        var current = fn_var;
+        var saw_fn_node = false;
+
+        while (true) {
+            const resolved = store.resolveVar(current);
+            switch (resolved.desc.content) {
+                .alias => |alias| {
+                    current = store.getAliasBackingVar(alias);
+                    continue;
+                },
+                .structure => |flat| switch (flat) {
+                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                        saw_fn_node = true;
+                        const current_args = store.sliceVars(func.args);
+                        const prev_len = args.items.len;
+                        try args.appendSlice(self.allocator, current_args);
+
+                        if (explicit_arg_count != 0 and prev_len < explicit_arg_count and args.items.len > explicit_arg_count) {
+                            std.debug.panic(
+                                "typed_cir invariant violated: lambda boundary split function arg group while building source function shape",
+                                .{},
+                            );
+                        }
+
+                        if (explicit_arg_count == 0 or args.items.len >= explicit_arg_count) {
+                            return .{
+                                .args = try args.toOwnedSlice(self.allocator),
+                                .ret = func.ret,
+                            };
+                        }
+
+                        const ret = func.ret;
+                        const ret_resolved = store.resolveVar(ret);
+                        switch (ret_resolved.desc.content) {
+                            .alias => |alias| current = store.getAliasBackingVar(alias),
+                            .structure => |ret_flat| switch (ret_flat) {
+                                .fn_pure, .fn_effectful, .fn_unbound => current = ret,
+                                else => std.debug.panic(
+                                    "typed_cir invariant violated: lambda boundary expected more function args when building source function shape",
+                                    .{},
+                                ),
+                            },
+                            else => std.debug.panic(
+                                "typed_cir invariant violated: lambda boundary expected more function args when building source function shape",
+                                .{},
+                            ),
+                        }
+                    },
+                    else => std.debug.panic(
+                        "typed_cir invariant violated: expected function type when building source function shape",
+                        .{},
+                    ),
+                },
+                else => std.debug.panic(
+                    "typed_cir invariant violated: expected function type when building source function shape",
+                    .{},
+                ),
+            }
+        }
+
+        if (!saw_fn_node) unreachable;
+    }
+
     pub fn sourceVarRoot(self: @This(), var_: Var) Var {
         return self.typeStoreConst().resolveVar(var_).var_;
     }

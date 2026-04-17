@@ -482,8 +482,7 @@ const ProcLowerer = struct {
         };
     }
 
-    fn lowLevelResultSemantics(self: *ProcLowerer, op: base.LowLevel, args: []const LIR.LocalId) LIR.ResultSemantics {
-        _ = self;
+    fn lowLevelResultSemantics(op: base.LowLevel, args: []const LIR.LocalId) LIR.ResultSemantics {
         return switch (op.procResultSemantics()) {
             .fresh, .no_return => .fresh,
             .alias_arg => |arg_index| blk: {
@@ -961,7 +960,7 @@ const ProcLowerer = struct {
             const args = try self.parent.store.addLocalSpan(&.{source_local});
             return try self.parent.store.addCFStmt(.{ .assign_low_level = .{
                 .target = target_local,
-                .result = self.lowLevelResultSemantics(.box_unbox, &.{source_local}),
+                .result = lowLevelResultSemantics(.box_unbox, &.{source_local}),
                 .ownership = try self.lowLevelOwnership(.box_unbox, &.{source_local}),
                 .op = .box_unbox,
                 .args = args,
@@ -973,7 +972,7 @@ const ProcLowerer = struct {
             const args = try self.parent.store.addLocalSpan(&.{source_local});
             return try self.parent.store.addCFStmt(.{ .assign_low_level = .{
                 .target = target_local,
-                .result = self.lowLevelResultSemantics(.box_box, &.{source_local}),
+                .result = lowLevelResultSemantics(.box_box, &.{source_local}),
                 .ownership = try self.lowLevelOwnership(.box_box, &.{source_local}),
                 .op = .box_box,
                 .args = args,
@@ -995,7 +994,7 @@ const ProcLowerer = struct {
             const box_args = try self.parent.store.addLocalSpan(&.{boxed_child_local});
             const box_stmt = try self.parent.store.addCFStmt(.{ .assign_low_level = .{
                 .target = target_local,
-                .result = self.lowLevelResultSemantics(.box_box, &.{boxed_child_local}),
+                .result = lowLevelResultSemantics(.box_box, &.{boxed_child_local}),
                 .ownership = try self.lowLevelOwnership(.box_box, &.{boxed_child_local}),
                 .op = .box_box,
                 .args = box_args,
@@ -1011,7 +1010,7 @@ const ProcLowerer = struct {
             const unbox_args = try self.parent.store.addLocalSpan(&.{source_local});
             return try self.parent.store.addCFStmt(.{ .assign_low_level = .{
                 .target = unboxed_local,
-                .result = self.lowLevelResultSemantics(.box_unbox, &.{source_local}),
+                .result = lowLevelResultSemantics(.box_unbox, &.{source_local}),
                 .ownership = try self.lowLevelOwnership(.box_unbox, &.{source_local}),
                 .op = .box_unbox,
                 .args = unbox_args,
@@ -1020,45 +1019,14 @@ const ProcLowerer = struct {
         }
 
         if (builtin.mode == .Debug) {
-            const actual_layout_val = ls.getLayout(actual_layout);
-            const target_layout_val = ls.getLayout(target_layout);
-            const target_box_child: ?layout_mod.Idx = if (target_layout_val.tag == .box) target_layout_val.data.box else null;
-            const actual_box_child: ?layout_mod.Idx = if (actual_layout_val.tag == .box) actual_layout_val.data.box else null;
-            const target_list_child: ?layout_mod.Idx = switch (target_layout_val.tag) {
-                .list => target_layout_val.data.list,
-                .list_of_zst => .zst,
-                else => null,
-            };
-            const actual_list_child: ?layout_mod.Idx = switch (actual_layout_val.tag) {
-                .list => actual_layout_val.data.list,
-                .list_of_zst => .zst,
-                else => null,
-            };
-            const target_box_child_tag: ?[]const u8 = if (target_box_child) |child| @tagName(ls.getLayout(child).tag) else null;
-            const actual_box_child_tag: ?[]const u8 = if (actual_box_child) |child| @tagName(ls.getLayout(child).tag) else null;
-            const target_list_child_tag: ?[]const u8 = if (target_list_child) |child| @tagName(ls.getLayout(child).tag) else null;
-            const actual_list_child_tag: ?[]const u8 = if (actual_list_child) |child| @tagName(ls.getLayout(child).tag) else null;
-            const proc_spec = self.parent.store.getProcSpec(self.proc_id);
             std.debug.panic(
-                "lir.from_ir invariant violated: no explicit bridge in proc {d} (symbol {d}) expr {any} from layout {d} ({s}, ref={any}, box_child={any}/{any}, list_child={any}/{any}) to layout {d} ({s}, ref={any}, box_child={any}/{any}, list_child={any}/{any})",
+                "lir.from_ir invariant violated: no explicit bridge in proc {d} from layout {d} ({s}) to layout {d} ({s})",
                 .{
                     @intFromEnum(self.proc_id),
-                    proc_spec.name.raw(),
-                    self.current_expr_id,
                     @intFromEnum(actual_layout),
-                    @tagName(actual_layout_val.tag),
-                    actual_ref,
-                    actual_box_child,
-                    actual_box_child_tag,
-                    actual_list_child,
-                    actual_list_child_tag,
+                    @tagName(ls.getLayout(actual_layout).tag),
                     @intFromEnum(target_layout),
-                    @tagName(target_layout_val.tag),
-                    target_ref,
-                    target_box_child,
-                    target_box_child_tag,
-                    target_list_child,
-                    target_list_child_tag,
+                    @tagName(ls.getLayout(target_layout).tag),
                 },
             );
         }
@@ -1729,7 +1697,7 @@ const ProcLowerer = struct {
 
                 break :blk try self.parent.store.addCFStmt(.{ .assign_low_level = .{
                     .target = raw_target,
-                    .result = self.lowLevelResultSemantics(call.op, locals),
+                    .result = lowLevelResultSemantics(call.op, locals),
                     .ownership = try self.lowLevelOwnership(call.op, locals),
                     .op = call.op,
                     .args = try self.parent.store.addLocalSpan(locals),

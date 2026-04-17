@@ -29,7 +29,7 @@ pub fn inferProcResultContracts(
     layouts: *const layout_mod.Store,
 ) Allocator.Error!void {
     try propagateRefResultSemantics(allocator, store);
-    try normalizeRefLocalOwnership(allocator, store, layouts);
+    try normalizeRefLocalOwnership(store, layouts);
     try normalizeAggregateOwnershipFixedPoint(allocator, store, layouts);
 
     var changed = true;
@@ -1214,11 +1214,9 @@ fn propagateRefResultSemantics(
 }
 
 fn normalizeRefLocalOwnership(
-    allocator: Allocator,
     store: *LirStore,
     layouts: *const layout_mod.Store,
 ) Allocator.Error!void {
-    _ = allocator;
     for (store.cf_stmts.items, 0..) |stmt, i| {
         const assign = switch (stmt) {
             .assign_ref => |assign| assign,

@@ -660,7 +660,7 @@ const ProcPass = struct {
             .assign_symbol => |assign| defs.set(@intFromEnum(assign.target)),
             .assign_ref => |assign| {
                 defs.set(@intFromEnum(assign.target));
-                self.markRefOpUses(assign.op, uses);
+                markRefOpUses(assign.op, uses);
                 self.markSpanOwnershipPassed(assign.ownership.consumed_owned_inputs, ownership_passed);
             },
             .assign_literal => |assign| defs.set(@intFromEnum(assign.target)),
@@ -741,8 +741,7 @@ const ProcPass = struct {
         }
     }
 
-    fn markRefOpUses(self: *ProcPass, op: LIR.RefOp, uses: *std.DynamicBitSetUnmanaged) void {
-        _ = self;
+    fn markRefOpUses(op: LIR.RefOp, uses: *std.DynamicBitSetUnmanaged) void {
         switch (op) {
             .local => |local| uses.set(@intFromEnum(local)),
             .discriminant => |info| uses.set(@intFromEnum(info.source)),
@@ -1457,17 +1456,17 @@ const ProcPass = struct {
             .assign_ref => |assign| try self.accumulateFreshInputRetains(self.store.getLocalSpan(assign.ownership.consumed_owned_inputs), retained_counts),
             .assign_list => |assign| {
                 try self.accumulateFreshInputRetains(self.store.getLocalSpan(assign.ownership.consumed_owned_inputs), retained_counts);
-                try self.accumulateRetainedBorrows(self.store.getLocalSpan(assign.ownership.retained_borrows), retained_counts);
+                try accumulateRetainedBorrows(self.store.getLocalSpan(assign.ownership.retained_borrows), retained_counts);
             },
             .assign_struct => |assign| {
                 try self.accumulateFreshInputRetains(self.store.getLocalSpan(assign.ownership.consumed_owned_inputs), retained_counts);
-                try self.accumulateRetainedBorrows(self.store.getLocalSpan(assign.ownership.retained_borrows), retained_counts);
+                try accumulateRetainedBorrows(self.store.getLocalSpan(assign.ownership.retained_borrows), retained_counts);
             },
             .assign_tag => |assign| {
                 try self.accumulateFreshInputRetains(self.store.getLocalSpan(assign.ownership.consumed_owned_inputs), retained_counts);
-                try self.accumulateRetainedBorrows(self.store.getLocalSpan(assign.ownership.retained_borrows), retained_counts);
+                try accumulateRetainedBorrows(self.store.getLocalSpan(assign.ownership.retained_borrows), retained_counts);
             },
-            .assign_low_level => |assign| try self.accumulateRetainedBorrows(self.store.getLocalSpan(assign.ownership.retained_borrows), retained_counts),
+            .assign_low_level => |assign| try accumulateRetainedBorrows(self.store.getLocalSpan(assign.ownership.retained_borrows), retained_counts),
             else => {},
         }
     }
@@ -1492,9 +1491,9 @@ const ProcPass = struct {
         } });
     }
 
-    fn accumulateRetainedBorrows(self: *ProcPass, retained_borrows: []const LocalId, retained_counts: []u16) Allocator.Error!void {
+    fn accumulateRetainedBorrows(retained_borrows: []const LocalId, retained_counts: []u16) Allocator.Error!void {
         for (retained_borrows) |local| {
-            self.incrementRetainCount(local, retained_counts, 1);
+            incrementRetainCount(local, retained_counts, 1);
         }
     }
 
@@ -1561,7 +1560,7 @@ const ProcPass = struct {
 
             const retain_count = self.freshInputRetainCount(local, occurrence_count);
             if (retain_count == 0) continue;
-            self.incrementRetainCount(local, retained_counts, retain_count);
+            incrementRetainCount(local, retained_counts, retain_count);
         }
     }
 
@@ -1569,7 +1568,7 @@ const ProcPass = struct {
         const layout_idx = self.store.getLocal(local).layout_idx;
         if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(layout_idx))) return;
         if (self.explicitOwnerForLocal(local) != null) return;
-        self.incrementRetainCount(local, retained_counts, 1);
+        incrementRetainCount(local, retained_counts, 1);
     }
 
     fn freshInputRetainCount(self: *ProcPass, local: LocalId, occurrence_count: u16) u16 {
@@ -1583,8 +1582,7 @@ const ProcPass = struct {
         return occurrence_count;
     }
 
-    fn incrementRetainCount(self: *ProcPass, local: LocalId, retained_counts: []u16, delta: u16) void {
-        _ = self;
+    fn incrementRetainCount(local: LocalId, retained_counts: []u16, delta: u16) void {
         const local_idx = @intFromEnum(local);
         const next = retained_counts[local_idx] + delta;
         std.debug.assert(next >= retained_counts[local_idx]);

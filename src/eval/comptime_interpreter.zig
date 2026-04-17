@@ -1128,7 +1128,7 @@ pub const Interpreter = struct {
 
         const rendered = blk: {
             if (value_rt_var) |rt_var| {
-                break :blk try self.renderValueRocWithType(value, rt_var, roc_ops);
+                break :blk try self.renderValueRocWithType(value, rt_var);
             } else {
                 break :blk try self.renderValueRoc(value);
             }
@@ -1981,15 +1981,15 @@ pub const Interpreter = struct {
                                 value.layout.data.scalar.tag == .frac or
                                 value.layout.data.scalar.tag == .str);
                         if (is_builtin_primitive) {
-                            break :blk try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
+                            break :blk try self.renderValueRocWithType(value, effective_rt_var);
                         }
                         break :blk try self.allocator.dupe(u8, "<opaque>");
                     } else {
                         // Nominal types render their inner value directly (no prefix)
-                        break :blk try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
+                        break :blk try self.renderValueRocWithType(value, effective_rt_var);
                     }
                 } else blk: {
-                    break :blk try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
+                    break :blk try self.renderValueRocWithType(value, effective_rt_var);
                 };
                 defer self.allocator.free(rendered);
 
@@ -6818,8 +6818,7 @@ pub const Interpreter = struct {
     }
 
     // Helper for REPL and tests: render a value given its runtime type var.
-    pub fn renderValueRocWithType(self: *Interpreter, value: StackValue, rt_var: types.Var, roc_ops: *RocOps) Error![]u8 {
-        _ = roc_ops;
+    pub fn renderValueRocWithType(self: *Interpreter, value: StackValue, rt_var: types.Var) Error![]u8 {
         var ctx = self.makeRenderCtx();
         return render_helpers.renderValueRocWithType(&ctx, value, rt_var);
     }
@@ -11250,8 +11249,7 @@ pub const Interpreter = struct {
 
                 if (func_expr_check == .e_lookup_external) {
                     const lookup = func_expr_check.e_lookup_external;
-                    const target = try self.resolveExternalLookupTarget(self.env, lookup, roc_ops);
-                    _ = target;
+                    _ = try self.resolveExternalLookupTarget(self.env, lookup, roc_ops);
                 }
 
                 // Check if this is an error expression that shouldn't be called
@@ -15235,7 +15233,7 @@ pub const Interpreter = struct {
                 // Pop evaluated value from stack
                 const value = value_stack.pop() orelse return error.Crash;
                 defer value.decref(&self.runtime_layout_store, roc_ops);
-                const rendered = try self.renderValueRocWithType(value, dp.inner_rt_var, roc_ops);
+                const rendered = try self.renderValueRocWithType(value, dp.inner_rt_var);
                 defer self.allocator.free(rendered);
                 roc_ops.dbg(rendered);
                 // Return {} (empty record) - dbg always returns unit like expect
@@ -16536,7 +16534,7 @@ pub const Interpreter = struct {
                 // Dbg statement: print value
                 const value = value_stack.pop() orelse return error.Crash;
                 defer value.decref(&self.runtime_layout_store, roc_ops);
-                const rendered = try self.renderValueRocWithType(value, value.rt_var, roc_ops);
+                const rendered = try self.renderValueRocWithType(value, value.rt_var);
                 defer self.allocator.free(rendered);
                 roc_ops.dbg(rendered);
                 // Continue with remaining statements

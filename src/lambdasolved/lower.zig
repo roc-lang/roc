@@ -23,6 +23,7 @@ pub const Result = struct {
     strings: base.StringLiteral.Store,
     idents: base.Ident.Store,
     attached_method_index: symbol_mod.AttachedMethodIndex,
+    builtin_attached_method_index: symbol_mod.BuiltinAttachedMethodIndex,
     runtime_inspect_symbols: std.AutoHashMap(Symbol, Symbol),
 
     pub fn deinit(self: *Result) void {
@@ -33,6 +34,7 @@ pub const Result = struct {
         self.strings.deinit(self.store.allocator);
         self.idents.deinit(self.store.allocator);
         self.attached_method_index.deinit();
+        self.builtin_attached_method_index.deinit();
         self.runtime_inspect_symbols.deinit();
     }
 };
@@ -122,6 +124,7 @@ const Lowerer = struct {
             .strings = self.input.strings,
             .idents = self.input.idents,
             .attached_method_index = self.input.attached_method_index,
+            .builtin_attached_method_index = self.input.builtin_attached_method_index,
             .runtime_inspect_symbols = self.input.runtime_inspect_symbols,
         };
 
@@ -132,6 +135,7 @@ const Lowerer = struct {
         self.input.strings = .{};
         self.input.idents = try base.Ident.Store.initCapacity(self.allocator, 1);
         self.input.attached_method_index = symbol_mod.AttachedMethodIndex.init(self.allocator);
+        self.input.builtin_attached_method_index = symbol_mod.BuiltinAttachedMethodIndex.init(self.allocator);
         self.input.runtime_inspect_symbols = std.AutoHashMap(Symbol, Symbol).init(self.allocator);
         return result;
     }
@@ -2045,7 +2049,10 @@ const Lowerer = struct {
         switch (stmt.*) {
             .decl => |*decl| {
                 try self.propagateExprErasure(decl.body, venv);
-                decl.bind.ty = self.output.getExpr(decl.body).ty;
+                decl.bind.ty = try self.overlayErasureTemplate(
+                    self.output.getExpr(decl.body).ty,
+                    decl.bind.ty,
+                );
                 return try self.extendEnvOne(venv, .{
                     .symbol = decl.bind.symbol,
                     .ty = decl.bind.ty,
@@ -2053,7 +2060,10 @@ const Lowerer = struct {
             },
             .var_decl => |*decl| {
                 try self.propagateExprErasure(decl.body, venv);
-                decl.bind.ty = self.output.getExpr(decl.body).ty;
+                decl.bind.ty = try self.overlayErasureTemplate(
+                    self.output.getExpr(decl.body).ty,
+                    decl.bind.ty,
+                );
                 return try self.extendEnvOne(venv, .{
                     .symbol = decl.bind.symbol,
                     .ty = decl.bind.ty,

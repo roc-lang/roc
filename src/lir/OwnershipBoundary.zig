@@ -21,14 +21,10 @@ pub const UseClass = enum {
 };
 
 /// Marker for builtin/runtime-internal RC sites.
-pub inline fn builtinRuntimeInternal(comptime site: []const u8) void {
-    _ = site;
-}
+pub inline fn builtinRuntimeInternal(comptime _: []const u8) void {}
 
 /// Marker for the only legal non-builtin RC execution/lowering sites.
-pub inline fn explicitLirRcExecution(comptime site: []const u8) void {
-    _ = site;
-}
+pub inline fn explicitLirRcExecution(comptime _: []const u8) void {}
 
 /// Debug-only trap for ordinary interpreter RC outside explicit RC statements.
 pub inline fn forbiddenInterpreterOrdinaryRc(comptime site: []const u8) void {
@@ -52,4 +48,3 @@ fn violation(comptime message: []const u8, comptime site: []const u8) void {
         unreachable;
     }
 }
-

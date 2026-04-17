@@ -33,6 +33,18 @@ pub const AttachedMethodKey = struct {
 
 pub const AttachedMethodIndex = std.AutoHashMap(AttachedMethodKey, Symbol);
 
+pub const BuiltinAttachedMethodOwner = enum {
+    list,
+    box,
+};
+
+pub const BuiltinAttachedMethodKey = struct {
+    owner: BuiltinAttachedMethodOwner,
+    method_ident: base.Ident.Idx,
+};
+
+pub const BuiltinAttachedMethodIndex = std.AutoHashMap(BuiltinAttachedMethodKey, Symbol);
+
 pub const BindingOrigin = union(enum) {
     top_level_def: struct {
         module_idx: u32,
