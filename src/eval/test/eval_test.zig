@@ -4224,6 +4224,54 @@ test "dev: Str.inspect through polymorphic wrapper" {
     , "\"42\"");
 }
 
+test "dev: tuple match - first branch matches" {
+    try runDevOnlyExpectStr(
+        \\match (1, 2) {
+        \\    (1, 2) => "1, 2 (correct)"
+        \\    _ => "any (incorrect)"
+        \\}
+    , "\"1, 2 (correct)\"");
+}
+
+test "dev: tuple match - wildcard branch matches when first does not" {
+    try runDevOnlyExpectStr(
+        \\match (1, 2) {
+        \\    (3, 4) => "3, 4 (incorrect)"
+        \\    _ => "any (correct)"
+        \\}
+    , "\"any (correct)\"");
+}
+
+test "dev: tuple match - wildcard branch matches when two tuple branches do not" {
+    try runDevOnlyExpectStr(
+        \\match (1, 2) {
+        \\    (5, 6) => "5, 6 (incorrect)"
+        \\    (3, 4) => "3, 4 (incorrect)"
+        \\    _ => "any (correct)"
+        \\}
+    , "\"any (correct)\"");
+}
+
+test "dev: tuple match - second tuple branch matches" {
+    try runDevOnlyExpectStr(
+        \\match (1, 2) {
+        \\    (5, 6) => "5, 6 (incorrect)"
+        \\    (1, 2) => "1, 2 (correct)"
+        \\    (3, 4) => "3, 4 (incorrect)"
+        \\    _ => "any (incorrect)"
+        \\}
+    , "\"1, 2 (correct)\"");
+}
+
+test "dev: str match - wildcard branch matches when literal does not" {
+    try runDevOnlyExpectStr(
+        \\match "foo" {
+        \\    "bar" => "bar (incorrect)"
+        \\    _ => "any (correct)"
+        \\}
+    , "\"any (correct)\"");
+}
+
 test "focused: polymorphic additional specialization via List.append (non-eq)" {
     try runExpectI64(
         \\{

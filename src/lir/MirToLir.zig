@@ -5693,10 +5693,23 @@ fn lowerPatternInternal(
                 .args = lir_args,
             } }, region);
         },
-        .int_literal => |i| self.lir_store.addPattern(.{ .int_literal = .{
-            .value = i.value.toI128(),
-            .layout_idx = runtime_layout,
-        } }, region),
+        .int_literal => |i| blk: {
+            // A raw integer literal in pattern position must match the scrutinee's
+            // runtime encoding. For Dec, values are stored scaled by 10^18, so the
+            // literal must be scaled the same way the matching expression-side
+            // lowering does (see `lowerInt`). Without this, a pattern like `(1, 2)`
+            // against a Dec tuple fails to match because the scrutinee is 10^18
+            // while the raw literal is 1.
+            var val = i.value.toI128();
+            if (runtime_layout == .dec) {
+                const one_point_zero: i128 = 1_000_000_000_000_000_000;
+                val *= one_point_zero;
+            }
+            break :blk self.lir_store.addPattern(.{ .int_literal = .{
+                .value = val,
+                .layout_idx = runtime_layout,
+            } }, region);
+        },
         .str_literal => |s| blk: {
             const lir_str_idx = try self.copyStringToLir(s);
             break :blk self.lir_store.addPattern(.{ .str_literal = lir_str_idx }, region);
