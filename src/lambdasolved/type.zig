@@ -174,6 +174,15 @@ pub const Store = struct {
         };
     }
 
+    pub fn unlinkConst(self: *const Store, id: TypeVarId) TypeVarId {
+        const node = self.getNode(id);
+        return switch (node) {
+            .link => |next| self.unlinkConst(next),
+            .nominal => |nominal| self.unlinkConst(nominal.backing),
+            else => id,
+        };
+    }
+
     pub fn unlinkPreservingNominal(self: *Store, id: TypeVarId) TypeVarId {
         const node = self.getNode(id);
         return switch (node) {
@@ -292,8 +301,8 @@ pub const Store = struct {
         return self.lambdas.items[span.start..][0..span.len];
     }
 
-    pub fn fnShape(self: *Store, ty: TypeVarId) FnShape {
-        const id = self.unlink(ty);
+    pub fn fnShape(self: *const Store, ty: TypeVarId) FnShape {
+        const id = self.unlinkConst(ty);
         return switch (self.getNode(id)) {
             .content => |content| switch (content) {
                 .func => |func| .{
@@ -307,9 +316,9 @@ pub const Store = struct {
         };
     }
 
-    pub fn lambdaRepr(self: *Store, fn_ty: TypeVarId) LambdaRepr {
+    pub fn lambdaRepr(self: *const Store, fn_ty: TypeVarId) LambdaRepr {
         const fn_shape = self.fnShape(fn_ty);
-        const lset = self.unlink(fn_shape.lset);
+        const lset = self.unlinkConst(fn_shape.lset);
         return switch (self.getNode(lset)) {
             .content => |content| switch (content) {
                 .lambda_set => |span| .{ .lset = self.sliceLambdas(span) },
@@ -324,7 +333,7 @@ pub const Store = struct {
         };
     }
 
-    pub fn maybeLambdaMember(self: *Store, fn_ty: TypeVarId, symbol: Symbol) ?LambdaMember {
+    pub fn maybeLambdaMember(self: *const Store, fn_ty: TypeVarId, symbol: Symbol) ?LambdaMember {
         return switch (self.lambdaRepr(fn_ty)) {
             .erased => null,
             .lset => |lambdas| {
@@ -340,12 +349,12 @@ pub const Store = struct {
         };
     }
 
-    pub fn requireLambdaMember(self: *Store, fn_ty: TypeVarId, symbol: Symbol) LambdaMember {
+    pub fn requireLambdaMember(self: *const Store, fn_ty: TypeVarId, symbol: Symbol) LambdaMember {
         return self.maybeLambdaMember(fn_ty, symbol) orelse
             debugPanic("lambdasolved.type requireLambdaMember missing lambda in lambda set");
     }
 
-    pub fn hasCapturelessLambda(self: *Store, fn_ty: TypeVarId, symbol: Symbol) bool {
+    pub fn hasCapturelessLambda(self: *const Store, fn_ty: TypeVarId, symbol: Symbol) bool {
         const member = self.maybeLambdaMember(fn_ty, symbol) orelse return false;
         return member.captures.len == 0;
     }

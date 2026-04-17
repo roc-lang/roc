@@ -56,7 +56,7 @@ const Lowerer = struct {
     root_defs: std.ArrayList(ast.DefId),
     types: type_mod.Store,
     def_id_by_symbol: std.AutoHashMap(Symbol, ast.DefId),
-    source_fn_capture_spans: std.AutoHashMap(Symbol, LiftedAst.Span(LiftedAst.TypedSymbol)),
+    lifted_fn_capture_spans: std.AutoHashMap(Symbol, LiftedAst.Span(LiftedAst.TypedSymbol)),
     current_return_ty: ?TypeVarId,
     current_def_symbol: ?Symbol,
     current_opaque_unify: ?DebugNominalContext,
@@ -99,7 +99,7 @@ const Lowerer = struct {
             .root_defs = .empty,
             .types = type_mod.Store.init(allocator),
             .def_id_by_symbol = std.AutoHashMap(Symbol, ast.DefId).init(allocator),
-            .source_fn_capture_spans = std.AutoHashMap(Symbol, LiftedAst.Span(LiftedAst.TypedSymbol)).init(allocator),
+            .lifted_fn_capture_spans = std.AutoHashMap(Symbol, LiftedAst.Span(LiftedAst.TypedSymbol)).init(allocator),
             .current_return_ty = null,
             .current_def_symbol = null,
             .current_opaque_unify = null,
@@ -111,7 +111,7 @@ const Lowerer = struct {
 
     fn deinit(self: *Lowerer) void {
         self.def_id_by_symbol.deinit();
-        self.source_fn_capture_spans.deinit();
+        self.lifted_fn_capture_spans.deinit();
         self.types.deinit();
         self.root_defs.deinit(self.allocator);
         self.output.deinit();
@@ -164,13 +164,13 @@ const Lowerer = struct {
     fn instantiateDef(self: *Lowerer, def: LiftedAst.Def) std.mem.Allocator.Error!ast.DefId {
         const bind = try self.instantiateTypedSymbol(def.bind);
         return switch (def.value) {
-            .fn_ => |fn_def| blk: {
-                try self.source_fn_capture_spans.put(bind.symbol, fn_def.captures);
+            .fn_ => |lifted_fn_def| blk: {
+                try self.lifted_fn_capture_spans.put(bind.symbol, lifted_fn_def.captures);
                 break :blk self.emitDef(.{
                     .bind = bind,
                     .value = .{ .fn_ = .{
-                        .arg = try self.instantiateTypedSymbol(fn_def.arg),
-                        .body = try self.instantiateExpr(fn_def.body),
+                        .arg = try self.instantiateTypedSymbol(lifted_fn_def.arg),
+                        .body = try self.instantiateExpr(lifted_fn_def.body),
                     } },
                 });
             },
@@ -213,9 +213,9 @@ const Lowerer = struct {
         return try self.output.addTypedSymbolSpan(out);
     }
 
-    fn instantiateSourceFnCaptures(self: *Lowerer, symbol: Symbol) std.mem.Allocator.Error![]ast.TypedSymbol {
-        const span = self.source_fn_capture_spans.get(symbol) orelse
-            debugPanic("lambdasolved.instantiateSourceFnCaptures missing source capture metadata", .{});
+    fn instantiateLiftedFnCaptures(self: *Lowerer, symbol: Symbol) std.mem.Allocator.Error![]ast.TypedSymbol {
+        const span = self.lifted_fn_capture_spans.get(symbol) orelse
+            debugPanic("lambdasolved.instantiateLiftedFnCaptures missing lifted capture metadata", .{});
         const values = self.input.store.sliceTypedSymbolSpan(span);
         const out = try self.allocator.alloc(ast.TypedSymbol, values.len);
         errdefer self.allocator.free(out);
@@ -608,7 +608,7 @@ const Lowerer = struct {
     }
 
     fn inferFn(self: *Lowerer, venv: []const EnvEntry, fn_entry: EnvEntry, fn_def: ast.FnDef) std.mem.Allocator.Error!TypeVarId {
-        const captures = try self.instantiateSourceFnCaptures(fn_entry.symbol);
+        const captures = try self.instantiateLiftedFnCaptures(fn_entry.symbol);
         defer self.allocator.free(captures);
         const captures_env = try self.allocator.alloc(EnvEntry, captures.len + 2);
         defer self.allocator.free(captures_env);

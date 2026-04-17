@@ -10,23 +10,10 @@ const symbol_mod = @import("symbol");
 const TypeVarId = solved.Type.TypeVarId;
 const Symbol = symbol_mod.Symbol;
 
-pub const CaptureInfo = struct {
-    captures: []const solved.Type.Capture,
-    ty: mono.TypeId,
-};
-
 pub const CaptureBinding = struct {
     symbol: Symbol,
-    solved_ty: TypeVarId,
     lowered_ty: mono.TypeId,
 };
-
-pub const SpecificLambdaRepr = union(enum) {
-    toplevel,
-    lset: CaptureInfo,
-};
-
-pub const LambdaRepr = solved.Type.LambdaRepr;
 
 pub const MonoCache = struct {
     active: std.AutoHashMap(TypeVarId, mono.TypeId),
@@ -47,44 +34,6 @@ pub const MonoCache = struct {
         self.active.deinit();
     }
 };
-
-pub fn extractFn(types: *solved.Type.Store, ty: TypeVarId) struct {
-    arg: TypeVarId,
-    lset: TypeVarId,
-    ret: TypeVarId,
-} {
-    const shape = types.fnShape(ty);
-    return .{
-        .arg = shape.arg,
-        .lset = shape.lset,
-        .ret = shape.ret,
-    };
-}
-
-pub fn lambdaRepr(types: *solved.Type.Store, ty: TypeVarId) LambdaRepr {
-    return types.lambdaRepr(ty);
-}
-
-pub fn extractLsetFn(
-    types: *solved.Type.Store,
-    mono_types: *mono.Store,
-    mono_cache: *MonoCache,
-    ty: TypeVarId,
-    lambda_symbol: Symbol,
-    symbols: *const symbol_mod.Store,
-) std.mem.Allocator.Error!SpecificLambdaRepr {
-    return switch (lambdaRepr(types, ty)) {
-        .erased => debugPanic("lambdamono.lower_type.extractLsetFn attempted concrete lambda extraction from erased callable"),
-        .lset => blk: {
-            const member = types.requireLambdaMember(ty, lambda_symbol);
-            if (member.captures.len == 0) break :blk .toplevel;
-            break :blk .{ .lset = .{
-                .captures = member.captures,
-                .ty = try lowerCaptures(types, mono_types, mono_cache, member.captures, symbols),
-            } };
-        },
-    };
-}
 
 pub fn lowerCaptureBindings(
     _: *solved.Type.Store,
@@ -155,7 +104,7 @@ fn lowerTypeRec(
                 .backing = try lowerTypeRec(types, mono_types, mono_cache, nominal.backing, symbols),
             } };
         },
-        .for_a, .unbd => .unbd,
+        .for_a, .unbd => .{ .tag_union = .{ .tags = &.{} } },
         .content => |content| switch (content) {
             .func => blk: {
                 const unit_ty = try mono_types.internResolved(.{
@@ -291,7 +240,6 @@ pub fn lowerCaptures(
     for (captures, 0..) |capture, i| {
         capture_bindings[i] = .{
             .symbol = capture.symbol,
-            .solved_ty = capture.ty,
             .lowered_ty = try lowerTypeRec(types, mono_types, mono_cache, capture.ty, symbols),
         };
     }
@@ -324,9 +272,4 @@ fn lambdaSetIsErased(types: *solved.Type.Store, lset: TypeVarId) bool {
 
 pub fn lambdaTagKey(symbol: Symbol) mono.TagName {
     return .{ .lambda = symbol };
-}
-
-fn debugPanic(comptime msg: []const u8) noreturn {
-    @branchHint(.cold);
-    std.debug.panic("{s}", .{msg});
 }
