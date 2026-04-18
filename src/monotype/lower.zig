@@ -5845,7 +5845,7 @@ pub const Lowerer = struct {
                     self.ctx.typedCirModule(module_idx).commonIdents().is_eq,
                 ) orelse debugPanic(
                     "monotype invariant violated: nominal eq binop expr {d} missing checked callable type",
-                    .{ @intFromEnum(expr_idx) },
+                    .{@intFromEnum(expr_idx)},
                 );
                 const eq_expr = try self.lowerMethodCallExpr(
                     module_idx,
