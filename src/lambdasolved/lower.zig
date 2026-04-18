@@ -1008,7 +1008,19 @@ const Lowerer = struct {
                     current_fn_ty = fn_parts.ret;
                 }
                 if (method_args.len == 0) {
-                    try self.unify(target_ty, current_fn_ty);
+                    const current_root = self.types.unlinkConst(current_fn_ty);
+                    switch (self.types.getNode(current_root)) {
+                        .content => |content| switch (content) {
+                            .func => {
+                                const fn_parts = self.types.fnShape(current_fn_ty);
+                                try step_arg_tys.append(self.allocator, fn_parts.arg);
+                                try step_result_tys.append(self.allocator, fn_parts.ret);
+                                try self.unify(target_ty, fn_parts.ret);
+                            },
+                            else => try self.unify(target_ty, current_fn_ty),
+                        },
+                        else => try self.unify(target_ty, current_fn_ty),
+                    }
                 }
                 const out_expr = &self.output.exprs.items[@intFromEnum(expr_id)];
                 out_expr.data.method_call.step_arg_tys = try self.types.addTypeVarSpan(step_arg_tys.items);
@@ -2755,6 +2767,7 @@ const Lowerer = struct {
                             .ty = try self.instantiateGeneralizedRec(field.ty, mapping),
                         };
                     }
+                    sortFieldsByName(&self.input.idents, out);
                     break :blk type_mod.Node{ .content = .{
                         .record = .{ .fields = try self.types.addFields(out) },
                     } };
@@ -3384,6 +3397,7 @@ const Lowerer = struct {
             }
         }
 
+        sortFieldsByName(&self.input.idents, merged.items);
         return try self.types.addFields(merged.items);
     }
 
@@ -3539,6 +3553,18 @@ fn assertSortedFields(idents: *const base.Ident.Store, fields: []const type_mod.
             .gt => debugPanic("lambdasolved lowered record fields were not pre-sorted", .{}),
         }
     }
+}
+
+fn sortFieldsByName(idents: *const base.Ident.Store, fields: []type_mod.Field) void {
+    std.mem.sort(type_mod.Field, fields, idents, struct {
+        fn lessThan(store: *const base.Ident.Store, a: type_mod.Field, b: type_mod.Field) bool {
+            return std.mem.lessThan(
+                u8,
+                store.getText(a.name),
+                store.getText(b.name),
+            );
+        }
+    }.lessThan);
 }
 
 fn debugPanic(comptime msg: []const u8, args: anytype) noreturn {

@@ -302,6 +302,30 @@ fn countExecutableBridgeNodes(executable: *const lambdamono.Lower.Result) usize 
     return count;
 }
 
+fn countUniqueDirectCallTargetsNamed(
+    allocator: std.mem.Allocator,
+    executable: *const lambdamono.Lower.Result,
+) !usize {
+    var seen = std.AutoHashMap(u32, void).init(allocator);
+    defer seen.deinit();
+
+    for (executable.store.exprs.items) |expr| {
+        switch (expr.data) {
+            .call => |call| {
+                const entry = executable.symbols.get(call.proc);
+                switch (entry.origin) {
+                    .specialized_local_fn => {},
+                    else => continue,
+                }
+                try seen.put(call.proc.raw(), {});
+            },
+            else => {},
+        }
+    }
+
+    return seen.count();
+}
+
 fn countIrBridgeNodes(ir_result: *const ir.Lower.Result) usize {
     var count: usize = 0;
     for (ir_result.store.exprs.items) |expr| {
@@ -339,6 +363,33 @@ fn collectSpecializedLocalFnResultTypes(
                 const result_ty = def.result_ty orelse
                     @panic("cor pipeline test expected specialized def result type");
                 try out.append(allocator, result_ty);
+            },
+            else => {},
+        }
+    }
+
+    return try out.toOwnedSlice(allocator);
+}
+
+fn collectSpecializedLocalFnFirstArgTypes(
+    allocator: std.mem.Allocator,
+    executable: *const lambdamono.Lower.Result,
+) ![]const lambdamono.Type.TypeId {
+    var out = std.ArrayList(lambdamono.Type.TypeId).empty;
+    errdefer out.deinit(allocator);
+
+    for (executable.store.defsSlice()) |def| {
+        const origin = executable.symbols.get(def.bind).origin;
+        switch (origin) {
+            .specialized_local_fn => switch (def.value) {
+                .fn_ => |fn_def| {
+                    const args = executable.store.sliceTypedSymbolSpan(fn_def.args);
+                    if (args.len == 0) {
+                        @panic("cor pipeline test expected specialized local fn to have at least one arg");
+                    }
+                    try out.append(allocator, args[0].ty);
+                },
+                else => @panic("cor pipeline test expected specialized local fn def"),
             },
             else => {},
         }
@@ -531,6 +582,18 @@ const additional_specialization_via_list_append_source =
     \\        append_one = |acc, x| List.append(acc, x)
     \\        _first_len = List.fold([1.I64, 2.I64], List.with_capacity(1), append_one).len()
     \\        List.fold([[1.I64, 2.I64], [3.I64, 4.I64]], List.with_capacity(1), append_one).len()
+    \\    }
+;
+
+const polymorphic_two_list_types_source =
+    \\main =
+    \\    {
+    \\        my_len = |list| list.len()
+    \\        a : List(I64)
+    \\        a = [1, 2, 3]
+    \\        b : List(Str)
+    \\        b = ["x", "y"]
+    \\        my_len(a) + my_len(b)
     \\    }
 ;
 
@@ -1495,6 +1558,35 @@ test "cor pipeline - lowering local callback specialization uses two distinct co
     try testing.expect(!executable.executable.types.equalIds(result_tys[0], result_tys[1]));
     try testing.expect(!executable.executable.types.containsAbstractLeaf(result_tys[0]));
     try testing.expect(!executable.executable.types.containsAbstractLeaf(result_tys[1]));
+}
+
+test "cor pipeline - lowering polymorphic two-list helper uses two distinct concrete defs" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const arena_allocator = arena.allocator();
+    var executable = try compileExecutableProgram(arena_allocator, .module, polymorphic_two_list_types_source, &.{});
+    defer executable.deinit(arena_allocator);
+
+    try testing.expectEqual(@as(usize, 2), countSpecializedLocalFnDefs(&executable.executable));
+    try testing.expectEqual(@as(usize, 2), try countUniqueDirectCallTargetsNamed(
+        arena_allocator,
+        &executable.executable,
+    ));
+    try testing.expectEqual(@as(usize, 0), countExecutableBridgeNodes(&executable.executable));
+
+    const arg_tys = try collectSpecializedLocalFnFirstArgTypes(
+        arena_allocator,
+        &executable.executable,
+    );
+    try testing.expectEqual(@as(usize, 2), arg_tys.len);
+    try testing.expect(!executable.executable.types.equalIds(arg_tys[0], arg_tys[1]));
+    try testing.expect(!executable.executable.types.containsAbstractLeaf(arg_tys[0]));
+    try testing.expect(!executable.executable.types.containsAbstractLeaf(arg_tys[1]));
+
+    var ir_program = try compileIrProgram(arena_allocator, .module, polymorphic_two_list_types_source, &.{});
+    defer ir_program.deinit(arena_allocator);
+    try testing.expectEqual(@as(usize, 0), countIrBridgeNodes(&ir_program.ir_result));
 }
 
 test "cor pipeline - lowering direct-only higher-order call has no executable or ir bridges" {

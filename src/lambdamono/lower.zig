@@ -1137,6 +1137,15 @@ const Lowerer = struct {
                             .ty = try self.lowerExecutableTypeWithBoxErasureRec(solved_types, mono_cache, field.ty),
                         };
                     }
+                    std.mem.sort(type_mod.Field, out, &self.input.idents, struct {
+                        fn lessThan(idents: *const base.Ident.Store, a: type_mod.Field, b: type_mod.Field) bool {
+                            return std.mem.lessThan(
+                                u8,
+                                idents.getText(a.name),
+                                idents.getText(b.name),
+                            );
+                        }
+                    }.lessThan);
                     assertSortedFields(&self.input.idents, out);
                     break :blk .{ .record = .{
                         .fields = try self.types.dupeFields(out),
@@ -1963,7 +1972,8 @@ const Lowerer = struct {
         const fn_ty = try self.cloneInstType(&inst, pending.fn_ty);
         const member = inst.types.requireLambdaMember(fn_ty, pending.name);
         const requested_ty = try self.cloneTypeIntoInstFromStore(&inst, &pending.requested_types, pending.requested_ty);
-        const requested_fn_shape = inst.types.fnShape(requested_ty);
+        const requested_snapshot_ty = try self.cloneTypeIntoInstFromStore(&inst, &pending.requested_types, pending.requested_ty);
+        const requested_fn_shape = inst.types.fnShape(requested_snapshot_ty);
         try self.unifyIn(&inst.types, fn_ty, requested_ty);
 
         return .{
@@ -2165,25 +2175,39 @@ const Lowerer = struct {
         errdefer mono_cache.deinit();
 
         const exact_fn_ty = try self.cloneInstType(&inst, entry.fn_ty);
-        var mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
-        defer mapping.deinit();
+        var snapshot_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
+        defer snapshot_mapping.deinit();
+        const snapshot_receiver_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &snapshot_mapping, receiver_ty);
+        const snapshot_arg_tys = try self.allocator.alloc(TypeVarId, arg_tys.len);
+        errdefer self.allocator.free(snapshot_arg_tys);
+        for (arg_tys, 0..) |arg_ty, i| {
+            snapshot_arg_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &snapshot_mapping, arg_ty);
+        }
+        const snapshot_step_result_tys = try self.allocator.alloc(TypeVarId, step_result_tys.len);
+        errdefer self.allocator.free(snapshot_step_result_tys);
+        for (step_result_tys, 0..) |step_result_ty, i| {
+            snapshot_step_result_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &snapshot_mapping, step_result_ty);
+        }
+        const all_step_arg_tys = try self.allocator.alloc(TypeVarId, snapshot_arg_tys.len + 1);
+        errdefer self.allocator.free(all_step_arg_tys);
+        all_step_arg_tys[0] = snapshot_receiver_ty;
+        for (snapshot_arg_tys, 0..) |arg_ty, i| {
+            all_step_arg_tys[i + 1] = arg_ty;
+        }
 
-        const cloned_receiver_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &mapping, receiver_ty);
+        var unify_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
+        defer unify_mapping.deinit();
+
+        const cloned_receiver_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &unify_mapping, receiver_ty);
         const cloned_arg_tys = try self.allocator.alloc(TypeVarId, arg_tys.len);
         defer self.allocator.free(cloned_arg_tys);
         for (arg_tys, 0..) |arg_ty, i| {
-            cloned_arg_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &mapping, arg_ty);
+            cloned_arg_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &unify_mapping, arg_ty);
         }
         const cloned_step_result_tys = try self.allocator.alloc(TypeVarId, step_result_tys.len);
         defer self.allocator.free(cloned_step_result_tys);
         for (step_result_tys, 0..) |step_result_ty, i| {
-            cloned_step_result_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &mapping, step_result_ty);
-        }
-        const all_step_arg_tys = try self.allocator.alloc(TypeVarId, cloned_arg_tys.len + 1);
-        errdefer self.allocator.free(all_step_arg_tys);
-        all_step_arg_tys[0] = cloned_receiver_ty;
-        for (cloned_arg_tys, 0..) |arg_ty, i| {
-            all_step_arg_tys[i + 1] = arg_ty;
+            cloned_step_result_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &unify_mapping, step_result_ty);
         }
 
         var steps = std.ArrayList(TypeVarId).empty;
@@ -2211,7 +2235,7 @@ const Lowerer = struct {
             current_fn_ty = step_result_ty;
         }
 
-        const cloned_env = try self.cloneEnvIntoInstFromStoreWithMapping(&inst, &mono_cache, source_types, &mapping, venv);
+        const cloned_env = try self.cloneEnvIntoInstFromStoreWithMapping(&inst, &mono_cache, source_types, &snapshot_mapping, venv);
 
         return .{
             .inst = inst,
@@ -2219,7 +2243,7 @@ const Lowerer = struct {
             .env = cloned_env,
             .fn_ty = exact_fn_ty,
             .step_arg_tys = all_step_arg_tys,
-            .step_result_tys = try steps.toOwnedSlice(self.allocator),
+            .step_result_tys = snapshot_step_result_tys,
         };
     }
 
@@ -2304,21 +2328,35 @@ const Lowerer = struct {
         errdefer mono_cache.deinit();
 
         const exact_fn_ty = try self.cloneInstType(&inst, entry.fn_ty);
-        var mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
-        defer mapping.deinit();
+        var snapshot_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
+        defer snapshot_mapping.deinit();
+
+        const snapshot_arg_tys = try self.allocator.alloc(TypeVarId, arg_tys.len);
+        errdefer self.allocator.free(snapshot_arg_tys);
+        for (arg_tys, 0..) |arg_ty, i| {
+            snapshot_arg_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &snapshot_mapping, arg_ty);
+        }
+        const snapshot_step_result_tys = try self.allocator.alloc(TypeVarId, step_result_tys.len);
+        errdefer self.allocator.free(snapshot_step_result_tys);
+        for (step_result_tys, 0..) |step_result_ty, i| {
+            snapshot_step_result_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &snapshot_mapping, step_result_ty);
+        }
+        const all_step_arg_tys = try self.allocator.dupe(TypeVarId, snapshot_arg_tys);
+        errdefer self.allocator.free(all_step_arg_tys);
+
+        var unify_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
+        defer unify_mapping.deinit();
 
         const cloned_arg_tys = try self.allocator.alloc(TypeVarId, arg_tys.len);
         defer self.allocator.free(cloned_arg_tys);
         for (arg_tys, 0..) |arg_ty, i| {
-            cloned_arg_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &mapping, arg_ty);
+            cloned_arg_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &unify_mapping, arg_ty);
         }
         const cloned_step_result_tys = try self.allocator.alloc(TypeVarId, step_result_tys.len);
         defer self.allocator.free(cloned_step_result_tys);
         for (step_result_tys, 0..) |step_result_ty, i| {
-            cloned_step_result_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &mapping, step_result_ty);
+            cloned_step_result_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &unify_mapping, step_result_ty);
         }
-        const all_step_arg_tys = try self.allocator.dupe(TypeVarId, cloned_arg_tys);
-        errdefer self.allocator.free(all_step_arg_tys);
 
         var steps = std.ArrayList(TypeVarId).empty;
         defer steps.deinit(self.allocator);
@@ -2344,7 +2382,7 @@ const Lowerer = struct {
             }
         }
 
-        const cloned_env = try self.cloneEnvIntoInstFromStoreWithMapping(&inst, &mono_cache, source_types, &mapping, venv);
+        const cloned_env = try self.cloneEnvIntoInstFromStoreWithMapping(&inst, &mono_cache, source_types, &snapshot_mapping, venv);
 
         return .{
             .inst = inst,
@@ -2352,7 +2390,7 @@ const Lowerer = struct {
             .env = cloned_env,
             .fn_ty = exact_fn_ty,
             .step_arg_tys = all_step_arg_tys,
-            .step_result_tys = try steps.toOwnedSlice(self.allocator),
+            .step_result_tys = snapshot_step_result_tys,
         };
     }
 
@@ -4064,7 +4102,7 @@ const Lowerer = struct {
     fn specializeVarExpr(
         self: *Lowerer,
         inst: *InstScope,
-        _: *lower_type.MonoCache,
+        mono_cache: *lower_type.MonoCache,
         venv: []const EnvEntry,
         symbol: Symbol,
         instantiated_ty: TypeVarId,
@@ -4093,6 +4131,40 @@ const Lowerer = struct {
         }
 
         if (specializations.lookupFnExact(self.fenv, symbol)) |entry| {
+            switch (solved_types.lambdaRepr(instantiated_ty)) {
+                .lset => {
+                    const member = solved_types.requireLambdaMember(instantiated_ty, symbol);
+                    if (member.captures.len == 0) {
+                        return .{
+                            .ty = try self.makeSingletonExecutableLambdaType(symbol, null),
+                            .data = .{ .tag = .{
+                                .name = lower_type.lambdaTagKey(symbol),
+                                .discriminant = 0,
+                                .args = ast.Span(ast.ExprId).empty(),
+                            } },
+                        };
+                    }
+
+                    const capture_exec_ty = try self.lowerCaptureRecordTypeFromSolved(solved_types, mono_cache, member.captures);
+                    const precise_ty = try self.makeSingletonExecutableLambdaType(symbol, capture_exec_ty);
+                    const capture_env = try self.captureBindingsFromCaptures(member.captures, capture_exec_ty);
+                    defer self.allocator.free(capture_env);
+                    const capture_record = try self.specializeCaptureRecord(capture_env, capture_exec_ty);
+                    const args = try self.allocator.alloc(ast.ExprId, 1);
+                    defer self.allocator.free(args);
+                    args[0] = capture_record;
+                    return .{
+                        .ty = precise_ty,
+                        .data = .{ .tag = .{
+                            .name = lower_type.lambdaTagKey(symbol),
+                            .discriminant = 0,
+                            .args = try self.output.addExprSpan(args),
+                        } },
+                    };
+                },
+                .erased => {},
+            }
+
             var exact_inst = InstScope.init(self.allocator);
             defer exact_inst.deinit();
             var exact_mono_cache = lower_type.MonoCache.init(self.allocator);
@@ -4619,6 +4691,26 @@ const Lowerer = struct {
             } },
         });
         if (!self.types.equalIds(sig.ret_ty, result_exec_ty)) {
+            if (builtin.mode == .Debug) {
+                const entry = self.input.symbols.get(target_symbol);
+                const name = if (entry.name.isNone()) "<none>" else self.input.idents.getText(entry.name);
+                const actual = self.types.getTypePreservingNominal(sig.ret_ty);
+                const expected = self.types.getTypePreservingNominal(result_exec_ty);
+                std.debug.print(
+                    "[call-bridge] target={s} actual={s} expected={s}\n",
+                    .{
+                        name,
+                        switch (actual) {
+                            .primitive => |prim| @tagName(prim),
+                            else => @tagName(std.meta.activeTag(actual)),
+                        },
+                        switch (expected) {
+                            .primitive => |prim| @tagName(prim),
+                            else => @tagName(std.meta.activeTag(expected)),
+                        },
+                    },
+                );
+            }
             call_expr = try self.emitExplicitBridgeExpr(call_expr, result_exec_ty);
         }
         return call_expr;
@@ -4817,6 +4909,35 @@ const Lowerer = struct {
         );
         var current_expr = first_result.expr;
         current_fn_ty = first_result_source_ty;
+        if (method_args.len == 0 and step_result_tys.len > 1) {
+            if (step_arg_tys.len != 2 or step_result_tys.len != 2) {
+                debugPanic("lambdamono.lower.specializeMethodCallExpr zero-arg step arity mismatch");
+            }
+            const unit_ty = try self.lowerExecutableTypeFromSolvedIn(&frozen.inst.types, &frozen.mono_cache, step_arg_tys[1]);
+            const unit_expr = try self.output.addExpr(.{
+                .ty = unit_ty,
+                .data = .unit,
+            });
+            const call_target: CallTarget = .{ .expr = current_expr };
+            const unit_result_exec_ty = try self.lowerAppliedResultExecutableType(
+                &frozen.inst.types,
+                &frozen.mono_cache,
+                call_target,
+                step_result_tys[1],
+            );
+            const applied = try self.applyCallArg(
+                &frozen.inst,
+                &frozen.mono_cache,
+                frozen.env,
+                call_target,
+                null,
+                current_fn_ty,
+                unit_expr,
+                unit_result_exec_ty,
+            );
+            current_expr = applied.expr;
+            current_fn_ty = step_result_tys[1];
+        }
         for (method_args, 0..) |arg_expr_id, i| {
             const lowered_arg = try self.specializeExprAtSourceTy(
                 &frozen.inst,
@@ -5963,8 +6084,13 @@ const Lowerer = struct {
                 idents.getText(field.name),
             )) {
                 .lt => prev = field,
-                .eq => debugPanic("lambdamono lowered duplicate record field"),
-                .gt => debugPanic("lambdamono lowered record fields were not pre-sorted"),
+                .eq => debugPanicFmt("lambdamono lowered duplicate record field {s}", .{
+                    idents.getText(field.name),
+                }),
+                .gt => debugPanicFmt("lambdamono lowered record fields were not pre-sorted: {s} then {s}", .{
+                    idents.getText(prev.name),
+                    idents.getText(field.name),
+                }),
             }
         }
     }

@@ -253,6 +253,9 @@ pub const Store = struct {
 
     pub fn addFields(self: *Store, values: []const Field) std.mem.Allocator.Error!Span(Field) {
         if (values.len == 0) return Span(Field).empty();
+        if (values.len > 1) {
+            assertDistinctFields(values);
+        }
         const start: u32 = @intCast(self.fields.items.len);
         try self.fields.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
@@ -690,6 +693,18 @@ fn assertDistinctSortedCaptures(values: []const Capture) void {
             debugPanic("lambdasolved.type captures were not pre-sorted");
         }
         debugPanic("lambdasolved.type duplicate capture symbol reached addCaptures");
+    }
+}
+
+fn assertDistinctFields(values: []const Field) void {
+    if (values.len <= 1) return;
+
+    for (values, 0..) |field, i| {
+        for (values[i + 1 ..]) |other| {
+            if (field.name == other.name) {
+                debugPanic("lambdasolved.type duplicate record field reached addFields");
+            }
+        }
     }
 }
 
