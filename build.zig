@@ -802,8 +802,8 @@ const CheckPostcheckArchitectureStep = struct {
         var child_argv = std.ArrayList([]const u8).empty;
         defer child_argv.deinit(b.allocator);
 
-        try child_argv.append(b.allocator, "python3");
-        try child_argv.append(b.allocator, "ci/check_postcheck_architecture.py");
+        try child_argv.append(b.allocator, "perl");
+        try child_argv.append(b.allocator, "ci/check_postcheck_architecture.pl");
 
         var child = std.process.Child.init(child_argv.items, b.allocator);
         child.stdin_behavior = .Inherit;
@@ -816,13 +816,13 @@ const CheckPostcheckArchitectureStep = struct {
             .Exited => |code| {
                 if (code != 0) {
                     return step.fail(
-                        "Post-check architecture check failed. Run 'python3 ci/check_postcheck_architecture.py' to see details.",
+                        "Post-check architecture check failed. Run 'perl ci/check_postcheck_architecture.pl' to see details.",
                         .{},
                     );
                 }
             },
             else => {
-                return step.fail("ci/check_postcheck_architecture.py terminated abnormally", .{});
+                return step.fail("ci/check_postcheck_architecture.pl terminated abnormally", .{});
             },
         }
     }
@@ -1871,7 +1871,8 @@ const MiniCiStep = struct {
         var child_argv = std.ArrayList([]const u8).empty;
         defer child_argv.deinit(b.allocator);
 
-        try child_argv.append(b.allocator, "ci/check_postcheck_architecture.py");
+        try child_argv.append(b.allocator, "perl");
+        try child_argv.append(b.allocator, "ci/check_postcheck_architecture.pl");
 
         var child = std.process.Child.init(child_argv.items, b.allocator);
         child.stdin_behavior = .Inherit;
@@ -1884,13 +1885,13 @@ const MiniCiStep = struct {
             .Exited => |code| {
                 if (code != 0) {
                     return step.fail(
-                        "Post-check architecture check failed. Run 'ci/check_postcheck_architecture.py' to see details.",
+                        "Post-check architecture check failed. Run 'perl ci/check_postcheck_architecture.pl' to see details.",
                         .{},
                     );
                 }
             },
             else => {
-                return step.fail("ci/check_postcheck_architecture.py terminated abnormally", .{});
+                return step.fail("ci/check_postcheck_architecture.pl terminated abnormally", .{});
             },
         }
     }
