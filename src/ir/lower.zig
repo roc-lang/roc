@@ -250,10 +250,11 @@ const Lowerer = struct {
                     } });
                     block.setTerm(.{ .value = temp });
                 } else {
-                    block.setTerm(.{ .value = try self.lowerTypedSymbol(.{
-                        .ty = expr.ty,
-                        .symbol = symbol,
-                    }) });
+                    const symbol_entry = self.input.symbols.get(symbol);
+                    std.debug.panic(
+                        "ir.lower missing env binding for symbol {d} ident={any} origin {s}",
+                        .{ symbol.raw(), symbol_entry.name, @tagName(symbol_entry.origin) },
+                    );
                 }
             },
             .bool_lit => |value| try self.emitLeafExpr(&block, expr.ty, "bool", .{ .lit = .{ .bool = value } }),

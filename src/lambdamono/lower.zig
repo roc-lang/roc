@@ -323,6 +323,11 @@ const Lowerer = struct {
         };
     }
 
+    const SpecializedCallTarget = struct {
+        symbol: Symbol,
+        ret_ty: type_mod.TypeId,
+    };
+
     fn ensureSpecializedCallResult(
         self: *Lowerer,
         solved_types: *const solved.Type.Store,
@@ -330,7 +335,7 @@ const Lowerer = struct {
         repr_mode: specializations.Pending.ReprMode,
         requested_ty: TypeVarId,
         fallback_ret_ty: type_mod.TypeId,
-    ) std.mem.Allocator.Error!struct { symbol: Symbol, ret_ty: type_mod.TypeId } {
+    ) std.mem.Allocator.Error!SpecializedCallTarget {
         const specialized_symbol = try specializations.specializeFn(
             &self.queue,
             self.fenv,
@@ -2447,6 +2452,8 @@ const Lowerer = struct {
         var frozen = try self.freezeFnWorld(pending);
         defer frozen.deinit();
         const frozen_captures = frozen.inst.types.sliceCaptures(frozen.capture_span);
+        const fn_arg_symbol = pending.fn_def.arg.symbol;
+        const fn_body = pending.fn_def.body;
 
         const specialized_arg_exec_ty = try self.lowerExecutableTypeFromSolvedIn(&frozen.inst.types, &frozen.mono_cache, frozen.requested_fn_shape.arg);
         switch (frozen.inst.types.lambdaRepr(frozen.fn_ty)) {
@@ -2460,38 +2467,13 @@ const Lowerer = struct {
                 try self.lowerExecutableTypeFromSolvedIn(&frozen.inst.types, &frozen.mono_cache, frozen.requested_fn_shape.ret),
             .natural => try self.lowerExecutableTypeFromSolvedIn(&frozen.inst.types, &frozen.mono_cache, frozen.requested_fn_shape.ret),
         };
-        if (builtin.mode == .Debug) {
-            switch (self.input.symbols.get(pending.specialized_symbol).origin) {
-                .specialized_local_fn => |data| {
-                    const requested_ret = self.types.getTypePreservingNominal(specialized_ret_exec_ty);
-                    const frozen_ret_exec_ty = try self.lowerExecutableTypeFromSolvedIn(&frozen.inst.types, &frozen.mono_cache, frozen.fn_shape.ret);
-                    const frozen_ret = self.types.getTypePreservingNominal(frozen_ret_exec_ty);
-                    std.debug.print(
-                        "[specialize-fn-ret] pending={d} source_symbol={d} requested_ret={s} frozen_ret={s}\n",
-                        .{
-                            pending.specialized_symbol.raw(),
-                            data.source_symbol,
-                            switch (requested_ret) {
-                                .primitive => |prim| @tagName(prim),
-                                else => @tagName(std.meta.activeTag(requested_ret)),
-                            },
-                            switch (frozen_ret) {
-                                .primitive => |prim| @tagName(prim),
-                                else => @tagName(std.meta.activeTag(frozen_ret)),
-                            },
-                        },
-                    );
-                },
-                else => {},
-            }
-        }
         var final_ret_ty = specialized_ret_exec_ty;
         const result: ast.FnDef = switch (pending.repr_mode) {
             .natural => if (frozen_captures.len == 0) .{
                     .args = blk: {
                     break :blk try self.output.addTypedSymbolSpan(&.{.{
                         .ty = specialized_arg_exec_ty,
-                        .symbol = pending.fn_def.arg.symbol,
+                        .symbol = fn_arg_symbol,
                     }});
                 },
                 .body = blk: {
@@ -2499,11 +2481,11 @@ const Lowerer = struct {
                         &frozen.inst,
                         &frozen.mono_cache,
                         &.{.{
-                            .symbol = pending.fn_def.arg.symbol,
+                            .symbol = fn_arg_symbol,
                             .ty = frozen.requested_fn_shape.arg,
                             .exec_ty = specialized_arg_exec_ty,
                         }},
-                        pending.fn_def.body,
+                        fn_body,
                     );
                     const body_ty = self.output.getExpr(body).ty;
                     const fn_ret_exec_ty = if (self.executableTypeIsAbstract(specialized_ret_exec_ty) and
@@ -2518,21 +2500,21 @@ const Lowerer = struct {
                     final_ret_ty = fn_ret_exec_ty;
                     break :blk bridged;
                 },
-            } else blk: {
+                } else blk: {
                     const arg_ty = frozen.requested_fn_shape.arg;
                     const captures_symbol = try self.input.symbols.add(base.Ident.Idx.NONE, .synthetic);
                     const capture_exec_ty = try self.lowerCaptureRecordTypeFromSolved(&frozen.inst.types, &frozen.mono_cache, frozen_captures);
                     const arg_exec_ty = specialized_arg_exec_ty;
                     const capture_env = try self.captureBindingsFromCaptures(frozen_captures, capture_exec_ty);
                     defer self.allocator.free(capture_env);
-                    const body_env = try self.buildFnBodyEnv(arg_ty, arg_exec_ty, pending.fn_def.arg.symbol, capture_env);
+                    const body_env = try self.buildFnBodyEnv(arg_ty, arg_exec_ty, fn_arg_symbol, capture_env);
                     defer self.allocator.free(body_env);
 
                     var body = try self.specializeExpr(
                         &frozen.inst,
                         &frozen.mono_cache,
                         body_env,
-                        pending.fn_def.body,
+                        fn_body,
                     );
                     const body_ty = self.output.getExpr(body).ty;
                     const fn_ret_exec_ty = if (self.executableTypeIsAbstract(specialized_ret_exec_ty) and
@@ -2549,18 +2531,20 @@ const Lowerer = struct {
                         capture_env,
                         body,
                     );
+                    var args_buf = [_]ast.TypedSymbol{
+                        .{
+                            .ty = arg_exec_ty,
+                            .symbol = fn_arg_symbol,
+                        },
+                        .{
+                            .ty = capture_exec_ty,
+                            .symbol = captures_symbol,
+                        },
+                    };
+                    const args_span = try self.output.addTypedSymbolSpan(&args_buf);
                     final_ret_ty = fn_ret_exec_ty;
                     break :blk .{
-                        .args = try self.output.addTypedSymbolSpan(&.{
-                            .{
-                                .ty = arg_exec_ty,
-                                .symbol = pending.fn_def.arg.symbol,
-                            },
-                            .{
-                                .ty = capture_exec_ty,
-                                .symbol = captures_symbol,
-                            },
-                        }),
+                        .args = args_span,
                         .body = body,
                     };
                 },
@@ -2575,14 +2559,14 @@ const Lowerer = struct {
                     captures_ty = lowered_capture_ty;
                     capture_env = try self.captureBindingsFromCaptures(frozen_captures, lowered_capture_ty);
                 }
-                const body_env = try self.buildFnBodyEnv(arg_ty, arg_exec_ty, pending.fn_def.arg.symbol, capture_env);
+                const body_env = try self.buildFnBodyEnv(arg_ty, arg_exec_ty, fn_arg_symbol, capture_env);
                 defer self.allocator.free(body_env);
 
                 var body = try self.specializeExpr(
                     &frozen.inst,
                     &frozen.mono_cache,
                     body_env,
-                    pending.fn_def.body,
+                    fn_body,
                 );
                 if (self.types.getTypePreservingNominal(specialized_ret_exec_ty) == .erased_fn and
                     frozen.inst.types.maybeLambdaRepr(frozen.requested_fn_shape.ret) != null)
@@ -2612,7 +2596,7 @@ const Lowerer = struct {
                         .args = try self.output.addTypedSymbolSpan(&.{
                             .{
                                 .ty = arg_exec_ty,
-                                .symbol = pending.fn_def.arg.symbol,
+                                .symbol = fn_arg_symbol,
                             },
                             .{
                                 .ty = captures_ty.?,
@@ -2626,7 +2610,7 @@ const Lowerer = struct {
                 break :blk .{
                     .args = try self.output.addTypedSymbolSpan(&.{.{
                         .ty = arg_exec_ty,
-                        .symbol = pending.fn_def.arg.symbol,
+                        .symbol = fn_arg_symbol,
                     }}),
                     .body = body,
                 };
@@ -4720,10 +4704,30 @@ const Lowerer = struct {
         solved_types: *solved.Type.Store,
         mono_cache: *lower_type.MonoCache,
         call_target: CallTarget,
+        current_fn_ty: TypeVarId,
         result_source_ty: TypeVarId,
     ) std.mem.Allocator.Error!type_mod.TypeId {
         return switch (call_target) {
-            .exact_top_level => try self.lowerExecutableTypeFromSolvedIn(solved_types, mono_cache, result_source_ty),
+            .exact_top_level => |target_symbol| blk: {
+                const sig = try self.buildLsetSpecializationSig(
+                    solved_types,
+                    mono_cache,
+                    null,
+                    target_symbol,
+                    current_fn_ty,
+                );
+                if (self.isHostedFunctionSymbol(target_symbol)) {
+                    break :blk sig.ret_ty;
+                }
+                const specialized = try self.ensureSpecializedCallResult(
+                    solved_types,
+                    target_symbol,
+                    .natural,
+                    current_fn_ty,
+                    sig.ret_ty,
+                );
+                break :blk specialized.ret_ty;
+            },
             .expr => |func_expr| switch (self.types.getTypePreservingNominal(self.output.getExpr(func_expr).ty)) {
                 .erased_fn => if (solved_types.maybeLambdaRepr(result_source_ty) != null)
                     try self.lowerBoxBoundaryCallableTypeIn(solved_types, mono_cache, result_source_ty)
@@ -4768,7 +4772,7 @@ const Lowerer = struct {
             .erased => {},
         }
 
-        const specialized_call = if (self.isHostedFunctionSymbol(target_symbol))
+        const specialized_call: SpecializedCallTarget = if (self.isHostedFunctionSymbol(target_symbol))
             .{ .symbol = target_symbol, .ret_ty = sig.ret_ty }
         else
             try self.ensureSpecializedCallResult(
@@ -4786,26 +4790,6 @@ const Lowerer = struct {
             } },
         });
         if (!self.types.equalIds(specialized_call.ret_ty, result_exec_ty)) {
-            if (builtin.mode == .Debug) {
-                const entry = self.input.symbols.get(target_symbol);
-                const name = if (entry.name.isNone()) "<none>" else self.input.idents.getText(entry.name);
-                const actual = self.types.getTypePreservingNominal(specialized_call.ret_ty);
-                const expected = self.types.getTypePreservingNominal(result_exec_ty);
-                std.debug.print(
-                    "[call-bridge] target={s} actual={s} expected={s}\n",
-                    .{
-                        name,
-                        switch (actual) {
-                            .primitive => |prim| @tagName(prim),
-                            else => @tagName(std.meta.activeTag(actual)),
-                        },
-                        switch (expected) {
-                            .primitive => |prim| @tagName(prim),
-                            else => @tagName(std.meta.activeTag(expected)),
-                        },
-                    },
-                );
-            }
             call_expr = try self.emitExplicitBridgeExpr(call_expr, result_exec_ty);
         }
         return call_expr;
@@ -4987,6 +4971,7 @@ const Lowerer = struct {
             &frozen.inst.types,
             &frozen.mono_cache,
             first_call_target,
+            current_fn_ty,
             first_result_source_ty,
         );
         const first_result = try self.applyCallArg(
@@ -5015,6 +5000,7 @@ const Lowerer = struct {
                 &frozen.inst.types,
                 &frozen.mono_cache,
                 call_target,
+                current_fn_ty,
                 step_result_tys[1],
             );
             const applied = try self.applyCallArg(
@@ -5044,6 +5030,7 @@ const Lowerer = struct {
                 &frozen.inst.types,
                 &frozen.mono_cache,
                 call_target,
+                current_fn_ty,
                 step_result_source_ty,
             );
             const applied = try self.applyCallArg(
@@ -5122,6 +5109,7 @@ const Lowerer = struct {
                 &frozen.inst.types,
                 &frozen.mono_cache,
                 unit_call_target,
+                current_fn_ty,
                 step_result_tys[0],
             );
             const applied = try self.applyCallArg(
@@ -5158,6 +5146,7 @@ const Lowerer = struct {
                 &frozen.inst.types,
                 &frozen.mono_cache,
                 call_target,
+                current_fn_ty,
                 step_result_source_ty,
             );
             const applied = try self.applyCallArg(
@@ -5271,6 +5260,7 @@ const Lowerer = struct {
                 &frozen.inst.types,
                 &frozen.mono_cache,
                 call_target,
+                current_fn_ty,
                 frozen.inst.types.fnShape(current_fn_ty).ret,
             );
             const applied = try self.applyCallArg(

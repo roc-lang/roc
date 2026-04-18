@@ -302,131 +302,6 @@ fn countExecutableBridgeNodes(executable: *const lambdamono.Lower.Result) usize 
     return count;
 }
 
-fn debugPrintExecutableBridges(executable: *const lambdamono.Lower.Result) void {
-    for (executable.store.exprs.items, 0..) |expr, i| {
-        switch (expr.data) {
-            .bridge => |inner| {
-                const inner_expr = executable.store.getExpr(inner);
-                const target_ty = executable.types.getTypePreservingNominal(expr.ty);
-                const source_ty = executable.types.getTypePreservingNominal(inner_expr.ty);
-                std.debug.print(
-                    "[exec-bridge {d}] source_expr={s} source_ty={s} target_ty={s}\n",
-                    .{
-                        i,
-                        @tagName(inner_expr.data),
-                        switch (source_ty) {
-                            .primitive => |prim| @tagName(prim),
-                            else => @tagName(std.meta.activeTag(source_ty)),
-                        },
-                        switch (target_ty) {
-                            .primitive => |prim| @tagName(prim),
-                            else => @tagName(std.meta.activeTag(target_ty)),
-                        },
-                    },
-                );
-                switch (inner_expr.data) {
-                    .call => |call| {
-                        const entry = executable.symbols.get(call.proc);
-                        switch (entry.origin) {
-                            .specialized_top_level_def => |data| {
-                                std.debug.print(
-                                    "  call target_symbol={d} name={d} origin=specialized_top_level_def source_symbol={d}\n",
-                                    .{ call.proc.raw(), entry.name.idx, data.source_symbol },
-                                );
-                            },
-                            .specialized_local_fn => |data| {
-                                std.debug.print(
-                                    "  call target_symbol={d} name={d} origin=specialized_local_fn source_symbol={d}\n",
-                                    .{ call.proc.raw(), entry.name.idx, data.source_symbol },
-                                );
-                            },
-                            else => {
-                                std.debug.print(
-                                    "  call target_symbol={d} name={d} origin={s}\n",
-                                    .{ call.proc.raw(), entry.name.idx, @tagName(entry.origin) },
-                                );
-                            },
-                        }
-                    },
-                    else => {},
-                }
-            },
-            else => {},
-        }
-    }
-}
-
-fn debugPrintSpecializedLocalFnResultTypes(executable: *const lambdamono.Lower.Result) void {
-    for (executable.store.defsSlice()) |def| {
-        const entry = executable.symbols.get(def.bind);
-        switch (entry.origin) {
-            .specialized_local_fn => |data| {
-                const result_ty = def.result_ty orelse continue;
-                const content = executable.types.getTypePreservingNominal(result_ty);
-                std.debug.print(
-                    "[specialized-local-ret] bind={d} source_symbol={d} result_ty={s}\n",
-                    .{
-                        def.bind.raw(),
-                        data.source_symbol,
-                        switch (content) {
-                            .primitive => |prim| @tagName(prim),
-                            else => @tagName(std.meta.activeTag(content)),
-                        },
-                    },
-                );
-            },
-            else => {},
-        }
-    }
-}
-
-fn debugPrintNumPlusExprs(executable: *const lambdamono.Lower.Result) void {
-    for (executable.store.exprs.items, 0..) |expr, i| {
-        switch (expr.data) {
-            .low_level => |low_level| {
-                if (low_level.op != .num_plus) continue;
-                const expr_ty = executable.types.getTypePreservingNominal(expr.ty);
-                std.debug.print(
-                    "[num-plus {d}] result_ty={s}\n",
-                    .{
-                        i,
-                        switch (expr_ty) {
-                            .primitive => |prim| @tagName(prim),
-                            else => @tagName(std.meta.activeTag(expr_ty)),
-                        },
-                    },
-                );
-                for (executable.store.sliceExprSpan(low_level.args), 0..) |arg_id, arg_i| {
-                    const arg = executable.store.getExpr(arg_id);
-                    const arg_ty = executable.types.getTypePreservingNominal(arg.ty);
-                    std.debug.print(
-                        "  arg[{d}] expr={s} ty={s}\n",
-                        .{
-                            arg_i,
-                            @tagName(arg.data),
-                            switch (arg_ty) {
-                                .primitive => |prim| @tagName(prim),
-                                else => @tagName(std.meta.activeTag(arg_ty)),
-                            },
-                        },
-                    );
-                    switch (arg.data) {
-                        .call => |call| {
-                            const entry = executable.symbols.get(call.proc);
-                            std.debug.print(
-                                "    call target_symbol={d} origin={s}\n",
-                                .{ call.proc.raw(), @tagName(entry.origin) },
-                            );
-                        },
-                        else => {},
-                    }
-                }
-            },
-            else => {},
-        }
-    }
-}
-
 fn countUniqueDirectCallTargetsNamed(
     allocator: std.mem.Allocator,
     executable: *const lambdamono.Lower.Result,
@@ -728,6 +603,10 @@ const simple_direct_call_source =
     \\        add_one = |x| x + 1.I64
     \\        add_one(41.I64)
     \\    }
+;
+
+const typed_nested_captures_source =
+    \\(|y| (|x| (|z| x + y + z)(3.I64))(2.I64))(1.I64)
 ;
 
 const cross_module_annotated_callback_param_source =
@@ -1693,8 +1572,6 @@ test "cor pipeline - lowering polymorphic two-list helper uses two distinct conc
     var executable = try compileExecutableProgram(arena_allocator, .module, polymorphic_two_list_types_source, &.{});
     defer executable.deinit(arena_allocator);
 
-    debugPrintNumPlusExprs(&executable.executable);
-
     try testing.expectEqual(@as(usize, 2), countSpecializedLocalFnDefs(&executable.executable));
     try testing.expectEqual(@as(usize, 2), try countUniqueDirectCallTargetsNamed(
         arena_allocator,
@@ -1717,10 +1594,6 @@ test "cor pipeline - lowering polymorphic two-list helper uses two distinct conc
     try testing.expectEqual(@as(usize, 2), result_tys.len);
     try testing.expect(!executable.executable.types.containsAbstractLeaf(result_tys[0]));
     try testing.expect(!executable.executable.types.containsAbstractLeaf(result_tys[1]));
-    if (countExecutableBridgeNodes(&executable.executable) != 0) {
-        debugPrintSpecializedLocalFnResultTypes(&executable.executable);
-        debugPrintExecutableBridges(&executable.executable);
-    }
     try testing.expectEqual(@as(usize, 0), countExecutableBridgeNodes(&executable.executable));
 
     var ir_program = try compileIrProgram(arena_allocator, .module, polymorphic_two_list_types_source, &.{});
@@ -1740,6 +1613,10 @@ test "cor pipeline - lowering direct-only higher-order call has no executable or
     var ir_program = try compileIrProgram(arena_allocator, .module, simple_direct_call_source, &.{});
     defer ir_program.deinit(arena_allocator);
     try testing.expectEqual(@as(usize, 0), countIrBridgeNodes(&ir_program.ir_result));
+}
+
+test "cor pipeline - typed nested captures" {
+    try expectInspectProgram(.expr, typed_nested_captures_source, &.{}, "6");
 }
 
 test "cor pipeline - lowering emits explicit bridges only at real representation boundaries" {

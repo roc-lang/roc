@@ -111,7 +111,12 @@ pub const Store = struct {
     pub fn internTypeId(self: *Store, id: TypeId) std.mem.Allocator.Error!TypeId {
         const root = self.resolveLinks(id);
         if (self.containsAbstractLeaf(root)) return root;
-        if (self.interned_by_raw.get(root)) |cached| return cached;
+        if (self.interned_by_raw.get(root)) |cached| {
+            if (cached != root) {
+                self.replaceType(root, .{ .link = cached });
+            }
+            return cached;
+        }
 
         var active = std.AutoHashMap(TypeId, TypeId).init(self.allocator);
         defer active.deinit();
@@ -282,7 +287,12 @@ pub const Store = struct {
         active: *std.AutoHashMap(TypeId, TypeId),
     ) std.mem.Allocator.Error!TypeId {
         const root = self.resolveLinks(raw_id);
-        if (self.interned_by_raw.get(root)) |cached| return cached;
+        if (self.interned_by_raw.get(root)) |cached| {
+            if (cached != root) {
+                self.replaceType(root, .{ .link = cached });
+            }
+            return cached;
+        }
         if (active.get(root)) |pending| return pending;
 
         const root_content = self.types.items[@intFromEnum(root)];
