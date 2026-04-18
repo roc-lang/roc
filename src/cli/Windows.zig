@@ -80,6 +80,6 @@ pub fn deinit(state: Windows) void {
     const h_out = std.fs.File.stdout().handle;
     const h_in = std.fs.File.stdin().handle;
 
-    windows.SetConsoleMode(h_out, state.output_mode);
-    windows.SetConsoleMode(h_in, state.input_mode);
+    _ = windows.SetConsoleMode(h_out, state.output_mode);
+    _ = windows.SetConsoleMode(h_in, state.input_mode);
 }
