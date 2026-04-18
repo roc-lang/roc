@@ -585,7 +585,7 @@ const Lowerer = struct {
                     current_expr = func_expr;
                 } else {
                     current_expr = try self.applyFuncValue(
-                        &inst,
+                        &self.input.types,
                         &mono_cache,
                         func_expr,
                         entry_fn_ty,
@@ -600,7 +600,7 @@ const Lowerer = struct {
             var i: usize = 1;
             while (i < arg_count) : (i += 1) {
                 current_expr = try self.applyFuncValue(
-                    &inst,
+                    &self.input.types,
                     &mono_cache,
                     current_expr,
                     ret_vars.items[i - 1],
@@ -654,7 +654,7 @@ const Lowerer = struct {
 
     fn applyFuncValue(
         self: *Lowerer,
-        inst: *InstScope,
+        solved_types: *solved.Type.Store,
         mono_cache: *lower_type.MonoCache,
         func_expr: ast.ExprId,
         func_ty: TypeVarId,
@@ -663,7 +663,6 @@ const Lowerer = struct {
         result_exec_ty: type_mod.TypeId,
         direct_func_symbol: ?Symbol,
     ) std.mem.Allocator.Error!ast.ExprId {
-        const solved_types = &inst.types;
         self.assertCallableExprMatchesSolvedType(solved_types, func_expr, func_ty);
         return switch (self.types.getType(func_exec_ty)) {
             .erased_fn => {
@@ -4833,7 +4832,7 @@ const Lowerer = struct {
             ),
             .expr => |func_expr| blk: {
                 break :blk try self.applyFuncValue(
-                    inst,
+                    &inst.types,
                     mono_cache,
                     func_expr,
                     current_fn_ty,

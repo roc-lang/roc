@@ -6271,6 +6271,9 @@ fn mkBinopConstraint(
         .origin = .desugared_binop,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+    if (binop_expr_idx) |idx| {
+        try self.cir.recordMethodCallFn(idx, method_name, .desugared_binop, constraint_fn_var);
+    }
 
     // Create a constrained flex and unify it with the lhs (receiver)
     const constrained_var = try self.freshFromContent(
@@ -6314,6 +6317,9 @@ fn mkUnaryOp(
         .origin = .desugared_unaryop,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+    if (unary_expr_idx) |idx| {
+        try self.cir.recordMethodCallFn(idx, method_name, .desugared_unaryop, constraint_fn_var);
+    }
 
     // Create a constrained flex and unify it with the arg
     const constrained_var = try self.freshFromContent(
@@ -6354,7 +6360,7 @@ fn mkMethodCallConstraint(
         .origin = .method_call,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
-    try self.cir.recordMethodCallFn(method_expr_idx, method_name, constraint_fn_var);
+    try self.cir.recordMethodCallFn(method_expr_idx, method_name, .method_call, constraint_fn_var);
 
     const constrained_var = try self.freshFromContent(
         .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
@@ -6389,7 +6395,7 @@ fn mkTypeMethodCallConstraint(
         .origin = .method_call,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
-    try self.cir.recordMethodCallFn(method_expr_idx, method_name, constraint_fn_var);
+    try self.cir.recordMethodCallFn(method_expr_idx, method_name, .method_call, constraint_fn_var);
 
     const constrained_var = try self.freshFromContent(
         .{ .flex = Flex{ .name = null, .constraints = constraint_range } },

@@ -158,7 +158,7 @@ test "crash protection pattern (nested callback)" {
         env.crashed = false;
         const result = setjmp(&env.jmp_buf);
         if (result == 0) {
-            env.riskyOperation(true);
+            _ = env.riskyOperation(true);
             unreachable;
         } else {
             try std.testing.expect(env.crashed);

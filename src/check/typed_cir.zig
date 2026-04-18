@@ -368,7 +368,12 @@ pub const Module = struct {
             .e_type_method_call => |method_call| method_call.method_name,
             else => return null,
         };
-        return self.env().methodCallFnVar(idx, method_name);
+        return self.env().methodCallFnVar(idx, method_name, .method_call);
+    }
+
+    /// Return the checked function var associated with a desugared binop dispatch, if any.
+    pub fn binopConstraintFnVar(self: @This(), idx: CIR.Expr.Idx, method_name: Ident.Idx) ?Var {
+        return self.env().methodCallFnVar(idx, method_name, .desugared_binop);
     }
 
     /// Flatten a checked function type into its argument list and final return var.

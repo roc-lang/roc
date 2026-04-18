@@ -218,6 +218,10 @@ const Ctx = struct {
             return self.source_module.methodCallConstraintFnVar(idx);
         }
 
+        pub fn binopConstraintFnVar(self: @This(), idx: CIR.Expr.Idx, method_name: Ident.Idx) ?Var {
+            return self.source_module.binopConstraintFnVar(idx, method_name);
+        }
+
         pub fn curriedFnShape(self: @This(), fn_var: Var) std.mem.Allocator.Error!typed_cir.Module.CurriedFnShape {
             return self.source_module.curriedFnShape(fn_var);
         }
@@ -5836,11 +5840,18 @@ pub const Lowerer = struct {
                     return null;
                 }
                 const bool_ty = try self.makePrimitiveType(.bool);
+                const method_fn_var = self.ctx.typedCirModule(module_idx).binopConstraintFnVar(
+                    expr_idx,
+                    self.ctx.typedCirModule(module_idx).commonIdents().is_eq,
+                ) orelse debugPanic(
+                    "monotype invariant violated: nominal eq binop expr {d} missing checked callable type",
+                    .{ @intFromEnum(expr_idx) },
+                );
                 const eq_expr = try self.lowerMethodCallExpr(
                     module_idx,
                     type_scope,
                     env,
-                    expr_idx,
+                    method_fn_var,
                     operand_ty,
                     self.ctx.typedCirModule(module_idx).commonIdents().is_eq,
                     binop.lhs,
@@ -5946,7 +5957,7 @@ pub const Lowerer = struct {
         module_idx: u32,
         type_scope: *TypeScope,
         env: BindingEnv,
-        expr_idx: CIR.Expr.Idx,
+        method_fn_var: types.Var,
         receiver_ty: type_mod.TypeId,
         lookup_name: base.Ident.Idx,
         receiver_expr: ?CIR.Expr.Idx,
@@ -5965,9 +5976,6 @@ pub const Lowerer = struct {
             receiver_ty,
             try self.exprResultVar(module_idx, type_scope, env, receiver_expr_idx),
         );
-        const typed_cir_module = self.ctx.typedCirModule(module_idx);
-        const method_fn_var = typed_cir_module.methodCallConstraintFnVar(expr_idx) orelse
-            debugPanic("monotype invariant violated: method call missing checked callable type", .{});
         const lowered_args = try self.allocator.alloc(ast.ExprId, explicit_arg_exprs.len);
         defer self.allocator.free(lowered_args);
         for (explicit_arg_exprs, 0..) |arg_expr_idx, i| {
@@ -6360,17 +6368,23 @@ pub const Lowerer = struct {
             .e_lookup_local => try self.lowerSolvedExpr(module_idx, type_scope, env, expr),
             .e_lookup_external => try self.lowerSolvedExpr(module_idx, type_scope, env, expr),
             .e_field_access => |_| try self.lowerSolvedExpr(module_idx, type_scope, env, expr),
-            .e_method_call => |method_call| self.lowerMethodCallExpr(
-                module_idx,
-                type_scope,
-                env,
-                expr.idx,
-                try self.requireExprType(module_idx, type_scope, method_call.receiver),
-                method_call.method_name,
-                method_call.receiver,
-                typed_cir_module.sliceExpr(method_call.args),
-                target_ty,
-            ),
+            .e_method_call => |method_call| blk: {
+                const method_fn_var = typed_cir_module.methodCallConstraintFnVar(expr.idx) orelse debugPanic(
+                    "monotype invariant violated: method call expr {d} ({s}) missing checked callable type",
+                    .{ @intFromEnum(expr.idx), self.ctx.typedCirModule(module_idx).getIdent(method_call.method_name) },
+                );
+                break :blk self.lowerMethodCallExpr(
+                    module_idx,
+                    type_scope,
+                    env,
+                    method_fn_var,
+                    try self.requireExprType(module_idx, type_scope, method_call.receiver),
+                    method_call.method_name,
+                    method_call.receiver,
+                    typed_cir_module.sliceExpr(method_call.args),
+                    target_ty,
+                );
+            },
             .e_type_method_call => |method_call| self.lowerTypeMethodCallExpr(
                 module_idx,
                 type_scope,

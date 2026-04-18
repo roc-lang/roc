@@ -863,7 +863,7 @@ pub const InstructionImmediates = union {
             std.debug.assert(@sizeOf(CallIndirectImmediates) == 8);
             std.debug.assert(@sizeOf(TablePairImmediates) == 8);
             std.debug.assert(@sizeOf(IfImmediates) == 12);
-            std.debug.assert(@sizeOf(InstructionImmediates) == 8);
+            std.debug.assert(@sizeOf(InstructionImmediates) == 16);
         }
     }
 };
@@ -887,7 +887,7 @@ pub const Instruction = struct {
 
     comptime {
         if (builtin.mode == .ReleaseFast) {
-            std.debug.assert(@sizeOf(Instruction) == 16);
+            std.debug.assert(@sizeOf(Instruction) == 24);
         }
     }
 

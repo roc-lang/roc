@@ -529,6 +529,7 @@ pub const RequiredType = struct {
 pub const MethodCallFn = struct {
     expr_idx: CIR.Expr.Idx,
     method_name: Ident.Idx,
+    origin: types_mod.StaticDispatchConstraint.Origin,
     fn_var: TypeVar,
 
     pub const SafeList = collections.SafeList(@This());
@@ -3437,13 +3438,14 @@ pub fn recordMethodCallFn(
     self: *Self,
     expr_idx: CIR.Expr.Idx,
     method_name: Ident.Idx,
+    origin: types_mod.StaticDispatchConstraint.Origin,
     fn_var: TypeVar,
 ) std.mem.Allocator.Error!void {
     for (self.method_call_fns.items.items) |entry| {
-        if (entry.expr_idx != expr_idx or entry.method_name != method_name) continue;
+        if (entry.expr_idx != expr_idx or entry.method_name != method_name or entry.origin != origin) continue;
         if (entry.fn_var != fn_var) {
             std.debug.panic(
-                "ModuleEnv invariant violated: duplicate method-call fn for expr {d} method {s}",
+                "ModuleEnv invariant violated: duplicate dispatch-call fn for expr {d} method {s}",
                 .{ @intFromEnum(expr_idx), self.getIdent(method_name) },
             );
         }
@@ -3453,14 +3455,20 @@ pub fn recordMethodCallFn(
     _ = try self.method_call_fns.append(self.gpa, .{
         .expr_idx = expr_idx,
         .method_name = method_name,
+        .origin = origin,
         .fn_var = fn_var,
     });
 }
 
 /// Public function `methodCallFnVar`.
-pub fn methodCallFnVar(self: *const Self, expr_idx: CIR.Expr.Idx, _: Ident.Idx) ?TypeVar {
+pub fn methodCallFnVar(
+    self: *const Self,
+    expr_idx: CIR.Expr.Idx,
+    _: Ident.Idx,
+    origin: types_mod.StaticDispatchConstraint.Origin,
+) ?TypeVar {
     for (self.method_call_fns.items.items) |entry| {
-        if (entry.expr_idx == expr_idx) {
+        if (entry.expr_idx == expr_idx and entry.origin == origin) {
             return entry.fn_var;
         }
     }

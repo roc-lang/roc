@@ -969,12 +969,7 @@ const Lowerer = struct {
         return fn_entry.ty;
     }
 
-    fn inferHostedFn(self: *Lowerer, fn_entry: EnvEntry, hosted_fn: ast.HostedFnDef) std.mem.Allocator.Error!TypeVarId {
-        const args = self.output.sliceTypedSymbolSpan(hosted_fn.args);
-        if (args.len == 0) {
-            debugPanic("lambdasolved.inferHostedFn expected at least one executable arg", .{});
-        }
-
+    fn inferHostedFn(self: *Lowerer, fn_entry: EnvEntry, _: ast.HostedFnDef) std.mem.Allocator.Error!TypeVarId {
         const captures_span = try self.types.addCaptures(&.{});
         const lambda_span = try self.types.addLambdas(&.{.{ .symbol = fn_entry.symbol, .captures = captures_span }});
         const lset_ty = try self.types.freshContent(.{ .lambda_set = lambda_span });
