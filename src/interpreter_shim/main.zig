@@ -573,10 +573,10 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     );
     defer mono_lowerer.deinit();
     const entry_symbol = try mono_lowerer.specializeTopLevelDef(primary_module_idx, entry_def_idx);
-    const mono = try mono_lowerer.run(primary_module_idx);
-    const lifted = try monotype_lifted.Lower.run(wrapped_allocator, mono);
-    const solved = try lambdasolved.Lower.run(wrapped_allocator, lifted);
-    var executable = try lambdamono.Lower.runWithEntrypoints(wrapped_allocator, solved, &.{entry_symbol});
+    var mono = try mono_lowerer.run(primary_module_idx);
+    var lifted = try monotype_lifted.Lower.run(wrapped_allocator, &mono);
+    var solved = try lambdasolved.Lower.run(wrapped_allocator, &lifted);
+    var executable = try lambdamono.Lower.runWithEntrypoints(wrapped_allocator, &solved, &.{entry_symbol});
     const entrypoint_wrappers = executable.entrypoint_wrappers;
     executable.entrypoint_wrappers = &.{};
     defer if (entrypoint_wrappers.len > 0) wrapped_allocator.free(entrypoint_wrappers);
@@ -584,14 +584,14 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
         entry_symbol
     else
         entrypoint_wrappers[0];
-    const lowered_ir = try ir.Lower.run(wrapped_allocator, executable);
+    var lowered_ir = try ir.Lower.run(wrapped_allocator, &executable);
 
     var lir_result = try lir.FromIr.run(
         wrapped_allocator,
         lowering_module_envs_const,
         builtin_str,
         base.target.TargetUsize.native,
-        lowered_ir,
+        &lowered_ir,
     );
     defer lir_result.deinit();
     try lir.Ownership.inferProcResultContracts(wrapped_allocator, &lir_result.store, &lir_result.layouts);

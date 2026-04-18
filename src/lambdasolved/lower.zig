@@ -38,11 +38,27 @@ pub const Result = struct {
         self.builtin_attached_method_index.deinit();
         self.runtime_inspect_symbols.deinit();
     }
+
+    pub fn take(self: *Result, allocator: std.mem.Allocator) std.mem.Allocator.Error!Result {
+        const result = self.*;
+        self.* = .{
+            .store = ast.Store.init(allocator),
+            .root_defs = .empty,
+            .symbols = symbol_mod.Store.init(allocator),
+            .types = type_mod.Store.init(allocator),
+            .strings = .{},
+            .idents = try base.Ident.Store.initCapacity(allocator, 1),
+            .attached_method_index = symbol_mod.AttachedMethodIndex.init(allocator),
+            .builtin_attached_method_index = symbol_mod.BuiltinAttachedMethodIndex.init(allocator),
+            .runtime_inspect_symbols = std.AutoHashMap(Symbol, Symbol).init(allocator),
+        };
+        return result;
+    }
 };
 
 /// Run this compilation stage.
-pub fn run(allocator: std.mem.Allocator, input: LiftedResult) std.mem.Allocator.Error!Result {
-    var lowerer = Lowerer.init(allocator, input);
+pub fn run(allocator: std.mem.Allocator, input: *LiftedResult) std.mem.Allocator.Error!Result {
+    var lowerer = Lowerer.init(allocator, try input.take(allocator));
     defer lowerer.deinit();
     try lowerer.instantiateProgram();
     try lowerer.inferProgram();

@@ -4326,10 +4326,10 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         });
     }
 
-    const mono = try mono_lowerer.run(platform_module_idx);
+    var mono = try mono_lowerer.run(platform_module_idx);
 
-    const lifted = try monotype_lifted.Lower.run(ctx.gpa, mono);
-    const solved = try lambdasolved.Lower.run(ctx.gpa, lifted);
+    var lifted = try monotype_lifted.Lower.run(ctx.gpa, &mono);
+    var solved = try lambdasolved.Lower.run(ctx.gpa, &lifted);
 
     const entrypoint_symbols = try ctx.gpa.alloc(symbol.Symbol, pending_entrypoint_symbols.items.len);
     defer ctx.gpa.free(entrypoint_symbols);
@@ -4337,11 +4337,11 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         entrypoint_symbols[i] = pending.symbol;
     }
 
-    var executable = try lambdamono.Lower.runWithEntrypoints(ctx.gpa, solved, entrypoint_symbols);
+    var executable = try lambdamono.Lower.runWithEntrypoints(ctx.gpa, &solved, entrypoint_symbols);
     const entrypoint_wrappers = executable.entrypoint_wrappers;
     executable.entrypoint_wrappers = &.{};
     defer if (entrypoint_wrappers.len > 0) ctx.gpa.free(entrypoint_wrappers);
-    var lowered_ir = try ir.Lower.run(ctx.gpa, executable);
+    var lowered_ir = try ir.Lower.run(ctx.gpa, &executable);
     var lowered_ir_live = true;
     defer if (lowered_ir_live) lowered_ir.deinit();
 
@@ -4354,7 +4354,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         module_envs_const,
         builtin_str,
         base.target.TargetUsize.native,
-        lowered_ir,
+        &lowered_ir,
     );
     lowered_ir_live = false;
     defer lir_result.deinit();

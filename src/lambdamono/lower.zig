@@ -36,20 +36,37 @@ pub const Result = struct {
             self.store.allocator.free(self.entrypoint_wrappers);
         }
     }
+
+    pub fn take(self: *Result, allocator: std.mem.Allocator) std.mem.Allocator.Error!Result {
+        const result = self.*;
+        var empty_store = ast.Store.init(allocator);
+        errdefer empty_store.deinit();
+        const empty_layouts = try layouts_mod.Layouts.initEmpty(allocator, &empty_store);
+        self.* = .{
+            .store = empty_store,
+            .root_defs = .empty,
+            .symbols = symbol_mod.Store.init(allocator),
+            .types = type_mod.Store.init(allocator),
+            .layouts = empty_layouts,
+            .strings = .{},
+            .entrypoint_wrappers = &.{},
+        };
+        return result;
+    }
 };
 
 /// Lower a solved program into executable lambdamono form.
-pub fn run(allocator: std.mem.Allocator, input: solved.Lower.Result) std.mem.Allocator.Error!Result {
+pub fn run(allocator: std.mem.Allocator, input: *solved.Lower.Result) std.mem.Allocator.Error!Result {
     return runWithEntrypoints(allocator, input, &.{});
 }
 
 /// Lower a solved program while generating wrappers for the requested entrypoints.
 pub fn runWithEntrypoints(
     allocator: std.mem.Allocator,
-    input: solved.Lower.Result,
+    input: *solved.Lower.Result,
     entrypoints: []const Symbol,
 ) std.mem.Allocator.Error!Result {
-    var lowerer = Lowerer.init(allocator, input, entrypoints);
+    var lowerer = Lowerer.init(allocator, try input.take(allocator), entrypoints);
     defer lowerer.deinit();
     if (entrypoints.len > 0) {
         lowerer.entrypoint_wrappers = try allocator.alloc(Symbol, entrypoints.len);
@@ -4683,12 +4700,6 @@ const Lowerer = struct {
                 );
             },
         }
-        const key = symbol_mod.AttachedMethodKey{
-            .module_idx = undefined,
-            .type_ident = undefined,
-            .method_ident = undefined,
-        };
-        _ = key;
         unreachable;
     }
 

@@ -48,10 +48,7 @@ const trace_rc = struct {
 
 const debugPrint = if (is_freestanding)
     struct {
-        fn print(comptime fmt: []const u8, args: anytype) void {
-            _ = fmt;
-            _ = args;
-        }
+        fn print(comptime _: []const u8, _: anytype) void {}
     }.print
 else
     struct {
@@ -200,7 +197,11 @@ const InterpreterRocEnv = struct {
                 "LIR/interpreter invariant violated: roc_crashed fired without an active jump buffer\n",
                 .{},
             );
-            std.process.abort();
+            if (is_freestanding) {
+                @trap();
+            } else {
+                std.process.abort();
+            }
         };
         self.active_jmp_buf = null;
         longjmp(active_jmp_buf, 1);
@@ -252,16 +253,21 @@ pub const Interpreter = struct {
             env.resetCrash();
             return .{
                 .env = env,
-                .prev_jmp_buf = env.installJumpBuf(&env.jmp_buf),
+                .prev_jmp_buf = if (sljmp.supported) env.installJumpBuf(&env.jmp_buf) else null,
             };
         }
 
         fn deinit(self: *CrashBoundary) void {
-            self.env.restoreJumpBuf(self.prev_jmp_buf);
+            if (sljmp.supported) {
+                self.env.restoreJumpBuf(self.prev_jmp_buf);
+            }
         }
 
         fn set(self: *CrashBoundary) c_int {
-            return setjmp(&self.env.jmp_buf);
+            if (sljmp.supported) {
+                return setjmp(&self.env.jmp_buf);
+            }
+            return 0;
         }
     };
 
@@ -487,11 +493,13 @@ pub const Interpreter = struct {
     pub fn eval(self: *LirInterpreter, request: EvalRequest) Error!EvalResult {
         self.roc_env.resetForEval();
 
-        var eval_jmp_buf: JmpBuf = undefined;
-        const prev_jmp_buf = self.roc_env.installJumpBuf(&eval_jmp_buf);
-        defer self.roc_env.restoreJumpBuf(prev_jmp_buf);
-        const sj = setjmp(&eval_jmp_buf);
-        if (sj != 0) return error.Crash;
+        if (sljmp.supported) {
+            var eval_jmp_buf: JmpBuf = undefined;
+            const prev_jmp_buf = self.roc_env.installJumpBuf(&eval_jmp_buf);
+            defer self.roc_env.restoreJumpBuf(prev_jmp_buf);
+            const sj = setjmp(&eval_jmp_buf);
+            if (sj != 0) return error.Crash;
+        }
 
         const args = try self.marshalAbiArgs(request.arg_ptr, request.arg_layouts);
         const proc_ret_layout = self.store.getProcSpec(request.proc_id).ret_layout;

@@ -22,10 +22,7 @@ const RocCrashed = builtins.host_abi.RocCrashed;
 
 const debugPrint = if (is_freestanding)
     struct {
-        fn print(comptime fmt: []const u8, args: anytype) void {
-            _ = fmt;
-            _ = args;
-        }
+        fn print(comptime _: []const u8, _: anytype) void {}
     }.print
 else
     struct {

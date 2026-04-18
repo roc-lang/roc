@@ -74,6 +74,21 @@ pub const Result = struct {
         self.builtin_attached_method_index.deinit();
         self.runtime_inspect_symbols.deinit();
     }
+
+    pub fn take(self: *Result, allocator: std.mem.Allocator) std.mem.Allocator.Error!Result {
+        const result = self.*;
+        self.* = .{
+            .program = Program.init(allocator),
+            .symbols = symbol_mod.Store.init(allocator),
+            .types = type_mod.Store.init(allocator),
+            .strings = .{},
+            .idents = try base.Ident.Store.initCapacity(allocator, 1),
+            .attached_method_index = symbol_mod.AttachedMethodIndex.init(allocator),
+            .builtin_attached_method_index = symbol_mod.BuiltinAttachedMethodIndex.init(allocator),
+            .runtime_inspect_symbols = std.AutoHashMap(symbol_mod.Symbol, symbol_mod.Symbol).init(allocator),
+        };
+        return result;
+    }
 };
 
 const Ctx = struct {

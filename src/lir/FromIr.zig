@@ -33,9 +33,9 @@ pub fn run(
     all_module_envs: []const *const ModuleEnv,
     builtin_str_ident: ?base.Ident.Idx,
     target_usize: base.target.TargetUsize,
-    input: ir.Lower.Result,
+    input: *ir.Lower.Result,
 ) std.mem.Allocator.Error!Result {
-    var lowerer = try Lowerer.init(allocator, all_module_envs, builtin_str_ident, target_usize, input);
+    var lowerer = try Lowerer.init(allocator, all_module_envs, builtin_str_ident, target_usize, input.take(allocator));
     errdefer lowerer.deinit();
     try lowerer.registerProcPlaceholders();
     try lowerer.lowerAllDefs();

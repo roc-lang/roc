@@ -165,19 +165,19 @@ pub fn runViaInterpreter(
     const entry_def_idx = entry_def orelse return error.EntrypointDefNotFound;
 
     const entry_symbol = try mono_lowerer.specializeTopLevelDef(entry_idx, entry_def_idx);
-    const mono = try mono_lowerer.run(entry_idx);
+    var mono = try mono_lowerer.run(entry_idx);
 
-    const lifted = try monotype_lifted.Lower.run(gpa, mono);
-    const solved = try lambdasolved.Lower.run(gpa, lifted);
-    const executable = try lambdamono.Lower.runWithEntrypoints(gpa, solved, &.{entry_symbol});
-    const lowered_ir = try ir.Lower.run(gpa, executable);
+    var lifted = try monotype_lifted.Lower.run(gpa, &mono);
+    var solved = try lambdasolved.Lower.run(gpa, &lifted);
+    var executable = try lambdamono.Lower.runWithEntrypoints(gpa, &solved, &.{entry_symbol});
+    var lowered_ir = try ir.Lower.run(gpa, &executable);
 
     var lir_result = try lir.FromIr.run(
         gpa,
         all_module_envs,
         builtin_env.idents.builtin_str,
         base.target.TargetUsize.native,
-        lowered_ir,
+        &lowered_ir,
     );
     defer lir_result.deinit();
     try lir.Ownership.inferProcResultContracts(gpa, &lir_result.store, &lir_result.layouts);
@@ -257,19 +257,19 @@ pub fn runViaDev(
     const entry_def_idx = entry_def orelse return error.EntrypointDefNotFound;
 
     const entry_symbol = try mono_lowerer.specializeTopLevelDef(entry_idx, entry_def_idx);
-    const mono = try mono_lowerer.run(entry_idx);
+    var mono = try mono_lowerer.run(entry_idx);
 
-    const lifted = try monotype_lifted.Lower.run(gpa, mono);
-    const solved = try lambdasolved.Lower.run(gpa, lifted);
-    const executable = try lambdamono.Lower.runWithEntrypoints(gpa, solved, &.{entry_symbol});
-    const lowered_ir = try ir.Lower.run(gpa, executable);
+    var lifted = try monotype_lifted.Lower.run(gpa, &mono);
+    var solved = try lambdasolved.Lower.run(gpa, &lifted);
+    var executable = try lambdamono.Lower.runWithEntrypoints(gpa, &solved, &.{entry_symbol});
+    var lowered_ir = try ir.Lower.run(gpa, &executable);
 
     var lir_result = try lir.FromIr.run(
         gpa,
         all_module_envs,
         builtin_env.idents.builtin_str,
         base.target.TargetUsize.native,
-        lowered_ir,
+        &lowered_ir,
     );
     defer lir_result.deinit();
     try lir.Ownership.inferProcResultContracts(gpa, &lir_result.store, &lir_result.layouts);

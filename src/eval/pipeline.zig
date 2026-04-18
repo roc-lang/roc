@@ -34,10 +34,7 @@ const trace = if ((if (@hasDecl(build_options, "trace_eval")) build_options.trac
     }
 else
     struct {
-        fn log(comptime fmt: []const u8, args: anytype) void {
-            _ = fmt;
-            _ = args;
-        }
+        fn log(comptime _: []const u8, _: anytype) void {}
     };
 
 /// Public enum `SourceKind`.
@@ -58,8 +55,7 @@ const AvailableImport = struct {
     statement_idx: ?CIR.Statement.Idx,
 };
 
-fn availableImportStatementIdx(module_env: *const ModuleEnv) ?CIR.Statement.Idx {
-    _ = module_env;
+fn availableImportStatementIdx(_: *const ModuleEnv) ?CIR.Statement.Idx {
     return null;
 }
 
@@ -456,16 +452,16 @@ pub fn lowerTypedCIRToLirForTarget(
     trace.log("typed-cir -> monotype", .{});
     var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, typed_cir_modules, 1, null);
     defer mono_lowerer.deinit();
-    const mono = try mono_lowerer.run(0);
+    var mono = try mono_lowerer.run(0);
     debugValidateMonotypeTypes(&mono.types);
     trace.log("monotype -> monotype_lifted", .{});
-    const lifted = try monotype_lifted.Lower.run(allocator, mono);
+    var lifted = try monotype_lifted.Lower.run(allocator, &mono);
     trace.log("monotype_lifted -> lambdasolved", .{});
-    const solved = try lambdasolved.Lower.run(allocator, lifted);
+    var solved = try lambdasolved.Lower.run(allocator, &lifted);
     trace.log("lambdasolved -> lambdamono", .{});
-    const executable = try lambdamono.Lower.run(allocator, solved);
+    var executable = try lambdamono.Lower.run(allocator, &solved);
     trace.log("lambdamono -> ir", .{});
-    const lowered_ir = try ir.Lower.run(allocator, executable);
+    var lowered_ir = try ir.Lower.run(allocator, &executable);
 
     trace.log("ir -> lir", .{});
     var lowered_lir = try FromIr.run(
@@ -473,7 +469,7 @@ pub fn lowerTypedCIRToLirForTarget(
         module_envs,
         null,
         target_usize,
-        lowered_ir,
+        &lowered_ir,
     );
     errdefer lowered_lir.deinit();
     try lir.Ownership.inferProcResultContracts(allocator, &lowered_lir.store, &lowered_lir.layouts);
@@ -515,21 +511,21 @@ fn lowerToLirForTarget(
     var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, &resources.typed_cir_modules, 1, null);
     defer mono_lowerer.deinit();
     const entry_symbol = try mono_lowerer.specializeTopLevelDef(0, entry_def_idx);
-    const mono = try mono_lowerer.run(0);
+    var mono = try mono_lowerer.run(0);
     debugValidateMonotypeTypes(&mono.types);
 
     trace.log("monotype -> monotype_lifted", .{});
-    const lifted = try monotype_lifted.Lower.run(allocator, mono);
+    var lifted = try monotype_lifted.Lower.run(allocator, &mono);
     trace.log("monotype_lifted -> lambdasolved", .{});
-    const solved = try lambdasolved.Lower.run(allocator, lifted);
+    var solved = try lambdasolved.Lower.run(allocator, &lifted);
     trace.log("lambdasolved -> lambdamono", .{});
-    const executable = try lambdamono.Lower.runWithEntrypoints(allocator, solved, &.{entry_symbol});
+    var executable = try lambdamono.Lower.runWithEntrypoints(allocator, &solved, &.{entry_symbol});
     const runtime_entry_symbol = if (executable.entrypoint_wrappers.len != 0 and !executable.entrypoint_wrappers[0].isNone())
         executable.entrypoint_wrappers[0]
     else
         entry_symbol;
     trace.log("lambdamono -> ir", .{});
-    const lowered_ir = try ir.Lower.run(allocator, executable);
+    var lowered_ir = try ir.Lower.run(allocator, &executable);
 
     trace.log("ir -> lir", .{});
     var lowered_lir = try FromIr.run(
@@ -537,7 +533,7 @@ fn lowerToLirForTarget(
         module_envs,
         null,
         target_usize,
-        lowered_ir,
+        &lowered_ir,
     );
     errdefer lowered_lir.deinit();
     try lir.Ownership.inferProcResultContracts(allocator, &lowered_lir.store, &lowered_lir.layouts);

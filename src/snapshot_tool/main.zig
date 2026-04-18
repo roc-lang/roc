@@ -4138,7 +4138,7 @@ fn processDevObjectSnapshot(
 
     var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, &typed_cir_modules, 0, null);
     defer mono_lowerer.deinit();
-    const mono = try mono_lowerer.run(platform_module_idx);
+    var mono = try mono_lowerer.run(platform_module_idx);
 
     const EntrySymbol = struct {
         ffi_symbol: []const u8,
@@ -4215,17 +4215,17 @@ fn processDevObjectSnapshot(
         return false;
     }
 
-    const lifted = try monotype_lifted.Lower.run(allocator, mono);
-    const solved = try lambdasolved.Lower.run(allocator, lifted);
-    const executable = try lambdamono.Lower.run(allocator, solved);
-    const lowered_ir = try ir.Lower.run(allocator, executable);
+    var lifted = try monotype_lifted.Lower.run(allocator, &mono);
+    var solved = try lambdasolved.Lower.run(allocator, &lifted);
+    var executable = try lambdamono.Lower.run(allocator, &solved);
+    var lowered_ir = try ir.Lower.run(allocator, &executable);
 
     var lowered_lir = try lir_mod.FromIr.run(
         allocator,
         all_module_envs,
         builtin_env.idents.builtin_str,
         base.target.TargetUsize.native,
-        lowered_ir,
+        &lowered_ir,
     );
     defer lowered_lir.deinit();
     try lir_mod.Ownership.inferProcResultContracts(allocator, &lowered_lir.store, &lowered_lir.layouts);

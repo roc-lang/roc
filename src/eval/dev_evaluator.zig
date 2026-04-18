@@ -118,19 +118,19 @@ pub const DevEvaluator = struct {
 
         var mono_lowerer = try monotype.Lower.Lowerer.init(self.allocator, &typed_cir_modules, builtin_idx, null);
         defer mono_lowerer.deinit();
-        const mono = try mono_lowerer.runRootExpr(@intCast(module_idx), expr_idx);
+        var mono = try mono_lowerer.runRootExpr(@intCast(module_idx), expr_idx);
 
-        const lifted = try monotype_lifted.Lower.run(self.allocator, mono);
-        const solved = try lambdasolved.Lower.run(self.allocator, lifted);
-        const executable = try lambdamono.Lower.run(self.allocator, solved);
-        const lowered_ir = try ir.Lower.run(self.allocator, executable);
+        var lifted = try monotype_lifted.Lower.run(self.allocator, &mono);
+        var solved = try lambdasolved.Lower.run(self.allocator, &lifted);
+        var executable = try lambdamono.Lower.run(self.allocator, &solved);
+        var lowered_ir = try ir.Lower.run(self.allocator, &executable);
 
         var lir_result = try lir.FromIr.run(
             self.allocator,
             all_module_envs,
             null,
             base.target.TargetUsize.native,
-            lowered_ir,
+            &lowered_ir,
         );
         defer lir_result.deinit();
         try lir.Ownership.inferProcResultContracts(self.allocator, &lir_result.store, &lir_result.layouts);

@@ -213,10 +213,10 @@ fn compileExecutableProgram(
 
     var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, &resources.typed_cir_modules, 1, null);
     defer mono_lowerer.deinit();
-    const mono = try mono_lowerer.run(0);
-    const lifted = try monotype_lifted.Lower.run(allocator, mono);
-    const solved = try lambdasolved.Lower.run(allocator, lifted);
-    const executable = try lambdamono.Lower.run(allocator, solved);
+    var mono = try mono_lowerer.run(0);
+    var lifted = try monotype_lifted.Lower.run(allocator, &mono);
+    var solved = try lambdasolved.Lower.run(allocator, &lifted);
+    const executable = try lambdamono.Lower.run(allocator, &solved);
 
     return .{
         .resources = resources,
@@ -235,11 +235,11 @@ fn compileIrProgram(
 
     var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, &resources.typed_cir_modules, 1, null);
     defer mono_lowerer.deinit();
-    const mono = try mono_lowerer.run(0);
-    const lifted = try monotype_lifted.Lower.run(allocator, mono);
-    const solved = try lambdasolved.Lower.run(allocator, lifted);
-    const executable = try lambdamono.Lower.run(allocator, solved);
-    const ir_result = try ir.Lower.run(allocator, executable);
+    var mono = try mono_lowerer.run(0);
+    var lifted = try monotype_lifted.Lower.run(allocator, &mono);
+    var solved = try lambdasolved.Lower.run(allocator, &lifted);
+    var executable = try lambdamono.Lower.run(allocator, &solved);
+    const ir_result = try ir.Lower.run(allocator, &executable);
 
     return .{
         .resources = resources,

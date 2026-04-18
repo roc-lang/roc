@@ -29,11 +29,23 @@ pub const Result = struct {
         self.layouts.deinit(self.store.allocator);
         self.strings.deinit(self.store.allocator);
     }
+
+    pub fn take(self: *Result, allocator: std.mem.Allocator) Result {
+        const result = self.*;
+        self.* = .{
+            .store = ast.Store.init(allocator),
+            .root_defs = .empty,
+            .symbols = symbol_mod.Store.init(allocator),
+            .layouts = .{},
+            .strings = .{},
+        };
+        return result;
+    }
 };
 
 /// Lower lambdamono into the shared IR representation.
-pub fn run(allocator: std.mem.Allocator, input: lambdamono.Lower.Result) std.mem.Allocator.Error!Result {
-    var lowerer = Lowerer.init(allocator, input);
+pub fn run(allocator: std.mem.Allocator, input: *lambdamono.Lower.Result) std.mem.Allocator.Error!Result {
+    var lowerer = Lowerer.init(allocator, try input.take(allocator));
     defer lowerer.deinit();
     try lowerer.lowerProgram();
     return lowerer.finish();

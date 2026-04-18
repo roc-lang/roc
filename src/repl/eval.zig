@@ -15,7 +15,7 @@ const collections = @import("collections");
 const single_module = compile.single_module;
 const eval_pipeline = eval_mod.pipeline;
 const builtin_loading = eval_mod.builtin_loading;
-const Interpreter = eval_mod.Interpreter;
+const Interpreter = eval_mod.LirInterpreter;
 const CrashContext = eval_mod.CrashContext;
 
 const AST = parse.AST;
@@ -123,6 +123,9 @@ pub const Repl = struct {
     }
 
     pub fn backendAvailable(backend_kind: Backend) bool {
+        if (builtin.target.os.tag == .freestanding) {
+            return backend_kind == .interpreter;
+        }
         return eval_mod.backendAvailable(backend_kind);
     }
 
@@ -187,6 +190,16 @@ pub const Repl = struct {
             .source = owned_source,
         });
         try self.definitions.put(owned_name, self.definitions_order.items.len - 1);
+    }
+
+    pub fn clearDefinitions(self: *Repl) void {
+        self.clearLastResources();
+        self.definitions.clearRetainingCapacity();
+        for (self.definitions_order.items) |definition| {
+            self.allocator.free(definition.name);
+            self.allocator.free(definition.source);
+        }
+        self.definitions_order.clearRetainingCapacity();
     }
 
     pub fn deinit(self: *Repl) void {
@@ -271,6 +284,7 @@ pub const Repl = struct {
 
         switch (parse_result) {
             .assignment => |info| {
+                self.clearLastResources();
                 try self.addOrReplaceDefinition(info.source, info.var_name);
                 return .{ .definition = try std.fmt.allocPrint(self.allocator, "assigned `{s}`", .{info.var_name}) };
             },
@@ -392,15 +406,17 @@ pub const Repl = struct {
         allocators.initInPlace(self.allocator);
         defer allocators.deinit();
 
-        const stmt_ast = single_module.parseSingleModule(
+        const stmt_ast = try single_module.parseSingleModule(
             &allocators,
             &module_env,
             .statement,
             .{ .module_name = "REPL", .init_cir_fields = false },
-        ) catch {
-            return self.tryParseExpressionOnly(input);
-        };
+        );
         defer stmt_ast.deinit();
+
+        if (stmt_ast.hasErrors()) {
+            return self.tryParseExpressionOnly(input);
+        }
 
         if (stmt_ast.root_node_idx != 0) {
             const stmt_idx: AST.Statement.Idx = @enumFromInt(stmt_ast.root_node_idx);
@@ -442,15 +458,43 @@ pub const Repl = struct {
         allocators.initInPlace(self.allocator);
         defer allocators.deinit();
 
-        const expr_ast = single_module.parseSingleModule(
+        const expr_ast = try single_module.parseSingleModule(
             &allocators,
             &module_env,
             .expr,
             .{ .module_name = "REPL", .init_cir_fields = false },
-        ) catch {
-            return ParseResult{ .parse_error = try self.allocator.dupe(u8, "Failed to parse input") };
-        };
+        );
         defer expr_ast.deinit();
+
+        if (expr_ast.hasErrors()) {
+            if (expr_ast.tokenize_diagnostics.items.len > 0) {
+                var report = try expr_ast.tokenizeDiagnosticToReport(
+                    expr_ast.tokenize_diagnostics.items[0],
+                    self.allocator,
+                    null,
+                );
+                defer report.deinit();
+
+                var output = std.array_list.Managed(u8).init(self.allocator);
+                var unmanaged = output.moveToUnmanaged();
+                var writer_alloc = std.Io.Writer.Allocating.fromArrayList(self.allocator, &unmanaged);
+                report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
+                    error.WriteFailed => return error.OutOfMemory,
+                    else => return err,
+                };
+                unmanaged = writer_alloc.toArrayList();
+                output = unmanaged.toManaged(self.allocator);
+                return ParseResult{ .parse_error = try output.toOwnedSlice() };
+            }
+
+            if (expr_ast.parse_diagnostics.items.len > 0) {
+                const diagnostic = expr_ast.parse_diagnostics.items[0];
+                const error_text = try renderParseDiagnosticForRepl(expr_ast, &module_env.common, diagnostic, self.allocator);
+                return ParseResult{ .parse_error = error_text };
+            }
+
+            return ParseResult{ .parse_error = try self.allocator.dupe(u8, "Failed to parse input") };
+        }
 
         if (expr_ast.root_node_idx != 0) {
             return ParseResult.expression;
@@ -547,15 +591,8 @@ pub const Repl = struct {
     }
 
     fn evaluateLowered(self: *Repl, lowered: *const LoweredProgram) !StepResult {
-        if (!Repl.backendAvailable(self.backend)) {
-            return .{ .eval_error = try self.allocator.dupe(u8, "Backend unavailable") };
-        }
-
         return switch (self.backend) {
-            .interpreter => if (comptime builtin.target.os.tag == .freestanding)
-                .{ .eval_error = try self.allocator.dupe(u8, "Backend unavailable") }
-            else
-                self.evaluateWithInterpreter(lowered),
+            .interpreter => self.evaluateWithInterpreter(lowered),
             .dev => self.evaluateWithDev(lowered, "Dev"),
             .wasm => self.evaluateWithWasm(lowered),
             .llvm => .{ .eval_error = try self.allocator.dupe(u8, "LLVM backend not implemented for REPL") },

@@ -342,15 +342,16 @@ fn sendMessageToWasm(wasm_interface: *const WasmInterface, allocator: std.mem.Al
     }
 
     // Read the null-terminated response string from WASM memory.
+    const wasm_memory_after = wasm_interface.memory.buffer();
     const response_ptr: usize = @intCast(response_ptr_opt);
-    if (response_ptr >= wasm_memory.len) {
+    if (response_ptr >= wasm_memory_after.len) {
         logDebug("[ERROR] WASM returned response pointer out of bounds: {}\n", .{response_ptr});
         // Attempt to free the response string if possible.
         _ = wasm_interface.module_instance.invoke(wasm_interface.freeWasmString_handle, &[_]bytebox.Val{bytebox.Val{ .I32 = @intCast(response_ptr) }}, &[_]bytebox.Val{}, .{}) catch {};
         return error.WasmReturnedInvalidPointer;
     }
 
-    const response_slice = wasm_memory[response_ptr..];
+    const response_slice = wasm_memory_after[response_ptr..];
     const null_terminator_idx = std.mem.indexOfScalar(u8, response_slice, 0) orelse {
         logDebug("[ERROR] WASM returned response string without a null terminator.\n", .{});
         _ = wasm_interface.module_instance.invoke(wasm_interface.freeWasmString_handle, &[_]bytebox.Val{bytebox.Val{ .I32 = @intCast(response_ptr) }}, &[_]bytebox.Val{}, .{}) catch {};

@@ -52,6 +52,7 @@ pub const value = @import("value.zig");
 pub const Value = value.Value;
 /// Stack value representation used by the interpreter
 pub const StackValue = @import("StackValue.zig");
+const real_interpreter = @import("interpreter.zig");
 /// LIR expression interpreter
 pub const interpreter = if (builtin.target.os.tag == .freestanding) struct {
     pub const Interpreter = struct {
@@ -82,8 +83,9 @@ pub const interpreter = if (builtin.target.os.tag == .freestanding) struct {
             return error.BackendUnavailable;
         }
     };
-} else @import("interpreter.zig");
+} else real_interpreter;
 pub const Interpreter = interpreter.Interpreter;
+pub const LirInterpreter = real_interpreter.Interpreter;
 /// Production-faithful RocOps recorder used by eval tests.
 pub const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
 /// Backward-compatible export for existing eval test helpers and tests.
