@@ -399,8 +399,8 @@ pub const Watcher = struct {
                     const SetEvent = struct {
                         extern "kernel32" fn SetEvent(hEvent: std.os.windows.HANDLE) callconv(.winapi) std.os.windows.BOOL;
                     }.SetEvent;
-                    SetEvent(stop_event);
-                    std.os.windows.CloseHandle(stop_event);
+                    _ = SetEvent(stop_event);
+                    _ = std.os.windows.CloseHandle(stop_event);
                     self.impl.stop_event = null;
                 }
 
@@ -960,7 +960,7 @@ pub const Watcher = struct {
         }
 
         // Reset the event for the next operation
-        ResetEvent(self.impl.overlapped_data.items[index].overlapped.hEvent.?);
+        _ = ResetEvent(self.impl.overlapped_data.items[index].overlapped.hEvent.?);
 
         // Process the file change notifications
         self.parseWindowsFileNotifications(index, bytes_transferred);

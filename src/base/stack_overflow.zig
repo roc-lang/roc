@@ -36,10 +36,10 @@ fn handleStackOverflow() noreturn {
 
         const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
         var bytes_written: DWORD = 0;
-        kernel32.WriteFile(stderr_handle, STACK_OVERFLOW_MESSAGE.ptr, STACK_OVERFLOW_MESSAGE.len, &bytes_written, null);
+        _ = kernel32.WriteFile(stderr_handle, STACK_OVERFLOW_MESSAGE.ptr, STACK_OVERFLOW_MESSAGE.len, &bytes_written, null);
         // Use TerminateProcess instead of ExitProcess: after a stack overflow the
         // stack is blown and ExitProcess's DLL cleanup can trigger a secondary crash.
-        kernel32.TerminateProcess(kernel32.GetCurrentProcess(), 134);
+        _ = kernel32.TerminateProcess(kernel32.GetCurrentProcess(), 134);
         @trap();
     } else if (comptime builtin.os.tag != .freestanding) {
         // POSIX: use direct write syscall for signal-safety
@@ -82,7 +82,7 @@ fn handleArithmeticError() noreturn {
 
         const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
         var bytes_written: DWORD = 0;
-        kernel32.WriteFile(stderr_handle, ARITHMETIC_ERROR_MESSAGE.ptr, ARITHMETIC_ERROR_MESSAGE.len, &bytes_written, null);
+        _ = kernel32.WriteFile(stderr_handle, ARITHMETIC_ERROR_MESSAGE.ptr, ARITHMETIC_ERROR_MESSAGE.len, &bytes_written, null);
         kernel32.ExitProcess(136);
     } else if (comptime builtin.os.tag != .freestanding) {
         const written = posix.write(posix.STDERR_FILENO, ARITHMETIC_ERROR_MESSAGE) catch |err| {
@@ -125,9 +125,9 @@ fn handleAccessViolation(fault_addr: usize) noreturn {
         const msg2 = "\n\nPlease report this issue at: https://github.com/roc-lang/roc/issues\n\n";
         const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
         var bytes_written: DWORD = 0;
-        kernel32.WriteFile(stderr_handle, msg1.ptr, msg1.len, &bytes_written, null);
-        kernel32.WriteFile(stderr_handle, addr_str.ptr, @intCast(addr_str.len), &bytes_written, null);
-        kernel32.WriteFile(stderr_handle, msg2.ptr, msg2.len, &bytes_written, null);
+        _ = kernel32.WriteFile(stderr_handle, msg1.ptr, msg1.len, &bytes_written, null);
+        _ = kernel32.WriteFile(stderr_handle, addr_str.ptr, @intCast(addr_str.len), &bytes_written, null);
+        _ = kernel32.WriteFile(stderr_handle, msg2.ptr, msg2.len, &bytes_written, null);
         kernel32.ExitProcess(139);
     } else if (comptime builtin.os.tag != .freestanding) {
         // POSIX: use direct write syscall for signal-safety

@@ -331,7 +331,7 @@ fn resize(ctx: *anyopaque, buf: []u8, _: std.mem.Alignment, new_len: usize, _: u
                             );
                             if (commit_result == null) {
                                 // Failed to commit - rollback the offset change
-                                self.offset.fetchSub(grow_amount, .monotonic);
+                                _ = self.offset.fetchSub(grow_amount, .monotonic);
                                 return false;
                             }
                         }

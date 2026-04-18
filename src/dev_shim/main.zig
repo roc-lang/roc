@@ -28,6 +28,7 @@ const lambdasolved = @import("lambdasolved");
 const monotype = @import("monotype");
 const monotype_lifted = @import("monotype_lifted");
 const symbol = @import("symbol");
+const ExecutableMemoryInitError = @typeInfo(@typeInfo(@TypeOf(backend.ExecutableMemory.initWithEntryOffset)).@"fn".return_type.?).error_union.error_set;
 
 // Module tracing flag - enabled via `zig build -Dtrace-modules`
 const trace_modules = if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
@@ -210,7 +211,7 @@ const ShimError = error{
     MmapFailed,
     MprotectFailed,
     Crash,
-} || safe_memory.MemoryError;
+} || safe_memory.MemoryError || ExecutableMemoryInitError;
 
 /// Exported symbol that reads ModuleEnv from shared memory, compiles to native code, and executes.
 export fn roc_entrypoint(entry_idx: u32, ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void {

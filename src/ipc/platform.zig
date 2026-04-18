@@ -375,7 +375,7 @@ pub fn unmapMemory(ptr: *anyopaque, size: usize) void {
 
 fn unmapWindowsMemory(ptr: *anyopaque) void {
     if (comptime is_windows) {
-        windows.UnmapViewOfFile(ptr);
+        _ = windows.UnmapViewOfFile(ptr);
     }
 }
 
@@ -408,7 +408,7 @@ fn closeWindowsHandle(handle: Handle, is_owner: bool) void {
         // On Windows, only the owner should close the handle
         // Inherited handles belong to the parent process
         if (is_owner) {
-            windows.CloseHandle(handle);
+            _ = windows.CloseHandle(handle);
         }
     }
 }
