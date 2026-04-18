@@ -51,6 +51,7 @@ impl DeriveKey {
             DeriveKey::ToEncoder(key) => format!("to_encoder_{}", key.debug_name()),
             DeriveKey::Decoder(key) => format!("decoder_{}", key.debug_name()),
             DeriveKey::Hash(key) => format!("hash_{}", key.debug_name()),
+            DeriveKey::ToInspector(key) => format!("to_inspector_{}", key.debug_name()),
         }
     }
 }
