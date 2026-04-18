@@ -3,6 +3,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const base = @import("base");
+const build_options = @import("build_options");
 const can = @import("can");
 const check = @import("check");
 const parse = @import("parse");
@@ -23,6 +24,17 @@ const CIR = can.CIR;
 const Allocators = base.Allocators;
 const FromIr = lir.FromIr;
 const is_freestanding = builtin.os.tag == .freestanding;
+
+/// Comptime-gated tracing for the shared lowering pipeline.
+const trace = struct {
+    const enabled = if (@hasDecl(build_options, "trace_eval")) build_options.trace_eval else false;
+
+    fn log(comptime fmt: []const u8, args: anytype) void {
+        if (comptime enabled) {
+            std.debug.print("[lower] " ++ fmt ++ "\n", args);
+        }
+    }
+};
 
 pub const SourceKind = enum {
     expr,
@@ -416,15 +428,21 @@ pub fn lowerTypedCIRToLirForTarget(
     module_envs: []const *const ModuleEnv,
     target_usize: base.target.TargetUsize,
 ) !LoweredProgram {
+    trace.log("typed-cir -> monotype", .{});
     var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, typed_cir_modules, 1, null);
     defer mono_lowerer.deinit();
     const mono = try mono_lowerer.run(0);
     debugValidateMonotypeTypes(&mono.types);
+    trace.log("monotype -> monotype_lifted", .{});
     const lifted = try monotype_lifted.Lower.run(allocator, mono);
+    trace.log("monotype_lifted -> lambdasolved", .{});
     const solved = try lambdasolved.Lower.run(allocator, lifted);
+    trace.log("lambdasolved -> lambdamono", .{});
     const executable = try lambdamono.Lower.run(allocator, solved);
+    trace.log("lambdamono -> ir", .{});
     const lowered_ir = try ir.Lower.run(allocator, executable);
 
+    trace.log("ir -> lir", .{});
     var lowered_lir = try FromIr.run(
         allocator,
         module_envs,
