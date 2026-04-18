@@ -15,6 +15,12 @@ pub const Pending = struct {
         erased_boundary,
     };
 
+    pub const Status = enum(u8) {
+        pending,
+        specializing,
+        done,
+    };
+
     name: Symbol,
     repr_mode: ReprMode,
     fn_ty: TypeVarId,
@@ -23,6 +29,7 @@ pub const Pending = struct {
     requested_ty: TypeVarId,
     key_bytes: []const u8,
     specialized_symbol: Symbol,
+    status: Status = .pending,
     specialized: ?ast.FnDef = null,
     result_ty: ?type_mod.TypeId = null,
 };
@@ -51,7 +58,7 @@ pub const Queue = struct {
 
     pub fn nextPending(self: *Queue) ?*Pending {
         for (self.items.items) |*item| {
-            if (item.specialized == null) return item;
+            if (item.status == .pending) return item;
         }
         return null;
     }

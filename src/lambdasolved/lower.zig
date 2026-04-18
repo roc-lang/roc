@@ -600,6 +600,153 @@ const Lowerer = struct {
         return placeholder;
     }
 
+    fn snapshotTypeVarSpanWithMapping(
+        self: *Lowerer,
+        tys: []const TypeVarId,
+        mapping: *std.AutoHashMap(TypeVarId, TypeVarId),
+    ) std.mem.Allocator.Error!type_mod.Span(TypeVarId) {
+        if (tys.len == 0) return type_mod.Span(TypeVarId).empty();
+
+        const out = try self.allocator.alloc(TypeVarId, tys.len);
+        defer self.allocator.free(out);
+        for (tys, 0..) |ty, i| {
+            out[i] = try self.snapshotTypeRec(ty, mapping);
+        }
+        return try self.types.addTypeVarSpan(out);
+    }
+
+    fn snapshotTypeRec(
+        self: *Lowerer,
+        ty: TypeVarId,
+        mapping: *std.AutoHashMap(TypeVarId, TypeVarId),
+    ) std.mem.Allocator.Error!TypeVarId {
+        const id = self.types.unlinkPreservingNominal(ty);
+        if (mapping.get(id)) |cached| return cached;
+
+        switch (self.types.getNode(id)) {
+            .unbd => {
+                const fresh = try self.types.freshUnbd();
+                try mapping.put(id, fresh);
+                return fresh;
+            },
+            .for_a => {
+                const fresh = try self.types.freshForA();
+                try mapping.put(id, fresh);
+                return fresh;
+            },
+            else => {},
+        }
+
+        const placeholder = try self.types.freshUnbd();
+        try mapping.put(id, placeholder);
+
+        const frozen = switch (self.types.getNode(id)) {
+            .unbd, .for_a => unreachable,
+            .link => unreachable,
+            .nominal => |nominal| blk: {
+                const args = self.types.sliceTypeVarSpan(nominal.args);
+                const out_args = try self.allocator.alloc(TypeVarId, args.len);
+                defer self.allocator.free(out_args);
+                for (args, 0..) |arg, i| {
+                    out_args[i] = try self.snapshotTypeRec(arg, mapping);
+                }
+                break :blk type_mod.Node{ .nominal = .{
+                    .module_idx = nominal.module_idx,
+                    .ident = nominal.ident,
+                    .is_opaque = nominal.is_opaque,
+                    .args = try self.types.addTypeVarSpan(out_args),
+                    .backing = try self.snapshotTypeRec(nominal.backing, mapping),
+                } };
+            },
+            .content => |content| switch (content) {
+                .primitive => type_mod.Node{ .content = .{ .primitive = content.primitive } },
+                .func => type_mod.Node{ .content = .{ .func = .{
+                    .arg = try self.snapshotTypeRec(content.func.arg, mapping),
+                    .lset = try self.snapshotTypeRec(content.func.lset, mapping),
+                    .ret = try self.snapshotTypeRec(content.func.ret, mapping),
+                } } },
+                .list => |elem| type_mod.Node{ .content = .{
+                    .list = try self.snapshotTypeRec(elem, mapping),
+                } },
+                .box => |elem| type_mod.Node{ .content = .{
+                    .box = try self.snapshotTypeRec(elem, mapping),
+                } },
+                .tuple => |tuple| blk: {
+                    const elems = self.types.sliceTypeVarSpan(tuple);
+                    const out_elems = try self.allocator.alloc(TypeVarId, elems.len);
+                    defer self.allocator.free(out_elems);
+                    for (elems, 0..) |elem, i| {
+                        out_elems[i] = try self.snapshotTypeRec(elem, mapping);
+                    }
+                    break :blk type_mod.Node{ .content = .{
+                        .tuple = try self.types.addTypeVarSpan(out_elems),
+                    } };
+                },
+                .tag_union => |tag_union| blk: {
+                    const tags = self.types.sliceTags(tag_union.tags);
+                    const out_tags = try self.allocator.alloc(type_mod.Tag, tags.len);
+                    defer self.allocator.free(out_tags);
+                    for (tags, 0..) |tag, i| {
+                        const args = self.types.sliceTypeVarSpan(tag.args);
+                        const out_args = try self.allocator.alloc(TypeVarId, args.len);
+                        defer self.allocator.free(out_args);
+                        for (args, 0..) |arg, arg_i| {
+                            out_args[arg_i] = try self.snapshotTypeRec(arg, mapping);
+                        }
+                        out_tags[i] = .{
+                            .name = tag.name,
+                            .args = try self.types.addTypeVarSpan(out_args),
+                        };
+                    }
+                    break :blk type_mod.Node{ .content = .{
+                        .tag_union = .{ .tags = try self.types.addTags(out_tags) },
+                    } };
+                },
+                .record => |record| blk: {
+                    const fields = self.types.sliceFields(record.fields);
+                    const out_fields = try self.allocator.alloc(type_mod.Field, fields.len);
+                    defer self.allocator.free(out_fields);
+                    for (fields, 0..) |field, i| {
+                        out_fields[i] = .{
+                            .name = field.name,
+                            .ty = try self.snapshotTypeRec(field.ty, mapping),
+                        };
+                    }
+                    sortFieldsByName(&self.input.idents, out_fields);
+                    break :blk type_mod.Node{ .content = .{
+                        .record = .{ .fields = try self.types.addFields(out_fields) },
+                    } };
+                },
+                .lambda_set => |lambda_set| blk: {
+                    const lambdas = self.types.sliceLambdas(lambda_set);
+                    const out_lambdas = try self.allocator.alloc(type_mod.Lambda, lambdas.len);
+                    defer self.allocator.free(out_lambdas);
+                    for (lambdas, 0..) |lambda, i| {
+                        const captures = self.types.sliceCaptures(lambda.captures);
+                        const out_captures = try self.allocator.alloc(type_mod.Capture, captures.len);
+                        defer self.allocator.free(out_captures);
+                        for (captures, 0..) |capture, capture_i| {
+                            out_captures[capture_i] = .{
+                                .symbol = capture.symbol,
+                                .ty = try self.snapshotTypeRec(capture.ty, mapping),
+                            };
+                        }
+                        out_lambdas[i] = .{
+                            .symbol = lambda.symbol,
+                            .captures = try self.types.addCaptures(out_captures),
+                        };
+                    }
+                    break :blk type_mod.Node{ .content = .{
+                        .lambda_set = try self.types.addLambdas(out_lambdas),
+                    } };
+                },
+            },
+        };
+
+        self.types.setNode(placeholder, frozen);
+        return placeholder;
+    }
+
     fn inferProgram(self: *Lowerer) std.mem.Allocator.Error!void {
         const sccs = try self.computeSccs();
         defer self.freeSccs(sccs);
@@ -1023,8 +1170,11 @@ const Lowerer = struct {
                     }
                 }
                 const out_expr = &self.output.exprs.items[@intFromEnum(expr_id)];
-                out_expr.data.method_call.step_arg_tys = try self.types.addTypeVarSpan(step_arg_tys.items);
-                out_expr.data.method_call.step_result_tys = try self.types.addTypeVarSpan(step_result_tys.items);
+                var snapshot_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
+                defer snapshot_mapping.deinit();
+                out_expr.data.method_call.method_fn_ty = try self.snapshotTypeRec(method_call.method_fn_ty, &snapshot_mapping);
+                out_expr.data.method_call.step_arg_tys = try self.snapshotTypeVarSpanWithMapping(step_arg_tys.items, &snapshot_mapping);
+                out_expr.data.method_call.step_result_tys = try self.snapshotTypeVarSpanWithMapping(step_result_tys.items, &snapshot_mapping);
                 break :blk target_ty;
             },
             .type_method_call => |method_call| blk: {
@@ -1054,8 +1204,12 @@ const Lowerer = struct {
                     try self.unify(target_ty, fn_parts.ret);
                 }
                 const out_expr = &self.output.exprs.items[@intFromEnum(expr_id)];
-                out_expr.data.type_method_call.step_arg_tys = try self.types.addTypeVarSpan(step_arg_tys.items);
-                out_expr.data.type_method_call.step_result_tys = try self.types.addTypeVarSpan(step_result_tys.items);
+                var snapshot_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
+                defer snapshot_mapping.deinit();
+                out_expr.data.type_method_call.dispatcher_ty = try self.snapshotTypeRec(method_call.dispatcher_ty, &snapshot_mapping);
+                out_expr.data.type_method_call.method_fn_ty = try self.snapshotTypeRec(method_call.method_fn_ty, &snapshot_mapping);
+                out_expr.data.type_method_call.step_arg_tys = try self.snapshotTypeVarSpanWithMapping(step_arg_tys.items, &snapshot_mapping);
+                out_expr.data.type_method_call.step_result_tys = try self.snapshotTypeVarSpanWithMapping(step_result_tys.items, &snapshot_mapping);
                 break :blk target_ty;
             },
             .let_ => |let_expr| blk: {

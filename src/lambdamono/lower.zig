@@ -269,10 +269,16 @@ const Lowerer = struct {
             // potentially grows the queue. Specialization must consume stable
             // explicit facts, not keep reading through a queue slot that may
             // be relocated by later appends.
+            const specialized_symbol = pending.specialized_symbol;
+            pending.status = .specializing;
+            errdefer pending.status = .pending;
             const pending_copy = pending.*;
             const specialized = try self.specializeFn(pending_copy);
-            pending.specialized = specialized.fn_def;
-            pending.result_ty = specialized.ret_ty;
+            const updated = self.lookupPendingBySpecializedSymbol(specialized_symbol) orelse
+                debugPanic("lambdamono.lower.lowerProgram lost queued specialization after growth");
+            updated.specialized = specialized.fn_def;
+            updated.result_ty = specialized.ret_ty;
+            updated.status = .done;
         }
 
         const fn_defs = try self.queue.solvedDefs(self.allocator);
@@ -300,6 +306,74 @@ const Lowerer = struct {
         }
 
         try self.moveEntrypointRootsToEnd();
+    }
+
+    fn lookupPendingBySpecializedSymbol(self: *Lowerer, symbol: Symbol) ?*specializations.Pending {
+        for (self.queue.items.items) |*item| {
+            if (item.specialized_symbol == symbol) return item;
+        }
+        return null;
+    }
+
+    fn executableTypeIsAbstract(self: *Lowerer, ty: type_mod.TypeId) bool {
+        if (self.types.containsAbstractLeaf(ty)) return true;
+        return switch (self.types.getTypePreservingNominal(ty)) {
+            .tag_union => |tag_union| tag_union.tags.len == 0,
+            else => false,
+        };
+    }
+
+    fn ensureSpecializedCallResult(
+        self: *Lowerer,
+        solved_types: *const solved.Type.Store,
+        requested_name: Symbol,
+        repr_mode: specializations.Pending.ReprMode,
+        requested_ty: TypeVarId,
+        fallback_ret_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!struct { symbol: Symbol, ret_ty: type_mod.TypeId } {
+        const specialized_symbol = try specializations.specializeFn(
+            &self.queue,
+            self.fenv,
+            solved_types,
+            &self.input.symbols,
+            requested_name,
+            repr_mode,
+            requested_ty,
+        );
+        const pending = self.lookupPendingBySpecializedSymbol(specialized_symbol) orelse
+            debugPanic("lambdamono.lower.ensureSpecializedCallResult missing queued specialization");
+        switch (pending.status) {
+            .done => return .{
+                .symbol = specialized_symbol,
+                .ret_ty = pending.result_ty orelse
+                    debugPanic("lambdamono.lower.ensureSpecializedCallResult done specialization missing result type"),
+            },
+            .pending => {
+                const pending_symbol = pending.specialized_symbol;
+                pending.status = .specializing;
+                errdefer pending.status = .pending;
+                const pending_copy = pending.*;
+                const specialized = try self.specializeFn(pending_copy);
+                const updated = self.lookupPendingBySpecializedSymbol(pending_symbol) orelse
+                    debugPanic("lambdamono.lower.ensureSpecializedCallResult lost queued specialization after growth");
+                updated.specialized = specialized.fn_def;
+                updated.result_ty = specialized.ret_ty;
+                updated.status = .done;
+                return .{
+                    .symbol = specialized_symbol,
+                    .ret_ty = specialized.ret_ty,
+                };
+            },
+            .specializing => {
+                if (self.executableTypeIsAbstract(fallback_ret_ty)) {
+                    debugPanic("lambdamono.lower.ensureSpecializedCallResult recursive call needs concrete result type");
+                }
+                return .{
+                    .symbol = specialized_symbol,
+                    .ret_ty = fallback_ret_ty,
+                };
+            },
+        }
     }
 
     fn seedEntrypointSpecializations(self: *Lowerer) std.mem.Allocator.Error!void {
@@ -651,25 +725,23 @@ const Lowerer = struct {
                     if (lambda_member.capture_ty == null and current_member.captures.len != 0) {
                         debugPanic("lambdamono.lower.applyFuncValue missing executable capture payload for lambda member");
                     }
-                    const specialized = try specializations.specializeFn(
-                        &self.queue,
-                        self.fenv,
+                    const specialized = try self.ensureSpecializedCallResult(
                         solved_types,
-                        &self.input.symbols,
                         specialization_symbol,
                         .natural,
                         func_ty,
+                        result_exec_ty,
                     );
 
                     if (lambda_member.capture_ty == null) {
                         var body_expr = try self.output.addExpr(.{
-                            .ty = sig.ret_ty,
+                            .ty = specialized.ret_ty,
                             .data = .{ .call = .{
-                                .proc = specialized,
+                                .proc = specialized.symbol,
                                 .args = try self.output.addExprSpan(&.{call_arg}),
                             } },
                         });
-                        if (!self.types.equalIds(sig.ret_ty, result_exec_ty)) {
+                        if (!self.types.equalIds(specialized.ret_ty, result_exec_ty)) {
                             body_expr = try self.emitExplicitBridgeExpr(body_expr, result_exec_ty);
                         }
                         const body_ty = self.output.getExpr(body_expr).ty;
@@ -707,9 +779,9 @@ const Lowerer = struct {
                             } },
                         });
                         var body_expr = try self.output.addExpr(.{
-                            .ty = sig.ret_ty,
+                            .ty = specialized.ret_ty,
                             .data = .{ .call = .{
-                                .proc = specialized,
+                                .proc = specialized.symbol,
                                 .args = try self.output.addExprSpan(&.{
                                     call_arg,
                                     try self.output.addExpr(.{
@@ -719,7 +791,7 @@ const Lowerer = struct {
                                 }),
                             } },
                         });
-                        if (!self.types.equalIds(sig.ret_ty, result_exec_ty)) {
+                        if (!self.types.equalIds(specialized.ret_ty, result_exec_ty)) {
                             body_expr = try self.emitExplicitBridgeExpr(body_expr, result_exec_ty);
                         }
                         const body_ty = self.output.getExpr(body_expr).ty;
@@ -2175,26 +2247,6 @@ const Lowerer = struct {
         errdefer mono_cache.deinit();
 
         const exact_fn_ty = try self.cloneInstType(&inst, entry.fn_ty);
-        var snapshot_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
-        defer snapshot_mapping.deinit();
-        const snapshot_receiver_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &snapshot_mapping, receiver_ty);
-        const snapshot_arg_tys = try self.allocator.alloc(TypeVarId, arg_tys.len);
-        errdefer self.allocator.free(snapshot_arg_tys);
-        for (arg_tys, 0..) |arg_ty, i| {
-            snapshot_arg_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &snapshot_mapping, arg_ty);
-        }
-        const snapshot_step_result_tys = try self.allocator.alloc(TypeVarId, step_result_tys.len);
-        errdefer self.allocator.free(snapshot_step_result_tys);
-        for (step_result_tys, 0..) |step_result_ty, i| {
-            snapshot_step_result_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &snapshot_mapping, step_result_ty);
-        }
-        const all_step_arg_tys = try self.allocator.alloc(TypeVarId, snapshot_arg_tys.len + 1);
-        errdefer self.allocator.free(all_step_arg_tys);
-        all_step_arg_tys[0] = snapshot_receiver_ty;
-        for (snapshot_arg_tys, 0..) |arg_ty, i| {
-            all_step_arg_tys[i + 1] = arg_ty;
-        }
-
         var unify_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
         defer unify_mapping.deinit();
 
@@ -2235,7 +2287,15 @@ const Lowerer = struct {
             current_fn_ty = step_result_ty;
         }
 
-        const cloned_env = try self.cloneEnvIntoInstFromStoreWithMapping(&inst, &mono_cache, source_types, &snapshot_mapping, venv);
+        const all_step_arg_tys = try self.allocator.alloc(TypeVarId, cloned_arg_tys.len + 1);
+        errdefer self.allocator.free(all_step_arg_tys);
+        all_step_arg_tys[0] = cloned_receiver_ty;
+        for (cloned_arg_tys, 0..) |arg_ty, i| {
+            all_step_arg_tys[i + 1] = arg_ty;
+        }
+        const out_step_result_tys = try self.allocator.dupe(TypeVarId, steps.items);
+        errdefer self.allocator.free(out_step_result_tys);
+        const cloned_env = try self.cloneEnvIntoInstFromStoreWithMapping(&inst, &mono_cache, source_types, &unify_mapping, venv);
 
         return .{
             .inst = inst,
@@ -2243,7 +2303,7 @@ const Lowerer = struct {
             .env = cloned_env,
             .fn_ty = exact_fn_ty,
             .step_arg_tys = all_step_arg_tys,
-            .step_result_tys = snapshot_step_result_tys,
+            .step_result_tys = out_step_result_tys,
         };
     }
 
@@ -2328,21 +2388,6 @@ const Lowerer = struct {
         errdefer mono_cache.deinit();
 
         const exact_fn_ty = try self.cloneInstType(&inst, entry.fn_ty);
-        var snapshot_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
-        defer snapshot_mapping.deinit();
-
-        const snapshot_arg_tys = try self.allocator.alloc(TypeVarId, arg_tys.len);
-        errdefer self.allocator.free(snapshot_arg_tys);
-        for (arg_tys, 0..) |arg_ty, i| {
-            snapshot_arg_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &snapshot_mapping, arg_ty);
-        }
-        const snapshot_step_result_tys = try self.allocator.alloc(TypeVarId, step_result_tys.len);
-        errdefer self.allocator.free(snapshot_step_result_tys);
-        for (step_result_tys, 0..) |step_result_ty, i| {
-            snapshot_step_result_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &snapshot_mapping, step_result_ty);
-        }
-        const all_step_arg_tys = try self.allocator.dupe(TypeVarId, snapshot_arg_tys);
-        errdefer self.allocator.free(all_step_arg_tys);
 
         var unify_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
         defer unify_mapping.deinit();
@@ -2382,7 +2427,11 @@ const Lowerer = struct {
             }
         }
 
-        const cloned_env = try self.cloneEnvIntoInstFromStoreWithMapping(&inst, &mono_cache, source_types, &snapshot_mapping, venv);
+        const all_step_arg_tys = try self.allocator.dupe(TypeVarId, cloned_arg_tys);
+        errdefer self.allocator.free(all_step_arg_tys);
+        const out_step_result_tys = try self.allocator.dupe(TypeVarId, steps.items);
+        errdefer self.allocator.free(out_step_result_tys);
+        const cloned_env = try self.cloneEnvIntoInstFromStoreWithMapping(&inst, &mono_cache, source_types, &unify_mapping, venv);
 
         return .{
             .inst = inst,
@@ -2390,7 +2439,7 @@ const Lowerer = struct {
             .env = cloned_env,
             .fn_ty = exact_fn_ty,
             .step_arg_tys = all_step_arg_tys,
-            .step_result_tys = snapshot_step_result_tys,
+            .step_result_tys = out_step_result_tys,
         };
     }
 
@@ -2411,6 +2460,32 @@ const Lowerer = struct {
                 try self.lowerExecutableTypeFromSolvedIn(&frozen.inst.types, &frozen.mono_cache, frozen.requested_fn_shape.ret),
             .natural => try self.lowerExecutableTypeFromSolvedIn(&frozen.inst.types, &frozen.mono_cache, frozen.requested_fn_shape.ret),
         };
+        if (builtin.mode == .Debug) {
+            switch (self.input.symbols.get(pending.specialized_symbol).origin) {
+                .specialized_local_fn => |data| {
+                    const requested_ret = self.types.getTypePreservingNominal(specialized_ret_exec_ty);
+                    const frozen_ret_exec_ty = try self.lowerExecutableTypeFromSolvedIn(&frozen.inst.types, &frozen.mono_cache, frozen.fn_shape.ret);
+                    const frozen_ret = self.types.getTypePreservingNominal(frozen_ret_exec_ty);
+                    std.debug.print(
+                        "[specialize-fn-ret] pending={d} source_symbol={d} requested_ret={s} frozen_ret={s}\n",
+                        .{
+                            pending.specialized_symbol.raw(),
+                            data.source_symbol,
+                            switch (requested_ret) {
+                                .primitive => |prim| @tagName(prim),
+                                else => @tagName(std.meta.activeTag(requested_ret)),
+                            },
+                            switch (frozen_ret) {
+                                .primitive => |prim| @tagName(prim),
+                                else => @tagName(std.meta.activeTag(frozen_ret)),
+                            },
+                        },
+                    );
+                },
+                else => {},
+            }
+        }
+        var final_ret_ty = specialized_ret_exec_ty;
         const result: ast.FnDef = switch (pending.repr_mode) {
             .natural => if (frozen_captures.len == 0) .{
                     .args = blk: {
@@ -2431,10 +2506,16 @@ const Lowerer = struct {
                         pending.fn_def.body,
                     );
                     const body_ty = self.output.getExpr(body).ty;
-                    const bridged = if (!self.types.equalIds(body_ty, specialized_ret_exec_ty))
-                        try self.emitExplicitBridgeExpr(body, specialized_ret_exec_ty)
+                    const fn_ret_exec_ty = if (self.executableTypeIsAbstract(specialized_ret_exec_ty) and
+                        !self.executableTypeIsAbstract(body_ty))
+                        body_ty
+                    else
+                        specialized_ret_exec_ty;
+                    const bridged = if (!self.types.equalIds(body_ty, fn_ret_exec_ty))
+                        try self.emitExplicitBridgeExpr(body, fn_ret_exec_ty)
                     else
                         body;
+                    final_ret_ty = fn_ret_exec_ty;
                     break :blk bridged;
                 },
             } else blk: {
@@ -2453,8 +2534,14 @@ const Lowerer = struct {
                         body_env,
                         pending.fn_def.body,
                     );
-                    if (!self.types.equalIds(self.output.getExpr(body).ty, specialized_ret_exec_ty)) {
-                        body = try self.emitExplicitBridgeExpr(body, specialized_ret_exec_ty);
+                    const body_ty = self.output.getExpr(body).ty;
+                    const fn_ret_exec_ty = if (self.executableTypeIsAbstract(specialized_ret_exec_ty) and
+                        !self.executableTypeIsAbstract(body_ty))
+                        body_ty
+                    else
+                        specialized_ret_exec_ty;
+                    if (!self.types.equalIds(body_ty, fn_ret_exec_ty)) {
+                        body = try self.emitExplicitBridgeExpr(body, fn_ret_exec_ty);
                     }
                     body = try self.bindCaptureLets(
                         captures_symbol,
@@ -2462,6 +2549,7 @@ const Lowerer = struct {
                         capture_env,
                         body,
                     );
+                    final_ret_ty = fn_ret_exec_ty;
                     break :blk .{
                         .args = try self.output.addTypedSymbolSpan(&.{
                             .{
@@ -2507,12 +2595,19 @@ const Lowerer = struct {
                         body,
                     );
                 }
-                if (!self.types.equalIds(self.output.getExpr(body).ty, specialized_ret_exec_ty)) {
-                    body = try self.emitExplicitBridgeExpr(body, specialized_ret_exec_ty);
+                const body_ty = self.output.getExpr(body).ty;
+                const fn_ret_exec_ty = if (self.executableTypeIsAbstract(specialized_ret_exec_ty) and
+                    !self.executableTypeIsAbstract(body_ty))
+                    body_ty
+                else
+                    specialized_ret_exec_ty;
+                if (!self.types.equalIds(body_ty, fn_ret_exec_ty)) {
+                    body = try self.emitExplicitBridgeExpr(body, fn_ret_exec_ty);
                 }
                 if (capture_env.len != 0) {
                     const captures_symbol = try self.input.symbols.add(base.Ident.Idx.NONE, .synthetic);
                     body = try self.bindCaptureLets(captures_symbol, captures_ty.?, capture_env, body);
+                    final_ret_ty = fn_ret_exec_ty;
                     break :blk .{
                         .args = try self.output.addTypedSymbolSpan(&.{
                             .{
@@ -2527,6 +2622,7 @@ const Lowerer = struct {
                         .body = body,
                     };
                 }
+                final_ret_ty = fn_ret_exec_ty;
                 break :blk .{
                     .args = try self.output.addTypedSymbolSpan(&.{.{
                         .ty = arg_exec_ty,
@@ -2539,7 +2635,7 @@ const Lowerer = struct {
         return .{
             .fn_def = result,
             .arg_ty = specialized_arg_exec_ty,
-            .ret_ty = specialized_ret_exec_ty,
+            .ret_ty = final_ret_ty,
         };
     }
 
@@ -4672,29 +4768,28 @@ const Lowerer = struct {
             .erased => {},
         }
 
+        const specialized_call = if (self.isHostedFunctionSymbol(target_symbol))
+            .{ .symbol = target_symbol, .ret_ty = sig.ret_ty }
+        else
+            try self.ensureSpecializedCallResult(
+                solved_types,
+                target_symbol,
+                .natural,
+                current_fn_ty,
+                sig.ret_ty,
+            );
         var call_expr = try self.output.addExpr(.{
-            .ty = sig.ret_ty,
+            .ty = specialized_call.ret_ty,
             .data = .{ .call = .{
-                .proc = if (self.isHostedFunctionSymbol(target_symbol))
-                    target_symbol
-                else
-                    try specializations.specializeFn(
-                        &self.queue,
-                        self.fenv,
-                        solved_types,
-                        &self.input.symbols,
-                        target_symbol,
-                        .natural,
-                        current_fn_ty,
-                    ),
+                .proc = specialized_call.symbol,
                 .args = try self.output.addExprSpan(&.{call_arg}),
             } },
         });
-        if (!self.types.equalIds(sig.ret_ty, result_exec_ty)) {
+        if (!self.types.equalIds(specialized_call.ret_ty, result_exec_ty)) {
             if (builtin.mode == .Debug) {
                 const entry = self.input.symbols.get(target_symbol);
                 const name = if (entry.name.isNone()) "<none>" else self.input.idents.getText(entry.name);
-                const actual = self.types.getTypePreservingNominal(sig.ret_ty);
+                const actual = self.types.getTypePreservingNominal(specialized_call.ret_ty);
                 const expected = self.types.getTypePreservingNominal(result_exec_ty);
                 std.debug.print(
                     "[call-bridge] target={s} actual={s} expected={s}\n",
@@ -4831,7 +4926,7 @@ const Lowerer = struct {
         _: *lower_type.MonoCache,
         venv: []const EnvEntry,
         method_call: @FieldType(solved.Ast.Expr.Data, "method_call"),
-        source_result_ty: TypeVarId,
+        _: TypeVarId,
         expected_exec_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!SpecializedExprLowering {
         const receiver_source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, method_call.receiver);
@@ -4845,16 +4940,13 @@ const Lowerer = struct {
         }
         const target_symbol = self.findAttachedMethodTargetForInstantiatedSource(
             &inst.types,
-            instantiated_step_arg_tys[0],
+            receiver_source_ty,
             method_call.method_name,
         );
         const instantiated_step_result_tys = try self.allocator.alloc(TypeVarId, explicit_step_result_tys.len);
         defer self.allocator.free(instantiated_step_result_tys);
         for (explicit_step_result_tys, 0..) |step_result_ty, i| {
             instantiated_step_result_tys[i] = try self.cloneInstType(inst, step_result_ty);
-        }
-        if (instantiated_step_result_tys.len != 0) {
-            instantiated_step_result_tys[instantiated_step_result_tys.len - 1] = source_result_ty;
         }
         var frozen = try self.freezeMethodCallWorld(
             &inst.types,
@@ -4980,7 +5072,7 @@ const Lowerer = struct {
         _: *lower_type.MonoCache,
         venv: []const EnvEntry,
         method_call: @FieldType(solved.Ast.Expr.Data, "type_method_call"),
-        source_result_ty: TypeVarId,
+        _: TypeVarId,
         _: type_mod.TypeId,
     ) std.mem.Allocator.Error!SpecializedExprLowering {
         const dispatcher_source_ty = try self.cloneInstType(inst, method_call.dispatcher_ty);
@@ -5001,9 +5093,6 @@ const Lowerer = struct {
         defer self.allocator.free(instantiated_step_result_tys);
         for (explicit_step_result_tys, 0..) |step_result_ty, i| {
             instantiated_step_result_tys[i] = try self.cloneInstType(inst, step_result_ty);
-        }
-        if (instantiated_step_result_tys.len != 0) {
-            instantiated_step_result_tys[instantiated_step_result_tys.len - 1] = source_result_ty;
         }
         var frozen = try self.freezeTypeMethodCallWorld(
             &inst.types,
