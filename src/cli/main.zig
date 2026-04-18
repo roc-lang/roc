@@ -53,6 +53,7 @@ const eval = @import("eval");
 const echo_platform = @import("echo_platform");
 const lsp = @import("lsp");
 const cli_repl = @import("repl.zig");
+const ansi_term = @import("ansi_term.zig");
 
 const cli_args = @import("cli_args.zig");
 const roc_target = @import("target.zig");
@@ -5308,7 +5309,7 @@ fn replayTestCache(
     } else {
         const total_tests = passed + failed;
         if (total_tests > 0) {
-            try stderr.print("Ran {} test(s): {} passed, {} failed in {d:.1}ms (cached)\n", .{ total_tests, passed, failed, elapsed_ms });
+            try stderr.print("Ran {} tests in {d:.1}ms (cached):\n    " ++ ansi_term.green ++ "{}" ++ ansi_term.reset ++ " passed\n    " ++ ansi_term.red ++ "{}" ++ ansi_term.reset ++ " failed\n", .{ total_tests, elapsed_ms, passed, failed });
         }
 
         if (args.verbose) {
@@ -5970,9 +5971,9 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
         const total_tests = total_passed + total_failed + total_skipped;
         if (total_tests > 0) {
             if (total_skipped > 0) {
-                try stderr.print("Ran {} test(s): {} passed, {} failed, {} skipped in {d:.1}ms\n", .{ total_tests, total_passed, total_failed, total_skipped, elapsed_ms });
+                try stderr.print("Ran {} tests in {d:.1}ms:\n    " ++ ansi_term.green ++ "{}" ++ ansi_term.reset ++ " passed\n    " ++ ansi_term.red ++ "{}" ++ ansi_term.reset ++ " failed\n    {} skipped\n", .{ total_tests, elapsed_ms, total_passed, total_failed, total_skipped });
             } else {
-                try stderr.print("Ran {} test(s): {} passed, {} failed in {d:.1}ms\n", .{ total_tests, total_passed, total_failed, elapsed_ms });
+                try stderr.print("Ran {} tests in {d:.1}ms:\n    " ++ ansi_term.green ++ "{}" ++ ansi_term.reset ++ " passed\n    " ++ ansi_term.red ++ "{}" ++ ansi_term.reset ++ " failed\n", .{ total_tests, elapsed_ms, total_passed, total_failed });
             }
         }
 
@@ -5983,23 +5984,17 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                     switch (result.result) {
                         .passed => try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ mr.path, region_info.start_line_idx + 1 }),
                         .skipped => try stdout.print("\x1b[33mSKIP\x1b[0m: {s}:{}\n", .{ mr.path, region_info.start_line_idx + 1 }),
-                        .failed => {
-                            try stderr.print("\x1b[31mFAIL\x1b[0m: {s}:{}", .{ mr.path, region_info.start_line_idx + 1 });
-                            if (result.error_msg) |msg| {
-                                try stderr.print(" - {s}", .{msg});
-                            }
-                            try stderr.print("\n", .{});
-                        },
+                        .failed => try printTestFailure(stderr, mr.path, mr.env, result.region, region_info, result.error_msg),
                     }
                 }
             }
         } else {
-            // Non-verbose mode: just show simple FAIL messages with line numbers
+            // Non-verbose mode: only show failures
             for (module_results.items) |mr| {
                 for (mr.results) |result| {
                     if (result.result == .failed) {
                         const region_info = mr.env.calcRegionInfo(result.region);
-                        try stderr.print("\x1b[31mFAIL\x1b[0m: {s}:{}\n", .{ mr.path, region_info.start_line_idx + 1 });
+                        try printTestFailure(stderr, mr.path, mr.env, result.region, region_info, result.error_msg);
                     }
                 }
             }
@@ -6007,6 +6002,68 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
 
         return error.TestsFailed;
     }
+}
+
+/// Prints a formatted test failure to stderr, including the source snippet,
+/// an optional doc comment from the preceding line, and an optional error message.
+fn printTestFailure(
+    stderr: *std.Io.Writer,
+    path: []const u8,
+    env: *const ModuleEnv,
+    region: base.Region,
+    region_info: base.RegionInfo,
+    error_msg: ?[]const u8,
+) !void {
+    const src = env.getSourceAll();
+    const error_src = src[region.start.offset..region.end.offset];
+
+    // Check if the previous line is a doc comment
+    const doc_comment: ?[]const u8 = blk: {
+        const line_starts = env.getLineStarts();
+        const curr_line_start_idx = region_info.start_line_idx;
+        const curr_line_start = line_starts[curr_line_start_idx];
+        const prev_line_start = if (curr_line_start_idx > 0) line_starts[curr_line_start_idx - 1] else break :blk null;
+        const prev_line = std.mem.trimLeft(u8, src[prev_line_start..curr_line_start], " ");
+        if (std.mem.startsWith(u8, prev_line, "##")) {
+            break :blk std.mem.trimRight(u8, prev_line, " \r\n");
+        }
+        break :blk null;
+    };
+
+    try stderr.print("\n\x1b[31mFAIL\x1b[0m: {s}", .{path});
+
+    try stderr.print("\x1b[31m", .{});
+
+    // Calculate the width needed to right-align line numbers
+    const last_line_num: usize = region_info.end_line_idx + 1;
+    const num_width: usize = blk: {
+        var digits: usize = 0;
+        var n = last_line_num;
+        while (n > 0) : (n /= 10) digits += 1;
+        break :blk if (digits == 0) 1 else digits;
+    };
+
+    var line_num: usize = region_info.start_line_idx + 1;
+
+    if (doc_comment) |comment| {
+        line_num -= 1;
+        try stderr.print("\n{d:[num_width]} \u{2502} ", .{ .d = line_num, .num_width = num_width });
+        try stderr.print("{s}", .{comment});
+        line_num += 1;
+    }
+
+    var lines = std.mem.splitScalar(u8, error_src, '\n');
+    while (lines.next()) |line| {
+        try stderr.print("\n{d:[num_width]} \u{2502} ", .{ .d = line_num, .num_width = num_width });
+        try stderr.print("{s}", .{line});
+        line_num += 1;
+    }
+
+    if (error_msg) |msg| {
+        try stderr.print("\x1b[31m - {s}", .{msg});
+    }
+
+    try stderr.print("\x1b[0m\n", .{});
 }
 
 fn rocRepl(ctx: *CliContext, repl_args: cli_args.ReplArgs) !void {
@@ -6962,20 +7019,14 @@ fn generateDocs(
     // If the path contains "platform", we're documenting a platform directly
     const is_documenting_platform = std.mem.indexOf(u8, module_path, "platform") != null;
 
-    // Determine the root package name from the module path
-    // Extract basename without extension (e.g., "app.roc" -> "app")
-    const basename = std.fs.path.basename(module_path);
-    const pkg_name = if (std.mem.endsWith(u8, basename, ".roc"))
-        try ctx.gpa.dupe(u8, basename[0 .. basename.len - 4])
-    else
-        try ctx.gpa.dupe(u8, basename);
-
     // Collect ModuleDocs from all compiled modules
     var module_docs_list = std.ArrayList(DocModel.ModuleDocs).empty;
     defer {
         for (module_docs_list.items) |*mod| mod.deinit(ctx.gpa);
         module_docs_list.deinit(ctx.gpa);
     }
+
+    var is_package = false;
 
     var sched_iter = build_env.schedulers.iterator();
     while (sched_iter.next()) |sched_entry| {
@@ -6987,6 +7038,13 @@ fn generateDocs(
                 // Skip platform main.roc modules when documenting an app
                 // Platform modules are still included when documenting a platform directly
                 if (mod_env.module_kind == .platform and !is_documenting_platform) {
+                    continue;
+                }
+
+                // Skip package definition files — they just declare which modules
+                // are exposed and don't contain docs of their own.
+                if (mod_env.module_kind == .package) {
+                    is_package = true;
                     continue;
                 }
 
@@ -7002,23 +7060,19 @@ fn generateDocs(
         }
     }
 
-    // Extract documentation from the Builtin module.
-    // The Builtin module is special — it's pre-compiled and lives in build_env.builtin_modules.
-    {
-        const builtin_env = build_env.builtin_modules.builtin_module.env;
-
-        const builtin_docs = extract.extractModuleDocs(ctx.gpa, builtin_env, "Builtin") catch |err| blk: {
-            std.debug.print("Warning: failed to extract docs for Builtin module: {}\n", .{err});
-            break :blk null;
-        };
-
-        if (builtin_docs) |b_docs| {
-            module_docs_list.append(ctx.gpa, b_docs) catch {
-                var d = b_docs;
-                d.deinit(ctx.gpa);
-            };
-        }
-    }
+    // Determine the package name for the docs header.
+    // For packages, use the parent directory name (e.g., "my_parser" from "my_parser/main.roc")
+    // since the entry file is just a package definition.
+    // For apps/platforms, use the filename without extension (e.g., "app" from "app.roc").
+    const pkg_name = if (is_package)
+        try ctx.gpa.dupe(u8, std.fs.path.basename(std.fs.path.dirname(module_path) orelse "."))
+    else blk: {
+        const basename = std.fs.path.basename(module_path);
+        break :blk if (std.mem.endsWith(u8, basename, ".roc"))
+            try ctx.gpa.dupe(u8, basename[0 .. basename.len - 4])
+        else
+            try ctx.gpa.dupe(u8, basename);
+    };
 
     const modules_slice = module_docs_list.toOwnedSlice(ctx.gpa) catch return;
 
@@ -7027,6 +7081,9 @@ fn generateDocs(
         .modules = modules_slice,
     };
     defer package_docs.deinit(ctx.gpa);
+
+    // Remove existing output directory to ensure a clean build
+    try std.fs.cwd().deleteTree(base_output_dir);
 
     // Create output directory
     std.fs.cwd().makePath(base_output_dir) catch |err| switch (err) {

@@ -7563,9 +7563,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             comptime site: []const u8,
         ) ValueLocation {
             if (builtin.mode == .Debug and actual_layout != expected_layout) {
+                const actual_layout_val = self.layout_store.getLayout(actual_layout);
+                const expected_layout_val = self.layout_store.getLayout(expected_layout);
                 std.debug.panic(
-                    "LIR/codegen invariant violated at {s}: actual layout {} did not match expected layout {}",
-                    .{ site, @intFromEnum(actual_layout), @intFromEnum(expected_layout) },
+                    "LIR/codegen invariant violated at {s}: actual layout {} ({s}) did not match expected layout {} ({s})",
+                    .{
+                        site,
+                        @intFromEnum(actual_layout),
+                        @tagName(actual_layout_val.tag),
+                        @intFromEnum(expected_layout),
+                        @tagName(expected_layout_val.tag),
+                    },
                 );
             }
 
@@ -11626,6 +11634,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Keep the lambda caches in final coordinates so later call sites resolve correctly.
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, std.math.maxInt(u64));
                 self.shiftPendingCalls(body_start, body_end, prologue_size);
+                self.shiftPendingProcAddrs(body_start, body_end, prologue_size);
 
                 // Re-patch internal calls/addr whose targets are outside the shifted body
                 self.repatchInternalCalls(body_start, body_end, prologue_size, body_start);

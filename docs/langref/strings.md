@@ -103,7 +103,7 @@ Besides emoji like 👩‍👩‍👦‍👦, another classic example of code po
 
 ```
 "caf\u(e9)"
-"caf\u(301)e"
+"cafe\u(301)"
 ```
 
 The `\u(e9)` syntax is a way of inserting code points into string literals. In this case, it's the same as inserting the hexadecimal number `0xe9` as a code point onto the end of the string `"caf"`. Since Unicode code point `0xe9` happens to be `é`, the string `"caf\u(e9)"` ends up being identical in memory to the string `"café"`.

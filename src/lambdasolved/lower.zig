@@ -57,6 +57,8 @@ const Lowerer = struct {
     types: type_mod.Store,
     def_id_by_symbol: std.AutoHashMap(Symbol, ast.DefId),
     lifted_fn_capture_spans: std.AutoHashMap(Symbol, LiftedAst.Span(LiftedAst.TypedSymbol)),
+    fn_infer_states: std.AutoHashMap(Symbol, FnInferState),
+    current_instantiate_cache: ?*std.AutoHashMap(LiftedType.TypeId, TypeVarId),
     current_return_ty: ?TypeVarId,
     current_def_symbol: ?Symbol,
     current_opaque_unify: ?DebugNominalContext,
@@ -91,6 +93,12 @@ const Lowerer = struct {
         def_ids: []ast.DefId,
     };
 
+    const FnInferState = enum {
+        pending,
+        inferring,
+        done,
+    };
+
     fn init(allocator: std.mem.Allocator, input: LiftedResult) Lowerer {
         return .{
             .allocator = allocator,
@@ -100,6 +108,8 @@ const Lowerer = struct {
             .types = type_mod.Store.init(allocator),
             .def_id_by_symbol = std.AutoHashMap(Symbol, ast.DefId).init(allocator),
             .lifted_fn_capture_spans = std.AutoHashMap(Symbol, LiftedAst.Span(LiftedAst.TypedSymbol)).init(allocator),
+            .fn_infer_states = std.AutoHashMap(Symbol, FnInferState).init(allocator),
+            .current_instantiate_cache = null,
             .current_return_ty = null,
             .current_def_symbol = null,
             .current_opaque_unify = null,
@@ -112,6 +122,7 @@ const Lowerer = struct {
     fn deinit(self: *Lowerer) void {
         self.def_id_by_symbol.deinit();
         self.lifted_fn_capture_spans.deinit();
+        self.fn_infer_states.deinit();
         self.types.deinit();
         self.root_defs.deinit(self.allocator);
         self.output.deinit();
@@ -158,13 +169,20 @@ const Lowerer = struct {
         const def_id = try self.output.addDef(def);
         try self.root_defs.append(self.allocator, def_id);
         try self.def_id_by_symbol.put(def.bind.symbol, def_id);
+        try self.fn_infer_states.put(def.bind.symbol, .pending);
         return def_id;
     }
 
     fn instantiateDef(self: *Lowerer, def: LiftedAst.Def) std.mem.Allocator.Error!ast.DefId {
-        const bind = try self.instantiateTypedSymbol(def.bind);
         return switch (def.value) {
             .fn_ => |lifted_fn_def| blk: {
+                var cache = std.AutoHashMap(LiftedType.TypeId, TypeVarId).init(self.allocator);
+                defer cache.deinit();
+                const previous_cache = self.current_instantiate_cache;
+                self.current_instantiate_cache = &cache;
+                defer self.current_instantiate_cache = previous_cache;
+
+                const bind = try self.instantiateTypedSymbol(def.bind);
                 try self.lifted_fn_capture_spans.put(bind.symbol, lifted_fn_def.captures);
                 break :blk self.emitDef(.{
                     .bind = bind,
@@ -175,7 +193,7 @@ const Lowerer = struct {
                 });
             },
             .hosted_fn => |hosted_fn| self.emitDef(.{
-                .bind = bind,
+                .bind = try self.instantiateTypedSymbol(def.bind),
                 .value = .{ .hosted_fn = .{
                     .bind = try self.instantiateTypedSymbol(hosted_fn.bind),
                     .args = try self.instantiateTypedSymbolSpan(hosted_fn.args),
@@ -183,17 +201,75 @@ const Lowerer = struct {
                 } },
             }),
             .val => |expr_id| self.emitDef(.{
-                .bind = bind,
+                .bind = try self.instantiateTypedSymbol(def.bind),
                 .value = .{ .val = try self.instantiateExpr(expr_id) },
             }),
             .run => |run_def| self.emitDef(.{
-                .bind = bind,
+                .bind = try self.instantiateTypedSymbol(def.bind),
                 .value = .{ .run = .{
                     .body = try self.instantiateExpr(run_def.body),
                     .entry_ty = run_def.entry_ty,
                 } },
             }),
         };
+    }
+
+    const DebugMonoTypeText = struct {
+        text: []const u8,
+        owned: bool,
+    };
+
+    fn debugMonotypeTypeSummary(self: *Lowerer, ty: LiftedType.TypeId) DebugMonoTypeText {
+        var out = std.ArrayList(u8).empty;
+        self.debugWriteMonotypeType(&out, ty) catch {
+            return .{ .text = "<debug-print-failed>", .owned = false };
+        };
+        return .{ .text = out.toOwnedSlice(self.allocator) catch "<oom>", .owned = true };
+    }
+
+    fn debugWriteMonotypeType(self: *Lowerer, out: *std.ArrayList(u8), ty: LiftedType.TypeId) std.mem.Allocator.Error!void {
+        switch (self.input.types.getTypePreservingNominal(ty)) {
+            .placeholder => try out.appendSlice(self.allocator, "<placeholder>"),
+            .unbd => try out.appendSlice(self.allocator, "?"),
+            .link => unreachable,
+            .primitive => |prim| try out.appendSlice(self.allocator, @tagName(prim)),
+            .func => |func| {
+                try out.appendSlice(self.allocator, "Fn(");
+                try self.debugWriteMonotypeType(out, func.arg);
+                try out.appendSlice(self.allocator, " -> ");
+                try self.debugWriteMonotypeType(out, func.ret);
+                try out.appendSlice(self.allocator, ")");
+            },
+            .nominal => |nominal| {
+                try out.writer(self.allocator).print("Nom({d}:{d} ", .{ nominal.module_idx, @as(u32, @bitCast(nominal.ident)) });
+                try self.debugWriteMonotypeType(out, nominal.backing);
+                try out.append(self.allocator, ')');
+            },
+            .list => |elem| {
+                try out.appendSlice(self.allocator, "List(");
+                try self.debugWriteMonotypeType(out, elem);
+                try out.append(self.allocator, ')');
+            },
+            .box => |elem| {
+                try out.appendSlice(self.allocator, "Box(");
+                try self.debugWriteMonotypeType(out, elem);
+                try out.append(self.allocator, ')');
+            },
+            .tuple => |elems| {
+                try out.appendSlice(self.allocator, "Tuple(");
+                for (elems, 0..) |elem, i| {
+                    if (i != 0) try out.appendSlice(self.allocator, ", ");
+                    try self.debugWriteMonotypeType(out, elem);
+                }
+                try out.append(self.allocator, ')');
+            },
+            .tag_union => |tag_union| {
+                try out.writer(self.allocator).print("TagUnion[{d}]", .{tag_union.tags.len});
+            },
+            .record => |record| {
+                try out.writer(self.allocator).print("Record[{d}]", .{record.fields.len});
+            },
+        }
     }
 
     fn instantiateTypedSymbol(self: *Lowerer, value: LiftedAst.TypedSymbol) std.mem.Allocator.Error!ast.TypedSymbol {
@@ -213,9 +289,7 @@ const Lowerer = struct {
         return try self.output.addTypedSymbolSpan(out);
     }
 
-    fn instantiateLiftedFnCaptures(self: *Lowerer, symbol: Symbol) std.mem.Allocator.Error![]ast.TypedSymbol {
-        const span = self.lifted_fn_capture_spans.get(symbol) orelse
-            debugPanic("lambdasolved.instantiateLiftedFnCaptures missing lifted capture metadata", .{});
+    fn instantiateLiftedTypedSymbolSlice(self: *Lowerer, span: LiftedAst.Span(LiftedAst.TypedSymbol)) std.mem.Allocator.Error![]ast.TypedSymbol {
         const values = self.input.store.sliceTypedSymbolSpan(span);
         const out = try self.allocator.alloc(ast.TypedSymbol, values.len);
         errdefer self.allocator.free(out);
@@ -250,13 +324,19 @@ const Lowerer = struct {
             } },
             .method_call => |method_call| .{ .method_call = .{
                 .receiver = try self.instantiateExpr(method_call.receiver),
+                .method_fn_ty = try self.instantiateType(method_call.method_fn_ty),
                 .method_name = method_call.method_name,
                 .args = try self.instantiateExprSpan(method_call.args),
+                .step_arg_tys = type_mod.Span(TypeVarId).empty(),
+                .step_result_tys = type_mod.Span(TypeVarId).empty(),
             } },
             .type_method_call => |method_call| .{ .type_method_call = .{
                 .dispatcher_ty = try self.instantiateType(method_call.dispatcher_ty),
+                .method_fn_ty = try self.instantiateType(method_call.method_fn_ty),
                 .method_name = method_call.method_name,
                 .args = try self.instantiateExprSpan(method_call.args),
+                .step_arg_tys = type_mod.Span(TypeVarId).empty(),
+                .step_result_tys = type_mod.Span(TypeVarId).empty(),
             } },
             .let_ => |let_expr| .{ .let_ = .{
                 .bind = try self.instantiateTypedSymbol(let_expr.bind),
@@ -414,6 +494,9 @@ const Lowerer = struct {
     }
 
     fn instantiateType(self: *Lowerer, ty: LiftedType.TypeId) std.mem.Allocator.Error!TypeVarId {
+        if (self.current_instantiate_cache) |cache| {
+            return try self.instantiateTypeRec(ty, cache);
+        }
         var cache = std.AutoHashMap(LiftedType.TypeId, TypeVarId).init(self.allocator);
         defer cache.deinit();
         return try self.instantiateTypeRec(ty, &cache);
@@ -530,10 +613,20 @@ const Lowerer = struct {
                 defer self.current_def_symbol = previous_def;
                 switch (def.value) {
                     .fn_ => |fn_def| {
+                        if (self.needsLexicalFnInference(def.bind.symbol) and
+                            !(try self.canInferFnInEnv(venv, def.bind.symbol)))
+                        {
+                            const next = try self.extendEnvOne(venv, .{ .symbol = def.bind.symbol, .ty = def.bind.ty });
+                            if (venv.len != 0) self.allocator.free(venv);
+                            venv = next;
+                            continue;
+                        }
+
                         const t_fn = try self.types.freshUnbd();
                         const inferred = try self.inferFn(venv, .{ .symbol = def.bind.symbol, .ty = t_fn }, fn_def);
                         try self.unify(def.bind.ty, inferred);
                         try self.generalize(venv, inferred);
+                        try self.fn_infer_states.put(def.bind.symbol, .done);
                         const next = try self.extendEnvOne(venv, .{ .symbol = def.bind.symbol, .ty = inferred });
                         if (venv.len != 0) self.allocator.free(venv);
                         venv = next;
@@ -541,6 +634,7 @@ const Lowerer = struct {
                     .hosted_fn => |hosted_fn| {
                         const inferred = try self.inferHostedFn(.{ .symbol = def.bind.symbol, .ty = def.bind.ty }, hosted_fn);
                         try self.generalize(venv, inferred);
+                        try self.fn_infer_states.put(def.bind.symbol, .done);
                         const next = try self.extendEnvOne(venv, .{ .symbol = def.bind.symbol, .ty = inferred });
                         if (venv.len != 0) self.allocator.free(venv);
                         venv = next;
@@ -597,6 +691,7 @@ const Lowerer = struct {
                 try self.unify(def.bind.ty, generalized[i].ty);
                 try self.generalize(venv, generalized[i].ty);
                 generalized[i].ty = def.bind.ty;
+                try self.fn_infer_states.put(def.bind.symbol, .done);
             }
 
             const next = try self.extendEnvMany(venv, generalized);
@@ -607,18 +702,76 @@ const Lowerer = struct {
         if (venv.len != 0) self.allocator.free(venv);
     }
 
+    fn canInferFnInEnv(self: *Lowerer, venv: []const EnvEntry, symbol: Symbol) std.mem.Allocator.Error!bool {
+        const def_id = self.def_id_by_symbol.get(symbol) orelse return false;
+        const def = self.output.getDef(def_id);
+        return switch (def.value) {
+            .fn_ => {
+                const capture_span = self.lifted_fn_capture_spans.get(symbol) orelse
+                    debugPanic("lambdasolved.canInferFnInEnv missing lifted capture metadata", .{});
+                for (self.input.store.sliceTypedSymbolSpan(capture_span)) |capture| {
+                    if (self.lookupEnv(venv, capture.symbol) == null) return false;
+                }
+                return true;
+            },
+            .hosted_fn => true,
+            else => false,
+        };
+    }
+
+    fn ensureFnInferred(self: *Lowerer, venv: []const EnvEntry, symbol: Symbol) std.mem.Allocator.Error!void {
+        const state = self.fn_infer_states.get(symbol) orelse return;
+        switch (state) {
+            .done, .inferring => return,
+            .pending => {},
+        }
+
+        const def_id = self.def_id_by_symbol.get(symbol) orelse return;
+        const def = self.output.getDef(def_id);
+        if (!try self.canInferFnInEnv(venv, symbol)) return;
+
+        try self.fn_infer_states.put(symbol, .inferring);
+        errdefer self.fn_infer_states.put(symbol, .pending) catch unreachable;
+
+        const previous_def = self.current_def_symbol;
+        self.current_def_symbol = symbol;
+        defer self.current_def_symbol = previous_def;
+
+        switch (def.value) {
+            .fn_ => |fn_def| {
+                const t_fn = try self.types.freshUnbd();
+                const inferred = try self.inferFn(venv, .{ .symbol = symbol, .ty = t_fn }, fn_def);
+                try self.unify(def.bind.ty, inferred);
+                try self.generalize(venv, inferred);
+            },
+            .hosted_fn => |hosted_fn| {
+                _ = try self.inferHostedFn(.{ .symbol = symbol, .ty = def.bind.ty }, hosted_fn);
+                try self.generalize(venv, def.bind.ty);
+            },
+            else => unreachable,
+        }
+
+        try self.fn_infer_states.put(symbol, .done);
+    }
+
     fn inferFn(self: *Lowerer, venv: []const EnvEntry, fn_entry: EnvEntry, fn_def: ast.FnDef) std.mem.Allocator.Error!TypeVarId {
-        const captures = try self.instantiateLiftedFnCaptures(fn_entry.symbol);
+        const lifted_capture_span = self.lifted_fn_capture_spans.get(fn_entry.symbol) orelse
+            debugPanic("lambdasolved.inferFn missing lifted capture metadata", .{});
+        const captures = try self.instantiateLiftedTypedSymbolSlice(lifted_capture_span);
         defer self.allocator.free(captures);
         const captures_env = try self.allocator.alloc(EnvEntry, captures.len + 2);
         defer self.allocator.free(captures_env);
+        const lset_captures = try self.allocator.alloc(type_mod.Capture, captures.len);
+        defer self.allocator.free(lset_captures);
         captures_env[0] = fn_entry;
         captures_env[1] = .{ .symbol = fn_def.arg.symbol, .ty = fn_def.arg.ty };
         for (captures, 0..) |capture, i| {
-            if (self.lookupEnv(venv, capture.symbol)) |env_ty| {
-                try self.unify(capture.ty, env_ty);
-            }
-            captures_env[i + 2] = .{ .symbol = capture.symbol, .ty = capture.ty };
+            const capture_ty = if (self.lookupEnv(venv, capture.symbol)) |env_ty|
+                env_ty
+            else
+                capture.ty;
+            captures_env[i + 2] = .{ .symbol = capture.symbol, .ty = capture_ty };
+            lset_captures[i] = .{ .symbol = capture.symbol, .ty = capture_ty };
         }
 
         const body_env = try self.extendEnvMany(venv, captures_env);
@@ -629,11 +782,6 @@ const Lowerer = struct {
         self.current_return_ty = fn_ret_ty;
         defer self.current_return_ty = previous_return_ty;
 
-        const lset_captures = try self.allocator.alloc(type_mod.Capture, captures.len);
-        defer self.allocator.free(lset_captures);
-        for (captures, 0..) |capture, i| {
-            lset_captures[i] = .{ .symbol = capture.symbol, .ty = capture.ty };
-        }
         const captures_span = try self.types.addCaptures(lset_captures);
         const lambda_span = try self.types.addLambdas(&.{.{ .symbol = fn_entry.symbol, .captures = captures_span }});
         const lset_ty = try self.types.freshContent(.{ .lambda_set = lambda_span });
@@ -663,6 +811,14 @@ const Lowerer = struct {
         return fn_entry.ty;
     }
 
+    fn needsLexicalFnInference(self: *Lowerer, symbol: Symbol) bool {
+        const origin = self.input.symbols.get(symbol).origin;
+        return switch (origin) {
+            .lifted_local_fn, .lifted_local_fn_alias, .lifted_lambda => true,
+            else => false,
+        };
+    }
+
     fn inferExpr(self: *Lowerer, venv: []const EnvEntry, expr_id: ast.ExprId) std.mem.Allocator.Error!TypeVarId {
         const previous_expr = self.current_expr_id;
         self.current_expr_id = expr_id;
@@ -678,6 +834,9 @@ const Lowerer = struct {
                         "lambdasolved.inferExpr invalid symbol {d} (store len {d})",
                         .{ symbol.raw(), self.input.symbols.len() },
                     );
+                }
+                if (self.needsLexicalFnInference(symbol)) {
+                    try self.ensureFnInferred(venv, symbol);
                 }
                 const symbol_entry = self.input.symbols.get(symbol);
                 const env_ty = self.lookupEnv(venv, symbol) orelse {
@@ -744,7 +903,9 @@ const Lowerer = struct {
                 try self.fixCaptures(venv, inst_ty, symbol);
                 break :blk inst_ty;
             },
-            .int_lit => target_ty,
+            .int_lit => blk: {
+                break :blk target_ty;
+            },
             .frac_f32_lit => target_ty,
             .frac_f64_lit => target_ty,
             .dec_lit => target_ty,
@@ -820,17 +981,69 @@ const Lowerer = struct {
             .method_call => |method_call| blk: {
                 const receiver_ty = try self.inferExpr(venv, method_call.receiver);
                 try self.unify(receiver_ty, self.output.getExpr(method_call.receiver).ty);
-                for (self.output.sliceExprSpan(method_call.args)) |arg| {
+                var current_fn_ty = method_call.method_fn_ty;
+                var step_arg_tys = std.ArrayList(TypeVarId).empty;
+                defer step_arg_tys.deinit(self.allocator);
+                var step_result_tys = std.ArrayList(TypeVarId).empty;
+                defer step_result_tys.deinit(self.allocator);
+                {
+                    const fn_parts = self.types.fnShape(current_fn_ty);
+                    try step_arg_tys.append(self.allocator, fn_parts.arg);
+                    try self.unify(fn_parts.arg, receiver_ty);
+                    current_fn_ty = fn_parts.ret;
+                    try step_result_tys.append(self.allocator, current_fn_ty);
+                }
+                const method_args = self.output.sliceExprSpan(method_call.args);
+                for (method_args, 0..) |arg, i| {
                     const arg_ty = try self.inferExpr(venv, arg);
                     try self.unify(arg_ty, self.output.getExpr(arg).ty);
+                    const fn_parts = self.types.fnShape(current_fn_ty);
+                    try step_arg_tys.append(self.allocator, fn_parts.arg);
+                    try self.unify(fn_parts.arg, arg_ty);
+                    try step_result_tys.append(self.allocator, fn_parts.ret);
+                    if (i + 1 == method_args.len) {
+                        try self.unify(target_ty, fn_parts.ret);
+                        break;
+                    }
+                    current_fn_ty = fn_parts.ret;
                 }
+                if (method_args.len == 0) {
+                    try self.unify(target_ty, current_fn_ty);
+                }
+                const out_expr = &self.output.exprs.items[@intFromEnum(expr_id)];
+                out_expr.data.method_call.step_arg_tys = try self.types.addTypeVarSpan(step_arg_tys.items);
+                out_expr.data.method_call.step_result_tys = try self.types.addTypeVarSpan(step_result_tys.items);
                 break :blk target_ty;
             },
             .type_method_call => |method_call| blk: {
-                for (self.output.sliceExprSpan(method_call.args)) |arg| {
+                var current_fn_ty = method_call.method_fn_ty;
+                var step_arg_tys = std.ArrayList(TypeVarId).empty;
+                defer step_arg_tys.deinit(self.allocator);
+                var step_result_tys = std.ArrayList(TypeVarId).empty;
+                defer step_result_tys.deinit(self.allocator);
+                const method_args = self.output.sliceExprSpan(method_call.args);
+                for (method_args, 0..) |arg, i| {
                     const arg_ty = try self.inferExpr(venv, arg);
                     try self.unify(arg_ty, self.output.getExpr(arg).ty);
+                    const fn_parts = self.types.fnShape(current_fn_ty);
+                    try step_arg_tys.append(self.allocator, fn_parts.arg);
+                    try self.unify(fn_parts.arg, arg_ty);
+                    try step_result_tys.append(self.allocator, fn_parts.ret);
+                    if (i + 1 == method_args.len) {
+                        try self.unify(target_ty, fn_parts.ret);
+                        break;
+                    }
+                    current_fn_ty = fn_parts.ret;
                 }
+                if (method_args.len == 0) {
+                    const fn_parts = self.types.fnShape(current_fn_ty);
+                    try step_arg_tys.append(self.allocator, fn_parts.arg);
+                    try step_result_tys.append(self.allocator, fn_parts.ret);
+                    try self.unify(target_ty, fn_parts.ret);
+                }
+                const out_expr = &self.output.exprs.items[@intFromEnum(expr_id)];
+                out_expr.data.type_method_call.step_arg_tys = try self.types.addTypeVarSpan(step_arg_tys.items);
+                out_expr.data.type_method_call.step_result_tys = try self.types.addTypeVarSpan(step_result_tys.items);
                 break :blk target_ty;
             },
             .let_ => |let_expr| blk: {
@@ -895,80 +1108,9 @@ const Lowerer = struct {
             },
             .low_level => |ll| blk: {
                 const args = self.output.sliceExprSpan(ll.args);
-                switch (ll.op) {
-                    .box_box => {
-                        if (args.len != 1) return debugPanic("lambdasolved.low_level box_box expected one arg", .{});
-                        const arg_ty = try self.inferExpr(venv, args[0]);
-                        const boxed_ty = try self.types.freshContent(.{ .box = arg_ty });
-                        try self.unify(target_ty, boxed_ty);
-                    },
-                    .box_unbox => {
-                        if (args.len != 1) return debugPanic("lambdasolved.low_level box_unbox expected one arg", .{});
-                        const arg_ty = try self.inferExpr(venv, args[0]);
-                        const elem_ty = try self.types.freshUnbd();
-                        const boxed_ty = try self.types.freshContent(.{ .box = elem_ty });
-                        try self.unify(arg_ty, boxed_ty);
-                        try self.unify(target_ty, elem_ty);
-                    },
-                    .bool_not => {
-                        if (args.len != 1) return debugPanic("lambdasolved.low_level bool_not expected one arg", .{});
-                        const arg_ty = try self.inferExpr(venv, args[0]);
-                        const bool_ty = try self.freshPrimitiveType(.bool);
-                        try self.unify(arg_ty, bool_ty);
-                        try self.unify(target_ty, bool_ty);
-                    },
-                    .num_is_eq,
-                    .num_is_gt,
-                    .num_is_gte,
-                    .num_is_lt,
-                    .num_is_lte,
-                    => {
-                        if (args.len != 2) return debugPanic("lambdasolved.low_level numeric comparison expected two args", .{});
-                        const lhs_ty = try self.inferExpr(venv, args[0]);
-                        const rhs_ty = try self.inferExpr(venv, args[1]);
-                        try self.unify(lhs_ty, rhs_ty);
-                        try self.unify(target_ty, try self.freshPrimitiveType(.bool));
-                    },
-                    .num_negate,
-                    .num_abs,
-                    .num_sqrt,
-                    .num_log,
-                    .num_round,
-                    .num_floor,
-                    .num_ceiling,
-                    => {
-                        if (args.len != 1) return debugPanic("lambdasolved.low_level unary numeric op expected one arg", .{});
-                        const arg_ty = try self.inferExpr(venv, args[0]);
-                        try self.unify(target_ty, arg_ty);
-                    },
-                    .num_plus,
-                    .num_minus,
-                    .num_times,
-                    .num_div_by,
-                    .num_div_trunc_by,
-                    .num_rem_by,
-                    .num_mod_by,
-                    .num_pow,
-                    => {
-                        if (args.len != 2) return debugPanic("lambdasolved.low_level binary numeric op expected two args", .{});
-                        const lhs_ty = try self.inferExpr(venv, args[0]);
-                        const rhs_ty = try self.inferExpr(venv, args[1]);
-                        try self.unify(lhs_ty, rhs_ty);
-                        try self.unify(target_ty, lhs_ty);
-                    },
-                    .num_abs_diff => {
-                        if (args.len != 2) return debugPanic("lambdasolved.low_level binary numeric op expected two args", .{});
-                        const lhs_ty = try self.inferExpr(venv, args[0]);
-                        const rhs_ty = try self.inferExpr(venv, args[1]);
-                        try self.unify(lhs_ty, rhs_ty);
-                        try self.unify(target_ty, try self.absDiffResultType(lhs_ty));
-                    },
-                    else => {
-                        for (args) |arg| {
-                            const arg_ty = try self.inferExpr(venv, arg);
-                            try self.unify(arg_ty, arg_ty);
-                        }
-                    },
+                for (args) |arg| {
+                    const arg_ty = try self.inferExpr(venv, arg);
+                    try self.unify(arg_ty, self.output.getExpr(arg).ty);
                 }
                 break :blk target_ty;
             },
@@ -2019,10 +2161,7 @@ const Lowerer = struct {
                         .func => |actual_func| blk: {
                             const arg = try self.overlayErasureTemplateRec(template_func.arg, actual_func.arg, visited);
                             const ret = try self.overlayErasureTemplateRec(template_func.ret, actual_func.ret, visited);
-                            const lset = if (self.lambdaSetIsErased(template_func.lset))
-                                try self.freshPrimitiveType(.erased)
-                            else
-                                actual_func.lset;
+                            const lset = actual_func.lset;
                             if (arg == actual_func.arg and lset == actual_func.lset and ret == actual_func.ret) {
                                 break :blk actual_ty;
                             }
@@ -2728,7 +2867,9 @@ const Lowerer = struct {
         switch (self.types.getNode(id)) {
             .unbd => {
                 for (venv) |entry| {
-                    if (self.occurs(id, entry.ty)) return;
+                    if (self.occurs(id, entry.ty)) {
+                        return;
+                    }
                 }
                 self.types.setNode(id, .for_a);
             },
@@ -3096,8 +3237,26 @@ const Lowerer = struct {
                             .low_level => |ll| @tagName(ll.op),
                             else => "<none>",
                         } else "<none>";
+                        const current_expr_symbol = current_expr_symbol_blk: {
+                            if (self.current_expr_id) |expr_id| switch (self.output.getExpr(expr_id).data) {
+                                .var_ => |symbol| {
+                                    const symbol_entry = self.input.symbols.get(symbol);
+                                    break :current_expr_symbol_blk if (symbol_entry.name.isNone())
+                                        "<none>"
+                                    else
+                                        self.input.idents.getText(symbol_entry.name);
+                                },
+                                else => {},
+                            };
+                            break :current_expr_symbol_blk "<none>";
+                        };
+                        const call_func_expr = if (self.current_call_context) |ctx| ctx.func_expr else "<none>";
+                        const call_arg_expr = if (self.current_call_context) |ctx| ctx.arg_expr else "<none>";
+                        const call_func_ty = if (self.current_call_context) |ctx| ctx.func_ty else "<none>";
+                        const call_arg_ty = if (self.current_call_context) |ctx| ctx.arg_ty else "<none>";
+                        const call_target_ty = if (self.current_call_context) |ctx| ctx.target_ty else "<none>";
                         std.debug.panic(
-                            "lambdasolved.unify incompatible primitives {s} vs {s}\ndef={s}\ndef_raw={d}\ndef_origin={s}\nexpr={s}\nexpr_raw={d}\nll_op={s}\nleft={s}\nright={s}",
+                            "lambdasolved.unify incompatible primitives {s} vs {s}\ndef={s}\ndef_raw={d}\ndef_origin={s}\nexpr={s}\nexpr_raw={d}\nexpr_symbol={s}\nll_op={s}\ncall_func_expr={s}\ncall_arg_expr={s}\ncall_func_ty={s}\ncall_arg_ty={s}\ncall_target_ty={s}\nleft={s}\nright={s}",
                             .{
                                 @tagName(prim),
                                 @tagName(right.primitive),
@@ -3106,7 +3265,13 @@ const Lowerer = struct {
                                 current_def_origin,
                                 current_expr_tag,
                                 current_expr_raw,
+                                current_expr_symbol,
                                 current_ll_op,
+                                call_func_expr,
+                                call_arg_expr,
+                                call_func_ty,
+                                call_arg_ty,
+                                call_target_ty,
                                 left_text.text,
                                 right_text.text,
                             },

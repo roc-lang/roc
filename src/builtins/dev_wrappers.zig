@@ -280,6 +280,13 @@ pub fn roc_builtins_str_from_utf8_parts(
     return @intFromBool(result.is_ok);
 }
 
+/// Wrapper: call roc_dbg with a formatted RocStr
+pub fn roc_builtins_roc_dbg(str_bytes: ?[*]u8, str_len: usize, str_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    const slice = s.asSlice();
+    roc_ops.dbg(slice);
+}
+
 /// Wrapper: escape special characters and wrap in double quotes for Str.inspect
 pub fn roc_builtins_str_escape_and_quote(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, roc_ops: *RocOps) callconv(.c) void {
     const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
