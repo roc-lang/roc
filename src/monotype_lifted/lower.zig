@@ -21,6 +21,7 @@ const MonoResult = mono.Lower.Result;
 const MonoAst = mono.Ast;
 const Symbol = symbol_mod.Symbol;
 
+/// Public struct `Result`.
 pub const Result = struct {
     store: ast.Store,
     root_defs: std.ArrayList(ast.DefId),
@@ -45,6 +46,7 @@ pub const Result = struct {
     }
 };
 
+/// Run this compilation stage.
 pub fn run(allocator: std.mem.Allocator, input: MonoResult) std.mem.Allocator.Error!Result {
     var lowerer = Lowerer.init(allocator, input);
     defer lowerer.deinit();

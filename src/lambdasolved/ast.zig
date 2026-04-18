@@ -10,12 +10,18 @@ const type_mod = @import("type.zig");
 pub const Symbol = symbol_mod.Symbol;
 pub const TypeVarId = type_mod.TypeVarId;
 
+/// Public enum `ExprId`.
 pub const ExprId = enum(u32) { _ };
+/// Public enum `PatId`.
 pub const PatId = enum(u32) { _ };
+/// Public enum `DefId`.
 pub const DefId = enum(u32) { _ };
+/// Public enum `StmtId`.
 pub const StmtId = enum(u32) { _ };
+/// Public enum `BranchId`.
 pub const BranchId = enum(u32) { _ };
 
+/// Public function `Span`.
 pub fn Span(comptime _: type) type {
     return extern struct {
         start: u32,
@@ -27,11 +33,13 @@ pub fn Span(comptime _: type) type {
     };
 }
 
+/// Public struct `TypedSymbol`.
 pub const TypedSymbol = struct {
     ty: TypeVarId,
     symbol: Symbol,
 };
 
+/// Public struct `Pat`.
 pub const Pat = struct {
     ty: TypeVarId,
     data: Data,
@@ -47,16 +55,19 @@ pub const Pat = struct {
     };
 };
 
+/// Public struct `Branch`.
 pub const Branch = struct {
     pat: PatId,
     body: ExprId,
 };
 
+/// Public struct `FieldExpr`.
 pub const FieldExpr = struct {
     name: base.Ident.Idx,
     value: ExprId,
 };
 
+/// Public struct `Expr`.
 pub const Expr = struct {
     ty: TypeVarId,
     data: Data,
@@ -145,6 +156,7 @@ pub const Expr = struct {
     };
 };
 
+/// Public union `Stmt`.
 pub const Stmt = union(enum) {
     decl: struct {
         bind: TypedSymbol,
@@ -175,22 +187,26 @@ pub const Stmt = union(enum) {
     },
 };
 
+/// Public struct `FnDef`.
 pub const FnDef = struct {
     arg: TypedSymbol,
     body: ExprId,
 };
 
+/// Public struct `RunDef`.
 pub const RunDef = struct {
     body: ExprId,
     entry_ty: types.Var,
 };
 
+/// Public struct `HostedFnDef`.
 pub const HostedFnDef = struct {
     bind: TypedSymbol,
     args: Span(TypedSymbol),
     hosted: base.HostedProc,
 };
 
+/// Public union `DefVal`.
 pub const DefVal = union(enum) {
     fn_: FnDef,
     hosted_fn: HostedFnDef,
@@ -198,11 +214,13 @@ pub const DefVal = union(enum) {
     run: RunDef,
 };
 
+/// Public struct `Def`.
 pub const Def = struct {
     bind: TypedSymbol,
     value: DefVal,
 };
 
+/// Public struct `Store`.
 pub const Store = struct {
     allocator: std.mem.Allocator,
     exprs: std.ArrayList(Expr),

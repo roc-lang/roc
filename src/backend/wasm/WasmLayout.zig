@@ -74,6 +74,7 @@ pub fn wasmReprWithStore(layout_idx: layout.Idx, ls: *const layout.Store) WasmRe
     }
 }
 
+/// Public struct `TagUnionWasmLayout`.
 pub const TagUnionWasmLayout = struct {
     size: u32,
     discriminant_offset: u32,
@@ -81,14 +82,17 @@ pub const TagUnionWasmLayout = struct {
     alignment: u32,
 };
 
+/// Public function `structSizeWithStore`.
 pub fn structSizeWithStore(struct_idx: layout.StructIdx, ls: *const layout.Store) u32 {
     return structSizeWasm(ls, struct_idx);
 }
 
+/// Public function `structAlignWithStore`.
 pub fn structAlignWithStore(struct_idx: layout.StructIdx, ls: *const layout.Store) u32 {
     return structAlignWasm(ls, struct_idx);
 }
 
+/// Public function `tagUnionLayoutWithStore`.
 pub fn tagUnionLayoutWithStore(tu_idx: layout.TagUnionIdx, ls: *const layout.Store) TagUnionWasmLayout {
     const tu_data = ls.getTagUnionData(tu_idx);
     const variants = ls.getTagUnionVariants(tu_data);

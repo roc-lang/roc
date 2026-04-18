@@ -9,31 +9,42 @@ const types = @import("types");
 const symbol_mod = @import("symbol");
 const layout_mod = @import("layout.zig");
 
+/// Interned symbol identifiers referenced by lowered IR nodes.
 pub const Symbol = symbol_mod.Symbol;
+/// Logical layout references assigned during IR lowering.
 pub const LayoutRef = layout_mod.Ref;
 
+/// Identifier for a lowered IR expression node.
 pub const ExprId = enum(u32) { _ };
+/// Identifier for a lowered IR statement node.
 pub const StmtId = enum(u32) { _ };
+/// Identifier for a lowered IR block.
 pub const BlockId = enum(u32) { _ };
+/// Identifier for a lowered IR switch branch.
 pub const BranchId = enum(u32) { _ };
+/// Identifier for a lowered IR definition.
 pub const DefId = enum(u32) { _ };
 
+/// Slice metadata for contiguous ids stored in side arrays.
 pub fn Span(comptime _: type) type {
     return extern struct {
         start: u32,
         len: u32,
 
+        /// Return an empty span.
         pub fn empty() @This() {
             return .{ .start = 0, .len = 0 };
         }
     };
 }
 
+/// A symbol paired with its assigned logical layout.
 pub const Var = struct {
     layout: LayoutRef,
     symbol: Symbol,
 };
 
+/// Literal payloads lowered into IR.
 pub const Lit = union(enum) {
     int: i128,
     f32: f32,
@@ -43,6 +54,7 @@ pub const Lit = union(enum) {
     bool: bool,
 };
 
+/// Lowered IR expression node.
 pub const Expr = union(enum) {
     var_: Var,
     lit: Lit,
@@ -80,6 +92,7 @@ pub const Expr = union(enum) {
     },
 };
 
+/// Block terminator.
 pub const Term = union(enum) {
     value: Var,
     return_: Var,
@@ -88,16 +101,19 @@ pub const Term = union(enum) {
     @"unreachable": void,
 };
 
+/// Lowered IR block.
 pub const Block = struct {
     stmts: Span(StmtId),
     term: Term,
 };
 
+/// Lowered IR switch branch.
 pub const Branch = struct {
     value: u64,
     block: BlockId,
 };
 
+/// Lowered IR statement node.
 pub const Stmt = union(enum) {
     let_: struct {
         bind: Var,
@@ -127,6 +143,7 @@ pub const Stmt = union(enum) {
     },
 };
 
+/// Lowered IR definition.
 pub const Def = struct {
     name: Symbol,
     args: Span(Var),
@@ -136,6 +153,7 @@ pub const Def = struct {
     entry_ty: ?types.Var = null,
 };
 
+/// Owning store for lowered IR nodes and side arrays.
 pub const Store = struct {
     allocator: std.mem.Allocator,
     exprs: std.ArrayList(Expr),

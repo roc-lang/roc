@@ -38,6 +38,7 @@ fn exprTest(
     };
 }
 
+/// Public value `tests`.
 pub const tests = [_]TestCase{
     // Ported from origin/main:src/eval/test/interpreter_style_test.zig
     exprTest(
@@ -511,7 +512,7 @@ pub const tests = [_]TestCase{
         \\    0
         \\}
     ,
-        &.{ crashed("boom") },
+        &.{crashed("boom")},
         .crashed,
     ),
     exprTest(
@@ -546,7 +547,7 @@ pub const tests = [_]TestCase{
         \\    {}
         \\}
     ,
-        &.{ expectFailed("expect failed") },
+        &.{expectFailed("expect failed")},
         .returned,
     ),
     exprTest(
@@ -557,7 +558,7 @@ pub const tests = [_]TestCase{
         \\    x + 1
         \\}
     ,
-        &.{ dbg("42.0") },
+        &.{dbg("42.0")},
         .returned,
     ),
     exprTest(
@@ -568,7 +569,7 @@ pub const tests = [_]TestCase{
         \\    msg
         \\}
     ,
-        &.{ dbg("\"hello\"") },
+        &.{dbg("\"hello\"")},
         .returned,
     ),
     exprTest(
@@ -578,7 +579,7 @@ pub const tests = [_]TestCase{
         \\    0
         \\}
     ,
-        &.{ dbg("3") },
+        &.{dbg("3")},
         .returned,
     ),
     exprTest(
@@ -588,7 +589,7 @@ pub const tests = [_]TestCase{
         \\    123
         \\}
     ,
-        &.{ dbg("42.0") },
+        &.{dbg("42.0")},
         .returned,
     ),
     exprTest(
@@ -599,7 +600,7 @@ pub const tests = [_]TestCase{
         \\    x
         \\}
     ,
-        &.{ dbg("-99.0") },
+        &.{dbg("-99.0")},
         .returned,
     ),
     exprTest(
@@ -611,7 +612,7 @@ pub const tests = [_]TestCase{
         \\    x
         \\}
     ,
-        &.{ dbgContains("3.14") },
+        &.{dbgContains("3.14")},
         .returned,
     ),
     exprTest(
@@ -621,7 +622,7 @@ pub const tests = [_]TestCase{
         \\    False
         \\}
     ,
-        &.{ dbg("True") },
+        &.{dbg("True")},
         .returned,
     ),
     exprTest(
@@ -631,7 +632,7 @@ pub const tests = [_]TestCase{
         \\    True
         \\}
     ,
-        &.{ dbg("False") },
+        &.{dbg("False")},
         .returned,
     ),
     exprTest(
@@ -641,7 +642,7 @@ pub const tests = [_]TestCase{
         \\    "done"
         \\}
     ,
-        &.{ dbg("\"\"") },
+        &.{dbg("\"\"")},
         .returned,
     ),
     exprTest(
@@ -652,7 +653,7 @@ pub const tests = [_]TestCase{
         \\    xs
         \\}
     ,
-        &.{ dbg("[1, 2, 3]") },
+        &.{dbg("[1, 2, 3]")},
         .returned,
     ),
     exprTest(
@@ -663,7 +664,7 @@ pub const tests = [_]TestCase{
         \\    xs
         \\}
     ,
-        &.{ dbg("[\"a\", \"b\", \"c\"]") },
+        &.{dbg("[\"a\", \"b\", \"c\"]")},
         .returned,
     ),
     exprTest(
@@ -674,7 +675,7 @@ pub const tests = [_]TestCase{
         \\    t
         \\}
     ,
-        &.{ dbg("(1.0, \"two\", 3.0)") },
+        &.{dbg("(1.0, \"two\", 3.0)")},
         .returned,
     ),
     exprTest(
@@ -685,7 +686,7 @@ pub const tests = [_]TestCase{
         \\    r
         \\}
     ,
-        &.{ dbg("{ age: 30.0, name: \"Alice\" }") },
+        &.{dbg("{ age: 30.0, name: \"Alice\" }")},
         .returned,
     ),
     exprTest(
@@ -696,7 +697,7 @@ pub const tests = [_]TestCase{
         \\    r
         \\}
     ,
-        &.{ dbg("{}") },
+        &.{dbg("{}")},
         .returned,
     ),
     exprTest(
@@ -708,7 +709,7 @@ pub const tests = [_]TestCase{
         \\    x
         \\}
     ,
-        &.{ dbg("B") },
+        &.{dbg("B")},
         .returned,
     ),
     exprTest(
@@ -719,7 +720,7 @@ pub const tests = [_]TestCase{
         \\    match x { Ok(n) => n, Err(_) => 0 }
         \\}
     ,
-        &.{ dbg("Ok(42.0)") },
+        &.{dbg("Ok(42.0)")},
         .returned,
     ),
     exprTest(
@@ -730,7 +731,7 @@ pub const tests = [_]TestCase{
         \\    f(5)
         \\}
     ,
-        &.{ dbgAny() },
+        &.{dbgAny()},
         .returned,
     ),
     exprTest(
@@ -741,7 +742,7 @@ pub const tests = [_]TestCase{
         \\    x + 1
         \\}
     ,
-        &.{ dbg("42.0") },
+        &.{dbg("42.0")},
         .returned,
     ),
     exprTest(
@@ -781,7 +782,7 @@ pub const tests = [_]TestCase{
         \\    }
         \\}
     ,
-        &.{ dbg("\"greater\"") },
+        &.{dbg("\"greater\"")},
         .returned,
     ),
     exprTest(
@@ -798,7 +799,7 @@ pub const tests = [_]TestCase{
         \\    }
         \\}
     ,
-        &.{ dbg("\"other\"") },
+        &.{dbg("\"other\"")},
         .returned,
     ),
     exprTest(
@@ -821,7 +822,7 @@ pub const tests = [_]TestCase{
         \\    dbg 42
         \\}
     ,
-        &.{ dbg("42.0") },
+        &.{dbg("42.0")},
         .returned,
     ),
     exprTest(
@@ -830,7 +831,7 @@ pub const tests = [_]TestCase{
         \\    dbg(2 + 3 * 4)
         \\}
     ,
-        &.{ dbg("14.0") },
+        &.{dbg("14.0")},
         .returned,
     ),
     exprTest(
@@ -843,7 +844,7 @@ pub const tests = [_]TestCase{
         \\    double(21)
         \\}
     ,
-        &.{ dbg("21.0") },
+        &.{dbg("21.0")},
         .returned,
     ),
     exprTest(
@@ -866,7 +867,7 @@ pub const tests = [_]TestCase{
         \\    "done"
         \\}
     ,
-        &.{ dbgContains("hello\nworld") },
+        &.{dbgContains("hello\nworld")},
         .returned,
     ),
     exprTest(
@@ -878,7 +879,7 @@ pub const tests = [_]TestCase{
         \\    x
         \\}
     ,
-        &.{ dbg("9223372036854775807") },
+        &.{dbg("9223372036854775807")},
         .returned,
     ),
     exprTest(

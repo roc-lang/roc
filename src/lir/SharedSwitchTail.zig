@@ -12,6 +12,7 @@ const CFStmtId = LIR.CFStmtId;
 const CFSwitchBranch = LIR.CFSwitchBranch;
 const JoinPointId = LIR.JoinPointId;
 
+/// Public struct `Pass`.
 pub const Pass = struct {
     store: *LirStore,
     allocator: Allocator,
@@ -790,6 +791,7 @@ fn nextJoinId(store: *const LirStore) u32 {
     return next_id;
 }
 
+/// Run this compilation stage.
 pub fn run(allocator: Allocator, store: *LirStore) Allocator.Error!void {
     var pass = Pass.init(store, allocator);
     defer pass.deinit();

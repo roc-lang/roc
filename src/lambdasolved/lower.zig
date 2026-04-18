@@ -15,6 +15,7 @@ const LiftedType = lifted.Type;
 const Symbol = symbol_mod.Symbol;
 const TypeVarId = type_mod.TypeVarId;
 
+/// Public struct `Result`.
 pub const Result = struct {
     store: ast.Store,
     root_defs: std.ArrayList(ast.DefId),
@@ -39,6 +40,7 @@ pub const Result = struct {
     }
 };
 
+/// Run this compilation stage.
 pub fn run(allocator: std.mem.Allocator, input: LiftedResult) std.mem.Allocator.Error!Result {
     var lowerer = Lowerer.init(allocator, input);
     defer lowerer.deinit();

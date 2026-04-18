@@ -25,13 +25,16 @@ const Value = @import("../value.zig").Value;
 const LayoutHelper = @import("../value.zig").LayoutHelper;
 
 pub const interpreter_allocator = std.heap.page_allocator;
+/// Public enum `TraceMode`.
 pub const TraceMode = enum { trace, no_trace };
 
+/// Public struct `ExpectedField`.
 pub const ExpectedField = struct {
     name: []const u8,
     value: i128,
 };
 
+/// Public struct `ExpectedElement`.
 pub const ExpectedElement = struct {
     index: u32,
     value: i128,
@@ -43,6 +46,7 @@ pub const CheckedModule = pipeline.CheckedModule;
 pub const ParsedResources = pipeline.ParsedResources;
 pub const LoweredProgram = pipeline.LoweredProgram;
 
+/// Public struct `CompiledProgram`.
 pub const CompiledProgram = struct {
     resources: ParsedResources,
     lowered: LoweredProgram,
@@ -55,20 +59,25 @@ pub const CompiledProgram = struct {
     }
 };
 
+/// Public value `CompiledInspectedExpr`.
 pub const CompiledInspectedExpr = CompiledProgram;
 
+/// Public function `parseAndCanonicalizeExpr`.
 pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) !ParsedResources {
     return parseAndCanonicalizeProgram(allocator, .expr, source, &.{});
 }
 
+/// Public function `parseAndCanonicalizeInspectedExpr`.
 pub fn parseAndCanonicalizeInspectedExpr(allocator: std.mem.Allocator, source: []const u8) !ParsedResources {
     return parseAndCanonicalizeProgramWrapped(allocator, .expr, source, &.{}, true);
 }
 
+/// Public function `compileInspectedExpr`.
 pub fn compileInspectedExpr(allocator: std.mem.Allocator, source: []const u8) !CompiledInspectedExpr {
     return compileInspectedProgram(allocator, .expr, source, &.{});
 }
 
+/// Public function `compileProgram`.
 pub fn compileProgram(
     allocator: std.mem.Allocator,
     source_kind: SourceKind,
@@ -96,6 +105,7 @@ pub fn compileProgram(
     };
 }
 
+/// Public function `parseAndCanonicalizeProgram`.
 pub fn parseAndCanonicalizeProgram(
     allocator: std.mem.Allocator,
     source_kind: SourceKind,
@@ -105,6 +115,7 @@ pub fn parseAndCanonicalizeProgram(
     return parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, false);
 }
 
+/// Public function `compileInspectedProgram`.
 pub fn compileInspectedProgram(
     allocator: std.mem.Allocator,
     source_kind: SourceKind,
@@ -132,11 +143,13 @@ pub fn compileInspectedProgram(
     };
 }
 
+/// Public function `cleanupParseAndCanonical`.
 pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: ParsedResources) void {
     var mutable = resources;
     mutable.deinit(allocator);
 }
 
+/// Public function `lowerParsedExprToLir`.
 pub fn lowerParsedExprToLir(
     allocator: std.mem.Allocator,
     resources: *ParsedResources,
@@ -144,6 +157,7 @@ pub fn lowerParsedExprToLir(
     return pipeline.lowerParsedExprToLir(allocator, resources);
 }
 
+/// Public function `lowerParsedExprToLirForTarget`.
 pub fn lowerParsedExprToLirForTarget(
     allocator: std.mem.Allocator,
     resources: *ParsedResources,
@@ -152,6 +166,7 @@ pub fn lowerParsedExprToLirForTarget(
     return pipeline.lowerParsedExprToLirForTarget(allocator, resources, target_usize);
 }
 
+/// Public function `lowerTypedCIRToLir`.
 pub fn lowerTypedCIRToLir(
     allocator: std.mem.Allocator,
     typed_cir_modules: *check.TypedCIR.Modules,
@@ -160,6 +175,7 @@ pub fn lowerTypedCIRToLir(
     return pipeline.lowerTypedCIRToLir(allocator, typed_cir_modules, module_envs);
 }
 
+/// Public function `mainProcArgLayouts`.
 pub fn mainProcArgLayouts(
     allocator: std.mem.Allocator,
     lowered: *const LoweredProgram,
@@ -173,6 +189,7 @@ pub fn mainProcArgLayouts(
     return arg_layouts;
 }
 
+/// Public function `entrypointParamSlotSize`.
 pub fn entrypointParamSlotSize(lowered: *const LoweredProgram, layout_idx: layout_mod.Idx) u32 {
     const layouts = &lowered.lir_result.layouts;
     const runtime_layout_idx = layouts.runtimeRepresentationLayoutIdx(layout_idx);
@@ -193,6 +210,7 @@ pub fn entrypointParamSlotSize(lowered: *const LoweredProgram, layout_idx: layou
     return if (size == 0) 0 else 8;
 }
 
+/// Public function `zeroedEntrypointArgBuffer`.
 pub fn zeroedEntrypointArgBuffer(
     allocator: std.mem.Allocator,
     lowered: *const LoweredProgram,
@@ -251,6 +269,7 @@ pub fn zeroedEntrypointArgBuffer(
     return buffer;
 }
 
+/// Public function `lirInterpreterInspectedStr`.
 pub fn lirInterpreterInspectedStr(
     allocator: std.mem.Allocator,
     lowered: *const LoweredProgram,
@@ -297,6 +316,7 @@ pub fn lirInterpreterInspectedStr(
     );
 }
 
+/// Public function `devEvaluatorInspectedStr`.
 pub fn devEvaluatorInspectedStr(
     allocator: std.mem.Allocator,
     lowered: *const LoweredProgram,
@@ -372,6 +392,7 @@ pub fn devEvaluatorInspectedStr(
     );
 }
 
+/// Public function `wasmEvaluatorInspectedStr`.
 pub fn wasmEvaluatorInspectedStr(
     allocator: std.mem.Allocator,
     lowered: *const LoweredProgram,
@@ -551,6 +572,7 @@ fn boolDiscriminantIndex(
     return error.MissingTag;
 }
 
+/// Public struct `EvalState`.
 pub const EvalState = struct {
     compiled: *CompiledProgram,
     runtime_env: *RuntimeHostEnv,
@@ -574,6 +596,7 @@ pub const EvalState = struct {
     }
 };
 
+/// Public function `evalExprToValue`.
 pub fn evalExprToValue(
     allocator: std.mem.Allocator,
     src: []const u8,
@@ -632,6 +655,7 @@ pub fn evalExprToValue(
     return eval_state;
 }
 
+/// Public function `evalLoweredNumericI128`.
 pub fn evalLoweredNumericI128(allocator: std.mem.Allocator, lowered: *const LoweredProgram) !i128 {
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
@@ -658,6 +682,7 @@ pub fn evalLoweredNumericI128(allocator: std.mem.Allocator, lowered: *const Lowe
     return int_value;
 }
 
+/// Public function `runExpectI64`.
 pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: TraceMode) !void {
     std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
@@ -671,6 +696,7 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: TraceMode
     try std.testing.expectEqual(expected_int, int_value);
 }
 
+/// Public function `runExpectSuccess`.
 pub fn runExpectSuccess(src: []const u8, should_trace: TraceMode) !void {
     std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
@@ -682,10 +708,12 @@ pub fn runExpectSuccess(src: []const u8, should_trace: TraceMode) !void {
     try std.testing.expect(eval_state.runtime_env.terminationState() == .returned);
 }
 
+/// Public function `runExpectIntDec`.
 pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: TraceMode) !void {
     return runExpectI64(src, expected_int, should_trace);
 }
 
+/// Public function `runExpectDec`.
 pub fn runExpectDec(src: []const u8, expected_dec: i128, should_trace: TraceMode) !void {
     std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
@@ -699,6 +727,7 @@ pub fn runExpectDec(src: []const u8, expected_dec: i128, should_trace: TraceMode
     try std.testing.expectEqual(expected_dec, dec_value);
 }
 
+/// Public function `runExpectBool`.
 pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: TraceMode) !void {
     std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
@@ -718,6 +747,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: TraceMo
     try std.testing.expectEqual(expected_bool, actual_bool);
 }
 
+/// Public function `runExpectError`.
 pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: TraceMode) !void {
     std.mem.doNotOptimizeAway(should_trace);
     var compiled = try compileProgram(interpreter_allocator, .expr, src, &.{});
@@ -748,6 +778,7 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: T
     try std.testing.expect(false);
 }
 
+/// Public function `runExpectStr`.
 pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: TraceMode) !void {
     std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
@@ -766,6 +797,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: Tra
     try std.testing.expectEqualStrings(expected_str, copied);
 }
 
+/// Public function `runDevOnlyExpectStr`.
 pub fn runDevOnlyExpectStr(src: []const u8, expected_str: []const u8) !void {
     var compiled = try compileInspectedExpr(interpreter_allocator, src);
     defer compiled.deinit(interpreter_allocator);
@@ -776,6 +808,7 @@ pub fn runDevOnlyExpectStr(src: []const u8, expected_str: []const u8) !void {
     try std.testing.expectEqualStrings(expected_str, actual);
 }
 
+/// Public function `runExpectTuple`.
 pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElement, should_trace: TraceMode) !void {
     std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
@@ -811,6 +844,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     }
 }
 
+/// Public function `runExpectRecord`.
 pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, should_trace: TraceMode) !void {
     std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
@@ -828,7 +862,6 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     const struct_idx = layout_val.data.struct_.idx;
     const struct_data = layout_store.getStructData(struct_idx);
     const sorted_fields = layout_store.struct_fields.sliceRange(struct_data.getFields());
-
 
     for (expected_fields) |expected| {
         const semantic_index = try recordFieldSemanticIndex(interpreter_allocator, module_env, expr_var, expected.name);
@@ -848,6 +881,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     }
 }
 
+/// Public function `runExpectListI64`.
 pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_trace: TraceMode) !void {
     std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
@@ -878,10 +912,12 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
     }
 }
 
+/// Public function `runExpectEmptyListI64`.
 pub fn runExpectEmptyListI64(src: []const u8, should_trace: TraceMode) !void {
     return runExpectListI64(src, &.{}, should_trace);
 }
 
+/// Public function `runExpectListZst`.
 pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_trace: TraceMode) !void {
     std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
@@ -899,6 +935,7 @@ pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_t
     try std.testing.expectEqual(expected_element_count, rl.len());
 }
 
+/// Public function `runExpectProblem`.
 pub fn runExpectProblem(src: []const u8) !void {
     const resources = try parseAndCanonicalizeExpr(interpreter_allocator, src);
     defer cleanupParseAndCanonical(interpreter_allocator, resources);
@@ -911,6 +948,7 @@ pub fn runExpectProblem(src: []const u8) !void {
     try std.testing.expect(can_diags + type_problems > 0);
 }
 
+/// Public function `runExpectTypeMismatchAndCrash`.
 pub fn runExpectTypeMismatchAndCrash(src: []const u8) !void {
     const resources = try parseAndCanonicalizeExpr(interpreter_allocator, src);
     defer cleanupParseAndCanonical(interpreter_allocator, resources);

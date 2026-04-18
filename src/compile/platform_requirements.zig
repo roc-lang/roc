@@ -1,3 +1,5 @@
+//! Shared helpers for explicit platform requirement lookups.
+
 const std = @import("std");
 const base = @import("base");
 const can = @import("can");
@@ -6,8 +8,10 @@ const check = @import("check");
 const ModuleEnv = can.ModuleEnv;
 const TypedCIR = check.TypedCIR;
 
+/// Public value `IdentMap`.
 pub const IdentMap = std.AutoHashMap(base.Ident.Idx, base.Ident.Idx);
 
+/// Public function `buildPlatformToAppIdents`.
 pub fn buildPlatformToAppIdents(
     allocator: std.mem.Allocator,
     platform_env: *const ModuleEnv,
@@ -42,6 +46,7 @@ pub fn buildPlatformToAppIdents(
     return platform_to_app_idents;
 }
 
+/// Public function `populateRequiredLookupTargets`.
 pub fn populateRequiredLookupTargets(
     typed_modules: *TypedCIR.Modules,
     app_module_idx: ?u32,

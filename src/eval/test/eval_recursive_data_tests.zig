@@ -2,6 +2,7 @@
 
 const TestCase = @import("parallel_runner.zig").TestCase;
 
+/// Public value `tests`.
 pub const tests = [_]TestCase{
     // Ported recursive nominal coverage from comptime_eval_test.zig
     .{

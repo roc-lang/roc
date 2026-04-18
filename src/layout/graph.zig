@@ -20,6 +20,7 @@ pub const Ref = union(enum) {
     local: NodeId,
 };
 
+/// Public function `refKey`.
 pub fn refKey(ref: Ref) u64 {
     return switch (ref) {
         .canonical => |idx| 0x8000_0000_0000_0000 | @as(u64, @intFromEnum(idx)),

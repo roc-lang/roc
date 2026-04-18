@@ -34,11 +34,13 @@ const POISON_VALUE: isize = @bitCast(if (@sizeOf(usize) == 8)
 else
     @as(usize, 0xDEADBEEF));
 
+/// Public enum `Termination`.
 pub const Termination = enum {
     returned,
     crashed,
 };
 
+/// Public union `HostEvent`.
 pub const HostEvent = union(enum) {
     dbg: []u8,
     expect_failed: []u8,
@@ -61,6 +63,7 @@ pub const HostEvent = union(enum) {
     }
 };
 
+/// Public struct `RecordedRun`.
 pub const RecordedRun = struct {
     events: []HostEvent,
     termination: Termination,
@@ -89,11 +92,13 @@ pub const RecordedRun = struct {
     }
 };
 
+/// Public union `CrashState`.
 pub const CrashState = union(enum) {
     did_not_crash,
     crashed: []const u8,
 };
 
+/// Public value `LeakError`.
 pub const LeakError = error{MemoryLeak};
 
 allocator: std.mem.Allocator,
@@ -117,6 +122,7 @@ pub fn deinit(self: *RuntimeHostEnv) void {
     self.allocation_tracker.deinit();
 }
 
+/// Public function `resetObservation`.
 pub fn resetObservation(self: *RuntimeHostEnv) void {
     for (self.events.items) |*event| event.deinit(self.allocator);
     self.events.clearAndFree(self.allocator);
@@ -124,15 +130,18 @@ pub fn resetObservation(self: *RuntimeHostEnv) void {
     self.active_jmp_buf = null;
 }
 
+/// Public function `resetAllocationTracker`.
 pub fn resetAllocationTracker(self: *RuntimeHostEnv) void {
     self.freeRemainingAllocations();
     self.allocation_tracker.clearRetainingCapacity();
 }
 
+/// Public function `checkForLeaks`.
 pub fn checkForLeaks(self: *RuntimeHostEnv) LeakError!void {
     if (self.allocation_tracker.count() > 0) return error.MemoryLeak;
 }
 
+/// Public function `get_ops`.
 pub fn get_ops(self: *RuntimeHostEnv) *RocOps {
     if (self.roc_ops == null) {
         self.roc_ops = .{
@@ -149,10 +158,12 @@ pub fn get_ops(self: *RuntimeHostEnv) *RocOps {
     return &self.roc_ops.?;
 }
 
+/// Public function `terminationState`.
 pub fn terminationState(self: *const RuntimeHostEnv) Termination {
     return self.termination;
 }
 
+/// Public function `crashState`.
 pub fn crashState(self: *const RuntimeHostEnv) CrashState {
     for (0..self.events.items.len) |i| {
         const idx = self.events.items.len - 1 - i;
@@ -164,6 +175,7 @@ pub fn crashState(self: *const RuntimeHostEnv) CrashState {
     return .did_not_crash;
 }
 
+/// Public function `snapshot`.
 pub fn snapshot(self: *const RuntimeHostEnv, allocator: std.mem.Allocator) !RecordedRun {
     return RecordedRun.dupe(.{
         .events = self.events.items,
@@ -171,6 +183,7 @@ pub fn snapshot(self: *const RuntimeHostEnv, allocator: std.mem.Allocator) !Reco
     }, allocator);
 }
 
+/// Public struct `CrashBoundary`.
 pub const CrashBoundary = struct {
     env: *RuntimeHostEnv,
     prev_jmp_buf: ?*JmpBuf,
@@ -191,6 +204,7 @@ pub const CrashBoundary = struct {
     }
 };
 
+/// Public function `enterCrashBoundary`.
 pub fn enterCrashBoundary(self: *RuntimeHostEnv) CrashBoundary {
     return CrashBoundary.init(self);
 }

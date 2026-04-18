@@ -14,11 +14,13 @@ const wasm_runner = if (builtin.target.os.tag == .freestanding) struct {
 
 const WasmCodeGen = backend.wasm.WasmCodeGen;
 
+/// Public value `WasmEvalError`.
 pub const WasmEvalError = if (builtin.target.os.tag == .freestanding)
     wasm_runner.EvalError
 else
     wasm_runner.WasmEvalError;
 
+/// Public function `evalLoweredToStr`.
 pub fn evalLoweredToStr(
     allocator: std.mem.Allocator,
     lowered: *const pipeline.LoweredProgram,

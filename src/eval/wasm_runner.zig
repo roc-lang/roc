@@ -8,6 +8,7 @@ const builtin = @import("builtin");
 const builtins = @import("builtins");
 const bytebox = @import("bytebox");
 const i128h = builtins.compiler_rt_128;
+const is_freestanding = builtin.target.os.tag == .freestanding;
 
 /// Errors that can occur during WebAssembly evaluation.
 pub const WasmEvalError = error{
@@ -15,6 +16,20 @@ pub const WasmEvalError = error{
     WasmExecFailed,
     OutOfMemory,
 };
+
+const debugPrint = if (is_freestanding)
+    struct {
+        fn print(comptime fmt: []const u8, args: anytype) void {
+            _ = fmt;
+            _ = args;
+        }
+    }.print
+else
+    struct {
+        fn print(comptime fmt: []const u8, args: anytype) void {
+            std.debug.print(fmt, args);
+        }
+    }.print;
 
 fn readIntLittle(comptime T: type, buffer: []const u8, offset: usize) T {
     const UInt = std.meta.Int(.unsigned, @bitSizeOf(T));
@@ -63,14 +78,14 @@ pub fn runWasmStr(
     var module_def = bytebox.createModuleDefinition(arena, .{}) catch return error.WasmExecFailed;
     module_def.decode(wasm_bytes) catch |err| {
         if (std.debug.runtime_safety) {
-            std.debug.print("wasm decode failed: {s}\n", .{@errorName(err)});
+            debugPrint("wasm decode failed: {s}\n", .{@errorName(err)});
         }
         return error.WasmExecFailed;
     };
 
     var module_instance = bytebox.createModuleInstance(.Stack, module_def, std.heap.page_allocator) catch |err| {
         if (std.debug.runtime_safety) {
-            std.debug.print("wasm instance create failed: {s}\n", .{@errorName(err)});
+            debugPrint("wasm instance create failed: {s}\n", .{@errorName(err)});
         }
         return error.WasmExecFailed;
     };
@@ -163,14 +178,14 @@ pub fn runWasmStr(
         const imports = [_]bytebox.ModuleImportPackage{env_imports};
         module_instance.instantiate(.{ .stack_size = 1024 * 256, .imports = &imports }) catch |err| {
             if (std.debug.runtime_safety) {
-                std.debug.print("wasm instantiate failed: {s}\n", .{@errorName(err)});
+                debugPrint("wasm instantiate failed: {s}\n", .{@errorName(err)});
             }
             return error.WasmExecFailed;
         };
     } else {
         module_instance.instantiate(.{ .stack_size = 1024 * 256 }) catch |err| {
             if (std.debug.runtime_safety) {
-                std.debug.print("wasm instantiate failed: {s}\n", .{@errorName(err)});
+                debugPrint("wasm instantiate failed: {s}\n", .{@errorName(err)});
             }
             return error.WasmExecFailed;
         };
@@ -178,7 +193,7 @@ pub fn runWasmStr(
 
     const handle = module_instance.getFunctionHandle("main") catch |err| {
         if (std.debug.runtime_safety) {
-            std.debug.print("wasm get main handle failed: {s}\n", .{@errorName(err)});
+            debugPrint("wasm get main handle failed: {s}\n", .{@errorName(err)});
         }
         return error.WasmExecFailed;
     };
@@ -475,7 +490,6 @@ fn hostIntToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]cons
     const signed_value: i128 = @bitCast((@as(u128, high) << 64) | @as(u128, low));
     const unsigned_value: u128 = (@as(u128, high) << 64) | @as(u128, low);
 
-
     var fmt_buf: [48]u8 = undefined;
     const formatted = (if (is_signed) switch (int_width) {
         1 => std.fmt.bufPrint(&fmt_buf, "{d}", .{@as(i8, @intCast(signed_value))}),
@@ -751,7 +765,7 @@ fn hostRocDbg(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const 
     if (args_ptr + 8 > buffer.len) return;
     const msg_ptr: u32 = @bitCast(buffer[args_ptr..][0..4].*);
     const msg_len: u32 = @bitCast(buffer[args_ptr + 4 ..][0..4].*);
-    if (msg_ptr + msg_len <= buffer.len) std.debug.print("[dbg] {s}\n", .{buffer[msg_ptr..][0..msg_len]});
+    if (msg_ptr + msg_len <= buffer.len) debugPrint("[dbg] {s}\n", .{buffer[msg_ptr..][0..msg_len]});
 }
 
 fn hostRocExpectFailed(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
@@ -760,7 +774,7 @@ fn hostRocExpectFailed(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: 
     if (args_ptr + 8 > buffer.len) return;
     const msg_ptr: u32 = @bitCast(buffer[args_ptr..][0..4].*);
     const msg_len: u32 = @bitCast(buffer[args_ptr + 4 ..][0..4].*);
-    if (msg_ptr + msg_len <= buffer.len) std.debug.print("Expect failed: {s}\n", .{buffer[msg_ptr..][0..msg_len]});
+    if (msg_ptr + msg_len <= buffer.len) debugPrint("Expect failed: {s}\n", .{buffer[msg_ptr..][0..msg_len]});
     wasm_crash_state = .crashed;
 }
 
@@ -770,7 +784,7 @@ fn hostRocCrashed(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     if (args_ptr + 8 > buffer.len) return;
     const msg_ptr: u32 = @bitCast(buffer[args_ptr..][0..4].*);
     const msg_len: u32 = @bitCast(buffer[args_ptr + 4 ..][0..4].*);
-    if (msg_ptr + msg_len <= buffer.len) std.debug.print("Roc crashed: {s}\n", .{buffer[msg_ptr..][0..msg_len]});
+    if (msg_ptr + msg_len <= buffer.len) debugPrint("Roc crashed: {s}\n", .{buffer[msg_ptr..][0..msg_len]});
     wasm_crash_state = .crashed;
 }
 
@@ -1150,11 +1164,11 @@ fn hostListConcat(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     const total_bytes: usize = new_len * elem_width;
     const new_data = if (total_bytes == 0) 0 else allocWasmData(buffer, alignment, total_bytes);
     if (a_len > 0 and a_data != 0) {
-        @memcpy(buffer[new_data..][0..a_len * elem_width], buffer[a_data..][0..a_len * elem_width]);
+        @memcpy(buffer[new_data..][0 .. a_len * elem_width], buffer[a_data..][0 .. a_len * elem_width]);
     }
     if (b_len > 0 and b_data != 0) {
         const offset = a_len * elem_width;
-        @memcpy(buffer[new_data + offset ..][0..b_len * elem_width], buffer[b_data..][0..b_len * elem_width]);
+        @memcpy(buffer[new_data + offset ..][0 .. b_len * elem_width], buffer[b_data..][0 .. b_len * elem_width]);
     }
 
     writeIntLittle(u32, buffer, result_ptr, @intCast(new_data));

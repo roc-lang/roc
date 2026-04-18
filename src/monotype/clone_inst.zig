@@ -8,6 +8,7 @@
 const std = @import("std");
 const base = @import("base");
 const types_mod = @import("types");
+/// Public struct `TypeKey`.
 pub const TypeKey = struct {
     module_idx: u32,
     var_: Var,
@@ -28,7 +29,9 @@ const RecordField = types_mod.RecordField;
 const Tag = types_mod.Tag;
 const NominalType = types_mod.NominalType;
 
+/// Public value `VarMapping`.
 pub const VarMapping = std.AutoHashMap(Var, Var);
+/// Public value `ScopedCloneMap`.
 pub const ScopedCloneMap = std.AutoHashMap(TypeKey, Var);
 
 fn cloneIdent(
@@ -43,6 +46,7 @@ fn cloneIdent(
     return try dest_idents.insert(allocator, ident_value);
 }
 
+/// Public function `cloneVar`.
 pub fn cloneVar(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
@@ -76,6 +80,7 @@ pub fn cloneVar(
     return placeholder_var;
 }
 
+/// Public function `cloneVarFromModule`.
 pub fn cloneVarFromModule(
     source_module_idx: u32,
     source_store: *const TypesStore,

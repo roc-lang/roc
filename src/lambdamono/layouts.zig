@@ -28,6 +28,7 @@ const LayoutCache = struct {
     }
 };
 
+/// Explicit logical layouts derived from executable lambdamono types and nodes.
 pub const Layouts = struct {
     graph: layout_mod.Graph,
     cache: LayoutCache,
@@ -42,6 +43,7 @@ pub const Layouts = struct {
     pat_tag_payload_layouts: []?layout_mod.GraphRef,
     pat_source_layouts: []?layout_mod.GraphRef,
 
+    /// Allocate empty layout tables sized for an executable store.
     pub fn initEmpty(
         allocator: std.mem.Allocator,
         store: *ast.Store,

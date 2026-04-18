@@ -3,9 +3,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
+/// Public enum `TypeId`.
 pub const TypeId = enum(u32) { _ };
+/// Public value `TypeIds`.
 pub const TypeIds = []const TypeId;
 
+/// Public enum `Prim`.
 pub const Prim = enum(u16) {
     bool,
     str,
@@ -25,20 +28,25 @@ pub const Prim = enum(u16) {
     erased,
 };
 
+/// Public struct `Tag`.
 pub const Tag = struct {
     name: base.Ident.Idx,
     args: TypeIds,
 };
 
+/// Public value `Tags`.
 pub const Tags = []const Tag;
 
+/// Public struct `Field`.
 pub const Field = struct {
     name: base.Ident.Idx,
     ty: TypeId,
 };
 
+/// Public value `Fields`.
 pub const Fields = []const Field;
 
+/// Public struct `Nominal`.
 pub const Nominal = struct {
     module_idx: u32,
     ident: base.Ident.Idx,
@@ -47,6 +55,7 @@ pub const Nominal = struct {
     backing: TypeId,
 };
 
+/// Public union `Content`.
 pub const Content = union(enum) {
     placeholder,
     unbd,
@@ -68,6 +77,7 @@ pub const Content = union(enum) {
     primitive: Prim,
 };
 
+/// Public struct `Store`.
 pub const Store = struct {
     allocator: std.mem.Allocator,
     types: std.ArrayList(Content),

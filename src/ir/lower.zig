@@ -13,6 +13,7 @@ const ir_layout = @import("layout.zig");
 
 const Symbol = symbol_mod.Symbol;
 
+/// Final IR lowering result, including the lowered IR store and layout graph.
 pub const Result = struct {
     store: ast.Store,
     root_defs: std.ArrayList(ast.DefId),
@@ -20,6 +21,7 @@ pub const Result = struct {
     layouts: ir_layout.Graph,
     strings: base.StringLiteral.Store,
 
+    /// Release all memory owned by the IR lowering result.
     pub fn deinit(self: *Result) void {
         self.store.deinit();
         self.root_defs.deinit(self.store.allocator);
@@ -29,6 +31,7 @@ pub const Result = struct {
     }
 };
 
+/// Lower lambdamono into the shared IR representation.
 pub fn run(allocator: std.mem.Allocator, input: lambdamono.Lower.Result) std.mem.Allocator.Error!Result {
     var lowerer = Lowerer.init(allocator, input);
     defer lowerer.deinit();

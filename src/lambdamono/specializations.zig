@@ -9,12 +9,15 @@ const symbol_mod = @import("symbol");
 const Symbol = symbol_mod.Symbol;
 const TypeVarId = solved.Type.TypeVarId;
 
+/// Pending specialization work item keyed by source symbol and solved function type.
 pub const Pending = struct {
+    /// Controls whether the specialization uses the natural or erased-boundary representation.
     pub const ReprMode = enum(u8) {
         natural,
         erased_boundary,
     };
 
+    /// Current lifecycle state for a pending specialization.
     pub const Status = enum(u8) {
         pending,
         specializing,
@@ -34,11 +37,13 @@ pub const Pending = struct {
     result_ty: ?type_mod.TypeId = null,
 };
 
+/// Queue of pending and completed executable specializations.
 pub const Queue = struct {
     allocator: std.mem.Allocator,
     items: std.ArrayList(Pending),
     by_key: std.StringHashMap(usize),
 
+    /// Initialize an empty specialization queue.
     pub fn init(allocator: std.mem.Allocator) Queue {
         return .{
             .allocator = allocator,
@@ -47,6 +52,7 @@ pub const Queue = struct {
         };
     }
 
+    /// Release all specialization queue state.
     pub fn deinit(self: *Queue) void {
         for (self.items.items) |*item| {
             item.requested_types.deinit();
@@ -56,6 +62,7 @@ pub const Queue = struct {
         self.by_key.deinit();
     }
 
+    /// Return the next specialization that has not started yet.
     pub fn nextPending(self: *Queue) ?*Pending {
         for (self.items.items) |*item| {
             if (item.status == .pending) return item;
@@ -63,6 +70,7 @@ pub const Queue = struct {
         return null;
     }
 
+    /// Materialize completed specializations as executable definitions.
     pub fn solvedDefs(self: *const Queue, allocator: std.mem.Allocator) std.mem.Allocator.Error![]ast.Def {
         var out = std.ArrayList(ast.Def).empty;
         errdefer out.deinit(allocator);
@@ -78,12 +86,14 @@ pub const Queue = struct {
     }
 };
 
+/// Function-environment entry used to look up solved source definitions by symbol.
 pub const FEnvEntry = struct {
     name: Symbol,
     fn_ty: TypeVarId,
     fn_def: solved.Ast.FnDef,
 };
 
+/// Build a lookup table of solved function definitions from the solved program.
 pub fn buildFEnv(allocator: std.mem.Allocator, input: *const solved.Lower.Result) std.mem.Allocator.Error![]FEnvEntry {
     var out = std.ArrayList(FEnvEntry).empty;
     errdefer out.deinit(allocator);
@@ -102,6 +112,7 @@ pub fn buildFEnv(allocator: std.mem.Allocator, input: *const solved.Lower.Result
     return try out.toOwnedSlice(allocator);
 }
 
+/// Look up a source function definition by its exact symbol.
 pub fn lookupFnExact(fenv: []const FEnvEntry, name: Symbol) ?FEnvEntry {
     for (fenv) |entry| {
         if (entry.name == name) return entry;
@@ -109,6 +120,7 @@ pub fn lookupFnExact(fenv: []const FEnvEntry, name: Symbol) ?FEnvEntry {
     return null;
 }
 
+/// Queue or reuse a specialization for a solved source function.
 pub fn specializeFn(
     queue: *Queue,
     fenv: []const FEnvEntry,

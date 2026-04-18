@@ -1653,17 +1653,14 @@ pub const ComptimeEvaluator = struct {
         const payload_idx = try_accessor.findFieldIndex(layout_env.idents.payload) orelse {
             // This should never happen - Try type must have a payload field
         };
-        const payload_rt_var = self.interpreter.runtime_types.fresh() catch {
-        };
-        const payload_field = try_accessor.getFieldByIndex(payload_idx, payload_rt_var) catch {
-        };
+        const payload_rt_var = self.interpreter.runtime_types.fresh() catch {};
+        const payload_field = try_accessor.getFieldByIndex(payload_idx, payload_rt_var) catch {};
 
         // The payload for Err is the error type: [InvalidNumeral(Str), ...]
         // This is itself a tag union which may be a record { tag, payload } or just a scalar
         if (payload_field.layout.tag == .struct_) {
             // Tag union with payload - look for InvalidNumeral tag
-            var err_accessor = payload_field.asRecord(&self.interpreter.runtime_layout_store) catch {
-            };
+            var err_accessor = payload_field.asRecord(&self.interpreter.runtime_layout_store) catch {};
 
             // Check if this has a payload field (for the Str)
             // Single-tag unions might not have a "tag" field, so we look for payload first
@@ -1687,12 +1684,10 @@ pub const ComptimeEvaluator = struct {
                     return try self.extractStrFromValue(field);
                 }
             }
-
         } else if (payload_field.layout.tag == .scalar and payload_field.layout.data.scalar.tag == .str) {
             // Direct Str payload (single-tag union optimized to just the payload)
             return try self.extractStrFromValue(payload_field);
         }
-
     }
 
     /// Extract a Str value from a StackValue
@@ -1707,8 +1702,7 @@ pub const ComptimeEvaluator = struct {
                 }
             }
         }
-        if (value.layout.tag == .scalar) {
-        }
+        if (value.layout.tag == .scalar) {}
     }
 
     /// Evaluates all top-level declarations in the module

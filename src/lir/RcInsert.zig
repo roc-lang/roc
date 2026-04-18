@@ -27,6 +27,7 @@ const LoopContinueVisitKey = struct {
     innermost_for: ?CFStmtId,
 };
 
+/// Run this compilation stage.
 pub fn run(
     allocator: Allocator,
     store: *LirStore,
@@ -1663,7 +1664,6 @@ const ProcPass = struct {
             .scope_exit, .jump, .ret, .runtime_error, .crash => {},
         }
     }
-
 };
 
 fn collectReachableStmtIds(
@@ -1762,7 +1762,6 @@ fn containsStmtId(stmt_ids: []const CFStmtId, target: CFStmtId) bool {
     }
     return false;
 }
-
 
 fn bitsetsEqual(a: std.DynamicBitSetUnmanaged, b: std.DynamicBitSetUnmanaged) bool {
     if (a.bit_length != b.bit_length) return false;

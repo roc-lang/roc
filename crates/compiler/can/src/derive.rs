@@ -217,6 +217,7 @@ fn is_eq<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
     )
 }
 
+fn to_inspector<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
     // Inspect for opaques as a tag so it prints `@Opaque payload`.
     let alloc_pat = |it| env.arena.alloc(Loc::at(DERIVED_REGION, it));
     let alloc_expr = |it| env.arena.alloc(Loc::at(DERIVED_REGION, it));
@@ -233,8 +234,11 @@ fn is_eq<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
         )]),
     );
 
+    // Inspect.to_inspector(payload)
+    let to_inspector_payload = alloc_expr(ast::Expr::Apply(
         alloc_expr(ast::Expr::Var {
             module_name: "Inspect",
+            ident: "to_inspector",
         }),
         &*env.arena.alloc([&*alloc_expr(ast::Expr::Var {
             module_name: "",
@@ -243,6 +247,9 @@ fn is_eq<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
         CalledVia::Space,
     ));
 
+    // Inspect.tag("@opaque", [Inspect.to_inspector(payload)])
+    let to_inspector_list = alloc_expr(ast::Expr::List(Collection::with_items(
+        &*env.arena.alloc([&*to_inspector_payload]),
     )));
     let opaque_name = alloc_expr(ast::Expr::Str(ast::StrLiteral::PlainLine(at_opaque)));
 
@@ -251,6 +258,7 @@ fn is_eq<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
             module_name: "Inspect",
             ident: "tag",
         }),
+        &*env.arena.alloc([&*opaque_name, &*to_inspector_list]),
         CalledVia::Space,
     ));
 
@@ -319,6 +327,8 @@ pub(crate) fn synthesize_member_impl<'a>(
         Symbol::HASH_HASH => (format!("#{opaque_name}_hash"), hash(env, at_opaque)),
         Symbol::BOOL_IS_EQ => (format!("#{opaque_name}_is_eq"), is_eq(env, at_opaque)),
         Symbol::INSPECT_TO_INSPECTOR => (
+            format!("#{opaque_name}_to_inspector"),
+            to_inspector(env, at_opaque),
         ),
         other => internal_error!("{:?} is not a derivable ability member!", other),
     };

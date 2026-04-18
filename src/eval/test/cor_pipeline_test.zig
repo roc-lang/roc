@@ -1815,8 +1815,6 @@ test "cor pipeline - zero-arg hosted proc call reaches host abi" {
     try testing.expectEqualStrings("tick", dev_run.events[1].bytes());
 }
 
-
-
 test "cor pipeline - multi-arg hosted proc call preserves argument marshaling" {
     const hosted_fns = [_]builtins.host_abi.HostedFn{
         builtins.host_abi.hostedFn(&pairHostedFn),

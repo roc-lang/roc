@@ -33,5 +33,5 @@ test "lsp tests" {
     std.testing.refAllDecls(@import("cir_queries.zig"));
     std.testing.refAllDecls(@import("module_lookup.zig"));
     std.testing.refAllDecls(@import("doc_comments.zig"));
-_ = @import("completion/mod.zig");
+    _ = @import("completion/mod.zig");
 }

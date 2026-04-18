@@ -7,6 +7,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const builtins = @import("builtins");
+const is_freestanding = builtin.target.os.tag == .freestanding;
 
 const Allocator = std.mem.Allocator;
 
@@ -18,6 +19,20 @@ const RocRealloc = builtins.host_abi.RocRealloc;
 const RocDbg = builtins.host_abi.RocDbg;
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocCrashed = builtins.host_abi.RocCrashed;
+
+const debugPrint = if (is_freestanding)
+    struct {
+        fn print(comptime fmt: []const u8, args: anytype) void {
+            _ = fmt;
+            _ = args;
+        }
+    }.print
+else
+    struct {
+        fn print(comptime fmt: []const u8, args: anytype) void {
+            std.debug.print(fmt, args);
+        }
+    }.print;
 
 /// Environment for RocOps in evaluators.
 /// Tracks allocator-owned buffers so generated code can use roc_alloc /
@@ -51,7 +66,7 @@ pub const RocEnv = struct {
     pub fn reportLeaks(self: *const RocEnv) void {
         var iterator = self.allocations.iterator();
         while (iterator.next()) |entry| {
-            std.debug.print(
+            debugPrint(
                 "RocEnv leak: ptr=0x{x} len={d} align={d}\n",
                 .{ entry.key_ptr.*, entry.value_ptr.len, entry.value_ptr.alignment },
             );
@@ -123,29 +138,26 @@ pub const RocEnv = struct {
 
     /// Debug output function.
     pub fn rocDbgFn(roc_dbg: *const RocDbg, _: *anyopaque) callconv(.c) void {
-        // On freestanding (WASM), skip debug output to avoid thread locking
-        if (builtin.os.tag != .freestanding) {
+        if (comptime !is_freestanding) {
             const msg = roc_dbg.utf8_bytes[0..roc_dbg.len];
-            std.debug.print("[dbg] {s}\n", .{msg});
+            debugPrint("[dbg] {s}\n", .{msg});
         }
     }
 
     /// Expect failed function.
     pub fn rocExpectFailedFn(_: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {
-        // On freestanding (WASM), skip debug output to avoid thread locking
-        if (builtin.os.tag != .freestanding) {
-            std.debug.print("[expect failed]\n", .{});
+        if (comptime !is_freestanding) {
+            debugPrint("[expect failed]\n", .{});
         }
     }
 
     /// Crash function.
     pub fn rocCrashedFn(roc_crashed: *const RocCrashed, _: *anyopaque) callconv(.c) noreturn {
-        // On freestanding (WASM), just panic without debug output to avoid thread locking
-        if (builtin.os.tag == .freestanding) {
+        if (comptime is_freestanding) {
             @panic("Roc crashed");
         } else {
             const msg = roc_crashed.utf8_bytes[0..roc_crashed.len];
-            std.debug.print("Roc crashed: {s}\n", .{msg});
+            debugPrint("Roc crashed: {s}\n", .{msg});
             unreachable;
         }
     }

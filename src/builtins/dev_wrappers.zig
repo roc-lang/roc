@@ -230,6 +230,7 @@ fn writeDiscriminant(out: [*]u8, offset: u32, size: u32, value: u64) void {
     }
 }
 
+/// Public value `StrFromUtf8Layout`.
 pub const StrFromUtf8Layout = extern struct {
     ok_tag: u64,
     err_tag: u64,

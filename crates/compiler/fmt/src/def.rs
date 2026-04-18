@@ -469,11 +469,13 @@ impl<'a> Formattable for TypeDef<'a> {
                 typ: ann,
                 derived: has_abilities,
             } => {
+                let ann_is_where_clause =
                     matches!(ann.extract_spaces().item, TypeAnnotation::Where(..));
 
                 // Always put the has-abilities clause on a newline if the opaque annotation
                 // contains a where-has clause.
                 let has_abilities_multiline = if let Some(has_abilities) = has_abilities {
+                    !has_abilities.item.value.is_empty() && ann_is_where_clause
                 } else {
                     false
                 };

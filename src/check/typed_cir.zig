@@ -1,3 +1,5 @@
+//! Typed CIR module views used by later lowering stages.
+
 const std = @import("std");
 const base = @import("base");
 const can = @import("can");
@@ -79,11 +81,13 @@ const ModuleData = struct {
     }
 };
 
+/// Owned collection of typed CIR modules used by later lowering stages.
 pub const Modules = struct {
     allocator: Allocator,
     modules: []ModuleData,
     module_idxs_by_name: std.StringHashMapUnmanaged(u32),
 
+    /// Ways to provide a checked module env to typed CIR.
     pub const SourceModule = union(enum) {
         precompiled: *ModuleEnv,
         owned_checked: OwnedCheckedModule,
@@ -110,6 +114,7 @@ pub const Modules = struct {
         }
     };
 
+    /// Initialize typed CIR module storage from checked module environments.
     pub fn init(allocator: Allocator, source_modules: []const SourceModule) Allocator.Error!Modules {
         const modules = try allocator.alloc(ModuleData, source_modules.len);
         errdefer allocator.free(modules);
@@ -194,7 +199,6 @@ pub const Modules = struct {
             target_def_idx,
         );
     }
-
 };
 
 fn ensureModuleNameIdents(env: *ModuleEnv) Allocator.Error!void {
@@ -211,15 +215,18 @@ fn ensureModuleNameIdents(env: *ModuleEnv) Allocator.Error!void {
     }
 }
 
+/// Read-only view over one typed CIR module and its explicit facts.
 pub const Module = struct {
     allocator: Allocator,
     module_idx: u32,
     data_store: *ModuleData,
 
+    /// Function-shape view recovered from checked function types.
     pub const CurriedFnShape = struct {
         args: []Var,
         ret: Var,
 
+        /// Release the owned argument slice for a function-shape snapshot.
         pub fn deinit(self: *@This(), allocator: Allocator) void {
             allocator.free(self.args);
         }
@@ -229,6 +236,7 @@ pub const Module = struct {
         return self.data_store.env;
     }
 
+    /// Return all definitions owned by this module in source order.
     pub fn allDefs(self: @This()) []const CIR.Def.Idx {
         return self.env().store.sliceDefs(self.env().all_defs);
     }
@@ -321,6 +329,7 @@ pub const Module = struct {
         return self.data_store.top_level_defs_by_ident.get(ident);
     }
 
+    /// Return the checked module's method identifier table for tooling and lowering.
     pub fn methodIdentEntries(self: @This()) []const ModuleEnv.MethodIdents.Entry {
         return self.env().method_idents.entries.items;
     }
@@ -351,6 +360,7 @@ pub const Module = struct {
         };
     }
 
+    /// Return the checked function var associated with a method-call constraint, if any.
     pub fn methodCallConstraintFnVar(self: @This(), idx: CIR.Expr.Idx) ?Var {
         const expr_data = self.expr(idx).data;
         const method_name = switch (expr_data) {
@@ -361,6 +371,7 @@ pub const Module = struct {
         return self.env().methodCallFnVar(idx, method_name);
     }
 
+    /// Flatten a checked function type into its argument list and final return var.
     pub fn curriedFnShape(self: @This(), fn_var: Var) Allocator.Error!CurriedFnShape {
         var args = std.ArrayList(Var).empty;
         errdefer args.deinit(self.allocator);
@@ -371,6 +382,7 @@ pub const Module = struct {
         };
     }
 
+    /// Recover the checked source-level function boundary for a lambda definition.
     pub fn lambdaFnShape(self: @This(), fn_var: Var, explicit_arg_count: usize) Allocator.Error!CurriedFnShape {
         var args = std.ArrayList(Var).empty;
         errdefer args.deinit(self.allocator);
@@ -564,6 +576,7 @@ pub const Module = struct {
     }
 };
 
+/// Typed CIR definition view.
 pub const Def = struct {
     owner: Module,
     idx: CIR.Def.Idx,
@@ -571,34 +584,41 @@ pub const Def = struct {
     pattern: Pattern,
     expr: Expr,
 
+    /// Return the module that owns this definition.
     pub fn module(self: @This()) Module {
         return self.owner;
     }
 };
 
+/// Typed CIR expression view.
 pub const Expr = struct {
     owner: Module,
     idx: CIR.Expr.Idx,
     data: CIR.Expr,
 
+    /// Return the module that owns this expression.
     pub fn module(self: @This()) Module {
         return self.owner;
     }
 
+    /// Return the checked type variable for this expression.
     pub fn ty(self: @This()) Var {
         return self.owner.exprType(self.idx);
     }
 };
 
+/// Typed CIR pattern view.
 pub const Pattern = struct {
     owner: Module,
     idx: CIR.Pattern.Idx,
     data: CIR.Pattern,
 
+    /// Return the module that owns this pattern.
     pub fn module(self: @This()) Module {
         return self.owner;
     }
 
+    /// Return the checked type variable for this pattern.
     pub fn ty(self: @This()) Var {
         return self.owner.patternType(self.idx);
     }

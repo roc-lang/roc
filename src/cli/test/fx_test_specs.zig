@@ -227,6 +227,26 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Repro: generic record map2 discarded before static output",
     },
     .{
+        .roc_file = "test/fx/direct_map2_three_drop_repro.roc",
+        .io_spec = "1>done",
+        .description = "Repro: dropped three-way direct map2 result before static output",
+    },
+    .{
+        .roc_file = "test/fx/direct_map2_three_inner_unused_repro.roc",
+        .io_spec = "1>done",
+        .description = "Repro: dropped inner direct map2 result before static output",
+    },
+    .{
+        .roc_file = "test/fx/direct_map2_three_named_drop_repro.roc",
+        .io_spec = "1>done",
+        .description = "Repro: named inner and outer direct map2 values dropped before static output",
+    },
+    .{
+        .roc_file = "test/fx/direct_map2_three_named_outer_drop_repro.roc",
+        .io_spec = "1>done",
+        .description = "Repro: named outer direct map2 value dropped before static output",
+    },
+    .{
         .roc_file = "test/fx/drop_concat_unused_repro.roc",
         .io_spec = "1>done",
         .description = "Repro: dropped concat string before static output",
@@ -245,6 +265,11 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/drop_proc_returned_record_repro.roc",
         .io_spec = "1>done",
         .description = "Repro: dropped proc-returned record containing concat string",
+    },
+    .{
+        .roc_file = "test/fx/project_inner_help_concat_repro.roc",
+        .io_spec = "1>done",
+        .description = "Repro: projected inner help concat dropped before static output",
     },
     .{
         .roc_file = "test/fx/inspect_wrong_sig_test.roc",
@@ -357,6 +382,36 @@ pub const io_spec_tests = [_]TestSpec{
         // Multi-line strings (\\) create strings with embedded newlines - use \n in spec
         .io_spec = "1>=== Record Builder ===\n|1>Test 1: Two-field record builder\n  Result: host=localhost, port=8080\n|1>Test 2: Three-field record builder\n  Result: name=world, count=1, verbose=False\n|1>Test 3: Four-field record builder\n  Result: w=10, x=20, y=30, z=40\n|1>Test 4: Combined help text\n  Help:  --input <value>  --output <value>|1>Test 5: Equivalence with direct map2|1>  Builder: a=1, b=2|1>  Direct:  a=1, b=2|1>|1>=== All tests passed! ===",
         .description = "True applicative record builder: { a: Cli.option(...), b: Cli.flag(...) }.Cli with parameterized Cli(a) type",
+    },
+    .{
+        .roc_file = "test/fx/record_builder_test1_repro.roc",
+        .io_spec = "1>host=localhost, port=8080",
+        .description = "Repro: two-field applicative record builder lowers to the same result as direct map2",
+    },
+    .{
+        .roc_file = "test/fx/record_builder_test2_drop_repro.roc",
+        .io_spec = "1>done",
+        .description = "Repro: dropped three-field applicative record builder result before static output",
+    },
+    .{
+        .roc_file = "test/fx/record_builder_test2_repro.roc",
+        .io_spec = "1>name=world, count=1, verbose=False",
+        .description = "Repro: three-field applicative record builder preserves Bool field values",
+    },
+    .{
+        .roc_file = "test/fx/record_builder_test3_repro.roc",
+        .io_spec = "1>w=10, x=20, y=30, z=40",
+        .description = "Repro: four-field applicative record builder preserves field order and values",
+    },
+    .{
+        .roc_file = "test/fx/record_builder_test4_repro.roc",
+        .io_spec = "1>Help:  --input <value>  --output <value>",
+        .description = "Repro: applicative record builder help text concatenates projected field help exactly once",
+    },
+    .{
+        .roc_file = "test/fx/record_builder_test5_repro.roc",
+        .io_spec = "1>Builder: a=1, b=2|1>Direct: a=1, b=2",
+        .description = "Repro: applicative record builder and direct map2 agree on the same parsed record",
     },
     .{
         .roc_file = "test/fx/issue9049.roc",

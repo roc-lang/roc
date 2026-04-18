@@ -20,6 +20,7 @@ const lir_value = @import("value.zig");
 const builtins = @import("builtins");
 const sljmp = @import("sljmp");
 const build_options = @import("build_options");
+const is_freestanding = builtin.target.os.tag == .freestanding;
 
 /// Comptime-gated tracing for the interpreter eval loop.
 /// Enabled via `-Dtrace-eval=true`. Zero cost when disabled.
@@ -28,7 +29,7 @@ const trace = struct {
 
     fn log(comptime fmt: []const u8, args: anytype) void {
         if (comptime enabled) {
-            std.debug.print("[interp] " ++ fmt ++ "\n", args);
+            debugPrint("[interp] " ++ fmt ++ "\n", args);
         }
     }
 };
@@ -40,10 +41,24 @@ const trace_rc = struct {
 
     fn log(comptime fmt: []const u8, args: anytype) void {
         if (comptime enabled) {
-            std.debug.print("[rc] " ++ fmt ++ "\n", args);
+            debugPrint("[rc] " ++ fmt ++ "\n", args);
         }
     }
 };
+
+const debugPrint = if (is_freestanding)
+    struct {
+        fn print(comptime fmt: []const u8, args: anytype) void {
+            _ = fmt;
+            _ = args;
+        }
+    }.print
+else
+    struct {
+        fn print(comptime fmt: []const u8, args: anytype) void {
+            std.debug.print(fmt, args);
+        }
+    }.print;
 
 const Allocator = std.mem.Allocator;
 const LirProcSpecId = LIR.LirProcSpecId;
@@ -181,7 +196,7 @@ const InterpreterRocEnv = struct {
         if (self.crash_message) |old| self.allocator.free(old);
         self.crash_message = self.allocator.dupe(u8, msg) catch null;
         const active_jmp_buf = self.active_jmp_buf orelse {
-            std.debug.print(
+            debugPrint(
                 "LIR/interpreter invariant violated: roc_crashed fired without an active jump buffer\n",
                 .{},
             );
@@ -277,7 +292,6 @@ pub const Interpreter = struct {
                 .val = value,
             };
         }
-
     };
 
     const ExecOutcome = union(enum) {
@@ -371,8 +385,8 @@ pub const Interpreter = struct {
 
     fn invariantFailed(_: *const LirInterpreter, comptime fmt: []const u8, args: anytype) noreturn {
         if (builtin.mode == .Debug) {
-            std.debug.print(fmt, args);
-            std.debug.print("\n", .{});
+            debugPrint(fmt, args);
+            debugPrint("\n", .{});
             std.debug.assert(false);
         }
         unreachable;
@@ -438,9 +452,9 @@ pub const Interpreter = struct {
                 const i_align = self.helper.sizeAlignOf(arg_layouts[sorted_indices[i]]).alignment.toByteUnits();
                 const j_align = self.helper.sizeAlignOf(arg_layouts[sorted_indices[j]]).alignment.toByteUnits();
                 if (j_align > i_align or (j_align == i_align and sorted_indices[j] < sorted_indices[i])) {
-                const tmp = sorted_indices[i];
-                sorted_indices[i] = sorted_indices[j];
-                sorted_indices[j] = tmp;
+                    const tmp = sorted_indices[i];
+                    sorted_indices[i] = sorted_indices[j];
+                    sorted_indices[j] = tmp;
                 }
             }
         }
@@ -721,16 +735,16 @@ pub const Interpreter = struct {
                 const stmt_count = self.store.cf_stmts.items.len;
                 const start = center -| 20;
                 const end = @min(stmt_count, center + 21);
-                std.debug.print("LIR/interpreter stmt window around failing stmt {d}:\n", .{@intFromEnum(id)});
+                debugPrint("LIR/interpreter stmt window around failing stmt {d}:\n", .{@intFromEnum(id)});
                 for (start..end) |i| {
                     const window_id: CFStmtId = @enumFromInt(@as(u32, @intCast(i)));
-                    std.debug.print("  stmt {d}: {any}\n", .{ i, self.store.getCFStmt(window_id) });
+                    debugPrint("  stmt {d}: {any}\n", .{ i, self.store.getCFStmt(window_id) });
                 }
 
                 switch (self.store.getCFStmt(id)) {
                     .assign_call => |assign| {
                         const callee_proc = self.store.getProcSpec(assign.proc);
-                        std.debug.print(
+                        debugPrint(
                             "LIR/interpreter failing assign_call callee proc {d}: name={d} body={any} ret_layout={d} hosted={any}\n",
                             .{
                                 @intFromEnum(assign.proc),
@@ -775,7 +789,7 @@ pub const Interpreter = struct {
 
     fn debugPrintStmtChain(self: *LirInterpreter, start_stmt: CFStmtId, limit: usize) void {
         if (comptime builtin.target.os.tag == .freestanding) return;
-        std.debug.print(
+        debugPrint(
             "LIR/interpreter stmt chain from {d}:\n",
             .{@intFromEnum(start_stmt)},
         );
@@ -785,7 +799,7 @@ pub const Interpreter = struct {
         while (remaining > 0) : (remaining -= 1) {
             const stmt = self.store.getCFStmt(current);
             switch (stmt) {
-                .assign_symbol => |assign| std.debug.print(
+                .assign_symbol => |assign| debugPrint(
                     "  stmt {d}: {any} target_layout={d}\n",
                     .{
                         @intFromEnum(current),
@@ -793,7 +807,7 @@ pub const Interpreter = struct {
                         @intFromEnum(self.store.getLocal(assign.target).layout_idx),
                     },
                 ),
-                .assign_ref => |assign| std.debug.print(
+                .assign_ref => |assign| debugPrint(
                     "  stmt {d}: {any} target_layout={d}\n",
                     .{
                         @intFromEnum(current),
@@ -801,7 +815,7 @@ pub const Interpreter = struct {
                         @intFromEnum(self.store.getLocal(assign.target).layout_idx),
                     },
                 ),
-                .assign_literal => |assign| std.debug.print(
+                .assign_literal => |assign| debugPrint(
                     "  stmt {d}: {any} target_layout={d}\n",
                     .{
                         @intFromEnum(current),
@@ -809,7 +823,7 @@ pub const Interpreter = struct {
                         @intFromEnum(self.store.getLocal(assign.target).layout_idx),
                     },
                 ),
-                .assign_call => |assign| std.debug.print(
+                .assign_call => |assign| debugPrint(
                     "  stmt {d}: {any} target_layout={d}\n",
                     .{
                         @intFromEnum(current),
@@ -817,7 +831,7 @@ pub const Interpreter = struct {
                         @intFromEnum(self.store.getLocal(assign.target).layout_idx),
                     },
                 ),
-                .assign_call_indirect => |assign| std.debug.print(
+                .assign_call_indirect => |assign| debugPrint(
                     "  stmt {d}: {any} target_layout={d}\n",
                     .{
                         @intFromEnum(current),
@@ -825,7 +839,7 @@ pub const Interpreter = struct {
                         @intFromEnum(self.store.getLocal(assign.target).layout_idx),
                     },
                 ),
-                .assign_low_level => |assign| std.debug.print(
+                .assign_low_level => |assign| debugPrint(
                     "  stmt {d}: {any} target_layout={d}\n",
                     .{
                         @intFromEnum(current),
@@ -833,7 +847,7 @@ pub const Interpreter = struct {
                         @intFromEnum(self.store.getLocal(assign.target).layout_idx),
                     },
                 ),
-                .assign_list => |assign| std.debug.print(
+                .assign_list => |assign| debugPrint(
                     "  stmt {d}: {any} target_layout={d}\n",
                     .{
                         @intFromEnum(current),
@@ -841,7 +855,7 @@ pub const Interpreter = struct {
                         @intFromEnum(self.store.getLocal(assign.target).layout_idx),
                     },
                 ),
-                .assign_struct => |assign| std.debug.print(
+                .assign_struct => |assign| debugPrint(
                     "  stmt {d}: {any} target_layout={d}\n",
                     .{
                         @intFromEnum(current),
@@ -849,7 +863,7 @@ pub const Interpreter = struct {
                         @intFromEnum(self.store.getLocal(assign.target).layout_idx),
                     },
                 ),
-                .assign_tag => |assign| std.debug.print(
+                .assign_tag => |assign| debugPrint(
                     "  stmt {d}: {any} target_layout={d}\n",
                     .{
                         @intFromEnum(current),
@@ -857,7 +871,7 @@ pub const Interpreter = struct {
                         @intFromEnum(self.store.getLocal(assign.target).layout_idx),
                     },
                 ),
-                .set_local => |assign| std.debug.print(
+                .set_local => |assign| debugPrint(
                     "  stmt {d}: {any} target_layout={d} target_layout_data={any}\n",
                     .{
                         @intFromEnum(current),
@@ -866,7 +880,7 @@ pub const Interpreter = struct {
                         self.layout_store.getLayout(self.store.getLocal(assign.target).layout_idx),
                     },
                 ),
-                else => std.debug.print("  stmt {d}: {any}\n", .{ @intFromEnum(current), stmt }),
+                else => debugPrint("  stmt {d}: {any}\n", .{ @intFromEnum(current), stmt }),
             }
             current = switch (stmt) {
                 .assign_symbol => |assign| assign.next,
@@ -900,14 +914,14 @@ pub const Interpreter = struct {
     }
 
     fn debugPrintIndexedLayoutShape(self: *LirInterpreter, index: usize, layout_idx: layout_mod.Idx) void {
-        std.debug.print("  field[{d}] layout tree:\n", .{index});
+        debugPrint("  field[{d}] layout tree:\n", .{index});
         var visited = std.ArrayList(u32).empty;
         defer visited.deinit(self.allocator);
         self.debugPrintLayoutShapeLines(layout_idx, 2, &visited);
     }
 
     fn debugPrintLayoutShape(self: *LirInterpreter, label: []const u8, layout_idx: layout_mod.Idx) void {
-        std.debug.print("{s}:\n", .{label});
+        debugPrint("{s}:\n", .{label});
         var visited = std.ArrayList(u32).empty;
         defer visited.deinit(self.allocator);
         self.debugPrintLayoutShapeLines(layout_idx, 1, &visited);
@@ -921,7 +935,7 @@ pub const Interpreter = struct {
     ) void {
         for (visited.items) |existing| {
             if (existing == @intFromEnum(layout_idx)) {
-                std.debug.print("{s}{d} (cycle)\n", .{ debugIndent(indent), @intFromEnum(layout_idx) });
+                debugPrint("{s}{d} (cycle)\n", .{ debugIndent(indent), @intFromEnum(layout_idx) });
                 return;
             }
         }
@@ -930,7 +944,7 @@ pub const Interpreter = struct {
         defer _ = visited.pop();
 
         const layout_val = self.layout_store.getLayout(layout_idx);
-        std.debug.print("{s}{d}: {s}\n", .{ debugIndent(indent), @intFromEnum(layout_idx), @tagName(layout_val.tag) });
+        debugPrint("{s}{d}: {s}\n", .{ debugIndent(indent), @intFromEnum(layout_idx), @tagName(layout_val.tag) });
         switch (layout_val.tag) {
             .scalar, .zst, .box_of_zst, .list_of_zst => {},
             .box => self.debugPrintLayoutShapeLines(layout_val.data.box, indent + 1, visited),
@@ -940,7 +954,7 @@ pub const Interpreter = struct {
                 const info = self.layout_store.getStructInfo(layout_val);
                 for (0..info.fields.len) |i| {
                     const field = info.fields.get(@intCast(i));
-                    std.debug.print("{s}field[{d}] semantic_index={d}\n", .{ debugIndent(indent + 1), i, field.index });
+                    debugPrint("{s}field[{d}] semantic_index={d}\n", .{ debugIndent(indent + 1), i, field.index });
                     self.debugPrintLayoutShapeLines(field.layout, indent + 2, visited);
                 }
             },
@@ -948,7 +962,7 @@ pub const Interpreter = struct {
                 const info = self.layout_store.getTagUnionInfo(layout_val);
                 for (0..info.variants.len) |i| {
                     const variant = info.variants.get(@intCast(i));
-                    std.debug.print("{s}variant[{d}]\n", .{ debugIndent(indent + 1), i });
+                    debugPrint("{s}variant[{d}]\n", .{ debugIndent(indent + 1), i });
                     self.debugPrintLayoutShapeLines(variant.payload_layout, indent + 2, visited);
                 }
             },
@@ -1269,7 +1283,7 @@ pub const Interpreter = struct {
                 },
                 .incref => |inc| {
                     if (builtin.mode == .Debug and !frame.locals[@intFromEnum(inc.value)].assigned) {
-                        std.debug.print(
+                        debugPrint(
                             "LIR/interpreter invariant violated before incref: local {d} unassigned in proc {d} at stmt {d}\n",
                             .{ @intFromEnum(inc.value), @intFromEnum(frame.proc_id), @intFromEnum(current) },
                         );
@@ -1286,7 +1300,7 @@ pub const Interpreter = struct {
                 },
                 .decref => |dec| {
                     if (builtin.mode == .Debug and !frame.locals[@intFromEnum(dec.value)].assigned) {
-                        std.debug.print(
+                        debugPrint(
                             "LIR/interpreter invariant violated before decref: local {d} unassigned in proc {d} at stmt {d}\n",
                             .{ @intFromEnum(dec.value), @intFromEnum(frame.proc_id), @intFromEnum(current) },
                         );
@@ -1303,7 +1317,7 @@ pub const Interpreter = struct {
                 },
                 .free => |free_stmt| {
                     if (builtin.mode == .Debug and !frame.locals[@intFromEnum(free_stmt.value)].assigned) {
-                        std.debug.print(
+                        debugPrint(
                             "LIR/interpreter invariant violated before free: local {d} unassigned in proc {d} at stmt {d}\n",
                             .{ @intFromEnum(free_stmt.value), @intFromEnum(frame.proc_id), @intFromEnum(current) },
                         );
@@ -1430,7 +1444,7 @@ pub const Interpreter = struct {
                             if ((actual_layout_val.tag == .struct_ or actual_layout_val.tag == .tag_union) and
                                 actual_layout != expected_layout)
                             {
-                                std.debug.print(
+                                debugPrint(
                                     "LIR/interpreter jump bridge proc={d} stmt={d} join={d} arg_local={d} actual={d} ({s}) param={d} expected={d} ({s})\n",
                                     .{
                                         @intFromEnum(frame.proc_id),
@@ -1470,11 +1484,11 @@ pub const Interpreter = struct {
     fn debugDumpProc(self: *LirInterpreter, proc_id: LirProcSpecId) void {
         const proc_spec = self.store.getProcSpec(proc_id);
         const body = proc_spec.body orelse {
-            std.debug.print("  proc {d} has no body\n", .{ @intFromEnum(proc_id) });
+            debugPrint("  proc {d} has no body\n", .{@intFromEnum(proc_id)});
             return;
         };
 
-        std.debug.print(
+        debugPrint(
             "  proc {d} name={d} body={d} ret_layout={d}\n",
             .{
                 @intFromEnum(proc_id),
@@ -1485,39 +1499,39 @@ pub const Interpreter = struct {
         );
         const args = self.store.getLocalSpan(proc_spec.args);
         if (args.len > 0) {
-            std.debug.print("  args:", .{});
+            debugPrint("  args:", .{});
             for (args) |arg| {
                 const layout_idx = self.store.getLocal(arg).layout_idx;
-                std.debug.print(" {d}:{d}", .{ @intFromEnum(arg), @intFromEnum(layout_idx) });
+                debugPrint(" {d}:{d}", .{ @intFromEnum(arg), @intFromEnum(layout_idx) });
             }
-            std.debug.print("\n", .{});
+            debugPrint("\n", .{});
         }
         const owned_params = self.store.getLocalSpan(proc_spec.owned_params);
         if (owned_params.len > 0) {
-            std.debug.print("  owned_params:", .{});
+            debugPrint("  owned_params:", .{});
             for (owned_params) |param| {
-                std.debug.print(" {d}", .{@intFromEnum(param)});
+                debugPrint(" {d}", .{@intFromEnum(param)});
             }
-            std.debug.print("\n", .{});
+            debugPrint("\n", .{});
         }
         const local_count = self.store.locals.items.len;
         if (local_count > 0) {
-            std.debug.print("  locals:\n", .{});
+            debugPrint("  locals:\n", .{});
             for (self.store.locals.items, 0..) |local, idx| {
                 const layout_idx = local.layout_idx;
                 const layout_val = self.layout_store.getLayout(layout_idx);
-                std.debug.print(
+                debugPrint(
                     "    local {d}: layout={d} tag={s}",
                     .{ idx, @intFromEnum(layout_idx), @tagName(layout_val.tag) },
                 );
                 if (layout_val.tag == .list) {
-                    std.debug.print(" elem={d}", .{@intFromEnum(layout_val.data.list)});
+                    debugPrint(" elem={d}", .{@intFromEnum(layout_val.data.list)});
                 }
                 if (layout_val.tag == .tag_union) {
                     const tu_info = self.layout_store.getTagUnionInfo(layout_val);
-                    std.debug.print(" variants={d}", .{tu_info.variants.len});
+                    debugPrint(" variants={d}", .{tu_info.variants.len});
                 }
-                std.debug.print("\n", .{});
+                debugPrint("\n", .{});
             }
         }
 
@@ -1534,7 +1548,7 @@ pub const Interpreter = struct {
             const stmt = self.store.getCFStmt(stmt_id);
             switch (stmt) {
                 .assign_symbol => |assign| {
-                    std.debug.print("    {d}: assign_symbol target={d} next={d}\n", .{
+                    debugPrint("    {d}: assign_symbol target={d} next={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(assign.target),
                         @intFromEnum(assign.next),
@@ -1542,7 +1556,7 @@ pub const Interpreter = struct {
                     stack.append(self.allocator, assign.next) catch return;
                 },
                 .assign_ref => |assign| {
-                    std.debug.print("    {d}: assign_ref target={d} result={s} materialization={s} op={any} next={d}\n", .{
+                    debugPrint("    {d}: assign_ref target={d} result={s} materialization={s} op={any} next={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(assign.target),
                         switch (assign.result) {
@@ -1557,7 +1571,7 @@ pub const Interpreter = struct {
                     stack.append(self.allocator, assign.next) catch return;
                 },
                 .assign_literal => |assign| {
-                    std.debug.print("    {d}: assign_literal target={d} next={d}\n", .{
+                    debugPrint("    {d}: assign_literal target={d} next={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(assign.target),
                         @intFromEnum(assign.next),
@@ -1565,7 +1579,7 @@ pub const Interpreter = struct {
                     stack.append(self.allocator, assign.next) catch return;
                 },
                 .assign_call => |assign| {
-                    std.debug.print("    {d}: assign_call proc={d} target={d} result={s} args=", .{
+                    debugPrint("    {d}: assign_call proc={d} target={d} result={s} args=", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(assign.proc),
                         @intFromEnum(assign.target),
@@ -1576,13 +1590,13 @@ pub const Interpreter = struct {
                         },
                     });
                     for (self.store.getLocalSpan(assign.args)) |arg_local| {
-                        std.debug.print("{d} ", .{@intFromEnum(arg_local)});
+                        debugPrint("{d} ", .{@intFromEnum(arg_local)});
                     }
-                    std.debug.print("next={d}\n", .{@intFromEnum(assign.next)});
+                    debugPrint("next={d}\n", .{@intFromEnum(assign.next)});
                     stack.append(self.allocator, assign.next) catch return;
                 },
                 .assign_call_indirect => |assign| {
-                    std.debug.print("    {d}: assign_call_indirect target={d} next={d}\n", .{
+                    debugPrint("    {d}: assign_call_indirect target={d} next={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(assign.target),
                         @intFromEnum(assign.next),
@@ -1590,7 +1604,7 @@ pub const Interpreter = struct {
                     stack.append(self.allocator, assign.next) catch return;
                 },
                 .assign_low_level => |assign| {
-                    std.debug.print("    {d}: assign_low_level target={d} op={s} next={d}\n", .{
+                    debugPrint("    {d}: assign_low_level target={d} op={s} next={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(assign.target),
                         @tagName(assign.op),
@@ -1599,7 +1613,7 @@ pub const Interpreter = struct {
                     stack.append(self.allocator, assign.next) catch return;
                 },
                 .assign_list => |assign| {
-                    std.debug.print("    {d}: assign_list target={d} next={d}\n", .{
+                    debugPrint("    {d}: assign_list target={d} next={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(assign.target),
                         @intFromEnum(assign.next),
@@ -1607,28 +1621,28 @@ pub const Interpreter = struct {
                     stack.append(self.allocator, assign.next) catch return;
                 },
                 .assign_struct => |assign| {
-                    std.debug.print("    {d}: assign_struct target={d} fields=", .{
+                    debugPrint("    {d}: assign_struct target={d} fields=", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(assign.target),
                     });
                     for (self.store.getLocalSpan(assign.fields)) |field_local| {
-                        std.debug.print("{d} ", .{@intFromEnum(field_local)});
+                        debugPrint("{d} ", .{@intFromEnum(field_local)});
                     }
-                    std.debug.print("consumed=", .{});
+                    debugPrint("consumed=", .{});
                     for (self.store.getLocalSpan(assign.ownership.consumed_owned_inputs)) |local| {
-                        std.debug.print("{d} ", .{@intFromEnum(local)});
+                        debugPrint("{d} ", .{@intFromEnum(local)});
                     }
-                    std.debug.print("retained=", .{});
+                    debugPrint("retained=", .{});
                     for (self.store.getLocalSpan(assign.ownership.retained_borrows)) |local| {
-                        std.debug.print("{d} ", .{@intFromEnum(local)});
+                        debugPrint("{d} ", .{@intFromEnum(local)});
                     }
-                    std.debug.print("next={d}\n", .{
+                    debugPrint("next={d}\n", .{
                         @intFromEnum(assign.next),
                     });
                     stack.append(self.allocator, assign.next) catch return;
                 },
                 .assign_tag => |assign| {
-                    std.debug.print("    {d}: assign_tag target={d} discrim={d} next={d}\n", .{
+                    debugPrint("    {d}: assign_tag target={d} discrim={d} next={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(assign.target),
                         assign.discriminant,
@@ -1637,7 +1651,7 @@ pub const Interpreter = struct {
                     stack.append(self.allocator, assign.next) catch return;
                 },
                 .set_local => |assign| {
-                    std.debug.print("    {d}: set_local target={d} value={d} next={d}\n", .{
+                    debugPrint("    {d}: set_local target={d} value={d} next={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(assign.target),
                         @intFromEnum(assign.value),
@@ -1646,14 +1660,14 @@ pub const Interpreter = struct {
                     stack.append(self.allocator, assign.next) catch return;
                 },
                 .debug => |debug_stmt| {
-                    std.debug.print("    {d}: debug next={d}\n", .{
+                    debugPrint("    {d}: debug next={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(debug_stmt.next),
                     });
                     stack.append(self.allocator, debug_stmt.next) catch return;
                 },
                 .expect => |expect_stmt| {
-                    std.debug.print("    {d}: expect cond={d} next={d}\n", .{
+                    debugPrint("    {d}: expect cond={d} next={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(expect_stmt.condition),
                         @intFromEnum(expect_stmt.next),
@@ -1661,10 +1675,10 @@ pub const Interpreter = struct {
                     stack.append(self.allocator, expect_stmt.next) catch return;
                 },
                 .runtime_error => {
-                    std.debug.print("    {d}: runtime_error\n", .{ @intFromEnum(stmt_id) });
+                    debugPrint("    {d}: runtime_error\n", .{@intFromEnum(stmt_id)});
                 },
                 .incref => |inc| {
-                    std.debug.print("    {d}: incref value={d} next={d}\n", .{
+                    debugPrint("    {d}: incref value={d} next={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(inc.value),
                         @intFromEnum(inc.next),
@@ -1672,7 +1686,7 @@ pub const Interpreter = struct {
                     stack.append(self.allocator, inc.next) catch return;
                 },
                 .decref => |dec| {
-                    std.debug.print("    {d}: decref value={d} next={d}\n", .{
+                    debugPrint("    {d}: decref value={d} next={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(dec.value),
                         @intFromEnum(dec.next),
@@ -1680,7 +1694,7 @@ pub const Interpreter = struct {
                     stack.append(self.allocator, dec.next) catch return;
                 },
                 .free => |dec| {
-                    std.debug.print("    {d}: free value={d} next={d}\n", .{
+                    debugPrint("    {d}: free value={d} next={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(dec.value),
                         @intFromEnum(dec.next),
@@ -1688,7 +1702,7 @@ pub const Interpreter = struct {
                     stack.append(self.allocator, dec.next) catch return;
                 },
                 .switch_stmt => |switch_stmt| {
-                    std.debug.print("    {d}: switch cond={d} default={d}\n", .{
+                    debugPrint("    {d}: switch cond={d} default={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(switch_stmt.cond),
                         @intFromEnum(switch_stmt.default_branch),
@@ -1696,7 +1710,7 @@ pub const Interpreter = struct {
                     stack.append(self.allocator, switch_stmt.default_branch) catch return;
                     const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
                     for (branches) |branch| {
-                        std.debug.print("        branch {d} -> {d}\n", .{
+                        debugPrint("        branch {d} -> {d}\n", .{
                             branch.value,
                             @intFromEnum(branch.body),
                         });
@@ -1704,7 +1718,7 @@ pub const Interpreter = struct {
                     }
                 },
                 .borrow_scope => |scope| {
-                    std.debug.print("    {d}: borrow_scope body={d} remainder={d}\n", .{
+                    debugPrint("    {d}: borrow_scope body={d} remainder={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(scope.body),
                         @intFromEnum(scope.remainder),
@@ -1713,13 +1727,13 @@ pub const Interpreter = struct {
                     stack.append(self.allocator, scope.remainder) catch return;
                 },
                 .scope_exit => |scope| {
-                    std.debug.print("    {d}: scope_exit id={d}\n", .{
+                    debugPrint("    {d}: scope_exit id={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(scope.id),
                     });
                 },
                 .for_list => |for_list| {
-                    std.debug.print("    {d}: for_list elem={d} iterable={d} body={d} next={d}\n", .{
+                    debugPrint("    {d}: for_list elem={d} iterable={d} body={d} next={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(for_list.elem),
                         @intFromEnum(for_list.iterable),
@@ -1730,17 +1744,17 @@ pub const Interpreter = struct {
                     stack.append(self.allocator, for_list.next) catch return;
                 },
                 .loop_continue => {
-                    std.debug.print("    {d}: loop_continue\n", .{ @intFromEnum(stmt_id) });
+                    debugPrint("    {d}: loop_continue\n", .{@intFromEnum(stmt_id)});
                 },
                 .join => |join| {
-                    std.debug.print("    {d}: join id={d} params=", .{
+                    debugPrint("    {d}: join id={d} params=", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(join.id),
                     });
                     for (self.store.getLocalSpan(join.params)) |param_local| {
-                        std.debug.print("{d} ", .{ @intFromEnum(param_local) });
+                        debugPrint("{d} ", .{@intFromEnum(param_local)});
                     }
-                    std.debug.print("body={d} remainder={d}\n", .{
+                    debugPrint("body={d} remainder={d}\n", .{
                         @intFromEnum(join.body),
                         @intFromEnum(join.remainder),
                     });
@@ -1748,23 +1762,23 @@ pub const Interpreter = struct {
                     stack.append(self.allocator, join.remainder) catch return;
                 },
                 .jump => |jump| {
-                    std.debug.print("    {d}: jump target={d} args=", .{
+                    debugPrint("    {d}: jump target={d} args=", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(jump.target),
                     });
                     for (self.store.getLocalSpan(jump.args)) |arg_local| {
-                        std.debug.print("{d} ", .{@intFromEnum(arg_local)});
+                        debugPrint("{d} ", .{@intFromEnum(arg_local)});
                     }
-                    std.debug.print("\n", .{});
+                    debugPrint("\n", .{});
                 },
                 .ret => |ret| {
-                    std.debug.print("    {d}: ret value={d}\n", .{
+                    debugPrint("    {d}: ret value={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(ret.value),
                     });
                 },
                 .crash => |crash| {
-                    std.debug.print("    {d}: crash msg={d}\n", .{
+                    debugPrint("    {d}: crash msg={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(crash.msg),
                     });
@@ -1818,7 +1832,7 @@ pub const Interpreter = struct {
                 else => {
                     if (builtin.mode == .Debug) {
                         const layout_val_dbg = self.layout_store.getLayout(layout_idx);
-                        std.debug.print(
+                        debugPrint(
                             "LIR/interpreter bad switch layout idx={d} tag={s} size={d}\n",
                             .{ @intFromEnum(layout_idx), @tagName(layout_val_dbg.tag), self.helper.sizeOf(layout_idx) },
                         );

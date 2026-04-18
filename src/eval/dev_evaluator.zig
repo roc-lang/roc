@@ -20,6 +20,7 @@ const CIR = can.CIR;
 const LayoutIdx = @import("layout").Idx;
 const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
 
+/// Public struct `DevEvaluator`.
 pub const DevEvaluator = struct {
     allocator: std.mem.Allocator,
     runtime_env: RuntimeHostEnv,

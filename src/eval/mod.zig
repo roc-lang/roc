@@ -105,7 +105,6 @@ pub const wasm_runner = if (builtin.target.os.tag == .freestanding) struct {
     }
 } else @import("wasm_runner.zig");
 
-
 test "eval tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(@import("comptime_value.zig"));
@@ -113,11 +112,20 @@ test "eval tests" {
     std.testing.refAllDecls(@import("builtins.zig"));
     std.testing.refAllDecls(@import("crash_context.zig"));
     std.testing.refAllDecls(@import("value.zig"));
+    std.testing.refAllDecls(@import("interpreter_values.zig"));
     std.testing.refAllDecls(@import("interpreter.zig"));
     std.testing.refAllDecls(@import("stack.zig"));
+    std.testing.refAllDecls(@import("comptime_interpreter.zig"));
     std.testing.refAllDecls(@import("comptime_evaluator.zig"));
     std.testing.refAllDecls(@import("test/RuntimeHostEnv.zig"));
+    std.testing.refAllDecls(@import("test/TestEnv.zig"));
     std.testing.refAllDecls(@import("test/helpers.zig"));
+    std.testing.refAllDecls(@import("test/anno_only_interp_test.zig"));
+    std.testing.refAllDecls(@import("test/comptime_eval_test.zig"));
+    std.testing.refAllDecls(@import("test/cor_pipeline_test.zig"));
+    std.testing.refAllDecls(@import("test/module_env_serialization_test.zig"));
+    std.testing.refAllDecls(@import("test/mono_emit_test.zig"));
+    std.testing.refAllDecls(@import("test/stack_test.zig"));
     std.testing.refAllDecls(@import("pipeline.zig"));
     std.testing.refAllDecls(@import("wasm_evaluator.zig"));
 }

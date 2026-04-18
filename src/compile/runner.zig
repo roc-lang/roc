@@ -23,6 +23,7 @@ const BuiltinModules = eval.BuiltinModules;
 const RocOps = builtins.host_abi.RocOps;
 const Symbol = @import("symbol").Symbol;
 
+/// Public struct `LoweringModuleEnvs`.
 pub const LoweringModuleEnvs = struct {
     allocator: std.mem.Allocator,
     all_module_envs: []*ModuleEnv,
@@ -38,6 +39,7 @@ pub const LoweringModuleEnvs = struct {
     }
 };
 
+/// Public function `buildLoweringModuleEnvs`.
 pub fn buildLoweringModuleEnvs(
     allocator: std.mem.Allocator,
     builtin_env: *ModuleEnv,
@@ -107,6 +109,7 @@ fn containsModuleEnv(module_envs: []const *ModuleEnv, target: *const ModuleEnv) 
     return findModuleEnvIdx(module_envs, target) != null;
 }
 
+/// Public function `findModuleEnvIdx`.
 pub fn findModuleEnvIdx(module_envs: []const *ModuleEnv, target: *const ModuleEnv) ?u32 {
     for (module_envs, 0..) |module_env, i| {
         if (module_env == target) return @intCast(i);
@@ -206,6 +209,7 @@ pub fn runViaInterpreter(
     interp.dropValue(eval_result.value, proc.ret_layout);
 }
 
+/// Public function `runViaDev`.
 pub fn runViaDev(
     gpa: std.mem.Allocator,
     entrypoint_env: *ModuleEnv,

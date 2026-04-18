@@ -10,6 +10,7 @@ const lir = @import("lir");
 
 const Allocator = std.mem.Allocator;
 
+/// Public struct `MonoLlvmCodeGen`.
 pub const MonoLlvmCodeGen = struct {
     allocator: Allocator,
     store: *const lir.LirStore,

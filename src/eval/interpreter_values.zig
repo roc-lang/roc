@@ -16,6 +16,7 @@ const RocList = builtins.list.RocList;
 const i128h = builtins.compiler_rt_128;
 const Ident = base.Ident;
 
+/// Public value `RocValue`.
 pub const RocValue = @This();
 
 /// Pointer to raw value bytes (null for zero-sized types).

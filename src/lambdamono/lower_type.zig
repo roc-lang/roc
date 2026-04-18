@@ -10,16 +10,19 @@ const symbol_mod = @import("symbol");
 const TypeVarId = solved.Type.TypeVarId;
 const Symbol = symbol_mod.Symbol;
 
+/// Lowered capture binding used when constructing executable capture records.
 pub const CaptureBinding = struct {
     symbol: Symbol,
     lowered_ty: mono.TypeId,
 };
 
+/// Specialization-local executable type cache over a frozen solved world.
 pub const MonoCache = struct {
     active: std.AutoHashMap(TypeVarId, mono.TypeId),
     provisional: std.AutoHashMap(TypeVarId, mono.TypeId),
     resolved: std.AutoHashMap(TypeVarId, mono.TypeId),
 
+    /// Initialize an empty specialization-local executable type cache.
     pub fn init(allocator: std.mem.Allocator) MonoCache {
         return .{
             .active = std.AutoHashMap(TypeVarId, mono.TypeId).init(allocator),
@@ -28,6 +31,7 @@ pub const MonoCache = struct {
         };
     }
 
+    /// Release all cache memory.
     pub fn deinit(self: *MonoCache) void {
         self.resolved.deinit();
         self.provisional.deinit();
@@ -35,6 +39,7 @@ pub const MonoCache = struct {
     }
 };
 
+/// Lower solved capture bindings into an executable record type.
 pub fn lowerCaptureBindings(
     _: *solved.Type.Store,
     mono_types: *mono.Store,
@@ -227,6 +232,7 @@ fn lowerLambdaSet(
     } };
 }
 
+/// Lower solved lambda captures into an executable capture-record type.
 pub fn lowerCaptures(
     types: *solved.Type.Store,
     mono_types: *mono.Store,
@@ -270,6 +276,7 @@ fn lambdaSetIsErased(types: *solved.Type.Store, lset: TypeVarId) bool {
     };
 }
 
+/// Convert a lambda symbol into its executable tag-union constructor key.
 pub fn lambdaTagKey(symbol: Symbol) mono.TagName {
     return .{ .lambda = symbol };
 }

@@ -7,6 +7,7 @@
 const std = @import("std");
 const base = @import("base");
 
+/// Public enum `Symbol`.
 pub const Symbol = enum(u32) {
     _,
 
@@ -25,26 +26,32 @@ pub const Symbol = enum(u32) {
     }
 };
 
+/// Public struct `AttachedMethodKey`.
 pub const AttachedMethodKey = struct {
     module_idx: u32,
     type_ident: base.Ident.Idx,
     method_ident: base.Ident.Idx,
 };
 
+/// Public value `AttachedMethodIndex`.
 pub const AttachedMethodIndex = std.AutoHashMap(AttachedMethodKey, Symbol);
 
+/// Public enum `BuiltinAttachedMethodOwner`.
 pub const BuiltinAttachedMethodOwner = enum {
     list,
     box,
 };
 
+/// Public struct `BuiltinAttachedMethodKey`.
 pub const BuiltinAttachedMethodKey = struct {
     owner: BuiltinAttachedMethodOwner,
     method_ident: base.Ident.Idx,
 };
 
+/// Public value `BuiltinAttachedMethodIndex`.
 pub const BuiltinAttachedMethodIndex = std.AutoHashMap(BuiltinAttachedMethodKey, Symbol);
 
+/// Public union `BindingOrigin`.
 pub const BindingOrigin = union(enum) {
     top_level_def: struct {
         module_idx: u32,
@@ -73,11 +80,13 @@ pub const BindingOrigin = union(enum) {
     synthetic: void,
 };
 
+/// Public struct `Entry`.
 pub const Entry = struct {
     name: base.Ident.Idx,
     origin: BindingOrigin,
 };
 
+/// Public struct `Store`.
 pub const Store = struct {
     allocator: std.mem.Allocator,
     entries: std.ArrayList(Entry),

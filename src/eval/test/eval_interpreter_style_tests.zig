@@ -2,6 +2,7 @@
 
 const TestCase = @import("parallel_runner.zig").TestCase;
 
+/// Public value `tests`.
 pub const tests = [_]TestCase{
     .{ .name = "interpreter: (|x| x)(\"Hello\") yields \"Hello\"", .source = "(|x| x)(\"Hello\")", .expected = .{ .inspect_str = "\"Hello\"" } },
     .{ .name = "interpreter: (|n| n + 1)(41) yields 42", .source = "(|n| n + 1)(41)", .expected = .{ .inspect_str = "42.0" } },

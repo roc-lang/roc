@@ -23,6 +23,7 @@ const ParamRefContract = LIR.ParamRefContract;
 const ProcResultContract = LIR.ProcResultContract;
 const ResultSemantics = LIR.ResultSemantics;
 
+/// Public function `inferProcResultContracts`.
 pub fn inferProcResultContracts(
     allocator: Allocator,
     store: *LirStore,
@@ -52,6 +53,7 @@ pub fn inferProcResultContracts(
     try propagateCallResultSemantics(allocator, store);
 }
 
+/// Public function `inferProcOwnedParams`.
 pub fn inferProcOwnedParams(
     allocator: Allocator,
     store: *LirStore,

@@ -1034,17 +1034,6 @@ fn processTypeDeclFirstPassWithExisting(
     parent_name: ?Ident.Idx,
 ) std.mem.Allocator.Error!void {
     try self.type_decl_stmt_by_ast_idx.put(self.env.gpa, ast_stmt_idx, type_decl_stmt_idx);
-    if (builtin.mode == .Debug and parent_name == null and type_decl.associated != null) {
-        const ast_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch null;
-        if (ast_header) |hdr| {
-            if (self.parse_ir.tokens.resolveIdentifier(hdr.name)) |name_ident| {
-                std.debug.print(
-                    "type_decl existing map put ast {d} -> can {d} name {s}\n",
-                    .{ @intFromEnum(ast_stmt_idx), @intFromEnum(type_decl_stmt_idx), self.env.getIdent(name_ident) },
-                );
-            }
-        }
-    }
     const ast_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch null;
     const local_type_name = if (ast_header) |hdr|
         self.parse_ir.tokens.resolveIdentifier(hdr.name)
@@ -5227,11 +5216,6 @@ pub fn canonicalizeExpr(
                                     },
                                     .not_found => {
                                         // Associated item not found - generate error
-                                        if (trace_modules) {
-                                            const parent_text = self.env.getIdent(module_alias);
-                                            const nested_text = self.env.getIdent(ident);
-                                            std.debug.print("[TRACE-MODULES] nested_value_not_found: {s}.{s} (scope lookup failed)\n", .{ parent_text, nested_text });
-                                        }
                                         const diagnostic = Diagnostic{ .nested_value_not_found = .{
                                             .parent_name = module_alias,
                                             .nested_name = ident,
@@ -13809,12 +13793,6 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
 
     // If we didn't find a valid node index, report an error (don't fall back)
     const target_node_idx = target_node_idx_opt orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.print(
-                "tryModuleQualifiedLookup missing target for {s}.{s}\n",
-                .{ module_text, field_text },
-            );
-        }
         return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .qualified_ident_does_not_exist = .{
             .ident = field_name,
             .region = region,
@@ -13823,18 +13801,6 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
 
     const target_module_env = (self.lookupAvailableModuleEnv(module_name) orelse unreachable).env;
     const target_node_tag = target_module_env.store.nodes.get(@enumFromInt(@as(u32, target_node_idx))).tag;
-    if (std.mem.eql(u8, module_text, "CounterMod") and std.mem.eql(u8, field_text, "Counter")) {
-        std.debug.print(
-            "tryModuleQualifiedLookup resolved {s}.{s} target_node_idx={d} tag={s} call_args_len={d}\n",
-            .{
-                module_text,
-                field_text,
-                target_node_idx,
-                @tagName(target_node_tag),
-                if (call_args) |args| self.env.store.exprSlice(args).len else @as(usize, 0),
-            },
-        );
-    }
     if (target_node_tag == .statement_nominal_decl) {
         const tag_expr_idx = try self.env.addExpr(CIR.Expr{
             .e_tag = .{

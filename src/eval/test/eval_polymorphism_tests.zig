@@ -2,6 +2,7 @@
 
 const TestCase = @import("parallel_runner.zig").TestCase;
 
+/// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
         .name = "interpreter poly: return a function then call (int)",

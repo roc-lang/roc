@@ -10746,7 +10746,7 @@ pub const Interpreter = struct {
                                     // Add mappings to empty_scope so layout store finds them via TypeScope.lookup()
                                     try self.addRigidMappingsToScope(rigids.items, rt_type_args);
 
-                    // Also add to rigid_subst for backwards compatibility
+                                    // Also add to rigid_subst for backwards compatibility
                                     const num_mappings = @min(rigids.items.len, rt_type_args.len);
                                     for (0..num_mappings) |i| {
                                         const arg_resolved = self.runtime_types.resolveVar(rt_type_args[i]);

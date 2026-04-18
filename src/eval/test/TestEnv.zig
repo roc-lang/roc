@@ -111,6 +111,7 @@ pub fn crashState(self: *TestEnv) CrashState {
     return self.crash.state;
 }
 
+/// Public struct `CrashBoundary`.
 pub const CrashBoundary = struct {
     env: *TestEnv,
     prev_jmp_buf: ?*JmpBuf,
@@ -132,6 +133,7 @@ pub const CrashBoundary = struct {
     }
 };
 
+/// Public function `enterCrashBoundary`.
 pub fn enterCrashBoundary(self: *TestEnv) CrashBoundary {
     return CrashBoundary.init(self);
 }

@@ -2,6 +2,7 @@
 
 const TestCase = @import("parallel_runner.zig").TestCase;
 
+/// Public value `tests`.
 pub const tests = [_]TestCase{
     // Ported from interpreter_style_test.zig
     .{

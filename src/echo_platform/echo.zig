@@ -27,6 +27,7 @@ const ReportingConfig = reporting.ReportingConfig;
 
 const Allocator = std.mem.Allocator;
 
+/// Public API.
 pub const std_options: std.Options = .{
     .log_level = .warn,
     .logFn = logFn,

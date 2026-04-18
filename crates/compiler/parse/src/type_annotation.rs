@@ -1001,9 +1001,7 @@ fn expression<'a>(
                     state,
                 ))
             }
-            Err(_) => {
-                Ok((progress, annot, state))
-            }
+            Err(_) => Ok((progress, annot, state)),
         }
     })
     .trace("type_annotation:expression")

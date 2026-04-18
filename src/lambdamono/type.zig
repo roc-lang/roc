@@ -5,11 +5,16 @@ const builtin = @import("builtin");
 const base = @import("base");
 const solved_type = @import("lambdasolved").Type;
 
+/// Identifier for an executable monomorphic type node.
 pub const TypeId = enum(u32) { _ };
+/// Borrowed slice of executable type identifiers.
 pub const TypeIds = []const TypeId;
+/// Primitive executable types reused from the solved type layer.
 pub const Prim = solved_type.Prim;
+/// Interned symbol identifiers used in executable type tags.
 pub const Symbol = @import("symbol").Symbol;
 
+/// Executable nominal type metadata, including its lowered backing type.
 pub const Nominal = struct {
     module_idx: u32,
     ident: base.Ident.Idx,
@@ -18,25 +23,31 @@ pub const Nominal = struct {
     backing: TypeId,
 };
 
+/// Executable tag names, either source constructors or lambda tags.
 pub const TagName = union(enum) {
     ctor: base.Ident.Idx,
     lambda: Symbol,
 };
 
+/// Executable tag-union variant metadata.
 pub const Tag = struct {
     name: TagName,
     args: TypeIds,
 };
 
+/// Borrowed slice of executable tag descriptors.
 pub const Tags = []const Tag;
 
+/// Executable record field metadata.
 pub const Field = struct {
     name: base.Ident.Idx,
     ty: TypeId,
 };
 
+/// Borrowed slice of executable record fields.
 pub const Fields = []const Field;
 
+/// Executable monomorphic type content.
 pub const Content = union(enum) {
     placeholder,
     unbd,
@@ -55,6 +66,7 @@ pub const Content = union(enum) {
     primitive: Prim,
 };
 
+/// Interning store for executable monomorphic types.
 pub const Store = struct {
     allocator: std.mem.Allocator,
     types: std.ArrayList(Content),
@@ -62,6 +74,7 @@ pub const Store = struct {
     scratch_intern_key: std.ArrayList(u8),
     interned_by_raw: std.AutoHashMap(TypeId, TypeId),
 
+    /// Initialize an empty executable type store.
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
             .allocator = allocator,
@@ -72,6 +85,7 @@ pub const Store = struct {
         };
     }
 
+    /// Release all memory owned by the executable type store.
     pub fn deinit(self: *Store) void {
         for (self.types.items) |content| {
             self.freeOwnedContent(content);
@@ -86,16 +100,19 @@ pub const Store = struct {
         self.interned_by_raw.deinit();
     }
 
+    /// Append a raw executable type node without interning it.
     pub fn addType(self: *Store, content: Content) std.mem.Allocator.Error!TypeId {
         const idx: u32 = @intCast(self.types.items.len);
         try self.types.append(self.allocator, content);
         return @enumFromInt(idx);
     }
 
+    /// Replace an existing executable type node in place.
     pub fn setType(self: *Store, id: TypeId, content: Content) void {
         self.replaceType(id, content);
     }
 
+    /// Return the canonical key for an executable type when it is fully resolved.
     pub fn keyId(self: *Store, id: TypeId) std.mem.Allocator.Error!TypeId {
         const root = self.resolveLinks(id);
         if (self.containsAbstractLeaf(root)) return root;
@@ -103,11 +120,13 @@ pub const Store = struct {
         return try self.internTypeId(root);
     }
 
+    /// Add and intern a fully resolved executable type node.
     pub fn internResolved(self: *Store, content: Content) std.mem.Allocator.Error!TypeId {
         const raw = try self.addType(content);
         return try self.internTypeId(raw);
     }
 
+    /// Intern an existing executable type node and return its canonical id.
     pub fn internTypeId(self: *Store, id: TypeId) std.mem.Allocator.Error!TypeId {
         const root = self.resolveLinks(id);
         if (self.containsAbstractLeaf(root)) return root;
@@ -123,6 +142,7 @@ pub const Store = struct {
         return try self.internTypeIdInner(root, &active);
     }
 
+    /// Resolve links and nominal backing types before returning executable content.
     pub fn getType(self: *const Store, id: TypeId) Content {
         var current = id;
         while (true) {
@@ -134,6 +154,7 @@ pub const Store = struct {
         }
     }
 
+    /// Resolve links while preserving outer nominal wrappers.
     pub fn getTypePreservingNominal(self: *const Store, id: TypeId) Content {
         var current = id;
         while (true) {
@@ -144,11 +165,13 @@ pub const Store = struct {
         }
     }
 
+    /// Duplicate a borrowed executable type-id slice into store-owned memory.
     pub fn dupeTypeIds(self: *const Store, ids: []const TypeId) std.mem.Allocator.Error![]const TypeId {
         if (ids.len == 0) return &.{};
         return try self.allocator.dupe(TypeId, ids);
     }
 
+    /// Duplicate executable tag metadata into store-owned memory.
     pub fn dupeTags(self: *const Store, tags: []const Tag) std.mem.Allocator.Error![]const Tag {
         if (tags.len == 0) return &.{};
 
@@ -171,23 +194,27 @@ pub const Store = struct {
         return out;
     }
 
+    /// Duplicate executable field metadata into store-owned memory.
     pub fn dupeFields(self: *const Store, fields: []const Field) std.mem.Allocator.Error![]const Field {
         if (fields.len == 0) return &.{};
         return try self.allocator.dupe(Field, fields);
     }
 
+    /// Compare two executable types structurally.
     pub fn equalIds(self: *const Store, left: TypeId, right: TypeId) bool {
         var visited = std.ArrayList(TypePair).empty;
         defer visited.deinit(self.allocator);
         return self.equalIdsVisited(left, right, &visited) catch false;
     }
 
+    /// Report whether an executable type still contains abstract leaves.
     pub fn containsAbstractLeaf(self: *const Store, id: TypeId) bool {
         var visited = std.AutoHashMap(TypeId, void).init(self.allocator);
         defer visited.deinit();
         return self.containsAbstractLeafVisited(id, &visited) catch true;
     }
 
+    /// Report whether an executable type is fully concrete and internable.
     pub fn isFullyResolved(self: *const Store, id: TypeId) bool {
         var visited = std.AutoHashMap(TypeId, void).init(self.allocator);
         defer visited.deinit();

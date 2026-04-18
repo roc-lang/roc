@@ -3525,7 +3525,6 @@ fn extractEntrypointDefNamesFromPlatform(ctx: *CliContext, roc_file_path: []cons
 /// For native builds and roc run, use the native shim (pass null or native target).
 /// For cross-compilation, pass the target to get the appropriate shim.
 pub fn extractReadRocFilePathShimLibrary(_: *CliContext, output_path: []const u8, target: ?RocTarget) !void {
-
     if (builtin.is_test) {
         // In test mode, create an empty file to avoid embedding issues
         const shim_file = try std.fs.cwd().createFile(output_path, .{});

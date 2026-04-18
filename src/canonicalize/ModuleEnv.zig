@@ -525,6 +525,7 @@ pub const RequiredType = struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// Public struct `MethodCallFn`.
 pub const MethodCallFn = struct {
     expr_idx: CIR.Expr.Idx,
     method_name: Ident.Idx,
@@ -619,6 +620,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     };
 }
 
+/// Public function `cloneForEval`.
 pub fn cloneForEval(self: *const Self, gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
     var common = try self.common.clone(gpa);
     errdefer common.deinit(gpa);
@@ -3430,6 +3432,7 @@ pub fn registerMethodIdent(self: *Self, type_ident: Ident.Idx, method_ident: Ide
     try self.method_idents.put(self.gpa, key, qualified_ident);
 }
 
+/// Public function `recordMethodCallFn`.
 pub fn recordMethodCallFn(
     self: *Self,
     expr_idx: CIR.Expr.Idx,
@@ -3454,6 +3457,7 @@ pub fn recordMethodCallFn(
     });
 }
 
+/// Public function `methodCallFnVar`.
 pub fn methodCallFnVar(self: *const Self, expr_idx: CIR.Expr.Idx, _: Ident.Idx) ?TypeVar {
     for (self.method_call_fns.items.items) |entry| {
         if (entry.expr_idx == expr_idx) {

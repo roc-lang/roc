@@ -199,7 +199,6 @@ pub const Generalizer = struct {
         var_pool.ranks.items[rank_to_generalize_int].clearRetainingCapacity();
     }
 
-
     // adjust rank //
 
     /// Adjusts type variable ranks to prepare for generalization.

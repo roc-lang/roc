@@ -7,6 +7,7 @@ const lifted_type = @import("monotype_lifted").Type;
 
 pub const Symbol = symbol_mod.Symbol;
 pub const Prim = lifted_type.Prim;
+/// Public struct `Nominal`.
 pub const Nominal = struct {
     module_idx: u32,
     ident: base.Ident.Idx,
@@ -15,8 +16,10 @@ pub const Nominal = struct {
     backing: TypeVarId,
 };
 
+/// Public enum `TypeVarId`.
 pub const TypeVarId = enum(u32) { _ };
 
+/// Public function `Span`.
 pub fn Span(comptime _: type) type {
     return extern struct {
         start: u32,
@@ -32,42 +35,50 @@ pub fn Span(comptime _: type) type {
     };
 }
 
+/// Public struct `Capture`.
 pub const Capture = struct {
     symbol: Symbol,
     ty: TypeVarId,
 };
 
+/// Public struct `Lambda`.
 pub const Lambda = struct {
     symbol: Symbol,
     captures: Span(Capture),
 };
 
+/// Public struct `FnShape`.
 pub const FnShape = struct {
     arg: TypeVarId,
     lset: TypeVarId,
     ret: TypeVarId,
 };
 
+/// Public union `LambdaRepr`.
 pub const LambdaRepr = union(enum) {
     lset: []const Lambda,
     erased,
 };
 
+/// Public struct `LambdaMember`.
 pub const LambdaMember = struct {
     lambda: Lambda,
     captures: []const Capture,
 };
 
+/// Public struct `Tag`.
 pub const Tag = struct {
     name: base.Ident.Idx,
     args: Span(TypeVarId),
 };
 
+/// Public struct `Field`.
 pub const Field = struct {
     name: base.Ident.Idx,
     ty: TypeVarId,
 };
 
+/// Public union `Content`.
 pub const Content = union(enum) {
     func: struct {
         arg: TypeVarId,
@@ -87,6 +98,7 @@ pub const Content = union(enum) {
     lambda_set: Span(Lambda),
 };
 
+/// Public union `Node`.
 pub const Node = union(enum) {
     link: TypeVarId,
     nominal: Nominal,
@@ -95,6 +107,7 @@ pub const Node = union(enum) {
     content: Content,
 };
 
+/// Public struct `Store`.
 pub const Store = struct {
     allocator: std.mem.Allocator,
     nodes: std.ArrayList(Node),

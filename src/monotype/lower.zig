@@ -35,6 +35,7 @@ const Var = types.Var;
 const Instantiator = instantiate.Instantiator;
 const dec_scale_i128: i128 = 1_000_000_000_000_000_000;
 
+/// Public struct `Program`.
 pub const Program = struct {
     store: ast.Store,
     root_defs: std.ArrayList(ast.DefId),
@@ -52,6 +53,7 @@ pub const Program = struct {
     }
 };
 
+/// Public struct `Result`.
 pub const Result = struct {
     program: Program,
     symbols: symbol_mod.Store,
@@ -429,6 +431,7 @@ const LoweredCall = struct {
     result_ty: type_mod.TypeId,
 };
 
+/// Public struct `Lowerer`.
 pub const Lowerer = struct {
     allocator: std.mem.Allocator,
     ctx: Ctx,
@@ -734,7 +737,6 @@ pub const Lowerer = struct {
             }
         }
     };
-
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -8098,7 +8100,8 @@ pub const Lowerer = struct {
         return switch (content) {
             .flex => |flex| if (flex.name) |name|
                 builtinNumPrimInStore(type_scope.identStoreConst(), name)
-            else null,
+            else
+                null,
             .rigid => |rigid| builtinNumPrimInStore(type_scope.identStoreConst(), rigid.name),
             else => null,
         };
@@ -9749,7 +9752,6 @@ pub const Lowerer = struct {
     fn isTopLevelFunction(self: *const Lowerer, symbol: symbol_mod.Symbol) bool {
         return if (self.top_level_defs_by_symbol.get(symbol)) |top_level| top_level.is_function else false;
     }
-
 };
 
 fn isLambdaExpr(expr: CIR.Expr) bool {

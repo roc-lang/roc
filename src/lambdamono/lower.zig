@@ -14,6 +14,7 @@ const layouts_mod = @import("layouts.zig");
 const Symbol = symbol_mod.Symbol;
 const TypeVarId = solved.Type.TypeVarId;
 
+/// Final executable lowering result, including layouts and generated wrappers.
 pub const Result = struct {
     store: ast.Store,
     root_defs: std.ArrayList(ast.DefId),
@@ -23,6 +24,7 @@ pub const Result = struct {
     strings: base.StringLiteral.Store,
     entrypoint_wrappers: []Symbol,
 
+    /// Release all memory owned by the executable lowering result.
     pub fn deinit(self: *Result) void {
         self.store.deinit();
         self.root_defs.deinit(self.store.allocator);
@@ -36,10 +38,12 @@ pub const Result = struct {
     }
 };
 
+/// Lower a solved program into executable lambdamono form.
 pub fn run(allocator: std.mem.Allocator, input: solved.Lower.Result) std.mem.Allocator.Error!Result {
     return runWithEntrypoints(allocator, input, &.{});
 }
 
+/// Lower a solved program while generating wrappers for the requested entrypoints.
 pub fn runWithEntrypoints(
     allocator: std.mem.Allocator,
     input: solved.Lower.Result,
@@ -2470,7 +2474,7 @@ const Lowerer = struct {
         var final_ret_ty = specialized_ret_exec_ty;
         const result: ast.FnDef = switch (pending.repr_mode) {
             .natural => if (frozen_captures.len == 0) .{
-                    .args = blk: {
+                .args = blk: {
                     break :blk try self.output.addTypedSymbolSpan(&.{.{
                         .ty = specialized_arg_exec_ty,
                         .symbol = fn_arg_symbol,
@@ -2500,54 +2504,54 @@ const Lowerer = struct {
                     final_ret_ty = fn_ret_exec_ty;
                     break :blk bridged;
                 },
-                } else blk: {
-                    const arg_ty = frozen.requested_fn_shape.arg;
-                    const captures_symbol = try self.input.symbols.add(base.Ident.Idx.NONE, .synthetic);
-                    const capture_exec_ty = try self.lowerCaptureRecordTypeFromSolved(&frozen.inst.types, &frozen.mono_cache, frozen_captures);
-                    const arg_exec_ty = specialized_arg_exec_ty;
-                    const capture_env = try self.captureBindingsFromCaptures(frozen_captures, capture_exec_ty);
-                    defer self.allocator.free(capture_env);
-                    const body_env = try self.buildFnBodyEnv(arg_ty, arg_exec_ty, fn_arg_symbol, capture_env);
-                    defer self.allocator.free(body_env);
+            } else blk: {
+                const arg_ty = frozen.requested_fn_shape.arg;
+                const captures_symbol = try self.input.symbols.add(base.Ident.Idx.NONE, .synthetic);
+                const capture_exec_ty = try self.lowerCaptureRecordTypeFromSolved(&frozen.inst.types, &frozen.mono_cache, frozen_captures);
+                const arg_exec_ty = specialized_arg_exec_ty;
+                const capture_env = try self.captureBindingsFromCaptures(frozen_captures, capture_exec_ty);
+                defer self.allocator.free(capture_env);
+                const body_env = try self.buildFnBodyEnv(arg_ty, arg_exec_ty, fn_arg_symbol, capture_env);
+                defer self.allocator.free(body_env);
 
-                    var body = try self.specializeExpr(
-                        &frozen.inst,
-                        &frozen.mono_cache,
-                        body_env,
-                        fn_body,
-                    );
-                    const body_ty = self.output.getExpr(body).ty;
-                    const fn_ret_exec_ty = if (self.executableTypeIsAbstract(specialized_ret_exec_ty) and
-                        !self.executableTypeIsAbstract(body_ty))
-                        body_ty
-                    else
-                        specialized_ret_exec_ty;
-                    if (!self.types.equalIds(body_ty, fn_ret_exec_ty)) {
-                        body = try self.emitExplicitBridgeExpr(body, fn_ret_exec_ty);
-                    }
-                    body = try self.bindCaptureLets(
-                        captures_symbol,
-                        capture_exec_ty,
-                        capture_env,
-                        body,
-                    );
-                    var args_buf = [_]ast.TypedSymbol{
-                        .{
-                            .ty = arg_exec_ty,
-                            .symbol = fn_arg_symbol,
-                        },
-                        .{
-                            .ty = capture_exec_ty,
-                            .symbol = captures_symbol,
-                        },
-                    };
-                    const args_span = try self.output.addTypedSymbolSpan(&args_buf);
-                    final_ret_ty = fn_ret_exec_ty;
-                    break :blk .{
-                        .args = args_span,
-                        .body = body,
-                    };
-                },
+                var body = try self.specializeExpr(
+                    &frozen.inst,
+                    &frozen.mono_cache,
+                    body_env,
+                    fn_body,
+                );
+                const body_ty = self.output.getExpr(body).ty;
+                const fn_ret_exec_ty = if (self.executableTypeIsAbstract(specialized_ret_exec_ty) and
+                    !self.executableTypeIsAbstract(body_ty))
+                    body_ty
+                else
+                    specialized_ret_exec_ty;
+                if (!self.types.equalIds(body_ty, fn_ret_exec_ty)) {
+                    body = try self.emitExplicitBridgeExpr(body, fn_ret_exec_ty);
+                }
+                body = try self.bindCaptureLets(
+                    captures_symbol,
+                    capture_exec_ty,
+                    capture_env,
+                    body,
+                );
+                var args_buf = [_]ast.TypedSymbol{
+                    .{
+                        .ty = arg_exec_ty,
+                        .symbol = fn_arg_symbol,
+                    },
+                    .{
+                        .ty = capture_exec_ty,
+                        .symbol = captures_symbol,
+                    },
+                };
+                const args_span = try self.output.addTypedSymbolSpan(&args_buf);
+                final_ret_ty = fn_ret_exec_ty;
+                break :blk .{
+                    .args = args_span,
+                    .body = body,
+                };
+            },
             .erased_boundary => blk: {
                 const arg_ty = frozen.requested_fn_shape.arg;
                 const arg_exec_ty = specialized_arg_exec_ty;
@@ -4491,7 +4495,6 @@ const Lowerer = struct {
         }
         return null;
     }
-
 
     fn directCallableSymbol(self: *const Lowerer, expr: solved.Ast.Expr) ?Symbol {
         if (expr.data != .var_) return null;

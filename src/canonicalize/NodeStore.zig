@@ -220,6 +220,7 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
     };
 }
 
+/// Public function `clone`.
 pub fn clone(self: *const NodeStore, gpa: Allocator) Allocator.Error!NodeStore {
     var cloned = NodeStore{
         .gpa = gpa,

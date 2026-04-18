@@ -1907,15 +1907,15 @@ fn findTypeAliasBodyVar(self: *Self, name: Ident.Idx) ?Var {
 ///
 /// When these are looked up, we need to *not* instantiate the alias, so all
 /// references in the module Point to the same var.
-    fn isForClauseAliasStatement(self: *Self, stmt_idx: CIR.Statement.Idx) bool {
-        // Slice the for-clause alias statements and check if stmt_idx is in the list
-        for (self.cir.for_clause_aliases.items.items) |for_clause| {
-            if (stmt_idx == for_clause.alias_stmt_idx) {
-                return true;
-            }
+fn isForClauseAliasStatement(self: *Self, stmt_idx: CIR.Statement.Idx) bool {
+    // Slice the for-clause alias statements and check if stmt_idx is in the list
+    for (self.cir.for_clause_aliases.items.items) |for_clause| {
+        if (stmt_idx == for_clause.alias_stmt_idx) {
+            return true;
         }
-        return false;
     }
+    return false;
+}
 
 // repl //
 
@@ -7705,69 +7705,69 @@ fn checkFlexVarConstraintCompatibility(self: *Self, var_: Var, env: *Env, is_num
 /// we should use the annotation type for the pattern instead of the expression type.
 /// This handles cases like `Error -> Error` where the root is a function but the
 /// argument/return types are errors.
-    /// Check if a branch body type is compatible with the expected return type.
-    /// This performs a non-destructive unification probe using a type-store snapshot.
-    /// Must be called BEFORE pairwise unification poisons branch vars.
-    /// Returns true if the given expression is (or contains as its final expression)
-    /// a match or if expression that could have erroneous branches.
-    /// Walks through blocks to find the final branching expression.
-    fn findBranchingBodyExpr(self: *Self, expr_idx: CIR.Expr.Idx) bool {
-        const expr = self.cir.store.getExpr(expr_idx);
-        return switch (expr) {
-            .e_match, .e_if => true,
-            .e_block => |blk| self.findBranchingBodyExpr(blk.final_expr),
-            else => false,
-        };
+/// Check if a branch body type is compatible with the expected return type.
+/// This performs a non-destructive unification probe using a type-store snapshot.
+/// Must be called BEFORE pairwise unification poisons branch vars.
+/// Returns true if the given expression is (or contains as its final expression)
+/// a match or if expression that could have erroneous branches.
+/// Walks through blocks to find the final branching expression.
+fn findBranchingBodyExpr(self: *Self, expr_idx: CIR.Expr.Idx) bool {
+    const expr = self.cir.store.getExpr(expr_idx);
+    return switch (expr) {
+        .e_match, .e_if => true,
+        .e_block => |blk| self.findBranchingBodyExpr(blk.final_expr),
+        else => false,
+    };
+}
+
+fn isCompatibleWithExpected(self: *Self, body_var: Var, expected_var: Var, ctx: problem.Context) bool {
+    const body = self.types.resolveVar(body_var);
+    const expected = self.types.resolveVar(expected_var);
+
+    // Same resolved var (unified) → compatible
+    if (body.var_ == expected.var_) return true;
+
+    // If either is .err, assume compatible (don't add additional errors)
+    if (body.desc.content == .err or expected.desc.content == .err) return true;
+
+    const from_numeral_count = self.types.from_numeral_flex_count;
+    var store_snapshot = self.types.snapshot() catch return true;
+    defer {
+        self.types.rollbackTo(&store_snapshot);
+        self.types.from_numeral_flex_count = from_numeral_count;
+        store_snapshot.deinit(self.cir.gpa);
     }
 
-    fn isCompatibleWithExpected(self: *Self, body_var: Var, expected_var: Var, ctx: problem.Context) bool {
-        const body = self.types.resolveVar(body_var);
-        const expected = self.types.resolveVar(expected_var);
+    const probe_result = unifier.unifyInContext(
+        self.cir.gpa,
+        self.cir.getIdentStoreConst(),
+        self.cir.qualified_module_ident,
+        self.types,
+        &self.problems,
+        &self.snapshots,
+        &self.type_writer,
+        &self.unify_scratch,
+        &self.occurs_scratch,
+        expected_var,
+        body_var,
+        ctx,
+    ) catch return true;
 
-        // Same resolved var (unified) → compatible
-        if (body.var_ == expected.var_) return true;
+    return probe_result.isOk();
+}
 
-        // If either is .err, assume compatible (don't add additional errors)
-        if (body.desc.content == .err or expected.desc.content == .err) return true;
+fn markErroneousBranchWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected_ret: Var, env: *Env) std.mem.Allocator.Error!void {
+    if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) return;
 
-        const from_numeral_count = self.types.from_numeral_flex_count;
-        var store_snapshot = self.types.snapshot() catch return true;
-        defer {
-            self.types.rollbackTo(&store_snapshot);
-            self.types.from_numeral_flex_count = from_numeral_count;
-            store_snapshot.deinit(self.cir.gpa);
-        }
+    try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
 
-        const probe_result = unifier.unifyInContext(
-            self.cir.gpa,
-            self.cir.getIdentStoreConst(),
-            self.cir.qualified_module_ident,
-            self.types,
-            &self.problems,
-            &self.snapshots,
-            &self.type_writer,
-            &self.unify_scratch,
-            &self.occurs_scratch,
-            expected_var,
-            body_var,
-            ctx,
-        ) catch return true;
+    const expr_var = ModuleEnv.varFrom(expr_idx);
+    const region = self.cir.store.getExprRegion(expr_idx);
+    const bridge_var = try self.fresh(env, region);
+    _ = try self.unifyInContext(bridge_var, expected_ret, env, .none);
 
-        return probe_result.isOk();
-    }
-
-    fn markErroneousBranchWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected_ret: Var, env: *Env) std.mem.Allocator.Error!void {
-        if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) return;
-
-        try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
-
-        const expr_var = ModuleEnv.varFrom(expr_idx);
-        const region = self.cir.store.getExprRegion(expr_idx);
-        const bridge_var = try self.fresh(env, region);
-        _ = try self.unifyInContext(bridge_var, expected_ret, env, .none);
-
-        try self.types.dangerousSetVarRedirect(expr_var, bridge_var);
-    }
+    try self.types.dangerousSetVarRedirect(expr_var, bridge_var);
+}
 
 fn varContainsError(self: *Self, var_: Var, visited: *std.AutoHashMap(Var, void)) bool {
     const resolved = self.types.resolveVar(var_);
@@ -7841,7 +7841,6 @@ fn has_can_error_diagnostics(self: *Self) bool {
     }
     return false;
 }
-
 
 /// Check if any of the given vars contain errors
 fn varsContainError(self: *Self, vars: []const Var, visited: *std.AutoHashMap(Var, void)) bool {

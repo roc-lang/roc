@@ -2,6 +2,7 @@
 
 const TestCase = @import("parallel_runner.zig").TestCase;
 
+/// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
         .name = "low_level - Str.is_empty returns True for empty string",

@@ -26,6 +26,7 @@ const HostLirCodeGen = backend.HostLirCodeGen;
 const ExecutableMemory = backend.ExecutableMemory;
 const collections = @import("collections");
 
+/// Public struct `TestCase`.
 pub const TestCase = struct {
     name: []const u8,
     source: []const u8,
@@ -817,6 +818,7 @@ fn writeFailureDetail(tc: TestCase, result: TestResult) void {
     }
 }
 
+/// Public function `main`.
 pub fn main() !void {
     var gpa_impl: std.heap.GeneralPurposeAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();

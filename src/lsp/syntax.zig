@@ -94,7 +94,6 @@ pub const SyntaxChecker = struct {
 
     /// Check the file referenced by the URI and return diagnostics grouped by URI.
     pub fn check(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8, _: ?[]const u8) ![]Diagnostics.PublishDiagnostics {
-
         self.mutex.lock();
         defer self.mutex.unlock();
 

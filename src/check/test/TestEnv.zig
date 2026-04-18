@@ -440,6 +440,7 @@ pub fn deinit(self: *TestEnv) void {
     }
 }
 
+/// Transfer ownership of the published checked module into a typed-CIR source module.
 pub fn takePublishedSourceModule(self: *TestEnv) TypedCIR.Modules.SourceModule {
     self.published_owns_module_env = true;
     const owned_source = self.owned_source;
@@ -614,6 +615,7 @@ pub fn assertOneTypeErrorMsg(self: *TestEnv, expected: []const u8) !void {
     try testing.expectEqualStrings(expected, report_buf.items);
 }
 
+/// Assert that canonicalization produced exactly one diagnostic with the expected title.
 pub fn assertOneCanError(self: *TestEnv, expected: []const u8) !void {
     try self.assertNoParseProblems();
 
@@ -627,6 +629,7 @@ pub fn assertOneCanError(self: *TestEnv, expected: []const u8) !void {
     try testing.expectEqualStrings(expected, report.title);
 }
 
+/// Assert that canonicalization produced exactly one diagnostic with the expected rendered message.
 pub fn assertOneCanErrorMsg(self: *TestEnv, expected: []const u8) !void {
     try self.assertNoParseProblems();
 

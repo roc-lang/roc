@@ -22,11 +22,13 @@ use roc_types::types::RecordField;
 use crate::util::Env;
 use crate::{synth_var, DerivedBody};
 
+pub(crate) fn derive_to_inspector(
     env: &mut Env<'_>,
     key: FlatInspectableKey,
     def_symbol: Symbol,
 ) -> DerivedBody {
     let (body, body_type) = match key {
+        FlatInspectableKey::List() => to_inspector_list(env, def_symbol),
         FlatInspectableKey::Set() => unreachable!(),
         FlatInspectableKey::Dict() => unreachable!(),
         FlatInspectableKey::Record(fields) => {
@@ -47,6 +49,7 @@ use crate::{synth_var, DerivedBody};
                 Content::Structure(FlatType::Record(fields, Variable::EMPTY_RECORD)),
             );
 
+            to_inspector_record(env, record_var, fields, def_symbol)
         }
         FlatInspectableKey::Tuple(arity) => {
             // Generalized tuple var so we can reuse this impl between many tuples:
@@ -60,6 +63,7 @@ use crate::{synth_var, DerivedBody};
                 Content::Structure(FlatType::Tuple(elems, Variable::EMPTY_TUPLE)),
             );
 
+            to_inspector_tuple(env, tuple_var, elems, def_symbol)
         }
         FlatInspectableKey::TagUnion(tags) => {
             // Generalized tag union var so we can reuse this impl between many unions:
@@ -83,6 +87,7 @@ use crate::{synth_var, DerivedBody};
                 )),
             );
 
+            to_inspector_tag_union(env, tag_union_var, union_tags, def_symbol)
         }
         FlatInspectableKey::Function(_arity) => {
             // Desired output: \x, y, z -> ... ===> "<function>"
@@ -103,6 +108,8 @@ use crate::{synth_var, DerivedBody};
     }
 }
 
+fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
+    // Build \lst -> list, List.walk, (\elem -> Inspect.to_inspector elem)
 
     use Expr::*;
 
@@ -117,13 +124,18 @@ use crate::{synth_var, DerivedBody};
         Content::Structure(FlatType::Apply(Symbol::LIST_LIST, elem_var_slice)),
     );
 
+    // build `to_inspector elem` type
     // val -[uls]-> Inspector fmt where fmt implements InspectorFormatter
+    let to_inspector_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_TO_INSPECTOR);
 
     // elem -[clos]-> t1
+    let to_inspector_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
     let elem_inspector_var = env.subs.fresh_unnamed_flex_var(); // t1
+    let elem_to_inspector_fn_var = synth_var(
         env.subs,
         Content::Structure(FlatType::Func(
             elem_var_slice,
+            to_inspector_clos_var,
             elem_inspector_var,
             Variable::PURE,
         )),
@@ -131,15 +143,27 @@ use crate::{synth_var, DerivedBody};
 
     //   val  -[uls]->  Inspector fmt where fmt implements InspectorFormatter
     // ~ elem -[clos]-> t1
+    env.unify(to_inspector_fn_var, elem_to_inspector_fn_var);
 
+    // to_inspector : (typeof rcd.a) -[clos]-> Inspector fmt where fmt implements InspectorFormatter
+    let to_inspector_var =
+        AbilityMember(Symbol::INSPECT_TO_INSPECTOR, None, elem_to_inspector_fn_var);
+    let to_inspector_fn = Box::new((
+        to_inspector_fn_var,
+        Loc::at_zero(to_inspector_var),
+        to_inspector_clos_var,
         elem_inspector_var,
         Variable::PURE,
     ));
 
+    // to_inspector elem
+    let to_inspector_call = Call(
+        to_inspector_fn,
         vec![(elem_var, Loc::at_zero(Var(elem_sym, elem_var)))],
         CalledVia::Space,
     );
 
+    // elem -[to_elem_inspector]-> to_inspector elem
     let to_elem_inspector_sym = env.new_symbol("to_elem_inspector");
 
     // Create fn_var for ambient capture; we fix it up below.
@@ -157,6 +181,7 @@ use crate::{synth_var, DerivedBody};
             ambient_function: to_elem_inspector_fn_var,
         }),
     );
+    // elem -[to_elem_inspector]-> to_inspector elem
     env.subs.set_content(
         to_elem_inspector_fn_var,
         Content::Structure(FlatType::Func(
@@ -167,6 +192,7 @@ use crate::{synth_var, DerivedBody};
         )),
     );
 
+    // \elem -> to_inspector elem
     let to_elem_inspector = Closure(ClosureData {
         function_type: to_elem_inspector_fn_var,
         closure_type: to_elem_inspector_lset,
@@ -181,8 +207,10 @@ use crate::{synth_var, DerivedBody};
             AnnotatedMark::known_exhaustive(),
             Loc::at_zero(Pattern::Identifier(elem_sym)),
         )],
+        loc_body: Box::new(Loc::at_zero(to_inspector_call)),
     });
 
+    // build `Inspect.list lst (\elem -> Inspect.to_inspector elem)` type
     // List e, (e -> Inspector fmt) -[uls]-> Inspector fmt where fmt implements InspectorFormatter
     let inspect_list_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_LIST);
 
@@ -240,6 +268,7 @@ use crate::{synth_var, DerivedBody};
         list_var,
     );
 
+    // \lst -> Inspect.list lst (\elem -> Inspect.to_inspector elem)
     // Create fn_var for ambient capture; we fix it up below.
     let fn_var = synth_var(env.subs, Content::Error);
 
@@ -266,6 +295,7 @@ use crate::{synth_var, DerivedBody};
         )),
     );
 
+    // \lst -[fn_name]-> Inspect.list lst (\elem -> Inspect.to_inspector elem)
     let clos = Closure(ClosureData {
         function_type: fn_var,
         closure_type: fn_clos_var,
@@ -286,6 +316,7 @@ use crate::{synth_var, DerivedBody};
     (clos, fn_var)
 }
 
+fn to_inspector_record(
     env: &mut Env<'_>,
     record_var: Variable,
     fields: RecordFields,
@@ -294,6 +325,8 @@ use crate::{synth_var, DerivedBody};
     // Suppose rcd = { a: t1, b: t2 }. Build
     //
     // \rcd -> Inspect.record [
+    //      { key: "a", value: Inspect.to_inspector rcd.a },
+    //      { key: "b", value: Inspect.to_inspector rcd.b },
     //   ]
 
     let rcd_sym = env.new_symbol("rcd");
@@ -327,13 +360,18 @@ use crate::{synth_var, DerivedBody};
                 field: field_name,
             };
 
+            // build `to_inspector rcd.a` type
             // val -[uls]-> Inspector fmt where fmt implements InspectorFormatter
+            let to_inspector_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_TO_INSPECTOR);
 
             // (typeof rcd.a) -[clos]-> t1
+            let to_inspector_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
             let inspector_var = env.subs.fresh_unnamed_flex_var(); // t1
+            let this_to_inspector_fn_var = synth_var(
                 env.subs,
                 Content::Structure(FlatType::Func(
                     field_var_slice,
+                    to_inspector_clos_var,
                     inspector_var,
                     Variable::PURE,
                 )),
@@ -341,20 +379,34 @@ use crate::{synth_var, DerivedBody};
 
             //   val            -[uls]->  Inspector fmt where fmt implements InspectorFormatter
             // ~ (typeof rcd.a) -[clos]-> t1
+            env.unify(to_inspector_fn_var, this_to_inspector_fn_var);
 
+            // to_inspector : (typeof rcd.a) -[clos]-> Inspector fmt where fmt implements InspectorFormatter
+            let to_inspector_var =
+                AbilityMember(Symbol::INSPECT_TO_INSPECTOR, None, to_inspector_fn_var);
+            let to_inspector_fn = Box::new((
+                to_inspector_fn_var,
+                Loc::at_zero(to_inspector_var),
+                to_inspector_clos_var,
                 inspector_var,
                 Variable::PURE,
             ));
 
+            // to_inspector rcd.a
+            let to_inspector_call = Call(
+                to_inspector_fn,
                 vec![(field_var, Loc::at_zero(field_access))],
                 CalledVia::Space,
             );
 
+            // value: to_inspector rcd.a
             let value_field = Field {
                 var: inspector_var,
                 region: Region::zero(),
+                loc_expr: Box::new(Loc::at_zero(to_inspector_call)),
             };
 
+            // { key: "a", value: to_inspector rcd.a }
             let mut kv = SendMap::default();
             kv.insert("key".into(), key_field);
             kv.insert("value".into(), value_field);
@@ -481,6 +533,7 @@ use crate::{synth_var, DerivedBody};
     (clos, fn_var)
 }
 
+fn to_inspector_tuple(
     env: &mut Env<'_>,
     tuple_var: Variable,
     elems: TupleElems,
@@ -489,6 +542,8 @@ use crate::{synth_var, DerivedBody};
     // Suppose tup = (t1, t2). Build
     //
     // \tup -> Inspect.tuple [
+    //      Inspect.to_inspector tup.0,
+    //      Inspect.to_inspector tup.1,
     //   ]
 
     let tup_sym = env.new_symbol("tup");
@@ -515,13 +570,18 @@ use crate::{synth_var, DerivedBody};
                 index,
             };
 
+            // build `to_inspector tup.0` type
             // val -[uls]-> Inspector fmt where fmt implements InspectorFormatter
+            let to_inspector_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_TO_INSPECTOR);
 
             // (typeof tup.0) -[clos]-> t1
+            let to_inspector_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
             let inspector_var = env.subs.fresh_unnamed_flex_var(); // t1
+            let this_to_inspector_fn_var = synth_var(
                 env.subs,
                 Content::Structure(FlatType::Func(
                     elem_var_slice,
+                    to_inspector_clos_var,
                     inspector_var,
                     Variable::PURE,
                 )),
@@ -529,11 +589,22 @@ use crate::{synth_var, DerivedBody};
 
             //   val            -[uls]->  Inspector fmt where fmt implements InspectorFormatter
             // ~ (typeof tup.0) -[clos]-> t1
+            env.unify(to_inspector_fn_var, this_to_inspector_fn_var);
 
+            // to_inspector : (typeof tup.0) -[clos]-> Inspector fmt where fmt implements InspectorFormatter
+            let to_inspector_var =
+                AbilityMember(Symbol::INSPECT_TO_INSPECTOR, None, to_inspector_fn_var);
+            let to_inspector_fn = Box::new((
+                to_inspector_fn_var,
+                Loc::at_zero(to_inspector_var),
+                to_inspector_clos_var,
                 inspector_var,
                 Variable::PURE,
             ));
 
+            // to_inspector tup.0
+            let to_inspector_call = Call(
+                to_inspector_fn,
                 vec![(elem_var, Loc::at_zero(tuple_access))],
                 CalledVia::Space,
             );
@@ -541,9 +612,11 @@ use crate::{synth_var, DerivedBody};
             // NOTE: must be done to unify the lambda sets under `inspector_var`
             env.unify(inspector_var, whole_inspector_in_list_var);
 
+            Loc::at_zero(to_inspector_call)
         })
         .collect::<Vec<_>>();
 
+    // typeof [ to_inspector tup.0, to_inspector tup.1 ]
     let whole_inspector_in_list_var_slice =
         env.subs.insert_into_vars(once(whole_inspector_in_list_var));
     let elem_inspectors_list_var = synth_var(
@@ -554,11 +627,13 @@ use crate::{synth_var, DerivedBody};
         )),
     );
 
+    // [ to_inspector tup.0, to_inspector tup.1 ]
     let elem_inspectors_list = List {
         elem_var: whole_inspector_in_list_var,
         loc_elems: elem_inspectors_list,
     };
 
+    // build `Inspect.tuple [ to_inspector tup.0, to_inspector tup.1 ]` type
     // List (Inspector fmt) -[uls]-> Inspector fmt where fmt implements InspectorFormatter
     let inspect_tuple_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_TUPLE);
 
@@ -648,6 +723,7 @@ use crate::{synth_var, DerivedBody};
     (clos, fn_var)
 }
 
+fn to_inspector_tag_union(
     env: &mut Env<'_>,
     tag_union_var: Variable,
     tags: UnionTags,
@@ -656,6 +732,8 @@ use crate::{synth_var, DerivedBody};
     // Suppose tag = [ A t1 t2, B t3 ]. Build
     //
     // \tag -> when tag is
+    //     A v1 v2 -> Inspect.tag "A" [ Inspect.to_inspector v1, Inspect.to_inspector v2 ]
+    //     B v3 -> Inspect.tag "B" [ Inspect.to_inspector v3 ]
 
     let tag_sym = env.new_symbol("tag");
     let whole_tag_inspectors_var = env.subs.fresh_unnamed_flex_var(); // type of the Inspect.tag ... calls in the branch bodies
@@ -691,18 +769,26 @@ use crate::{synth_var, DerivedBody};
                 degenerate: false,
             };
 
+            // whole type of the elements in [ Inspect.to_inspector v1, Inspect.to_inspector v2 ]
             let whole_payload_inspectors_var = env.subs.fresh_unnamed_flex_var();
+            // [ Inspect.to_inspector v1, Inspect.to_inspector v2 ]
+            let payload_to_inspectors = (payload_syms.iter())
                 .zip(payload_vars.iter())
                 .map(|(&sym, &sym_var)| {
+                    // build `to_inspector v1` type
                     // expected: val -[uls]-> Inspector fmt where fmt implements InspectorFormatter
+                    let to_inspector_fn_var =
                         env.import_builtin_symbol_var(Symbol::INSPECT_TO_INSPECTOR);
 
                     // wanted: t1 -[clos]-> t'
                     let var_slice_of_sym_var = env.subs.insert_into_vars([sym_var]); // [ t1 ]
+                    let to_inspector_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
                     let inspector_var = env.subs.fresh_unnamed_flex_var(); // t'
+                    let this_to_inspector_fn_var = synth_var(
                         env.subs,
                         Content::Structure(FlatType::Func(
                             var_slice_of_sym_var,
+                            to_inspector_clos_var,
                             inspector_var,
                             Variable::PURE,
                         )),
@@ -710,11 +796,22 @@ use crate::{synth_var, DerivedBody};
 
                     //   val -[uls]->  Inspector fmt where fmt implements InspectorFormatter
                     // ~ t1  -[clos]-> t'
+                    env.unify(to_inspector_fn_var, this_to_inspector_fn_var);
 
+                    // to_inspector : t1 -[clos]-> Inspector fmt where fmt implements InspectorFormatter
+                    let to_inspector_var =
+                        AbilityMember(Symbol::INSPECT_TO_INSPECTOR, None, this_to_inspector_fn_var);
+                    let to_inspector_fn = Box::new((
+                        this_to_inspector_fn_var,
+                        Loc::at_zero(to_inspector_var),
+                        to_inspector_clos_var,
                         inspector_var,
                         Variable::PURE,
                     ));
 
+                    // to_inspector rcd.a
+                    let to_inspector_call = Call(
+                        to_inspector_fn,
                         vec![(sym_var, Loc::at_zero(Var(sym, sym_var)))],
                         CalledVia::Space,
                     );
@@ -722,9 +819,11 @@ use crate::{synth_var, DerivedBody};
                     // NOTE: must be done to unify the lambda sets under `inspector_var`
                     env.unify(inspector_var, whole_payload_inspectors_var);
 
+                    Loc::at_zero(to_inspector_call)
                 })
                 .collect();
 
+            // typeof [ Inspect.to_inspector v1, Inspect.to_inspector v2 ]
             let whole_inspectors_var_slice =
                 env.subs.insert_into_vars([whole_payload_inspectors_var]);
             let payload_inspectors_list_var = synth_var(
@@ -735,8 +834,10 @@ use crate::{synth_var, DerivedBody};
                 )),
             );
 
+            // [ Inspect.to_inspector v1, Inspect.to_inspector v2 ]
             let payload_inspectors_list = List {
                 elem_var: whole_payload_inspectors_var,
+                loc_elems: payload_to_inspectors,
             };
 
             // build `Inspect.tag "A" [ ... ]` type
@@ -773,11 +874,13 @@ use crate::{synth_var, DerivedBody};
                 Variable::PURE,
             ));
 
+            // Inspect.tag "A" [ Inspect.to_inspector v1, Inspect.to_inspector v2 ]
             let inspect_tag_call = Call(
                 inspect_tag_fn,
                 vec![
                     // (Str, "A")
                     (Variable::STR, Loc::at_zero(Str(tag_name.0.as_str().into()))),
+                    // (List (Inspector fmt), [ Inspect.to_inspector v1, Inspect.to_inspector v2 ])
                     (
                         payload_inspectors_list_var,
                         Loc::at_zero(payload_inspectors_list),
@@ -787,6 +890,7 @@ use crate::{synth_var, DerivedBody};
             );
 
             // NOTE: must be done to unify the lambda sets under `inspector_var`
+            // Inspect.tag "A" [ Inspect.to_inspector v1, Inspect.to_inspector v2 ] ~ whole_inspectors
             env.unify(this_inspector_var, whole_tag_inspectors_var);
 
             WhenBranch {
@@ -799,6 +903,8 @@ use crate::{synth_var, DerivedBody};
         .collect::<Vec<_>>();
 
     // when tag is
+    //     A v1 v2 -> Inspect.tag "A" [ Inspect.to_inspector v1, Inspect.to_inspector v2 ]
+    //     B v3 -> Inspect.tag "B" [ Inspect.to_inspector v3 ]
     let when_branches = When {
         loc_cond: Box::new(Loc::at_zero(Var(tag_sym, tag_union_var))),
         cond_var: tag_union_var,
@@ -847,6 +953,8 @@ use crate::{synth_var, DerivedBody};
     // \tag ->
     //   Inspect.custom \fmt -> Inspect.apply (
     //     when tag is
+    //        A v1 v2 -> Inspect.tag "A" [ Inspect.to_inspector v1, Inspect.to_inspector v2 ]
+    //        B v3 -> Inspect.tag "B" [ Inspect.to_inspector v3 ])
     //     fmt
     let clos = Closure(ClosureData {
         function_type: fn_var,

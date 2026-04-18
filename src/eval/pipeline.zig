@@ -26,21 +26,27 @@ const FromIr = lir.FromIr;
 const is_freestanding = builtin.os.tag == .freestanding;
 
 /// Comptime-gated tracing for the shared lowering pipeline.
-const trace = struct {
-    const enabled = if (@hasDecl(build_options, "trace_eval")) build_options.trace_eval else false;
-
-    fn log(comptime fmt: []const u8, args: anytype) void {
-        if (comptime enabled) {
+const trace = if ((if (@hasDecl(build_options, "trace_eval")) build_options.trace_eval else false) and !is_freestanding)
+    struct {
+        fn log(comptime fmt: []const u8, args: anytype) void {
             std.debug.print("[lower] " ++ fmt ++ "\n", args);
         }
     }
-};
+else
+    struct {
+        fn log(comptime fmt: []const u8, args: anytype) void {
+            _ = fmt;
+            _ = args;
+        }
+    };
 
+/// Public enum `SourceKind`.
 pub const SourceKind = enum {
     expr,
     module,
 };
 
+/// Public struct `ModuleSource`.
 pub const ModuleSource = struct {
     name: []const u8,
     source: []const u8,
@@ -57,6 +63,7 @@ fn availableImportStatementIdx(module_env: *const ModuleEnv) ?CIR.Statement.Idx 
     return null;
 }
 
+/// Public struct `CheckedModule`.
 pub const CheckedModule = struct {
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
@@ -70,6 +77,7 @@ pub const CheckedModule = struct {
     typecheck_ns: u64 = 0,
 };
 
+/// Public struct `ParsedResources`.
 pub const ParsedResources = struct {
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
@@ -106,6 +114,7 @@ pub const ParsedResources = struct {
     }
 };
 
+/// Public struct `LoweredProgram`.
 pub const LoweredProgram = struct {
     lir_result: FromIr.Result,
     main_proc: lir.LIR.LirProcSpecId,
@@ -116,6 +125,7 @@ pub const LoweredProgram = struct {
     }
 };
 
+/// Public function `parseAndCanonicalizeProgramWrapped`.
 pub fn parseAndCanonicalizeProgramWrapped(
     allocator: std.mem.Allocator,
     source_kind: SourceKind,
@@ -246,6 +256,7 @@ pub fn parseAndCanonicalizeProgramWrapped(
     };
 }
 
+/// Public function `parseCheckModule`.
 pub fn parseCheckModule(
     allocator: std.mem.Allocator,
     module_name: []const u8,
@@ -399,10 +410,12 @@ pub fn parseCheckModule(
     };
 }
 
+/// Public function `exprSourcePrefixLen`.
 pub fn exprSourcePrefixLen(inspect_wrap: bool) u32 {
     return @intCast(if (inspect_wrap) "main = Str.inspect((".len else "main = ".len);
 }
 
+/// Public function `lowerParsedExprToLir`.
 pub fn lowerParsedExprToLir(
     allocator: std.mem.Allocator,
     resources: *ParsedResources,
@@ -410,6 +423,7 @@ pub fn lowerParsedExprToLir(
     return lowerToLirForTarget(allocator, resources, base.target.TargetUsize.native);
 }
 
+/// Public function `lowerParsedExprToLirForTarget`.
 pub fn lowerParsedExprToLirForTarget(
     allocator: std.mem.Allocator,
     resources: *ParsedResources,
@@ -418,6 +432,7 @@ pub fn lowerParsedExprToLirForTarget(
     return lowerToLirForTarget(allocator, resources, target_usize);
 }
 
+/// Public function `lowerTypedCIRToLir`.
 pub fn lowerTypedCIRToLir(
     allocator: std.mem.Allocator,
     typed_cir_modules: *check.TypedCIR.Modules,
@@ -431,6 +446,7 @@ pub fn lowerTypedCIRToLir(
     );
 }
 
+/// Public function `lowerTypedCIRToLirForTarget`.
 pub fn lowerTypedCIRToLirForTarget(
     allocator: std.mem.Allocator,
     typed_cir_modules: *check.TypedCIR.Modules,
@@ -536,6 +552,7 @@ fn lowerToLirForTarget(
     };
 }
 
+/// Public function `cleanupCheckedModule`.
 pub fn cleanupCheckedModule(allocator: std.mem.Allocator, module: CheckedModule) void {
     module.checker.deinit();
     module.can.deinit();

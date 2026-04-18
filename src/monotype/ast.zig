@@ -10,12 +10,18 @@ const type_mod = @import("type.zig");
 pub const Symbol = symbol_mod.Symbol;
 pub const TypeId = type_mod.TypeId;
 
+/// Public enum `ExprId`.
 pub const ExprId = enum(u32) { _ };
+/// Public enum `PatId`.
 pub const PatId = enum(u32) { _ };
+/// Public enum `DefId`.
 pub const DefId = enum(u32) { _ };
+/// Public enum `StmtId`.
 pub const StmtId = enum(u32) { _ };
+/// Public enum `BranchId`.
 pub const BranchId = enum(u32) { _ };
 
+/// Public function `Span`.
 pub fn Span(comptime _: type) type {
     return extern struct {
         start: u32,
@@ -27,11 +33,13 @@ pub fn Span(comptime _: type) type {
     };
 }
 
+/// Public struct `TypedSymbol`.
 pub const TypedSymbol = struct {
     ty: TypeId,
     symbol: Symbol,
 };
 
+/// Public struct `Pat`.
 pub const Pat = struct {
     ty: TypeId,
     data: Data,
@@ -47,6 +55,7 @@ pub const Pat = struct {
     };
 };
 
+/// Public struct `LetFn`.
 pub const LetFn = struct {
     recursive: bool,
     bind: TypedSymbol,
@@ -54,26 +63,31 @@ pub const LetFn = struct {
     body: ExprId,
 };
 
+/// Public struct `LetVal`.
 pub const LetVal = struct {
     bind: TypedSymbol,
     body: ExprId,
 };
 
+/// Public union `LetDef`.
 pub const LetDef = union(enum) {
     let_fn: LetFn,
     let_val: LetVal,
 };
 
+/// Public struct `Branch`.
 pub const Branch = struct {
     pat: PatId,
     body: ExprId,
 };
 
+/// Public struct `FieldExpr`.
 pub const FieldExpr = struct {
     name: base.Ident.Idx,
     value: ExprId,
 };
 
+/// Public struct `Expr`.
 pub const Expr = struct {
     ty: TypeId,
     data: Data,
@@ -161,6 +175,7 @@ pub const Expr = struct {
     };
 };
 
+/// Public union `Stmt`.
 pub const Stmt = union(enum) {
     local_fn: LetFn,
     decl: struct {
@@ -192,18 +207,21 @@ pub const Stmt = union(enum) {
     },
 };
 
+/// Public struct `RunDef`.
 pub const RunDef = struct {
     bind: TypedSymbol,
     body: ExprId,
     entry_ty: types.Var,
 };
 
+/// Public struct `HostedFnDef`.
 pub const HostedFnDef = struct {
     bind: TypedSymbol,
     args: Span(TypedSymbol),
     hosted: base.HostedProc,
 };
 
+/// Public union `DefVal`.
 pub const DefVal = union(enum) {
     fn_: LetFn,
     hosted_fn: HostedFnDef,
@@ -211,11 +229,13 @@ pub const DefVal = union(enum) {
     run: RunDef,
 };
 
+/// Public struct `Def`.
 pub const Def = struct {
     bind: TypedSymbol,
     value: DefVal,
 };
 
+/// Public struct `Store`.
 pub const Store = struct {
     allocator: std.mem.Allocator,
     exprs: std.ArrayList(Expr),

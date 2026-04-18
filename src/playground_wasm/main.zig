@@ -53,17 +53,27 @@ var wasm_heap_memory: [64 * 1024 * 1024]u8 = undefined; // 64MB heap
 var fba: std.heap.FixedBufferAllocator = undefined;
 var allocator: Allocator = undefined;
 
+/// Playground-specific std options, including a freestanding-safe log sink.
 pub const std_options: std.Options = .{
     .log_level = .warn,
     .logFn = logFn,
 };
 
-fn logFn(comptime level: std.log.Level, comptime scope: @TypeOf(.enum_literal), comptime format: []const u8, args: anytype) void {
-    if (comptime builtin.target.os.tag == .freestanding) {
-        return;
-    }
-    std.log.defaultLog(level, scope, format, args);
-}
+const logFn = if (builtin.target.os.tag == .freestanding)
+    struct {
+        fn log(comptime level: std.log.Level, comptime scope: @TypeOf(.enum_literal), comptime format: []const u8, args: anytype) void {
+            _ = level;
+            _ = scope;
+            _ = format;
+            _ = args;
+        }
+    }.log
+else
+    struct {
+        fn log(comptime level: std.log.Level, comptime scope: @TypeOf(.enum_literal), comptime format: []const u8, args: anytype) void {
+            std.log.defaultLog(level, scope, format, args);
+        }
+    }.log;
 
 const State = enum {
     START,
@@ -1049,6 +1059,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
                 .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
                 .import_mapping = types.import_mapping.ImportMapping.init(gpa),
                 .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
+                .method_call_fns = serialized_ptr.method_call_fns.deserializeInto(base_ptr),
                 .rigid_vars = std.AutoHashMapUnmanaged(base.Ident.Idx, types.Var){},
             };
             logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});

@@ -177,9 +177,9 @@ pub const BuiltinFn = enum {
     str_drop_prefix,
     str_drop_suffix,
     str_with_ascii_lowercased,
-        str_with_ascii_uppercased,
-        str_from_utf8_lossy,
-        str_from_utf8,
+    str_with_ascii_uppercased,
+    str_from_utf8_lossy,
+    str_from_utf8,
     str_escape_and_quote,
     dbg_str,
 
@@ -3953,7 +3953,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
                 self.codegen.freeGeneral(temp_reg);
                 self.codegen.freeGeneral(ptr_reg);
-
             }
 
             // Build rest list via roc_builtins_list_sublist, writing directly into result+list_field_offset

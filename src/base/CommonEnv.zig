@@ -47,6 +47,7 @@ pub fn deinit(self: *CommonEnv, gpa: std.mem.Allocator) void {
     // NOTE: Caller owns source and is responsible for freeing it.
 }
 
+/// Public function `clone`.
 pub fn clone(self: *const CommonEnv, gpa: std.mem.Allocator) std.mem.Allocator.Error!CommonEnv {
     return CommonEnv{
         .idents = try self.idents.clone(gpa),

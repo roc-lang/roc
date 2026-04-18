@@ -1,3 +1,5 @@
+//! Tests for the typed CIR module and view APIs.
+
 const std = @import("std");
 const can = @import("can");
 

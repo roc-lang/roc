@@ -6,35 +6,47 @@ const types = @import("types");
 const symbol_mod = @import("symbol");
 const type_mod = @import("type.zig");
 
+/// Interned symbol identifiers referenced by executable AST nodes.
 pub const Symbol = symbol_mod.Symbol;
+/// Executable type identifiers carried by AST nodes.
 pub const TypeId = type_mod.TypeId;
 
+/// Identifier for an executable expression node.
 pub const ExprId = enum(u32) { _ };
+/// Identifier for an executable pattern node.
 pub const PatId = enum(u32) { _ };
+/// Identifier for an executable definition node.
 pub const DefId = enum(u32) { _ };
+/// Identifier for an executable statement node.
 pub const StmtId = enum(u32) { _ };
+/// Identifier for an executable branch node.
 pub const BranchId = enum(u32) { _ };
 
+/// Slice metadata for contiguous ids stored in side arrays.
 pub fn Span(comptime _: type) type {
     return extern struct {
         start: u32,
         len: u32,
 
+        /// Return an empty span.
         pub fn empty() @This() {
             return .{ .start = 0, .len = 0 };
         }
     };
 }
 
+/// Symbol/type pair used at executable binding sites.
 pub const TypedSymbol = struct {
     ty: TypeId,
     symbol: Symbol,
 };
 
+/// Executable pattern node.
 pub const Pat = struct {
     ty: TypeId,
     data: Data,
 
+    /// Pattern payload variants.
     pub const Data = union(enum) {
         bool_lit: bool,
         tag: struct {
@@ -46,26 +58,31 @@ pub const Pat = struct {
     };
 };
 
+/// Executable branch pairing a pattern with a body expression.
 pub const Branch = struct {
     pat: PatId,
     body: ExprId,
 };
 
+/// Record-field expression stored in side arrays.
 pub const FieldExpr = struct {
     name: base.Ident.Idx,
     value: ExprId,
 };
 
+/// First-class erased function packaging for indirect-call sites.
 pub const PackedFn = struct {
     lambda: Symbol,
     captures: ?ExprId,
     capture_ty: ?TypeId,
 };
 
+/// Executable expression node.
 pub const Expr = struct {
     ty: TypeId,
     data: Data,
 
+    /// Expression payload variants.
     pub const Data = union(enum) {
         var_: Symbol,
         int_lit: i128,
@@ -140,6 +157,7 @@ pub const Expr = struct {
     };
 };
 
+/// Executable statement node.
 pub const Stmt = union(enum) {
     decl: struct {
         bind: TypedSymbol,
@@ -170,22 +188,26 @@ pub const Stmt = union(enum) {
     },
 };
 
+/// Executable function definition body.
 pub const FnDef = struct {
     args: Span(TypedSymbol),
     body: ExprId,
 };
 
+/// Executable wrapper for a `run` entrypoint.
 pub const RunDef = struct {
     body: ExprId,
     entry_ty: types.Var,
 };
 
+/// Executable hosted-function definition.
 pub const HostedFnDef = struct {
     bind: Symbol,
     args: Span(TypedSymbol),
     hosted: base.HostedProc,
 };
 
+/// Executable definition payload variants.
 pub const DefVal = union(enum) {
     fn_: FnDef,
     hosted_fn: HostedFnDef,
@@ -193,12 +215,14 @@ pub const DefVal = union(enum) {
     run: RunDef,
 };
 
+/// Executable top-level definition.
 pub const Def = struct {
     bind: Symbol,
     result_ty: ?TypeId = null,
     value: DefVal,
 };
 
+/// Owning store for the executable AST and its side arrays.
 pub const Store = struct {
     allocator: std.mem.Allocator,
     exprs: std.ArrayList(Expr),

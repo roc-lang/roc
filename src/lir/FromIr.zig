@@ -12,6 +12,7 @@ const LirStore = @import("LirStore.zig");
 
 const ModuleEnv = can.ModuleEnv;
 
+/// Public struct `Result`.
 pub const Result = struct {
     store: LirStore,
     layouts: layout_mod.Store,
@@ -26,6 +27,7 @@ pub const Result = struct {
     }
 };
 
+/// Run this compilation stage.
 pub fn run(
     allocator: std.mem.Allocator,
     all_module_envs: []const *const ModuleEnv,
@@ -1826,8 +1828,7 @@ const ProcLowerer = struct {
                     self.localLayout(source),
                     payload.tag_discriminant,
                 );
-                const access = if (physical_payload_layout == logical_payload_layout)
-                blk_access: {
+                const access = if (physical_payload_layout == logical_payload_layout) blk_access: {
                     self.requireLocalMatchesShape(target, logical_payload_layout, logical_payload_ref, "get_union_struct");
                     break :blk_access try self.addAssignRef(target, .fresh, .{ .tag_payload_struct = .{
                         .source = source,
@@ -1942,8 +1943,7 @@ const ProcLowerer = struct {
                 const logical_field_ref = self.structFieldLayoutRef(self.localLayoutRef(source), field.field_index);
                 const logical_field_layout = try self.parent.lowerLayoutId(logical_field_ref);
                 const physical_field_layout = self.lowerPhysicalStructFieldLayout(self.localLayout(source), field.field_index);
-                const access = if (physical_field_layout == logical_field_layout)
-                blk_access: {
+                const access = if (physical_field_layout == logical_field_layout) blk_access: {
                     self.requireLocalMatchesShape(target, logical_field_layout, logical_field_ref, "get_struct_field");
                     break :blk_access try self.addAssignRef(target, .fresh, .{ .field = .{
                         .source = source,
