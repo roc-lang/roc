@@ -330,6 +330,18 @@ const record_field_closure_extraction_source =
     \\    }
 ;
 
+const opaque_function_field_lookup_source =
+    \\W(a) := { f : {} -> [V(a)] }.{
+    \\    run : W(a) -> [V(a)]
+    \\    run = |w| (w.f)({})
+    \\
+    \\    mk : a -> W(a)
+    \\    mk = |val| { f: |_| V(val) }
+    \\}
+    \\
+    \\main = W.run(W.mk("x")) == V("x")
+;
+
 const cross_module_annotated_callback_param_source =
     \\import Helpers
     \\
@@ -1229,6 +1241,24 @@ test "cor pipeline - eval direct-only higher-order call record field closure ext
 test "cor pipeline - lowering direct-only higher-order call record field closure extraction then call" {
     const case = direct_call_cases[16];
     try expectDirectOnlyLoweringProgram(case.source_kind, case.source, case.imports, case.executable_direct_calls, case.lir_direct_calls);
+}
+
+test "cor pipeline - lowering opaque function field lookup issue 9262 has no erased callables" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const arena_allocator = arena.allocator();
+    var executable = try compileExecutableProgram(arena_allocator, .module, opaque_function_field_lookup_source, &.{});
+    defer executable.deinit(arena_allocator);
+
+    try testing.expectEqual(@as(usize, 0), countExecutableIndirectCalls(&executable.executable));
+    try testing.expectEqual(@as(usize, 0), countExecutablePackedFns(&executable.executable));
+    try testing.expectEqual(@as(usize, 0), countExecutableErasedFnTypes(&executable.executable));
+
+    var compiled = try helpers.compileProgram(arena_allocator, .module, opaque_function_field_lookup_source, &.{});
+    defer compiled.deinit(arena_allocator);
+
+    try testing.expectEqual(@as(usize, 0), countIndirectCalls(&compiled));
 }
 
 test "cor pipeline - boxed lambda lowering uses erased indirect-call path" {

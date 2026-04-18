@@ -91,14 +91,17 @@ pub const Modules = struct {
             return switch (self) {
                 .precompiled => |module_env| blk: {
                     try module_env.getIdentStore().enableRuntimeInserts(allocator);
+                    try ensureModuleNameIdents(module_env);
                     break :blk ModuleData.initBorrowed(module_env);
                 },
                 .owned_checked => |owned| blk: {
                     try owned.env.getIdentStore().enableRuntimeInserts(allocator);
+                    try ensureModuleNameIdents(owned.env);
                     break :blk ModuleData.initOwnedChecked(owned.env, owned.owned_source);
                 },
                 .owned_cached => |owned| blk: {
                     try owned.env.getIdentStore().enableRuntimeInserts(allocator);
+                    try ensureModuleNameIdents(owned.env);
                     break :blk ModuleData.initOwnedCached(owned.env, owned.buffer);
                 },
             };
@@ -178,6 +181,20 @@ pub const Modules = struct {
     }
 
 };
+
+fn ensureModuleNameIdents(env: *ModuleEnv) Allocator.Error!void {
+    if (env.display_module_name_idx.isNone()) {
+        if (env.module_name.len == 0) {
+            std.debug.panic("typed_cir invariant violated: missing module_name for env with no display_module_name_idx", .{});
+        }
+
+        env.display_module_name_idx = try env.insertIdent(base.Ident.for_text(env.module_name));
+    }
+
+    if (env.qualified_module_ident.isNone()) {
+        env.qualified_module_ident = env.display_module_name_idx;
+    }
+}
 
 pub const Module = struct {
     allocator: Allocator,

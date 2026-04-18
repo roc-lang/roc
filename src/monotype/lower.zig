@@ -1311,7 +1311,7 @@ pub const Lowerer = struct {
     fn lowerRootModule(self: *Lowerer, module_idx: u32) std.mem.Allocator.Error!void {
         for (self.ctx.typedCirModule(module_idx).allDefs()) |def_idx| {
             const symbol = self.lookupTopLevelDefSymbol(module_idx, def_idx) orelse continue;
-            _ = self.top_level_defs_by_symbol.get(symbol) orelse continue;
+            if (self.top_level_defs_by_symbol.get(symbol) == null) continue;
             const lowered = try self.lowerTopLevelDef(module_idx, def_idx);
             if (lowered) |def_id| {
                 try self.program.root_defs.append(self.allocator, def_id);
@@ -2038,6 +2038,14 @@ pub const Lowerer = struct {
             module_idx,
             type_scope,
             pattern_idx,
+            arg_bind.ty,
+            scoped_arg_solved_var,
+        );
+        try self.bindPatternFromSourceExpr(
+            module_idx,
+            type_scope,
+            pattern_idx,
+            arg_expr,
             arg_bind.ty,
             scoped_arg_solved_var,
             &branch_env,
@@ -3773,17 +3781,26 @@ pub const Lowerer = struct {
             defer branch_env.deinit();
             var binding_decls = std.ArrayList(BindingDecl).empty;
             defer binding_decls.deinit(self.allocator);
+            const branch_pat = try self.lowerMatchPatWithType(
+                module_idx,
+                type_scope,
+                branch_pattern.pattern,
+                cond.ty,
+                cond.solved_var,
+            );
+            try self.bindPatternFromSourceExpr(
+                module_idx,
+                type_scope,
+                branch_pattern.pattern,
+                cond.expr,
+                cond.ty,
+                cond.solved_var,
+                &branch_env,
+                &binding_decls,
+            );
 
             out[i] = .{
-                .pat = try self.lowerMatchPatWithType(
-                    module_idx,
-                    type_scope,
-                    branch_pattern.pattern,
-                    cond.ty,
-                    cond.solved_var,
-                    &branch_env,
-                    &binding_decls,
-                ),
+                .pat = branch_pat,
                 .body = try self.wrapExprWithBindingDecls(
                     try self.lowerExprWithExpectedType(
                         module_idx,
@@ -4863,6 +4880,7 @@ pub const Lowerer = struct {
                     .solved_var = source_solved_var,
                 });
             },
+            .runtime_error => {},
             .as, .record_destructure, .tuple => {
                 const source = try self.makePatternSourceBindWithType(module_idx, pattern_idx, effective_source_ty);
                 try decls.append(self.allocator, .{
@@ -4881,7 +4899,12 @@ pub const Lowerer = struct {
             },
             .underscore => {},
             .nominal => |nominal| {
-                const child = self.nominalPatternChildContext(type_scope, effective_source_ty, source_solved_var);
+                const child = try self.nominalPatternChildContext(
+                    module_idx,
+                    type_scope,
+                    effective_source_ty,
+                    nominal.backing_pattern,
+                );
                 try self.bindPatternFromSourceExpr(
                     module_idx,
                     type_scope,
@@ -4894,7 +4917,12 @@ pub const Lowerer = struct {
                 );
             },
             .nominal_external => |nominal| {
-                const child = self.nominalPatternChildContext(type_scope, effective_source_ty, source_solved_var);
+                const child = try self.nominalPatternChildContext(
+                    module_idx,
+                    type_scope,
+                    effective_source_ty,
+                    nominal.backing_pattern,
+                );
                 try self.bindPatternFromSourceExpr(
                     module_idx,
                     type_scope,
@@ -5028,7 +5056,6 @@ pub const Lowerer = struct {
             .frac_f64_literal,
             .str_literal,
             => {},
-            else => debugTodoPattern(pattern),
         }
     }
 
@@ -6650,7 +6677,7 @@ pub const Lowerer = struct {
             .placeholder => try self.requireExprType(module_idx, type_scope, backing_expr_idx),
             else => nominal_ty,
         };
-        return self.lowerExprWithExpectedType(
+        const lowered_backing = try self.lowerExprWithExpectedType(
             module_idx,
             type_scope,
             env,
@@ -6658,6 +6685,19 @@ pub const Lowerer = struct {
             backing_ty,
             backing_var,
         );
+        return switch (self.ctx.types.getTypePreservingNominal(nominal_ty)) {
+            .nominal => blk: {
+                const lowered = self.program.store.getExpr(lowered_backing);
+                break :blk if (self.ctx.types.equalIds(lowered.ty, nominal_ty))
+                    lowered_backing
+                else
+                    try self.program.store.addExpr(.{
+                        .ty = nominal_ty,
+                        .data = lowered.data,
+                    });
+            },
+            else => lowered_backing,
+        };
     }
 
     fn resolveTransparentBackingVar(
@@ -7338,7 +7378,12 @@ pub const Lowerer = struct {
                 }
             },
             .nominal => |nominal| {
-                const child = self.nominalPatternChildContext(type_scope, effective_source_ty, source_solved_var);
+                const child = try self.nominalPatternChildContext(
+                    module_idx,
+                    type_scope,
+                    effective_source_ty,
+                    nominal.backing_pattern,
+                );
                 try self.recordPatternStructuralInfoFromSourceType(
                     module_idx,
                     type_scope,
@@ -7348,7 +7393,12 @@ pub const Lowerer = struct {
                 );
             },
             .nominal_external => |nominal| {
-                const child = self.nominalPatternChildContext(type_scope, effective_source_ty, source_solved_var);
+                const child = try self.nominalPatternChildContext(
+                    module_idx,
+                    type_scope,
+                    effective_source_ty,
+                    nominal.backing_pattern,
+                );
                 try self.recordPatternStructuralInfoFromSourceType(
                     module_idx,
                     type_scope,
@@ -7458,7 +7508,7 @@ pub const Lowerer = struct {
                     module_idx,
                     type_scope,
                     nominal.backing_pattern,
-                    self.resolveTransparentBackingVar(type_scope, source_solved_var) orelse source_solved_var,
+                    try self.requirePatternSolvedVar(module_idx, type_scope, nominal.backing_pattern),
                     env,
                 );
             },
@@ -7467,7 +7517,7 @@ pub const Lowerer = struct {
                     module_idx,
                     type_scope,
                     nominal.backing_pattern,
-                    self.resolveTransparentBackingVar(type_scope, source_solved_var) orelse source_solved_var,
+                    try self.requirePatternSolvedVar(module_idx, type_scope, nominal.backing_pattern),
                     env,
                 );
             },
@@ -7996,7 +8046,7 @@ pub const Lowerer = struct {
         if (type_scope.provisional_type_cache.get(key)) |provisional| {
             if (!self.ctx.types.containsAbstractLeaf(provisional) and !self.ctx.types.containsFunctionLeaf(provisional)) {
                 const canonical = try self.ctx.types.internTypeId(provisional);
-                _ = type_scope.provisional_type_cache.remove(key);
+                std.debug.assert(type_scope.provisional_type_cache.remove(key));
                 try type_scope.type_cache.put(key, canonical);
                 return canonical;
             }
@@ -8055,12 +8105,12 @@ pub const Lowerer = struct {
 
         self.ctx.types.setType(placeholder, lowered);
         if (lowered == .placeholder) {
-            _ = type_scope.active_type_cache.remove(key);
+            std.debug.assert(type_scope.active_type_cache.remove(key));
             try type_scope.provisional_type_cache.put(key, placeholder);
             return placeholder;
         }
 
-        _ = type_scope.active_type_cache.remove(key);
+        std.debug.assert(type_scope.active_type_cache.remove(key));
         if (!self.ctx.types.containsAbstractLeaf(placeholder) and !self.ctx.types.containsFunctionLeaf(placeholder)) {
             const canonical = try self.ctx.types.internTypeId(placeholder);
             try type_scope.type_cache.put(key, canonical);
@@ -8284,22 +8334,25 @@ pub const Lowerer = struct {
         );
         const defining_module = self.ctx.typedCirModule(defining.module_idx);
         const defining_ident = defining.ident;
+        const is_builtin_nominal = defining.module_idx == self.ctx.builtin_module_idx;
 
-        if (defining_ident.eql(defining_module.commonIdents().str) or defining_ident.eql(defining_module.commonIdents().builtin_str)) {
+        if (is_builtin_nominal and (defining_ident.eql(defining_module.commonIdents().str) or defining_ident.eql(defining_module.commonIdents().builtin_str))) {
             return .{ .primitive = .str };
         }
-        if (defining_ident.eql(defining_module.commonIdents().list)) {
+        if (is_builtin_nominal and defining_ident.eql(defining_module.commonIdents().list)) {
             const args = type_scope.typeStoreConst().sliceNominalArgs(nominal);
             if (args.len != 1) debugPanic("monotype.lowerNominalType List expected one type argument", .{});
             return .{ .list = try self.lowerInstantiatedType(module_idx, type_scope, args[0]) };
         }
-        if (defining_ident.eql(defining_module.commonIdents().box)) {
+        if (is_builtin_nominal and defining_ident.eql(defining_module.commonIdents().box)) {
             const args = type_scope.typeStoreConst().sliceNominalArgs(nominal);
             if (args.len != 1) debugPanic("monotype.lowerNominalType Box expected one type argument", .{});
             return .{ .box = try self.lowerInstantiatedType(module_idx, type_scope, args[0]) };
         }
-        if (defining_ident.eql(defining_module.commonIdents().bool_type)) return .{ .primitive = .bool };
-        if (builtinNumPrim(defining_module, defining_ident)) |prim| return .{ .primitive = prim };
+        if (is_builtin_nominal and defining_ident.eql(defining_module.commonIdents().bool_type)) return .{ .primitive = .bool };
+        if (is_builtin_nominal) {
+            if (builtinNumPrim(defining_module, defining_ident)) |prim| return .{ .primitive = prim };
+        }
 
         const nominal_args = type_scope.typeStoreConst().sliceNominalArgs(nominal);
         const lowered_args = try self.allocator.alloc(type_mod.TypeId, nominal_args.len);
@@ -8703,7 +8756,12 @@ pub const Lowerer = struct {
                 }
             },
             .nominal => |nominal| {
-                const child = self.nominalPatternChildContext(type_scope, source.ty, source_solved_var);
+                const child = try self.nominalPatternChildContext(
+                    module_idx,
+                    type_scope,
+                    source.ty,
+                    nominal.backing_pattern,
+                );
                 try self.collectStructuralBindingDeclsWithSolvedVar(
                     module_idx,
                     type_scope,
@@ -8715,7 +8773,12 @@ pub const Lowerer = struct {
                 );
             },
             .nominal_external => |nominal| {
-                const child = self.nominalPatternChildContext(type_scope, source.ty, source_solved_var);
+                const child = try self.nominalPatternChildContext(
+                    module_idx,
+                    type_scope,
+                    source.ty,
+                    nominal.backing_pattern,
+                );
                 try self.collectStructuralBindingDeclsWithSolvedVar(
                     module_idx,
                     type_scope,
@@ -8942,7 +9005,12 @@ pub const Lowerer = struct {
                 }
             },
             .nominal => |nominal| {
-                const child = self.nominalPatternChildContext(type_scope, source_ty, source_solved_var);
+                const child = try self.nominalPatternChildContext(
+                    module_idx,
+                    type_scope,
+                    source_ty,
+                    nominal.backing_pattern,
+                );
                 try self.lowerPatternReassignFromExpr(
                     module_idx,
                     type_scope,
@@ -8955,7 +9023,12 @@ pub const Lowerer = struct {
                 );
             },
             .nominal_external => |nominal| {
-                const child = self.nominalPatternChildContext(type_scope, source_ty, source_solved_var);
+                const child = try self.nominalPatternChildContext(
+                    module_idx,
+                    type_scope,
+                    source_ty,
+                    nominal.backing_pattern,
+                );
                 try self.lowerPatternReassignFromExpr(
                     module_idx,
                     type_scope,
@@ -8976,11 +9049,8 @@ pub const Lowerer = struct {
         module_idx: u32,
         type_scope: *TypeScope,
         pattern_idx: CIR.Pattern.Idx,
-        env: *BindingEnv,
-        decls: *std.ArrayList(BindingDecl),
     ) std.mem.Allocator.Error!ast.PatId {
         const source = try self.makePatternSourceBind(module_idx, type_scope, pattern_idx);
-        try self.collectStructuralBindingDecls(module_idx, type_scope, source, pattern_idx, env, decls);
         return try self.program.store.addPat(.{
             .ty = source.ty,
             .data = .{ .var_ = source.symbol },
@@ -8994,8 +9064,6 @@ pub const Lowerer = struct {
         pattern_idx: CIR.Pattern.Idx,
         source_ty: type_mod.TypeId,
         source_solved_var: ?Var,
-        env: *BindingEnv,
-        decls: *std.ArrayList(BindingDecl),
     ) std.mem.Allocator.Error!ast.PatId {
         try self.recordPatternStructuralInfoFromSourceType(
             module_idx,
@@ -9006,15 +9074,6 @@ pub const Lowerer = struct {
         );
         const effective_source_ty = self.requirePatternSourceType(module_idx, type_scope, pattern_idx);
         const source = try self.makePatternSourceBindWithType(module_idx, pattern_idx, effective_source_ty);
-        try self.collectStructuralBindingDeclsWithSolvedVar(
-            module_idx,
-            type_scope,
-            source,
-            source_solved_var,
-            pattern_idx,
-            env,
-            decls,
-        );
         return try self.program.store.addPat(.{
             .ty = source.ty,
             .data = .{ .var_ = source.symbol },
@@ -9028,8 +9087,6 @@ pub const Lowerer = struct {
         pattern_idx: CIR.Pattern.Idx,
         source_ty: type_mod.TypeId,
         source_solved_var: ?Var,
-        env: *BindingEnv,
-        decls: *std.ArrayList(BindingDecl),
     ) std.mem.Allocator.Error!ast.PatId {
         try self.recordPatternStructuralInfoFromSourceType(
             module_idx,
@@ -9043,7 +9100,7 @@ pub const Lowerer = struct {
         const pattern = self.ctx.typedCirModule(module_idx).pattern(pattern_idx).data;
 
         if (self.patternNeedsBindingDecls(module_idx, pattern_idx)) {
-            return self.lowerStructuralPatWithType(module_idx, type_scope, pattern_idx, effective_source_ty, source_solved_var, env, decls);
+            return self.lowerStructuralPatWithType(module_idx, type_scope, pattern_idx, effective_source_ty, source_solved_var);
         }
 
         return switch (pattern) {
@@ -9052,21 +9109,16 @@ pub const Lowerer = struct {
                     .ty = effective_source_ty,
                     .symbol = try self.ctx.getOrCreatePatternSymbol(module_idx, pattern_idx, assign.ident),
                 };
-                try self.collectStructuralBindingDeclsWithSolvedVar(
-                    module_idx,
-                    type_scope,
-                    source,
-                    source_solved_var,
-                    pattern_idx,
-                    env,
-                    decls,
-                );
                 break :blk try self.program.store.addPat(.{
                     .ty = effective_source_ty,
                     .data = .{ .var_ = source.symbol },
                 });
             },
             .underscore => try self.program.store.addPat(.{
+                .ty = effective_source_ty,
+                .data = .{ .var_ = symbol_mod.Symbol.none },
+            }),
+            .runtime_error => try self.program.store.addPat(.{
                 .ty = effective_source_ty,
                 .data = .{ .var_ = symbol_mod.Symbol.none },
             }),
@@ -9090,8 +9142,6 @@ pub const Lowerer = struct {
                         arg_pat,
                         self.requirePatternSourceType(module_idx, type_scope, arg_pat),
                         try self.requirePatternSolvedVar(module_idx, type_scope, arg_pat),
-                        env,
-                        decls,
                     );
                 }
                 break :blk try self.program.store.addPat(.{
@@ -9104,8 +9154,13 @@ pub const Lowerer = struct {
                 });
             },
             .nominal => |nominal| blk: {
-                const child = self.nominalPatternChildContext(type_scope, effective_source_ty, source_solved_var);
-                const lowered = try self.lowerMatchPatWithType(module_idx, type_scope, nominal.backing_pattern, child.ty, child.solved_var, env, decls);
+                const child = try self.nominalPatternChildContext(
+                    module_idx,
+                    type_scope,
+                    effective_source_ty,
+                    nominal.backing_pattern,
+                );
+                const lowered = try self.lowerMatchPatWithType(module_idx, type_scope, nominal.backing_pattern, child.ty, child.solved_var);
                 const backing = self.program.store.getPat(lowered);
                 break :blk try self.program.store.addPat(.{
                     .ty = effective_source_ty,
@@ -9113,8 +9168,13 @@ pub const Lowerer = struct {
                 });
             },
             .nominal_external => |nominal| blk: {
-                const child = self.nominalPatternChildContext(type_scope, effective_source_ty, source_solved_var);
-                const lowered = try self.lowerMatchPatWithType(module_idx, type_scope, nominal.backing_pattern, child.ty, child.solved_var, env, decls);
+                const child = try self.nominalPatternChildContext(
+                    module_idx,
+                    type_scope,
+                    effective_source_ty,
+                    nominal.backing_pattern,
+                );
+                const lowered = try self.lowerMatchPatWithType(module_idx, type_scope, nominal.backing_pattern, child.ty, child.solved_var);
                 const backing = self.program.store.getPat(lowered);
                 break :blk try self.program.store.addPat(.{
                     .ty = effective_source_ty,
@@ -9125,32 +9185,41 @@ pub const Lowerer = struct {
         };
     }
 
-    fn normalizeNominalChildType(
-        self: *Lowerer,
-        parent_ty: type_mod.TypeId,
-        child_ty: type_mod.TypeId,
-    ) type_mod.TypeId {
-        return switch (self.ctx.types.getTypePreservingNominal(parent_ty)) {
-            .nominal => |nominal| if (child_ty == nominal.backing) parent_ty else child_ty,
-            else => child_ty,
-        };
-    }
-
     fn nominalPatternChildContext(
-        self: *const Lowerer,
-        type_scope: *const TypeScope,
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeScope,
         source_ty: type_mod.TypeId,
-        source_solved_var: ?Var,
-    ) struct { ty: type_mod.TypeId, solved_var: ?Var } {
-        return switch (self.ctx.types.getTypePreservingNominal(source_ty)) {
-            .nominal => |nominal| .{
-                .ty = nominal.backing,
-                .solved_var = self.resolveTransparentBackingVar(type_scope, source_solved_var),
-            },
-            else => .{
-                .ty = source_ty,
-                .solved_var = source_solved_var,
-            },
+        backing_pattern_idx: CIR.Pattern.Idx,
+    ) std.mem.Allocator.Error!struct { ty: type_mod.TypeId, solved_var: Var } {
+        const backing_solved_var = try self.requirePatternSolvedVar(
+            module_idx,
+            type_scope,
+            backing_pattern_idx,
+        );
+        const backing_ty = try self.instantiateVarType(
+            module_idx,
+            type_scope,
+            backing_solved_var,
+        );
+
+        if (comptime builtin.mode == .Debug) {
+            switch (self.ctx.types.getTypePreservingNominal(source_ty)) {
+                .nominal => |nominal| {
+                    if (!self.ctx.types.equalIds(nominal.backing, backing_ty)) {
+                        debugPanic(
+                            "monotype nominal pattern invariant violated: backing pattern type diverged from nominal backing",
+                            .{},
+                        );
+                    }
+                },
+                else => {},
+            }
+        }
+
+        return .{
+            .ty = backing_ty,
+            .solved_var = backing_solved_var,
         };
     }
 
@@ -9170,7 +9239,7 @@ pub const Lowerer = struct {
                         type_scope.getIdent(nominal.ident.ident_idx),
                     ) orelse return null;
                     const defining_module = self.ctx.typedCirModule(defining.module_idx);
-                    if (!defining.ident.eql(defining_module.commonIdents().list)) {
+                    if (defining.module_idx != self.ctx.builtin_module_idx or !defining.ident.eql(defining_module.commonIdents().list)) {
                         break :blk self.lookupListElemSolvedVar(module_idx, type_scope, type_scope.typeStoreConst().getNominalBackingVar(nominal));
                     }
                     const args = type_scope.typeStoreConst().sliceNominalArgs(nominal);
@@ -9554,11 +9623,21 @@ pub const Lowerer = struct {
                 }
             },
             .nominal => |nominal| {
-                const child = self.nominalPatternChildContext(type_scope, source_ty, source_solved_var);
+                const child = try self.nominalPatternChildContext(
+                    module_idx,
+                    type_scope,
+                    source_ty,
+                    nominal.backing_pattern,
+                );
                 try self.bindPatternEnvFromTypeWithSolvedVar(module_idx, type_scope, nominal.backing_pattern, child.ty, child.solved_var, env);
             },
             .nominal_external => |nominal| {
-                const child = self.nominalPatternChildContext(type_scope, source_ty, source_solved_var);
+                const child = try self.nominalPatternChildContext(
+                    module_idx,
+                    type_scope,
+                    source_ty,
+                    nominal.backing_pattern,
+                );
                 try self.bindPatternEnvFromTypeWithSolvedVar(module_idx, type_scope, nominal.backing_pattern, child.ty, child.solved_var, env);
             },
             .underscore,

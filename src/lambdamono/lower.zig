@@ -1196,7 +1196,7 @@ const Lowerer = struct {
                 },
             })),
             .tag_union => |tag_union| if (self.tagUnionIsInternalLambdaSet(tag_union.tags))
-                try self.makeErasedFnType(try self.commonErasedCaptureTypeFromExecutable(tag_union.tags))
+                try self.makeErasedFnType(self.commonErasedCaptureTypeFromExecutable(tag_union.tags))
             else
                 ty,
             .erased_fn => ty,
@@ -2272,8 +2272,40 @@ const Lowerer = struct {
                 .args = try self.specializeExprSpan(inst, mono_cache, venv, tag.args),
             } } },
             .record => |fields| blk: {
-                const lowered_fields = try self.specializeFieldSpan(inst, mono_cache, venv, fields);
-                const record_ty = try self.recordTypeFromFields(lowered_fields);
+                const source_fields = self.input.store.sliceFieldExprSpan(fields);
+                const lowered = try self.allocator.alloc(ast.FieldExpr, source_fields.len);
+                defer self.allocator.free(lowered);
+
+                const use_expected_record = switch (self.types.getTypePreservingNominal(default_ty)) {
+                    .nominal, .record => true,
+                    else => false,
+                };
+
+                for (source_fields, 0..) |field, i| {
+                    var value = try self.specializeExpr(inst, mono_cache, venv, field.value);
+                    if (use_expected_record) {
+                        const expected_field = self.recordFieldByName(default_ty, field.name) orelse
+                            debugPanic("lambdamono.lower.record missing expected record field");
+                        if (!self.types.equalIds(self.output.getExpr(value).ty, expected_field.ty)) {
+                            value = try self.bridgeExprToExpectedType(
+                                inst,
+                                mono_cache,
+                                try self.instantiatedSourceTypeForExpr(inst, venv, field.value),
+                                value,
+                                expected_field.ty,
+                            );
+                        }
+                    }
+                    lowered[i] = .{
+                        .name = field.name,
+                        .value = value,
+                    };
+                }
+                const lowered_fields = try self.output.addFieldExprSpan(lowered);
+                const record_ty = if (use_expected_record)
+                    default_ty
+                else
+                    try self.recordTypeFromFields(lowered_fields);
                 const ordered_fields = try self.orderedRecordFields(record_ty, lowered_fields);
                 break :blk .{ .ty = record_ty, .data = .{ .record = ordered_fields } };
             },
@@ -4283,17 +4315,98 @@ const Lowerer = struct {
 
     fn instantiatedSourceTypeForExpr(
         self: *Lowerer,
-        _: *InstScope,
+        inst: *InstScope,
         venv: []const EnvEntry,
         expr_id: solved.Ast.ExprId,
     ) std.mem.Allocator.Error!TypeVarId {
         const expr = self.input.store.getExpr(expr_id);
-        if (expr.data == .var_) {
-            if (self.lookupEnvEntry(venv, expr.data.var_)) |entry| {
-                return entry.ty;
-            }
+        switch (expr.data) {
+            .var_ => |symbol| {
+                if (self.lookupEnvEntry(venv, symbol)) |entry| {
+                    return entry.ty;
+                }
+            },
+            .access => |access| {
+                const record_ty = try self.instantiatedSourceTypeForExpr(inst, venv, access.record);
+                return self.solvedRecordFieldTypeByName(record_ty, access.field) orelse
+                    debugPanic("lambdamono.lower.instantiatedSourceTypeForExpr missing solved record field");
+            },
+            .tuple_access => |access| {
+                const tuple_ty = try self.instantiatedSourceTypeForExpr(inst, venv, access.tuple);
+                return self.solvedTupleElemType(tuple_ty, access.elem_index) orelse
+                    debugPanic("lambdamono.lower.instantiatedSourceTypeForExpr missing solved tuple field");
+            },
+            .tag_payload => |payload| {
+                const union_ty = try self.instantiatedSourceTypeForExpr(inst, venv, payload.tag_union);
+                return self.solvedTagPayloadType(union_ty, payload.tag_discriminant, payload.payload_index) orelse
+                    debugPanic("lambdamono.lower.instantiatedSourceTypeForExpr missing solved tag payload");
+            },
+            else => {},
         }
         return try self.cloneFreshType(expr.ty);
+    }
+
+    fn solvedRecordFieldTypeByName(
+        self: *Lowerer,
+        record_ty: TypeVarId,
+        field_name: base.Ident.Idx,
+    ) ?TypeVarId {
+        const root = self.input.types.unlinkPreservingNominal(record_ty);
+        return switch (self.input.types.getNode(root)) {
+            .nominal => |nominal| self.solvedRecordFieldTypeByName(nominal.backing, field_name),
+            .content => |content| switch (content) {
+                .record => |record| blk: {
+                    for (self.input.types.sliceFields(record.fields)) |field| {
+                        if (field.name == field_name) break :blk field.ty;
+                    }
+                    break :blk null;
+                },
+                else => null,
+            },
+            else => null,
+        };
+    }
+
+    fn solvedTupleElemType(
+        self: *Lowerer,
+        tuple_ty: TypeVarId,
+        elem_index: u32,
+    ) ?TypeVarId {
+        const root = self.input.types.unlinkPreservingNominal(tuple_ty);
+        return switch (self.input.types.getNode(root)) {
+            .nominal => |nominal| self.solvedTupleElemType(nominal.backing, elem_index),
+            .content => |content| switch (content) {
+                .tuple => |elems| blk: {
+                    const slice = self.input.types.sliceTypeVarSpan(elems);
+                    if (elem_index >= slice.len) break :blk null;
+                    break :blk slice[elem_index];
+                },
+                else => null,
+            },
+            else => null,
+        };
+    }
+
+    fn solvedTagPayloadType(
+        self: *Lowerer,
+        union_ty: TypeVarId,
+        tag_discriminant: u16,
+        payload_index: u16,
+    ) ?TypeVarId {
+        const root = self.input.types.unlinkErasingNominal(union_ty);
+        return switch (self.input.types.getNode(root)) {
+            .content => |content| switch (content) {
+                .tag_union => |tag_union| blk: {
+                    const tags = self.input.types.sliceTags(tag_union.tags);
+                    if (tag_discriminant >= tags.len) break :blk null;
+                    const args = self.input.types.sliceTypeVarSpan(tags[tag_discriminant].args);
+                    if (payload_index >= args.len) break :blk null;
+                    break :blk args[payload_index];
+                },
+                else => null,
+            },
+            else => null,
+        };
     }
 
     fn primitiveMethodTypeMatches(self: *const Lowerer, prim: type_mod.Prim, type_ident: base.Ident.Idx) bool {
@@ -4574,9 +4687,12 @@ const Lowerer = struct {
 
         const expr_ty = self.output.getExpr(func_expr).ty;
         switch (self.input.types.lambdaRepr(current_fn_ty)) {
-            .erased => switch (self.types.getType(expr_ty)) {
+            .erased => switch (self.types.getTypePreservingNominal(expr_ty)) {
                 .erased_fn => {},
-                else => debugPanic("lambdamono.lower.assertCallableExprMatchesSolvedType expected erased callable expr"),
+                else => debugPanicFmt(
+                    "lambdamono.lower.assertCallableExprMatchesSolvedType expected erased callable expr, found {s} for expr {d}",
+                    .{ @tagName(self.types.getTypePreservingNominal(expr_ty)), @intFromEnum(func_expr) },
+                ),
             },
             .lset => |lambdas| switch (self.types.getType(expr_ty)) {
                 .tag_union => |tag_union| {

@@ -279,6 +279,11 @@ pub const ComptimeEvaluator = struct {
             }
 
             switch (err) {
+                error.RequiresSpecialization => {
+                    // Attached method calls are not executable until later specialization
+                    // resolves them to exact callees. Leave the declaration in CIR form.
+                    return EvalResult{ .success = null };
+                },
                 error.Crash => {
                     if (self.expect.crashMessage()) |msg| {
                         return EvalResult{

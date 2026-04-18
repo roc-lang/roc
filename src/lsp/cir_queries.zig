@@ -231,6 +231,13 @@ const FindLookupContext = struct {
                     ctx.result = expr_idx;
                 }
             },
+            .e_method_call, .e_type_method_call => {
+                const size = regionSize(region);
+                if (size < ctx.best_size) {
+                    ctx.best_size = size;
+                    ctx.result = expr_idx;
+                }
+            },
             .e_field_access => |field_access| {
                 // Check if cursor is on the field/method name
                 if (regionContainsOffset(field_access.field_name_region, ctx.target_offset)) {

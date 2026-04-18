@@ -86,6 +86,10 @@ exposed_type_texts: std.StringHashMapUnmanaged(Region) = .{},
 /// This is empty for 99% of files; only used during multi-phase canonicalization (mainly Builtin.roc)
 /// Maps the fully qualified placeholder ident to its component parts for hierarchical registration
 placeholder_idents: std.AutoHashMapUnmanaged(Ident.Idx, PlaceholderInfo) = .{},
+/// Explicit mapping from parsed type declarations to canonical type-decl statements.
+/// Associated-block processing must consume this fact instead of re-deriving a
+/// type declaration from text.
+type_decl_stmt_by_ast_idx: std.AutoHashMapUnmanaged(AST.Statement.Idx, Statement.Idx) = .{},
 /// Stack of function regions for tracking var reassignment across function boundaries
 function_regions: std.array_list.Managed(Region),
 /// Maps var patterns to the function region they were declared in
@@ -242,6 +246,7 @@ pub fn deinit(
     self.exposed_ident_texts.deinit(gpa);
     self.exposed_type_texts.deinit(gpa);
     self.placeholder_idents.deinit(gpa);
+    self.type_decl_stmt_by_ast_idx.deinit(gpa);
 
     for (0..self.scopes.items.len) |i| {
         var scope = &self.scopes.items[i];
@@ -736,13 +741,13 @@ fn introduceImmediateAssociatedTypeAliases(
 
 fn processTypeDeclFirstPass(
     self: *Self,
+    ast_stmt_idx: AST.Statement.Idx,
     type_decl: std.meta.fieldInfo(AST.Statement, .type_decl).type,
     parent_name: ?Ident.Idx,
     relative_parent_name: ?Ident.Idx,
     defer_associated_blocks: bool,
 ) std.mem.Allocator.Error!void {
     const region = self.parse_ir.tokenizedRegionToRegion(type_decl.region);
-
     // First, try to get the type name from the AST to check if it was already introduced
     // in Phase 1.5.8 (for forward reference support). If so, we can reuse the existing
     // header and skip re-canonicalization to avoid duplicate diagnostics.
@@ -785,6 +790,7 @@ fn processTypeDeclFirstPass(
 
                         // Process annotation and update the placeholder
                         return try self.processTypeDeclFirstPassWithExisting(
+                            ast_stmt_idx,
                             type_decl,
                             existing_stmt_idx,
                             header_idx,
@@ -911,7 +917,7 @@ fn processTypeDeclFirstPass(
 
         break :blk stmt_idx;
     };
-
+    try self.type_decl_stmt_by_ast_idx.put(self.env.gpa, ast_stmt_idx, type_decl_stmt_idx);
     // For nested types, also add an unqualified alias so child scopes can find it
     // E.g., when introducing "Builtin.Bool", also add "Bool" -> "Builtin.Bool"
     // This allows nested scopes (like Str's or Num.U8's associated blocks) to find Bool via scope lookup
@@ -1007,7 +1013,7 @@ fn processTypeDeclFirstPass(
     // to handle sibling type forward references)
     if (!defer_associated_blocks) {
         if (type_decl.associated) |assoc| {
-            try self.processAssociatedBlock(qualified_name_idx, relative_name_idx, type_header.relative_name, assoc, false);
+            try self.processAssociatedBlock(type_decl_stmt_idx, qualified_name_idx, relative_name_idx, type_header.relative_name, assoc, false);
         }
     }
 }
@@ -1016,6 +1022,7 @@ fn processTypeDeclFirstPass(
 /// This avoids re-canonicalizing the header which would produce duplicate diagnostics.
 fn processTypeDeclFirstPassWithExisting(
     self: *Self,
+    ast_stmt_idx: AST.Statement.Idx,
     type_decl: std.meta.fieldInfo(AST.Statement, .type_decl).type,
     type_decl_stmt_idx: Statement.Idx,
     header_idx: CIR.TypeHeader.Idx,
@@ -1026,6 +1033,18 @@ fn processTypeDeclFirstPassWithExisting(
     defer_associated_blocks: bool,
     parent_name: ?Ident.Idx,
 ) std.mem.Allocator.Error!void {
+    try self.type_decl_stmt_by_ast_idx.put(self.env.gpa, ast_stmt_idx, type_decl_stmt_idx);
+    if (builtin.mode == .Debug and parent_name == null and type_decl.associated != null) {
+        const ast_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch null;
+        if (ast_header) |hdr| {
+            if (self.parse_ir.tokens.resolveIdentifier(hdr.name)) |name_ident| {
+                std.debug.print(
+                    "type_decl existing map put ast {d} -> can {d} name {s}\n",
+                    .{ @intFromEnum(ast_stmt_idx), @intFromEnum(type_decl_stmt_idx), self.env.getIdent(name_ident) },
+                );
+            }
+        }
+    }
     const ast_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch null;
     const local_type_name = if (ast_header) |hdr|
         self.parse_ir.tokens.resolveIdentifier(hdr.name)
@@ -1122,7 +1141,7 @@ fn processTypeDeclFirstPassWithExisting(
     // Process associated items
     if (!defer_associated_blocks) {
         if (type_decl.associated) |assoc| {
-            try self.processAssociatedBlock(qualified_name_idx, relative_name_idx, local_type_name orelse type_header.relative_name, assoc, false);
+            try self.processAssociatedBlock(type_decl_stmt_idx, qualified_name_idx, relative_name_idx, local_type_name orelse type_header.relative_name, assoc, false);
         }
     }
 }
@@ -1348,6 +1367,7 @@ fn introduceNestedItemAliases(
 /// relative_name is the type's name without module prefix (null for module-level associated blocks)
 fn processAssociatedBlock(
     self: *Self,
+    parent_type_decl_idx: Statement.Idx,
     qualified_name_idx: Ident.Idx,
     relative_name_idx: ?Ident.Idx,
     type_name: Ident.Idx,
@@ -1372,10 +1392,8 @@ fn processAssociatedBlock(
 
     // Introduce the parent type itself into this scope so it can be referenced by its unqualified name
     // For example, if we're processing MyBool's associated items, we need "MyBool" to resolve to "Test.MyBool"
-    if (self.scopeLookupTypeDecl(qualified_name_idx)) |parent_type_decl_idx| {
-        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-        try current_scope.introduceTypeAlias(self.env.gpa, type_name, parent_type_decl_idx);
-    }
+    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+    try current_scope.introduceTypeAlias(self.env.gpa, type_name, parent_type_decl_idx);
 
     // Note: Sibling types and ancestor types are accessible via parent scope lookup.
     // When nested types were introduced in processTypeDeclFirstPass, unqualified aliases
@@ -1405,8 +1423,6 @@ fn processAssociatedBlock(
                     // Look up the fully qualified pattern (from module scope via nesting)
                     switch (self.scopeLookup(.ident, fully_qualified_ident_idx)) {
                         .found => |pattern_idx| {
-                            const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-
                             // Add unqualified name (e.g., "my_not")
                             try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
 
@@ -1452,7 +1468,12 @@ fn processAssociatedBlock(
                 // Recursively process the nested type's associated block
                 // Skip first pass because placeholders were already created by
                 // processAssociatedItemsFirstPass Phase 2b
-                try self.processAssociatedBlock(nested_qualified_idx, nested_relative_idx, nested_type_ident, nested_assoc, true);
+                const nested_type_decl_idx = self.scopeLookupTypeDecl(nested_qualified_idx) orelse
+                    std.debug.panic(
+                        "canonicalize associated-block invariant violated: missing nested type decl for {s}",
+                        .{self.env.getIdent(nested_qualified_idx)},
+                    );
+                try self.processAssociatedBlock(nested_type_decl_idx, nested_qualified_idx, nested_relative_idx, nested_type_ident, nested_assoc, true);
             }
         }
     }
@@ -1474,10 +1495,10 @@ fn processAssociatedBlock(
 
                 // Introduce type aliases (fully qualified is already in parent scope from processTypeDeclFirstPass)
                 if (self.scopeLookupTypeDecl(qualified_ident_idx)) |qualified_type_decl_idx| {
-                    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                    const assoc_scope = &self.scopes.items[self.scopes.items.len - 1];
 
                     // Add unqualified alias (e.g., "Bar" -> the fully qualified type)
-                    try current_scope.introduceTypeAlias(self.env.gpa, unqualified_ident, qualified_type_decl_idx);
+                    try assoc_scope.introduceTypeAlias(self.env.gpa, unqualified_ident, qualified_type_decl_idx);
 
                     // Add user-facing qualified alias (e.g., "Foo.Bar" -> the fully qualified type)
                     // This allows users to write "Foo.Bar" in type annotations
@@ -1485,7 +1506,7 @@ fn processAssociatedBlock(
                     const type_name_text_str = self.env.getIdent(type_name);
                     const nested_type_text_str = self.env.getIdent(unqualified_ident);
                     const user_qualified_ident_idx = try self.env.insertQualifiedIdent(type_name_text_str, nested_type_text_str);
-                    try current_scope.introduceTypeAlias(self.env.gpa, user_qualified_ident_idx, qualified_type_decl_idx);
+                    try assoc_scope.introduceTypeAlias(self.env.gpa, user_qualified_ident_idx, qualified_type_decl_idx);
                 }
 
                 // Introduce associated items of nested types into this scope (recursively)
@@ -1526,17 +1547,17 @@ fn processAssociatedBlock(
                     // Look up the fully qualified pattern (from parent scope via nesting)
                     switch (self.scopeLookup(.ident, fully_qualified_ident_idx)) {
                         .found => |pattern_idx| {
-                            const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                            const assoc_scope = &self.scopes.items[self.scopes.items.len - 1];
 
                             // Add unqualified name (e.g., "len")
-                            try current_scope.idents.put(self.env.gpa, anno_ident, pattern_idx);
+                            try assoc_scope.idents.put(self.env.gpa, anno_ident, pattern_idx);
 
                             // Add type-qualified name (e.g., "List.len")
                             // Re-fetch strings since insertQualifiedIdent may have reallocated the ident store
                             const parent_type_text_refetched = self.env.getIdent(type_name);
                             const anno_text_refetched = self.env.getIdent(anno_ident);
                             const type_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_type_text_refetched, anno_text_refetched);
-                            try current_scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
+                            try assoc_scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
                         },
                         .not_found => {
                             // This can happen if the type_anno was followed by a matching decl
@@ -2036,7 +2057,7 @@ fn processAssociatedItemsFirstPass(
             const type_decl = stmt.type_decl;
             // Only process nominal/opaque types in this phase; aliases will be processed later
             if (type_decl.kind == .nominal or type_decl.kind == .@"opaque") {
-                try self.processTypeDeclFirstPass(type_decl, parent_name, relative_parent_name, true); // defer associated blocks
+                try self.processTypeDeclFirstPass(stmt_idx, type_decl, parent_name, relative_parent_name, true); // defer associated blocks
             }
         }
     }
@@ -2096,7 +2117,7 @@ fn processAssociatedItemsFirstPass(
         if (stmt == .type_decl) {
             const type_decl = stmt.type_decl;
             if (type_decl.kind == .alias) {
-                try self.processTypeDeclFirstPass(type_decl, parent_name, relative_parent_name, true); // defer associated blocks
+                try self.processTypeDeclFirstPass(stmt_idx, type_decl, parent_name, relative_parent_name, true); // defer associated blocks
             }
         }
     }
@@ -2374,7 +2395,7 @@ pub fn canonicalizeFile(
         switch (stmt) {
             .type_decl => |type_decl| {
                 if (type_decl.associated) |_| {
-                    try self.processTypeDeclFirstPass(type_decl, null, null, true); // defer associated blocks
+                    try self.processTypeDeclFirstPass(stmt_id, type_decl, null, null, true); // defer associated blocks
                 }
             },
             .decl => |decl| {
@@ -2556,7 +2577,15 @@ pub fn canonicalizeFile(
                     null
                 else
                     type_ident;
-                try self.processAssociatedBlock(qualified_type_ident, relative_parent, type_ident, assoc, false);
+                const type_decl_idx = self.type_decl_stmt_by_ast_idx.get(stmt_id) orelse
+                    std.debug.panic(
+                        "canonicalize associated-block invariant violated: missing canonical type decl for AST stmt {d} name {s}",
+                        .{
+                            @intFromEnum(stmt_id),
+                            self.env.getIdent(type_ident),
+                        },
+                    );
+                try self.processAssociatedBlock(type_decl_idx, qualified_type_ident, relative_parent, type_ident, assoc, false);
             }
         }
     }
@@ -2796,7 +2825,7 @@ pub fn canonicalizeFile(
             for (scc_result.sccs.items) |scc| {
                 for (scc.items) |idx| {
                     const info = type_decls.items[idx];
-                    try self.processTypeDeclFirstPass(info.type_decl, null, null, false);
+                    try self.processTypeDeclFirstPass(info.stmt_id, info.type_decl, null, null, false);
                 }
             }
         }
@@ -10200,93 +10229,122 @@ fn canonicalizeTypeAnnoBasicType(
     const type_name_region = self.parse_ir.tokens.resolve(ty.token);
 
     if (qualifier_toks.len == 0) {
-        // First, check if the type is a builtin type
-        // There are always automatically in-scope
         const type_text = self.env.getIdentText(type_name_ident);
-        if (TypeAnno.Builtin.fromBytes(type_text)) |builtin_type| {
+        const mb_builtin_type = TypeAnno.Builtin.fromBytes(type_text);
+
+        // Inside the Builtin module itself, compiler-provided primitive types are
+        // still spelled with their builtin meaning even though there are local
+        // associated blocks named List/Box/etc.
+        if (std.mem.eql(u8, self.env.module_name, "Builtin")) {
+            if (mb_builtin_type) |builtin_type| {
+                return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+                    .name = type_name_ident,
+                    .base = .{ .builtin = builtin_type },
+                } }, region);
+            }
+        }
+
+        // Unqualified type annotations obey scope first. Builtins are only the
+        // auto-imported fallback when no local/associated/imported type binding
+        // with the same user-visible name is in scope.
+        if (self.scopeLookupTypeBinding(type_name_ident)) |binding_location| {
+            const binding = binding_location.binding.*;
+            return switch (binding) {
+                .local_nominal => |stmt| try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+                    .name = type_name_ident,
+                    .base = .{ .local = .{ .decl_idx = stmt } },
+                } }, region),
+                .local_alias => |stmt| blk: {
+                    // Check if this is an alias placeholder (introduced but not yet processed).
+                    // During Phase 1.7, types are processed in topological order so forward refs work.
+                    // However, for mutually recursive aliases (cycles), one type may still be a
+                    // placeholder when another is processed - these get UNDECLARED TYPE.
+                    // EXCEPTION: Self-references pass through to be caught as RECURSIVE ALIAS in Check.
+                    if (self.processing_alias_declarations) {
+                        const alias_stmt = self.env.store.getStatement(stmt);
+                        if (alias_stmt == .s_alias_decl and alias_stmt.s_alias_decl.anno == .placeholder) {
+                            // Check if this is a self-reference (same type name as current alias)
+                            const is_self_reference = if (self.current_alias_name) |current_name|
+                                current_name.eql(type_name_ident)
+                            else
+                                false;
+
+                            if (!is_self_reference) {
+                                // This alias is a placeholder and not a self-reference - part of a cycle
+                                break :blk try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .undeclared_type = .{
+                                    .name = type_name_ident,
+                                    .region = region,
+                                } });
+                            }
+                            // Self-references pass through to be caught as RECURSIVE ALIAS in Check
+                        }
+                    }
+                    break :blk try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+                        .name = type_name_ident,
+                        .base = .{ .local = .{ .decl_idx = stmt } },
+                    } }, region);
+                },
+                .associated_nominal => |stmt| try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+                    .name = type_name_ident,
+                    .base = .{ .local = .{ .decl_idx = stmt } },
+                } }, region),
+                .external_nominal => |external| blk: {
+                    // Primitive builtin auto-imports like List/Box are represented as
+                    // external bindings with no exposed-node target. Those bindings
+                    // should still fall through to the builtin path below unless a
+                    // local declaration has shadowed the builtin name.
+                    if (external.target_node_idx == null and
+                        external.module_ident.eql(self.env.idents.builtin_module))
+                    {
+                        break :blk try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+                            .name = type_name_ident,
+                            .base = .{ .builtin = mb_builtin_type orelse unreachable },
+                        } }, region);
+                    }
+
+                    const import_idx = external.import_idx orelse {
+                        break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .module_not_imported = .{
+                            .module_name = external.module_ident,
+                            .region = type_name_region,
+                        } });
+                    };
+
+                    const target_node_idx = external.target_node_idx orelse {
+                        // Check if the module was not found
+                        if (external.module_not_found) {
+                            break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .type_from_missing_module = .{
+                                .module_name = external.module_ident,
+                                .type_name = type_name_ident,
+                                .region = type_name_region,
+                            } });
+                        } else {
+                            break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .type_not_exposed = .{
+                                .module_name = external.module_ident,
+                                .type_name = type_name_ident,
+                                .region = type_name_region,
+                            } });
+                        }
+                    };
+
+                    break :blk try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+                        .name = type_name_ident,
+                        .base = .{ .external = .{
+                            .module_idx = import_idx,
+                            .target_node_idx = target_node_idx,
+                        } },
+                    } }, region);
+                },
+            };
+        }
+
+        // If it's not shadowed by a scope binding, builtin names are always
+        // available as auto-imported types.
+        if (mb_builtin_type) |builtin_type| {
             return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
                 .name = type_name_ident,
                 .base = .{ .builtin = builtin_type },
             } }, region);
         } else {
-            // If it's not a builtin, look up in scope using unified type bindings
-            if (self.scopeLookupTypeBinding(type_name_ident)) |binding_location| {
-                const binding = binding_location.binding.*;
-                return switch (binding) {
-                    .local_nominal => |stmt| try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
-                        .name = type_name_ident,
-                        .base = .{ .local = .{ .decl_idx = stmt } },
-                    } }, region),
-                    .local_alias => |stmt| blk: {
-                        // Check if this is an alias placeholder (introduced but not yet processed).
-                        // During Phase 1.7, types are processed in topological order so forward refs work.
-                        // However, for mutually recursive aliases (cycles), one type may still be a
-                        // placeholder when another is processed - these get UNDECLARED TYPE.
-                        // EXCEPTION: Self-references pass through to be caught as RECURSIVE ALIAS in Check.
-                        if (self.processing_alias_declarations) {
-                            const alias_stmt = self.env.store.getStatement(stmt);
-                            if (alias_stmt == .s_alias_decl and alias_stmt.s_alias_decl.anno == .placeholder) {
-                                // Check if this is a self-reference (same type name as current alias)
-                                const is_self_reference = if (self.current_alias_name) |current_name|
-                                    current_name.eql(type_name_ident)
-                                else
-                                    false;
-
-                                if (!is_self_reference) {
-                                    // This alias is a placeholder and not a self-reference - part of a cycle
-                                    break :blk try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .undeclared_type = .{
-                                        .name = type_name_ident,
-                                        .region = region,
-                                    } });
-                                }
-                                // Self-references pass through to be caught as RECURSIVE ALIAS in Check
-                            }
-                        }
-                        break :blk try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
-                            .name = type_name_ident,
-                            .base = .{ .local = .{ .decl_idx = stmt } },
-                        } }, region);
-                    },
-                    .associated_nominal => |stmt| try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
-                        .name = type_name_ident,
-                        .base = .{ .local = .{ .decl_idx = stmt } },
-                    } }, region),
-                    .external_nominal => |external| blk: {
-                        const import_idx = external.import_idx orelse {
-                            break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .module_not_imported = .{
-                                .module_name = external.module_ident,
-                                .region = type_name_region,
-                            } });
-                        };
-
-                        const target_node_idx = external.target_node_idx orelse {
-                            // Check if the module was not found
-                            if (external.module_not_found) {
-                                break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .type_from_missing_module = .{
-                                    .module_name = external.module_ident,
-                                    .type_name = type_name_ident,
-                                    .region = type_name_region,
-                                } });
-                            } else {
-                                break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .type_not_exposed = .{
-                                    .module_name = external.module_ident,
-                                    .type_name = type_name_ident,
-                                    .region = type_name_region,
-                                } });
-                            }
-                        };
-
-                        break :blk try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
-                            .name = type_name_ident,
-                            .base = .{ .external = .{
-                                .module_idx = import_idx,
-                                .target_node_idx = target_node_idx,
-                            } },
-                        } }, region);
-                    },
-                };
-            }
-
             // Check if this is an auto-imported type from module_envs
             if (self.lookupAvailableModuleEnv(type_name_ident)) |auto_imported_type| {
                 // If this is a placeholder module (not yet compiled), create a pending lookup
@@ -10890,20 +10948,6 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
             .region = region,
         } });
     };
-
-    // Check if this is a builtin type
-    // Allow builtin type names to be redeclared in the Builtin module
-    // (e.g., Str := ... within Builtin.roc)
-    // Use identifier index comparison instead of string comparison for efficiency
-    if (TypeAnno.Builtin.isBuiltinTypeIdent(name_ident, self.env.idents)) {
-        const is_builtin_module = std.mem.eql(u8, self.env.module_name, "Builtin");
-        if (!is_builtin_module) {
-            return try self.env.pushMalformed(CIR.TypeHeader.Idx, Diagnostic{ .ident_already_in_scope = .{
-                .ident = name_ident,
-                .region = region,
-            } });
-        }
-    }
 
     // Canonicalize type arguments - these are parameter declarations, not references
     const scratch_top = self.env.store.scratchTypeAnnoTop();
@@ -11568,7 +11612,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                     if (type_decl.associated) |assoc| {
                         // For local types, use the type name as the qualified name
                         // (no module prefix needed since it's local to this scope)
-                        try self.processAssociatedBlock(type_header.name, type_header.name, type_header.name, assoc, false);
+                        try self.processAssociatedBlock(stmt_idx, type_header.name, type_header.name, type_header.name, assoc, false);
                     }
 
                     mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() };
@@ -12809,22 +12853,6 @@ pub fn introduceType(
 
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
-    // Check if trying to redeclare an auto-imported builtin type
-    if (self.builtin_auto_imported_types.get(name_ident)) |_| {
-        // This is an auto-imported builtin type - report error
-        // Use Region.zero() since auto-imported types don't have a meaningful source location
-        const original_region = Region.zero();
-
-        try self.env.pushDiagnostic(Diagnostic{
-            .type_redeclared = .{
-                .original_region = original_region,
-                .redeclared_region = region,
-                .name = name_ident,
-            },
-        });
-        return;
-    }
-
     // Check for shadowing in parent scopes
     var shadowed_in_parent: ?Statement.Idx = null;
     if (self.scopes.items.len > 1) {
@@ -13575,26 +13603,52 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     const right_expr = self.parse_ir.store.getExpr(field_access.right);
     const region = self.parse_ir.tokenizedRegionToRegion(field_access.region);
 
-    if (right_expr == .apply) {
-        return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-            .region = region,
-        } });
-    }
+    var call_args: ?Expr.Span = null;
+    const field_name = switch (right_expr) {
+        .ident => |right_ident| self.parse_ir.tokens.resolveIdentifier(right_ident.token) orelse {
+            return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                .region = region,
+            } });
+        },
+        .apply => |apply| blk: {
+            const callee_expr = self.parse_ir.store.getExpr(apply.@"fn");
+            if (callee_expr != .ident) {
+                return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                    .region = region,
+                } });
+            }
 
-    // Handle simple field access.
-    if (right_expr != .ident) {
+            const callee_ident = callee_expr.ident;
+            const resolved = self.parse_ir.tokens.resolveIdentifier(callee_ident.token) orelse {
+                return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                    .region = region,
+                } });
+            };
+
+            const scratch_top = self.env.store.scratchExprTop();
+            for (self.parse_ir.store.exprSlice(apply.args)) |arg_idx| {
+                if (try self.canonicalizeExpr(arg_idx)) |can_arg| {
+                    try self.env.store.addScratchExpr(can_arg.idx);
+                }
+            }
+            call_args = try self.env.store.exprSpanFrom(scratch_top);
+            break :blk resolved;
+        },
+        else => {
+            // Module-qualified access with non-ident, non-apply right side - malformed
+            return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                .region = region,
+            } });
+        },
+    };
+
+    // Handle simple field access or module-qualified apply.
+    if (right_expr != .ident and right_expr != .apply) {
         // Module-qualified access with non-ident, non-apply right side - malformed
         return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
             .region = region,
         } });
     }
-
-    const right_ident = right_expr.ident;
-    const field_name = self.parse_ir.tokens.resolveIdentifier(right_ident.token) orelse {
-        return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-            .region = region,
-        } });
-    };
 
     // Check if this is a tag access on an auto-imported nominal type (e.g., Bool.True)
     if (self.lookupAvailableModuleEnv(module_name)) |auto_imported_type| {
@@ -13657,20 +13711,52 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
 
     // If we didn't find a valid node index, report an error (don't fall back)
     const target_node_idx = target_node_idx_opt orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.print(
+                "tryModuleQualifiedLookup missing target for {s}.{s}\n",
+                .{ module_text, field_text },
+            );
+        }
         return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .qualified_ident_does_not_exist = .{
             .ident = field_name,
             .region = region,
         } });
     };
 
+    const target_module_env = (self.lookupAvailableModuleEnv(module_name) orelse unreachable).env;
+    const target_node_tag = target_module_env.store.nodes.get(@enumFromInt(@as(u32, target_node_idx))).tag;
+    if (target_node_tag == .statement_nominal_decl) {
+        const tag_expr_idx = try self.env.addExpr(CIR.Expr{
+            .e_tag = .{
+                .name = field_name,
+                .args = call_args orelse Expr.Span{ .span = DataSpan.empty() },
+            },
+        }, region);
+        return try self.env.addExpr(CIR.Expr{
+            .e_nominal_external = .{
+                .module_idx = import_idx,
+                .target_node_idx = target_node_idx,
+                .backing_expr = tag_expr_idx,
+                .backing_type = .tag,
+            },
+        }, region);
+    }
+
     // Create the e_lookup_external expression with Import.Idx
-    const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
+    const lookup_expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
         .module_idx = import_idx,
         .target_node_idx = target_node_idx,
         .ident_idx = field_name,
         .region = region,
     } }, region);
-    return expr_idx;
+    if (call_args) |args_span| {
+        return try self.env.addExpr(CIR.Expr{ .e_call = .{
+            .func = lookup_expr_idx,
+            .args = args_span,
+            .called_via = CalledVia.apply,
+        } }, region);
+    }
+    return lookup_expr_idx;
 }
 
 /// Canonicalize regular field access (not module-qualified).

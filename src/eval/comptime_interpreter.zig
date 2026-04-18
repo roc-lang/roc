@@ -331,6 +331,7 @@ pub const Interpreter = struct {
         NotNumeric,
         NullStackPointer,
         RecordIndexOutOfBounds,
+        RequiresSpecialization,
         StringOrderingNotSupported,
         StackOverflow,
         TupleIndexOutOfBounds,
@@ -3823,6 +3824,7 @@ pub const Interpreter = struct {
                 }
 
                 // Unsupported result layout is a compiler bug
+                debugUnreachable(roc_ops, "num_from_numeral produced unsupported result layout", @src());
             },
             .u8_from_str,
             .i8_from_str,
@@ -11618,10 +11620,10 @@ pub const Interpreter = struct {
                 } });
             },
             .e_method_call => {
-                std.debug.panic("eval invariant violated: unresolved method call reached comptime interpreter", .{});
+                return error.RequiresSpecialization;
             },
             .e_type_method_call => {
-                std.debug.panic("eval invariant violated: unresolved type method call reached comptime interpreter", .{});
+                return error.RequiresSpecialization;
             },
 
             // If we reach here, there's a new expression type that hasn't been added.
