@@ -465,6 +465,8 @@ import_mapping: types_mod.import_mapping.ImportMapping,
 /// Enables O(1) index-based method lookup during type checking and evaluation.
 /// Populated during canonicalization when methods are defined in associated blocks.
 method_idents: MethodIdents,
+/// Exact checked callable facts for source method-call sites.
+method_call_fns: MethodCallFn.SafeList,
 
 /// Whether to defer finalizing numeric defaults until after platform requirements are checked.
 /// Set to true for app modules that have platform imports, so that numeric literals can be
@@ -523,6 +525,14 @@ pub const RequiredType = struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+pub const MethodCallFn = struct {
+    expr_idx: CIR.Expr.Idx,
+    method_name: Ident.Idx,
+    fn_var: TypeVar,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// Relocate all pointers in the ModuleEnv by the given offset.
 /// This is used when loading a ModuleEnv from shared memory at a different address.
 pub fn relocate(self: *Self, offset: isize) void {
@@ -537,6 +547,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.store.relocate(offset);
     self.deferred_numeric_literals.relocate(offset);
     self.method_idents.relocate(offset);
+    self.method_call_fns.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
     if (self.module_name.len > 0) {
@@ -604,6 +615,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .deferred_numeric_literals = try DeferredNumericLiteral.SafeList.initCapacity(gpa, 32),
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
         .method_idents = MethodIdents.init(),
+        .method_call_fns = try MethodCallFn.SafeList.initCapacity(gpa, 32),
     };
 }
 
@@ -646,6 +658,9 @@ pub fn cloneForEval(self: *const Self, gpa: std.mem.Allocator) std.mem.Allocator
 
     var method_idents = try self.method_idents.clone(gpa);
     errdefer method_idents.deinit(gpa);
+
+    var method_call_fns = try self.method_call_fns.clone(gpa);
+    errdefer method_call_fns.deinit(gpa);
 
     var rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){};
     errdefer rigid_vars.deinit(gpa);
@@ -690,6 +705,7 @@ pub fn cloneForEval(self: *const Self, gpa: std.mem.Allocator) std.mem.Allocator
         .deferred_numeric_literals = deferred_numeric_literals,
         .import_mapping = import_mapping,
         .method_idents = method_idents,
+        .method_call_fns = method_call_fns,
         .defer_numeric_defaults = self.defer_numeric_defaults,
     };
 }
@@ -707,6 +723,7 @@ pub fn deinit(self: *Self) void {
     self.deferred_numeric_literals.deinit(self.gpa);
     self.import_mapping.deinit();
     self.method_idents.deinit(self.gpa);
+    self.method_call_fns.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
 
@@ -2563,6 +2580,7 @@ pub const Serialized = extern struct {
     deferred_numeric_literals: DeferredNumericLiteral.SafeList.Serialized,
     import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
     method_idents: MethodIdents.Serialized,
+    method_call_fns: MethodCallFn.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
@@ -2615,6 +2633,7 @@ pub const Serialized = extern struct {
         self.import_mapping_reserved = .{ 0, 0, 0, 0, 0, 0 };
         // Serialize method_idents map
         try self.method_idents.serialize(&env.method_idents, allocator, writer);
+        try self.method_call_fns.serialize(&env.method_call_fns, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
     }
@@ -2658,6 +2677,7 @@ pub const Serialized = extern struct {
             .deferred_numeric_literals = self.deferred_numeric_literals.deserializeInto(base_addr),
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
+            .method_call_fns = self.method_call_fns.deserializeInto(base_addr),
             .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
         };
 
@@ -2705,6 +2725,7 @@ pub const Serialized = extern struct {
             .deferred_numeric_literals = self.deferred_numeric_literals.deserializeInto(base_addr),
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
+            .method_call_fns = self.method_call_fns.deserializeInto(base_addr),
             .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
         };
 
@@ -3407,6 +3428,39 @@ pub fn getMethodIdent(self: *const Self, type_name: []const u8, method_name: []c
 pub fn registerMethodIdent(self: *Self, type_ident: Ident.Idx, method_ident: Ident.Idx, qualified_ident: Ident.Idx) !void {
     const key = MethodKey{ .type_ident = type_ident, .method_ident = method_ident };
     try self.method_idents.put(self.gpa, key, qualified_ident);
+}
+
+pub fn recordMethodCallFn(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    method_name: Ident.Idx,
+    fn_var: TypeVar,
+) std.mem.Allocator.Error!void {
+    for (self.method_call_fns.items.items) |entry| {
+        if (entry.expr_idx != expr_idx or entry.method_name != method_name) continue;
+        if (entry.fn_var != fn_var) {
+            std.debug.panic(
+                "ModuleEnv invariant violated: duplicate method-call fn for expr {d} method {s}",
+                .{ @intFromEnum(expr_idx), self.getIdent(method_name) },
+            );
+        }
+        return;
+    }
+
+    _ = try self.method_call_fns.append(self.gpa, .{
+        .expr_idx = expr_idx,
+        .method_name = method_name,
+        .fn_var = fn_var,
+    });
+}
+
+pub fn methodCallFnVar(self: *const Self, expr_idx: CIR.Expr.Idx, _: Ident.Idx) ?TypeVar {
+    for (self.method_call_fns.items.items) |entry| {
+        if (entry.expr_idx == expr_idx) {
+            return entry.fn_var;
+        }
+    }
+    return null;
 }
 
 /// Looks up a method identifier by type and method ident indices.

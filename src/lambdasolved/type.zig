@@ -333,6 +333,27 @@ pub const Store = struct {
         };
     }
 
+    pub fn maybeLambdaRepr(self: *const Store, ty: TypeVarId) ?LambdaRepr {
+        var id = ty;
+        while (true) {
+            switch (self.getNode(id)) {
+                .link => |next| id = next,
+                else => break,
+            }
+        }
+
+        return switch (self.getNode(id)) {
+            .nominal => |nominal| self.maybeLambdaRepr(nominal.backing),
+            .content => |content| switch (content) {
+                .func => self.lambdaRepr(id),
+                .lambda_set => |span| .{ .lset = self.sliceLambdas(span) },
+                .primitive => |prim| if (prim == .erased) .erased else null,
+                else => null,
+            },
+            else => null,
+        };
+    }
+
     pub fn maybeLambdaMember(self: *const Store, fn_ty: TypeVarId, symbol: Symbol) ?LambdaMember {
         return switch (self.lambdaRepr(fn_ty)) {
             .erased => null,
@@ -354,9 +375,26 @@ pub const Store = struct {
             debugPanic("lambdasolved.type requireLambdaMember missing lambda in lambda set");
     }
 
+    pub fn requireLambdaCaptures(self: *const Store, fn_ty: TypeVarId, symbol: Symbol) []const Capture {
+        return self.requireLambdaMember(fn_ty, symbol).captures;
+    }
+
     pub fn hasCapturelessLambda(self: *const Store, fn_ty: TypeVarId, symbol: Symbol) bool {
         const member = self.maybeLambdaMember(fn_ty, symbol) orelse return false;
         return member.captures.len == 0;
+    }
+
+    pub fn structuralKeyOwned(self: *const Store, ty: TypeVarId) std.mem.Allocator.Error![]u8 {
+        var serializer = StructuralKeySerializer{
+            .allocator = self.allocator,
+            .store = self,
+            .seen = std.AutoHashMap(TypeVarId, u32).init(self.allocator),
+            .out = .empty,
+            .next_id = 0,
+        };
+        defer serializer.deinit();
+        try serializer.writeType(ty);
+        return try serializer.out.toOwnedSlice(self.allocator);
     }
 
     const TypePair = struct {
@@ -526,6 +564,116 @@ pub const Store = struct {
             }
             debugPanic("lambdasolved.type duplicate tag constructor reached addTags");
         }
+    }
+};
+
+const StructuralKeySerializer = struct {
+    allocator: std.mem.Allocator,
+    store: *const Store,
+    seen: std.AutoHashMap(TypeVarId, u32),
+    out: std.ArrayList(u8),
+    next_id: u32,
+
+    fn deinit(self: *StructuralKeySerializer) void {
+        self.seen.deinit();
+        self.out.deinit(self.allocator);
+    }
+
+    fn writeType(self: *StructuralKeySerializer, ty: TypeVarId) std.mem.Allocator.Error!void {
+        const root = self.store.unlinkConst(ty);
+        if (self.seen.get(root)) |existing| {
+            try self.out.append(self.allocator, 'r');
+            try self.writeU32(existing);
+            return;
+        }
+
+        const id = self.next_id;
+        self.next_id += 1;
+        try self.seen.put(root, id);
+
+        switch (self.store.getNode(root)) {
+            .link => unreachable,
+            .unbd => try self.out.append(self.allocator, 'u'),
+            .for_a => try self.out.append(self.allocator, 'a'),
+            .nominal => |nominal| {
+                try self.out.append(self.allocator, 'n');
+                try self.writeU32(nominal.module_idx);
+                try self.writeU32(@as(u32, @bitCast(nominal.ident)));
+                try self.writeBool(nominal.is_opaque);
+                const args = self.store.sliceTypeVarSpan(nominal.args);
+                try self.writeU32(@intCast(args.len));
+                for (args) |arg| try self.writeType(arg);
+                try self.writeType(nominal.backing);
+            },
+            .content => |content| switch (content) {
+                .func => |func| {
+                    try self.out.append(self.allocator, 'f');
+                    try self.writeType(func.arg);
+                    try self.writeType(func.lset);
+                    try self.writeType(func.ret);
+                },
+                .list => |elem| {
+                    try self.out.append(self.allocator, 'l');
+                    try self.writeType(elem);
+                },
+                .box => |elem| {
+                    try self.out.append(self.allocator, 'b');
+                    try self.writeType(elem);
+                },
+                .tuple => |span| {
+                    try self.out.append(self.allocator, 't');
+                    const elems = self.store.sliceTypeVarSpan(span);
+                    try self.writeU32(@intCast(elems.len));
+                    for (elems) |elem| try self.writeType(elem);
+                },
+                .tag_union => |tag_union| {
+                    try self.out.append(self.allocator, 'g');
+                    const tags = self.store.sliceTags(tag_union.tags);
+                    try self.writeU32(@intCast(tags.len));
+                    for (tags) |tag| {
+                        try self.writeU32(@as(u32, @bitCast(tag.name)));
+                        const args = self.store.sliceTypeVarSpan(tag.args);
+                        try self.writeU32(@intCast(args.len));
+                        for (args) |arg| try self.writeType(arg);
+                    }
+                },
+                .record => |record| {
+                    try self.out.append(self.allocator, 'd');
+                    const fields = self.store.sliceFields(record.fields);
+                    try self.writeU32(@intCast(fields.len));
+                    for (fields) |field| {
+                        try self.writeU32(@as(u32, @bitCast(field.name)));
+                        try self.writeType(field.ty);
+                    }
+                },
+                .primitive => |prim| {
+                    try self.out.append(self.allocator, 'p');
+                    try self.writeU32(@intFromEnum(prim));
+                },
+                .lambda_set => |span| {
+                    try self.out.append(self.allocator, 's');
+                    const lambdas = self.store.sliceLambdas(span);
+                    try self.writeU32(@intCast(lambdas.len));
+                    for (lambdas) |lambda| {
+                        try self.writeU32(lambda.symbol.raw());
+                        const captures = self.store.sliceCaptures(lambda.captures);
+                        try self.writeU32(@intCast(captures.len));
+                        for (captures) |capture| {
+                            try self.writeU32(capture.symbol.raw());
+                            try self.writeType(capture.ty);
+                        }
+                    }
+                },
+            },
+        }
+    }
+
+    fn writeU32(self: *StructuralKeySerializer, value: u32) std.mem.Allocator.Error!void {
+        try self.out.appendSlice(self.allocator, std.mem.asBytes(&value));
+    }
+
+    fn writeBool(self: *StructuralKeySerializer, value: bool) std.mem.Allocator.Error!void {
+        try self.out.append(self.allocator, if (value) 1 else 0);
     }
 };
 

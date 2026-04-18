@@ -295,6 +295,7 @@ const Lowerer = struct {
                     .ty = expr.ty,
                     .data = .{ .method_call = .{
                         .receiver = try self.lowerExprInto(&lowered.lifted_defs, venv, method_call.receiver),
+                        .method_fn_ty = method_call.method_fn_ty,
                         .method_name = method_call.method_name,
                         .args = try self.lowerExprSpan(&lowered.lifted_defs, venv, method_call.args),
                     } },
@@ -305,6 +306,7 @@ const Lowerer = struct {
                     .ty = expr.ty,
                     .data = .{ .type_method_call = .{
                         .dispatcher_ty = method_call.dispatcher_ty,
+                        .method_fn_ty = method_call.method_fn_ty,
                         .method_name = method_call.method_name,
                         .args = try self.lowerExprSpan(&lowered.lifted_defs, venv, method_call.args),
                     } },

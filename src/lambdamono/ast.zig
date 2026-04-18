@@ -91,6 +91,7 @@ pub const Expr = struct {
             body: ExprId,
             rest: ExprId,
         },
+        bridge: ExprId,
         call: struct {
             proc: Symbol,
             args: Span(ExprId),

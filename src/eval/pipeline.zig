@@ -49,7 +49,13 @@ pub const ModuleSource = struct {
 const AvailableImport = struct {
     name: []const u8,
     env: *const ModuleEnv,
+    statement_idx: ?CIR.Statement.Idx,
 };
+
+fn availableImportStatementIdx(module_env: *const ModuleEnv) ?CIR.Statement.Idx {
+    _ = module_env;
+    return null;
+}
 
 pub const CheckedModule = struct {
     module_env: *ModuleEnv,
@@ -139,6 +145,7 @@ pub fn parseAndCanonicalizeProgramWrapped(
             available_imports[i] = .{
                 .name = extra.module_env.module_name,
                 .env = extra.module_env,
+                .statement_idx = availableImportStatementIdx(extra.module_env),
             };
         }
 
@@ -162,6 +169,7 @@ pub fn parseAndCanonicalizeProgramWrapped(
         main_imports[i] = .{
             .name = extra.module_env.module_name,
             .env = extra.module_env,
+            .statement_idx = availableImportStatementIdx(extra.module_env),
         };
     }
 
@@ -299,6 +307,7 @@ pub fn parseCheckModule(
         const qualified_ident = try module_env.insertIdent(base.Ident.for_text(available.name));
         try imported_modules.put(import_ident, .{
             .env = available.env,
+            .statement_idx = available.statement_idx,
             .qualified_type_ident = qualified_ident,
         });
     }
@@ -474,7 +483,57 @@ fn lowerToLirForTarget(
     for (resources.extra_modules, 0..) |module, i| {
         module_envs[i + 2] = module.module_env;
     }
-    return lowerTypedCIRToLirForTarget(allocator, &resources.typed_cir_modules, module_envs, target_usize);
+
+    const defs = resources.module_env.store.sliceDefs(resources.module_env.all_defs);
+    var entry_def: ?CIR.Def.Idx = null;
+    for (defs) |def_idx| {
+        const def = resources.module_env.store.getDef(def_idx);
+        if (def.expr == resources.expr_idx) {
+            entry_def = def_idx;
+            break;
+        }
+    }
+    const entry_def_idx = entry_def orelse return error.NoRootDefinition;
+
+    trace.log("typed-cir -> monotype", .{});
+    var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, &resources.typed_cir_modules, 1, null);
+    defer mono_lowerer.deinit();
+    const entry_symbol = try mono_lowerer.specializeTopLevelDef(0, entry_def_idx);
+    const mono = try mono_lowerer.run(0);
+    debugValidateMonotypeTypes(&mono.types);
+
+    trace.log("monotype -> monotype_lifted", .{});
+    const lifted = try monotype_lifted.Lower.run(allocator, mono);
+    trace.log("monotype_lifted -> lambdasolved", .{});
+    const solved = try lambdasolved.Lower.run(allocator, lifted);
+    trace.log("lambdasolved -> lambdamono", .{});
+    const executable = try lambdamono.Lower.runWithEntrypoints(allocator, solved, &.{entry_symbol});
+    const runtime_entry_symbol = if (executable.entrypoint_wrappers.len != 0 and !executable.entrypoint_wrappers[0].isNone())
+        executable.entrypoint_wrappers[0]
+    else
+        entry_symbol;
+    trace.log("lambdamono -> ir", .{});
+    const lowered_ir = try ir.Lower.run(allocator, executable);
+
+    trace.log("ir -> lir", .{});
+    var lowered_lir = try FromIr.run(
+        allocator,
+        module_envs,
+        null,
+        target_usize,
+        lowered_ir,
+    );
+    errdefer lowered_lir.deinit();
+    try lir.Ownership.inferProcResultContracts(allocator, &lowered_lir.store, &lowered_lir.layouts);
+    try lir.RcInsert.run(allocator, &lowered_lir.store, &lowered_lir.layouts);
+    try lir.SharedSwitchTail.run(allocator, &lowered_lir.store);
+
+    const proc_id = lowered_lir.proc_ids_by_symbol.get(runtime_entry_symbol.raw()) orelse return error.NoRootProc;
+    return .{
+        .lir_result = lowered_lir,
+        .main_proc = proc_id,
+        .target_usize = target_usize,
+    };
 }
 
 pub fn cleanupCheckedModule(allocator: std.mem.Allocator, module: CheckedModule) void {

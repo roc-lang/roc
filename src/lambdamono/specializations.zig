@@ -1,4 +1,4 @@
-//! Cor-style executable specialization queue.
+//! Solved-callable-driven executable specialization queue.
 
 const std = @import("std");
 const solved = @import("lambdasolved");
@@ -9,36 +9,42 @@ const symbol_mod = @import("symbol");
 const Symbol = symbol_mod.Symbol;
 const TypeVarId = solved.Type.TypeVarId;
 
-pub const CaptureSpec = union(enum) {
-    toplevel,
-    lset: type_mod.TypeId,
-    erased: type_mod.TypeId,
-};
-
 pub const Pending = struct {
+    pub const ReprMode = enum(u8) {
+        natural,
+        erased_boundary,
+    };
+
     name: Symbol,
+    repr_mode: ReprMode,
     fn_ty: TypeVarId,
     fn_def: solved.Ast.FnDef,
+    requested_types: solved.Type.Store,
     requested_ty: TypeVarId,
-    sig: SigKey,
+    key_bytes: []const u8,
     specialized_symbol: Symbol,
     specialized: ?ast.FnDef = null,
+    result_ty: ?type_mod.TypeId = null,
 };
 
 pub const Queue = struct {
     allocator: std.mem.Allocator,
     items: std.ArrayList(Pending),
-    by_key: std.AutoHashMap(SigKey, usize),
+    by_key: std.StringHashMap(usize),
 
     pub fn init(allocator: std.mem.Allocator) Queue {
         return .{
             .allocator = allocator,
             .items = .empty,
-            .by_key = std.AutoHashMap(SigKey, usize).init(allocator),
+            .by_key = std.StringHashMap(usize).init(allocator),
         };
     }
 
     pub fn deinit(self: *Queue) void {
+        for (self.items.items) |*item| {
+            item.requested_types.deinit();
+            self.allocator.free(item.key_bytes);
+        }
         self.items.deinit(self.allocator);
         self.by_key.deinit();
     }
@@ -50,20 +56,14 @@ pub const Queue = struct {
         return null;
     }
 
-    pub fn solvedDefs(
-        self: *const Queue,
-        allocator: std.mem.Allocator,
-        _: *solved.Type.Store,
-        _: *type_mod.Store,
-        _: *const symbol_mod.Store,
-    ) std.mem.Allocator.Error![]ast.Def {
+    pub fn solvedDefs(self: *const Queue, allocator: std.mem.Allocator) std.mem.Allocator.Error![]ast.Def {
         var out = std.ArrayList(ast.Def).empty;
         errdefer out.deinit(allocator);
         for (self.items.items) |item| {
             const fn_def = item.specialized orelse continue;
             try out.append(allocator, .{
                 .bind = item.specialized_symbol,
-                .result_ty = item.sig.ret_ty,
+                .result_ty = item.result_ty orelse debugPanic("lambdamono.specializations.solvedDefs missing result type"),
                 .value = .{ .fn_ = fn_def },
             });
         }
@@ -76,46 +76,6 @@ pub const FEnvEntry = struct {
     fn_ty: TypeVarId,
     fn_def: solved.Ast.FnDef,
 };
-
-const CaptureKind = enum(u8) {
-    toplevel,
-    lset,
-    erased,
-};
-
-pub const SigKey = struct {
-    name: Symbol,
-    arg_ty: type_mod.TypeId,
-    ret_ty: type_mod.TypeId,
-    capture_kind: CaptureKind,
-    capture_ty: ?type_mod.TypeId,
-};
-
-pub fn makeSigKey(name: Symbol, arg_ty: type_mod.TypeId, ret_ty: type_mod.TypeId, captures: CaptureSpec) SigKey {
-    return switch (captures) {
-        .toplevel => .{
-            .name = name,
-            .arg_ty = arg_ty,
-            .ret_ty = ret_ty,
-            .capture_kind = .toplevel,
-            .capture_ty = null,
-        },
-        .lset => |capture_ty| .{
-            .name = name,
-            .arg_ty = arg_ty,
-            .ret_ty = ret_ty,
-            .capture_kind = .lset,
-            .capture_ty = capture_ty,
-        },
-        .erased => |capture_ty| .{
-            .name = name,
-            .arg_ty = arg_ty,
-            .ret_ty = ret_ty,
-            .capture_kind = .erased,
-            .capture_ty = capture_ty,
-        },
-    };
-}
 
 pub fn buildFEnv(allocator: std.mem.Allocator, input: *const solved.Lower.Result) std.mem.Allocator.Error![]FEnvEntry {
     var out = std.ArrayList(FEnvEntry).empty;
@@ -142,68 +102,209 @@ pub fn lookupFnExact(fenv: []const FEnvEntry, name: Symbol) ?FEnvEntry {
     return null;
 }
 
-pub fn specializeFnLset(
+pub fn specializeFn(
     queue: *Queue,
     fenv: []const FEnvEntry,
+    solved_types: *const solved.Type.Store,
     symbols: *symbol_mod.Store,
     requested_name: Symbol,
+    repr_mode: Pending.ReprMode,
     requested_ty: TypeVarId,
-    sig: SigKey,
 ) std.mem.Allocator.Error!Symbol {
     const entry = lookupFnExact(fenv, requested_name) orelse
-        debugPanic("lambdamono.specializations.specializeFnLset missing function");
-    if (queue.by_key.get(sig)) |idx| {
+        debugPanic("lambdamono.specializations.specializeFn missing function");
+    const key = try makeKey(queue.allocator, solved_types, requested_name, repr_mode, requested_ty);
+    errdefer queue.allocator.free(key);
+    if (queue.by_key.get(key)) |idx| {
+        queue.allocator.free(key);
         return queue.items.items[idx].specialized_symbol;
     }
 
+    var requested_types = solved.Type.Store.init(queue.allocator);
+    errdefer requested_types.deinit();
+    const requested_ty_copy = try cloneTypeIntoStore(queue.allocator, solved_types, &requested_types, requested_ty);
+
     const source_entry = symbols.get(requested_name);
-    const specialized_symbol = try symbols.add(source_entry.name, .{
-        .specialized_top_level_def = .{
-            .source_symbol = requested_name.raw(),
-        },
-    });
+    const specialized_symbol = try symbols.add(source_entry.name, specializedOrigin(source_entry.origin, requested_name));
     try queue.items.append(queue.allocator, .{
         .name = entry.name,
+        .repr_mode = repr_mode,
         .fn_ty = entry.fn_ty,
         .fn_def = entry.fn_def,
-        .requested_ty = requested_ty,
-        .sig = sig,
+        .requested_types = requested_types,
+        .requested_ty = requested_ty_copy,
+        .key_bytes = key,
         .specialized_symbol = specialized_symbol,
     });
-    try queue.by_key.put(sig, queue.items.items.len - 1);
+    try queue.by_key.put(key, queue.items.items.len - 1);
     return specialized_symbol;
 }
 
-pub fn specializeFnErased(
-    queue: *Queue,
-    fenv: []const FEnvEntry,
-    symbols: *symbol_mod.Store,
-    requested_name: Symbol,
-    requested_ty: TypeVarId,
-    sig: SigKey,
-) std.mem.Allocator.Error!Symbol {
-    const entry = lookupFnExact(fenv, requested_name) orelse
-        debugPanic("lambdamono.specializations.specializeFnErased missing function");
-    if (queue.by_key.get(sig)) |idx| {
-        return queue.items.items[idx].specialized_symbol;
-    }
+fn cloneTypeIntoStore(
+    allocator: std.mem.Allocator,
+    source_types: *const solved.Type.Store,
+    target_types: *solved.Type.Store,
+    ty: TypeVarId,
+) std.mem.Allocator.Error!TypeVarId {
+    var mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(allocator);
+    defer mapping.deinit();
+    return try cloneTypeRec(allocator, source_types, target_types, &mapping, ty);
+}
 
-    const source_entry = symbols.get(requested_name);
-    const specialized_symbol = try symbols.add(source_entry.name, .{
-        .specialized_top_level_def = .{
-            .source_symbol = requested_name.raw(),
+fn cloneTypeRec(
+    allocator: std.mem.Allocator,
+    source_types: *const solved.Type.Store,
+    target_types: *solved.Type.Store,
+    mapping: *std.AutoHashMap(TypeVarId, TypeVarId),
+    ty: TypeVarId,
+) std.mem.Allocator.Error!TypeVarId {
+    const id = source_types.unlinkConst(ty);
+    if (mapping.get(id)) |cached| return cached;
+
+    const cloned = switch (source_types.getNode(id)) {
+        .link => unreachable,
+        .for_a => try target_types.freshForA(),
+        .unbd => try target_types.freshUnbd(),
+        .nominal => |nominal| blk: {
+            const placeholder = try target_types.freshUnbd();
+            try mapping.put(id, placeholder);
+            const args = source_types.sliceTypeVarSpan(nominal.args);
+            const cloned_args = try allocator.alloc(TypeVarId, args.len);
+            defer allocator.free(cloned_args);
+            for (args, 0..) |arg, i| {
+                cloned_args[i] = try cloneTypeRec(allocator, source_types, target_types, mapping, arg);
+            }
+            target_types.setNode(placeholder, .{ .nominal = .{
+                .module_idx = nominal.module_idx,
+                .ident = nominal.ident,
+                .is_opaque = nominal.is_opaque,
+                .args = try target_types.addTypeVarSpan(cloned_args),
+                .backing = try cloneTypeRec(allocator, source_types, target_types, mapping, nominal.backing),
+            } });
+            break :blk placeholder;
         },
-    });
-    try queue.items.append(queue.allocator, .{
-        .name = entry.name,
-        .fn_ty = entry.fn_ty,
-        .fn_def = entry.fn_def,
-        .requested_ty = requested_ty,
-        .sig = sig,
-        .specialized_symbol = specialized_symbol,
-    });
-    try queue.by_key.put(sig, queue.items.items.len - 1);
-    return specialized_symbol;
+        .content => |content| blk: {
+            const placeholder = try target_types.freshUnbd();
+            try mapping.put(id, placeholder);
+            const node = switch (content) {
+                .primitive => solved.Type.Node{ .content = .{ .primitive = content.primitive } },
+                .func => solved.Type.Node{ .content = .{ .func = .{
+                    .arg = try cloneTypeRec(allocator, source_types, target_types, mapping, content.func.arg),
+                    .lset = try cloneTypeRec(allocator, source_types, target_types, mapping, content.func.lset),
+                    .ret = try cloneTypeRec(allocator, source_types, target_types, mapping, content.func.ret),
+                } } },
+                .list => |elem| solved.Type.Node{ .content = .{
+                    .list = try cloneTypeRec(allocator, source_types, target_types, mapping, elem),
+                } },
+                .box => |elem| solved.Type.Node{ .content = .{
+                    .box = try cloneTypeRec(allocator, source_types, target_types, mapping, elem),
+                } },
+                .tuple => |tuple| blk2: {
+                    const elems = source_types.sliceTypeVarSpan(tuple);
+                    const out = try allocator.alloc(TypeVarId, elems.len);
+                    defer allocator.free(out);
+                    for (elems, 0..) |elem, i| {
+                        out[i] = try cloneTypeRec(allocator, source_types, target_types, mapping, elem);
+                    }
+                    break :blk2 solved.Type.Node{ .content = .{
+                        .tuple = try target_types.addTypeVarSpan(out),
+                    } };
+                },
+                .record => |record| blk2: {
+                    const fields = source_types.sliceFields(record.fields);
+                    const out = try allocator.alloc(solved.Type.Field, fields.len);
+                    defer allocator.free(out);
+                    for (fields, 0..) |field, i| {
+                        out[i] = .{
+                            .name = field.name,
+                            .ty = try cloneTypeRec(allocator, source_types, target_types, mapping, field.ty),
+                        };
+                    }
+                    break :blk2 solved.Type.Node{ .content = .{
+                        .record = .{ .fields = try target_types.addFields(out) },
+                    } };
+                },
+                .tag_union => |tag_union| blk2: {
+                    const tags = source_types.sliceTags(tag_union.tags);
+                    const out = try allocator.alloc(solved.Type.Tag, tags.len);
+                    defer allocator.free(out);
+                    for (tags, 0..) |tag, i| {
+                        const args = source_types.sliceTypeVarSpan(tag.args);
+                        const out_args = try allocator.alloc(TypeVarId, args.len);
+                        defer allocator.free(out_args);
+                        for (args, 0..) |arg, arg_i| {
+                            out_args[arg_i] = try cloneTypeRec(allocator, source_types, target_types, mapping, arg);
+                        }
+                        out[i] = .{
+                            .name = tag.name,
+                            .args = try target_types.addTypeVarSpan(out_args),
+                        };
+                    }
+                    break :blk2 solved.Type.Node{ .content = .{
+                        .tag_union = .{ .tags = try target_types.addTags(out) },
+                    } };
+                },
+                .lambda_set => |lambda_set| blk2: {
+                    const lambdas = source_types.sliceLambdas(lambda_set);
+                    const out = try allocator.alloc(solved.Type.Lambda, lambdas.len);
+                    defer allocator.free(out);
+                    for (lambdas, 0..) |lambda, i| {
+                        const captures = source_types.sliceCaptures(lambda.captures);
+                        const out_captures = try allocator.alloc(solved.Type.Capture, captures.len);
+                        defer allocator.free(out_captures);
+                        for (captures, 0..) |capture, capture_i| {
+                            out_captures[capture_i] = .{
+                                .symbol = capture.symbol,
+                                .ty = try cloneTypeRec(allocator, source_types, target_types, mapping, capture.ty),
+                            };
+                        }
+                        out[i] = .{
+                            .symbol = lambda.symbol,
+                            .captures = try target_types.addCaptures(out_captures),
+                        };
+                    }
+                    break :blk2 solved.Type.Node{ .content = .{
+                        .lambda_set = try target_types.addLambdas(out),
+                    } };
+                },
+            };
+            target_types.setNode(placeholder, node);
+            break :blk placeholder;
+        },
+    };
+
+    try mapping.put(id, cloned);
+    return cloned;
+}
+
+fn makeKey(
+    allocator: std.mem.Allocator,
+    solved_types: *const solved.Type.Store,
+    requested_name: Symbol,
+    repr_mode: Pending.ReprMode,
+    requested_ty: TypeVarId,
+) std.mem.Allocator.Error![]const u8 {
+    const ty_key = try solved_types.structuralKeyOwned(requested_ty);
+    defer allocator.free(ty_key);
+
+    const source_raw: u32 = @intFromEnum(requested_name);
+    const prefix_len = @sizeOf(u32) + @sizeOf(u8);
+    const key = try allocator.alloc(u8, prefix_len + ty_key.len);
+    @memcpy(key[0..@sizeOf(u32)], std.mem.asBytes(&source_raw));
+    key[@sizeOf(u32)] = @intFromEnum(repr_mode);
+    @memcpy(key[prefix_len..], ty_key);
+    return key;
+}
+
+fn specializedOrigin(origin: symbol_mod.BindingOrigin, source_symbol: Symbol) symbol_mod.BindingOrigin {
+    return switch (origin) {
+        .lifted_local_fn, .lifted_local_fn_alias, .specialized_local_fn => .{
+            .specialized_local_fn = .{ .source_symbol = source_symbol.raw() },
+        },
+        else => .{
+            .specialized_top_level_def = .{ .source_symbol = source_symbol.raw() },
+        },
+    };
 }
 
 fn debugPanic(comptime msg: []const u8) noreturn {

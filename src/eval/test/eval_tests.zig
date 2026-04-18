@@ -2285,6 +2285,8 @@ const core_tests = [_]TestCase{
             .{
                 .name = "Helpers",
                 .source =
+                \\module [read]
+                \\
                 \\read = |value| value.get()
                 ,
             },

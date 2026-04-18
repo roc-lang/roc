@@ -160,6 +160,97 @@ pub fn lowerTypedCIRToLir(
     return pipeline.lowerTypedCIRToLir(allocator, typed_cir_modules, module_envs);
 }
 
+pub fn mainProcArgLayouts(
+    allocator: std.mem.Allocator,
+    lowered: *const LoweredProgram,
+) ![]layout_mod.Idx {
+    const proc = lowered.lir_result.store.getProcSpec(lowered.main_proc);
+    const arg_locals = lowered.lir_result.store.getLocalSpan(proc.args);
+    const arg_layouts = try allocator.alloc(layout_mod.Idx, arg_locals.len);
+    for (arg_locals, 0..) |local_id, i| {
+        arg_layouts[i] = lowered.lir_result.store.getLocal(local_id).layout_idx;
+    }
+    return arg_layouts;
+}
+
+pub fn entrypointParamSlotSize(lowered: *const LoweredProgram, layout_idx: layout_mod.Idx) u32 {
+    const layouts = &lowered.lir_result.layouts;
+    const runtime_layout_idx = layouts.runtimeRepresentationLayoutIdx(layout_idx);
+    if (runtime_layout_idx == .str) return 24;
+    if (runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec) return 16;
+
+    if (@intFromEnum(runtime_layout_idx) < layouts.layouts.len()) {
+        const layout_val = layouts.getLayout(runtime_layout_idx);
+        const size = layouts.layoutSizeAlign(layout_val).size;
+        if (layout_val.tag == .zst or size == 0) return 0;
+        if (layout_val.tag == .list or layout_val.tag == .list_of_zst) return 24;
+        if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
+            if (size > 8) return @intCast(std.mem.alignForward(u32, size, 8));
+        }
+    }
+
+    const size = layouts.layoutSizeAlign(layouts.getLayout(layout_idx)).size;
+    return if (size == 0) 0 else 8;
+}
+
+pub fn zeroedEntrypointArgBuffer(
+    allocator: std.mem.Allocator,
+    lowered: *const LoweredProgram,
+    arg_layouts: []const layout_mod.Idx,
+) !?[]u8 {
+    const EntrypointArgOrder = struct {
+        index: usize,
+        alignment: u32,
+        size: u32,
+    };
+
+    const arg_offsets = try allocator.alloc(u32, arg_layouts.len);
+    defer allocator.free(arg_offsets);
+    if (arg_layouts.len != 0) {
+        const ordered = try allocator.alloc(EntrypointArgOrder, arg_layouts.len);
+        defer allocator.free(ordered);
+
+        for (arg_layouts, 0..) |arg_layout, i| {
+            const size_align = lowered.lir_result.layouts.layoutSizeAlign(
+                lowered.lir_result.layouts.getLayout(arg_layout),
+            );
+            const slot_size = entrypointParamSlotSize(lowered, arg_layout);
+            ordered[i] = .{
+                .index = i,
+                .alignment = @intCast(size_align.alignment.toByteUnits()),
+                .size = slot_size,
+            };
+        }
+
+        const SortCtx = struct {
+            fn lessThan(_: void, lhs: EntrypointArgOrder, rhs: EntrypointArgOrder) bool {
+                if (lhs.alignment != rhs.alignment) return lhs.alignment > rhs.alignment;
+                return lhs.index < rhs.index;
+            }
+        };
+
+        std.mem.sort(EntrypointArgOrder, ordered, {}, SortCtx.lessThan);
+
+        var current_offset: u32 = 0;
+        for (ordered) |arg| {
+            current_offset = std.mem.alignForward(u32, current_offset, arg.alignment);
+            arg_offsets[arg.index] = current_offset;
+            current_offset += arg.size;
+        }
+    }
+
+    var total_size: usize = 0;
+    for (arg_layouts, 0..) |arg_layout, i| {
+        total_size = @max(total_size, @as(usize, arg_offsets[i]) + entrypointParamSlotSize(lowered, arg_layout));
+    }
+
+    if (total_size == 0) return null;
+
+    const buffer = try allocator.alignedAlloc(u8, collections.max_roc_alignment, @max(total_size, 1));
+    @memset(buffer, 0);
+    return buffer;
+}
+
 pub fn lirInterpreterInspectedStr(
     allocator: std.mem.Allocator,
     lowered: *const LoweredProgram,
@@ -175,7 +266,13 @@ pub fn lirInterpreterInspectedStr(
     );
     defer interp.deinit();
 
-    const result = interp.eval(.{ .proc_id = lowered.main_proc }) catch |err| switch (err) {
+    const arg_layouts = try mainProcArgLayouts(allocator, lowered);
+    defer allocator.free(arg_layouts);
+
+    const result = interp.eval(.{
+        .proc_id = lowered.main_proc,
+        .arg_layouts = arg_layouts,
+    }) catch |err| switch (err) {
         error.RuntimeError => {
             if (interp.getRuntimeErrorMessage()) |msg| {
                 std.debug.print("eval interpreter runtime error: {s}\n", .{msg});
@@ -214,10 +311,12 @@ pub fn devEvaluatorInspectedStr(
     try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
 
     const proc = lowered.lir_result.store.getProcSpec(lowered.main_proc);
+    const arg_layouts = try mainProcArgLayouts(allocator, lowered);
+    defer allocator.free(arg_layouts);
     const entrypoint = try codegen.generateEntrypointWrapper(
         "roc_eval_test_main",
         lowered.main_proc,
-        &.{},
+        arg_layouts,
         proc.ret_layout,
     );
     var exec_mem = try ExecutableMemory.initWithEntryOffset(
@@ -228,6 +327,9 @@ pub fn devEvaluatorInspectedStr(
 
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
+
+    const arg_buffer = try zeroedEntrypointArgBuffer(allocator, lowered, arg_layouts);
+    defer if (arg_buffer) |buf| allocator.free(buf);
 
     const ret_layout = proc.ret_layout;
     const size_align = lowered.lir_result.layouts.layoutSizeAlign(lowered.lir_result.layouts.getLayout(ret_layout));
@@ -247,7 +349,11 @@ pub fn devEvaluatorInspectedStr(
         return error.Crash;
     }
 
-    exec_mem.callRocABI(@ptrCast(runtime_env.get_ops()), @ptrCast(ret_buf.ptr), null);
+    exec_mem.callRocABI(
+        @ptrCast(runtime_env.get_ops()),
+        @ptrCast(ret_buf.ptr),
+        if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
+    );
 
     switch (runtime_env.crashState()) {
         .did_not_crash => {},
@@ -509,7 +615,13 @@ pub fn evalExprToValue(
     );
     eval_state.interp = interp;
 
-    const result = eval_state.interp.?.eval(.{ .proc_id = eval_state.compiled.lowered.main_proc }) catch |err| {
+    const arg_layouts = try mainProcArgLayouts(allocator, &eval_state.compiled.lowered);
+    defer allocator.free(arg_layouts);
+
+    const result = eval_state.interp.?.eval(.{
+        .proc_id = eval_state.compiled.lowered.main_proc,
+        .arg_layouts = arg_layouts,
+    }) catch |err| {
         return err;
     };
     const ret_layout = eval_state.compiled.lowered.lir_result.store.getProcSpec(eval_state.compiled.lowered.main_proc).ret_layout;
@@ -532,7 +644,13 @@ pub fn evalLoweredNumericI128(allocator: std.mem.Allocator, lowered: *const Lowe
     );
     defer interp.deinit();
 
-    const result = try interp.eval(.{ .proc_id = lowered.main_proc });
+    const arg_layouts = try mainProcArgLayouts(allocator, lowered);
+    defer allocator.free(arg_layouts);
+
+    const result = try interp.eval(.{
+        .proc_id = lowered.main_proc,
+        .arg_layouts = arg_layouts,
+    });
     const ret_layout = lowered.lir_result.store.getProcSpec(lowered.main_proc).ret_layout;
     const layout_val = lowered.lir_result.layouts.getLayout(ret_layout);
     const int_value = try readNumericI128(result.value, layout_val);
@@ -616,7 +734,13 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: T
     );
     defer interp.deinit();
 
-    _ = interp.eval(.{ .proc_id = compiled.lowered.main_proc }) catch |err| {
+    const arg_layouts = try mainProcArgLayouts(interpreter_allocator, &compiled.lowered);
+    defer interpreter_allocator.free(arg_layouts);
+
+    _ = interp.eval(.{
+        .proc_id = compiled.lowered.main_proc,
+        .arg_layouts = arg_layouts,
+    }) catch |err| {
         try std.testing.expectEqual(expected_error, err);
         return;
     };
@@ -827,7 +951,13 @@ pub fn runExpectTypeMismatchAndCrash(src: []const u8) !void {
     );
     defer interp.deinit();
 
-    _ = interp.eval(.{ .proc_id = compiled.lowered.main_proc }) catch |err| {
+    const arg_layouts = try mainProcArgLayouts(interpreter_allocator, &compiled.lowered);
+    defer interpreter_allocator.free(arg_layouts);
+
+    _ = interp.eval(.{
+        .proc_id = compiled.lowered.main_proc,
+        .arg_layouts = arg_layouts,
+    }) catch |err| {
         switch (err) {
             error.Crash, error.RuntimeError => return,
             else => return error.UnexpectedError,

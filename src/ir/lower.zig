@@ -42,6 +42,7 @@ const Lowerer = struct {
     output: ast.Store,
     root_defs: std.ArrayList(ast.DefId),
     value_thunks: std.AutoHashMap(Symbol, ValueThunk),
+    current_def_ret_layout: ?ast.LayoutRef = null,
 
     const EnvEntry = struct {
         symbol: Symbol,
@@ -146,6 +147,10 @@ const Lowerer = struct {
     }
 
     fn lowerDef(self: *Lowerer, def_id: lambdamono.Ast.DefId, def: lambdamono.Ast.Def) std.mem.Allocator.Error!ast.Def {
+        const saved_ret_layout = self.current_def_ret_layout;
+        self.current_def_ret_layout = self.input.layouts.defRetLayout(def_id);
+        defer self.current_def_ret_layout = saved_ret_layout;
+
         return switch (def.value) {
             .fn_ => |fn_def| blk: {
                 const args = try self.lowerTypedSymbolSpan(fn_def.args);
@@ -235,7 +240,7 @@ const Lowerer = struct {
                 if (self.lookupEnv(env, symbol)) |value| {
                     block.setTerm(.{ .value = value });
                 } else if (self.value_thunks.get(symbol)) |value_thunk| {
-                    const temp = try self.freshVar(value_thunk.result_ty, "thunk_result");
+                    const temp = try self.freshVarWithLayout(self.procRetLayoutRef(value_thunk.proc), "thunk_result");
                     try block.stmts.append(self.allocator, .{ .let_ = .{
                         .bind = temp,
                         .expr = try self.output.addExpr(.{ .call_direct = .{
@@ -263,33 +268,37 @@ const Lowerer = struct {
             .record => |fields| {
                 const lowered_fields = try self.lowerFieldValues(&block, env, expr.ty, fields);
                 if (lowered_fields == null) return if (block.has_term) block else debugPanic("ir.lower record missing terminator");
-                try self.emitLeafExpr(&block, expr.ty, "record", .{ .make_struct = lowered_fields.? });
+                const target_layout = self.input.layouts.layoutForType(expr.ty);
+                const bridged_fields = try self.bridgeStructFieldsToTargetLayout(&block, target_layout, lowered_fields.?);
+                try self.emitLeafExpr(&block, expr.ty, "record", .{ .make_struct = bridged_fields });
             },
             .tuple => |items| {
                 const lowered_items = try self.lowerValueSpan(&block, env, items);
                 if (lowered_items == null) return if (block.has_term) block else debugPanic("ir.lower tuple missing terminator");
-                try self.emitLeafExpr(&block, expr.ty, "tuple", .{ .make_struct = lowered_items.? });
+                const target_layout = self.input.layouts.layoutForType(expr.ty);
+                const bridged_items = try self.bridgeStructFieldsToTargetLayout(&block, target_layout, lowered_items.?);
+                try self.emitLeafExpr(&block, expr.ty, "tuple", .{ .make_struct = bridged_items });
             },
             .tag_payload => |tag_payload| {
                 const tag_union = try self.lowerSubexprValue(&block, env, tag_payload.tag_union);
                 if (tag_union == null) return if (block.has_term) block else debugPanic("ir.lower tag_payload missing terminator");
                 const payload_layout = self.input.layouts.exprTagPayloadLayout(expr_id);
-                const payload_var = try self.freshVarWithLayout(payload_layout, "tag_payload");
-                try block.stmts.append(self.allocator, .{ .let_ = .{
-                    .bind = payload_var,
-                    .expr = try self.output.addExpr(.{ .get_union_struct = .{
-                        .value = tag_union.?,
-                        .tag_discriminant = tag_payload.tag_discriminant,
-                    } }),
-                } });
-                const temp = try self.freshVar(expr.ty, "tag_payload_field");
-                try block.stmts.append(self.allocator, .{ .let_ = .{
-                    .bind = temp,
-                    .expr = try self.output.addExpr(.{ .get_struct_field = .{
-                        .record = payload_var,
-                        .field_index = tag_payload.payload_index,
-                    } }),
-                } });
+                const payload_var = try self.emitUnionPayloadValue(
+                    &block.stmts,
+                    tag_union.?,
+                    tag_payload.tag_discriminant,
+                    payload_layout,
+                    "tag_payload",
+                );
+                const actual_field_layout = self.input.layouts.exprFieldLayout(expr_id);
+                const temp = try self.emitStructFieldValue(
+                    &block,
+                    payload_var,
+                    tag_payload.payload_index,
+                    actual_field_layout,
+                    expr.ty,
+                    "tag_payload_field",
+                );
                 block.setTerm(.{ .value = temp });
             },
             .list => |items| {
@@ -309,9 +318,10 @@ const Lowerer = struct {
                         payload_layout,
                         "tag_payload",
                     );
+                    const bridged_args = try self.bridgeStructFieldsToTargetLayout(&block, payload_layout, lowered_args.?);
                     try block.stmts.append(self.allocator, .{ .let_ = .{
                         .bind = payload_var,
-                        .expr = try self.output.addExpr(.{ .make_struct = lowered_args.? }),
+                        .expr = try self.output.addExpr(.{ .make_struct = bridged_args }),
                     } });
                     break :blk payload_var;
                 };
@@ -329,35 +339,30 @@ const Lowerer = struct {
             .access => |access| {
                 const record = try self.lowerSubexprValue(&block, env, access.record);
                 if (record == null) return if (block.has_term) block else debugPanic("ir.lower access missing terminator");
-                const field_layout = self.input.layouts.exprFieldLayout(expr_id);
-                const temp = try self.freshVarWithLayout(
-                    field_layout,
+                const actual_field_layout = self.input.layouts.exprFieldLayout(expr_id);
+                const temp = try self.emitStructFieldValue(
+                    &block,
+                    record.?,
+                    access.field_index,
+                    actual_field_layout,
+                    expr.ty,
                     "field",
                 );
-                try block.stmts.append(self.allocator, .{ .let_ = .{
-                    .bind = temp,
-                    .expr = try self.output.addExpr(.{ .get_struct_field = .{
-                        .record = record.?,
-                        .field_index = access.field_index,
-                    } }),
-                } });
                 block.setTerm(.{ .value = temp });
             },
             .tuple_access => |tuple_access| {
                 const tuple = try self.lowerSubexprValue(&block, env, tuple_access.tuple);
                 if (tuple == null) return if (block.has_term) block else debugPanic("ir.lower tuple_access missing terminator");
-                const field_layout = self.input.layouts.exprFieldLayout(expr_id);
-                const temp = try self.freshVarWithLayout(
-                    field_layout,
+                const field_index: u16 = @intCast(tuple_access.elem_index);
+                const actual_field_layout = self.input.layouts.exprFieldLayout(expr_id);
+                const temp = try self.emitStructFieldValue(
+                    &block,
+                    tuple.?,
+                    field_index,
+                    actual_field_layout,
+                    expr.ty,
                     "tuple_field",
                 );
-                try block.stmts.append(self.allocator, .{ .let_ = .{
-                    .bind = temp,
-                    .expr = try self.output.addExpr(.{ .get_struct_field = .{
-                        .record = tuple.?,
-                        .field_index = @intCast(tuple_access.elem_index),
-                    } }),
-                } });
                 block.setTerm(.{ .value = temp });
             },
             .let_ => |let_expr| {
@@ -379,10 +384,21 @@ const Lowerer = struct {
                 defer rest.deinit(self.allocator);
                 try self.appendChildBlock(&block, &rest);
             },
+            .bridge => |source_expr| {
+                const source = try self.lowerSubexprValue(&block, env, source_expr);
+                if (source == null) return if (block.has_term) block else debugPanic("ir.lower bridge missing terminator");
+                const temp = try self.freshVar(expr.ty, "bridge");
+                const bridge_expr = try self.output.addExpr(.{ .bridge = source.? });
+                try block.stmts.append(self.allocator, .{ .let_ = .{
+                    .bind = temp,
+                    .expr = bridge_expr,
+                } });
+                block.setTerm(.{ .value = temp });
+            },
             .call => |call| {
                 const args = try self.lowerValueSpan(&block, env, call.args);
                 if (args == null) return if (block.has_term) block else debugPanic("ir.lower call missing terminator");
-                const temp = try self.freshVar(expr.ty, "call");
+                const temp = try self.freshVarWithLayout(self.procRetLayoutRef(call.proc), "call");
                 try block.stmts.append(self.allocator, .{ .let_ = .{
                     .bind = temp,
                     .expr = try self.output.addExpr(.{ .call_direct = .{
@@ -486,7 +502,19 @@ const Lowerer = struct {
             .return_ => |ret_expr| {
                 const value = try self.lowerSubexprValue(&block, env, ret_expr);
                 if (value == null) return if (block.has_term) block else debugPanic("ir.lower return missing terminator");
-                block.setTerm(.{ .return_ = value.? });
+                const ret_layout = self.current_def_ret_layout orelse
+                    debugPanic("ir.lower return missing current function return layout");
+                const ret_value = if (std.meta.eql(value.?.layout, ret_layout))
+                    value.?
+                else blk: {
+                    const bridged = try self.freshVarWithLayout(ret_layout, "return");
+                    try block.stmts.append(self.allocator, .{ .let_ = .{
+                        .bind = bridged,
+                        .expr = try self.output.addExpr(.{ .bridge = value.? }),
+                    } });
+                    break :blk bridged;
+                };
+                block.setTerm(.{ .return_ = ret_value });
             },
             .runtime_error => {
                 if (runtime_replacement) |replacement| {
@@ -529,6 +557,14 @@ const Lowerer = struct {
         };
     }
 
+    fn procRetLayoutRef(self: *const Lowerer, proc_symbol: Symbol) ir_layout.Ref {
+        for (self.input.store.defsSlice(), 0..) |def, i| {
+            if (def.bind != proc_symbol) continue;
+            return self.input.layouts.defRetLayout(@enumFromInt(@as(u32, @intCast(i))));
+        }
+        debugPanic("ir.lower missing proc return layout for direct call");
+    }
+
     fn freshSymbol(self: *Lowerer, comptime _: []const u8) std.mem.Allocator.Error!Symbol {
         return try self.input.symbols.add(base.Ident.Idx.NONE, .synthetic);
     }
@@ -560,6 +596,94 @@ const Lowerer = struct {
             .expr = try self.output.addExpr(expr),
         } });
         block.setTerm(.{ .value = temp });
+    }
+
+    fn emitStructFieldValue(
+        self: *Lowerer,
+        block: *LoweredBlock,
+        record: ast.Var,
+        field_index: u16,
+        actual_layout: ir_layout.Ref,
+        result_ty: lambdamono.Type.TypeId,
+        comptime label: []const u8,
+    ) std.mem.Allocator.Error!ast.Var {
+        const actual_field = try self.freshVarWithLayout(actual_layout, label);
+        try block.stmts.append(self.allocator, .{ .let_ = .{
+            .bind = actual_field,
+            .expr = try self.output.addExpr(.{ .get_struct_field = .{
+                .record = record,
+                .field_index = field_index,
+            } }),
+        } });
+
+        const target_layout = self.input.layouts.layoutForType(result_ty);
+        if (std.meta.eql(actual_field.layout, target_layout)) return actual_field;
+
+        const bridged = try self.freshVar(result_ty, label);
+        try block.stmts.append(self.allocator, .{ .let_ = .{
+            .bind = bridged,
+            .expr = try self.output.addExpr(.{ .bridge = actual_field }),
+        } });
+        return bridged;
+    }
+
+    fn emitUnionPayloadValue(
+        self: *Lowerer,
+        stmts: *std.ArrayList(ast.Stmt),
+        tag_union: ast.Var,
+        tag_discriminant: u16,
+        target_layout: ast.LayoutRef,
+        comptime label: []const u8,
+    ) std.mem.Allocator.Error!ast.Var {
+        const actual_payload_layout = try self.input.layouts.payloadLayoutForUnionLayout(
+            tag_union.layout,
+            tag_discriminant,
+        );
+        const actual_payload = try self.freshVarWithLayout(actual_payload_layout, label);
+        try stmts.append(self.allocator, .{ .let_ = .{
+            .bind = actual_payload,
+            .expr = try self.output.addExpr(.{ .get_union_struct = .{
+                .value = tag_union,
+                .tag_discriminant = tag_discriminant,
+            } }),
+        } });
+
+        if (std.meta.eql(actual_payload.layout, target_layout)) return actual_payload;
+
+        const bridged = try self.freshVarWithLayout(target_layout, label);
+        try stmts.append(self.allocator, .{ .let_ = .{
+            .bind = bridged,
+            .expr = try self.output.addExpr(.{ .bridge = actual_payload }),
+        } });
+        return bridged;
+    }
+
+    fn bridgeStructFieldsToTargetLayout(
+        self: *Lowerer,
+        block: *LoweredBlock,
+        target_layout: ast.LayoutRef,
+        fields_span: ast.Span(ast.Var),
+    ) std.mem.Allocator.Error!ast.Span(ast.Var) {
+        const source_fields = self.output.sliceVarSpan(fields_span);
+        const bridged_fields = try self.allocator.alloc(ast.Var, source_fields.len);
+        defer self.allocator.free(bridged_fields);
+
+        for (source_fields, 0..) |source_field, i| {
+            const slot_ref = try self.input.layouts.structFieldLayout(target_layout, @intCast(i));
+            if (std.meta.eql(source_field.layout, slot_ref)) {
+                bridged_fields[i] = source_field;
+                continue;
+            }
+
+            const bridged = try self.freshVarWithLayout(slot_ref, "struct_field");
+            try block.stmts.append(self.allocator, .{ .let_ = .{
+                .bind = bridged,
+                .expr = try self.output.addExpr(.{ .bridge = source_field }),
+            } });
+            bridged_fields[i] = bridged;
+        }
+
+        return try self.output.addVarSpan(bridged_fields);
     }
 
     fn appendChildBlock(self: *Lowerer, dst: *LoweredBlock, src: *const LoweredBlock) std.mem.Allocator.Error!void {
@@ -1046,32 +1170,39 @@ const Lowerer = struct {
                 const args = self.input.store.slicePatSpan(tag.args);
                 if (args.len == 0) return;
                 const payload_layout = self.input.layouts.patTagPayloadLayout(pat_id);
-
-                const payload_var = try self.freshVarWithLayout(
+                const payload_var = try self.emitUnionPayloadValue(
+                    prefix,
+                    source_var,
+                    tag.discriminant,
                     payload_layout,
                     "pat_payload",
                 );
-                try prefix.append(self.allocator, .{ .let_ = .{
-                    .bind = payload_var,
-                    .expr = try self.output.addExpr(.{ .get_union_struct = .{
-                        .value = source_var,
-                        .tag_discriminant = tag.discriminant,
-                    } }),
-                } });
 
                 for (args, 0..) |arg_pat_id, i| {
-                    const field_layout = try self.input.layouts.structFieldLayout(payload_var.layout, @intCast(i));
-                    const field_var = try self.freshVarWithLayout(
+                    const field_layout = self.input.layouts.patSourceLayout(arg_pat_id);
+                    const actual_field_var = try self.freshVarWithLayout(
                         field_layout,
                         "pat_field",
                     );
                     try prefix.append(self.allocator, .{ .let_ = .{
-                        .bind = field_var,
+                        .bind = actual_field_var,
                         .expr = try self.output.addExpr(.{ .get_struct_field = .{
                             .record = payload_var,
                             .field_index = @intCast(i),
                         } }),
                     } });
+                    const arg_pat = self.input.store.getPat(arg_pat_id);
+                    const expected_layout = self.input.layouts.layoutForType(arg_pat.ty);
+                    const field_var = if (std.meta.eql(actual_field_var.layout, expected_layout))
+                        actual_field_var
+                    else blk: {
+                        const bridged = try self.freshVarWithLayout(expected_layout, "pat_field");
+                        try prefix.append(self.allocator, .{ .let_ = .{
+                            .bind = bridged,
+                            .expr = try self.output.addExpr(.{ .bridge = actual_field_var }),
+                        } });
+                        break :blk bridged;
+                    };
                     try self.destructurePattern(prefix, additions, field_var, arg_pat_id);
                 }
             },

@@ -6,10 +6,12 @@ const can = @import("can");
 const backend = @import("backend");
 const builtins = @import("builtins");
 const collections = @import("collections");
+const layout = @import("layout");
 const monotype = @import("monotype");
 const monotype_lifted = @import("monotype_lifted");
 const lambdasolved = @import("lambdasolved");
 const lambdamono = @import("lambdamono");
+const ir = @import("ir");
 const Interpreter = @import("../interpreter.zig").Interpreter;
 const RuntimeHostEnv = @import("RuntimeHostEnv.zig");
 const helpers = @import("helpers.zig");
@@ -17,6 +19,98 @@ const helpers = @import("helpers.zig");
 const testing = std.testing;
 const HostLirCodeGen = backend.HostLirCodeGen;
 const ExecutableMemory = backend.ExecutableMemory;
+
+fn mainProcArgLayouts(
+    allocator: std.mem.Allocator,
+    compiled: *const helpers.CompiledProgram,
+) ![]layout.Idx {
+    const proc = compiled.lowered.lir_result.store.getProcSpec(compiled.lowered.main_proc);
+    const arg_locals = compiled.lowered.lir_result.store.getLocalSpan(proc.args);
+    const arg_layouts = try allocator.alloc(layout.Idx, arg_locals.len);
+    for (arg_locals, 0..) |local_id, i| {
+        arg_layouts[i] = compiled.lowered.lir_result.store.getLocal(local_id).layout_idx;
+    }
+    return arg_layouts;
+}
+
+fn zeroedEntrypointArgBuffer(
+    allocator: std.mem.Allocator,
+    compiled: *const helpers.CompiledProgram,
+    arg_layouts: []const layout.Idx,
+) !?[]u8 {
+    const EntrypointArgOrder = struct {
+        index: usize,
+        alignment: u32,
+        size: u32,
+    };
+
+    const arg_offsets = try allocator.alloc(u32, arg_layouts.len);
+    defer allocator.free(arg_offsets);
+    if (arg_layouts.len != 0) {
+        const ordered = try allocator.alloc(EntrypointArgOrder, arg_layouts.len);
+        defer allocator.free(ordered);
+
+        for (arg_layouts, 0..) |arg_layout, i| {
+            const size_align = compiled.lowered.lir_result.layouts.layoutSizeAlign(
+                compiled.lowered.lir_result.layouts.getLayout(arg_layout),
+            );
+            const slot_size = entrypointParamSlotSize(compiled, arg_layout);
+            ordered[i] = .{
+                .index = i,
+                .alignment = @intCast(size_align.alignment.toByteUnits()),
+                .size = slot_size,
+            };
+        }
+
+        const SortCtx = struct {
+            fn lessThan(_: void, lhs: EntrypointArgOrder, rhs: EntrypointArgOrder) bool {
+                if (lhs.alignment != rhs.alignment) return lhs.alignment > rhs.alignment;
+                return lhs.index < rhs.index;
+            }
+        };
+
+        std.mem.sort(EntrypointArgOrder, ordered, {}, SortCtx.lessThan);
+
+        var current_offset: u32 = 0;
+        for (ordered) |arg| {
+            current_offset = std.mem.alignForward(u32, current_offset, arg.alignment);
+            arg_offsets[arg.index] = current_offset;
+            current_offset += arg.size;
+        }
+    }
+
+    var total_size: usize = 0;
+    for (arg_layouts, 0..) |arg_layout, i| {
+        total_size = @max(total_size, @as(usize, arg_offsets[i]) + entrypointParamSlotSize(compiled, arg_layout));
+    }
+
+    if (total_size == 0) return null;
+
+    const buffer = try allocator.alignedAlloc(u8, collections.max_roc_alignment, @max(total_size, 1));
+    @memset(buffer, 0);
+    return buffer;
+}
+
+fn entrypointParamSlotSize(compiled: *const helpers.CompiledProgram, layout_idx: layout.Idx) u32 {
+    const layouts = &compiled.lowered.lir_result.layouts;
+    const runtime_layout_idx = layouts.runtimeRepresentationLayoutIdx(layout_idx);
+    if (runtime_layout_idx == .str) return 24;
+    if (runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec) return 16;
+
+    if (@intFromEnum(runtime_layout_idx) < layouts.layouts.len()) {
+        const layout_val = layouts.getLayout(runtime_layout_idx);
+        const size = layouts.layoutSizeAlign(layout_val).size;
+        if (layout_val.tag == .zst or size == 0) return 0;
+        if (layout_val.tag == .list or layout_val.tag == .list_of_zst) return 24;
+        if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
+            if (size > 8) return @intCast(std.mem.alignForward(u32, size, 8));
+        }
+    }
+
+    const size = layouts.layoutSizeAlign(layouts.getLayout(layout_idx)).size;
+    return if (size == 0) 0 else 8;
+}
+
 fn expectInspect(comptime source: []const u8, expected: []const u8) !void {
     var compiled = try helpers.compileInspectedExpr(testing.allocator, source);
     defer compiled.deinit(testing.allocator);
@@ -98,6 +192,16 @@ const CompiledExecutableProgram = struct {
     }
 };
 
+const CompiledIrProgram = struct {
+    resources: helpers.ParsedResources,
+    ir_result: ir.Lower.Result,
+
+    pub fn deinit(self: *CompiledIrProgram, allocator: std.mem.Allocator) void {
+        self.ir_result.deinit();
+        helpers.cleanupParseAndCanonical(allocator, self.resources);
+    }
+};
+
 fn compileExecutableProgram(
     allocator: std.mem.Allocator,
     source_kind: helpers.SourceKind,
@@ -117,6 +221,29 @@ fn compileExecutableProgram(
     return .{
         .resources = resources,
         .executable = executable,
+    };
+}
+
+fn compileIrProgram(
+    allocator: std.mem.Allocator,
+    source_kind: helpers.SourceKind,
+    source: []const u8,
+    imports: []const helpers.ModuleSource,
+) !CompiledIrProgram {
+    var resources = try helpers.parseAndCanonicalizeProgram(allocator, source_kind, source, imports);
+    errdefer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, &resources.typed_cir_modules, 1, null);
+    defer mono_lowerer.deinit();
+    const mono = try mono_lowerer.run(0);
+    const lifted = try monotype_lifted.Lower.run(allocator, mono);
+    const solved = try lambdasolved.Lower.run(allocator, lifted);
+    const executable = try lambdamono.Lower.run(allocator, solved);
+    const ir_result = try ir.Lower.run(allocator, executable);
+
+    return .{
+        .resources = resources,
+        .ir_result = ir_result,
     };
 }
 
@@ -162,6 +289,62 @@ fn countExecutableErasedFnTypes(executable: *const lambdamono.Lower.Result) usiz
         }
     }
     return count;
+}
+
+fn countExecutableBridgeNodes(executable: *const lambdamono.Lower.Result) usize {
+    var count: usize = 0;
+    for (executable.store.exprs.items) |expr| {
+        switch (expr.data) {
+            .bridge => count += 1,
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn countIrBridgeNodes(ir_result: *const ir.Lower.Result) usize {
+    var count: usize = 0;
+    for (ir_result.store.exprs.items) |expr| {
+        switch (expr) {
+            .bridge => count += 1,
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn countSpecializedLocalFnDefs(executable: *const lambdamono.Lower.Result) usize {
+    var count: usize = 0;
+    for (executable.store.defsSlice()) |def| {
+        const origin = executable.symbols.get(def.bind).origin;
+        switch (origin) {
+            .specialized_local_fn => count += 1,
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn collectSpecializedLocalFnResultTypes(
+    allocator: std.mem.Allocator,
+    executable: *const lambdamono.Lower.Result,
+) ![]const lambdamono.Type.TypeId {
+    var out = std.ArrayList(lambdamono.Type.TypeId).empty;
+    errdefer out.deinit(allocator);
+
+    for (executable.store.defsSlice()) |def| {
+        const origin = executable.symbols.get(def.bind).origin;
+        switch (origin) {
+            .specialized_local_fn => {
+                const result_ty = def.result_ty orelse
+                    @panic("cor pipeline test expected specialized def result type");
+                try out.append(allocator, result_ty);
+            },
+            else => {},
+        }
+    }
+
+    return try out.toOwnedSlice(allocator);
 }
 
 fn expectDirectOnlyLoweringProgram(
@@ -342,6 +525,23 @@ const opaque_function_field_lookup_source =
     \\main = W.run(W.mk("x")) == V("x")
 ;
 
+const additional_specialization_via_list_append_source =
+    \\main =
+    \\    {
+    \\        append_one = |acc, x| List.append(acc, x)
+    \\        _first_len = List.fold([1.I64, 2.I64], List.with_capacity(1), append_one).len()
+    \\        List.fold([[1.I64, 2.I64], [3.I64, 4.I64]], List.with_capacity(1), append_one).len()
+    \\    }
+;
+
+const simple_direct_call_source =
+    \\main =
+    \\    {
+    \\        add_one = |x| x + 1.I64
+    \\        add_one(41.I64)
+    \\    }
+;
+
 const cross_module_annotated_callback_param_source =
     \\import Helpers
     \\
@@ -435,63 +635,63 @@ const direct_call_cases = [_]DirectCallCase{
         .source = annotated_callback_param_source,
         .expected = "42",
         .executable_direct_calls = 4,
-        .lir_direct_calls = 6,
+        .lir_direct_calls = 12,
     },
     .{
         .name = "annotated function return slot",
         .source = annotated_return_source,
         .expected = "42",
         .executable_direct_calls = 2,
-        .lir_direct_calls = 4,
+        .lir_direct_calls = 9,
     },
     .{
         .name = "abstract higher-order apply",
         .source = abstract_apply_source,
         .expected = "42",
         .executable_direct_calls = 4,
-        .lir_direct_calls = 6,
+        .lir_direct_calls = 12,
     },
     .{
         .name = "nested polymorphic helper",
         .source = nested_polymorphic_helper_source,
         .expected = "42",
         .executable_direct_calls = 4,
-        .lir_direct_calls = 6,
+        .lir_direct_calls = 12,
     },
     .{
         .name = "apply twice",
         .source = apply_twice_source,
         .expected = "42",
         .executable_direct_calls = 6,
-        .lir_direct_calls = 8,
+        .lir_direct_calls = 15,
     },
     .{
         .name = "annotated local binding",
         .source = annotated_local_binding_source,
         .expected = "42",
         .executable_direct_calls = 1,
-        .lir_direct_calls = 2,
+        .lir_direct_calls = 6,
     },
     .{
         .name = "passing captured closure to callback parameter",
         .source = captured_callback_param_source,
         .expected = "42",
         .executable_direct_calls = 4,
-        .lir_direct_calls = 6,
+        .lir_direct_calls = 12,
     },
     .{
         .name = "annotated return of concrete lambda",
         .source = annotated_return_source,
         .expected = "42",
         .executable_direct_calls = 2,
-        .lir_direct_calls = 4,
+        .lir_direct_calls = 9,
     },
     .{
         .name = "passing concrete lambda to annotated callback parameter",
         .source = annotated_callback_param_source,
         .expected = "42",
         .executable_direct_calls = 4,
-        .lir_direct_calls = 6,
+        .lir_direct_calls = 12,
     },
     .{
         .name = "cross-module annotated callback parameter slot",
@@ -499,7 +699,7 @@ const direct_call_cases = [_]DirectCallCase{
         .imports = &cross_module_annotated_callback_param_imports,
         .expected = "42",
         .executable_direct_calls = 4,
-        .lir_direct_calls = 6,
+        .lir_direct_calls = 12,
     },
     .{
         .name = "cross-module annotated function return slot",
@@ -507,7 +707,7 @@ const direct_call_cases = [_]DirectCallCase{
         .imports = &cross_module_annotated_return_imports,
         .expected = "42",
         .executable_direct_calls = 2,
-        .lir_direct_calls = 4,
+        .lir_direct_calls = 9,
     },
     .{
         .name = "cross-module abstract higher-order apply",
@@ -515,7 +715,7 @@ const direct_call_cases = [_]DirectCallCase{
         .imports = &cross_module_abstract_apply_imports,
         .expected = "42",
         .executable_direct_calls = 4,
-        .lir_direct_calls = 6,
+        .lir_direct_calls = 12,
     },
     .{
         .name = "cross-module nested higher-order bridge",
@@ -523,7 +723,7 @@ const direct_call_cases = [_]DirectCallCase{
         .imports = &cross_module_nested_bridge_imports,
         .expected = "42",
         .executable_direct_calls = 4,
-        .lir_direct_calls = 6,
+        .lir_direct_calls = 12,
     },
     .{
         .name = "cross-module apply twice",
@@ -531,7 +731,7 @@ const direct_call_cases = [_]DirectCallCase{
         .imports = &cross_module_apply_twice_imports,
         .expected = "42",
         .executable_direct_calls = 6,
-        .lir_direct_calls = 8,
+        .lir_direct_calls = 15,
     },
     .{
         .name = "cross-module passing captured closure to callback parameter",
@@ -539,21 +739,21 @@ const direct_call_cases = [_]DirectCallCase{
         .imports = &cross_module_captured_callback_param_imports,
         .expected = "42",
         .executable_direct_calls = 4,
-        .lir_direct_calls = 6,
+        .lir_direct_calls = 12,
     },
     .{
         .name = "two callback params with different captures",
         .source = two_callback_params_source,
         .expected = "42",
         .executable_direct_calls = 7,
-        .lir_direct_calls = 10,
+        .lir_direct_calls = 18,
     },
     .{
         .name = "record field closure extraction then call",
         .source = record_field_closure_extraction_source,
         .expected = "42",
         .executable_direct_calls = 1,
-        .lir_direct_calls = 2,
+        .lir_direct_calls = 6,
     },
 };
 
@@ -577,10 +777,10 @@ const boxed_lambda_round_trip_erased_case = ErasedCallCase{
     \\    f(41.I64)
     \\}
     ,
-    .expected_executable_indirect_calls = 1,
+    .expected_executable_indirect_calls = 2,
     .expected_executable_packed_fns = 1,
     .expected_executable_erased_fn_types = 1,
-    .expected_lir_indirect_calls = 2,
+    .expected_lir_indirect_calls = 3,
 };
 
 fn countHostedProcSpecs(compiled: *const helpers.CompiledProgram) usize {
@@ -658,7 +858,12 @@ fn runModuleWithInterpreter(
     );
     defer interp.deinit();
 
-    _ = try interp.eval(.{ .proc_id = compiled.lowered.main_proc });
+    const arg_layouts = try mainProcArgLayouts(allocator, compiled);
+    defer allocator.free(arg_layouts);
+    _ = try interp.eval(.{
+        .proc_id = compiled.lowered.main_proc,
+        .arg_layouts = arg_layouts,
+    });
     return try runtime_env.snapshot(allocator);
 }
 
@@ -677,10 +882,12 @@ fn runModuleWithDevBackend(
     try codegen.compileAllProcSpecs(compiled.lowered.lir_result.store.getProcSpecs());
 
     const proc = compiled.lowered.lir_result.store.getProcSpec(compiled.lowered.main_proc);
+    const arg_layouts = try mainProcArgLayouts(allocator, compiled);
+    defer allocator.free(arg_layouts);
     const entrypoint = try codegen.generateEntrypointWrapper(
         "roc_eval_hosted_test_main",
         compiled.lowered.main_proc,
-        &.{},
+        arg_layouts,
         proc.ret_layout,
     );
     var exec_mem = try ExecutableMemory.initWithEntryOffset(
@@ -702,7 +909,14 @@ fn runModuleWithDevBackend(
     defer allocator.free(ret_buf);
     @memset(ret_buf, 0);
 
-    exec_mem.callRocABI(@ptrCast(runtime_env.get_ops()), @ptrCast(ret_buf.ptr), null);
+    const arg_buf = try zeroedEntrypointArgBuffer(allocator, compiled, arg_layouts);
+    defer if (arg_buf) |buf| allocator.free(buf);
+
+    exec_mem.callRocABI(
+        @ptrCast(runtime_env.get_ops()),
+        @ptrCast(ret_buf.ptr),
+        if (arg_buf) |buf| @ptrCast(buf.ptr) else null,
+    );
     return try runtime_env.snapshot(allocator);
 }
 
@@ -921,6 +1135,8 @@ test "cor pipeline - cross-module polymorphic attached method specialization fro
             .{
                 .name = "Helpers",
                 .source =
+                \\module [read]
+                \\
                 \\read = |value| value.get()
                 ,
             },
@@ -1261,6 +1477,55 @@ test "cor pipeline - lowering opaque function field lookup issue 9262 has no era
     try testing.expectEqual(@as(usize, 0), countIndirectCalls(&compiled));
 }
 
+test "cor pipeline - lowering local callback specialization uses two distinct concrete defs" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const arena_allocator = arena.allocator();
+    var executable = try compileExecutableProgram(arena_allocator, .module, additional_specialization_via_list_append_source, &.{});
+    defer executable.deinit(arena_allocator);
+
+    try testing.expectEqual(@as(usize, 2), countSpecializedLocalFnDefs(&executable.executable));
+
+    const result_tys = try collectSpecializedLocalFnResultTypes(
+        arena_allocator,
+        &executable.executable,
+    );
+    try testing.expectEqual(@as(usize, 2), result_tys.len);
+    try testing.expect(!executable.executable.types.equalIds(result_tys[0], result_tys[1]));
+    try testing.expect(!executable.executable.types.containsAbstractLeaf(result_tys[0]));
+    try testing.expect(!executable.executable.types.containsAbstractLeaf(result_tys[1]));
+}
+
+test "cor pipeline - lowering direct-only higher-order call has no executable or ir bridges" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const arena_allocator = arena.allocator();
+    var executable = try compileExecutableProgram(arena_allocator, .module, simple_direct_call_source, &.{});
+    defer executable.deinit(arena_allocator);
+    try testing.expectEqual(@as(usize, 0), countExecutableBridgeNodes(&executable.executable));
+
+    var ir_program = try compileIrProgram(arena_allocator, .module, simple_direct_call_source, &.{});
+    defer ir_program.deinit(arena_allocator);
+    try testing.expectEqual(@as(usize, 0), countIrBridgeNodes(&ir_program.ir_result));
+}
+
+test "cor pipeline - lowering emits explicit bridges only at real representation boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const arena_allocator = arena.allocator();
+    var executable = try compileExecutableProgram(arena_allocator, .module, annotated_callback_param_source, &.{});
+    defer executable.deinit(arena_allocator);
+    const executable_bridges = countExecutableBridgeNodes(&executable.executable);
+    try testing.expect(executable_bridges >= 1);
+
+    var ir_program = try compileIrProgram(arena_allocator, .module, annotated_callback_param_source, &.{});
+    defer ir_program.deinit(arena_allocator);
+    try testing.expectEqual(executable_bridges, countIrBridgeNodes(&ir_program.ir_result));
+}
+
 test "cor pipeline - boxed lambda lowering uses erased indirect-call path" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -1441,6 +1706,8 @@ test "cor pipeline - zero-arg hosted proc call reaches host abi" {
     try testing.expectEqualStrings("tick", dev_run.events[0].bytes());
     try testing.expectEqualStrings("tick", dev_run.events[1].bytes());
 }
+
+
 
 test "cor pipeline - multi-arg hosted proc call preserves argument marshaling" {
     const hosted_fns = [_]builtins.host_abi.HostedFn{

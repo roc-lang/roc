@@ -979,6 +979,12 @@ pub const Interpreter = struct {
 
         if (proc_spec.hosted) |hosted| {
             const param_layouts = try self.localLayoutsFromSpan(proc_spec.args);
+            if (args.len != param_layouts.len) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: hosted proc {d} received {d} args but has {d} param layouts",
+                    .{ proc_spec.name.raw(), args.len, param_layouts.len },
+                );
+            }
             const normalized_args = try self.arena.allocator().alloc(Value, args.len);
             for (args, arg_layouts, param_layouts, 0..) |arg, arg_layout, param_layout, i| {
                 normalized_args[i] = try self.coerceExplicitRefValueToLayout(arg, arg_layout, param_layout);
@@ -1259,14 +1265,6 @@ pub const Interpreter = struct {
                     current = expect_stmt.next;
                 },
                 .runtime_error => {
-                    if (builtin.mode == .Debug) {
-                        std.debug.print(
-                            "LIR/interpreter runtime_error in proc {d} at stmt {d}\n",
-                            .{ @intFromEnum(frame.proc_id), @intFromEnum(current) },
-                        );
-                        self.debugDumpProc(frame.proc_id);
-                        self.debugPrintStmtChain(current, 12);
-                    }
                     return self.runtimeError("RuntimeError");
                 },
                 .incref => |inc| {
@@ -1477,8 +1475,13 @@ pub const Interpreter = struct {
         };
 
         std.debug.print(
-            "  proc {d} body={d} ret_layout={d}\n",
-            .{ @intFromEnum(proc_id), @intFromEnum(body), @intFromEnum(proc_spec.ret_layout) },
+            "  proc {d} name={d} body={d} ret_layout={d}\n",
+            .{
+                @intFromEnum(proc_id),
+                proc_spec.name.raw(),
+                @intFromEnum(body),
+                @intFromEnum(proc_spec.ret_layout),
+            },
         );
         const args = self.store.getLocalSpan(proc_spec.args);
         if (args.len > 0) {

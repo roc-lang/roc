@@ -83,13 +83,19 @@ pub const Expr = struct {
         },
         method_call: struct {
             receiver: ExprId,
+            method_fn_ty: TypeVarId,
             method_name: base.Ident.Idx,
             args: Span(ExprId),
+            step_arg_tys: type_mod.Span(TypeVarId),
+            step_result_tys: type_mod.Span(TypeVarId),
         },
         type_method_call: struct {
             dispatcher_ty: TypeVarId,
+            method_fn_ty: TypeVarId,
             method_name: base.Ident.Idx,
             args: Span(ExprId),
+            step_arg_tys: type_mod.Span(TypeVarId),
+            step_result_tys: type_mod.Span(TypeVarId),
         },
         let_: struct {
             bind: TypedSymbol,

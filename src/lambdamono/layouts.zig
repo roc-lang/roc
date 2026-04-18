@@ -40,6 +40,7 @@ pub const Layouts = struct {
     expr_discriminant_layouts: []?layout_mod.GraphRef,
     expr_tag_payload_layouts: []?layout_mod.GraphRef,
     pat_tag_payload_layouts: []?layout_mod.GraphRef,
+    pat_source_layouts: []?layout_mod.GraphRef,
 
     pub fn initEmpty(
         allocator: std.mem.Allocator,
@@ -57,6 +58,7 @@ pub const Layouts = struct {
             .expr_discriminant_layouts = try allocator.alloc(?layout_mod.GraphRef, store.exprs.items.len),
             .expr_tag_payload_layouts = try allocator.alloc(?layout_mod.GraphRef, store.exprs.items.len),
             .pat_tag_payload_layouts = try allocator.alloc(?layout_mod.GraphRef, store.pats.items.len),
+            .pat_source_layouts = try allocator.alloc(?layout_mod.GraphRef, store.pats.items.len),
         };
         errdefer layouts.deinit(allocator);
 
@@ -64,10 +66,12 @@ pub const Layouts = struct {
         @memset(layouts.expr_discriminant_layouts, null);
         @memset(layouts.expr_tag_payload_layouts, null);
         @memset(layouts.pat_tag_payload_layouts, null);
+        @memset(layouts.pat_source_layouts, null);
         return layouts;
     }
 
     pub fn deinit(self: *Layouts, allocator: std.mem.Allocator) void {
+        allocator.free(self.pat_source_layouts);
         allocator.free(self.pat_tag_payload_layouts);
         allocator.free(self.expr_tag_payload_layouts);
         allocator.free(self.expr_discriminant_layouts);
@@ -115,9 +119,22 @@ pub const Layouts = struct {
             debugPanic("lambdamono.layouts.exprTagPayloadLayout missing explicit payload layout");
     }
 
+    pub fn payloadLayoutForUnionLayout(
+        self: *Layouts,
+        union_layout: layout_mod.GraphRef,
+        discriminant: u16,
+    ) std.mem.Allocator.Error!layout_mod.GraphRef {
+        return self.unionPayloadLayout(union_layout, discriminant);
+    }
+
     pub fn patTagPayloadLayout(self: *const Layouts, pat_id: ast.PatId) layout_mod.GraphRef {
         return self.pat_tag_payload_layouts[@intFromEnum(pat_id)] orelse
             debugPanic("lambdamono.layouts.patTagPayloadLayout missing explicit payload layout");
+    }
+
+    pub fn patSourceLayout(self: *const Layouts, pat_id: ast.PatId) layout_mod.GraphRef {
+        return self.pat_source_layouts[@intFromEnum(pat_id)] orelse
+            debugPanic("lambdamono.layouts.patSourceLayout missing explicit source layout");
     }
 
     pub fn recordTypedSymbol(
@@ -175,6 +192,10 @@ pub const Layouts = struct {
                 self.expr_tag_payload_layouts[i] = try self.unionPayloadLayout(
                     self.exprLayout(tag_payload.tag_union),
                     tag_payload.tag_discriminant,
+                );
+                self.expr_field_layouts[i] = try self.structFieldLayout(
+                    self.expr_tag_payload_layouts[i].?,
+                    tag_payload.payload_index,
                 );
             },
             .packed_fn => |packed_fn| {
@@ -243,8 +264,15 @@ pub const Layouts = struct {
         self.pat_layouts[i] = try self.layoutForExecutableType(allocator, mono_types, idents, pat.ty);
         switch (pat.data) {
             .tag => |tag| {
-                if (store.slicePatSpan(tag.args).len == 0) return;
+                const args = store.slicePatSpan(tag.args);
+                if (args.len == 0) return;
                 self.pat_tag_payload_layouts[i] = try self.unionPayloadLayout(self.patLayout(pat_id), tag.discriminant);
+                for (args, 0..) |arg_pat_id, field_index| {
+                    self.pat_source_layouts[@intFromEnum(arg_pat_id)] = try self.structFieldLayout(
+                        self.pat_tag_payload_layouts[i].?,
+                        @intCast(field_index),
+                    );
+                }
             },
             else => {},
         }
@@ -311,7 +339,7 @@ pub const Layouts = struct {
         return switch (resolved) {
             .canonical => debugPanic("lambdamono.layouts.structFieldLayout expected local struct layout"),
             .local => |node_id| switch (self.graph.getNode(node_id)) {
-                .struct_ => |fields| self.graph.getFields(fields)[field_index].child,
+                .struct_ => |fields| self.unwrapNominalRef(self.graph.getFields(fields)[field_index].child),
                 else => debugPanic("lambdamono.layouts.structFieldLayout expected struct layout"),
             },
         };

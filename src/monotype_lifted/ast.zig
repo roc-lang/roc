@@ -82,11 +82,13 @@ pub const Expr = struct {
         },
         method_call: struct {
             receiver: ExprId,
+            method_fn_ty: TypeId,
             method_name: base.Ident.Idx,
             args: Span(ExprId),
         },
         type_method_call: struct {
             dispatcher_ty: TypeId,
+            method_fn_ty: TypeId,
             method_name: base.Ident.Idx,
             args: Span(ExprId),
         },

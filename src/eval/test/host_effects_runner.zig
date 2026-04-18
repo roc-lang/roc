@@ -317,7 +317,13 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
     );
     defer interp.deinit();
 
-    const eval_result = interp.eval(.{ .proc_id = lowered.main_proc }) catch |err| switch (err) {
+    const arg_layouts = try helpers.mainProcArgLayouts(allocator, lowered);
+    defer allocator.free(arg_layouts);
+
+    const eval_result = interp.eval(.{
+        .proc_id = lowered.main_proc,
+        .arg_layouts = arg_layouts,
+    }) catch |err| switch (err) {
         error.Crash => return runtime_env.snapshot(allocator),
         else => return err,
     };
@@ -339,10 +345,12 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) !Runtime
     try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
 
     const proc = lowered.lir_result.store.getProcSpec(lowered.main_proc);
+    const arg_layouts = try helpers.mainProcArgLayouts(allocator, lowered);
+    defer allocator.free(arg_layouts);
     const entrypoint = try codegen.generateEntrypointWrapper(
         "roc_eval_host_effects_main",
         lowered.main_proc,
-        &.{},
+        arg_layouts,
         proc.ret_layout,
     );
     var exec_mem = try ExecutableMemory.initWithEntryOffset(
@@ -353,6 +361,9 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) !Runtime
 
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
+
+    const arg_buffer = try helpers.zeroedEntrypointArgBuffer(allocator, lowered, arg_layouts);
+    defer if (arg_buffer) |buf| allocator.free(buf);
 
     const ret_layout = proc.ret_layout;
     const size_align = lowered.lir_result.layouts.layoutSizeAlign(lowered.lir_result.layouts.getLayout(ret_layout));
@@ -365,7 +376,11 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) !Runtime
     defer crash_boundary.deinit();
     const sj = crash_boundary.set();
     if (sj == 0) {
-        exec_mem.callRocABI(@ptrCast(runtime_env.get_ops()), @ptrCast(ret_buf.ptr), null);
+        exec_mem.callRocABI(
+            @ptrCast(runtime_env.get_ops()),
+            @ptrCast(ret_buf.ptr),
+            if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
+        );
     }
 
     return runtime_env.snapshot(allocator);

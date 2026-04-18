@@ -63,6 +63,7 @@ pub const Expr = union(enum) {
         record: Var,
         field_index: u16,
     },
+    bridge: Var,
     layout_size: LayoutRef,
     call_direct: struct {
         proc: Symbol,

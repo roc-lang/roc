@@ -3122,6 +3122,18 @@ pub fn canonicalizeFile(
         }
     }
 
+    switch (self.env.module_kind) {
+        .type_module => {
+            if (self.findMatchingTypeIdent()) |result| {
+                if (result.kind == .nominal or result.kind == .@"opaque") {
+                    self.env.module_kind = .{ .type_module = result.ident };
+                    try self.exposeTypeModuleMainType(result);
+                }
+            }
+        },
+        else => {},
+    }
+
     // Check for exposed but not implemented items
     try self.checkExposedButNotImplemented();
 
@@ -3233,6 +3245,7 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
                 if (result.kind == .nominal or result.kind == .@"opaque") {
                     // Store the matching type ident in module_kind
                     main_type_ident.* = result.ident;
+                    try self.exposeTypeModuleMainType(result);
                     break :blk true;
                 } else {
                     // Found alias instead of nominal type - emit specific error
@@ -3270,6 +3283,11 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
 pub fn validateForExecution(self: *Self) std.mem.Allocator.Error!void {
     switch (self.env.module_kind) {
         .type_module => {
+            if (self.findMatchingTypeIdent()) |result| {
+                if (result.kind == .nominal or result.kind == .@"opaque") {
+                    try self.exposeTypeModuleMainType(result);
+                }
+            }
             const main_status = try self.checkMainFunction(true);
             if (main_status == .not_found) {
                 try self.reportExecutionRequiresAppOrDefaultApp();
@@ -4418,9 +4436,9 @@ fn introduceItemsAliased(
     self: *Self,
     exposed_items_span: CIR.ExposedItem.Span,
     module_name: Ident.Idx,
-    module_alias: Ident.Idx,
+    _: Ident.Idx,
     import_region: Region,
-    module_import_idx: CIR.Import.Idx,
+    _: CIR.Import.Idx,
 ) std.mem.Allocator.Error!void {
     const exposed_items_slice = self.env.store.sliceExposedItems(exposed_items_span);
     const current_scope = self.currentScope();
@@ -4471,44 +4489,7 @@ fn introduceItemsAliased(
 
         // Auto-expose the module's main type for type modules
         switch (module_env.module_kind) {
-            .type_module => |main_type_ident| {
-                if (module_env.containsExposedById(main_type_ident)) {
-                    const item_info = Scope.ExposedItemInfo{
-                        .module_name = module_name,
-                        .original_name = main_type_ident,
-                    };
-                    try self.scopeIntroduceExposedItem(module_alias, item_info, import_region);
-
-                    // Get the correct target_node_idx using statement_idx from module_envs
-                    const target_node_idx = blk: {
-                        // Use the already-captured envs_map from the outer scope
-                        if (envs_map.get(module_name)) |auto_imported| {
-                            if (auto_imported.statement_idx) |stmt_idx| {
-                                if (module_env.getExposedNodeIndexByStatementIdx(stmt_idx)) |node_idx| {
-                                    break :blk node_idx;
-                                }
-                            }
-                        }
-                        // Fallback to the old method if we can't find it via statement_idx
-                        break :blk module_env.getExposedNodeIndexById(main_type_ident);
-                    };
-
-                    // Get the type name text from the target module's ident store
-                    const original_type_name = module_env.getIdent(main_type_ident);
-
-                    try self.setExternalTypeBinding(
-                        current_scope,
-                        module_alias,
-                        module_name,
-                        main_type_ident,
-                        original_type_name,
-                        target_node_idx,
-                        module_import_idx,
-                        import_region,
-                        .module_was_found,
-                    );
-                }
-            },
+            .type_module => {},
             else => {},
         }
 
@@ -8164,14 +8145,131 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
         const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
         return CanonicalizedExpr{ .idx = tag_expr_idx, .free_vars = free_vars_span };
     } else if (e.qualifiers.span.len == 1) {
-        // If this is a tag with a single qualifier, then it is a nominal tag and the qualifier
-        // is the type name. Check both local type_decls and imported types in exposed_items.
+        // If this is a tag with a single qualifier, there are two valid cases:
+        // 1. `Type.Tag(...)` where the qualifier is a local type name.
+        // 2. `Module.Type(...)` where the qualifier is an imported module name and
+        //    the token is both the nominal type name and the tag name.
 
         // Get the qualifier token
         const qualifier_toks = self.parse_ir.store.tokenSlice(e.qualifiers);
         const type_tok_idx = qualifier_toks[0];
         const type_tok_ident = self.parse_ir.tokens.resolveIdentifier(type_tok_idx) orelse unreachable;
         const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
+
+        if (self.scopeLookupTypeBinding(type_tok_ident)) |binding_location| {
+            switch (binding_location.binding.*) {
+                .external_nominal => |external| {
+                    if (external.target_node_idx) |target_node_idx| {
+                        const import_idx = external.import_idx orelse {
+                            return CanonicalizedExpr{
+                                .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .module_not_imported = .{
+                                    .module_name = external.module_ident,
+                                    .region = region,
+                                } }),
+                                .free_vars = DataSpan.empty(),
+                            };
+                        };
+
+                        const expr_idx = try self.env.addExpr(CIR.Expr{
+                            .e_nominal_external = .{
+                                .module_idx = import_idx,
+                                .target_node_idx = target_node_idx,
+                                .backing_expr = tag_expr_idx,
+                                .backing_type = .tag,
+                            },
+                        }, region);
+
+                        const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+                        return CanonicalizedExpr{
+                            .idx = expr_idx,
+                            .free_vars = free_vars_span,
+                        };
+                    }
+                },
+                else => {},
+            }
+        }
+
+        if (self.scopeLookupModule(type_tok_ident)) |module_info| {
+            const module_name = module_info.module_name;
+            const module_name_text = self.env.getIdent(module_name);
+
+            const import_idx = self.scopeLookupImportedModule(module_name_text) orelse {
+                return CanonicalizedExpr{
+                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .module_not_imported = .{
+                        .module_name = module_name,
+                        .region = region,
+                    } }),
+                    .free_vars = DataSpan.empty(),
+                };
+            };
+
+            const target_node_idx = blk: {
+                const imported_module = self.lookupAvailableModuleEnv(module_name) orelse {
+                    return CanonicalizedExpr{
+                        .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_from_missing_module = .{
+                            .module_name = module_name,
+                            .type_name = tag_name,
+                            .region = type_tok_region,
+                        } }),
+                        .free_vars = DataSpan.empty(),
+                    };
+                };
+                if (imported_module.statement_idx) |stmt_idx| {
+                    break :blk imported_module.env.getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
+                        return CanonicalizedExpr{
+                            .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
+                                .module_name = module_name,
+                                .type_name = tag_name,
+                                .region = type_tok_region,
+                            } }),
+                            .free_vars = DataSpan.empty(),
+                        };
+                    };
+                }
+
+                if (findNominalDeclNodeIdxByText(imported_module.env, self.env.getIdent(tag_name))) |node_idx| {
+                    break :blk node_idx;
+                }
+
+                const target_ident = imported_module.env.common.findIdent(self.env.getIdent(tag_name)) orelse {
+                    return CanonicalizedExpr{
+                        .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
+                            .module_name = module_name,
+                            .type_name = tag_name,
+                            .region = type_tok_region,
+                        } }),
+                        .free_vars = DataSpan.empty(),
+                    };
+                };
+
+                break :blk imported_module.env.getExposedNodeIndexById(target_ident) orelse {
+                    return CanonicalizedExpr{
+                        .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
+                            .module_name = module_name,
+                            .type_name = tag_name,
+                            .region = type_tok_region,
+                        } }),
+                        .free_vars = DataSpan.empty(),
+                    };
+                };
+            };
+
+            const expr_idx = try self.env.addExpr(CIR.Expr{
+                .e_nominal_external = .{
+                    .module_idx = import_idx,
+                    .target_node_idx = target_node_idx,
+                    .backing_expr = tag_expr_idx,
+                    .backing_type = .tag,
+                },
+            }, region);
+
+            const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+            return CanonicalizedExpr{
+                .idx = expr_idx,
+                .free_vars = free_vars_span,
+            };
+        }
 
         // First, try to lookup the type as a local declaration
         if (self.scopeLookupTypeDecl(type_tok_ident)) |nominal_type_decl_stmt_idx| {
@@ -13725,6 +13823,18 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
 
     const target_module_env = (self.lookupAvailableModuleEnv(module_name) orelse unreachable).env;
     const target_node_tag = target_module_env.store.nodes.get(@enumFromInt(@as(u32, target_node_idx))).tag;
+    if (std.mem.eql(u8, module_text, "CounterMod") and std.mem.eql(u8, field_text, "Counter")) {
+        std.debug.print(
+            "tryModuleQualifiedLookup resolved {s}.{s} target_node_idx={d} tag={s} call_args_len={d}\n",
+            .{
+                module_text,
+                field_text,
+                target_node_idx,
+                @tagName(target_node_tag),
+                if (call_args) |args| self.env.store.exprSlice(args).len else @as(usize, 0),
+            },
+        );
+    }
     if (target_node_tag == .statement_nominal_decl) {
         const tag_expr_idx = try self.env.addExpr(CIR.Expr{
             .e_tag = .{
@@ -14121,6 +14231,7 @@ fn checkMainFunction(self: *Self, report_errors: bool) std.mem.Allocator.Error!M
 const MatchingTypeResult = struct {
     ident: Ident.Idx,
     kind: AST.TypeDeclKind,
+    ast_statement_idx: AST.Statement.Idx,
 };
 
 /// Check if there's a type declaration matching the module name
@@ -14143,6 +14254,7 @@ fn findMatchingTypeIdent(self: *Self) ?MatchingTypeResult {
                 return .{
                     .ident = type_name_ident,
                     .kind = type_decl.kind,
+                    .ast_statement_idx = stmt_id,
                 };
             }
         }
@@ -14163,6 +14275,39 @@ fn hasAnyTypeDeclarations(self: *Self) bool {
     }
 
     return false;
+}
+
+fn exposeTypeModuleMainType(self: *Self, matching_type: MatchingTypeResult) std.mem.Allocator.Error!void {
+    if (!self.env.containsExposedById(matching_type.ident)) {
+        try self.env.addExposedById(matching_type.ident);
+    }
+
+    const stmt_idx = self.type_decl_stmt_by_ast_idx.get(matching_type.ast_statement_idx) orelse
+        std.debug.panic(
+            "type-module invariant violated: missing canonical statement for AST type decl {d}",
+            .{@intFromEnum(matching_type.ast_statement_idx)},
+        );
+
+    try self.env.setExposedNodeIndexById(
+        matching_type.ident,
+        @intCast(@intFromEnum(stmt_idx)),
+    );
+}
+
+fn findNominalDeclNodeIdxByText(module_env: *const ModuleEnv, type_name_text: []const u8) ?u16 {
+    for (module_env.store.sliceStatements(module_env.all_statements)) |stmt_idx| {
+        switch (module_env.store.getStatement(stmt_idx)) {
+            .s_nominal_decl => |decl| {
+                const header = module_env.store.getTypeHeader(decl.header);
+                if (std.mem.eql(u8, module_env.getIdent(header.name), type_name_text)) {
+                    return @intCast(@intFromEnum(stmt_idx));
+                }
+            },
+            else => {},
+        }
+    }
+
+    return null;
 }
 
 /// Report smart error when neither type module nor default-app is valid (checking mode)

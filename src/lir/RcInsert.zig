@@ -22,6 +22,10 @@ const CFStmt = LIR.CFStmt;
 const CFStmtId = LIR.CFStmtId;
 const LocalId = LIR.LocalId;
 const LirProcSpecId = LIR.LirProcSpecId;
+const LoopContinueVisitKey = struct {
+    stmt_id: CFStmtId,
+    innermost_for: ?CFStmtId,
+};
 
 pub fn run(
     allocator: Allocator,
@@ -1594,43 +1598,63 @@ const ProcPass = struct {
         stmt_id: CFStmtId,
         for_stack: []const CFStmtId,
     ) Allocator.Error!void {
+        var visited = std.AutoHashMap(LoopContinueVisitKey, void).init(self.allocator);
+        defer visited.deinit();
+        try self.collectLoopContinueTargetsRec(stmt_id, for_stack, &visited);
+    }
+
+    fn collectLoopContinueTargetsRec(
+        self: *ProcPass,
+        stmt_id: CFStmtId,
+        for_stack: []const CFStmtId,
+        visited: *std.AutoHashMap(LoopContinueVisitKey, void),
+    ) Allocator.Error!void {
+        const innermost_for = if (for_stack.len == 0) null else for_stack[for_stack.len - 1];
+        const gop = try visited.getOrPut(.{
+            .stmt_id = stmt_id,
+            .innermost_for = innermost_for,
+        });
+        if (gop.found_existing) {
+            return;
+        }
+
         switch (self.store.getCFStmt(stmt_id)) {
-            .assign_symbol => |assign| try self.collectLoopContinueTargets(assign.next, for_stack),
-            .assign_ref => |assign| try self.collectLoopContinueTargets(assign.next, for_stack),
-            .assign_literal => |assign| try self.collectLoopContinueTargets(assign.next, for_stack),
-            .assign_call => |assign| try self.collectLoopContinueTargets(assign.next, for_stack),
-            .assign_call_indirect => |assign| try self.collectLoopContinueTargets(assign.next, for_stack),
-            .assign_low_level => |assign| try self.collectLoopContinueTargets(assign.next, for_stack),
-            .assign_list => |assign| try self.collectLoopContinueTargets(assign.next, for_stack),
-            .assign_struct => |assign| try self.collectLoopContinueTargets(assign.next, for_stack),
-            .assign_tag => |assign| try self.collectLoopContinueTargets(assign.next, for_stack),
-            .set_local => |assign| try self.collectLoopContinueTargets(assign.next, for_stack),
-            .debug => |debug_stmt| try self.collectLoopContinueTargets(debug_stmt.next, for_stack),
-            .expect => |expect_stmt| try self.collectLoopContinueTargets(expect_stmt.next, for_stack),
-            .incref => |inc| try self.collectLoopContinueTargets(inc.next, for_stack),
-            .decref => |dec| try self.collectLoopContinueTargets(dec.next, for_stack),
-            .free => |free_stmt| try self.collectLoopContinueTargets(free_stmt.next, for_stack),
+            .assign_symbol => |assign| try self.collectLoopContinueTargetsRec(assign.next, for_stack, visited),
+            .assign_ref => |assign| try self.collectLoopContinueTargetsRec(assign.next, for_stack, visited),
+            .assign_literal => |assign| try self.collectLoopContinueTargetsRec(assign.next, for_stack, visited),
+            .assign_call => |assign| try self.collectLoopContinueTargetsRec(assign.next, for_stack, visited),
+            .assign_call_indirect => |assign| try self.collectLoopContinueTargetsRec(assign.next, for_stack, visited),
+            .assign_low_level => |assign| try self.collectLoopContinueTargetsRec(assign.next, for_stack, visited),
+            .assign_list => |assign| try self.collectLoopContinueTargetsRec(assign.next, for_stack, visited),
+            .assign_struct => |assign| try self.collectLoopContinueTargetsRec(assign.next, for_stack, visited),
+            .assign_tag => |assign| try self.collectLoopContinueTargetsRec(assign.next, for_stack, visited),
+            .set_local => |assign| try self.collectLoopContinueTargetsRec(assign.next, for_stack, visited),
+            .debug => |debug_stmt| try self.collectLoopContinueTargetsRec(debug_stmt.next, for_stack, visited),
+            .expect => |expect_stmt| try self.collectLoopContinueTargetsRec(expect_stmt.next, for_stack, visited),
+            .incref => |inc| try self.collectLoopContinueTargetsRec(inc.next, for_stack, visited),
+            .decref => |dec| try self.collectLoopContinueTargetsRec(dec.next, for_stack, visited),
+            .free => |free_stmt| try self.collectLoopContinueTargetsRec(free_stmt.next, for_stack, visited),
             .switch_stmt => |sw| {
-                try self.collectLoopContinueTargets(sw.default_branch, for_stack);
+                try self.collectLoopContinueTargetsRec(sw.default_branch, for_stack, visited);
                 for (self.store.getCFSwitchBranches(sw.branches)) |branch| {
-                    try self.collectLoopContinueTargets(branch.body, for_stack);
+                    try self.collectLoopContinueTargetsRec(branch.body, for_stack, visited);
                 }
             },
             .borrow_scope => |scope| {
-                try self.collectLoopContinueTargets(scope.body, for_stack);
-                try self.collectLoopContinueTargets(scope.remainder, for_stack);
+                try self.collectLoopContinueTargetsRec(scope.body, for_stack, visited);
+                try self.collectLoopContinueTargetsRec(scope.remainder, for_stack, visited);
             },
             .for_list => |for_stmt| {
                 var nested = try self.allocator.alloc(CFStmtId, for_stack.len + 1);
                 defer self.allocator.free(nested);
                 @memcpy(nested[0..for_stack.len], for_stack);
                 nested[for_stack.len] = stmt_id;
-                try self.collectLoopContinueTargets(for_stmt.body, nested);
-                try self.collectLoopContinueTargets(for_stmt.next, for_stack);
+                try self.collectLoopContinueTargetsRec(for_stmt.body, nested, visited);
+                try self.collectLoopContinueTargetsRec(for_stmt.next, for_stack, visited);
             },
             .join => |join| {
-                try self.collectLoopContinueTargets(join.body, for_stack);
-                try self.collectLoopContinueTargets(join.remainder, for_stack);
+                try self.collectLoopContinueTargetsRec(join.body, for_stack, visited);
+                try self.collectLoopContinueTargetsRec(join.remainder, for_stack, visited);
             },
             .loop_continue => {
                 const target = for_stack[for_stack.len - 1];

@@ -6354,6 +6354,7 @@ fn mkMethodCallConstraint(
         .origin = .method_call,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+    try self.cir.recordMethodCallFn(method_expr_idx, method_name, constraint_fn_var);
 
     const constrained_var = try self.freshFromContent(
         .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
@@ -6388,6 +6389,7 @@ fn mkTypeMethodCallConstraint(
         .origin = .method_call,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+    try self.cir.recordMethodCallFn(method_expr_idx, method_name, constraint_fn_var);
 
     const constrained_var = try self.freshFromContent(
         .{ .flex = Flex{ .name = null, .constraints = constraint_range } },

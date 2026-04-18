@@ -351,6 +351,16 @@ pub const Module = struct {
         };
     }
 
+    pub fn methodCallConstraintFnVar(self: @This(), idx: CIR.Expr.Idx) ?Var {
+        const expr_data = self.expr(idx).data;
+        const method_name = switch (expr_data) {
+            .e_method_call => |method_call| method_call.method_name,
+            .e_type_method_call => |method_call| method_call.method_name,
+            else => return null,
+        };
+        return self.env().methodCallFnVar(idx, method_name);
+    }
+
     pub fn curriedFnShape(self: @This(), fn_var: Var) Allocator.Error!CurriedFnShape {
         var args = std.ArrayList(Var).empty;
         errdefer args.deinit(self.allocator);
