@@ -332,7 +332,7 @@ pub const Watcher = struct {
                     self.allocator.free(data.buffer);
                     self.allocator.free(data.path);
                     if (data.overlapped.hEvent) |event| {
-                        std.os.windows.CloseHandle(event);
+                        _ = std.os.windows.CloseHandle(event);
                     }
                 }
                 self.impl.overlapped_data.deinit();
@@ -406,14 +406,14 @@ pub const Watcher = struct {
 
                 // Close directory handles and overlapped events
                 for (self.impl.handles.items) |handle| {
-                    std.os.windows.CloseHandle(handle);
+                    _ = std.os.windows.CloseHandle(handle);
                 }
                 self.impl.handles.clearRetainingCapacity();
 
                 // Close event handles and clear overlapped data
                 for (self.impl.overlapped_data.items) |*data| {
                     if (data.overlapped.hEvent) |event| {
-                        std.os.windows.CloseHandle(event);
+                        _ = std.os.windows.CloseHandle(event);
                     }
                     self.allocator.free(data.buffer);
                     self.allocator.free(data.path);
@@ -862,7 +862,7 @@ pub const Watcher = struct {
         }.CreateEventW;
 
         const event_handle = CreateEventW(null, std.os.windows.TRUE, std.os.windows.FALSE, null) orelse {
-            std.os.windows.CloseHandle(dir_handle);
+            _ = std.os.windows.CloseHandle(dir_handle);
             return error.FailedToCreateEvent;
         };
 
