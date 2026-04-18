@@ -2925,32 +2925,12 @@ fn checkPlatformRequirementsFromCoordinator(
     );
     defer checker.deinit();
 
-    // Build the platform-to-app ident translation map
-    // This translates platform requirement idents to app idents by name
-    var platform_to_app_idents = std.AutoHashMap(base.Ident.Idx, base.Ident.Idx).init(ctx.gpa);
+    var platform_to_app_idents = try compile.platform_requirements.buildPlatformToAppIdents(
+        ctx.gpa,
+        pf_root_env,
+        app_root_env,
+    );
     defer platform_to_app_idents.deinit();
-
-    for (pf_root_env.requires_types.items.items) |required_type| {
-        const platform_ident_text = pf_root_env.getIdent(required_type.ident);
-        if (app_root_env.common.findIdent(platform_ident_text)) |app_ident| {
-            try platform_to_app_idents.put(required_type.ident, app_ident);
-        }
-
-        // Also add for-clause type alias names (Model, model) to the translation map
-        const all_aliases = pf_root_env.for_clause_aliases.items.items;
-        const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
-        for (type_aliases_slice) |alias| {
-            // Add alias name (e.g., "Model")
-            const alias_name_text = pf_root_env.getIdentText(alias.alias_name);
-            const alias_app_ident = try app_root_env.common.insertIdent(ctx.gpa, base.Ident.for_text(alias_name_text));
-            try platform_to_app_idents.put(alias.alias_name, alias_app_ident);
-
-            // Add rigid name (e.g., "model")
-            const rigid_name_text = pf_root_env.getIdentText(alias.rigid_name);
-            const rigid_app_ident = try app_root_env.common.insertIdent(ctx.gpa, base.Ident.for_text(rigid_name_text));
-            try platform_to_app_idents.put(alias.rigid_name, rigid_app_ident);
-        }
-    }
 
     // Check platform requirements against app exports
     try checker.checkPlatformRequirements(pf_root_env, &platform_to_app_idents);
@@ -4332,6 +4312,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     var typed_cir_modules = try check.TypedCIR.Modules.init(ctx.gpa, source_modules);
     defer typed_cir_modules.deinit();
+    try compile.platform_requirements.populateRequiredLookupTargets(&typed_cir_modules, plat.app_module_idx);
 
     var mono_lowerer = try monotype.Lower.Lowerer.init(ctx.gpa, &typed_cir_modules, builtin_module_idx, plat.app_module_idx);
     defer mono_lowerer.deinit();

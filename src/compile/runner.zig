@@ -16,6 +16,7 @@ const lambdasolved = @import("lambdasolved");
 const monotype = @import("monotype");
 const monotype_lifted = @import("monotype_lifted");
 const builtins = @import("builtins");
+const platform_requirements = @import("platform_requirements.zig");
 
 const ModuleEnv = can.ModuleEnv;
 const BuiltinModules = eval.BuiltinModules;
@@ -145,6 +146,7 @@ pub fn runViaInterpreter(
         findModuleEnvIdx(all_module_envs, app_env)
     else
         null;
+    try platform_requirements.populateRequiredLookupTargets(&typed_cir_modules, app_module_idx);
 
     var mono_lowerer = try monotype.Lower.Lowerer.init(gpa, &typed_cir_modules, builtin_idx, app_module_idx);
     defer mono_lowerer.deinit();
@@ -235,6 +237,7 @@ pub fn runViaDev(
         findModuleEnvIdx(all_module_envs, app_env)
     else
         null;
+    try platform_requirements.populateRequiredLookupTargets(&typed_cir_modules, app_module_idx);
 
     var mono_lowerer = try monotype.Lower.Lowerer.init(gpa, &typed_cir_modules, builtin_idx, app_module_idx);
     defer mono_lowerer.deinit();

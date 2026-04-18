@@ -137,6 +137,10 @@ const Ctx = struct {
             return self.source_module.requiresTypes();
         }
 
+        pub fn requiredLookupTarget(self: @This(), requires_idx: u32) ?CIR.Def.Idx {
+            return self.source_module.requiredLookupTarget(requires_idx);
+        }
+
         pub fn nodeTag(self: @This(), idx: CIR.Node.Idx) CIR.Node.Tag {
             return self.source_module.nodeTag(idx);
         }
@@ -3028,16 +3032,6 @@ pub const Lowerer = struct {
         };
     }
 
-    fn topLevelDefByText(
-        self: *const Lowerer,
-        module_idx: u32,
-        text: []const u8,
-    ) ?CIR.Def.Idx {
-        const typed_cir_module = self.ctx.typedCirModule(module_idx);
-        const ident = typed_cir_module.identStoreConst().findByString(text) orelse return null;
-        return typed_cir_module.topLevelDefByIdent(ident);
-    }
-
     fn resolveRequiredLookupTarget(
         self: *const Lowerer,
         source_module_idx: u32,
@@ -3045,10 +3039,7 @@ pub const Lowerer = struct {
         requires_idx: u32,
     ) ?ResolvedDefTarget {
         const source_module = self.ctx.typedCirModule(source_module_idx);
-        const requires_items = source_module.requiresTypes();
-        if (requires_idx >= requires_items.len) return null;
-        const required_name = source_module.getIdent(requires_items[requires_idx].ident);
-        const def_idx = self.topLevelDefByText(app_module_idx, required_name) orelse return null;
+        const def_idx = source_module.requiredLookupTarget(requires_idx) orelse return null;
         return .{
             .module_idx = app_module_idx,
             .def_idx = def_idx,

@@ -35,6 +35,7 @@ const ModuleTimingInfo = compile_package.TimingInfo;
 const ImportResolver = compile_package.ImportResolver;
 const ScheduleHook = compile_package.ScheduleHook;
 const CacheManager = @import("cache_manager.zig").CacheManager;
+const platform_requirements = @import("platform_requirements.zig");
 
 // Actor model components
 const coordinator_mod = @import("coordinator.zig");
@@ -977,40 +978,12 @@ pub const BuildEnv = struct {
         );
         defer checker.deinit();
 
-        // Build the platform-to-app ident translation map
-        // This translates platform requirement idents to app idents by name
-        var platform_to_app_idents = std.AutoHashMap(base.Ident.Idx, base.Ident.Idx).init(self.gpa);
+        var platform_to_app_idents = try platform_requirements.buildPlatformToAppIdents(
+            self.gpa,
+            platform_root_env,
+            app_root_env,
+        );
         defer platform_to_app_idents.deinit();
-
-        // Enable runtime inserts on the app's interner so we can add new idents from platform
-        // (the app's interner may be deserialized from cache and not support inserts by default)
-        // Use app_root_env.gpa so the memory is freed by the same allocator during ModuleEnv.deinit()
-        try app_root_env.common.idents.interner.enableRuntimeInserts(app_root_env.gpa);
-
-        for (platform_root_env.requires_types.items.items) |required_type| {
-            const platform_ident_text = platform_root_env.getIdent(required_type.ident);
-            if (app_root_env.common.findIdent(platform_ident_text)) |app_ident| {
-                try platform_to_app_idents.put(required_type.ident, app_ident);
-            }
-
-            // Also add for-clause type alias names (Model, model) to the translation map
-            const all_aliases = platform_root_env.for_clause_aliases.items.items;
-            const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
-            for (type_aliases_slice) |alias| {
-                // Add alias name (e.g., "Model") - look up in app's ident store first,
-                // and only insert if not found (avoids error on deserialized interners).
-                const alias_name_text = platform_root_env.getIdent(alias.alias_name);
-                const alias_app_ident = app_root_env.common.findIdent(alias_name_text) orelse
-                    try app_root_env.common.insertIdent(app_root_env.gpa, base.Ident.for_text(alias_name_text));
-                try platform_to_app_idents.put(alias.alias_name, alias_app_ident);
-
-                // Add rigid name (e.g., "model") - look up first, only insert if not found.
-                const rigid_name_text = platform_root_env.getIdent(alias.rigid_name);
-                const rigid_app_ident = app_root_env.common.findIdent(rigid_name_text) orelse
-                    try app_root_env.common.insertIdent(app_root_env.gpa, base.Ident.for_text(rigid_name_text));
-                try platform_to_app_idents.put(alias.rigid_name, rigid_app_ident);
-            }
-        }
 
         // Check platform requirements against app exports
         try checker.checkPlatformRequirements(platform_root_env, &platform_to_app_idents);

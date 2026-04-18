@@ -464,6 +464,7 @@ fn evaluateFromSharedMemory(entry_idx: u32, host_roc_ops: *RocOps, ret_ptr: *any
 
     var typed_modules = try check.TypedCIR.Modules.init(wrapped_allocator, source_modules);
     defer typed_modules.deinit();
+    try compile.platform_requirements.populateRequiredLookupTargets(&typed_modules, app_module_idx);
 
     var mono_lowerer = try monotype.Lower.Lowerer.init(
         wrapped_allocator,
