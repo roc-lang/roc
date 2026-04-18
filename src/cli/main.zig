@@ -258,7 +258,7 @@ fn ensureWindowsConsoleSupportsAnsiAndUtf8() void {
     const current_code_page = kernel32.GetConsoleOutputCP();
     if (current_code_page != 0 and current_code_page != 65001) {
         windows_console_previous_code_page = current_code_page;
-        kernel32.SetConsoleOutputCP(65001);
+        _ = kernel32.SetConsoleOutputCP(65001);
     }
     // Note: ANSI escape support is enabled in Io.init()
 }
@@ -267,7 +267,7 @@ fn restoreWindowsConsoleCodePage() void {
     if (!is_windows) return;
     if (windows_console_previous_code_page) |code_page| {
         windows_console_previous_code_page = null;
-        std.os.windows.kernel32.SetConsoleOutputCP(code_page);
+        _ = std.os.windows.kernel32.SetConsoleOutputCP(code_page);
     }
 }
 
@@ -1276,8 +1276,8 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
     // to properly unmap the entire shared memory region and release kernel resources.
     defer {
         if (comptime is_windows) {
-            ipc.platform.windows.UnmapViewOfFile(shm_handle.ptr);
-            ipc.platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
+            _ = ipc.platform.windows.UnmapViewOfFile(shm_handle.ptr);
+            _ = ipc.platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
         } else {
             _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
             if (c.close(shm_handle.fd) != 0) {}
@@ -1621,8 +1621,8 @@ fn rocRunDevShim(ctx: *CliContext, args: cli_args.RunArgs) !void {
 
     defer {
         if (comptime is_windows) {
-            ipc.platform.windows.UnmapViewOfFile(shm_handle.ptr);
-            ipc.platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
+            _ = ipc.platform.windows.UnmapViewOfFile(shm_handle.ptr);
+            _ = ipc.platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
         } else {
             _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
             if (c.close(shm_handle.fd) != 0) {}
@@ -2015,8 +2015,8 @@ fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_h
     const wait_result = windows.WaitForSingleObject(process_info.hProcess, windows.INFINITE);
     if (wait_result != 0) { // WAIT_OBJECT_0 = 0
         // Clean up handles before returning
-        ipc.platform.windows.CloseHandle(process_info.hProcess);
-        ipc.platform.windows.CloseHandle(process_info.hThread);
+        _ = ipc.platform.windows.CloseHandle(process_info.hProcess);
+        _ = ipc.platform.windows.CloseHandle(process_info.hThread);
         return ctx.fail(.{ .child_process_wait_failed = .{
             .command = exe_path,
             .err = error.ProcessWaitFailed,
@@ -2027,8 +2027,8 @@ fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_h
     var exit_code: windows.DWORD = undefined;
     if (windows.GetExitCodeProcess(process_info.hProcess, &exit_code) == 0) {
         // Clean up handles before returning
-        ipc.platform.windows.CloseHandle(process_info.hProcess);
-        ipc.platform.windows.CloseHandle(process_info.hThread);
+        _ = ipc.platform.windows.CloseHandle(process_info.hProcess);
+        _ = ipc.platform.windows.CloseHandle(process_info.hThread);
         return ctx.fail(.{ .child_process_wait_failed = .{
             .command = exe_path,
             .err = error.ProcessExitCodeFailed,
@@ -2036,8 +2036,8 @@ fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_h
     }
 
     // Clean up process handles
-    ipc.platform.windows.CloseHandle(process_info.hProcess);
-    ipc.platform.windows.CloseHandle(process_info.hThread);
+    _ = ipc.platform.windows.CloseHandle(process_info.hProcess);
+    _ = ipc.platform.windows.CloseHandle(process_info.hThread);
 
     // On Windows, clean up temp files after the child process exits.
     // (Unlike Unix, Windows locks files while they're being executed)
@@ -2261,7 +2261,7 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
         0,
         ipc.platform.SHARED_MEMORY_BASE_ADDR,
     ) orelse {
-        ipc.platform.windows.CloseHandle(shm_handle);
+        _ = ipc.platform.windows.CloseHandle(shm_handle);
         return error.SharedMemoryMapFailed;
     };
 

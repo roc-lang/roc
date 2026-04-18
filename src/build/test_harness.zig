@@ -530,7 +530,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
             defer arena.deinit();
             for (specs, 0..) |spec, i| {
-                arena.reset(.retain_capacity);
+                _ = arena.reset(.retain_capacity);
                 const unstable_result = cfg.runTest(arena.allocator(), spec);
                 results[i] = cfg.stabilizeResult(gpa, unstable_result);
             }
