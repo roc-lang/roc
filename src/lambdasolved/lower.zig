@@ -1285,9 +1285,157 @@ const Lowerer = struct {
             },
             .low_level => |ll| blk: {
                 const args = self.output.sliceExprSpan(ll.args);
-                for (args) |arg| {
+                const arg_tys = try self.allocator.alloc(TypeVarId, args.len);
+                defer self.allocator.free(arg_tys);
+                for (args, 0..) |arg, i| {
                     const arg_ty = try self.inferExpr(venv, arg);
+                    arg_tys[i] = arg_ty;
                     try self.unify(arg_ty, self.output.getExpr(arg).ty);
+                }
+
+                switch (ll.op) {
+                    .bool_not => {
+                        const bool_ty = try self.freshPrimitiveType(.bool);
+                        try self.unify(target_ty, bool_ty);
+                        if (arg_tys.len != 1) {
+                            return debugPanic("lambdasolved.inferExpr bool_not expected one arg", .{});
+                        }
+                        try self.unify(arg_tys[0], bool_ty);
+                    },
+                    .str_concat => {
+                        const str_ty = try self.freshPrimitiveType(.str);
+                        try self.unify(target_ty, str_ty);
+                        for (arg_tys) |arg_ty| {
+                            try self.unify(arg_ty, str_ty);
+                        }
+                    },
+                    .num_negate,
+                    .num_abs,
+                    .num_plus,
+                    .num_minus,
+                    .num_times,
+                    .num_div_by,
+                    .num_div_trunc_by,
+                    .num_rem_by,
+                    .num_mod_by,
+                    .num_pow,
+                    .num_sqrt,
+                    .num_log,
+                    .num_round,
+                    .num_floor,
+                    .num_ceiling,
+                    => for (arg_tys, args) |arg_ty, arg_expr| {
+                        if (!self.exprIsFlexibleNumericLiteral(arg_expr)) {
+                            try self.unify(arg_ty, target_ty);
+                        }
+                    },
+                    .num_abs_diff => {
+                        if (arg_tys.len != 2) {
+                            return debugPanic("lambdasolved.inferExpr num_abs_diff expected two args", .{});
+                        }
+                        if (!self.exprIsFlexibleNumericLiteral(args[0])) {
+                            try self.unify(arg_tys[0], arg_tys[1]);
+                        } else if (!self.exprIsFlexibleNumericLiteral(args[1])) {
+                            try self.unify(arg_tys[1], arg_tys[0]);
+                        }
+                        try self.unify(target_ty, try self.absDiffResultType(arg_tys[0]));
+                    },
+                    .num_is_eq,
+                    .num_is_gt,
+                    .num_is_gte,
+                    .num_is_lt,
+                    .num_is_lte,
+                    => {
+                        const bool_ty = try self.freshPrimitiveType(.bool);
+                        try self.unify(target_ty, bool_ty);
+                        if (arg_tys.len == 0) {
+                            return debugPanic("lambdasolved.inferExpr numeric comparison expected args", .{});
+                        }
+                        for (arg_tys[1..], args[1..]) |arg_ty, arg_expr| {
+                            if (!self.exprIsFlexibleNumericLiteral(args[0])) {
+                                try self.unify(arg_tys[0], arg_ty);
+                            } else if (!self.exprIsFlexibleNumericLiteral(arg_expr)) {
+                                try self.unify(arg_ty, arg_tys[0]);
+                            }
+                        }
+                    },
+                    .num_to_str => {
+                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
+                    },
+                    .u8_to_str => {
+                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
+                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.u8));
+                    },
+                    .i8_to_str => {
+                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
+                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.i8));
+                    },
+                    .u16_to_str => {
+                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
+                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.u16));
+                    },
+                    .i16_to_str => {
+                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
+                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.i16));
+                    },
+                    .u32_to_str => {
+                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
+                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.u32));
+                    },
+                    .i32_to_str => {
+                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
+                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.i32));
+                    },
+                    .u64_to_str => {
+                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
+                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.u64));
+                    },
+                    .i64_to_str => {
+                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
+                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.i64));
+                    },
+                    .u128_to_str => {
+                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
+                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.u128));
+                    },
+                    .i128_to_str => {
+                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
+                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.i128));
+                    },
+                    .dec_to_str => {
+                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
+                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.dec));
+                    },
+                    .f32_to_str => {
+                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
+                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.f32));
+                    },
+                    .f64_to_str => {
+                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
+                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.f64));
+                    },
+                    .list_len => {
+                        if (arg_tys.len != 1) {
+                            return debugPanic("lambdasolved.inferExpr list_len expected one arg", .{});
+                        }
+                        try self.unify(target_ty, try self.freshPrimitiveType(.u64));
+                        try self.unify(arg_tys[0], try self.types.freshContent(.{
+                            .list = try self.types.freshUnbd(),
+                        }));
+                    },
+                    .box_box => {
+                        if (arg_tys.len != 1) {
+                            return debugPanic("lambdasolved.inferExpr box_box expected one arg", .{});
+                        }
+                        try self.unify(target_ty, try self.types.freshContent(.{ .box = arg_tys[0] }));
+                    },
+                    .box_unbox => {
+                        if (arg_tys.len != 1) {
+                            return debugPanic("lambdasolved.inferExpr box_unbox expected one arg", .{});
+                        }
+                        try self.unify(arg_tys[0], try self.types.freshContent(.{ .box = target_ty }));
+                    },
+                    else => {},
                 }
                 break :blk target_ty;
             },
@@ -1966,6 +2114,13 @@ const Lowerer = struct {
             .for_a,
             => false,
             .link => unreachable,
+        };
+    }
+
+    fn exprIsFlexibleNumericLiteral(self: *Lowerer, expr_id: ast.ExprId) bool {
+        return switch (self.output.getExpr(expr_id).data) {
+            .int_lit, .dec_lit => true,
+            else => false,
         };
     }
 

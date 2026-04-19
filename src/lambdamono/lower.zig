@@ -980,9 +980,9 @@ const Lowerer = struct {
     }
 
     fn lowLevelResultTypeFromArgs(
-        self: *Lowerer,
+        _: *Lowerer,
         op: base.LowLevel,
-        args: []const ast.ExprId,
+        _: []const ast.ExprId,
         default_ty: type_mod.TypeId,
     ) type_mod.TypeId {
         return switch (op) {
@@ -1005,12 +1005,7 @@ const Lowerer = struct {
             .num_shift_left_by,
             .num_shift_right_by,
             .num_shift_right_zf_by,
-            => blk: {
-                if (args.len == 0) {
-                    debugPanic("lambdamono.lower.lowLevelResultTypeFromArgs numeric op expected args");
-                }
-                break :blk self.output.getExpr(args[0]).ty;
-            },
+            => default_ty,
             else => default_ty,
         };
     }
@@ -2458,9 +2453,9 @@ const Lowerer = struct {
     fn specializeFn(self: *Lowerer, pending: specializations.Pending) std.mem.Allocator.Error!SpecializedFn {
         var frozen = try self.freezeFnWorld(pending);
         defer frozen.deinit();
+        const fn_body = pending.fn_def.body;
         const frozen_captures = frozen.inst.types.sliceCaptures(frozen.capture_span);
         const fn_arg_symbol = pending.fn_def.arg.symbol;
-        const fn_body = pending.fn_def.body;
 
         const specialized_arg_exec_ty = try self.lowerExecutableTypeFromSolvedIn(&frozen.inst.types, &frozen.mono_cache, frozen.fn_shape.arg);
         switch (frozen.inst.types.lambdaRepr(frozen.fn_ty)) {
