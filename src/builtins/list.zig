@@ -159,8 +159,11 @@ pub const RocList = extern struct {
     }
 
     pub fn incref(self: RocList, amount: isize, elements_refcounted: bool, roc_ops: *RocOps) void {
-        // If the list is unique and not a seamless slice, the length needs to be store on the heap if the elements are refcounted.
-        if (elements_refcounted and self.isUnique(roc_ops) and !self.isSeamlessSlice()) {
+        // Seamless slices of refcounted lists need the original allocation's element
+        // count recorded in the heap header. Once a non-slice list becomes shared,
+        // that count must already be present because later slice teardown will read it
+        // from the shared allocation.
+        if (elements_refcounted and !self.isSeamlessSlice()) {
             if (self.getAllocationDataPtr(roc_ops)) |source| {
                 // - 1 is refcount.
                 // - 2 is size on heap.

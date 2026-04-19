@@ -172,6 +172,7 @@ pub const BuiltinFn = enum {
     list_concat,
     list_prepend,
     list_sublist,
+    list_incref,
     list_drop_at,
     list_replace,
     list_reserve,
@@ -262,6 +263,7 @@ pub const BuiltinFn = enum {
             .list_concat => "roc_builtins_list_concat",
             .list_prepend => "roc_builtins_list_prepend",
             .list_sublist => "roc_builtins_list_sublist",
+            .list_incref => "roc_builtins_list_incref",
             .list_drop_at => "roc_builtins_list_drop_at",
             .list_replace => "roc_builtins_list_replace",
             .list_reserve => "roc_builtins_list_reserve",
@@ -4166,6 +4168,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const key = localKey(local);
             const local_layout = self.localLayout(local);
             if (self.local_locations.get(key)) |stable_loc| {
+                if (builtin.mode == .Debug and self.current_proc_name != null and self.current_proc_name.?.raw() == 0 and (@intFromEnum(local) == 27 or @intFromEnum(local) == 29)) {
+                    std.debug.print("dev rebind local={d} stable={any}\\n", .{ @intFromEnum(local), stable_loc });
+                }
                 try self.storeValueIntoStableLocation(stable_loc, value_loc, local_layout);
                 try self.emitDebugAssertValidBoxLocal(local, stable_loc);
                 try self.emitDebugAssertValidStrLocal(local, stable_loc);
@@ -4173,6 +4178,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             const stable_loc = try self.materializeValueToStackForLayout(value_loc, local_layout);
+            if (builtin.mode == .Debug and self.current_proc_name != null and self.current_proc_name.?.raw() == 0 and (@intFromEnum(local) == 27 or @intFromEnum(local) == 29)) {
+                std.debug.print("dev bind local={d} stable={any}\\n", .{ @intFromEnum(local), stable_loc });
+            }
             try self.local_locations.put(key, stable_loc);
             try self.emitDebugAssertValidBoxLocal(local, stable_loc);
             try self.emitDebugAssertValidStrLocal(local, stable_loc);
@@ -8006,15 +8014,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.codegen.freeGeneral(value_ptr_reg);
             try self.emitLoad(.w64, value_ptr_reg, frame_ptr, ptr_slot);
 
-            const data_ptr_reg = try self.allocTempGeneral();
-            defer self.codegen.freeGeneral(data_ptr_reg);
-            try self.loadListDataPtrForRcFromValuePtr(value_ptr_reg, data_ptr_reg);
-
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            try builder.addRegArg(data_ptr_reg);
+            try builder.addMemArg(value_ptr_reg, 0);
+            try builder.addMemArg(value_ptr_reg, 8);
+            try builder.addMemArg(value_ptr_reg, 16);
             try builder.addMemArg(frame_ptr, count_slot);
             try builder.addMemArg(frame_ptr, roc_ops_slot);
-            try self.callBuiltin(&builder, @intFromPtr(&increfDataPtrC), .incref_data_ptr);
+            try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_list_incref), .list_incref);
         }
 
         fn emitBuiltinInternalRcHelperListDrop(
@@ -9167,7 +9173,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const needs_ret_ptr = self.needsInternalReturnByPointer(ret_layout);
             const ret_buffer_offset = if (needs_ret_ptr) blk: {
-                const size = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(ret_layout)).size;
+                const runtime_ret_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
+                const size = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_ret_layout)).size;
                 break :blk self.codegen.allocStackSlot(size);
             } else 0;
 
@@ -9412,8 +9419,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn generateCallToCompiledProc(self: *Self, proc: CompiledProc, args: []const ValueLocation, arg_layouts: []const layout.Idx, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
             std.debug.assert(args.len == arg_layouts.len);
             const needs_ret_ptr = self.needsInternalReturnByPointer(ret_layout);
+            if (builtin.mode == .Debug and (proc.name.raw() == 2110 or proc.name.raw() == 2113 or proc.name.raw() == 0)) {
+                std.debug.print(
+                    "dev call current={d} target={d} ret_layout={} needs_ret_ptr={}\\n",
+                    .{
+                        if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64),
+                        proc.name.raw(),
+                        @intFromEnum(ret_layout),
+                        needs_ret_ptr,
+                    },
+                );
+            }
             const ret_buffer_offset = if (needs_ret_ptr) blk: {
-                const size = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(ret_layout)).size;
+                const runtime_ret_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
+                const size = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_ret_layout)).size;
                 break :blk self.codegen.allocStackSlot(size);
             } else 0;
 
@@ -11264,6 +11283,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             const needs_ret_ptr = self.needsInternalReturnByPointer(proc.ret_layout);
+            if (builtin.mode == .Debug and (proc.name.raw() == 2110 or proc.name.raw() == 2113 or proc.name.raw() == 0)) {
+                std.debug.print(
+                    "dev proc name={d} ret_layout={} needs_ret_ptr={}\\n",
+                    .{ proc.name.raw(), @intFromEnum(proc.ret_layout), needs_ret_ptr },
+                );
+            }
             if (needs_ret_ptr) {
                 self.ret_ptr_slot = self.codegen.allocStackSlot(8);
                 const first_reg = self.getArgumentRegister(0);
@@ -11476,11 +11501,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// Maximum number of registers used for multi-register returns in internal Roc calls.
-        /// x86_64: RAX, RDX, RCX, R8, R9, R10, R11, RDI, RSI = 9 registers = 72 bytes
-        /// aarch64: X0-X7, XR, X9-X15 = 16 registers = 128 bytes
-        const max_return_regs: u32 = if (target.toCpuArch() == .aarch64) 16 else 9;
-        const max_return_size: u32 = max_return_regs * 8;
+        /// Internal Roc proc calls use at most two general-purpose return registers.
+        /// Larger runtime values use a hidden return pointer instead.
+        const max_internal_return_words: u32 = 2;
+        const max_internal_return_size: u32 = max_internal_return_words * 8;
 
         /// Check if a return type exceeds the register limit and needs return-by-pointer.
         /// When true, the caller passes a hidden first argument (pointer to a pre-allocated
@@ -11488,13 +11512,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn needsInternalReturnByPointer(self: *Self, ret_layout: layout.Idx) bool {
             const ls = self.layout_store;
             const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(ret_layout);
-            if (@intFromEnum(runtime_layout_idx) < ls.layouts.len()) {
-                const layout_val = ls.getLayout(runtime_layout_idx);
-                if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
-                    return ls.layoutSizeAlign(layout_val).size > max_return_size;
-                }
-            }
-            return false;
+            const runtime_layout = ls.getLayout(runtime_layout_idx);
+            return ls.layoutSizeAlign(runtime_layout).size > max_internal_return_size;
         }
 
         /// Save the return value from a call into a stack-based ValueLocation.
@@ -12240,7 +12259,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// has passed a pointer to a pre-allocated buffer as a hidden first argument.
         fn copyResultToReturnPointer(self: *Self, result_loc: ValueLocation, ret_layout: layout.Idx, ret_ptr_stack_slot: i32) Allocator.Error!void {
             const ls = self.layout_store;
-            const layout_val = ls.getLayout(ret_layout);
+            const runtime_ret_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
+            const layout_val = ls.getLayout(runtime_ret_layout);
             const ret_size = ls.layoutSizeAlign(layout_val).size;
 
             // Ensure result is on stack
@@ -13188,10 +13208,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             arg_infos: []const ArgInfo,
             ret_layout: layout.Idx,
         ) Allocator.Error!ValueLocation {
-            const pbp_plan = try self.computePassByPtrPlan(arg_infos, 0, true);
+            const needs_ret_ptr = self.needsInternalReturnByPointer(ret_layout);
+            const ret_buffer_offset = if (needs_ret_ptr) blk: {
+                const runtime_ret_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
+                const size = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_ret_layout)).size;
+                break :blk self.codegen.allocStackSlot(size);
+            } else 0;
+
+            const pbp_plan = try self.computePassByPtrPlan(arg_infos, if (needs_ret_ptr) 1 else 0, true);
             defer self.scratch_pass_by_ptr.clearFrom(pbp_plan.start);
 
             const stack_spill_size = try self.placeCallArguments(arg_infos, .{
+                .needs_ret_ptr = needs_ret_ptr,
+                .ret_buffer_offset = ret_buffer_offset,
                 .pass_by_ptr = pbp_plan.slice,
                 .emit_roc_ops = true,
             });
@@ -13201,7 +13230,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitAddStackPtr(stack_spill_size);
             }
 
-            return self.saveCallReturnValue(ret_layout, false, 0);
+            return self.saveCallReturnValue(ret_layout, needs_ret_ptr, ret_buffer_offset);
         }
 
         fn generateEntrypointProcCall(
