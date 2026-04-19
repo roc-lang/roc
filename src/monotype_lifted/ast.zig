@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const monotype = @import("monotype");
 const types = @import("types");
 const symbol_mod = @import("symbol");
 const type_mod = @import("type.zig");
@@ -67,6 +68,8 @@ pub const FieldExpr = struct {
     value: ExprId,
 };
 
+pub const MethodTarget = monotype.Ast.MethodTarget;
+
 /// Public struct `Expr`.
 pub const Expr = struct {
     ty: TypeId,
@@ -93,14 +96,14 @@ pub const Expr = struct {
         },
         method_call: struct {
             receiver: ExprId,
-            target_symbol: Symbol,
+            target: MethodTarget,
             method_fn_ty: TypeId,
             method_name: base.Ident.Idx,
             args: Span(ExprId),
         },
         type_method_call: struct {
             dispatcher_ty: TypeId,
-            target_symbol: Symbol,
+            target: MethodTarget,
             method_fn_ty: TypeId,
             method_name: base.Ident.Idx,
             args: Span(ExprId),

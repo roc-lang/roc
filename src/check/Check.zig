@@ -6418,6 +6418,15 @@ fn recordResolvedMethodCallTarget(
     );
 }
 
+fn recordImplicitEqMethodCall(
+    self: *Self,
+    constraint: StaticDispatchConstraint,
+) void {
+    const site_expr_var = constraint.site_expr_var orelse return;
+    const expr_idx: CIR.Expr.Idx = @enumFromInt(@intFromEnum(site_expr_var));
+    self.cir.setMethodCallImplicitEq(expr_idx, constraint.fn_name, constraint.origin);
+}
+
 // problems //
 
 // copy type from other module //
@@ -7024,6 +7033,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         if (exact_method_ident == null) {
                             try self.satisfyImplicitEqualityConstraint(
                                 deferred_constraint.var_,
+                                constraint,
                                 constraint.fn_var,
                                 env,
                                 region,
@@ -7244,6 +7254,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             if (self.varSupportsIsEq(backing_var)) {
                                 try self.satisfyImplicitEqualityConstraint(
                                     deferred_constraint.var_,
+                                    constraint,
                                     constraint.fn_var,
                                     env,
                                     region,
@@ -7406,6 +7417,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         if (self.typeSupportsIsEq(dispatcher_content.structure)) {
                             try self.satisfyImplicitEqualityConstraint(
                                 deferred_constraint.var_,
+                                constraint,
                                 constraint.fn_var,
                                 env,
                                 self.getRegionAt(deferred_constraint.var_),
@@ -7638,6 +7650,7 @@ fn nominalIsBuiltinNumberType(self: *Self, nominal_type: types_mod.NominalType) 
 fn satisfyImplicitEqualityConstraint(
     self: *Self,
     dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
     constraint_fn_var: Var,
     env: *Env,
     region: Region,
@@ -7659,6 +7672,7 @@ fn satisfyImplicitEqualityConstraint(
     _ = try self.unify(dispatcher_var, args[0], env);
     _ = try self.unify(dispatcher_var, args[1], env);
     _ = try self.unify(try self.freshBool(env, region), resolved_func.ret, env);
+    self.recordImplicitEqMethodCall(constraint);
 }
 
 /// Check if a type variable supports is_eq by resolving it and checking its content

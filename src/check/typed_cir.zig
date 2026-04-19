@@ -25,9 +25,12 @@ const OwnedCheckedModule = struct {
     owned_source: ?[]u8 = null,
 };
 
-const MethodCallTargetData = struct {
-    module_idx: u32,
-    def_idx: CIR.Def.Idx,
+const MethodCallTargetData = union(enum) {
+    exact: struct {
+        module_idx: u32,
+        def_idx: CIR.Def.Idx,
+    },
+    implicit_eq,
 };
 
 const MethodCallTargetKey = struct {
@@ -178,13 +181,22 @@ pub const Modules = struct {
             };
             _ = module_;
             for (module_data.env.method_call_fns.items.items) |entry| {
-                if (!entry.has_resolved_target) continue;
-                const target_module_name = module_data.env.getIdent(entry.resolved_target_module_ident);
-                const target_module_idx = module_idxs_by_name.get(target_module_name) orelse {
-                    std.debug.panic(
-                        "typed_cir invariant violated: unknown resolved method target module {s}",
-                        .{target_module_name},
-                    );
+                const target_data: MethodCallTargetData = switch (entry.resolution) {
+                    .unresolved => continue,
+                    .implicit_eq => .implicit_eq,
+                    .resolved_target => blk: {
+                        const target_module_name = module_data.env.getIdent(entry.resolved_target_module_ident);
+                        const target_module_idx = module_idxs_by_name.get(target_module_name) orelse {
+                            std.debug.panic(
+                                "typed_cir invariant violated: unknown resolved method target module {s}",
+                                .{target_module_name},
+                            );
+                        };
+                        break :blk .{ .exact = .{
+                            .module_idx = target_module_idx,
+                            .def_idx = entry.resolved_target_def_idx,
+                        } };
+                    },
                 };
                 try module_data.method_call_targets.put(
                     allocator,
@@ -192,10 +204,7 @@ pub const Modules = struct {
                         .expr_idx = @intFromEnum(entry.expr_idx),
                         .origin = entry.origin,
                     },
-                    .{
-                        .module_idx = target_module_idx,
-                        .def_idx = entry.resolved_target_def_idx,
-                    },
+                    target_data,
                 );
             }
         }
@@ -263,9 +272,14 @@ pub const Module = struct {
     module_idx: u32,
     data_store: *ModuleData,
 
-    pub const MethodCallResolvedTarget = struct {
+    pub const MethodCallExactTarget = struct {
         module_idx: u32,
         def_idx: CIR.Def.Idx,
+    };
+
+    pub const MethodCallTarget = union(enum) {
+        exact: MethodCallExactTarget,
+        implicit_eq,
     };
 
     /// Function-shape view recovered from checked function types.
@@ -340,18 +354,21 @@ pub const Module = struct {
         return self.data_store.required_lookup_targets.get(requires_idx);
     }
 
-    pub fn methodCallResolvedTarget(
+    pub fn methodCallTarget(
         self: @This(),
         expr_idx: CIR.Expr.Idx,
         origin: types.StaticDispatchConstraint.Origin,
-    ) ?MethodCallResolvedTarget {
+    ) ?MethodCallTarget {
         const target = self.data_store.method_call_targets.get(.{
             .expr_idx = @intFromEnum(expr_idx),
             .origin = origin,
         }) orelse return null;
-        return .{
-            .module_idx = target.module_idx,
-            .def_idx = target.def_idx,
+        return switch (target) {
+            .exact => |exact| .{ .exact = .{
+                .module_idx = exact.module_idx,
+                .def_idx = exact.def_idx,
+            } },
+            .implicit_eq => .implicit_eq,
         };
     }
 

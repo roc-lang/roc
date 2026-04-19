@@ -87,6 +87,12 @@ pub const FieldExpr = struct {
     value: ExprId,
 };
 
+pub const MethodTarget = union(enum) {
+    unresolved,
+    exact_symbol: Symbol,
+    implicit_eq,
+};
+
 /// Public struct `Expr`.
 pub const Expr = struct {
     ty: TypeId,
@@ -113,14 +119,14 @@ pub const Expr = struct {
         },
         method_call: struct {
             receiver: ExprId,
-            target_symbol: Symbol,
+            target: MethodTarget,
             method_fn_ty: TypeId,
             method_name: base.Ident.Idx,
             args: Span(ExprId),
         },
         type_method_call: struct {
             dispatcher_ty: TypeId,
-            target_symbol: Symbol,
+            target: MethodTarget,
             method_fn_ty: TypeId,
             method_name: base.Ident.Idx,
             args: Span(ExprId),

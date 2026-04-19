@@ -319,7 +319,7 @@ const Lowerer = struct {
             } },
             .method_call => |method_call| .{ .method_call = .{
                 .receiver = try self.instantiateExpr(method_call.receiver),
-                .target_symbol = method_call.target_symbol,
+                .target = method_call.target,
                 .method_fn_ty = try self.instantiateType(method_call.method_fn_ty),
                 .method_name = method_call.method_name,
                 .args = try self.instantiateExprSpan(method_call.args),
@@ -328,7 +328,7 @@ const Lowerer = struct {
             } },
             .type_method_call => |method_call| .{ .type_method_call = .{
                 .dispatcher_ty = try self.instantiateType(method_call.dispatcher_ty),
-                .target_symbol = method_call.target_symbol,
+                .target = method_call.target,
                 .method_fn_ty = try self.instantiateType(method_call.method_fn_ty),
                 .method_name = method_call.method_name,
                 .args = try self.instantiateExprSpan(method_call.args),
@@ -1165,9 +1165,12 @@ const Lowerer = struct {
             },
             .method_call => |method_call| blk: {
                 const receiver = method_call.receiver;
-                if (!method_call.target_symbol.isNone()) {
-                    const exact_target_ty = try self.requireCallableTypeForSymbol(venv, method_call.target_symbol);
-                    try self.unify(method_call.method_fn_ty, exact_target_ty);
+                switch (method_call.target) {
+                    .exact_symbol => |target_symbol| {
+                        const exact_target_ty = try self.requireCallableTypeForSymbol(venv, target_symbol);
+                        try self.unify(method_call.method_fn_ty, exact_target_ty);
+                    },
+                    else => {},
                 }
                 const method_fn_ty = method_call.method_fn_ty;
                 const method_args = self.output.sliceExprSpan(method_call.args);
@@ -1216,7 +1219,7 @@ const Lowerer = struct {
                 const out_expr = &self.output.exprs.items[@intFromEnum(expr_id)];
                 var snapshot_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
                 defer snapshot_mapping.deinit();
-                out_expr.data.method_call.target_symbol = method_call.target_symbol;
+                out_expr.data.method_call.target = method_call.target;
                 out_expr.data.method_call.method_fn_ty = try self.snapshotTypeRec(method_fn_ty, &snapshot_mapping);
                 out_expr.data.method_call.step_arg_tys = try self.snapshotTypeVarSpanWithMapping(step_arg_tys.items, &snapshot_mapping);
                 out_expr.data.method_call.step_result_tys = try self.snapshotTypeVarSpanWithMapping(step_result_tys.items, &snapshot_mapping);
@@ -1224,9 +1227,12 @@ const Lowerer = struct {
             },
             .type_method_call => |method_call| blk: {
                 const dispatcher_ty = method_call.dispatcher_ty;
-                if (!method_call.target_symbol.isNone()) {
-                    const exact_target_ty = try self.requireCallableTypeForSymbol(venv, method_call.target_symbol);
-                    try self.unify(method_call.method_fn_ty, exact_target_ty);
+                switch (method_call.target) {
+                    .exact_symbol => |target_symbol| {
+                        const exact_target_ty = try self.requireCallableTypeForSymbol(venv, target_symbol);
+                        try self.unify(method_call.method_fn_ty, exact_target_ty);
+                    },
+                    else => {},
                 }
                 const method_fn_ty = method_call.method_fn_ty;
                 const method_args = self.output.sliceExprSpan(method_call.args);
@@ -1258,7 +1264,7 @@ const Lowerer = struct {
                 var snapshot_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
                 defer snapshot_mapping.deinit();
                 out_expr.data.type_method_call.dispatcher_ty = try self.snapshotTypeRec(dispatcher_ty, &snapshot_mapping);
-                out_expr.data.type_method_call.target_symbol = method_call.target_symbol;
+                out_expr.data.type_method_call.target = method_call.target;
                 out_expr.data.type_method_call.method_fn_ty = try self.snapshotTypeRec(method_fn_ty, &snapshot_mapping);
                 out_expr.data.type_method_call.step_arg_tys = try self.snapshotTypeVarSpanWithMapping(step_arg_tys.items, &snapshot_mapping);
                 out_expr.data.type_method_call.step_result_tys = try self.snapshotTypeVarSpanWithMapping(step_result_tys.items, &snapshot_mapping);
@@ -1267,6 +1273,7 @@ const Lowerer = struct {
             .let_ => |let_expr| blk: {
                 const body_ty = try self.inferExpr(venv, let_expr.body);
                 try self.unify(body_ty, let_expr.bind.ty);
+                try self.generalize(venv, let_expr.bind.ty);
                 const rest_env = try self.extendEnvOne(venv, .{ .symbol = let_expr.bind.symbol, .ty = let_expr.bind.ty });
                 defer self.allocator.free(rest_env);
                 break :blk try self.inferExpr(rest_env, let_expr.rest);
@@ -1807,6 +1814,7 @@ const Lowerer = struct {
             .decl => |decl| blk: {
                 const body_ty = try self.inferExpr(venv, decl.body);
                 try self.unify(body_ty, decl.bind.ty);
+                try self.generalize(venv, decl.bind.ty);
                 break :blk try self.extendEnvOne(venv, .{ .symbol = decl.bind.symbol, .ty = decl.bind.ty });
             },
             .var_decl => |decl| blk: {

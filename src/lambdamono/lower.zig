@@ -2242,7 +2242,6 @@ const Lowerer = struct {
         self: *Lowerer,
         current_types: *const solved.Type.Store,
         venv: []const EnvEntry,
-        method_name: base.Ident.Idx,
         explicit_target_symbol: Symbol,
         method_fn_ty: TypeVarId,
         receiver_ty: TypeVarId,
@@ -2293,15 +2292,8 @@ const Lowerer = struct {
 
         const target_symbol = if (!explicit_target_symbol.isNone())
             explicit_target_symbol
-        else blk: {
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
-                    "lambdamono.lower.freezeMethodCallWorld missing explicit target for method {s}",
-                    .{self.input.idents.getText(method_name)},
-                );
-            }
-            break :blk inst.types.requireExactTargetForResolvedFn(cloned_method_fn_ty);
-        };
+        else
+            inst.types.requireExactTargetForResolvedFn(cloned_method_fn_ty);
         const entry = specializations.lookupFnExact(self.fenv, target_symbol) orelse
             debugPanic("lambdamono.lower.freezeMethodCallWorld missing exact target function");
         const initial_fn_ty = try self.cloneInstType(&inst, entry.fn_ty);
@@ -4752,10 +4744,79 @@ const Lowerer = struct {
         }
     }
 
+    fn specializeImplicitEqMethodCallExpr(
+        self: *Lowerer,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        venv: []const EnvEntry,
+        method_call: @FieldType(solved.Ast.Expr.Data, "method_call"),
+        expected_exec_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!SpecializedExprLowering {
+        if (!std.mem.eql(u8, self.input.idents.getText(method_call.method_name), "is_eq")) {
+            debugPanic("lambdamono.lower.specializeImplicitEqMethodCallExpr only supports is_eq");
+        }
+
+        const method_args = self.input.store.sliceExprSpan(method_call.args);
+        if (method_args.len != 1) {
+            debugPanic("lambdamono.lower.specializeImplicitEqMethodCallExpr expected exactly one argument");
+        }
+
+        const receiver_source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, method_call.receiver);
+        const arg_source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, method_args[0]);
+        const receiver_exec_ty = try self.lowerExecutableTypeFromSolvedIn(&inst.types, mono_cache, receiver_source_ty);
+        const arg_exec_ty = try self.lowerExecutableTypeFromSolvedIn(&inst.types, mono_cache, arg_source_ty);
+        self.requireExecutableType(receiver_exec_ty, arg_exec_ty, "specializeImplicitEqMethodCallExpr.operand");
+
+        var lowered_receiver = try self.specializeExprAtSourceTy(
+            inst,
+            mono_cache,
+            venv,
+            method_call.receiver,
+            receiver_source_ty,
+        );
+        if (!self.types.equalIds(self.output.getExpr(lowered_receiver).ty, receiver_exec_ty)) {
+            lowered_receiver = try self.emitExplicitBridgeExpr(lowered_receiver, receiver_exec_ty);
+        }
+        if (try self.retypeDivergingExpr(lowered_receiver, expected_exec_ty)) |diverging| {
+            return .{
+                .ty = self.output.getExpr(diverging).ty,
+                .data = self.output.getExpr(diverging).data,
+            };
+        }
+
+        var lowered_arg = try self.specializeExprAtSourceTy(
+            inst,
+            mono_cache,
+            venv,
+            method_args[0],
+            arg_source_ty,
+        );
+        if (!self.types.equalIds(self.output.getExpr(lowered_arg).ty, receiver_exec_ty)) {
+            lowered_arg = try self.emitExplicitBridgeExpr(lowered_arg, receiver_exec_ty);
+        }
+        if (try self.retypeDivergingExpr(lowered_arg, expected_exec_ty)) |diverging| {
+            return .{
+                .ty = self.output.getExpr(diverging).ty,
+                .data = self.output.getExpr(diverging).data,
+            };
+        }
+
+        const bool_ty = try self.makePrimitiveType(.bool);
+        var eq_expr = try self.makeLowLevelExpr(bool_ty, .num_is_eq, &.{ lowered_receiver, lowered_arg });
+        if (!self.types.equalIds(self.output.getExpr(eq_expr).ty, expected_exec_ty)) {
+            eq_expr = try self.emitExplicitBridgeExpr(eq_expr, expected_exec_ty);
+        }
+        const final_expr = self.output.getExpr(eq_expr);
+        return .{
+            .ty = final_expr.ty,
+            .data = final_expr.data,
+        };
+    }
+
     fn specializeMethodCallExpr(
         self: *Lowerer,
         inst: *InstScope,
-        _: *lower_type.MonoCache,
+        mono_cache: *lower_type.MonoCache,
         venv: []const EnvEntry,
         method_call: @FieldType(solved.Ast.Expr.Data, "method_call"),
         _: TypeVarId,
@@ -4765,6 +4826,18 @@ const Lowerer = struct {
         const method_args = self.input.store.sliceExprSpan(method_call.args);
         const explicit_step_arg_tys = self.input.types.sliceTypeVarSpan(method_call.step_arg_tys);
         const explicit_step_result_tys = self.input.types.sliceTypeVarSpan(method_call.step_result_tys);
+        switch (method_call.target) {
+            .implicit_eq => {
+                return self.specializeImplicitEqMethodCallExpr(
+                    inst,
+                    mono_cache,
+                    venv,
+                    method_call,
+                    expected_exec_ty,
+                );
+            },
+            else => {},
+        }
         const actual_arg_tys = try self.allocator.alloc(TypeVarId, method_args.len);
         defer self.allocator.free(actual_arg_tys);
         for (method_args, 0..) |arg_expr_id, i| {
@@ -4773,8 +4846,10 @@ const Lowerer = struct {
         var frozen = try self.freezeMethodCallWorld(
             &inst.types,
             venv,
-            method_call.method_name,
-            method_call.target_symbol,
+            switch (method_call.target) {
+                .exact_symbol => |target_symbol| target_symbol,
+                else => Symbol.none,
+            },
             method_call.method_fn_ty,
             receiver_source_ty,
             explicit_step_arg_tys,
@@ -4916,7 +4991,11 @@ const Lowerer = struct {
             &inst.types,
             venv,
             method_call.dispatcher_ty,
-            method_call.target_symbol,
+            switch (method_call.target) {
+                .exact_symbol => |target_symbol| target_symbol,
+                .implicit_eq => debugPanic("lambdamono.lower.specializeTypeMethodCallExpr implicit_eq target is invalid"),
+                .unresolved => Symbol.none,
+            },
             method_call.method_fn_ty,
             explicit_step_arg_tys,
             explicit_step_result_tys,
