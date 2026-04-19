@@ -129,11 +129,6 @@ top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
 enclosing_func_name: ?Ident.Idx,
 /// Type writer for formatting types at snapshot time
 type_writer: types_mod.TypeWriter,
-/// When checking a match that's the body of a lambda with a return type annotation,
-/// this holds the expected return type. Used to detect which match branches have
-/// body types incompatible with the expected return type, BEFORE pairwise unification
-/// poisons all branch body vars via union-find.
-expected_match_ret: ?Var = null,
 /// --- Lazy cycle detection state ---
 ///
 /// Only one cycle can be active at a time because defs are processed
@@ -1480,7 +1475,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         switch (stmt) {
             .s_expect => |expr_stmt| {
                 // Check the body expression
-                _ = try self.checkExpr(expr_stmt.body, &env, .no_expectation);
+                _ = try self.checkExpr(expr_stmt.body, &env, Expected.none());
                 const body_var: Var = ModuleEnv.varFrom(expr_stmt.body);
 
                 // Unify with Bool (expects must be bool expressions)
@@ -1947,7 +1942,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     std.debug.assert(env.rank() == .outermost);
 
     // Check the expr
-    _ = try self.checkExpr(expr_idx, &env, .no_expectation);
+    _ = try self.checkExpr(expr_idx, &env, Expected.none());
 
     // Check any accumulated constraints
     try self.checkAllConstraints(&env);
@@ -2015,7 +2010,7 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     }
 
     // Check the expr
-    _ = try self.checkExpr(expr_idx, &env, .no_expectation);
+    _ = try self.checkExpr(expr_idx, &env, Expected.none());
 
     // Check any accumulated constraints
     try self.checkAllConstraints(&env);
@@ -2093,9 +2088,9 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     // Check the annotation, if it exists
     const expectation = blk: {
         if (def.annotation) |annotation_idx| {
-            break :blk Expected{ .expected = annotation_idx };
+            break :blk Expected.fromAnnotation(annotation_idx);
         } else {
-            break :blk Expected.no_expectation;
+            break :blk Expected.none();
         }
     };
 
@@ -3045,9 +3040,30 @@ fn setBuiltinTypeContent(
 
 // types //
 
-const Expected = union(enum) {
-    no_expectation,
-    expected: CIR.Annotation.Idx,
+const Expected = struct {
+    annotation: ?CIR.Annotation.Idx = null,
+    branch_result: ?Var = null,
+
+    fn none() Expected {
+        return .{};
+    }
+
+    fn fromAnnotation(annotation_idx: CIR.Annotation.Idx) Expected {
+        return .{ .annotation = annotation_idx };
+    }
+
+    fn withBranchResult(self: Expected, branch_result: Var) Expected {
+        return .{
+            .annotation = self.annotation,
+            .branch_result = branch_result,
+        };
+    }
+
+    fn forBranchBody(self: Expected) Expected {
+        return .{
+            .branch_result = self.branch_result,
+        };
+    }
 };
 
 // pattern //
@@ -3645,29 +3661,26 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             break :blk .{ expr_var_raw, null };
         }
 
-        switch (expected) {
-            .no_expectation => {
-                break :blk .{ expr_var_raw, null };
-            },
-            .expected => |annotation_idx| {
-                // Generate the type for the annotation
-                try self.generateAnnotationType(annotation_idx, env);
-                const anno_var = ModuleEnv.varFrom(annotation_idx);
+        if (expected.annotation) |annotation_idx| {
+            // Generate the type for the annotation
+            try self.generateAnnotationType(annotation_idx, env);
+            const anno_var = ModuleEnv.varFrom(annotation_idx);
 
-                // Copy/paste the variable. This will be used if the expr errors to
-                // preserve the type annotation for places that reference this def.
-                const anno_var_backup = try self.instantiateVarOrphan(
-                    anno_var,
-                    env,
-                    env.rank(),
-                    .use_last_var,
-                );
+            // Copy/paste the variable. This will be used if the expr errors to
+            // preserve the type annotation for places that reference this def.
+            const anno_var_backup = try self.instantiateVarOrphan(
+                anno_var,
+                env,
+                env.rank(),
+                .use_last_var,
+            );
 
-                break :blk .{
-                    try self.fresh(env, expr_region),
-                    .{ .anno_var = anno_var, .anno_var_backup = anno_var_backup },
-                };
-            },
+            break :blk .{
+                try self.fresh(env, expr_region),
+                .{ .anno_var = anno_var, .anno_var_backup = anno_var_backup },
+            };
+        } else {
+            break :blk .{ expr_var_raw, null };
         }
     };
 
@@ -3696,10 +3709,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // String literal segments are already Str type
                 switch (seg_expr) {
                     .e_str_segment => {
-                        does_fx = try self.checkExpr(seg_expr_idx, env, .no_expectation) or does_fx;
+                        does_fx = try self.checkExpr(seg_expr_idx, env, Expected.none()) or does_fx;
                     },
                     else => {
-                        does_fx = try self.checkExpr(seg_expr_idx, env, .no_expectation) or does_fx;
+                        does_fx = try self.checkExpr(seg_expr_idx, env, Expected.none()) or does_fx;
                         const seg_var = ModuleEnv.varFrom(seg_expr_idx);
 
                         // Interpolated expressions must be of type Str
@@ -3964,13 +3977,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // constrain the rest of the list
 
                 // Check the first elem
-                does_fx = try self.checkExpr(elems[0], env, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(elems[0], env, Expected.none()) or does_fx;
 
                 // Iterate over the remaining elements
                 const elem_var = ModuleEnv.varFrom(elems[0]);
                 var last_elem_expr_idx = elems[0];
                 for (elems[1..], 1..) |elem_expr_idx, i| {
-                    does_fx = try self.checkExpr(elem_expr_idx, env, .no_expectation) or does_fx;
+                    does_fx = try self.checkExpr(elem_expr_idx, env, Expected.none()) or does_fx;
                     const cur_elem_var = ModuleEnv.varFrom(elem_expr_idx);
 
                     // Unify each element's var with the list's elem var
@@ -3984,7 +3997,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // to the elem_var to catch their individual errors
                     if (!result.isOk()) {
                         for (elems[i + 1 ..]) |remaining_elem_expr_idx| {
-                            does_fx = try self.checkExpr(remaining_elem_expr_idx, env, .no_expectation) or does_fx;
+                            does_fx = try self.checkExpr(remaining_elem_expr_idx, env, Expected.none()) or does_fx;
                         }
 
                         // Break to avoid cascading errors
@@ -4004,7 +4017,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // Check tuple elements
             const elems_slice = self.cir.store.exprSlice(tuple.elems);
             for (elems_slice) |single_elem_expr_idx| {
-                does_fx = try self.checkExpr(single_elem_expr_idx, env, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(single_elem_expr_idx, env, Expected.none()) or does_fx;
             }
 
             // Cast the elems idxs to vars (this works because Anno Idx are 1-1 with type Vars)
@@ -4017,7 +4030,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_tuple_access => |tuple_access| {
             // Check the tuple expression
-            does_fx = try self.checkExpr(tuple_access.tuple, env, .no_expectation) or does_fx;
+            does_fx = try self.checkExpr(tuple_access.tuple, env, Expected.none()) or does_fx;
 
             const tuple_var = ModuleEnv.varFrom(tuple_access.tuple);
             const resolved = self.types.resolveVar(tuple_var);
@@ -4099,7 +4112,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // Create a record type in the type system and assign it the expr_var
 
                 // Check the record being updated
-                does_fx = try self.checkExpr(record_being_updated_expr, env, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(record_being_updated_expr, env, Expected.none()) or does_fx;
 
                 const record_being_updated_var = ModuleEnv.varFrom(record_being_updated_expr);
                 const record_being_updated_name: ?Ident.Idx = self.getExprPatternIdent(record_being_updated_expr);
@@ -4109,7 +4122,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const field = self.cir.store.getRecordField(field_idx);
 
                     // Check the field value expression
-                    does_fx = try self.checkExpr(field.value, env, .no_expectation) or does_fx;
+                    does_fx = try self.checkExpr(field.value, env, Expected.none()) or does_fx;
 
                     // Create an unbound record with this field
                     const single_field_record = try self.freshFromContent(.{ .structure = .{
@@ -4140,7 +4153,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const field = self.cir.store.getRecordField(field_idx);
 
                     // Check the field value expression
-                    does_fx = try self.checkExpr(field.value, env, .no_expectation) or does_fx;
+                    does_fx = try self.checkExpr(field.value, env, Expected.none()) or does_fx;
 
                     // Append it to the scratch records array
                     try self.scratch_record_fields.append(types_mod.RecordField{
@@ -4185,7 +4198,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // Process each tag arg
             const arg_expr_idx_slice = self.cir.store.sliceExpr(e.args);
             for (arg_expr_idx_slice) |arg_expr_idx| {
-                does_fx = try self.checkExpr(arg_expr_idx, env, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(arg_expr_idx, env, Expected.none()) or does_fx;
             }
 
             // Create the type
@@ -4200,7 +4213,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         // nominal //
         .e_nominal => |nominal| {
             // Check the backing expression first
-            does_fx = try self.checkExpr(nominal.backing_expr, env, .no_expectation) or does_fx;
+            does_fx = try self.checkExpr(nominal.backing_expr, env, Expected.none()) or does_fx;
             const actual_backing_var = ModuleEnv.varFrom(nominal.backing_expr);
 
             // Use shared nominal type checking logic
@@ -4215,7 +4228,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_nominal_external => |nominal| {
             // Check the backing expression first
-            does_fx = try self.checkExpr(nominal.backing_expr, env, .no_expectation) or does_fx;
+            does_fx = try self.checkExpr(nominal.backing_expr, env, Expected.none()) or does_fx;
             const actual_backing_var = ModuleEnv.varFrom(nominal.backing_expr);
 
             // Resolve the external type declaration
@@ -4385,7 +4398,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             does_fx = stmt_result.does_fx or does_fx;
 
             // Check the final expression
-            does_fx = try self.checkExpr(block.final_expr, env, .no_expectation) or does_fx;
+            does_fx = try self.checkExpr(block.final_expr, env, expected) or does_fx;
 
             // If the block diverges (has a return/crash), use a flex var for the block's type
             // since the final expression is unreachable
@@ -4514,18 +4527,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // Check the the body of the expr
             // If we have an expected function, use that as the expr's expected type
             if (mb_anno_func) |expected_func| {
-                // If the body is a match/if expression (possibly nested in a block),
-                // set expected_match_ret so the checker can detect erroneous branches
-                // BEFORE pairwise unification poisons all branch body vars via union-find.
-                const saved_expected = self.expected_match_ret;
-                if (self.findBranchingBodyExpr(lambda.body)) {
-                    self.expected_match_ret = expected_func.ret;
-                }
-                does_fx = try self.checkExpr(lambda.body, env, .no_expectation) or does_fx;
-                self.expected_match_ret = saved_expected;
+                does_fx = try self.checkExpr(lambda.body, env, Expected.none().withBranchResult(expected_func.ret)) or does_fx;
                 _ = try self.unifyInContext(expected_func.ret, body_var, env, .type_annotation);
             } else {
-                does_fx = try self.checkExpr(lambda.body, env, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(lambda.body, env, Expected.none()) or does_fx;
             }
 
             // Process any pending return constraints (from early returns / ? operator) before
@@ -4584,7 +4589,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 .apply => blk: {
                     // First, check the function being called
                     // It could be effectful, e.g. `(mk_fn!())(arg)`
-                    does_fx = try self.checkExpr(call.func, env, .no_expectation) or does_fx;
+                    does_fx = try self.checkExpr(call.func, env, Expected.none()) or does_fx;
                     const func_var = ModuleEnv.varFrom(call.func);
 
                     // Resolve the func var
@@ -4596,7 +4601,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const call_arg_expr_idxs = self.cir.store.sliceExpr(call.args);
                     for (call_arg_expr_idxs) |call_arg_idx| {
                         self.checking_call_arg = true;
-                        does_fx = try self.checkExpr(call_arg_idx, env, .no_expectation) or does_fx;
+                        does_fx = try self.checkExpr(call_arg_idx, env, Expected.none()) or does_fx;
 
                         // Check if this arg errored
                         did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(call_arg_idx)).desc.content == .err);
@@ -4789,10 +4794,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         },
         .e_if => |if_expr| {
-            does_fx = try self.checkIfElseExpr(expr_idx, expr_region, env, if_expr) or does_fx;
+            does_fx = try self.checkIfElseExpr(expr_idx, expr_region, env, if_expr, expected) or does_fx;
         },
         .e_match => |match| {
-            does_fx = try self.checkMatchExpr(expr_idx, env, match) or does_fx;
+            does_fx = try self.checkMatchExpr(expr_idx, env, match, expected) or does_fx;
         },
         .e_binop => |binop| {
             does_fx = try self.checkBinopExpr(expr_idx, expr_region, env, binop) or does_fx;
@@ -4804,7 +4809,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             does_fx = try self.checkUnaryNotExpr(expr_idx, expr_region, env, unary) or does_fx;
         },
         .e_field_access => |field_access| {
-            does_fx = try self.checkExpr(field_access.receiver, env, .no_expectation) or does_fx;
+            does_fx = try self.checkExpr(field_access.receiver, env, Expected.none()) or does_fx;
             const receiver_var = ModuleEnv.varFrom(field_access.receiver);
 
             const record_field_var = try self.fresh(env, expr_region);
@@ -4824,7 +4829,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             _ = try self.unify(expr_var, record_field_var, env);
         },
         .e_method_call => |method_call| {
-            does_fx = try self.checkExpr(method_call.receiver, env, .no_expectation) or does_fx;
+            does_fx = try self.checkExpr(method_call.receiver, env, Expected.none()) or does_fx;
             const receiver_var = ModuleEnv.varFrom(method_call.receiver);
             var did_err = self.types.resolveVar(receiver_var).desc.content == .err;
 
@@ -4834,7 +4839,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
                 self.checking_call_arg = true;
-                does_fx = try self.checkExpr(arg_expr_idx, env, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(arg_expr_idx, env, Expected.none()) or does_fx;
                 const arg_var = ModuleEnv.varFrom(arg_expr_idx);
                 arg_vars[i] = arg_var;
                 did_err = did_err or (self.types.resolveVar(arg_var).desc.content == .err);
@@ -4862,7 +4867,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             var did_err = false;
             for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
                 self.checking_call_arg = true;
-                does_fx = try self.checkExpr(arg_expr_idx, env, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(arg_expr_idx, env, Expected.none()) or does_fx;
                 const arg_var = ModuleEnv.varFrom(arg_expr_idx);
                 arg_vars[i] = arg_var;
                 did_err = did_err or (self.types.resolveVar(arg_var).desc.content == .err);
@@ -4889,7 +4894,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_dbg => |dbg| {
             // dbg evaluates its inner expression but returns {} (like expect)
-            _ = try self.checkExpr(dbg.expr, env, .no_expectation);
+            _ = try self.checkExpr(dbg.expr, env, Expected.none());
             does_fx = true;
             try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
         },
@@ -4908,7 +4913,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const for_ptrn_var: Var = ModuleEnv.varFrom(for_expr.patt);
 
             // Check the list expression
-            does_fx = try self.checkExpr(for_expr.expr, env, .no_expectation) or does_fx;
+            does_fx = try self.checkExpr(for_expr.expr, env, Expected.none()) or does_fx;
             const for_expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(for_expr.expr));
             const for_expr_var: Var = ModuleEnv.varFrom(for_expr.expr);
 
@@ -4918,7 +4923,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             _ = try self.unify(list_var, for_expr_var, env);
 
             // Check the body
-            does_fx = try self.checkExpr(for_expr.body, env, .no_expectation) or does_fx;
+            does_fx = try self.checkExpr(for_expr.body, env, Expected.none()) or does_fx;
 
             // Like cor, loop bodies are ordinary expressions whose final value is
             // discarded by the loop construct itself. The loop expression still
@@ -4932,19 +4937,16 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // For annotation-only expressions, the type comes from the annotation.
             // This case should only occur when the expression has an annotation (which is
             // enforced during canonicalization), so the expected type should be set.
-            switch (expected) {
-                .no_expectation => {
-                    // This shouldn't happen since we always create e_anno_only with an annotation
-                    try self.unifyWith(expr_var, .err, env);
-                },
-                .expected => |_| {
-                    // The expr will be unified with the expected type below
-                    // expr_var is a flex var by default, so no action is need here
-                },
+            if (expected.annotation == null) {
+                // This shouldn't happen since we always create e_anno_only with an annotation
+                try self.unifyWith(expr_var, .err, env);
+            } else {
+                // The expr will be unified with the expected type below
+                // expr_var is a flex var by default, so no action is need here
             }
         },
         .e_return => |ret| {
-            does_fx = try self.checkExpr(ret.expr, env, .no_expectation) or does_fx;
+            does_fx = try self.checkExpr(ret.expr, env, Expected.none()) or does_fx;
             const ret_var = ModuleEnv.varFrom(ret.expr);
 
             // Write down this constraint for later validation.
@@ -4969,29 +4971,26 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_hosted_lambda => {
             // For hosted lambda expressions, the type comes from the annotation.
             // This is similar to e_anno_only - the implementation is provided by the host.
-            switch (expected) {
-                .no_expectation => {
-                    // This shouldn't happen since hosted lambdas always have annotations
-                    try self.unifyWith(expr_var, .err, env);
-                },
-                .expected => |annotation_idx| {
-                    const annotation_var = ModuleEnv.varFrom(annotation_idx);
-                    if (self.varContainsUnboxedFunctionInHostedSignature(annotation_var)) {
-                        const region = self.cir.store.getAnnotationRegion(annotation_idx);
-                        _ = try self.problems.appendProblem(self.gpa, .{ .hosted_unboxed_function = .{
-                            .region = region,
-                        } });
-                    }
-                    // The expr will be unified with the expected type below
-                    // expr_var is a flex var by default, so no action is need here
-                },
+            if (expected.annotation) |annotation_idx| {
+                const annotation_var = ModuleEnv.varFrom(annotation_idx);
+                if (self.varContainsUnboxedFunctionInHostedSignature(annotation_var)) {
+                    const region = self.cir.store.getAnnotationRegion(annotation_idx);
+                    _ = try self.problems.appendProblem(self.gpa, .{ .hosted_unboxed_function = .{
+                        .region = region,
+                    } });
+                }
+                // The expr will be unified with the expected type below
+                // expr_var is a flex var by default, so no action is need here
+            } else {
+                // This shouldn't happen since hosted lambdas always have annotations
+                try self.unifyWith(expr_var, .err, env);
             }
         },
         .e_run_low_level => |run_ll| {
             // Check each argument expression in the run_low_level node
             for (self.cir.store.exprSlice(run_ll.args)) |arg_idx| {
                 self.checking_call_arg = true;
-                does_fx = try self.checkExpr(arg_idx, env, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(arg_idx, env, Expected.none()) or does_fx;
             }
         },
         .e_runtime_error => {
@@ -5165,9 +5164,9 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 // Check the annotation, if it exists
                 const expectation = blk: {
                     if (decl_stmt.anno) |annotation_idx| {
-                        break :blk Expected{ .expected = annotation_idx };
+                        break :blk Expected.fromAnnotation(annotation_idx);
                     } else {
-                        break :blk Expected.no_expectation;
+                        break :blk Expected.none();
                     }
                 };
 
@@ -5188,9 +5187,9 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 const expectation = blk: {
                     if (var_stmt.anno) |annotation_idx| {
                         // Return the expectation
-                        break :blk Expected{ .expected = annotation_idx };
+                        break :blk Expected.fromAnnotation(annotation_idx);
                     } else {
-                        break :blk Expected.no_expectation;
+                        break :blk Expected.none();
                     }
                 };
 
@@ -5213,7 +5212,7 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
 
                 const reassign_pattern_var: Var = ModuleEnv.varFrom(reassign.pattern_idx);
 
-                does_fx = try self.checkExpr(reassign.expr, env, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(reassign.expr, env, Expected.none()) or does_fx;
                 const reassign_expr_var: Var = ModuleEnv.varFrom(reassign.expr);
 
                 // Unify the pattern with the expression
@@ -5234,7 +5233,7 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 // Check the expr
                 // for item in [1,2,3] {
                 //             ^^^^^^^
-                does_fx = try self.checkExpr(for_stmt.expr, env, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(for_stmt.expr, env, Expected.none()) or does_fx;
                 const for_expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(for_stmt.expr));
                 const for_expr_var: Var = ModuleEnv.varFrom(for_stmt.expr);
 
@@ -5247,7 +5246,7 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 // for item in [1,2,3] {
                 //     print!(item.toStr())  <<<<
                 // }
-                does_fx = try self.checkExpr(for_stmt.body, env, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(for_stmt.body, env, Expected.none()) or does_fx;
                 const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, for_expr_region);
                 _ = try self.unify(stmt_var, empty_rec, env);
             },
@@ -5255,7 +5254,7 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 // Check the condition
                 // while $count < 10 {
                 //       ^^^^^^^^^^^
-                does_fx = try self.checkExpr(while_stmt.cond, env, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(while_stmt.cond, env, Expected.none()) or does_fx;
                 const cond_var: Var = ModuleEnv.varFrom(while_stmt.cond);
                 const cond_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(while_stmt.cond));
 
@@ -5268,12 +5267,12 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 //     print!($count.toStr())  <<<<
                 //     $count = $count + 1
                 // }
-                does_fx = try self.checkExpr(while_stmt.body, env, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(while_stmt.body, env, Expected.none()) or does_fx;
                 const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, cond_region);
                 _ = try self.unify(stmt_var, empty_rec, env);
             },
             .s_expr => |expr| {
-                does_fx = try self.checkExpr(expr.expr, env, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(expr.expr, env, Expected.none()) or does_fx;
                 const expr_var: Var = ModuleEnv.varFrom(expr.expr);
 
                 // Statements must evaluate to {}. Add a constraint to unify with empty record.
@@ -5285,13 +5284,13 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 _ = try self.unify(stmt_var, expr_var, env);
             },
             .s_dbg => |expr| {
-                does_fx = try self.checkExpr(expr.expr, env, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(expr.expr, env, Expected.none()) or does_fx;
                 const expr_var: Var = ModuleEnv.varFrom(expr.expr);
 
                 _ = try self.unify(stmt_var, expr_var, env);
             },
             .s_expect => |expr_stmt| {
-                does_fx = try self.checkExpr(expr_stmt.body, env, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(expr_stmt.body, env, Expected.none()) or does_fx;
                 const body_var: Var = ModuleEnv.varFrom(expr_stmt.body);
 
                 const bool_var = try self.freshBool(env, stmt_region);
@@ -5305,7 +5304,7 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
             },
             .s_return => |ret| {
                 // Type check the return expression
-                does_fx = try self.checkExpr(ret.expr, env, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(ret.expr, env, Expected.none()) or does_fx;
                 const ret_var = ModuleEnv.varFrom(ret.expr);
 
                 // Write down this constraint for later validation
@@ -5359,13 +5358,11 @@ fn checkIfElseExpr(
     expr_region: Region,
     env: *Env,
     if_: @FieldType(CIR.Expr, @tagName(.e_if)),
+    expected: Expected,
 ) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
-
-    // Consume expected_match_ret so nested if/match don't inherit it
-    const expected_branch_ret = self.expected_match_ret;
-    self.expected_match_ret = null;
+    const expected_branch_ret = expected.branch_result;
 
     const branches = self.cir.store.sliceIfBranches(if_.branches);
 
@@ -5377,13 +5374,13 @@ fn checkIfElseExpr(
     const first_branch = self.cir.store.getIfBranch(first_branch_idx);
 
     // Check the condition of the 1st branch
-    var does_fx = try self.checkExpr(first_branch.cond, env, .no_expectation);
+    var does_fx = try self.checkExpr(first_branch.cond, env, Expected.none());
     const first_cond_var: Var = ModuleEnv.varFrom(first_branch.cond);
     const bool_var = try self.freshBool(env, expr_region);
     _ = try self.unifyInContext(bool_var, first_cond_var, env, .if_condition);
 
     // Then we check the 1st branch's body
-    does_fx = try self.checkExpr(first_branch.body, env, .no_expectation) or does_fx;
+    does_fx = try self.checkExpr(first_branch.body, env, expected.forBranchBody()) or does_fx;
 
     if (expected_branch_ret) |expected_ret| {
         const first_body_var = ModuleEnv.varFrom(first_branch.body);
@@ -5413,13 +5410,13 @@ fn checkIfElseExpr(
         const branch = self.cir.store.getIfBranch(branch_idx);
 
         // Check the branches condition
-        does_fx = try self.checkExpr(branch.cond, env, .no_expectation) or does_fx;
+        does_fx = try self.checkExpr(branch.cond, env, Expected.none()) or does_fx;
         const cond_var: Var = ModuleEnv.varFrom(branch.cond);
         const branch_bool_var = try self.freshBool(env, expr_region);
         _ = try self.unifyInContext(branch_bool_var, cond_var, env, .if_condition);
 
         // Check the branch body
-        does_fx = try self.checkExpr(branch.body, env, .no_expectation) or does_fx;
+        does_fx = try self.checkExpr(branch.body, env, expected.forBranchBody()) or does_fx;
 
         // Check against expected return type BEFORE pairwise unification
         if (expected_branch_ret) |expected_ret| {
@@ -5449,32 +5446,16 @@ fn checkIfElseExpr(
 
             if (!body_result.isOk()) {
                 // Check remaining branches to catch their individual errors
-                for (branches[cur_index + 1 ..], cur_index + 1..) |remaining_branch_idx, remaining_index| {
+                for (branches[cur_index + 1 ..]) |remaining_branch_idx| {
                     const remaining_branch = self.cir.store.getIfBranch(remaining_branch_idx);
 
-                    does_fx = try self.checkExpr(remaining_branch.cond, env, .no_expectation) or does_fx;
+                    does_fx = try self.checkExpr(remaining_branch.cond, env, Expected.none()) or does_fx;
                     const remaining_cond_var: Var = ModuleEnv.varFrom(remaining_branch.cond);
 
                     const fresh_bool = try self.freshBool(env, expr_region);
                     _ = try self.unifyInContext(fresh_bool, remaining_cond_var, env, .if_condition);
 
-                    does_fx = try self.checkExpr(remaining_branch.body, env, .no_expectation) or does_fx;
-
-                    // Check against expected return type before setting to .err
-                    if (expected_branch_ret) |expected_ret| {
-                        const rem_body_var = ModuleEnv.varFrom(remaining_branch.body);
-                        const branch_ctx = problem.Context{ .if_branch = .{
-                            .branch_index = @intCast(remaining_index),
-                            .num_branches = num_branches,
-                            .is_else = false,
-                            .parent_if_expr = if_expr_idx,
-                            .last_if_branch = last_if_branch,
-                        } };
-                        if (!self.isCompatibleWithExpected(rem_body_var, expected_ret, branch_ctx)) {
-                            try self.markErroneousBranchWithExpected(remaining_branch.body, expected_ret, env);
-                        }
-                    }
-
+                    does_fx = try self.checkExpr(remaining_branch.body, env, expected.forBranchBody()) or does_fx;
                     try self.unifyWith(ModuleEnv.varFrom(remaining_branch.body), .err, env);
                 }
 
@@ -5487,7 +5468,7 @@ fn checkIfElseExpr(
     }
 
     // Check the final else
-    does_fx = try self.checkExpr(if_.final_else, env, .no_expectation) or does_fx;
+    does_fx = try self.checkExpr(if_.final_else, env, expected.forBranchBody()) or does_fx;
 
     // Check final else against expected return type before pairwise unification
     if (expected_branch_ret) |expected_ret| {
@@ -5528,18 +5509,21 @@ fn checkIfElseExpr(
 // match //
 
 /// Check the types for a match expr
-fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Expr.Match) Allocator.Error!bool {
+fn checkMatchExpr(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    env: *Env,
+    match: CIR.Expr.Match,
+    expected: Expected,
+) Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx));
-
-    // Consume expected_match_ret so nested matches don't inherit it
-    const expected_match_ret = self.expected_match_ret;
-    self.expected_match_ret = null;
+    const expected_branch_ret = expected.branch_result;
 
     // Check the match's condition
-    var does_fx = try self.checkExpr(match.cond, env, .no_expectation);
+    var does_fx = try self.checkExpr(match.cond, env, Expected.none());
     const cond_var = ModuleEnv.varFrom(match.cond);
 
     // Assert we have at least 1 branch
@@ -5603,17 +5587,17 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
 
     // Check guard if present
     if (first_branch.guard) |guard_idx| {
-        does_fx = try self.checkExpr(guard_idx, env, .no_expectation) or does_fx;
+        does_fx = try self.checkExpr(guard_idx, env, Expected.none()) or does_fx;
         const guard_var = ModuleEnv.varFrom(guard_idx);
         const guard_bool_var = try self.freshBool(env, expr_region);
         _ = try self.unifyInContext(guard_bool_var, guard_var, env, .if_condition);
     }
 
     // Check the first branch's value, then use that at the branch_var
-    does_fx = try self.checkExpr(first_branch.value, env, .no_expectation) or does_fx;
+    does_fx = try self.checkExpr(first_branch.value, env, expected.forBranchBody()) or does_fx;
 
     // Check first branch body against expected return type
-    if (expected_match_ret) |expected_ret| {
+    if (expected_branch_ret) |expected_ret| {
         const first_body_var = ModuleEnv.varFrom(first_branch.value);
         const branch_ctx = problem.Context{ .match_branch = .{
             .branch_index = 0,
@@ -5659,19 +5643,19 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
 
         // Check guard if present
         if (branch.guard) |guard_idx| {
-            does_fx = try self.checkExpr(guard_idx, env, .no_expectation) or does_fx;
+            does_fx = try self.checkExpr(guard_idx, env, Expected.none()) or does_fx;
             const guard_var = ModuleEnv.varFrom(guard_idx);
             const branch_guard_bool_var = try self.freshBool(env, expr_region);
             _ = try self.unifyInContext(branch_guard_bool_var, guard_var, env, .if_condition);
         }
 
         // Then, check the body
-        does_fx = try self.checkExpr(branch.value, env, .no_expectation) or does_fx;
+        does_fx = try self.checkExpr(branch.value, env, expected.forBranchBody()) or does_fx;
 
         // Check branch body against expected return type BEFORE pairwise unification.
         // Pairwise unification poisons ALL connected vars via union-find on failure,
         // making it impossible to distinguish correct from incorrect branches afterward.
-        if (expected_match_ret) |expected_ret| {
+        if (expected_branch_ret) |expected_ret| {
             const body_var = ModuleEnv.varFrom(branch.value);
             const branch_ctx = problem.Context{ .match_branch = .{
                 .branch_index = @intCast(branch_cur_index),
@@ -5716,21 +5700,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
                     }
 
                     // Then check the other branch's exprs
-                    does_fx = try self.checkExpr(other_branch.value, env, .no_expectation) or does_fx;
-
-                    // Check against expected return type before setting to .err
-                    if (expected_match_ret) |expected_ret| {
-                        const other_body_var = ModuleEnv.varFrom(other_branch.value);
-                        const branch_ctx = problem.Context{ .match_branch = .{
-                            .branch_index = @intCast(other_branch_cur_index),
-                            .num_branches = @intCast(match.branches.span.len),
-                            .match_expr = expr_idx,
-                        } };
-                        if (!self.isCompatibleWithExpected(other_body_var, expected_ret, branch_ctx)) {
-                            try self.markErroneousBranchWithExpected(other_branch.value, expected_ret, env);
-                        }
-                    }
-
+                    does_fx = try self.checkExpr(other_branch.value, env, expected.forBranchBody()) or does_fx;
                     try self.unifyWith(ModuleEnv.varFrom(other_branch.value), .err, env);
                 }
 
@@ -5741,7 +5711,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
     }
 
     // Unify the root expr with the match value
-    if (expected_match_ret) |expected_ret| {
+    if (expected_branch_ret) |expected_ret| {
         _ = try self.unify(ModuleEnv.varFrom(expr_idx), expected_ret, env);
     } else {
         _ = try self.unify(ModuleEnv.varFrom(expr_idx), val_var, env);
@@ -5872,7 +5842,7 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region,
     const expr_var = @as(Var, ModuleEnv.varFrom(expr_idx));
 
     // Check the operand expression
-    const does_fx = try self.checkExpr(unary.expr, env, .no_expectation);
+    const does_fx = try self.checkExpr(unary.expr, env, Expected.none());
 
     // Get the not method + ret var
     // Here, we assert that the arg and ret of `not` are same type
@@ -5901,7 +5871,7 @@ fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, e
     const expr_var = @as(Var, ModuleEnv.varFrom(expr_idx));
 
     // Check the operand expression
-    const does_fx = try self.checkExpr(unary.expr, env, .no_expectation);
+    const does_fx = try self.checkExpr(unary.expr, env, Expected.none());
 
     // Get the not method + ret var
     // Here, we assert that the arg and ret of `not` are same type
@@ -5938,8 +5908,8 @@ fn checkBinopExpr(
 
     // Check operands first
     var does_fx = false;
-    does_fx = try self.checkExpr(binop.lhs, env, .no_expectation) or does_fx;
-    does_fx = try self.checkExpr(binop.rhs, env, .no_expectation) or does_fx;
+    does_fx = try self.checkExpr(binop.lhs, env, Expected.none()) or does_fx;
+    does_fx = try self.checkExpr(binop.rhs, env, Expected.none()) or does_fx;
 
     switch (binop.op) {
         .add, .sub, .mul, .div, .rem, .div_trunc => {
@@ -7714,18 +7684,6 @@ fn checkFlexVarConstraintCompatibility(self: *Self, var_: Var, env: *Env, is_num
 /// Check if a branch body type is compatible with the expected return type.
 /// This performs a non-destructive unification probe using a type-store snapshot.
 /// Must be called BEFORE pairwise unification poisons branch vars.
-/// Returns true if the given expression is (or contains as its final expression)
-/// a match or if expression that could have erroneous branches.
-/// Walks through blocks to find the final branching expression.
-fn findBranchingBodyExpr(self: *Self, expr_idx: CIR.Expr.Idx) bool {
-    const expr = self.cir.store.getExpr(expr_idx);
-    return switch (expr) {
-        .e_match, .e_if => true,
-        .e_block => |blk| self.findBranchingBodyExpr(blk.final_expr),
-        else => false,
-    };
-}
-
 fn isCompatibleWithExpected(self: *Self, body_var: Var, expected_var: Var, ctx: problem.Context) bool {
     const body = self.types.resolveVar(body_var);
     const expected = self.types.resolveVar(expected_var);
