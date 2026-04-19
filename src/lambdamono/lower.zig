@@ -344,6 +344,77 @@ const Lowerer = struct {
         };
     }
 
+    fn solvedTypeContainsAbstractLeaf(
+        self: *Lowerer,
+        solved_types: *const solved.Type.Store,
+        ty: TypeVarId,
+    ) bool {
+        var visited = std.AutoHashMap(TypeVarId, void).init(self.allocator);
+        defer visited.deinit();
+        return self.solvedTypeContainsAbstractLeafRec(solved_types, &visited, ty) catch false;
+    }
+
+    fn solvedTypeContainsAbstractLeafRec(
+        self: *Lowerer,
+        solved_types: *const solved.Type.Store,
+        visited: *std.AutoHashMap(TypeVarId, void),
+        ty: TypeVarId,
+    ) std.mem.Allocator.Error!bool {
+        const id = solved_types.unlinkConst(ty);
+        if (visited.contains(id)) return false;
+        try visited.put(id, {});
+
+        return switch (solved_types.getNode(id)) {
+            .link => unreachable,
+            .unbd, .for_a => true,
+            .nominal => |nominal| blk: {
+                const args = solved_types.sliceTypeVarSpan(nominal.args);
+                for (args) |arg| {
+                    if (try self.solvedTypeContainsAbstractLeafRec(solved_types, visited, arg)) break :blk true;
+                }
+                break :blk try self.solvedTypeContainsAbstractLeafRec(solved_types, visited, nominal.backing);
+            },
+            .content => |content| switch (content) {
+                .primitive => false,
+                .func => |func| blk: {
+                    if (try self.solvedTypeContainsAbstractLeafRec(solved_types, visited, func.arg)) break :blk true;
+                    if (try self.solvedTypeContainsAbstractLeafRec(solved_types, visited, func.lset)) break :blk true;
+                    break :blk try self.solvedTypeContainsAbstractLeafRec(solved_types, visited, func.ret);
+                },
+                .list => |elem| try self.solvedTypeContainsAbstractLeafRec(solved_types, visited, elem),
+                .box => |elem| try self.solvedTypeContainsAbstractLeafRec(solved_types, visited, elem),
+                .tuple => |elems_span| blk: {
+                    for (solved_types.sliceTypeVarSpan(elems_span)) |elem| {
+                        if (try self.solvedTypeContainsAbstractLeafRec(solved_types, visited, elem)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .record => |record| blk: {
+                    for (solved_types.sliceFields(record.fields)) |field| {
+                        if (try self.solvedTypeContainsAbstractLeafRec(solved_types, visited, field.ty)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .tag_union => |tag_union| blk: {
+                    for (solved_types.sliceTags(tag_union.tags)) |tag| {
+                        for (solved_types.sliceTypeVarSpan(tag.args)) |arg| {
+                            if (try self.solvedTypeContainsAbstractLeafRec(solved_types, visited, arg)) break :blk true;
+                        }
+                    }
+                    break :blk false;
+                },
+                .lambda_set => |lambda_set| blk: {
+                    for (solved_types.sliceLambdas(lambda_set)) |lambda| {
+                        for (solved_types.sliceCaptures(lambda.captures)) |capture| {
+                            if (try self.solvedTypeContainsAbstractLeafRec(solved_types, visited, capture.ty)) break :blk true;
+                        }
+                    }
+                    break :blk false;
+                },
+            },
+        };
+    }
+
     const SpecializedCallTarget = struct {
         symbol: Symbol,
         ret_ty: type_mod.TypeId,
@@ -357,6 +428,14 @@ const Lowerer = struct {
         requested_ty: TypeVarId,
         fallback_ret_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!SpecializedCallTarget {
+        if (builtin.mode == .Debug and self.solvedTypeContainsAbstractLeaf(solved_types, requested_ty)) {
+            const entry = self.input.symbols.get(requested_name);
+            const name = if (entry.name.isNone()) "<none>" else self.input.idents.getText(entry.name);
+            debugPanicFmt(
+                "lambdamono.lower.ensureSpecializedCallResult abstract requested type for symbol {d} ({s}) ty={d}",
+                .{ requested_name.raw(), name, @intFromEnum(requested_ty) },
+            );
+        }
         const specialized_symbol = try specializations.specializeFn(
             &self.queue,
             self.fenv,
@@ -2050,11 +2129,11 @@ const Lowerer = struct {
         errdefer mono_cache.deinit();
 
         const fn_ty = try self.cloneInstType(&inst, pending.fn_ty);
-        const member = inst.types.requireLambdaMember(fn_ty, pending.name);
         const requested_ty = try self.cloneTypeIntoInstFromStore(&inst, &pending.requested_types, pending.requested_ty);
         const requested_snapshot_ty = try self.cloneTypeIntoInstFromStore(&inst, &pending.requested_types, pending.requested_ty);
         const requested_fn_shape = inst.types.fnShape(requested_snapshot_ty);
         try self.unifyIn(&inst.types, fn_ty, requested_ty);
+        const member = inst.types.requireLambdaMember(fn_ty, pending.name);
 
         return .{
             .inst = inst,
@@ -2242,6 +2321,7 @@ const Lowerer = struct {
         self: *Lowerer,
         current_types: *const solved.Type.Store,
         venv: []const EnvEntry,
+        explicit_target_symbol: Symbol,
         method_fn_ty: TypeVarId,
         method_name: base.Ident.Idx,
         receiver_ty: TypeVarId,
@@ -2282,22 +2362,32 @@ const Lowerer = struct {
             try self.unifyIn(&inst.types, cloned_step_arg_tys[i + 1], cloned_actual_arg_ty);
         }
 
-        var current_fn_ty = cloned_method_fn_ty;
+        const resolved_receiver_ty = cloned_step_arg_tys[0];
+        const target_symbol = if (!explicit_target_symbol.isNone())
+            explicit_target_symbol
+        else if (inst.types.exactTargetForResolvedFn(cloned_method_fn_ty)) |symbol|
+            symbol
+        else
+            self.findAttachedMethodTargetForInstantiatedSource(&inst.types, resolved_receiver_ty, method_name);
+        const entry = specializations.lookupFnExact(self.fenv, target_symbol) orelse
+            debugPanic("lambdamono.lower.freezeMethodCallWorld missing exact target function");
+        const initial_fn_ty = try self.cloneInstType(&inst, entry.fn_ty);
+        try self.unifyIn(&inst.types, cloned_method_fn_ty, initial_fn_ty);
+
+        var current_fn_ty = initial_fn_ty;
         for (cloned_step_arg_tys, cloned_step_result_tys) |step_arg_ty, step_result_ty| {
             const fn_parts = inst.types.fnShape(current_fn_ty);
             try self.unifyIn(&inst.types, fn_parts.arg, step_arg_ty);
             try self.unifyIn(&inst.types, fn_parts.ret, step_result_ty);
             current_fn_ty = step_result_ty;
         }
-
-        const target_symbol = self.requireExactResolvedMethodTarget(&inst.types, cloned_method_fn_ty, method_name);
         const cloned_env = try self.cloneEnvIntoInstFromStoreWithMapping(&inst, &mono_cache, current_types, &current_mapping, venv);
 
         return .{
             .inst = inst,
             .mono_cache = mono_cache,
             .env = cloned_env,
-            .fn_ty = cloned_method_fn_ty,
+            .fn_ty = initial_fn_ty,
             .target_symbol = target_symbol,
             .step_arg_tys = cloned_step_arg_tys,
             .step_result_tys = cloned_step_result_tys,
@@ -2373,6 +2463,8 @@ const Lowerer = struct {
         self: *Lowerer,
         current_types: *const solved.Type.Store,
         venv: []const EnvEntry,
+        explicit_target_symbol: Symbol,
+        dispatcher_ty: TypeVarId,
         method_fn_ty: TypeVarId,
         method_name: base.Ident.Idx,
         explicit_step_arg_tys: []const TypeVarId,
@@ -2389,6 +2481,7 @@ const Lowerer = struct {
         var current_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
         defer current_mapping.deinit();
 
+        const cloned_dispatcher_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, &self.input.types, &explicit_mapping, dispatcher_ty);
         const cloned_method_fn_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, &self.input.types, &explicit_mapping, method_fn_ty);
         const cloned_step_arg_tys = try self.allocator.alloc(TypeVarId, explicit_step_arg_tys.len);
         errdefer self.allocator.free(cloned_step_arg_tys);
@@ -2406,27 +2499,36 @@ const Lowerer = struct {
             debugPanic("lambdamono.lower.freezeTypeMethodCallWorld explicit step arity mismatch");
         }
 
+        const target_symbol = if (!explicit_target_symbol.isNone())
+            explicit_target_symbol
+        else if (inst.types.exactTargetForResolvedFn(cloned_method_fn_ty)) |symbol|
+            symbol
+        else
+            self.findAttachedMethodTargetForInstantiatedSource(&inst.types, cloned_dispatcher_ty, method_name);
+        const entry = specializations.lookupFnExact(self.fenv, target_symbol) orelse
+            debugPanic("lambdamono.lower.freezeTypeMethodCallWorld missing exact target function");
+        const initial_fn_ty = try self.cloneInstType(&inst, entry.fn_ty);
+        try self.unifyIn(&inst.types, cloned_method_fn_ty, initial_fn_ty);
+
         for (actual_arg_tys, 0..) |arg_ty, i| {
             const cloned_actual_arg_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, current_types, &current_mapping, arg_ty);
             try self.unifyIn(&inst.types, cloned_step_arg_tys[i], cloned_actual_arg_ty);
         }
 
-        var current_fn_ty = cloned_method_fn_ty;
+        var current_fn_ty = initial_fn_ty;
         for (cloned_step_arg_tys, cloned_step_result_tys) |step_arg_ty, step_result_ty| {
             const fn_parts = inst.types.fnShape(current_fn_ty);
             try self.unifyIn(&inst.types, fn_parts.arg, step_arg_ty);
             try self.unifyIn(&inst.types, fn_parts.ret, step_result_ty);
             current_fn_ty = step_result_ty;
         }
-
-        const target_symbol = self.requireExactResolvedMethodTarget(&inst.types, cloned_method_fn_ty, method_name);
         const cloned_env = try self.cloneEnvIntoInstFromStoreWithMapping(&inst, &mono_cache, current_types, &current_mapping, venv);
 
         return .{
             .inst = inst,
             .mono_cache = mono_cache,
             .env = cloned_env,
-            .fn_ty = cloned_method_fn_ty,
+            .fn_ty = initial_fn_ty,
             .target_symbol = target_symbol,
             .step_arg_tys = cloned_step_arg_tys,
             .step_result_tys = cloned_step_result_tys,
@@ -2439,6 +2541,32 @@ const Lowerer = struct {
         const fn_body = pending.fn_def.body;
         const frozen_captures = frozen.inst.types.sliceCaptures(frozen.capture_span);
         const fn_arg_symbol = pending.fn_def.arg.symbol;
+        if (builtin.mode == .Debug) {
+            for (frozen_captures) |capture| {
+                const capture_root = frozen.inst.types.unlinkPreservingNominal(capture.ty);
+                switch (frozen.inst.types.getNode(capture_root)) {
+                    .unbd, .for_a => {
+                        const fn_entry = self.input.symbols.get(pending.name);
+                        const fn_name = if (fn_entry.name.isNone()) "<none>" else self.input.idents.getText(fn_entry.name);
+                        const capture_entry = self.input.symbols.get(capture.symbol);
+                        const capture_name = if (capture_entry.name.isNone()) "<none>" else self.input.idents.getText(capture_entry.name);
+                        debugPanicFmt(
+                            "lambdamono.lower.specializeFn unresolved capture for fn {d} ({s}) capture {d} ({s}) ty={d} root={d} node={s}",
+                            .{
+                                pending.name.raw(),
+                                fn_name,
+                                capture.symbol.raw(),
+                                capture_name,
+                                @intFromEnum(capture.ty),
+                                @intFromEnum(capture_root),
+                                @tagName(frozen.inst.types.getNode(capture_root)),
+                            },
+                        );
+                    },
+                    else => {},
+                }
+            }
+        }
 
         const specialized_arg_exec_ty = try self.lowerExecutableTypeFromSolvedIn(&frozen.inst.types, &frozen.mono_cache, frozen.fn_shape.arg);
         switch (frozen.inst.types.lambdaRepr(frozen.fn_ty)) {
@@ -2825,10 +2953,12 @@ const Lowerer = struct {
                 const bind_ty = try self.cloneInstType(inst, let_expr.bind.ty);
                 const body = try self.specializeExprAtSourceTy(inst, mono_cache, venv, let_expr.body, bind_ty);
                 const bind_exec_ty = self.output.getExpr(body).ty;
+                const source_exact_fn_symbol = self.directCallableSymbol(self.input.store.getExpr(let_expr.body));
                 const rest_env = try self.extendEnv(venv, .{
                     .symbol = let_expr.bind.symbol,
                     .ty = bind_ty,
                     .exec_ty = bind_exec_ty,
+                    .exact_fn_symbol = source_exact_fn_symbol,
                 });
                 defer self.allocator.free(rest_env);
                 const rest = try self.specializeExpr(inst, mono_cache, rest_env, let_expr.rest);
@@ -2924,7 +3054,52 @@ const Lowerer = struct {
             },
             .when => |when_expr| blk: {
                 const cond = try self.specializeExpr(inst, mono_cache, venv, when_expr.cond);
-                const cond_source_ty = try self.cloneInstType(inst, self.input.store.getExpr(when_expr.cond).ty);
+                const cond_source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, when_expr.cond);
+                if (builtin.mode == .Debug) {
+                    const cond_root = inst.types.unlinkPreservingNominal(cond_source_ty);
+                    switch (inst.types.getNode(cond_root)) {
+                        .content => |content| switch (content) {
+                            .tag_union => |tag_union| {
+                                for (inst.types.sliceTags(tag_union.tags)) |tag| {
+                                    for (inst.types.sliceTypeVarSpan(tag.args)) |arg_ty| {
+                                        const arg_root = inst.types.unlinkPreservingNominal(arg_ty);
+                                        switch (inst.types.getNode(arg_root)) {
+                                            .unbd, .for_a => {
+                                                const cond_expr = self.input.store.getExpr(when_expr.cond);
+                                                const cond_symbol_raw = if (cond_expr.data == .var_)
+                                                    cond_expr.data.var_.raw()
+                                                else
+                                                    std.math.maxInt(u32);
+                                                const cond_symbol_name = if (cond_expr.data == .var_) blk_name: {
+                                                    const entry = self.input.symbols.get(cond_expr.data.var_);
+                                                    break :blk_name if (entry.name.isNone()) "<none>" else self.input.idents.getText(entry.name);
+                                                } else "<none>";
+                                                debugPanicFmt(
+                                                    "lambdamono.lower.specializeExpr when cond has unresolved tag payload: expr={d} data={s} symbol={d} name={s} cond_ty={d} cond_root={d} tag={s} arg_ty={d} arg_root={d} node={s}",
+                                                    .{
+                                                        @intFromEnum(when_expr.cond),
+                                                        @tagName(cond_expr.data),
+                                                        cond_symbol_raw,
+                                                        cond_symbol_name,
+                                                        @intFromEnum(cond_source_ty),
+                                                        @intFromEnum(cond_root),
+                                                        self.lookupIdentNameBytes(tag.name),
+                                                        @intFromEnum(arg_ty),
+                                                        @intFromEnum(arg_root),
+                                                        @tagName(inst.types.getNode(arg_root)),
+                                                    },
+                                                );
+                                            },
+                                            else => {},
+                                        }
+                                    }
+                                }
+                            },
+                            else => {},
+                        },
+                        else => {},
+                    }
+                }
                 const input_branch_ids = self.input.store.sliceBranchSpan(when_expr.branches);
                 const lowered_branches = try self.allocator.alloc(ast.Branch, input_branch_ids.len);
                 defer self.allocator.free(lowered_branches);
@@ -4237,11 +4412,10 @@ const Lowerer = struct {
             defer exact_mono_cache.deinit();
 
             const exact_source_ty = try self.cloneInstType(&exact_inst, entry.fn_ty);
-            const current_member = exact_inst.types.requireLambdaMember(exact_source_ty, symbol);
-            const current_capture_span = current_member.lambda.captures;
             const exact_requested_ty = try self.cloneTypeIntoInstFromStore(&exact_inst, solved_types, instantiated_ty);
             try self.unifyIn(&exact_inst.types, exact_source_ty, exact_requested_ty);
-            const current_captures = exact_inst.types.sliceCaptures(current_capture_span);
+            const current_member = exact_inst.types.requireLambdaMember(exact_source_ty, symbol);
+            const current_captures = current_member.captures;
             return switch (exact_inst.types.lambdaRepr(exact_source_ty)) {
                 .lset => blk: {
                     if (current_captures.len == 0) {
@@ -4535,6 +4709,139 @@ const Lowerer = struct {
         };
     }
 
+    fn findPrimitiveAttachedMethodTarget(self: *Lowerer, prim: type_mod.Prim, method_name: base.Ident.Idx) Symbol {
+        var iter = self.input.attached_method_index.iterator();
+        var matched: ?Symbol = null;
+        while (iter.next()) |entry| {
+            const key = entry.key_ptr.*;
+            if (key.method_ident != method_name) continue;
+            if (!self.primitiveMethodTypeMatches(prim, key.type_ident)) continue;
+            if (matched) |existing| {
+                if (existing != entry.value_ptr.*) {
+                    const type_text = self.input.idents.getText(key.type_ident);
+                    const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
+                    debugPanicFmt(
+                        "lambdamono.lower.findPrimitiveAttachedMethodTarget found multiple targets for {s}.{s}",
+                        .{ type_text, method_text },
+                    );
+                }
+            } else {
+                matched = entry.value_ptr.*;
+            }
+        }
+
+        return matched orelse {
+            const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
+            debugPanicFmt(
+                "lambdamono.lower.findPrimitiveAttachedMethodTarget missing attached method target for primitive {s}.{s}",
+                .{ @tagName(prim), method_text },
+            );
+        };
+    }
+
+    fn findBuiltinAttachedMethodTarget(
+        self: *Lowerer,
+        owner: symbol_mod.BuiltinAttachedMethodOwner,
+        method_name: base.Ident.Idx,
+    ) Symbol {
+        return self.input.builtin_attached_method_index.get(.{
+            .owner = owner,
+            .method_ident = method_name,
+        }) orelse {
+            const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
+            debugPanicFmt(
+                "lambdamono.lower.findBuiltinAttachedMethodTarget missing attached method target for builtin {s}.{s}",
+                .{ @tagName(owner), method_text },
+            );
+        };
+    }
+
+    fn findAttachedMethodTargetForInstantiatedSource(
+        self: *Lowerer,
+        solved_types: *solved.Type.Store,
+        receiver_ty: TypeVarId,
+        method_name: base.Ident.Idx,
+    ) Symbol {
+        const root = solved_types.unlinkPreservingNominal(receiver_ty);
+        const node = solved_types.getNode(root);
+        if (node == .nominal) {
+            const nominal = node.nominal;
+            const key = symbol_mod.AttachedMethodKey{
+                .module_idx = nominal.module_idx,
+                .type_ident = nominal.ident,
+                .method_ident = method_name,
+            };
+            return self.input.attached_method_index.get(key) orelse {
+                const type_text = if (nominal.ident.isNone()) "<none>" else self.input.idents.getText(nominal.ident);
+                const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
+                debugPanicFmt(
+                    "lambdamono.lower.findAttachedMethodTargetForInstantiatedSource missing attached method target for {s}.{s}",
+                    .{ type_text, method_text },
+                );
+            };
+        }
+
+        switch (node) {
+            .content => |content| switch (content) {
+                .primitive => |prim| return self.findPrimitiveAttachedMethodTarget(prim, method_name),
+                .list => return self.findBuiltinAttachedMethodTarget(.list, method_name),
+                .box => return self.findBuiltinAttachedMethodTarget(.box, method_name),
+                .tag_union => |tags_span| {
+                    const tags = solved_types.sliceTags(tags_span.tags);
+                    if (tags.len != 1) {
+                        const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
+                        debugPanicFmt(
+                            "lambdamono.lower.findAttachedMethodTargetForInstantiatedSource expected singleton nominal backing for method {s}, found tag union arity {d}",
+                            .{ method_text, tags.len },
+                        );
+                    }
+                    const owner_ident = tags[0].name;
+                    var found: ?Symbol = null;
+                    var iter = self.input.attached_method_index.iterator();
+                    while (iter.next()) |entry| {
+                        const key = entry.key_ptr.*;
+                        if (key.method_ident != method_name) continue;
+                        if (key.type_ident != owner_ident) continue;
+                        if (found) |existing| {
+                            if (existing != entry.value_ptr.*) {
+                                const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
+                                debugPanicFmt(
+                                    "lambdamono.lower.findAttachedMethodTargetForInstantiatedSource found multiple singleton nominal-backing targets for method {s}",
+                                    .{method_text},
+                                );
+                            }
+                        } else {
+                            found = entry.value_ptr.*;
+                        }
+                    }
+                    return if (found) |symbol| symbol else {
+                        const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
+                        const type_text = if (owner_ident.isNone()) "<none>" else self.input.idents.getText(owner_ident);
+                        debugPanicFmt(
+                            "lambdamono.lower.findAttachedMethodTargetForInstantiatedSource missing singleton nominal-backing target for {s}.{s}",
+                            .{ type_text, method_text },
+                        );
+                    };
+                },
+                else => {
+                    const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
+                    debugPanicFmt(
+                        "lambdamono.lower.findAttachedMethodTargetForInstantiatedSource expected nominal or primitive receiver for method {s}, got content {s} at {d}",
+                        .{ method_text, @tagName(content), @intFromEnum(root) },
+                    );
+                },
+            },
+            else => {
+                const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
+                debugPanicFmt(
+                    "lambdamono.lower.findAttachedMethodTargetForInstantiatedSource expected resolved receiver for method {s}, got node {s} at {d}",
+                    .{ method_text, @tagName(node), @intFromEnum(root) },
+                );
+            },
+        }
+        unreachable;
+    }
+
     fn requireExactResolvedMethodTarget(
         self: *Lowerer,
         solved_types: *const solved.Type.Store,
@@ -4788,6 +5095,84 @@ const Lowerer = struct {
         expected_exec_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!SpecializedExprLowering {
         const receiver_source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, method_call.receiver);
+        if (builtin.mode == .Debug and
+            !method_call.target_symbol.isNone() and
+            self.solvedTypeContainsAbstractLeaf(&inst.types, receiver_source_ty))
+        {
+            const receiver_expr = self.input.store.getExpr(method_call.receiver);
+            const method_text = if (method_call.method_name.isNone()) "<none>" else self.input.idents.getText(method_call.method_name);
+            const symbol_raw = if (receiver_expr.data == .var_) receiver_expr.data.var_.raw() else std.math.maxInt(u32);
+            var payload_ty: u32 = std.math.maxInt(u32);
+            var payload_root: u32 = std.math.maxInt(u32);
+            var payload_node: []const u8 = "<none>";
+            if (receiver_expr.data == .tag) {
+                if (self.solvedTagInfoByName(&inst.types, receiver_source_ty, receiver_expr.data.tag.name)) |tag_info| {
+                    if (tag_info.args.len > 0) {
+                        const payload_ty_local = tag_info.args[0];
+                        const payload_root_local = inst.types.unlinkPreservingNominal(payload_ty_local);
+                        payload_ty = @intFromEnum(payload_ty_local);
+                        payload_root = @intFromEnum(payload_root_local);
+                        payload_node = @tagName(inst.types.getNode(payload_root_local));
+                    }
+                }
+            }
+            debugPanicFmt(
+                "lambdamono.lower.specializeMethodCallExpr abstract explicit receiver for method {s}: expr={d} data={s} symbol={d} ty={d} payload_ty={d} payload_root={d} payload_node={s}",
+                .{
+                    method_text,
+                    @intFromEnum(method_call.receiver),
+                    @tagName(receiver_expr.data),
+                    symbol_raw,
+                    @intFromEnum(receiver_source_ty),
+                    payload_ty,
+                    payload_root,
+                    payload_node,
+                },
+            );
+        }
+        if (builtin.mode == .Debug and method_call.target_symbol.isNone()) {
+            const receiver_root = inst.types.unlinkPreservingNominal(receiver_source_ty);
+            switch (inst.types.getNode(receiver_root)) {
+                .unbd, .for_a => {
+                    const receiver_expr = self.input.store.getExpr(method_call.receiver);
+                    const method_text = if (method_call.method_name.isNone())
+                        "<none>"
+                    else
+                        self.input.idents.getText(method_call.method_name);
+                    const symbol_raw = if (receiver_expr.data == .var_)
+                        receiver_expr.data.var_.raw()
+                    else
+                        std.math.maxInt(u32);
+                    const symbol_name = if (receiver_expr.data == .var_) blk: {
+                        const entry = self.input.symbols.get(receiver_expr.data.var_);
+                        break :blk if (entry.name.isNone()) "<none>" else self.input.idents.getText(entry.name);
+                    } else "<none>";
+                    const symbol_origin = if (receiver_expr.data == .var_)
+                        @tagName(self.input.symbols.get(receiver_expr.data.var_).origin)
+                    else
+                        "<none>";
+                    const env_ty = if (receiver_expr.data == .var_)
+                        if (self.lookupEnvEntry(venv, receiver_expr.data.var_)) |entry| @intFromEnum(entry.ty) else std.math.maxInt(u32)
+                    else
+                        std.math.maxInt(u32);
+                    debugPanicFmt(
+                        "lambdamono.lower.specializeMethodCallExpr unresolved receiver before freeze for method {s}: expr={d} data={s} symbol={d} name={s} origin={s} ty={d} env_ty={d} node={s}",
+                        .{
+                            method_text,
+                            @intFromEnum(method_call.receiver),
+                            @tagName(receiver_expr.data),
+                            symbol_raw,
+                            symbol_name,
+                            symbol_origin,
+                            @intFromEnum(receiver_root),
+                            env_ty,
+                            @tagName(inst.types.getNode(receiver_root)),
+                        },
+                    );
+                },
+                else => {},
+            }
+        }
         const method_args = self.input.store.sliceExprSpan(method_call.args);
         const explicit_step_arg_tys = self.input.types.sliceTypeVarSpan(method_call.step_arg_tys);
         const explicit_step_result_tys = self.input.types.sliceTypeVarSpan(method_call.step_result_tys);
@@ -4799,6 +5184,7 @@ const Lowerer = struct {
         var frozen = try self.freezeMethodCallWorld(
             &inst.types,
             venv,
+            method_call.target_symbol,
             method_call.method_fn_ty,
             method_call.method_name,
             receiver_source_ty,
@@ -4852,7 +5238,7 @@ const Lowerer = struct {
             first_result_exec_ty,
         );
         var current_expr = first_result.expr;
-        current_fn_ty = first_result_source_ty;
+        current_fn_ty = first_result.next_fn_ty;
         if (method_args.len == 0 and step_result_tys.len > 1) {
             if (step_arg_tys.len != 2 or step_result_tys.len != 2) {
                 debugPanic("lambdamono.lower.specializeMethodCallExpr zero-arg step arity mismatch");
@@ -4881,7 +5267,7 @@ const Lowerer = struct {
                 unit_result_exec_ty,
             );
             current_expr = applied.expr;
-            current_fn_ty = step_result_tys[1];
+            current_fn_ty = applied.next_fn_ty;
         }
         for (method_args, 0..) |arg_expr_id, i| {
             const lowered_arg = try self.specializeExprAtSourceTy(
@@ -4911,7 +5297,7 @@ const Lowerer = struct {
                 step_result_exec_ty,
             );
             current_expr = applied.expr;
-            current_fn_ty = step_result_source_ty;
+            current_fn_ty = applied.next_fn_ty;
         }
         const final_expr = self.output.getExpr(current_expr);
         return .{
@@ -4940,6 +5326,8 @@ const Lowerer = struct {
         var frozen = try self.freezeTypeMethodCallWorld(
             &inst.types,
             venv,
+            method_call.target_symbol,
+            method_call.dispatcher_ty,
             method_call.method_fn_ty,
             method_call.method_name,
             explicit_step_arg_tys,
@@ -5014,7 +5402,7 @@ const Lowerer = struct {
                 step_result_exec_ty,
             );
             current_expr = applied.expr;
-            current_fn_ty = step_result_source_ty;
+            current_fn_ty = applied.next_fn_ty;
         }
 
         const final_expr_id = current_expr orelse
@@ -5214,15 +5602,37 @@ const Lowerer = struct {
         const lowered_ty = try self.lowerPatternTypeAtSourceTy(inst, mono_cache, ty);
 
         return switch (pat.data) {
-            .var_ => |symbol| .{
-                .pat = try self.output.addPat(.{
-                    .ty = lowered_ty,
-                    .data = .{ .var_ = symbol },
-                }),
-                .additions = if (symbol.isNone())
-                    try self.allocator.dupe(EnvEntry, &.{})
-                else
-                    try self.allocator.dupe(EnvEntry, &.{.{ .symbol = symbol, .ty = ty, .exec_ty = lowered_ty, .exact_fn_symbol = null }}),
+            .var_ => |symbol| blk: {
+                if (builtin.mode == .Debug and !symbol.isNone()) {
+                    const root = inst.types.unlinkPreservingNominal(ty);
+                    switch (inst.types.getNode(root)) {
+                        .unbd, .for_a => {
+                            const symbol_entry = self.input.symbols.get(symbol);
+                            const symbol_name = if (symbol_entry.name.isNone()) "<none>" else self.input.idents.getText(symbol_entry.name);
+                            debugPanicFmt(
+                                "lambdamono.lower.specializePatAtSourceTy unresolved pattern var {d} ({s}) ty={d} root={d} node={s}",
+                                .{
+                                    symbol.raw(),
+                                    symbol_name,
+                                    @intFromEnum(ty),
+                                    @intFromEnum(root),
+                                    @tagName(inst.types.getNode(root)),
+                                },
+                            );
+                        },
+                        else => {},
+                    }
+                }
+                break :blk .{
+                    .pat = try self.output.addPat(.{
+                        .ty = lowered_ty,
+                        .data = .{ .var_ = symbol },
+                    }),
+                    .additions = if (symbol.isNone())
+                        try self.allocator.dupe(EnvEntry, &.{})
+                    else
+                        try self.allocator.dupe(EnvEntry, &.{.{ .symbol = symbol, .ty = ty, .exec_ty = lowered_ty, .exact_fn_symbol = null }}),
+                };
             },
             .bool_lit => |value| .{
                 .pat = try self.output.addPat(.{
@@ -5286,11 +5696,6 @@ const Lowerer = struct {
                 const bind_ty = try self.cloneInstType(inst, decl.bind.ty);
                 const body = try self.specializeExprAtSourceTy(inst, mono_cache, venv, decl.body, bind_ty);
                 const source_exact_fn_symbol = self.directCallableSymbol(self.input.store.getExpr(decl.body));
-                const env_ty = if (source_exact_fn_symbol) |exact_fn_symbol|
-                    try self.cloneInstType(inst, (specializations.lookupFnExact(self.fenv, exact_fn_symbol) orelse
-                        debugPanic("lambdamono.lower.specializeStmt missing exact function for alias binding")).fn_ty)
-                else
-                    bind_ty;
                 const bind_exec_ty = self.output.getExpr(body).ty;
                 break :blk .{
                     .stmt = try self.output.addStmt(.{
@@ -5304,7 +5709,7 @@ const Lowerer = struct {
                     }),
                     .env = try self.extendEnv(venv, .{
                         .symbol = decl.bind.symbol,
-                        .ty = env_ty,
+                        .ty = bind_ty,
                         .exec_ty = bind_exec_ty,
                         .exact_fn_symbol = source_exact_fn_symbol,
                     }),
@@ -5314,11 +5719,6 @@ const Lowerer = struct {
                 const bind_ty = try self.cloneInstType(inst, decl.bind.ty);
                 const body = try self.specializeExprAtSourceTy(inst, mono_cache, venv, decl.body, bind_ty);
                 const source_exact_fn_symbol = self.directCallableSymbol(self.input.store.getExpr(decl.body));
-                const env_ty = if (source_exact_fn_symbol) |exact_fn_symbol|
-                    try self.cloneInstType(inst, (specializations.lookupFnExact(self.fenv, exact_fn_symbol) orelse
-                        debugPanic("lambdamono.lower.specializeStmt missing exact function for alias var binding")).fn_ty)
-                else
-                    bind_ty;
                 const bind_exec_ty = self.output.getExpr(body).ty;
                 break :blk .{
                     .stmt = try self.output.addStmt(.{
@@ -5332,7 +5732,7 @@ const Lowerer = struct {
                     }),
                     .env = try self.extendEnv(venv, .{
                         .symbol = decl.bind.symbol,
-                        .ty = env_ty,
+                        .ty = bind_ty,
                         .exec_ty = bind_exec_ty,
                         .exact_fn_symbol = source_exact_fn_symbol,
                     }),
@@ -5947,7 +6347,10 @@ const Lowerer = struct {
     }
 
     fn lookupEnvEntry(_: *const Lowerer, venv: []const EnvEntry, symbol: Symbol) ?EnvEntry {
-        for (venv) |entry| {
+        var i = venv.len;
+        while (i > 0) {
+            i -= 1;
+            const entry = venv[i];
             if (entry.symbol == symbol) return entry;
         }
         return null;

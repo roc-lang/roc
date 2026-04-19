@@ -218,6 +218,14 @@ const Ctx = struct {
             return self.source_module.methodCallConstraintFnVar(idx);
         }
 
+        pub fn methodCallResolvedTarget(
+            self: @This(),
+            idx: CIR.Expr.Idx,
+            origin: types.StaticDispatchConstraint.Origin,
+        ) ?typed_cir.Module.MethodCallResolvedTarget {
+            return self.source_module.methodCallResolvedTarget(idx, origin);
+        }
+
         pub fn binopConstraintFnVar(self: @This(), idx: CIR.Expr.Idx, method_name: Ident.Idx) ?Var {
             return self.source_module.binopConstraintFnVar(idx, method_name);
         }
@@ -2554,6 +2562,7 @@ pub const Lowerer = struct {
                 );
                 break :blk .{ .method_call = .{
                     .receiver = try self.lowerExpr(module_idx, type_scope, env, method_call.receiver),
+                    .target_symbol = self.methodCallTargetSymbol(module_idx, expr.idx, .method_call) orelse symbol_mod.Symbol.none,
                     .method_fn_ty = try self.instantiateSourceVarType(module_idx, type_scope, method_fn_var),
                     .method_name = try self.ctx.copyExecutableIdent(module_idx, method_call.method_name),
                     .args = try self.lowerExprSlice(module_idx, type_scope, env, typed_cir_module.sliceExpr(method_call.args)),
@@ -2571,6 +2580,7 @@ pub const Lowerer = struct {
                         type_scope,
                         ModuleEnv.varFrom(alias_stmt.s_type_var_alias.type_var_anno),
                     ),
+                    .target_symbol = self.methodCallTargetSymbol(module_idx, expr.idx, .method_call) orelse symbol_mod.Symbol.none,
                     .method_fn_ty = try self.instantiateSourceVarType(module_idx, type_scope, method_fn_var),
                     .method_name = try self.ctx.copyExecutableIdent(module_idx, method_call.method_name),
                     .args = try self.lowerExprSlice(module_idx, type_scope, env, typed_cir_module.sliceExpr(method_call.args)),
@@ -5837,6 +5847,8 @@ pub const Lowerer = struct {
                     module_idx,
                     type_scope,
                     env,
+                    expr_idx,
+                    .desugared_binop,
                     method_fn_var,
                     operand_ty,
                     self.ctx.typedCirModule(module_idx).commonIdents().is_eq,
@@ -5871,6 +5883,8 @@ pub const Lowerer = struct {
         module_idx: u32,
         type_scope: *TypeScope,
         env: BindingEnv,
+        expr_idx: CIR.Expr.Idx,
+        method_call_origin: types.StaticDispatchConstraint.Origin,
         method_fn_var: types.Var,
         receiver_ty: type_mod.TypeId,
         lookup_name: base.Ident.Idx,
@@ -5906,6 +5920,7 @@ pub const Lowerer = struct {
             .ty = result_ty,
             .data = .{ .method_call = .{
                 .receiver = lowered_receiver,
+                .target_symbol = self.methodCallTargetSymbol(module_idx, expr_idx, method_call_origin) orelse symbol_mod.Symbol.none,
                 .method_fn_ty = try self.instantiateSourceVarType(module_idx, type_scope, method_fn_var),
                 .method_name = try self.ctx.copyExecutableIdent(module_idx, lookup_name),
                 .args = try self.program.store.addExprSpan(lowered_args),
@@ -5950,6 +5965,7 @@ pub const Lowerer = struct {
             .ty = result_ty,
             .data = .{ .type_method_call = .{
                 .dispatcher_ty = dispatcher_ty,
+                .target_symbol = self.methodCallTargetSymbol(module_idx, expr_idx, .method_call) orelse symbol_mod.Symbol.none,
                 .method_fn_ty = try self.instantiateSourceVarType(module_idx, type_scope, method_fn_var),
                 .method_name = try self.ctx.copyExecutableIdent(module_idx, method_call.method_name),
                 .args = try self.program.store.addExprSpan(lowered_args),
@@ -6291,6 +6307,8 @@ pub const Lowerer = struct {
                     module_idx,
                     type_scope,
                     env,
+                    expr.idx,
+                    .method_call,
                     method_fn_var,
                     try self.requireExprType(module_idx, type_scope, method_call.receiver),
                     method_call.method_name,
@@ -9382,6 +9400,20 @@ pub const Lowerer = struct {
             }
         }
         return null;
+    }
+
+    fn methodCallTargetSymbol(
+        self: *Lowerer,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        origin: types.StaticDispatchConstraint.Origin,
+    ) ?symbol_mod.Symbol {
+        const typed_cir_module = self.ctx.typedCirModule(module_idx);
+        const target = typed_cir_module.methodCallResolvedTarget(expr_idx, origin) orelse return null;
+        return self.lookupTopLevelDefSymbol(target.module_idx, target.def_idx) orelse debugPanic(
+            "monotype invariant violated: unresolved explicit method target {d}:{d} for expr {d}",
+            .{ target.module_idx, @intFromEnum(target.def_idx), @intFromEnum(expr_idx) },
+        );
     }
 
     fn lowerResolvedTargetCallee(

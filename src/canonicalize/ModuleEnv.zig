@@ -531,6 +531,9 @@ pub const MethodCallFn = struct {
     method_name: Ident.Idx,
     origin: types_mod.StaticDispatchConstraint.Origin,
     fn_var: TypeVar,
+    has_resolved_target: bool,
+    resolved_target_module_ident: Ident.Idx,
+    resolved_target_def_idx: CIR.Def.Idx,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -3489,6 +3492,9 @@ pub fn recordMethodCallFn(
         .method_name = method_name,
         .origin = origin,
         .fn_var = fn_var,
+        .has_resolved_target = false,
+        .resolved_target_module_ident = Ident.Idx.NONE,
+        .resolved_target_def_idx = @enumFromInt(0),
     });
 }
 
@@ -3511,6 +3517,28 @@ pub fn setMethodCallFnVar(
     );
 }
 
+pub fn setMethodCallResolvedTarget(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    method_name: Ident.Idx,
+    origin: types_mod.StaticDispatchConstraint.Origin,
+    target_module_ident: Ident.Idx,
+    target_def_idx: CIR.Def.Idx,
+) void {
+    for (self.method_call_fns.items.items) |*entry| {
+        if (entry.expr_idx != expr_idx or entry.method_name != method_name or entry.origin != origin) continue;
+        entry.has_resolved_target = true;
+        entry.resolved_target_module_ident = target_module_ident;
+        entry.resolved_target_def_idx = target_def_idx;
+        return;
+    }
+
+    std.debug.panic(
+        "ModuleEnv invariant violated: missing dispatch-call target for expr {d} method {s}",
+        .{ @intFromEnum(expr_idx), self.getIdent(method_name) },
+    );
+}
+
 /// Public function `methodCallFnVar`.
 pub fn methodCallFnVar(
     self: *const Self,
@@ -3521,6 +3549,28 @@ pub fn methodCallFnVar(
     for (self.method_call_fns.items.items) |entry| {
         if (entry.expr_idx == expr_idx and entry.origin == origin) {
             return entry.fn_var;
+        }
+    }
+    return null;
+}
+
+pub const MethodCallResolvedTarget = struct {
+    module_ident: Ident.Idx,
+    def_idx: CIR.Def.Idx,
+};
+
+pub fn methodCallResolvedTarget(
+    self: *const Self,
+    expr_idx: CIR.Expr.Idx,
+    _: Ident.Idx,
+    origin: types_mod.StaticDispatchConstraint.Origin,
+) ?MethodCallResolvedTarget {
+    for (self.method_call_fns.items.items) |entry| {
+        if (entry.expr_idx == expr_idx and entry.origin == origin and entry.has_resolved_target) {
+            return .{
+                .module_ident = entry.resolved_target_module_ident,
+                .def_idx = entry.resolved_target_def_idx,
+            };
         }
     }
     return null;

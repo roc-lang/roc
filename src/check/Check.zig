@@ -6376,14 +6376,46 @@ fn mkTypeMethodCallConstraint(
     _ = try self.unify(constrained_var, dispatcher_var, env);
 }
 
-fn recordResolvedMethodCallFn(
+fn resolvedTargetModuleIdentInCurrentEnv(
+    self: *Self,
+    target_env: *const ModuleEnv,
+) std.mem.Allocator.Error!base.Ident.Idx {
+    const target_module_name = if (!target_env.qualified_module_ident.isNone())
+        target_env.getIdent(target_env.qualified_module_ident)
+    else if (!target_env.display_module_name_idx.isNone())
+        target_env.getIdent(target_env.display_module_name_idx)
+    else
+        target_env.module_name;
+
+    return self.cir.insertIdent(base.Ident.for_text(target_module_name));
+}
+
+fn recordResolvedMethodCall(
     self: *Self,
     constraint: StaticDispatchConstraint,
     resolved_method_var: Var,
-) void {
+) std.mem.Allocator.Error!void {
     const site_expr_var = constraint.site_expr_var orelse return;
     const expr_idx: CIR.Expr.Idx = @enumFromInt(@intFromEnum(site_expr_var));
     self.cir.setMethodCallFnVar(expr_idx, constraint.fn_name, constraint.origin, resolved_method_var);
+}
+
+fn recordResolvedMethodCallTarget(
+    self: *Self,
+    constraint: StaticDispatchConstraint,
+    target_env: *const ModuleEnv,
+    target_def_idx: CIR.Def.Idx,
+) std.mem.Allocator.Error!void {
+    const site_expr_var = constraint.site_expr_var orelse return;
+    const expr_idx: CIR.Expr.Idx = @enumFromInt(@intFromEnum(site_expr_var));
+    const target_module_ident = try self.resolvedTargetModuleIdentInCurrentEnv(target_env);
+    self.cir.setMethodCallResolvedTarget(
+        expr_idx,
+        constraint.fn_name,
+        constraint.origin,
+        target_module_ident,
+        target_def_idx,
+    );
 }
 
 // problems //
@@ -6898,7 +6930,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
 
                     // Then, lookup the inferred constraint in the actual list of rigid constraints
                     if (self.ident_to_var_map.get(constraint.fn_name)) |rigid_var| {
-                        self.recordResolvedMethodCallFn(constraint, rigid_var);
+                        try self.recordResolvedMethodCall(constraint, rigid_var);
                         // Unify the actual function var against the inferred var
                         //
                         // TODO: For better error messages, we should check if these
@@ -7026,6 +7058,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
 
                     const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_original_env)));
                     const def_var: Var = ModuleEnv.varFrom(def_idx);
+                    try self.recordResolvedMethodCallTarget(constraint, original_env, def_idx);
 
                     // Track whether we just processed a cycle participant
                     var cycle_method_expr_var: ?Var = null;
@@ -7115,7 +7148,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
 
                     // Unwrap the constraint type
                     const constraint_fn = constraint_fn_resolved.unwrapFunc() orelse {
-                        self.recordResolvedMethodCallFn(constraint, method_var);
+                        try self.recordResolvedMethodCall(constraint, method_var);
                         _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                             .method_type = .{
                                 .constraint_var = constraint.fn_var,
@@ -7127,7 +7160,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         continue;
                     };
 
-                    self.recordResolvedMethodCallFn(constraint, method_var);
+                    try self.recordResolvedMethodCall(constraint, method_var);
                     const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                         .method_type = .{
                             .constraint_var = deferred_constraint.var_,
@@ -7255,6 +7288,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
 
                     const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_original_env)));
                     const def_var: Var = ModuleEnv.varFrom(def_idx);
+                    try self.recordResolvedMethodCallTarget(constraint, original_env, def_idx);
 
                     var cycle_method_expr_var: ?Var = null;
                     if (is_this_module) {
@@ -7325,7 +7359,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     };
 
                     const constraint_fn = constraint_fn_resolved.unwrapFunc() orelse {
-                        self.recordResolvedMethodCallFn(constraint, method_var);
+                        try self.recordResolvedMethodCall(constraint, method_var);
                         _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                             .method_type = .{
                                 .constraint_var = constraint.fn_var,
@@ -7337,7 +7371,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         continue;
                     };
 
-                    self.recordResolvedMethodCallFn(constraint, method_var);
+                    try self.recordResolvedMethodCall(constraint, method_var);
                     const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                         .method_type = .{
                             .constraint_var = deferred_constraint.var_,

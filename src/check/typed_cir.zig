@@ -25,10 +25,21 @@ const OwnedCheckedModule = struct {
     owned_source: ?[]u8 = null,
 };
 
+const MethodCallTargetData = struct {
+    module_idx: u32,
+    def_idx: CIR.Def.Idx,
+};
+
+const MethodCallTargetKey = struct {
+    expr_idx: u32,
+    origin: types.StaticDispatchConstraint.Origin,
+};
+
 const ModuleData = struct {
     env: *ModuleEnv,
     top_level_defs_by_ident: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Def.Idx) = .{},
     required_lookup_targets: std.AutoHashMapUnmanaged(u32, CIR.Def.Idx) = .{},
+    method_call_targets: std.AutoHashMapUnmanaged(MethodCallTargetKey, MethodCallTargetData) = .{},
     ownership: union(enum) {
         borrowed,
         owned_checked: OwnedCheckedModule,
@@ -65,6 +76,7 @@ const ModuleData = struct {
     fn deinit(self: *ModuleData, allocator: Allocator) void {
         self.top_level_defs_by_ident.deinit(allocator);
         self.required_lookup_targets.deinit(allocator);
+        self.method_call_targets.deinit(allocator);
         switch (self.ownership) {
             .borrowed => {},
             .owned_checked => |owned| {
@@ -158,6 +170,36 @@ pub const Modules = struct {
             }
         }
 
+        for (modules, 0..) |*module_data, i| {
+            const module_ = Module{
+                .allocator = allocator,
+                .module_idx = @intCast(i),
+                .data_store = module_data,
+            };
+            _ = module_;
+            for (module_data.env.method_call_fns.items.items) |entry| {
+                if (!entry.has_resolved_target) continue;
+                const target_module_name = module_data.env.getIdent(entry.resolved_target_module_ident);
+                const target_module_idx = module_idxs_by_name.get(target_module_name) orelse {
+                    std.debug.panic(
+                        "typed_cir invariant violated: unknown resolved method target module {s}",
+                        .{target_module_name},
+                    );
+                };
+                try module_data.method_call_targets.put(
+                    allocator,
+                    .{
+                        .expr_idx = @intFromEnum(entry.expr_idx),
+                        .origin = entry.origin,
+                    },
+                    .{
+                        .module_idx = target_module_idx,
+                        .def_idx = entry.resolved_target_def_idx,
+                    },
+                );
+            }
+        }
+
         return .{
             .allocator = allocator,
             .modules = modules,
@@ -232,6 +274,11 @@ pub const Module = struct {
         }
     };
 
+    pub const MethodCallResolvedTarget = struct {
+        module_idx: u32,
+        def_idx: CIR.Def.Idx,
+    };
+
     fn env(self: @This()) *ModuleEnv {
         return self.data_store.env;
     }
@@ -291,6 +338,21 @@ pub const Module = struct {
 
     pub fn requiredLookupTarget(self: @This(), requires_idx: u32) ?CIR.Def.Idx {
         return self.data_store.required_lookup_targets.get(requires_idx);
+    }
+
+    pub fn methodCallResolvedTarget(
+        self: @This(),
+        expr_idx: CIR.Expr.Idx,
+        origin: types.StaticDispatchConstraint.Origin,
+    ) ?MethodCallResolvedTarget {
+        const target = self.data_store.method_call_targets.get(.{
+            .expr_idx = @intFromEnum(expr_idx),
+            .origin = origin,
+        }) orelse return null;
+        return .{
+            .module_idx = target.module_idx,
+            .def_idx = target.def_idx,
+        };
     }
 
     pub fn nodeTag(self: @This(), idx: CIR.Node.Idx) CIR.Node.Tag {

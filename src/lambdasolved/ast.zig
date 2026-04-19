@@ -94,6 +94,7 @@ pub const Expr = struct {
         },
         method_call: struct {
             receiver: ExprId,
+            target_symbol: Symbol,
             method_fn_ty: TypeVarId,
             method_name: base.Ident.Idx,
             args: Span(ExprId),
@@ -102,6 +103,7 @@ pub const Expr = struct {
         },
         type_method_call: struct {
             dispatcher_ty: TypeVarId,
+            target_symbol: Symbol,
             method_fn_ty: TypeVarId,
             method_name: base.Ident.Idx,
             args: Span(ExprId),
