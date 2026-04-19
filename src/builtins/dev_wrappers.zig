@@ -7,7 +7,6 @@
 //! - Object file generation (roc build --opt=dev) via symbol references
 
 const std = @import("std");
-const builtin = @import("builtin");
 const str = @import("str.zig");
 const list = @import("list.zig");
 const num = @import("num.zig");
@@ -394,17 +393,6 @@ fn callbackListElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c)
         @as([*]u8, @ptrCast(ctx_ptr)),
         @src(),
     );
-    if (builtin.mode == .Debug) {
-        std.debug.print(
-            "callbackListElementDecref elem=0x{x} words=[0x{x},0x{x},0x{x}]\\n",
-            .{
-                @intFromPtr(element),
-                utils.readAs(u64, element.? + 0, @src()),
-                utils.readAs(u64, element.? + 8, @src()),
-                utils.readAs(u64, element.? + 16, @src()),
-            },
-        );
-    }
     ctx.callback(element, ctx.roc_ops);
 }
 
@@ -562,22 +550,11 @@ pub fn roc_builtins_list_incref(
     list_len: usize,
     list_cap: usize,
     amount: isize,
+    elements_refcounted: bool,
     roc_ops: *RocOps,
 ) callconv(.c) void {
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    if (builtin.mode == .Debug) {
-        std.debug.print(
-            "list_incref bytes=0x{x} len={d} cap=0x{x} unique_before={} amount={d}\\n",
-            .{ @intFromPtr(list_bytes), list_len, list_cap, l.isUnique(roc_ops), amount },
-        );
-    }
-    list.listIncref(l, amount, true, roc_ops);
-    if (builtin.mode == .Debug) {
-        if (l.getAllocationDataPtr(roc_ops)) |alloc_ptr| {
-            const ptr: [*]usize = utils.alignedPtrCast([*]usize, alloc_ptr, @src());
-            std.debug.print("list_incref count_after={d}\\n", .{(ptr - 2)[0]});
-        }
-    }
+    list.listIncref(l, amount, elements_refcounted, roc_ops);
 }
 
 /// Wrapper: decref a List(Str), including decref of each string element when unique
@@ -631,25 +608,6 @@ pub fn roc_builtins_list_decref_with(
     roc_ops: *RocOps,
 ) callconv(.c) void {
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    if (builtin.mode == .Debug and list_len == 3) {
-        const alloc_ptr = l.getAllocationDataPtr(roc_ops);
-        const first0: u64 = if (alloc_ptr) |ptr| utils.readAs(u64, ptr + 0, @src()) else 0;
-        const first1: u64 = if (alloc_ptr) |ptr| utils.readAs(u64, ptr + 8, @src()) else 0;
-        const first2: u64 = if (alloc_ptr) |ptr| utils.readAs(u64, ptr + 16, @src()) else 0;
-        std.debug.print(
-            "list_decref_with width={d} align={d} slice={} bytes=0x{x} alloc=0x{x} first=[0x{x},0x{x},0x{x}]\\n",
-            .{
-                element_width,
-                alignment,
-                l.isSeamlessSlice(),
-                @intFromPtr(list_bytes),
-                @intFromPtr(alloc_ptr),
-                first0,
-                first1,
-                first2,
-            },
-        );
-    }
     if (element_decref) |callback| {
         var ctx = CallbackElementDecrefContext{
             .callback = callback,

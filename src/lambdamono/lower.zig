@@ -4632,11 +4632,7 @@ const Lowerer = struct {
                 .tag_union => |tags_span| {
                     const tags = solved_types.sliceTags(tags_span.tags);
                     if (tags.len != 1) {
-                        const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
-                        debugPanicFmt(
-                            "lambdamono.lower.findAttachedMethodTargetForInstantiatedSource expected singleton nominal backing for method {s}, found tag union arity {d}",
-                            .{ method_text, tags.len },
-                        );
+                        return self.findTagUnionAttachedMethodTarget(solved_types, tags, method_name);
                     }
                     const owner_ident = tags[0].name;
                     var found: ?Symbol = null;
@@ -4683,6 +4679,272 @@ const Lowerer = struct {
             },
         }
         unreachable;
+    }
+
+    fn tagUnionShapesMatch(
+        self: *Lowerer,
+        solved_types: *solved.Type.Store,
+        candidate_ty: TypeVarId,
+        expected_tags: []const solved.Type.Tag,
+    ) bool {
+        const candidate_root = solved_types.unlinkPreservingNominal(candidate_ty);
+        const candidate_node = solved_types.getNode(candidate_root);
+        const candidate_tags = switch (candidate_node) {
+            .nominal => |nominal| return self.tagUnionShapesMatch(solved_types, nominal.backing, expected_tags),
+            .content => |content| switch (content) {
+                .tag_union => |tag_union| solved_types.sliceTags(tag_union.tags),
+                else => return false,
+            },
+            else => return false,
+        };
+
+        if (candidate_tags.len != expected_tags.len) return false;
+        for (candidate_tags, expected_tags) |candidate_tag, expected_tag| {
+            if (candidate_tag.name != expected_tag.name) return false;
+            if (solved_types.sliceTypeVarSpan(candidate_tag.args).len != solved_types.sliceTypeVarSpan(expected_tag.args).len) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    fn findTagUnionAttachedMethodTarget(
+        self: *Lowerer,
+        _: *solved.Type.Store,
+        tags: []const solved.Type.Tag,
+        method_name: base.Ident.Idx,
+    ) Symbol {
+        var found: ?Symbol = null;
+        var iter = self.input.attached_method_index.iterator();
+        while (iter.next()) |entry| {
+            const key = entry.key_ptr.*;
+            if (key.method_ident != method_name) continue;
+
+            const symbol = entry.value_ptr.*;
+            const exact = specializations.lookupFnExact(self.fenv, symbol) orelse {
+                debugPanic("lambdamono.lower.findTagUnionAttachedMethodTarget missing exact method function");
+            };
+
+            var candidate_inst = InstScope.init(self.allocator);
+            defer candidate_inst.deinit();
+
+            const candidate_fn_ty = self.cloneInstType(&candidate_inst, exact.fn_ty) catch unreachable;
+            const candidate_arg_ty = candidate_inst.types.fnShape(candidate_fn_ty).arg;
+            if (!self.tagUnionShapesMatch(&candidate_inst.types, candidate_arg_ty, tags)) continue;
+
+            if (found) |existing| {
+                if (existing != symbol) {
+                    const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
+                    debugPanicFmt(
+                        "lambdamono.lower.findTagUnionAttachedMethodTarget found multiple tag-union targets for method {s}",
+                        .{method_text},
+                    );
+                }
+            } else {
+                found = symbol;
+            }
+        }
+
+        return found orelse {
+            const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
+            debugPanicFmt(
+                "lambdamono.lower.findTagUnionAttachedMethodTarget missing tag-union target for method {s}",
+                .{method_text},
+            );
+        };
+    }
+
+    fn maybeAttachedMethodTargetFromRefinedFnType(
+        _: *Lowerer,
+        solved_types: *solved.Type.Store,
+        method_fn_ty: TypeVarId,
+        _: base.Ident.Idx,
+    ) ?Symbol {
+        return switch (solved_types.lambdaRepr(method_fn_ty)) {
+            .erased => null,
+            .lset => |lambdas| {
+                if (lambdas.len != 1) return null;
+                return lambdas[0].symbol;
+            },
+        };
+    }
+
+    fn resolveTypeMethodTargetFromCurrentCall(
+        self: *Lowerer,
+        inst: *InstScope,
+        venv: []const EnvEntry,
+        method_call: @FieldType(solved.Ast.Expr.Data, "type_method_call"),
+        explicit_step_arg_tys: []const TypeVarId,
+        explicit_step_result_tys: []const TypeVarId,
+    ) std.mem.Allocator.Error!Symbol {
+        var target_inst = InstScope.init(self.allocator);
+        defer target_inst.deinit();
+
+        var snapshot_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
+        defer snapshot_mapping.deinit();
+
+        const cloned_dispatcher_ty = try self.cloneTypeIntoInstFromStoreWithMapping(
+            &target_inst,
+            &self.input.types,
+            &snapshot_mapping,
+            method_call.dispatcher_ty,
+        );
+        const cloned_method_fn_ty = try self.cloneTypeIntoInstFromStoreWithMapping(
+            &target_inst,
+            &self.input.types,
+            &snapshot_mapping,
+            method_call.method_fn_ty,
+        );
+
+        const method_args = self.input.store.sliceExprSpan(method_call.args);
+        const expected_step_count = if (method_args.len == 0) 1 else method_args.len;
+        if (explicit_step_arg_tys.len != expected_step_count or explicit_step_result_tys.len != expected_step_count) {
+            debugPanic("lambdamono.lower.resolveTypeMethodTargetFromCurrentCall explicit step arity mismatch");
+        }
+
+        const cloned_step_arg_tys = try self.allocator.alloc(TypeVarId, explicit_step_arg_tys.len);
+        defer self.allocator.free(cloned_step_arg_tys);
+        for (explicit_step_arg_tys, 0..) |step_arg_ty, i| {
+            cloned_step_arg_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(
+                &target_inst,
+                &self.input.types,
+                &snapshot_mapping,
+                step_arg_ty,
+            );
+        }
+
+        const cloned_step_result_tys = try self.allocator.alloc(TypeVarId, explicit_step_result_tys.len);
+        defer self.allocator.free(cloned_step_result_tys);
+        for (explicit_step_result_tys, 0..) |step_result_ty, i| {
+            cloned_step_result_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(
+                &target_inst,
+                &self.input.types,
+                &snapshot_mapping,
+                step_result_ty,
+            );
+        }
+
+        for (method_args, 0..) |arg_expr_id, i| {
+            const actual_arg_ty = try self.instantiatedSourceTypeForExpr(inst, venv, arg_expr_id);
+            const cloned_actual_arg_ty = try self.cloneTypeIntoInstFromStore(
+                &target_inst,
+                &inst.types,
+                actual_arg_ty,
+            );
+            try self.unifyIn(&target_inst.types, cloned_step_arg_tys[i], cloned_actual_arg_ty);
+        }
+
+        var current_fn_ty = cloned_method_fn_ty;
+        for (cloned_step_arg_tys, cloned_step_result_tys) |step_arg_ty, step_result_ty| {
+            const fn_parts = target_inst.types.fnShape(current_fn_ty);
+            try self.unifyIn(&target_inst.types, fn_parts.arg, step_arg_ty);
+            try self.unifyIn(&target_inst.types, fn_parts.ret, step_result_ty);
+            current_fn_ty = step_result_ty;
+        }
+
+        if (self.maybeAttachedMethodTargetFromRefinedFnType(
+            &target_inst.types,
+            cloned_method_fn_ty,
+            method_call.method_name,
+        )) |symbol| {
+            return symbol;
+        }
+
+        return self.findAttachedMethodTargetForInstantiatedSource(
+            &target_inst.types,
+            cloned_dispatcher_ty,
+            method_call.method_name,
+        );
+    }
+
+    fn resolveMethodTargetFromCurrentCall(
+        self: *Lowerer,
+        inst: *InstScope,
+        venv: []const EnvEntry,
+        method_call: @FieldType(solved.Ast.Expr.Data, "method_call"),
+        explicit_step_arg_tys: []const TypeVarId,
+        explicit_step_result_tys: []const TypeVarId,
+    ) std.mem.Allocator.Error!Symbol {
+        var target_inst = InstScope.init(self.allocator);
+        defer target_inst.deinit();
+
+        var snapshot_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
+        defer snapshot_mapping.deinit();
+
+        const cloned_method_fn_ty = try self.cloneTypeIntoInstFromStoreWithMapping(
+            &target_inst,
+            &self.input.types,
+            &snapshot_mapping,
+            method_call.method_fn_ty,
+        );
+
+        const expected_step_count = self.input.store.sliceExprSpan(method_call.args).len + 1;
+        if (explicit_step_arg_tys.len != expected_step_count or explicit_step_result_tys.len != expected_step_count) {
+            debugPanic("lambdamono.lower.resolveMethodTargetFromCurrentCall explicit step arity mismatch");
+        }
+
+        const cloned_step_arg_tys = try self.allocator.alloc(TypeVarId, explicit_step_arg_tys.len);
+        defer self.allocator.free(cloned_step_arg_tys);
+        for (explicit_step_arg_tys, 0..) |step_arg_ty, i| {
+            cloned_step_arg_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(
+                &target_inst,
+                &self.input.types,
+                &snapshot_mapping,
+                step_arg_ty,
+            );
+        }
+
+        const cloned_step_result_tys = try self.allocator.alloc(TypeVarId, explicit_step_result_tys.len);
+        defer self.allocator.free(cloned_step_result_tys);
+        for (explicit_step_result_tys, 0..) |step_result_ty, i| {
+            cloned_step_result_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(
+                &target_inst,
+                &self.input.types,
+                &snapshot_mapping,
+                step_result_ty,
+            );
+        }
+
+        const actual_receiver_ty = try self.instantiatedSourceTypeForExpr(inst, venv, method_call.receiver);
+        const cloned_actual_receiver_ty = try self.cloneTypeIntoInstFromStore(
+            &target_inst,
+            &inst.types,
+            actual_receiver_ty,
+        );
+        try self.unifyIn(&target_inst.types, cloned_step_arg_tys[0], cloned_actual_receiver_ty);
+
+        const method_args = self.input.store.sliceExprSpan(method_call.args);
+        for (method_args, 0..) |arg_expr_id, i| {
+            const actual_arg_ty = try self.instantiatedSourceTypeForExpr(inst, venv, arg_expr_id);
+            const cloned_actual_arg_ty = try self.cloneTypeIntoInstFromStore(
+                &target_inst,
+                &inst.types,
+                actual_arg_ty,
+            );
+            try self.unifyIn(&target_inst.types, cloned_step_arg_tys[i + 1], cloned_actual_arg_ty);
+        }
+
+        var current_fn_ty = cloned_method_fn_ty;
+        for (cloned_step_arg_tys, cloned_step_result_tys) |step_arg_ty, step_result_ty| {
+            const fn_parts = target_inst.types.fnShape(current_fn_ty);
+            try self.unifyIn(&target_inst.types, fn_parts.arg, step_arg_ty);
+            try self.unifyIn(&target_inst.types, fn_parts.ret, step_result_ty);
+            current_fn_ty = step_result_ty;
+        }
+
+        if (self.maybeAttachedMethodTargetFromRefinedFnType(
+            &target_inst.types,
+            cloned_method_fn_ty,
+            method_call.method_name,
+        )) |symbol| {
+            return symbol;
+        }
+
+        return self.findAttachedMethodTargetForInstantiatedSource(
+            &target_inst.types,
+            cloned_step_arg_tys[0],
+            method_call.method_name,
+        );
     }
 
     const CallTarget = union(enum) {
@@ -4918,10 +5180,12 @@ const Lowerer = struct {
         for (explicit_step_arg_tys, 0..) |step_arg_ty, i| {
             instantiated_step_arg_tys[i] = try self.cloneInstType(inst, step_arg_ty);
         }
-        const target_symbol = self.findAttachedMethodTargetForInstantiatedSource(
-            &inst.types,
-            receiver_source_ty,
-            method_call.method_name,
+        const target_symbol = try self.resolveMethodTargetFromCurrentCall(
+            inst,
+            venv,
+            method_call,
+            explicit_step_arg_tys,
+            explicit_step_result_tys,
         );
         const instantiated_step_result_tys = try self.allocator.alloc(TypeVarId, explicit_step_result_tys.len);
         defer self.allocator.free(instantiated_step_result_tys);
@@ -5058,15 +5322,16 @@ const Lowerer = struct {
         _: TypeVarId,
         _: type_mod.TypeId,
     ) std.mem.Allocator.Error!SpecializedExprLowering {
-        const dispatcher_source_ty = try self.cloneInstType(inst, method_call.dispatcher_ty);
-        const target_symbol = self.findAttachedMethodTargetForInstantiatedSource(
-            &inst.types,
-            dispatcher_source_ty,
-            method_call.method_name,
-        );
         const method_args = self.input.store.sliceExprSpan(method_call.args);
         const explicit_step_arg_tys = self.input.types.sliceTypeVarSpan(method_call.step_arg_tys);
         const explicit_step_result_tys = self.input.types.sliceTypeVarSpan(method_call.step_result_tys);
+        const target_symbol = try self.resolveTypeMethodTargetFromCurrentCall(
+            inst,
+            venv,
+            method_call,
+            explicit_step_arg_tys,
+            explicit_step_result_tys,
+        );
         const instantiated_step_arg_tys = try self.allocator.alloc(TypeVarId, explicit_step_arg_tys.len);
         defer self.allocator.free(instantiated_step_arg_tys);
         for (explicit_step_arg_tys, 0..) |step_arg_ty, i| {

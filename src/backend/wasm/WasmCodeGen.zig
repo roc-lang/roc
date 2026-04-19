@@ -754,7 +754,8 @@ fn emitRawDirectRcPlan(
             try self.emitBuiltinInternalStrRc(.free, value_ptr_local, 1);
             return true;
         },
-        .list_incref => {
+        .list_incref => |list_plan| {
+            if (list_plan.child != null) return false;
             const alloc_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             const is_slice_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitDecodeListAllocPtr(value_ptr_local, alloc_ptr_local, is_slice_local);
@@ -1326,6 +1327,40 @@ fn emitBuiltinInternalListRc(
     }
 }
 
+fn emitBuiltinInternalListIncrefByLocal(
+    self: *Self,
+    list_ptr_local: u32,
+    list_layout_idx: layout.Idx,
+    list_plan: layout.RcListPlan,
+    count_local: u32,
+) Allocator.Error!void {
+    const list_abi = self.builtinInternalListAbi("wasm.emitBuiltinInternalListIncrefByLocal.builtin_list_abi", list_layout_idx);
+    const alloc_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const is_slice_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitDecodeListAllocPtr(list_ptr_local, alloc_ptr_local, is_slice_local);
+
+    if (list_abi.elements_refcounted and list_plan.child != null) {
+        self.body.append(self.allocator, Op.block) catch return error.OutOfMemory;
+        self.body.append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+        try self.emitLocalGet(is_slice_local);
+        self.body.append(self.allocator, Op.br_if) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+
+        try self.emitLocalGet(alloc_ptr_local);
+        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, &self.body, 8) catch return error.OutOfMemory;
+        self.body.append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
+
+        try self.emitLocalGet(list_ptr_local);
+        try self.emitLoadOp(.i32, 4);
+        try self.emitStoreOp(.i32, 0);
+
+        self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
+    }
+
+    try self.emitDataPtrIncrefByLocal(alloc_ptr_local, count_local);
+}
+
 fn emitBuiltinInternalStrRc(self: *Self, comptime kind: RcOpKind, str_ptr_local: u32, inc_count: u16) Allocator.Error!void {
     const alloc_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     const is_small_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -1421,12 +1456,7 @@ fn generateBuiltinInternalRcHelperBody(
         },
         .str_decref => try self.emitBuiltinInternalStrRc(.decref, value_ptr_local, 1),
         .str_free => try self.emitBuiltinInternalStrRc(.free, value_ptr_local, 1),
-        .list_incref => {
-            const alloc_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            const is_slice_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitDecodeListAllocPtr(value_ptr_local, alloc_ptr_local, is_slice_local);
-            try self.emitDataPtrIncrefByLocal(alloc_ptr_local, count_local.?);
-        },
+        .list_incref => |list_plan| try self.emitBuiltinInternalListIncrefByLocal(value_ptr_local, helper_key.layout_idx, list_plan, count_local.?),
         .list_decref => |list_plan| try self.emitBuiltinInternalListRc(.decref, value_ptr_local, helper_key.layout_idx, list_plan, 1),
         .list_free => |list_plan| try self.emitBuiltinInternalListRc(.free, value_ptr_local, helper_key.layout_idx, list_plan, 1),
         .box_incref => {

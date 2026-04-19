@@ -548,6 +548,72 @@ pub fn CallBuilder(comptime EmitType: type) type {
             }
         }
 
+        /// Deferred arg sources that read through a base register cannot safely keep
+        /// that register live if it is also one of the destination parameter regs.
+        /// Materialize those sources into caller-frame slots first so later parallel
+        /// moves read from stable memory instead of a clobbered base register.
+        fn stabilizeDeferredMemorySources(self: *Self) !void {
+            if (self.reg_arg_count == 0) return;
+
+            var has_dst_reg = [_]bool{false} ** 32;
+            for (self.reg_args[0..self.reg_arg_count]) |ra| {
+                has_dst_reg[@intFromEnum(CC_EMIT.PARAM_REGS[ra.dst_index])] = true;
+            }
+
+            for (self.reg_args[0..self.reg_arg_count]) |*ra| {
+                switch (ra.src) {
+                    .from_mem => |mem| {
+                        if (!has_dst_reg[@intFromEnum(mem.base)]) continue;
+
+                        const save_offset = self.allocCallerTempSlot();
+                        if (comptime is_aarch64) {
+                            try self.emit.ldrRegMemSoff(.w64, CC_EMIT.SCRATCH_REG, mem.base, mem.offset);
+                            try self.emit.strRegMemSoff(.w64, CC_EMIT.SCRATCH_REG, CC_EMIT.BASE_PTR, save_offset);
+                        } else {
+                            try self.emit.movRegMem(.w64, CC_EMIT.SCRATCH_REG, mem.base, mem.offset);
+                            try self.emit.movMemReg(.w64, CC_EMIT.BASE_PTR, save_offset, CC_EMIT.SCRATCH_REG);
+                        }
+                        ra.src = .{ .from_mem = .{ .base = CC_EMIT.BASE_PTR, .offset = save_offset } };
+                    },
+                    .from_lea => |lea| {
+                        if (!has_dst_reg[@intFromEnum(lea.base)]) continue;
+
+                        const save_offset = self.allocCallerTempSlot();
+                        if (comptime is_aarch64) {
+                            if (lea.offset >= 0 and lea.offset <= 4095) {
+                                try self.emit.addRegRegImm12(.w64, CC_EMIT.SCRATCH_REG, lea.base, @intCast(lea.offset));
+                            } else if (lea.offset < 0 and -lea.offset <= 4095) {
+                                try self.emit.subRegRegImm12(.w64, CC_EMIT.SCRATCH_REG, lea.base, @intCast(-lea.offset));
+                            } else {
+                                try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, @bitCast(@as(i64, lea.offset)));
+                                try self.emit.addRegRegReg(.w64, CC_EMIT.SCRATCH_REG, lea.base, CC_EMIT.SCRATCH_REG);
+                            }
+                        } else {
+                            try self.emit.leaRegMem(CC_EMIT.SCRATCH_REG, lea.base, lea.offset);
+                        }
+                        if (comptime is_aarch64) {
+                            try self.emit.strRegMemSoff(.w64, CC_EMIT.SCRATCH_REG, CC_EMIT.BASE_PTR, save_offset);
+                        } else {
+                            try self.emit.movMemReg(.w64, CC_EMIT.BASE_PTR, save_offset, CC_EMIT.SCRATCH_REG);
+                        }
+                        ra.src = .{ .from_mem = .{ .base = CC_EMIT.BASE_PTR, .offset = save_offset } };
+                    },
+                    else => {},
+                }
+            }
+        }
+
+        fn allocCallerTempSlot(self: *Self) i32 {
+            if (comptime is_aarch64) {
+                const offset = self.stack_offset.*;
+                self.stack_offset.* += 16;
+                return offset;
+            } else {
+                self.stack_offset.* -= 8;
+                return self.stack_offset.*;
+            }
+        }
+
         /// Resolve deferred register arguments using Rideau-Serpette-Leroy parallel move algorithm.
         /// This handles arbitrary permutations of param registers without clobbering,
         /// using SCRATCH_REG to break cycles. At most one scratch save per cycle.
@@ -660,6 +726,8 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 }
             }
 
+            try self.stabilizeDeferredMemorySources();
+
             // Resolve deferred register args AFTER stack args are stored,
             // so the parallel move doesn't clobber stack arg source registers.
             try self.emitDeferredRegArgs();
@@ -751,6 +819,8 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     try self.emitStackArgAarch64(arg, @intCast(i));
                 }
             }
+
+            try self.stabilizeDeferredMemorySources();
 
             // Resolve deferred register args AFTER stack args are stored
             try self.emitDeferredRegArgs();

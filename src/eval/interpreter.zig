@@ -2618,10 +2618,16 @@ pub const Interpreter = struct {
                 trace_rc.log("str_free: bytes=0x{x} len={d} cap={d}", .{ @intFromPtr(rs.bytes), rs.length, rs.capacity_or_alloc_ptr });
                 rs.decref(&self.roc_ops);
             },
-            .list_incref => {
+            .list_incref => |list_plan| {
                 const rl = valueToRocList(val);
-                const has_child = false; // incref doesn't recurse into elements
-                trace_rc.log("list_incref: bytes=0x{x} len={d} cap={d} count={d}", .{ @intFromPtr(rl.bytes), rl.len(), rl.capacity_or_alloc_ptr, count });
+                const has_child = list_plan.child != null;
+                trace_rc.log("list_incref: bytes=0x{x} len={d} cap={d} count={d} has_child={any}", .{
+                    @intFromPtr(rl.bytes),
+                    rl.len(),
+                    rl.capacity_or_alloc_ptr,
+                    count,
+                    has_child,
+                });
                 rl.incref(@intCast(count), has_child, &self.roc_ops);
             },
             .list_decref => |list_plan| {

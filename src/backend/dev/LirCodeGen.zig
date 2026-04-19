@@ -4168,18 +4168,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const key = localKey(local);
             const local_layout = self.localLayout(local);
             if (self.local_locations.get(key)) |stable_loc| {
-                if (builtin.mode == .Debug and self.current_proc_name != null and ((self.current_proc_name.?.raw() == 0 and (@intFromEnum(local) == 27 or @intFromEnum(local) == 29 or @intFromEnum(local) == 31)) or (self.current_proc_name.?.raw() == 2110 and (@intFromEnum(local) == 2 or @intFromEnum(local) == 8 or @intFromEnum(local) == 9)))) {
-                    std.debug.print(
-                        "dev rebind local={d} stable={any} incoming={any} stmt_id={d} stmt={s}\\n",
-                        .{
-                            @intFromEnum(local),
-                            stable_loc,
-                            value_loc,
-                            if (self.current_stmt_id) |stmt_id| @intFromEnum(stmt_id) else std.math.maxInt(u32),
-                            if (self.current_stmt_id) |stmt_id| @tagName(self.store.getCFStmt(stmt_id)) else "none",
-                        },
-                    );
-                }
                 try self.storeValueIntoStableLocation(stable_loc, value_loc, local_layout);
                 try self.emitDebugAssertValidBoxLocal(local, stable_loc);
                 try self.emitDebugAssertValidStrLocal(local, stable_loc);
@@ -4187,18 +4175,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             const stable_loc = try self.materializeValueToStackForLayout(value_loc, local_layout);
-            if (builtin.mode == .Debug and self.current_proc_name != null and ((self.current_proc_name.?.raw() == 0 and (@intFromEnum(local) == 27 or @intFromEnum(local) == 29 or @intFromEnum(local) == 31)) or (self.current_proc_name.?.raw() == 2110 and (@intFromEnum(local) == 2 or @intFromEnum(local) == 8 or @intFromEnum(local) == 9)))) {
-                std.debug.print(
-                    "dev bind local={d} stable={any} incoming={any} stmt_id={d} stmt={s}\\n",
-                    .{
-                        @intFromEnum(local),
-                        stable_loc,
-                        value_loc,
-                        if (self.current_stmt_id) |stmt_id| @intFromEnum(stmt_id) else std.math.maxInt(u32),
-                        if (self.current_stmt_id) |stmt_id| @tagName(self.store.getCFStmt(stmt_id)) else "none",
-                    },
-                );
-            }
             try self.local_locations.put(key, stable_loc);
             try self.emitDebugAssertValidBoxLocal(local, stable_loc);
             try self.emitDebugAssertValidStrLocal(local, stable_loc);
@@ -4760,18 +4736,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return switch (op) {
                 .local => |local| blk: {
                     const raw_loc = try self.emitValueLocal(local);
-                    if (builtin.mode == .Debug and self.current_proc_name != null and self.current_proc_name.?.raw() == 2110 and @intFromEnum(target_layout) == 25) {
-                        std.debug.print(
-                            "dev ref local proc=2110 stmt={d} source_local={d} source_layout={d} target_layout={d} raw_loc={any}\n",
-                            .{
-                                if (self.current_stmt_id) |stmt_id| @intFromEnum(stmt_id) else std.math.maxInt(u32),
-                                @intFromEnum(local),
-                                @intFromEnum(self.localLayout(local)),
-                                @intFromEnum(target_layout),
-                                raw_loc,
-                            },
-                        );
-                    }
                     break :blk self.requireExactValueLocationToLayout(
                         raw_loc,
                         self.localLayout(local),
@@ -7802,21 +7766,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!void {
             const helper_key = RcHelperKey{ .op = op, .layout_idx = layout_idx };
             if (self.layout_store.rcHelperPlan(helper_key) == .noop) return;
-            if (builtin.mode == .Debug) {
-                const plan = self.layout_store.rcHelperPlan(helper_key);
-                if (plan == .list_incref) {
-                    std.debug.print(
-                        "dev emit rc helper proc={d} stmt={d} op={s} layout_idx={d} base_offset={d} plan=list_incref\\n",
-                        .{
-                            if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64),
-                            if (self.current_stmt_id) |stmt_id| @intFromEnum(stmt_id) else std.math.maxInt(u32),
-                            @tagName(op),
-                            @intFromEnum(layout_idx),
-                            base_offset,
-                        },
-                    );
-                }
-            }
 
             const ptr_slot = self.codegen.allocStackSlot(8);
             const roc_ops_slot = self.codegen.allocStackSlot(8);
@@ -7910,36 +7859,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const code_offset = try self.compileBuiltinInternalRcHelper(helper_key);
             try self.emitInternalCodeAddress(code_offset, callback_reg);
             return callback_reg;
-        }
-
-        fn loadListDataPtrForRcFromValuePtr(
-            self: *Self,
-            value_ptr_reg: GeneralReg,
-            out_reg: GeneralReg,
-        ) Allocator.Error!void {
-            try self.emitLoad(.w64, out_reg, value_ptr_reg, 0);
-
-            const cap_reg = try self.allocTempGeneral();
-            defer self.codegen.freeGeneral(cap_reg);
-            try self.emitLoad(.w64, cap_reg, value_ptr_reg, 16);
-
-            const slice_patch = blk: {
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.cmpRegImm12(.w64, cap_reg, 0);
-                    const patch_loc = self.codegen.currentOffset();
-                    try self.codegen.emit.bcond(.mi, 0);
-                    break :blk patch_loc;
-                } else {
-                    try self.codegen.emit.testRegReg(.w64, cap_reg, cap_reg);
-                    break :blk try self.codegen.emitCondJump(.sign);
-                }
-            };
-
-            const done_patch = try self.codegen.emitJump();
-            self.codegen.patchJump(slice_patch, self.codegen.currentOffset());
-            try self.emitMovRegReg(out_reg, cap_reg);
-            try self.emitShlImm(.w64, out_reg, out_reg, 1);
-            self.codegen.patchJump(done_patch, self.codegen.currentOffset());
         }
 
         fn loadStrDataPtrForRcFromValuePtr(
@@ -8054,6 +7973,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn emitBuiltinInternalRcHelperListIncref(
             self: *Self,
+            list_plan: layout.RcListPlan,
             ptr_slot: i32,
             count_slot: i32,
             roc_ops_slot: i32,
@@ -8067,6 +7987,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addMemArg(value_ptr_reg, 8);
             try builder.addMemArg(value_ptr_reg, 16);
             try builder.addMemArg(frame_ptr, count_slot);
+            try builder.addImmArg(@intFromBool(list_plan.child != null));
             try builder.addMemArg(frame_ptr, roc_ops_slot);
             try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_list_incref), .list_incref);
         }
@@ -8179,7 +8100,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .str_incref => try self.emitBuiltinInternalRcHelperStrIncref(ptr_slot, count_slot.?, roc_ops_slot),
                 .str_decref => try self.emitBuiltinInternalRcHelperStrDrop(.decref_data_ptr, @intFromPtr(&decrefDataPtrC), ptr_slot, roc_ops_slot),
                 .str_free => try self.emitBuiltinInternalRcHelperStrDrop(.free_data_ptr, @intFromPtr(&freeDataPtrC), ptr_slot, roc_ops_slot),
-                .list_incref => try self.emitBuiltinInternalRcHelperListIncref(ptr_slot, count_slot.?, roc_ops_slot),
+                .list_incref => |list_plan| try self.emitBuiltinInternalRcHelperListIncref(list_plan, ptr_slot, count_slot.?, roc_ops_slot),
                 .list_decref => |list_plan| try self.emitBuiltinInternalRcHelperListDrop(
                     .list_decref_with,
                     @intFromPtr(&dev_wrappers.roc_builtins_list_decref_with),
@@ -8459,28 +8380,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return final_offset;
         }
 
-        /// Given a field's stack base offset, size, and layout index, return the appropriate ValueLocation.
-        fn fieldLocationFromLayout(self: *Self, field_base: i32, field_size: u32, field_layout_idx: layout.Idx) ValueLocation {
-            if (field_layout_idx == .str) {
-                return .{ .stack_str = field_base };
-            }
-            if (field_layout_idx == .i128 or field_layout_idx == .u128 or field_layout_idx == .dec) {
-                return .{ .stack_i128 = field_base };
-            }
-            {
-                const ls = self.layout_store;
-                if (@intFromEnum(field_layout_idx) < ls.layouts.len()) {
-                    const field_layout = ls.getLayout(field_layout_idx);
-                    if (field_layout.tag == .list or field_layout.tag == .list_of_zst) {
-                        return .{ .list_stack = .{
-                            .struct_offset = field_base,
-                            .data_offset = 0,
-                            .num_elements = 0,
-                        } };
-                    }
-                }
-            }
-            return .{ .stack = .{ .offset = field_base, .size = ValueSize.fromByteCount(field_size) } };
+        /// Given a field's stack base offset and semantic layout index, return the appropriate ValueLocation.
+        fn fieldLocationFromLayout(self: *Self, field_base: i32, _: u32, field_layout_idx: layout.Idx) ValueLocation {
+            return switch (field_layout_idx) {
+                .zst => .{ .immediate_i64 = 0 },
+                else => self.stackLocationForLayout(field_layout_idx, field_base),
+            };
         }
 
         /// Generate code for struct field access (records and tuples).
@@ -8889,7 +8794,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.copyBytesToStackOffset(field_base, field_loc, field_size);
                     }
 
-                    return .{ .stack = .{ .offset = base_offset, .size = ValueSize.fromByteCount(@min(stack_size, 8)) } };
+                    return self.stackLocationForLayout(s.target_layout, base_offset);
                 },
                 else => {
                     if (builtin.mode == .Debug) {
@@ -8956,7 +8861,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const disc_size = tu_data.discriminant_size;
             try self.storeDiscriminant(base_offset + @as(i32, @intCast(disc_offset)), tag.discriminant, disc_size);
 
-            return .{ .stack = .{ .offset = base_offset } };
+            return self.stackLocationForLayout(tag.target_layout, base_offset);
         }
 
         fn generateTag(self: *Self, tag: anytype) Allocator.Error!ValueLocation {
@@ -9081,7 +8986,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const disc_size = tu_data.discriminant_size;
             try self.storeDiscriminant(base_offset + @as(i32, @intCast(disc_offset)), tag.discriminant, disc_size);
 
-            return .{ .stack = .{ .offset = base_offset } };
+            return self.stackLocationForLayout(tag.target_layout, base_offset);
         }
 
         fn compiledProcForId(
@@ -9103,21 +9008,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const proc_spec = self.store.getProcSpec(call.proc);
             const arg_refs = self.store.getLocalSpan(call.args);
             const param_refs = self.store.getLocalSpan(proc_spec.args);
-            if (builtin.mode == .Debug and proc_spec.name.raw() == 2110) {
-                std.debug.print("dev call->2110 args={any} params={any}\\n", .{ arg_refs, param_refs });
-                for (arg_refs, param_refs, 0..) |arg_ref, param_ref, i| {
-                    std.debug.print(
-                        "dev call->2110 arg[{d}] local={d} layout={d} -> param={d} layout={d}\\n",
-                        .{
-                            i,
-                            @intFromEnum(arg_ref),
-                            @intFromEnum(self.localLayout(arg_ref)),
-                            @intFromEnum(param_ref),
-                            @intFromEnum(self.localLayout(param_ref)),
-                        },
-                    );
-                }
-            }
             var arg_locs = try self.allocator.alloc(ValueLocation, arg_refs.len);
             defer self.allocator.free(arg_locs);
             var arg_layouts = try self.allocator.alloc(layout.Idx, arg_refs.len);
@@ -9136,12 +9026,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const raw_arg_loc = try self.emitValueLocal(arg_ref);
                 arg_locs[i] = self.requireExactValueLocationToLayout(raw_arg_loc, actual_layout, expected_layout, "direct_call.arg");
                 arg_layouts[i] = expected_layout;
-                if (builtin.mode == .Debug and proc_spec.name.raw() == 2110) {
-                    std.debug.print(
-                        "dev call->2110 arg_loc[{d}] raw={any} exact={any}\\n",
-                        .{ i, raw_arg_loc, arg_locs[i] },
-                    );
-                }
             }
 
             if (builtin.mode == .Debug and proc_spec.ret_layout != call.ret_layout) {
@@ -9488,17 +9372,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn generateCallToCompiledProc(self: *Self, proc: CompiledProc, args: []const ValueLocation, arg_layouts: []const layout.Idx, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
             std.debug.assert(args.len == arg_layouts.len);
             const needs_ret_ptr = self.needsInternalReturnByPointer(ret_layout);
-            if (builtin.mode == .Debug and (proc.name.raw() == 2110 or proc.name.raw() == 2113 or proc.name.raw() == 0)) {
-                std.debug.print(
-                    "dev call current={d} target={d} ret_layout={} needs_ret_ptr={}\\n",
-                    .{
-                        if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64),
-                        proc.name.raw(),
-                        @intFromEnum(ret_layout),
-                        needs_ret_ptr,
-                    },
-                );
-            }
             const ret_buffer_offset = if (needs_ret_ptr) blk: {
                 const runtime_ret_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
                 const size = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_ret_layout)).size;
@@ -11051,31 +10924,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const value_loc = try self.generateRcOperandValue(rc_op.value, rc_op.layout_idx);
             const ls = self.layout_store;
             const layout_val = ls.getLayout(rc_op.layout_idx);
-            if (builtin.mode == .Debug and self.current_proc_name != null and self.current_proc_name.?.raw() == 2110 and self.current_stmt_id != null and @intFromEnum(self.current_stmt_id.?) == 126) {
-                std.debug.print(
-                    "dev targeted incref proc=2110 stmt=126 local={d} layout_idx={d} value_loc={any}\n",
-                    .{ @intFromEnum(rc_op.value), @intFromEnum(rc_op.layout_idx), value_loc },
-                );
-            }
-            if (builtin.mode == .Debug) {
-                switch (layout_val.tag) {
-                    .list, .list_of_zst => switch (value_loc) {
-                        .stack_str => |off| std.debug.print(
-                            "dev rc mismatch incref local={d} layout_idx={d} layout_tag={} value_loc=stack_str({d})\n",
-                            .{ @intFromEnum(rc_op.value), @intFromEnum(rc_op.layout_idx), layout_val.tag, off },
-                        ),
-                        else => {},
-                    },
-                    .scalar => if (layout_val.data.scalar.tag == .str) switch (value_loc) {
-                        .list_stack => |info| std.debug.print(
-                            "dev rc mismatch incref local={d} layout_idx={d} layout_tag={} value_loc=list_stack({d})\n",
-                            .{ @intFromEnum(rc_op.value), @intFromEnum(rc_op.layout_idx), layout_val.tag, info.struct_offset },
-                        ),
-                        else => {},
-                    },
-                    else => {},
-                }
-            }
             if (!explicitRcLayoutValContainsRefcounted(ls, "dev.generateIncref.layout_rc", layout_val)) return value_loc;
 
             switch (layout_val.tag) {
@@ -11095,25 +10943,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const value_loc = try self.generateRcOperandValue(rc_op.value, rc_op.layout_idx);
             const ls = self.layout_store;
             const layout_val = ls.getLayout(rc_op.layout_idx);
-            if (builtin.mode == .Debug) {
-                switch (layout_val.tag) {
-                    .list, .list_of_zst => switch (value_loc) {
-                        .stack_str => |off| std.debug.print(
-                            "dev rc mismatch decref local={d} layout_idx={d} layout_tag={} value_loc=stack_str({d})\n",
-                            .{ @intFromEnum(rc_op.value), @intFromEnum(rc_op.layout_idx), layout_val.tag, off },
-                        ),
-                        else => {},
-                    },
-                    .scalar => if (layout_val.data.scalar.tag == .str) switch (value_loc) {
-                        .list_stack => |info| std.debug.print(
-                            "dev rc mismatch decref local={d} layout_idx={d} layout_tag={} value_loc=list_stack({d})\n",
-                            .{ @intFromEnum(rc_op.value), @intFromEnum(rc_op.layout_idx), layout_val.tag, info.struct_offset },
-                        ),
-                        else => {},
-                    },
-                    else => {},
-                }
-            }
             if (!explicitRcLayoutValContainsRefcounted(ls, "dev.generateDecref.layout_rc", layout_val)) return value_loc;
 
             if (layout_val.tag == .closure) {
@@ -11396,102 +11225,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             const needs_ret_ptr = self.needsInternalReturnByPointer(proc.ret_layout);
-            if (builtin.mode == .Debug and (proc.name.raw() == 2110 or proc.name.raw() == 2113 or proc.name.raw() == 0)) {
-                std.debug.print(
-                    "dev proc name={d} ret_layout={} needs_ret_ptr={}\\n",
-                    .{ proc.name.raw(), @intFromEnum(proc.ret_layout), needs_ret_ptr },
-                );
-                if (proc.name.raw() == 2110) {
-                    const stmt_124: CFStmtId = @enumFromInt(124);
-                    const stmt_125: CFStmtId = @enumFromInt(125);
-                    const stmt_126: CFStmtId = @enumFromInt(126);
-                    const proc_args = self.store.getLocalSpan(proc.args);
-                    const stmt124 = self.store.getCFStmt(stmt_124).assign_ref;
-                    const stmt125 = self.store.getCFStmt(stmt_125).assign_ref;
-                    const stmt126 = self.store.getCFStmt(stmt_126).incref;
-                    const layout25 = self.layout_store.getLayout(@enumFromInt(25));
-                    const layout27 = self.layout_store.getLayout(@enumFromInt(27));
-                    std.debug.print("dev proc 2110 layout25 tag={s}\\n", .{@tagName(layout25.tag)});
-                    std.debug.print("dev proc 2110 layout27 tag={s}\\n", .{@tagName(layout27.tag)});
-                    if (layout27.tag == .struct_) {
-                        const struct_idx = layout27.data.struct_.idx;
-                        const struct_data = self.layout_store.getStructData(struct_idx);
-                        std.debug.print("dev proc 2110 layout27 struct size={d} fields={d}\\n", .{ struct_data.size, struct_data.fields.count });
-                        var field_i: u32 = 0;
-                        while (field_i < struct_data.fields.count) : (field_i += 1) {
-                            const field_layout_idx = self.layout_store.getStructFieldLayout(struct_idx, @intCast(field_i));
-                            const field_offset = self.layout_store.getStructFieldOffset(struct_idx, @intCast(field_i));
-                            const field_layout = self.layout_store.getLayout(field_layout_idx);
-                            std.debug.print(
-                                "dev proc 2110 layout27 field[{d}] offset={d} layout={d} tag={s}\\n",
-                                .{ field_i, field_offset, @intFromEnum(field_layout_idx), @tagName(field_layout.tag) },
-                            );
-                        }
-                    }
-                    std.debug.print("dev proc 2110 args={any}\\n", .{proc_args});
-                    std.debug.print("dev proc 2110 stmt124 target={d} next={d}\\n", .{ @intFromEnum(stmt124.target), @intFromEnum(stmt124.next) });
-                    switch (stmt124.op) {
-                        .field => |field| std.debug.print(
-                            "dev proc 2110 stmt124 field source={d} field_idx={d} source_layout={d} target_layout={d}\\n",
-                            .{
-                                @intFromEnum(field.source),
-                                field.field_idx,
-                                @intFromEnum(self.localLayout(field.source)),
-                                @intFromEnum(self.localLayout(stmt124.target)),
-                            },
-                        ),
-                        else => std.debug.print("dev proc 2110 stmt124 non-field op={s}\\n", .{@tagName(stmt124.op)}),
-                    }
-                    std.debug.print(
-                        "dev proc 2110 stmt125 target={d} next={d} source_local={d} source_layout={d} target_layout={d}\\n",
-                        .{
-                            @intFromEnum(stmt125.target),
-                            @intFromEnum(stmt125.next),
-                            @intFromEnum(stmt125.op.local),
-                            @intFromEnum(self.localLayout(stmt125.op.local)),
-                            @intFromEnum(self.localLayout(stmt125.target)),
-                        },
-                    );
-                    std.debug.print(
-                        "dev proc 2110 stmt126 value={d} count={d} next={d} layout={d}\\n",
-                        .{
-                            @intFromEnum(stmt126.value),
-                            stmt126.count,
-                            @intFromEnum(stmt126.next),
-                            @intFromEnum(self.localLayout(stmt126.value)),
-                        },
-                    );
-                }
-                if (proc.name.raw() == 0) {
-                    const stmt_168: CFStmtId = @enumFromInt(168);
-                    const stmt_172: CFStmtId = @enumFromInt(172);
-                    const stmt_176: CFStmtId = @enumFromInt(176);
-                    const stmt168 = self.store.getCFStmt(stmt_168).assign_call;
-                    const stmt172 = self.store.getCFStmt(stmt_172).assign_ref;
-                    const stmt176 = self.store.getCFStmt(stmt_176).assign_call;
-                    std.debug.print(
-                        "dev proc 0 stmt168 target={d} proc={d} next={d}\\n",
-                        .{ @intFromEnum(stmt168.target), @intFromEnum(stmt168.proc), @intFromEnum(stmt168.next) },
-                    );
-                    std.debug.print("dev proc 0 stmt172 target={d} next={d}\\n", .{ @intFromEnum(stmt172.target), @intFromEnum(stmt172.next) });
-                    switch (stmt172.op) {
-                        .field => |field| std.debug.print(
-                            "dev proc 0 stmt172 field source={d} field_idx={d} source_layout={d} target_layout={d}\\n",
-                            .{
-                                @intFromEnum(field.source),
-                                field.field_idx,
-                                @intFromEnum(self.localLayout(field.source)),
-                                @intFromEnum(self.localLayout(stmt172.target)),
-                            },
-                        ),
-                        else => std.debug.print("dev proc 0 stmt172 non-field op={s}\\n", .{@tagName(stmt172.op)}),
-                    }
-                    std.debug.print(
-                        "dev proc 0 stmt176 target={d} proc={d} next={d}\\n",
-                        .{ @intFromEnum(stmt176.target), @intFromEnum(stmt176.proc), @intFromEnum(stmt176.next) },
-                    );
-                }
-            }
             if (needs_ret_ptr) {
                 self.ret_ptr_slot = self.codegen.allocStackSlot(8);
                 const first_reg = self.getArgumentRegister(0);
@@ -12193,9 +11926,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.emitStore(.w64, frame_ptr, stack_offset + off, temp_reg);
                     }
                     const stable_loc = self.stackLocationForLayout(self.localLayout(local), stack_offset);
-                    if (builtin.mode == .Debug and self.current_proc_name != null and self.current_proc_name.?.raw() == 2110 and @intFromEnum(local) == 2) {
-                        std.debug.print("dev bind param local=2 pbp stable={any}\\n", .{stable_loc});
-                    }
                     try self.local_locations.put(localKey(local), stable_loc);
                     reg_idx += 1;
                     continue;
@@ -12217,9 +11947,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emitStoreStack(.w64, stack_offset + @as(i32, ri) * 8, arg_reg);
                     }
                     const stable_loc = self.stackLocationForLayout(self.localLayout(local), stack_offset);
-                    if (builtin.mode == .Debug and self.current_proc_name != null and self.current_proc_name.?.raw() == 2110 and @intFromEnum(local) == 2) {
-                        std.debug.print("dev bind param local=2 reg stable={any}\\n", .{stable_loc});
-                    }
                     try self.local_locations.put(localKey(local), stable_loc);
                     reg_idx += num_regs;
                 } else {
@@ -12227,9 +11954,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const stack_offset = self.codegen.allocStackSlot(@intCast(size));
                     try self.copyFromCallerStack(stack_arg_offset, stack_offset, num_regs);
                     const stable_loc = self.stackLocationForLayout(self.localLayout(local), stack_offset);
-                    if (builtin.mode == .Debug and self.current_proc_name != null and self.current_proc_name.?.raw() == 2110 and @intFromEnum(local) == 2) {
-                        std.debug.print("dev bind param local=2 stack stable={any}\\n", .{stable_loc});
-                    }
                     try self.local_locations.put(localKey(local), stable_loc);
                     stack_arg_offset += @as(i32, num_regs) * 8;
                     reg_idx = max_arg_regs;

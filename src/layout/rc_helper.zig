@@ -75,7 +75,7 @@ pub const Plan = union(enum) {
     str_incref,
     str_decref,
     str_free,
-    list_incref,
+    list_incref: ListPlan,
     list_decref: ListPlan,
     list_free: ListPlan,
     box_incref,
@@ -116,7 +116,7 @@ pub const Resolver = struct {
             else
                 .noop,
             .list, .list_of_zst => switch (helper_key.op) {
-                .incref => .list_incref,
+                .incref => .{ .list_incref = self.listPlan(helper_key.layout_idx) },
                 .decref => .{ .list_decref = self.listPlan(helper_key.layout_idx) },
                 .free => .{ .list_free = self.listPlan(helper_key.layout_idx) },
             },
