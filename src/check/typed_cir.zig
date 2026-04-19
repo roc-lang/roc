@@ -371,17 +371,17 @@ pub const Module = struct {
         return self.env().methodCallFnVar(idx, method_name, .method_call);
     }
 
-    pub fn methodCallResolvedTarget(
+    pub fn methodCallResolvedTargets(
         self: @This(),
         expr_idx: CIR.Expr.Idx,
         origin: types.StaticDispatchConstraint.Origin,
-    ) ?ResolvedMethodTarget {
+    ) []const ResolvedMethodTarget {
         for (self.env().method_call_fns.items.items) |entry| {
             if (entry.expr_idx == expr_idx and entry.origin == origin) {
-                return entry.resolved_target;
+                return self.env().methodCallResolvedTargets(entry.resolved_targets);
             }
         }
-        return null;
+        return &.{};
     }
 
     /// Return the checked function var associated with a desugared binop dispatch, if any.

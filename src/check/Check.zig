@@ -6215,6 +6215,38 @@ fn getNominalOriginEnv(self: *Self, nominal_type: types_mod.NominalType) *const 
     );
 }
 
+fn currentConstraintSiteModule(self: *Self) Ident.Idx {
+    if (!self.cir.qualified_module_ident.isNone()) return self.cir.qualified_module_ident;
+    return self.cir.module_name;
+}
+
+fn methodCallOwnerEnv(self: *Self, site_module_name: ?Ident.Idx) *ModuleEnv {
+    const module_name = site_module_name orelse return self.cir;
+    if (module_name.eql(self.currentConstraintSiteModule())) return self.cir;
+
+    if (module_name.eql(self.builtin_ctx.module_name)) {
+        if (self.builtin_ctx.builtin_module) |builtin_env| {
+            return @constCast(builtin_env);
+        }
+        return self.cir;
+    }
+
+    for (self.imported_modules) |imported_env| {
+        const imported_ident = if (!imported_env.qualified_module_ident.isNone())
+            imported_env.qualified_module_ident
+        else
+            imported_env.module_name;
+        if (module_name.eql(imported_ident)) {
+            return @constCast(imported_env);
+        }
+    }
+
+    std.debug.panic(
+        "Check invariant violated: missing owner env for method-call site module {s}",
+        .{self.cir.getIdent(module_name)},
+    );
+}
+
 // binop + unary op exprs //
 
 /// Create a static dispatch fn like: `lhs, rhs -> ret` and assert the
@@ -6247,6 +6279,7 @@ fn mkBinopConstraint(
         .fn_name = method_name,
         .fn_var = constraint_fn_var,
         .site_expr_var = if (binop_expr_idx) |idx| ModuleEnv.varFrom(idx) else null,
+        .site_module_name = if (binop_expr_idx != null) self.currentConstraintSiteModule() else null,
         .origin = .desugared_binop,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
@@ -6293,6 +6326,7 @@ fn mkUnaryOp(
         .fn_name = method_name,
         .fn_var = constraint_fn_var,
         .site_expr_var = if (unary_expr_idx) |idx| ModuleEnv.varFrom(idx) else null,
+        .site_module_name = if (unary_expr_idx != null) self.currentConstraintSiteModule() else null,
         .origin = .desugared_unaryop,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
@@ -6336,6 +6370,7 @@ fn mkMethodCallConstraint(
         .fn_name = method_name,
         .fn_var = constraint_fn_var,
         .site_expr_var = ModuleEnv.varFrom(method_expr_idx),
+        .site_module_name = self.currentConstraintSiteModule(),
         .origin = .method_call,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
@@ -6371,6 +6406,7 @@ fn mkTypeMethodCallConstraint(
         .fn_name = method_name,
         .fn_var = constraint_fn_var,
         .site_expr_var = ModuleEnv.varFrom(method_expr_idx),
+        .site_module_name = self.currentConstraintSiteModule(),
         .origin = .method_call,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
@@ -6393,10 +6429,25 @@ fn recordResolvedMethodCall(
 ) std.mem.Allocator.Error!void {
     const site_expr_var = constraint.site_expr_var orelse return;
     const expr_idx: CIR.Expr.Idx = @enumFromInt(@intFromEnum(site_expr_var));
-    self.cir.setMethodCallFnVar(expr_idx, constraint.fn_name, constraint.origin, resolved_method_var);
+    const owner_env = self.methodCallOwnerEnv(constraint.site_module_name);
+    owner_env.setMethodCallFnVar(expr_idx, constraint.fn_name, constraint.origin, resolved_method_var);
     if (resolved_target) |target| {
-        self.cir.setMethodCallResolvedTarget(expr_idx, constraint.fn_name, constraint.origin, target);
+        try owner_env.setMethodCallResolvedTarget(expr_idx, constraint.fn_name, constraint.origin, target);
     }
+}
+
+fn freezeResolvedMethodCallVar(
+    self: *Self,
+    resolved_method_var: Var,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!Var {
+    return try self.instantiateVarOrphan(
+        resolved_method_var,
+        env,
+        env.rank(),
+        .{ .explicit = region },
+    );
 }
 
 fn rewriteImplicitEqMethodCallAsStructuralEq(
@@ -7152,10 +7203,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
 
                     // Unwrap the constraint type
                     const constraint_fn = constraint_fn_resolved.unwrapFunc() orelse {
-                        try self.recordResolvedMethodCall(constraint, method_var, .{
-                            .module_name = original_module_ident,
-                            .def_idx = def_idx,
-                        });
                         _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                             .method_type = .{
                                 .constraint_var = constraint.fn_var,
@@ -7163,14 +7210,18 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 .method_name = constraint.fn_name,
                             },
                         });
+                        try self.recordResolvedMethodCall(
+                            constraint,
+                            try self.freezeResolvedMethodCallVar(method_var, env, region),
+                            .{
+                                .module_name = original_module_ident,
+                                .def_idx = def_idx,
+                            },
+                        );
                         try self.unifyWith(deferred_constraint.var_, .err, env);
                         continue;
                     };
 
-                    try self.recordResolvedMethodCall(constraint, method_var, .{
-                        .module_name = original_module_ident,
-                        .def_idx = def_idx,
-                    });
                     const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                         .method_type = .{
                             .constraint_var = deferred_constraint.var_,
@@ -7178,6 +7229,14 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             .method_name = constraint.fn_name,
                         },
                     });
+                    try self.recordResolvedMethodCall(
+                        constraint,
+                        try self.freezeResolvedMethodCallVar(method_var, env, region),
+                        .{
+                            .module_name = original_module_ident,
+                            .def_idx = def_idx,
+                        },
+                    );
                     // If there was a problem, then ensure the error gets propagated
                     // to all args and return types.
                     if (fn_result.isProblem()) {
@@ -7368,10 +7427,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     };
 
                     const constraint_fn = constraint_fn_resolved.unwrapFunc() orelse {
-                        try self.recordResolvedMethodCall(constraint, method_var, .{
-                            .module_name = original_module_ident,
-                            .def_idx = def_idx,
-                        });
                         _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                             .method_type = .{
                                 .constraint_var = constraint.fn_var,
@@ -7379,14 +7434,18 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 .method_name = constraint.fn_name,
                             },
                         });
+                        try self.recordResolvedMethodCall(
+                            constraint,
+                            try self.freezeResolvedMethodCallVar(method_var, env, region),
+                            .{
+                                .module_name = original_module_ident,
+                                .def_idx = def_idx,
+                            },
+                        );
                         try self.unifyWith(deferred_constraint.var_, .err, env);
                         continue;
                     };
 
-                    try self.recordResolvedMethodCall(constraint, method_var, .{
-                        .module_name = original_module_ident,
-                        .def_idx = def_idx,
-                    });
                     const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                         .method_type = .{
                             .constraint_var = deferred_constraint.var_,
@@ -7394,6 +7453,14 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             .method_name = constraint.fn_name,
                         },
                     });
+                    try self.recordResolvedMethodCall(
+                        constraint,
+                        try self.freezeResolvedMethodCallVar(method_var, env, region),
+                        .{
+                            .module_name = original_module_ident,
+                            .def_idx = def_idx,
+                        },
+                    );
                     if (fn_result.isProblem()) {
                         var args_iter = self.types.iterVars(constraint_fn.args);
                         while (args_iter.next()) |arg| {

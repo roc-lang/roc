@@ -367,11 +367,11 @@ const Lowerer = struct {
                 .rhs = try self.instantiateExpr(eq.rhs),
             } },
             .method_call => |method_call| .{ .method_call = .{
-                .receiver = try self.instantiateExpr(method_call.receiver),
-                .method_fn_ty = try self.instantiateType(method_call.method_fn_ty),
-                .method_name = method_call.method_name,
-                .args = try self.instantiateExprSpan(method_call.args),
-            } },
+                    .receiver = try self.instantiateExpr(method_call.receiver),
+                    .method_fn_ty = try self.instantiateType(method_call.method_fn_ty),
+                    .method_name = method_call.method_name,
+                    .args = try self.instantiateExprSpan(method_call.args),
+                } },
             .type_method_call => |method_call| .{ .type_method_call = .{
                 .dispatcher_ty = try self.instantiateType(method_call.dispatcher_ty),
                 .method_fn_ty = try self.instantiateType(method_call.method_fn_ty),
@@ -659,7 +659,7 @@ const Lowerer = struct {
         return placeholder;
     }
 
-    fn instantiateExactCallableLset(self: *Lowerer, symbols: []const LiftedType.Symbol) std.mem.Allocator.Error!TypeVarId {
+    fn instantiateExactCallableLset(self: *Lowerer, symbols: []const Symbol) std.mem.Allocator.Error!TypeVarId {
         const lambdas = try self.allocator.alloc(type_mod.Lambda, symbols.len);
         defer self.allocator.free(lambdas);
 
@@ -680,6 +680,179 @@ const Lowerer = struct {
 
         const lambda_span = try self.types.addLambdas(lambdas);
         return try self.types.freshContent(.{ .lambda_set = lambda_span });
+    }
+
+    fn instantiateOccurrenceType(self: *Lowerer, ty: TypeVarId) std.mem.Allocator.Error!TypeVarId {
+        var mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
+        defer mapping.deinit();
+        return try self.instantiateOccurrenceTypeRec(ty, &mapping);
+    }
+
+    fn instantiateOccurrenceTypedSymbolsWithMapping(
+        self: *Lowerer,
+        values: []const ast.TypedSymbol,
+        mapping: *std.AutoHashMap(TypeVarId, TypeVarId),
+    ) std.mem.Allocator.Error![]ast.TypedSymbol {
+        const out = try self.allocator.alloc(ast.TypedSymbol, values.len);
+        errdefer self.allocator.free(out);
+        for (values, 0..) |value, i| {
+            out[i] = .{
+                .symbol = value.symbol,
+                .ty = try self.instantiateOccurrenceTypeRec(value.ty, mapping),
+            };
+        }
+        return out;
+    }
+
+    fn instantiateOccurrenceTypeRec(
+        self: *Lowerer,
+        ty: TypeVarId,
+        mapping: *std.AutoHashMap(TypeVarId, TypeVarId),
+    ) std.mem.Allocator.Error!TypeVarId {
+        const id = self.types.unlinkPreservingNominal(ty);
+        if (mapping.get(id)) |cached| return cached;
+
+        switch (self.types.getNode(id)) {
+            .unbd, .for_a => {
+                const fresh = try self.types.freshUnbd();
+                try mapping.put(id, fresh);
+                return fresh;
+            },
+            else => {},
+        }
+
+        const placeholder = try self.types.freshUnbd();
+        try mapping.put(id, placeholder);
+
+        const copied = switch (self.types.getNode(id)) {
+            .unbd, .for_a => unreachable,
+            .link => unreachable,
+            .nominal => |nominal| blk: {
+                const args = try self.allocator.dupe(TypeVarId, self.types.sliceTypeVarSpan(nominal.args));
+                defer self.allocator.free(args);
+                const out_args = try self.allocator.alloc(TypeVarId, args.len);
+                defer self.allocator.free(out_args);
+                for (args, 0..) |arg, i| {
+                    out_args[i] = try self.instantiateOccurrenceTypeRec(arg, mapping);
+                }
+                break :blk type_mod.Node{ .nominal = .{
+                    .module_idx = nominal.module_idx,
+                    .ident = nominal.ident,
+                    .is_opaque = nominal.is_opaque,
+                    .args = try self.types.addTypeVarSpan(out_args),
+                    .backing = try self.instantiateOccurrenceTypeRec(nominal.backing, mapping),
+                } };
+            },
+            .content => |content| switch (content) {
+                .primitive => type_mod.Node{ .content = .{ .primitive = content.primitive } },
+                .func => type_mod.Node{ .content = .{ .func = .{
+                    .args = try self.instantiateOccurrenceTypeVarSpanWithMapping(self.types.sliceTypeVarSpan(content.func.args), mapping),
+                    .lset = try self.instantiateOccurrenceTypeRec(content.func.lset, mapping),
+                    .ret = try self.instantiateOccurrenceTypeRec(content.func.ret, mapping),
+                } } },
+                .list => |elem| type_mod.Node{ .content = .{
+                    .list = try self.instantiateOccurrenceTypeRec(elem, mapping),
+                } },
+                .box => |elem| type_mod.Node{ .content = .{
+                    .box = try self.instantiateOccurrenceTypeRec(elem, mapping),
+                } },
+                .tuple => |tuple| blk: {
+                    const elems = try self.allocator.dupe(TypeVarId, self.types.sliceTypeVarSpan(tuple));
+                    defer self.allocator.free(elems);
+                    const out_elems = try self.allocator.alloc(TypeVarId, elems.len);
+                    defer self.allocator.free(out_elems);
+                    for (elems, 0..) |elem, i| {
+                        out_elems[i] = try self.instantiateOccurrenceTypeRec(elem, mapping);
+                    }
+                    break :blk type_mod.Node{ .content = .{
+                        .tuple = try self.types.addTypeVarSpan(out_elems),
+                    } };
+                },
+                .tag_union => |tag_union| blk: {
+                    const tags = try self.allocator.dupe(type_mod.Tag, self.types.sliceTags(tag_union.tags));
+                    defer self.allocator.free(tags);
+                    const out_tags = try self.allocator.alloc(type_mod.Tag, tags.len);
+                    defer self.allocator.free(out_tags);
+                    for (tags, 0..) |tag, i| {
+                        const args = try self.allocator.dupe(TypeVarId, self.types.sliceTypeVarSpan(tag.args));
+                        defer self.allocator.free(args);
+                        const out_args = try self.allocator.alloc(TypeVarId, args.len);
+                        defer self.allocator.free(out_args);
+                        for (args, 0..) |arg, arg_i| {
+                            out_args[arg_i] = try self.instantiateOccurrenceTypeRec(arg, mapping);
+                        }
+                        out_tags[i] = .{
+                            .name = tag.name,
+                            .args = try self.types.addTypeVarSpan(out_args),
+                        };
+                    }
+                    break :blk type_mod.Node{ .content = .{
+                        .tag_union = .{ .tags = try self.types.addTags(out_tags) },
+                    } };
+                },
+                .record => |record| blk: {
+                    const fields = try self.allocator.dupe(type_mod.Field, self.types.sliceFields(record.fields));
+                    defer self.allocator.free(fields);
+                    const out_fields = try self.allocator.alloc(type_mod.Field, fields.len);
+                    defer self.allocator.free(out_fields);
+                    for (fields, 0..) |field, i| {
+                        out_fields[i] = .{
+                            .name = field.name,
+                            .ty = try self.instantiateOccurrenceTypeRec(field.ty, mapping),
+                        };
+                    }
+                    sortFieldsByName(&self.input.idents, out_fields);
+                    break :blk type_mod.Node{ .content = .{
+                        .record = .{ .fields = try self.types.addFields(out_fields) },
+                    } };
+                },
+                .lambda_set => |lambda_set| blk: {
+                    const lambdas = try self.allocator.dupe(type_mod.Lambda, self.types.sliceLambdas(lambda_set));
+                    defer self.allocator.free(lambdas);
+                    const out_lambdas = try self.allocator.alloc(type_mod.Lambda, lambdas.len);
+                    defer self.allocator.free(out_lambdas);
+                    for (lambdas, 0..) |lambda, i| {
+                        const captures = try self.allocator.dupe(type_mod.Capture, self.types.sliceCaptures(lambda.captures));
+                        defer self.allocator.free(captures);
+                        const out_captures = try self.allocator.alloc(type_mod.Capture, captures.len);
+                        defer self.allocator.free(out_captures);
+                        for (captures, 0..) |capture, capture_i| {
+                            out_captures[capture_i] = .{
+                                .symbol = capture.symbol,
+                                .ty = try self.instantiateOccurrenceTypeRec(capture.ty, mapping),
+                            };
+                        }
+                        out_lambdas[i] = .{
+                            .symbol = lambda.symbol,
+                            .captures = try self.types.addCaptures(out_captures),
+                        };
+                    }
+                    break :blk type_mod.Node{ .content = .{
+                        .lambda_set = try self.types.addLambdas(out_lambdas),
+                    } };
+                },
+            },
+        };
+
+        self.types.setNode(placeholder, copied);
+        return placeholder;
+    }
+
+    fn instantiateOccurrenceTypeVarSpanWithMapping(
+        self: *Lowerer,
+        tys: []const TypeVarId,
+        mapping: *std.AutoHashMap(TypeVarId, TypeVarId),
+    ) std.mem.Allocator.Error!type_mod.Span(TypeVarId) {
+        if (tys.len == 0) return type_mod.Span(TypeVarId).empty();
+
+        const tys_copy = try self.allocator.dupe(TypeVarId, tys);
+        defer self.allocator.free(tys_copy);
+        const out = try self.allocator.alloc(TypeVarId, tys_copy.len);
+        defer self.allocator.free(out);
+        for (tys_copy, 0..) |inner_ty, i| {
+            out[i] = try self.instantiateOccurrenceTypeRec(inner_ty, mapping);
+        }
+        return try self.types.addTypeVarSpan(out);
     }
 
     fn snapshotTypeVarSpanWithMapping(
@@ -2008,6 +2181,17 @@ const Lowerer = struct {
                 const body_ty = try self.inferExpr(venv, decl.body);
                 try self.unify(body_ty, decl.bind.ty);
                 try self.generalize(venv, decl.bind.ty);
+                if (builtin.mode == .Debug) {
+                    const bind_entry = self.input.symbols.get(decl.bind.symbol);
+                    if (!bind_entry.name.isNone()) {
+                        const bind_name = self.input.idents.getText(bind_entry.name);
+                        if (std.mem.eql(u8, bind_name, "append_one") or std.mem.eql(u8, bind_name, "clone_via_fold")) {
+                            const summary = self.debugTypeSummary(decl.bind.ty);
+                            defer if (summary.owned) self.allocator.free(summary.text);
+                            std.debug.print("inferStmt decl generalized {s} -> {s}\n", .{ bind_name, summary.text });
+                        }
+                    }
+                }
                 break :blk try self.extendEnvOne(venv, .{ .symbol = decl.bind.symbol, .ty = decl.bind.ty });
             },
             .var_decl => |decl| blk: {
@@ -2399,7 +2583,7 @@ const Lowerer = struct {
                             .symbol = capture.symbol,
                             .ty = capture.ty,
                         });
-                        if (fn_env.len != 0) self.allocator.free(fn_env);
+                        if (fn_env.len != 0 and fn_env.ptr != top_env.ptr) self.allocator.free(fn_env);
                         fn_env = next_env;
                     }
                     try self.propagateExprErasure(fn_def.body, fn_env);

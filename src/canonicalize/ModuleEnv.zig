@@ -530,13 +530,15 @@ pub const MethodCallFn = struct {
     pub const ResolvedTarget = struct {
         module_name: Ident.Idx,
         def_idx: CIR.Def.Idx,
+
+        pub const SafeList = collections.SafeList(@This());
     };
 
     expr_idx: CIR.Expr.Idx,
     method_name: Ident.Idx,
     origin: types_mod.StaticDispatchConstraint.Origin,
     fn_var: TypeVar,
-    resolved_target: ?ResolvedTarget,
+    resolved_targets: ResolvedTarget.SafeList.Range,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -3495,7 +3497,7 @@ pub fn recordMethodCallFn(
         .method_name = method_name,
         .origin = origin,
         .fn_var = fn_var,
-        .resolved_target = null,
+        .resolved_targets = MethodCallFn.ResolvedTarget.SafeList.Range.empty(),
     });
 }
 
@@ -3524,10 +3526,21 @@ pub fn setMethodCallResolvedTarget(
     method_name: Ident.Idx,
     origin: types_mod.StaticDispatchConstraint.Origin,
     target: MethodCallFn.ResolvedTarget,
-) void {
+) std.mem.Allocator.Error!void {
     for (self.method_call_fns.items.items) |*entry| {
         if (entry.expr_idx != expr_idx or entry.method_name != method_name or entry.origin != origin) continue;
-        entry.resolved_target = target;
+        const existing = self.method_callResolvedTargets(entry.resolved_targets);
+        for (existing) |candidate| {
+            if (candidate.module_name == target.module_name and candidate.def_idx == target.def_idx) {
+                return;
+            }
+        }
+
+        var updated = std.ArrayList(MethodCallFn.ResolvedTarget).empty;
+        defer updated.deinit(self.gpa);
+        try updated.appendSlice(self.gpa, existing);
+        try updated.append(self.gpa, target);
+        entry.resolved_targets = try self.appendMethodCallResolvedTargets(updated.items);
         return;
     }
 
@@ -3535,6 +3548,20 @@ pub fn setMethodCallResolvedTarget(
         "ModuleEnv invariant violated: missing dispatch-call resolved target for expr {d} method {s}",
         .{ @intFromEnum(expr_idx), self.getIdent(method_name) },
     );
+}
+
+pub fn appendMethodCallResolvedTargets(
+    self: *Self,
+    values: []const MethodCallFn.ResolvedTarget,
+) std.mem.Allocator.Error!MethodCallFn.ResolvedTarget.SafeList.Range {
+    return try self.appendRange(MethodCallFn.ResolvedTarget, values);
+}
+
+pub fn methodCallResolvedTargets(
+    self: *const Self,
+    range: MethodCallFn.ResolvedTarget.SafeList.Range,
+) []const MethodCallFn.ResolvedTarget {
+    return self.sliceRange(MethodCallFn.ResolvedTarget, range);
 }
 
 /// Public function `methodCallFnVar`.

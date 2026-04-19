@@ -774,6 +774,9 @@ pub const StaticDispatchConstraint = struct {
     fn_var: Var,
     /// source expr var for source-site dispatches that must later resolve to an exact target
     site_expr_var: ?Var = null,
+    /// module that owns `site_expr_var`, so later resolution can update the
+    /// correct ModuleEnv even after cross-module type copying
+    site_module_name: ?Ident.Idx = null,
     /// the origin of this constraint (operator, method call, or where clause)
     origin: Origin,
     /// Optional numeric literal info for from_numeral constraints

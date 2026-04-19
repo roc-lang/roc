@@ -207,12 +207,12 @@ const Lowerer = struct {
                 var lowered_body = try self.lowerExpr(empty_venv, fn_def.body);
                 defer lowered_body.deinit(self.allocator);
                 try self.emitLiftedDefs(lowered_body.lifted_defs.items);
+                const lowered_args = try self.copyMonoTypedSymbols(self.input.program.store.sliceTypedSymbolSpan(fn_def.args));
+                defer self.allocator.free(lowered_args);
                 break :blk try self.emitDef(.{
                     .bind = .{ .ty = def.bind.ty, .symbol = def.bind.symbol },
                     .value = .{ .fn_ = .{
-                        .args = try self.output.addTypedSymbolSpan(
-                            self.input.program.store.sliceTypedSymbolSpan(fn_def.args),
-                        ),
+                        .args = try self.output.addTypedSymbolSpan(lowered_args),
                         .captures = try self.output.addTypedSymbolSpan(&.{}),
                         .body = lowered_body.expr,
                     } },
@@ -363,11 +363,13 @@ const Lowerer = struct {
                     var lowered_body = try self.lowerExpr(recursive_venv, let_fn.body);
                     defer lowered_body.deinit(self.allocator);
                     try lowered.lifted_defs.appendSlice(self.allocator, lowered_body.lifted_defs.items);
+                    const lowered_fn_args = try self.copyMonoTypedSymbols(let_fn_args);
+                    defer self.allocator.free(lowered_fn_args);
 
                     try lowered.lifted_defs.append(self.allocator, .{
                         .bind = .{ .ty = let_fn.bind.ty, .symbol = lifted_symbol },
                         .value = .{ .fn_ = .{
-                            .args = try self.output.addTypedSymbolSpan(let_fn_args),
+                            .args = try self.output.addTypedSymbolSpan(lowered_fn_args),
                             .captures = try self.output.addTypedSymbolSpan(captures),
                             .body = lowered_body.expr,
                         } },
@@ -794,12 +796,12 @@ const Lowerer = struct {
                 .captures = try self.output.addTypedSymbolSpan(captures),
                 .body = lowered_body.expr,
             };
+            const lowered_member_args = try self.copyMonoTypedSymbols(self.input.program.store.sliceTypedSymbolSpan(member.letfn.args));
+            defer self.allocator.free(lowered_member_args);
             try lifted_defs.append(self.allocator, .{
                 .bind = .{ .ty = member.letfn.bind.ty, .symbol = member.lifted_symbol },
                 .value = .{ .fn_ = .{
-                    .args = try self.output.addTypedSymbolSpan(
-                        self.input.program.store.sliceTypedSymbolSpan(member.letfn.args),
-                    ),
+                    .args = try self.output.addTypedSymbolSpan(lowered_member_args),
                     .captures = lowered_members[member_i].captures,
                     .body = lowered_members[member_i].body,
                 } },
@@ -936,6 +938,21 @@ const Lowerer = struct {
 
         self.sortTypedSymbols(captures);
         return captures;
+    }
+
+    fn copyMonoTypedSymbols(
+        self: *Lowerer,
+        values: []const MonoAst.TypedSymbol,
+    ) std.mem.Allocator.Error![]ast.TypedSymbol {
+        const out = try self.allocator.alloc(ast.TypedSymbol, values.len);
+        errdefer self.allocator.free(out);
+        for (values, 0..) |value, i| {
+            out[i] = .{
+                .ty = value.ty,
+                .symbol = value.symbol,
+            };
+        }
+        return out;
     }
 
     fn collectFreeVarsExpr(

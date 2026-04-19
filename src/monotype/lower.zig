@@ -218,6 +218,14 @@ const Ctx = struct {
             return self.source_module.methodCallConstraintFnVar(idx);
         }
 
+        pub fn methodCallResolvedTargets(
+            self: @This(),
+            expr_idx: CIR.Expr.Idx,
+            origin: types.StaticDispatchConstraint.Origin,
+        ) []const typed_cir.ResolvedMethodTarget {
+            return self.source_module.methodCallResolvedTargets(expr_idx, origin);
+        }
+
         pub fn binopConstraintFnVar(self: @This(), idx: CIR.Expr.Idx, method_name: Ident.Idx) ?Var {
             return self.source_module.binopConstraintFnVar(idx, method_name);
         }
@@ -2438,21 +2446,16 @@ pub const Lowerer = struct {
                 .rhs = try self.lowerExpr(module_idx, type_scope, env, eq.rhs),
             } },
             .e_method_call => |method_call| blk: {
-                const method_fn_var = typed_cir_module.methodCallConstraintFnVar(expr.idx) orelse debugPanic(
-                    "monotype invariant violated: method call expr {d} ({s}) missing checked callable type",
-                    .{ @intFromEnum(expr.idx), self.ctx.typedCirModule(module_idx).getIdent(method_call.method_name) },
-                );
                 const lowered_receiver = try self.lowerExpr(module_idx, type_scope, env, method_call.receiver);
                 const lowered_args = try self.lowerExprSlice(module_idx, type_scope, env, typed_cir_module.sliceExpr(method_call.args));
-                const method_fn_ty_base = try self.instantiateSourceVarType(module_idx, type_scope, method_fn_var);
-                const method_fn_ty = if (typed_cir_module.methodCallResolvedTarget(expr.idx, .method_call)) |target|
-                    try self.stampCallableTarget(
-                        module_idx,
-                        method_fn_ty_base,
-                        self.requireResolvedMethodTargetSymbol(module_idx, target),
-                    )
-                else
-                    method_fn_ty_base;
+                const method_fn_ty = try self.buildResolvedMethodCallType(
+                    module_idx,
+                    type_scope,
+                    try self.requireExprType(module_idx, type_scope, method_call.receiver),
+                    typed_cir_module.sliceExpr(method_call.args),
+                    ty,
+                    typed_cir_module.methodCallResolvedTargets(expr.idx, .method_call),
+                );
                 break :blk .{ .method_call = .{
                     .receiver = lowered_receiver,
                     .method_fn_ty = method_fn_ty,
@@ -2462,19 +2465,13 @@ pub const Lowerer = struct {
             },
             .e_type_method_call => |method_call| blk: {
                 const alias_stmt = typed_cir_module.getStatement(method_call.type_var_alias_stmt);
-                const method_fn_var = typed_cir_module.methodCallConstraintFnVar(expr.idx) orelse debugPanic(
-                    "monotype invariant violated: type method call expr {d} ({s}) missing checked callable type",
-                    .{ @intFromEnum(expr.idx), self.ctx.typedCirModule(module_idx).getIdent(method_call.method_name) },
+                const method_fn_ty = try self.buildResolvedTypeMethodCallType(
+                    module_idx,
+                    type_scope,
+                    typed_cir_module.sliceExpr(method_call.args),
+                    ty,
+                    typed_cir_module.methodCallResolvedTargets(expr.idx, .method_call),
                 );
-                const method_fn_ty_base = try self.instantiateSourceVarType(module_idx, type_scope, method_fn_var);
-                const method_fn_ty = if (typed_cir_module.methodCallResolvedTarget(expr.idx, .method_call)) |target|
-                    try self.stampCallableTarget(
-                        module_idx,
-                        method_fn_ty_base,
-                        self.requireResolvedMethodTargetSymbol(module_idx, target),
-                    )
-                else
-                    method_fn_ty_base;
                 break :blk .{ .type_method_call = .{
                     .dispatcher_ty = try self.instantiateSourceVarType(
                         module_idx,
@@ -5681,20 +5678,12 @@ pub const Lowerer = struct {
                     return null;
                 }
                 const bool_ty = try self.makePrimitiveType(.bool);
-                const method_fn_var = self.ctx.typedCirModule(module_idx).binopConstraintFnVar(
-                    expr_idx,
-                    self.ctx.typedCirModule(module_idx).commonIdents().is_eq,
-                ) orelse debugPanic(
-                    "monotype invariant violated: nominal eq binop expr {d} missing checked callable type",
-                    .{@intFromEnum(expr_idx)},
-                );
                 const eq_expr = try self.lowerMethodCallExpr(
                     module_idx,
                     type_scope,
                     env,
                     expr_idx,
                     .desugared_binop,
-                    method_fn_var,
                     operand_ty,
                     self.ctx.typedCirModule(module_idx).commonIdents().is_eq,
                     binop.lhs,
@@ -5723,6 +5712,54 @@ pub const Lowerer = struct {
         });
     }
 
+    fn buildResolvedMethodCallType(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeScope,
+        receiver_ty: type_mod.TypeId,
+        explicit_arg_exprs: []const CIR.Expr.Idx,
+        result_ty: type_mod.TypeId,
+        resolved_targets: []const typed_cir.ResolvedMethodTarget,
+    ) std.mem.Allocator.Error!type_mod.TypeId {
+        const arg_tys = try self.allocator.alloc(type_mod.TypeId, explicit_arg_exprs.len + 1);
+        defer self.allocator.free(arg_tys);
+        arg_tys[0] = receiver_ty;
+        for (explicit_arg_exprs, 0..) |arg_expr_idx, i| {
+            arg_tys[i + 1] = try self.requireExprType(module_idx, type_scope, arg_expr_idx);
+        }
+
+        const callable_targets = try self.allocator.alloc(Symbol, resolved_targets.len);
+        defer self.allocator.free(callable_targets);
+        for (resolved_targets, 0..) |target, i| {
+            callable_targets[i] = self.requireResolvedMethodTargetSymbol(module_idx, target);
+        }
+
+        return try self.ctx.types.addType(try self.buildFunctionType(arg_tys, result_ty, callable_targets));
+    }
+
+    fn buildResolvedTypeMethodCallType(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeScope,
+        explicit_arg_exprs: []const CIR.Expr.Idx,
+        result_ty: type_mod.TypeId,
+        resolved_targets: []const typed_cir.ResolvedMethodTarget,
+    ) std.mem.Allocator.Error!type_mod.TypeId {
+        const arg_tys = try self.allocator.alloc(type_mod.TypeId, explicit_arg_exprs.len);
+        defer self.allocator.free(arg_tys);
+        for (explicit_arg_exprs, 0..) |arg_expr_idx, i| {
+            arg_tys[i] = try self.requireExprType(module_idx, type_scope, arg_expr_idx);
+        }
+
+        const callable_targets = try self.allocator.alloc(Symbol, resolved_targets.len);
+        defer self.allocator.free(callable_targets);
+        for (resolved_targets, 0..) |target, i| {
+            callable_targets[i] = self.requireResolvedMethodTargetSymbol(module_idx, target);
+        }
+
+        return try self.ctx.types.addType(try self.buildFunctionType(arg_tys, result_ty, callable_targets));
+    }
+
     fn lowerMethodCallExpr(
         self: *Lowerer,
         module_idx: u32,
@@ -5730,7 +5767,6 @@ pub const Lowerer = struct {
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
         method_call_origin: types.StaticDispatchConstraint.Origin,
-        method_fn_var: types.Var,
         receiver_ty: type_mod.TypeId,
         lookup_name: base.Ident.Idx,
         receiver_expr: ?CIR.Expr.Idx,
@@ -5761,15 +5797,14 @@ pub const Lowerer = struct {
                 try self.exprResultVar(module_idx, type_scope, env, arg_expr_idx),
             );
         }
-        const method_fn_ty_base = try self.instantiateSourceVarType(module_idx, type_scope, method_fn_var);
-        const method_fn_ty = if (self.ctx.typedCirModule(module_idx).methodCallResolvedTarget(expr_idx, method_call_origin)) |target|
-            try self.stampCallableTarget(
-                module_idx,
-                method_fn_ty_base,
-                self.requireResolvedMethodTargetSymbol(module_idx, target),
-            )
-        else
-            method_fn_ty_base;
+        const method_fn_ty = try self.buildResolvedMethodCallType(
+            module_idx,
+            type_scope,
+            receiver_ty,
+            explicit_arg_exprs,
+            result_ty,
+            self.ctx.typedCirModule(module_idx).methodCallResolvedTargets(expr_idx, method_call_origin),
+        );
         return try self.program.store.addExpr(.{
             .ty = result_ty,
             .data = .{ .method_call = .{
@@ -5797,10 +5832,6 @@ pub const Lowerer = struct {
             type_scope,
             ModuleEnv.varFrom(alias_stmt.s_type_var_alias.type_var_anno),
         );
-        const method_fn_var = typed_cir_module.methodCallConstraintFnVar(expr_idx) orelse debugPanic(
-            "monotype invariant violated: type method call missing checked callable type",
-            .{},
-        );
         const explicit_arg_exprs = typed_cir_module.sliceExpr(method_call.args);
         const lowered_args = try self.allocator.alloc(ast.ExprId, explicit_arg_exprs.len);
         defer self.allocator.free(lowered_args);
@@ -5814,15 +5845,13 @@ pub const Lowerer = struct {
                 try self.exprResultVar(module_idx, type_scope, env, arg_expr_idx),
             );
         }
-        const method_fn_ty_base = try self.instantiateSourceVarType(module_idx, type_scope, method_fn_var);
-        const method_fn_ty = if (typed_cir_module.methodCallResolvedTarget(expr_idx, .method_call)) |target|
-            try self.stampCallableTarget(
-                module_idx,
-                method_fn_ty_base,
-                self.requireResolvedMethodTargetSymbol(module_idx, target),
-            )
-        else
-            method_fn_ty_base;
+        const method_fn_ty = try self.buildResolvedTypeMethodCallType(
+            module_idx,
+            type_scope,
+            explicit_arg_exprs,
+            result_ty,
+            typed_cir_module.methodCallResolvedTargets(expr_idx, .method_call),
+        );
         return try self.program.store.addExpr(.{
             .ty = result_ty,
             .data = .{ .type_method_call = .{
@@ -6164,17 +6193,12 @@ pub const Lowerer = struct {
                 } },
             }),
             .e_method_call => |method_call| blk: {
-                const method_fn_var = typed_cir_module.methodCallConstraintFnVar(expr.idx) orelse debugPanic(
-                    "monotype invariant violated: method call expr {d} ({s}) missing checked callable type",
-                    .{ @intFromEnum(expr.idx), self.ctx.typedCirModule(module_idx).getIdent(method_call.method_name) },
-                );
                 break :blk self.lowerMethodCallExpr(
                     module_idx,
                     type_scope,
                     env,
                     expr.idx,
                     .method_call,
-                    method_fn_var,
                     try self.requireExprType(module_idx, type_scope, method_call.receiver),
                     method_call.method_name,
                     method_call.receiver,

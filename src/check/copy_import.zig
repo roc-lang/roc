@@ -421,6 +421,10 @@ fn copyStaticDispatchConstraints(
         var dest_constraint = source_constraint;
         dest_constraint.fn_name = translated_fn_name;
         dest_constraint.fn_var = try copyVar(source_store, dest_store, source_constraint.fn_var, var_mapping, source_idents, dest_idents, allocator);
+        dest_constraint.site_module_name = if (source_constraint.site_module_name) |site_module_name|
+            try copyImportedIdent(source_idents, dest_idents, site_module_name, allocator)
+        else
+            null;
 
         try dest_constraints.append(dest_constraint);
     }
