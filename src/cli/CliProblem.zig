@@ -673,12 +673,37 @@ fn createInvalidUrlReport(allocator: Allocator, info: anytype) !Report {
 fn createDownloadFailedReport(allocator: Allocator, info: anytype) !Report {
     var report = Report.init(allocator, "DOWNLOAD FAILED", .runtime_error);
 
-    try report.document.addText("Failed to download from ");
-    try report.document.addAnnotated(info.url, .emphasized);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
-    try report.document.addText("Error: ");
-    try report.document.addText(@errorName(info.err));
+    if (info.err == error.InvalidHash) {
+        try report.document.addText("Error: ");
+        try report.document.addError(@errorName(info.err));
+        try report.document.addLineBreak();
+        try report.document.addText("The url contains an invalid hash.");
+        try report.document.addLineBreaks(2);
+
+        try report.document.addText("Platform Url: ");
+        try report.document.addAnnotated(info.url, .emphasized);
+        try report.document.addLineBreaks(2);
+
+        try report.document.addText("Possible Reasons: ");
+        try report.document.addLineBreak();
+        try report.document.addText("1. The platform has not been migrated to the new Roc (Zig) Compiler. ");
+        try report.document.addLineBreak();
+        try report.document.addText("2. The Hash portion of the URL is malformed");
+
+        try report.document.addLineBreaks(2);
+        try report.document.addText("Suggested Actions:");
+        try report.document.addLineBreak();
+        try report.document.addSuggestion("- If there is newer version of the platform available, try updating to that one");
+        try report.document.addLineBreak();
+        try report.document.addSuggestion("- Verify the URL and ensure it matches a valid platform release");
+        try report.document.addLineBreak();
+    } else {
+        try report.document.addText("Failed to download from ");
+        try report.document.addAnnotated(info.url, .emphasized);
+        try report.document.addLineBreaks(2);
+        try report.document.addText("Error: ");
+        try report.document.addText(@errorName(info.err));
+    }
 
     return report;
 }
