@@ -23,8 +23,6 @@ pub const Result = struct {
     types: type_mod.Store,
     strings: base.StringLiteral.Store,
     idents: base.Ident.Store,
-    attached_method_index: symbol_mod.AttachedMethodIndex,
-    builtin_attached_method_index: symbol_mod.BuiltinAttachedMethodIndex,
     runtime_inspect_symbols: std.AutoHashMap(Symbol, Symbol),
 
     pub fn deinit(self: *Result) void {
@@ -34,8 +32,6 @@ pub const Result = struct {
         self.types.deinit();
         self.strings.deinit(self.store.allocator);
         self.idents.deinit(self.store.allocator);
-        self.attached_method_index.deinit();
-        self.builtin_attached_method_index.deinit();
         self.runtime_inspect_symbols.deinit();
     }
 
@@ -48,8 +44,6 @@ pub const Result = struct {
             .types = type_mod.Store.init(allocator),
             .strings = .{},
             .idents = try base.Ident.Store.initCapacity(allocator, 1),
-            .attached_method_index = symbol_mod.AttachedMethodIndex.init(allocator),
-            .builtin_attached_method_index = symbol_mod.BuiltinAttachedMethodIndex.init(allocator),
             .runtime_inspect_symbols = std.AutoHashMap(Symbol, Symbol).init(allocator),
         };
         return result;
@@ -155,8 +149,6 @@ const Lowerer = struct {
             .types = self.types,
             .strings = self.input.strings,
             .idents = self.input.idents,
-            .attached_method_index = self.input.attached_method_index,
-            .builtin_attached_method_index = self.input.builtin_attached_method_index,
             .runtime_inspect_symbols = self.input.runtime_inspect_symbols,
         };
 
@@ -166,8 +158,6 @@ const Lowerer = struct {
         self.input.symbols = symbol_mod.Store.init(self.allocator);
         self.input.strings = .{};
         self.input.idents = try base.Ident.Store.initCapacity(self.allocator, 1);
-        self.input.attached_method_index = symbol_mod.AttachedMethodIndex.init(self.allocator);
-        self.input.builtin_attached_method_index = symbol_mod.BuiltinAttachedMethodIndex.init(self.allocator);
         self.input.runtime_inspect_symbols = std.AutoHashMap(Symbol, Symbol).init(self.allocator);
         return result;
     }
@@ -785,7 +775,8 @@ const Lowerer = struct {
 
                         const t_fn = try self.types.freshUnbd();
                         const inferred = try self.inferFn(venv, .{ .symbol = def.bind.symbol, .ty = t_fn }, fn_def);
-                        try self.unify(def.bind.ty, inferred);
+                        const declared_ty = try self.instantiateGeneralized(def.bind.ty);
+                        try self.unify(declared_ty, inferred);
                         try self.generalize(venv, inferred);
                         try self.fn_infer_states.put(def.bind.symbol, .done);
                         const next = try self.extendEnvOne(venv, .{ .symbol = def.bind.symbol, .ty = inferred });
@@ -793,7 +784,8 @@ const Lowerer = struct {
                         venv = next;
                     },
                     .hosted_fn => |hosted_fn| {
-                        const inferred = try self.inferHostedFn(.{ .symbol = def.bind.symbol, .ty = def.bind.ty }, hosted_fn);
+                        const declared_ty = try self.instantiateGeneralized(def.bind.ty);
+                        const inferred = try self.inferHostedFn(.{ .symbol = def.bind.symbol, .ty = declared_ty }, hosted_fn);
                         try self.generalize(venv, inferred);
                         try self.fn_infer_states.put(def.bind.symbol, .done);
                         const next = try self.extendEnvOne(venv, .{ .symbol = def.bind.symbol, .ty = inferred });
@@ -802,14 +794,16 @@ const Lowerer = struct {
                     },
                     .val => |expr_id| {
                         const inferred = try self.inferExpr(venv, expr_id);
-                        try self.unify(def.bind.ty, inferred);
+                        const declared_ty = try self.instantiateGeneralized(def.bind.ty);
+                        try self.unify(declared_ty, inferred);
                         const next = try self.extendEnvOne(venv, .{ .symbol = def.bind.symbol, .ty = def.bind.ty });
                         if (venv.len != 0) self.allocator.free(venv);
                         venv = next;
                     },
                     .run => |run_def| {
                         const inferred = try self.inferExpr(venv, run_def.body);
-                        try self.unify(def.bind.ty, inferred);
+                        const declared_ty = try self.instantiateGeneralized(def.bind.ty);
+                        try self.unify(declared_ty, inferred);
                         const next = try self.extendEnvOne(venv, .{ .symbol = def.bind.symbol, .ty = def.bind.ty });
                         if (venv.len != 0) self.allocator.free(venv);
                         venv = next;
@@ -849,9 +843,9 @@ const Lowerer = struct {
 
             for (group.def_ids, 0..) |def_id, i| {
                 const def = self.output.getDef(def_id);
-                try self.unify(def.bind.ty, generalized[i].ty);
+                const declared_ty = try self.instantiateGeneralized(def.bind.ty);
+                try self.unify(declared_ty, generalized[i].ty);
                 try self.generalize(venv, generalized[i].ty);
-                generalized[i].ty = def.bind.ty;
                 try self.fn_infer_states.put(def.bind.symbol, .done);
             }
 
@@ -902,17 +896,52 @@ const Lowerer = struct {
             .fn_ => |fn_def| {
                 const t_fn = try self.types.freshUnbd();
                 const inferred = try self.inferFn(venv, .{ .symbol = symbol, .ty = t_fn }, fn_def);
-                try self.unify(def.bind.ty, inferred);
+                const declared_ty = try self.instantiateGeneralized(def.bind.ty);
+                try self.unify(declared_ty, inferred);
                 try self.generalize(venv, inferred);
             },
             .hosted_fn => |hosted_fn| {
-                _ = try self.inferHostedFn(.{ .symbol = symbol, .ty = def.bind.ty }, hosted_fn);
-                try self.generalize(venv, def.bind.ty);
+                const declared_ty = try self.instantiateGeneralized(def.bind.ty);
+                const inferred = try self.inferHostedFn(.{ .symbol = symbol, .ty = declared_ty }, hosted_fn);
+                try self.generalize(venv, inferred);
             },
             else => unreachable,
         }
 
         try self.fn_infer_states.put(symbol, .done);
+    }
+
+    fn requireCallableTypeForSymbol(
+        self: *Lowerer,
+        venv: []const EnvEntry,
+        symbol: Symbol,
+    ) std.mem.Allocator.Error!TypeVarId {
+        if (symbol.isNone()) {
+            debugPanic("lambdasolved.requireCallableTypeForSymbol missing symbol", .{});
+        }
+        if (builtin.mode == .Debug) {
+            if (self.current_def_symbol) |current_def_symbol| {
+                if (symbol == current_def_symbol) {
+                    const entry = self.input.symbols.get(symbol);
+                    std.debug.panic(
+                        "lambdasolved.requireCallableTypeForSymbol unexpectedly resolved current def symbol {s} ({d}) as an exact method target",
+                        .{
+                            if (entry.name.isNone()) "<none>" else self.input.idents.getText(entry.name),
+                            symbol.raw(),
+                        },
+                    );
+                }
+            }
+        }
+        if (self.needsLexicalFnInference(symbol)) {
+            try self.ensureFnInferred(venv, symbol);
+        }
+        if (self.lookupEnv(venv, symbol)) |env_ty| return try self.instantiateGeneralized(env_ty);
+        const def_id = self.def_id_by_symbol.get(symbol) orelse debugPanic(
+            "lambdasolved.requireCallableTypeForSymbol missing def for explicit callable symbol",
+            .{},
+        );
+        return try self.instantiateGeneralized(self.output.getDef(def_id).bind.ty);
     }
 
     fn inferFn(self: *Lowerer, venv: []const EnvEntry, fn_entry: EnvEntry, fn_def: ast.FnDef) std.mem.Allocator.Error!TypeVarId {
@@ -1136,6 +1165,10 @@ const Lowerer = struct {
             },
             .method_call => |method_call| blk: {
                 const receiver = method_call.receiver;
+                if (!method_call.target_symbol.isNone()) {
+                    const exact_target_ty = try self.requireCallableTypeForSymbol(venv, method_call.target_symbol);
+                    try self.unify(method_call.method_fn_ty, exact_target_ty);
+                }
                 const method_fn_ty = method_call.method_fn_ty;
                 const method_args = self.output.sliceExprSpan(method_call.args);
                 const receiver_ty = try self.inferExpr(venv, receiver);
@@ -1183,6 +1216,7 @@ const Lowerer = struct {
                 const out_expr = &self.output.exprs.items[@intFromEnum(expr_id)];
                 var snapshot_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
                 defer snapshot_mapping.deinit();
+                out_expr.data.method_call.target_symbol = method_call.target_symbol;
                 out_expr.data.method_call.method_fn_ty = try self.snapshotTypeRec(method_fn_ty, &snapshot_mapping);
                 out_expr.data.method_call.step_arg_tys = try self.snapshotTypeVarSpanWithMapping(step_arg_tys.items, &snapshot_mapping);
                 out_expr.data.method_call.step_result_tys = try self.snapshotTypeVarSpanWithMapping(step_result_tys.items, &snapshot_mapping);
@@ -1190,6 +1224,10 @@ const Lowerer = struct {
             },
             .type_method_call => |method_call| blk: {
                 const dispatcher_ty = method_call.dispatcher_ty;
+                if (!method_call.target_symbol.isNone()) {
+                    const exact_target_ty = try self.requireCallableTypeForSymbol(venv, method_call.target_symbol);
+                    try self.unify(method_call.method_fn_ty, exact_target_ty);
+                }
                 const method_fn_ty = method_call.method_fn_ty;
                 const method_args = self.output.sliceExprSpan(method_call.args);
                 var current_fn_ty = method_fn_ty;
@@ -1220,6 +1258,7 @@ const Lowerer = struct {
                 var snapshot_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
                 defer snapshot_mapping.deinit();
                 out_expr.data.type_method_call.dispatcher_ty = try self.snapshotTypeRec(dispatcher_ty, &snapshot_mapping);
+                out_expr.data.type_method_call.target_symbol = method_call.target_symbol;
                 out_expr.data.type_method_call.method_fn_ty = try self.snapshotTypeRec(method_fn_ty, &snapshot_mapping);
                 out_expr.data.type_method_call.step_arg_tys = try self.snapshotTypeVarSpanWithMapping(step_arg_tys.items, &snapshot_mapping);
                 out_expr.data.type_method_call.step_result_tys = try self.snapshotTypeVarSpanWithMapping(step_result_tys.items, &snapshot_mapping);
@@ -3286,6 +3325,21 @@ const Lowerer = struct {
                 return;
             },
             .for_a => {
+                if (builtin.mode == .Debug) {
+                    const left_text = self.debugTypeSummary(l);
+                    defer if (left_text.owned) self.allocator.free(left_text.text);
+                    const right_text = self.debugTypeSummary(r);
+                    defer if (right_text.owned) self.allocator.free(right_text.text);
+                    const current_def_name = if (self.current_def_symbol) |def_symbol| blk: {
+                        const entry = self.input.symbols.get(def_symbol);
+                        break :blk if (entry.name.isNone()) "<none>" else self.input.idents.getText(entry.name);
+                    } else "<none>";
+                    const current_def_raw = if (self.current_def_symbol) |def_symbol| def_symbol.raw() else std.math.maxInt(u32);
+                    std.debug.panic(
+                        "lambdasolved.unify generalized type without instantiation\ndef={s}\ndef_raw={d}\nleft={s}\nright={s}",
+                        .{ current_def_name, current_def_raw, left_text.text, right_text.text },
+                    );
+                }
                 return debugPanic("lambdasolved.unify generalized type without instantiation", .{});
             },
             .link => unreachable,
@@ -3313,6 +3367,21 @@ const Lowerer = struct {
                     return;
                 },
                 .for_a => {
+                    if (builtin.mode == .Debug) {
+                        const left_text = self.debugTypeSummary(l);
+                        defer if (left_text.owned) self.allocator.free(left_text.text);
+                        const right_text = self.debugTypeSummary(r);
+                        defer if (right_text.owned) self.allocator.free(right_text.text);
+                        const current_def_name = if (self.current_def_symbol) |def_symbol| blk: {
+                            const entry = self.input.symbols.get(def_symbol);
+                            break :blk if (entry.name.isNone()) "<none>" else self.input.idents.getText(entry.name);
+                        } else "<none>";
+                        const current_def_raw = if (self.current_def_symbol) |def_symbol| def_symbol.raw() else std.math.maxInt(u32);
+                        std.debug.panic(
+                            "lambdasolved.unify generalized type without instantiation\ndef={s}\ndef_raw={d}\nleft={s}\nright={s}",
+                            .{ current_def_name, current_def_raw, left_text.text, right_text.text },
+                        );
+                    }
                     return debugPanic("lambdasolved.unify generalized type without instantiation", .{});
                 },
                 .link => unreachable,

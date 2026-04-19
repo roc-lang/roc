@@ -3554,28 +3554,6 @@ pub fn methodCallFnVar(
     return null;
 }
 
-pub const MethodCallResolvedTarget = struct {
-    module_ident: Ident.Idx,
-    def_idx: CIR.Def.Idx,
-};
-
-pub fn methodCallResolvedTarget(
-    self: *const Self,
-    expr_idx: CIR.Expr.Idx,
-    _: Ident.Idx,
-    origin: types_mod.StaticDispatchConstraint.Origin,
-) ?MethodCallResolvedTarget {
-    for (self.method_call_fns.items.items) |entry| {
-        if (entry.expr_idx == expr_idx and entry.origin == origin and entry.has_resolved_target) {
-            return .{
-                .module_ident = entry.resolved_target_module_ident,
-                .def_idx = entry.resolved_target_def_idx,
-            };
-        }
-    }
-    return null;
-}
-
 /// Looks up a method identifier by type and method ident indices.
 /// This is the fast O(log n) index-based lookup that avoids string comparison.
 ///

@@ -263,6 +263,11 @@ pub const Module = struct {
     module_idx: u32,
     data_store: *ModuleData,
 
+    pub const MethodCallResolvedTarget = struct {
+        module_idx: u32,
+        def_idx: CIR.Def.Idx,
+    };
+
     /// Function-shape view recovered from checked function types.
     pub const CurriedFnShape = struct {
         args: []Var,
@@ -272,11 +277,6 @@ pub const Module = struct {
         pub fn deinit(self: *@This(), allocator: Allocator) void {
             allocator.free(self.args);
         }
-    };
-
-    pub const MethodCallResolvedTarget = struct {
-        module_idx: u32,
-        def_idx: CIR.Def.Idx,
     };
 
     fn env(self: @This()) *ModuleEnv {

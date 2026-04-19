@@ -407,6 +407,33 @@ pub const Store = struct {
         };
     }
 
+    pub fn requireExactTargetForResolvedFn(self: *const Store, fn_ty: TypeVarId) Symbol {
+        if (self.exactTargetForResolvedFn(fn_ty)) |symbol| return symbol;
+        switch (self.lambdaRepr(fn_ty)) {
+            .erased => debugPanicFmt(
+                "lambdasolved.type requireExactTargetForResolvedFn expected singleton resolved callable, found erased callable at fn_ty {d}",
+                .{@intFromEnum(fn_ty)},
+            ),
+            .lset => |lambdas| {
+                if (lambdas.len > 0) {
+                    debugPanicFmt(
+                        "lambdasolved.type requireExactTargetForResolvedFn expected singleton resolved callable, found {d} lambdas at fn_ty {d} (first symbol {d}, last symbol {d})",
+                        .{
+                            lambdas.len,
+                            @intFromEnum(fn_ty),
+                            @intFromEnum(lambdas[0].symbol),
+                            @intFromEnum(lambdas[lambdas.len - 1].symbol),
+                        },
+                    );
+                }
+                debugPanicFmt(
+                    "lambdasolved.type requireExactTargetForResolvedFn expected singleton resolved callable, found empty lambda set at fn_ty {d}",
+                    .{@intFromEnum(fn_ty)},
+                );
+            },
+        }
+    }
+
     pub fn structuralKeyOwned(self: *const Store, ty: TypeVarId) std.mem.Allocator.Error![]u8 {
         var serializer = StructuralKeySerializer{
             .allocator = self.allocator,
@@ -751,4 +778,9 @@ test "lambdasolved type tests" {
 fn debugPanic(comptime msg: []const u8) noreturn {
     @branchHint(.cold);
     std.debug.panic("{s}", .{msg});
+}
+
+fn debugPanicFmt(comptime fmt: []const u8, args: anytype) noreturn {
+    @branchHint(.cold);
+    std.debug.panic(fmt, args);
 }
