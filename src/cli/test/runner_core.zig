@@ -9,7 +9,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
-var next_cache_dir_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+const util = @import("util.zig");
 
 /// Result of a test execution
 pub const TestResult = enum {
@@ -37,37 +37,17 @@ pub const TestStats = struct {
     }
 };
 
-fn createIsolatedTestCacheDir(allocator: Allocator) ![]u8 {
-    const cache_dir_id = next_cache_dir_id.fetchAdd(1, .monotonic);
-    const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{d}", .{
-        @as(u64, @intCast(std.time.nanoTimestamp())),
-        cache_dir_id,
-    });
-    defer allocator.free(cache_leaf);
-
-    const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
-    defer allocator.free(cwd_path);
-
-    const cache_rel = try std.fs.path.join(allocator, &.{ ".zig-cache", "roc-test-cache", cache_leaf });
-    defer allocator.free(cache_rel);
-
-    std.fs.cwd().makePath(cache_rel) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
-
-    return std.fs.path.join(allocator, &.{ cwd_path, cache_rel });
-}
-
 fn runRocChild(allocator: Allocator, argv: []const []const u8) !std.process.Child.RunResult {
     var env_map = try std.process.getEnvMap(allocator);
     defer env_map.deinit();
 
-    // Give every child build/run its own persistent cache root so test runner processes
-    // cannot share module/build artifacts or observe one another's cache state.
-    const cache_dir = try createIsolatedTestCacheDir(allocator);
-    defer allocator.free(cache_dir);
-    try env_map.put("ROC_CACHE_DIR", cache_dir);
+    // Give every child build/run its own Roc and Zig local cache roots so test
+    // runner processes cannot share module/build artifacts or observe one
+    // another's cache state.
+    const cache_dirs = try util.createIsolatedTestCacheDirs(allocator);
+    defer cache_dirs.deinit(allocator);
+    try env_map.put("ROC_CACHE_DIR", cache_dirs.roc_cache_dir);
+    try env_map.put("ZIG_LOCAL_CACHE_DIR", cache_dirs.zig_local_cache_dir);
 
     return std.process.Child.run(.{
         .allocator = allocator,

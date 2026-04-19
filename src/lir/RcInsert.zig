@@ -11,7 +11,6 @@
 //!   mechanically rather than inferring more ownership behavior
 
 const std = @import("std");
-const builtin = @import("builtin");
 const layout = @import("layout");
 
 const LIR = @import("LIR.zig");

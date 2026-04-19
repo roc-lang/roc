@@ -1,7 +1,6 @@
 //! Shared eval test helpers built on the cor-style lowering pipeline.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const base = @import("base");
 const types = @import("types");
 const can = @import("can");
@@ -13,7 +12,6 @@ const pipeline = @import("../pipeline.zig");
 const Interpreter = @import("../interpreter.zig").Interpreter;
 const RuntimeHostEnv = @import("RuntimeHostEnv.zig");
 
-const Check = check.Check;
 const ModuleEnv = can.ModuleEnv;
 const RocStr = builtins.str.RocStr;
 const HostLirCodeGen = backend.HostLirCodeGen;
@@ -511,65 +509,6 @@ fn recordFieldSemanticIndex(
     }
 
     return error.MissingRecordField;
-}
-
-fn readTagUnionDiscriminant(
-    helper: LayoutHelper,
-    val: Value,
-    layout_idx: LayoutIdx,
-) u16 {
-    return helper.readTagDiscriminant(val, layout_idx);
-}
-
-fn resolveTagUnion(
-    types_store: *const types.Store,
-    initial_var: types.Var,
-) ?types.TagUnion {
-    var current_var = initial_var;
-    var guard = types.debug.IterationGuard.init("resolveTagUnion");
-    while (true) {
-        guard.tick();
-        const resolved = types_store.resolveVar(current_var);
-        switch (resolved.desc.content) {
-            .alias => |alias| {
-                current_var = types_store.getAliasBackingVar(alias);
-                continue;
-            },
-            .structure => |flat| switch (flat) {
-                .tag_union => |tu| return tu,
-                else => return null,
-            },
-            else => return null,
-        }
-    }
-    return null;
-}
-
-fn boolDiscriminantIndex(
-    allocator: std.mem.Allocator,
-    module_env: *const ModuleEnv,
-    tag_union: types.TagUnion,
-    target_ident: base.Ident.Idx,
-) !u16 {
-    const ident_store = module_env.getIdentStoreConst();
-    const tags_slice = module_env.types.getTagsSlice(tag_union.tags);
-    const count = tags_slice.len;
-    var copied = try allocator.alloc(types.Tag, count);
-    defer allocator.free(copied);
-
-    for (0..count) |i| {
-        copied[i] = tags_slice.get(@intCast(i));
-    }
-
-    std.mem.sort(types.Tag, copied, ident_store, types.Tag.sortByNameAsc);
-
-    for (copied, 0..) |tag, i| {
-        if (tag.name == target_ident) {
-            return @intCast(i);
-        }
-    }
-
-    return error.MissingTag;
 }
 
 /// Public struct `EvalState`.

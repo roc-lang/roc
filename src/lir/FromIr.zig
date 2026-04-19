@@ -539,10 +539,6 @@ const ProcLowerer = struct {
         } });
     }
 
-    fn freshLocalWithLayout(self: *ProcLowerer, layout_idx: layout_mod.Idx) std.mem.Allocator.Error!LIR.LocalId {
-        return self.parent.store.addLocal(.{ .layout_idx = layout_idx });
-    }
-
     fn freshLocalWithRef(self: *ProcLowerer, ref: ir.Layout.Ref) std.mem.Allocator.Error!LIR.LocalId {
         return self.freshLocalWithLayoutAndRef(try self.parent.lowerLayoutId(ref), ref);
     }
@@ -739,20 +735,6 @@ const ProcLowerer = struct {
                     .box => |child| current = child,
                     .list => |elem| return elem,
                     else => return null,
-                },
-            }
-        }
-    }
-
-    fn boxChildLayoutRef(self: *ProcLowerer, ref: ir.Layout.Ref) ir.Layout.Ref {
-        var current = ref;
-        while (true) {
-            switch (current) {
-                .canonical => debugPanic("lir.from_ir expected local logical box layout ref"),
-                .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
-                    .nominal => |nominal| current = nominal,
-                    .box => |child| return child,
-                    else => debugPanic("lir.from_ir expected box logical layout ref"),
                 },
             }
         }

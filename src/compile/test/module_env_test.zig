@@ -3,7 +3,6 @@ const std = @import("std");
 const base = @import("base");
 const can = @import("can");
 const check = @import("check");
-const parse = @import("parse");
 const types = @import("types");
 const builtins = @import("builtins");
 const collections = @import("collections");

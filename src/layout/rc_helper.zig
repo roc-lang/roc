@@ -5,7 +5,6 @@ const builtins = @import("builtins");
 const layout_mod = @import("./layout.zig");
 const Store = @import("./store.zig").Store;
 
-const Layout = layout_mod.Layout;
 const Idx = layout_mod.Idx;
 const StructIdx = layout_mod.StructIdx;
 const TagUnionIdx = layout_mod.TagUnionIdx;

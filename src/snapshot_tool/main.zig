@@ -4135,10 +4135,18 @@ fn processDevObjectSnapshot(
     defer typed_cir_modules.deinit();
 
     const platform_module_idx: u32 = @intCast(platform_idx + 1);
+    const app_idx = BuildEnv.findAppModuleIndex(modules) orelse {
+        std.log.err("No app module found in compiled modules", .{});
+        return false;
+    };
+    const app_module_idx: u32 = @intCast(app_idx + 1);
 
-    var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, &typed_cir_modules, 0, null);
+    try compile.platform_requirements.populateRequiredLookupTargets(&typed_cir_modules, app_module_idx);
+
+    var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, &typed_cir_modules, 0, app_module_idx);
     defer mono_lowerer.deinit();
     var mono = try mono_lowerer.run(platform_module_idx);
+    defer mono.deinit();
 
     const EntrySymbol = struct {
         ffi_symbol: []const u8,
@@ -4216,9 +4224,13 @@ fn processDevObjectSnapshot(
     }
 
     var lifted = try monotype_lifted.Lower.run(allocator, &mono);
+    defer lifted.deinit();
     var solved = try lambdasolved.Lower.run(allocator, &lifted);
+    defer solved.deinit();
     var executable = try lambdamono.Lower.run(allocator, &solved);
+    defer executable.deinit();
     var lowered_ir = try ir.Lower.run(allocator, &executable);
+    defer lowered_ir.deinit();
 
     var lowered_lir = try lir_mod.FromIr.run(
         allocator,
@@ -4635,7 +4647,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                 std.debug.print("{s} REPL init failed in {s}: {}\n", .{ cfg.label, snapshot_path, err });
                 success = false;
             }
-        } // if (!gpa_poisoned)
+        }
     }
 
     // The GPA allocator is permanently broken — any alloc/free will deadlock.
@@ -4878,9 +4890,15 @@ test "TODO: cross-module function calls - string_ordering_unsupported" {}
 
 /// An implementation of RocOps for snapshot testing.
 pub const SnapshotOps = struct {
+    const AllocationInfo = struct {
+        size: usize,
+        alignment: usize,
+    };
+
     allocator: std.mem.Allocator,
     crash: CrashContext,
     roc_ops: RocOps,
+    allocation_tracker: std.AutoHashMap(usize, AllocationInfo),
 
     pub fn init(allocator: std.mem.Allocator) SnapshotOps {
         return SnapshotOps{
@@ -4896,11 +4914,14 @@ pub const SnapshotOps = struct {
                 .roc_crashed = snapshotRocCrashed,
                 .hosted_fns = .{ .count = 0, .fns = undefined }, // Not used in snapshots
             },
+            .allocation_tracker = std.AutoHashMap(usize, AllocationInfo).init(allocator),
         };
     }
 
     pub fn deinit(self: *SnapshotOps) void {
         self.crash.deinit();
+        freeRemainingSnapshotAllocations(self);
+        self.allocation_tracker.deinit();
     }
 
     pub fn get_ops(self: *SnapshotOps) *RocOps {
@@ -4916,85 +4937,63 @@ pub const SnapshotOps = struct {
 
 fn snapshotRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
-
-    const min_alignment: usize = @max(alloc_args.alignment, @alignOf(usize));
-    const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
-
-    // Calculate additional bytes needed to store the size
-    const size_storage_bytes = min_alignment;
-    const total_size = alloc_args.length + size_storage_bytes;
-
-    // Allocate memory including space for size metadata
-    const result = snapshot_env.allocator.rawAlloc(total_size, align_enum, @returnAddress());
-
-    const base_ptr = result orelse {
-        std.debug.panic("Out of memory during snapshotRocAlloc", .{});
-    };
-
-    // Store the total size (including metadata) right before the user data
-    const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
-    size_ptr.* = total_size;
-
-    // Return pointer to the user data (after the size metadata)
-    alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
+    const alloc_ptr = snapshotAllocateTrackedBytes(snapshot_env, alloc_args.length, alloc_args.alignment);
+    alloc_args.answer = @ptrCast(alloc_ptr);
 }
 
 fn snapshotRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void {
     const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
-
-    // Calculate where the size metadata is stored
-    const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
-    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
-
-    // Read the total size from metadata
-    const total_size = size_ptr.*;
-
-    // Calculate the base pointer (start of actual allocation)
-    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
-
-    // Calculate alignment
-    const min_alignment: usize = @max(dealloc_args.alignment, @alignOf(usize));
-    const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
-
-    // Free the memory (including the size metadata)
-    const slice = @as([*]u8, @ptrCast(base_ptr))[0..total_size];
-    snapshot_env.allocator.rawFree(slice, align_enum, @returnAddress());
+    const alloc_ptr = @intFromPtr(dealloc_args.ptr);
+    const alloc_info = snapshot_env.allocation_tracker.fetchRemove(alloc_ptr) orelse {
+        std.debug.panic("SnapshotOps: double-free or untracked free at ptr=0x{x}", .{alloc_ptr});
+    };
+    snapshotFreeTrackedBytes(snapshot_env, dealloc_args.ptr, alloc_info.value);
 }
 
 fn snapshotRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
     const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
-
-    const min_alignment: usize = @max(realloc_args.alignment, @alignOf(usize));
-    const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
-
-    // Calculate where the size metadata is stored for the old allocation
-    const size_storage_bytes = min_alignment;
-    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
-
-    // Read the old total size from metadata
-    const old_total_size = old_size_ptr.*;
-
-    // Calculate the old base pointer (start of actual allocation)
-    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(realloc_args.answer) - size_storage_bytes);
-
-    // Calculate new total size needed
-    const new_total_size = realloc_args.new_length + size_storage_bytes;
-
-    // Reallocate by allocating a new block and copying the old contents.
-    const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
-    const new_ptr = snapshot_env.allocator.rawAlloc(new_total_size, align_enum, @returnAddress()) orelse {
-        std.debug.panic("Out of memory during snapshotRocRealloc", .{});
+    const old_alloc_ptr = @intFromPtr(realloc_args.answer);
+    const old_info = snapshot_env.allocation_tracker.fetchRemove(old_alloc_ptr) orelse {
+        std.debug.panic("SnapshotOps: realloc of untracked memory at ptr=0x{x}", .{old_alloc_ptr});
     };
-    const copy_size = @min(old_total_size, new_total_size);
-    @memcpy(new_ptr[0..copy_size], old_slice[0..copy_size]);
-    snapshot_env.allocator.rawFree(old_slice, align_enum, @returnAddress());
 
-    // Store the new total size in the metadata
-    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_ptr) + size_storage_bytes - @sizeOf(usize));
-    new_size_ptr.* = new_total_size;
+    const new_base_ptr = snapshotAllocateTrackedBytes(snapshot_env, realloc_args.new_length, realloc_args.alignment);
+    const old_bytes: [*]u8 = @ptrCast(@alignCast(realloc_args.answer));
+    const copy_size = @min(old_info.value.size, @max(realloc_args.new_length, 1));
+    @memcpy(new_base_ptr[0..copy_size], old_bytes[0..copy_size]);
 
-    // Return pointer to the user data (after the size metadata)
-    realloc_args.answer = @ptrFromInt(@intFromPtr(new_ptr) + size_storage_bytes);
+    snapshotFreeTrackedBytes(snapshot_env, realloc_args.answer, old_info.value);
+    realloc_args.answer = @ptrCast(new_base_ptr);
+}
+
+fn snapshotAllocateTrackedBytes(snapshot_env: *SnapshotOps, len: usize, alignment: usize) [*]u8 {
+    const alloc_len = @max(len, 1);
+    const min_alignment: usize = @max(alignment, @alignOf(usize));
+    const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
+    const result = snapshot_env.allocator.rawAlloc(alloc_len, align_enum, @returnAddress()) orelse {
+        std.debug.panic("Out of memory during snapshotRocAlloc", .{});
+    };
+    snapshot_env.allocation_tracker.put(@intFromPtr(result), .{
+        .size = alloc_len,
+        .alignment = min_alignment,
+    }) catch {
+        std.debug.panic("SnapshotOps: failed to track allocation", .{});
+    };
+    return result;
+}
+
+fn snapshotFreeTrackedBytes(snapshot_env: *SnapshotOps, ptr: *anyopaque, alloc_info: SnapshotOps.AllocationInfo) void {
+    const bytes: [*]u8 = @ptrCast(@alignCast(ptr));
+    const align_enum = std.mem.Alignment.fromByteUnits(alloc_info.alignment);
+    snapshot_env.allocator.rawFree(bytes[0..alloc_info.size], align_enum, @returnAddress());
+}
+
+fn freeRemainingSnapshotAllocations(snapshot_env: *SnapshotOps) void {
+    var iterator = snapshot_env.allocation_tracker.iterator();
+    while (iterator.next()) |entry| {
+        const ptr: *anyopaque = @ptrFromInt(entry.key_ptr.*);
+        snapshotFreeTrackedBytes(snapshot_env, ptr, entry.value_ptr.*);
+    }
 }
 
 fn snapshotRocDbg(_: *const RocDbg, _: *anyopaque) callconv(.c) void {

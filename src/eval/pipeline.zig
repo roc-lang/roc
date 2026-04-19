@@ -453,15 +453,20 @@ pub fn lowerTypedCIRToLirForTarget(
     var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, typed_cir_modules, 1, null);
     defer mono_lowerer.deinit();
     var mono = try mono_lowerer.run(0);
+    defer mono.deinit();
     debugValidateMonotypeTypes(&mono.types);
     trace.log("monotype -> monotype_lifted", .{});
     var lifted = try monotype_lifted.Lower.run(allocator, &mono);
+    defer lifted.deinit();
     trace.log("monotype_lifted -> lambdasolved", .{});
     var solved = try lambdasolved.Lower.run(allocator, &lifted);
+    defer solved.deinit();
     trace.log("lambdasolved -> lambdamono", .{});
     var executable = try lambdamono.Lower.run(allocator, &solved);
+    defer executable.deinit();
     trace.log("lambdamono -> ir", .{});
     var lowered_ir = try ir.Lower.run(allocator, &executable);
+    defer lowered_ir.deinit();
 
     trace.log("ir -> lir", .{});
     var lowered_lir = try FromIr.run(
@@ -512,20 +517,25 @@ fn lowerToLirForTarget(
     defer mono_lowerer.deinit();
     const entry_symbol = try mono_lowerer.specializeTopLevelDef(0, entry_def_idx);
     var mono = try mono_lowerer.run(0);
+    defer mono.deinit();
     debugValidateMonotypeTypes(&mono.types);
 
     trace.log("monotype -> monotype_lifted", .{});
     var lifted = try monotype_lifted.Lower.run(allocator, &mono);
+    defer lifted.deinit();
     trace.log("monotype_lifted -> lambdasolved", .{});
     var solved = try lambdasolved.Lower.run(allocator, &lifted);
+    defer solved.deinit();
     trace.log("lambdasolved -> lambdamono", .{});
     var executable = try lambdamono.Lower.runWithEntrypoints(allocator, &solved, &.{entry_symbol});
+    defer executable.deinit();
     const runtime_entry_symbol = if (executable.entrypoint_wrappers.len != 0 and !executable.entrypoint_wrappers[0].isNone())
         executable.entrypoint_wrappers[0]
     else
         entry_symbol;
     trace.log("lambdamono -> ir", .{});
     var lowered_ir = try ir.Lower.run(allocator, &executable);
+    defer lowered_ir.deinit();
 
     trace.log("ir -> lir", .{});
     var lowered_lir = try FromIr.run(

@@ -525,8 +525,9 @@ pub const PackageEnv = struct {
                 self.lock.lock();
                 defer self.lock.unlock();
                 if (self.remaining_modules == 0 and self.injector.items.len == 0) break;
-                self.cond.timedWait(&self.lock, 1_000_000) catch |err| {
-                    if (err != error.Timeout) return err;
+                self.cond.timedWait(&self.lock, 1_000_000) catch |err| switch (err) {
+                    error.Timeout => {},
+                    else => return err,
                 };
                 continue;
             }

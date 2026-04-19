@@ -5,15 +5,12 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const build_options = @import("build_options");
 const testing = std.testing;
 const base = @import("base");
 const parse = @import("parse");
 const types = @import("types");
 const builtins = @import("builtins");
 const tracy = @import("tracy");
-
-const trace_modules = if (builtin.cpu.arch == .wasm32) false else if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
 
 const CIR = @import("CIR.zig");
 const Scope = @import("Scope.zig");

@@ -21,8 +21,6 @@ const CrashContext = eval_mod.CrashContext;
 const AST = parse.AST;
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
-const Can = can.Can;
-const Check = check.Check;
 const CIR = can.CIR;
 const RocOps = builtins.host_abi.RocOps;
 const RocStr = builtins.str.RocStr;
@@ -280,7 +278,9 @@ pub const Repl = struct {
     /// Process regular input (not special commands) - returns structured result
     fn processInputStructured(self: *Repl, input: []const u8) !StepResult {
         const cleaned_input = stripTrailingComment(input);
-        const parse_result = try self.tryParseStatement(cleaned_input);
+        const normalized_input = try normalizeInlineStatementSeparators(self.allocator, cleaned_input);
+        defer self.allocator.free(normalized_input);
+        const parse_result = try self.tryParseStatement(normalized_input);
 
         switch (parse_result) {
             .assignment => |info| {
@@ -292,12 +292,12 @@ pub const Repl = struct {
                 return .{ .parse_error = try self.allocator.dupe(u8, "Imports not yet supported") };
             },
             .expression => {
-                const full_source = try self.buildFullSource(cleaned_input);
+                const full_source = try self.buildFullSource(normalized_input);
                 defer self.allocator.free(full_source);
                 return try self.evaluateSourceStructured(full_source);
             },
             .statement => {
-                const full_source = try self.buildFullSourceStatement(cleaned_input);
+                const full_source = try self.buildFullSourceStatement(normalized_input);
                 defer self.allocator.free(full_source);
                 return try self.evaluateSourceStructured(full_source);
             },
@@ -307,6 +307,58 @@ pub const Repl = struct {
                 return .{ .parse_error = try std.fmt.allocPrint(self.allocator, "Parse error: {s}", .{msg}) };
             },
         }
+    }
+
+    fn normalizeInlineStatementSeparators(allocator: Allocator, input: []const u8) ![]const u8 {
+        var output = std.ArrayList(u8).empty;
+        errdefer output.deinit(allocator);
+
+        var in_string = false;
+        var in_single_quote = false;
+        var escape = false;
+
+        for (input) |c| {
+            if (escape) {
+                try output.append(allocator, c);
+                escape = false;
+                continue;
+            }
+
+            if (in_string) {
+                try output.append(allocator, c);
+                if (c == '\\') {
+                    escape = true;
+                } else if (c == '"') {
+                    in_string = false;
+                }
+                continue;
+            }
+
+            if (in_single_quote) {
+                try output.append(allocator, c);
+                if (c == '\\') {
+                    escape = true;
+                } else if (c == '\'') {
+                    in_single_quote = false;
+                }
+                continue;
+            }
+
+            switch (c) {
+                '"' => {
+                    in_string = true;
+                    try output.append(allocator, c);
+                },
+                '\'' => {
+                    in_single_quote = true;
+                    try output.append(allocator, c);
+                },
+                ';' => try output.append(allocator, '\n'),
+                else => try output.append(allocator, c),
+            }
+        }
+
+        return try output.toOwnedSlice(allocator);
     }
 
     fn stripTrailingComment(input: []const u8) []const u8 {
@@ -722,14 +774,27 @@ pub const Repl = struct {
         if (resources.checker.problems.problems.items.len > 0) {
             const problem = resources.checker.problems.problems.items[0];
             const empty_modules: []const *const ModuleEnv = &.{};
-            const line_starts = resources.module_env.common.line_starts.items.items;
-            const saved_line_start0 = if (line_starts.len > 0) line_starts[0] else 0;
-            if (line_starts.len > 0) {
-                line_starts[0] = eval_pipeline.exprSourcePrefixLen(inspect_wrap);
-            }
-            defer if (line_starts.len > 0) {
-                line_starts[0] = saved_line_start0;
+            const saved_line_start0 = blk: {
+                const line_starts = resources.module_env.common.line_starts.items.items;
+                break :blk if (line_starts.len > 0) line_starts[0] else 0;
             };
+            {
+                const line_starts = resources.module_env.common.line_starts.items.items;
+                if (line_starts.len > 0) {
+                    line_starts[0] = eval_pipeline.exprSourcePrefixLen(inspect_wrap);
+                }
+            }
+            const restoreLineStart0 = struct {
+                fn apply(module_env: *ModuleEnv, saved: u32) void {
+                    const line_starts = module_env.common.line_starts.items.items;
+                    if (line_starts.len > 0) {
+                        line_starts[0] = saved;
+                    }
+                }
+            }.apply;
+            var restored_line_start0 = false;
+            errdefer restoreLineStart0(resources.module_env, saved_line_start0);
+            defer if (!restored_line_start0) restoreLineStart0(resources.module_env, saved_line_start0);
             var report_builder = check.ReportBuilder.init(
                 self.allocator,
                 resources.module_env,
@@ -741,12 +806,14 @@ pub const Repl = struct {
                 &resources.checker.import_mapping,
                 &resources.checker.regions,
             ) catch {
+                restoreLineStart0(resources.module_env, saved_line_start0);
                 resources.deinit(self.allocator);
                 return .{ .type_error = try self.allocator.dupe(u8, "TYPE MISMATCH") };
             };
             defer report_builder.deinit();
 
             var report = report_builder.build(problem) catch {
+                restoreLineStart0(resources.module_env, saved_line_start0);
                 resources.deinit(self.allocator);
                 return .{ .type_error = try self.allocator.dupe(u8, "TYPE MISMATCH") };
             };
@@ -766,6 +833,8 @@ pub const Repl = struct {
             var msg: []const u8 = try self.allocator.dupe(u8, trimmed);
             output.deinit();
 
+            restoreLineStart0(resources.module_env, saved_line_start0);
+            restored_line_start0 = true;
             resources.deinit(self.allocator);
             msg = try stripReplWrapperFromReport(self.allocator, msg, inspect_wrap);
             return .{ .type_error = msg };
@@ -773,14 +842,27 @@ pub const Repl = struct {
 
         const diagnostics = try resources.module_env.getDiagnostics();
         if (diagnostics.len > 0) {
-            const line_starts = resources.module_env.common.line_starts.items.items;
-            const saved_line_start0 = if (line_starts.len > 0) line_starts[0] else 0;
-            if (line_starts.len > 0) {
-                line_starts[0] = eval_pipeline.exprSourcePrefixLen(inspect_wrap);
-            }
-            defer if (line_starts.len > 0) {
-                line_starts[0] = saved_line_start0;
+            const saved_line_start0 = blk: {
+                const line_starts = resources.module_env.common.line_starts.items.items;
+                break :blk if (line_starts.len > 0) line_starts[0] else 0;
             };
+            {
+                const line_starts = resources.module_env.common.line_starts.items.items;
+                if (line_starts.len > 0) {
+                    line_starts[0] = eval_pipeline.exprSourcePrefixLen(inspect_wrap);
+                }
+            }
+            const restoreLineStart0 = struct {
+                fn apply(module_env: *ModuleEnv, saved: u32) void {
+                    const line_starts = module_env.common.line_starts.items.items;
+                    if (line_starts.len > 0) {
+                        line_starts[0] = saved;
+                    }
+                }
+            }.apply;
+            var restored_line_start0 = false;
+            errdefer restoreLineStart0(resources.module_env, saved_line_start0);
+            defer if (!restored_line_start0) restoreLineStart0(resources.module_env, saved_line_start0);
             var error_diag_index: ?usize = null;
             for (diagnostics, 0..) |diagnostic, i| {
                 var report = try resources.module_env.diagnosticToReport(diagnostic, self.allocator, "repl");
@@ -810,6 +892,8 @@ pub const Repl = struct {
             const trimmed = std.mem.trimRight(u8, rendered, " \t\r\n");
             var msg: []const u8 = try self.allocator.dupe(u8, trimmed);
             output.deinit();
+            restoreLineStart0(resources.module_env, saved_line_start0);
+            restored_line_start0 = true;
             resources.deinit(self.allocator);
             msg = try stripReplWrapperFromReport(self.allocator, msg, inspect_wrap);
             return .{ .canonicalize_error = msg };

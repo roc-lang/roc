@@ -214,8 +214,11 @@ fn compileExecutableProgram(
     var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, &resources.typed_cir_modules, 1, null);
     defer mono_lowerer.deinit();
     var mono = try mono_lowerer.run(0);
+    defer mono.deinit();
     var lifted = try monotype_lifted.Lower.run(allocator, &mono);
+    defer lifted.deinit();
     var solved = try lambdasolved.Lower.run(allocator, &lifted);
+    defer solved.deinit();
     const executable = try lambdamono.Lower.run(allocator, &solved);
 
     return .{
@@ -236,9 +239,13 @@ fn compileIrProgram(
     var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, &resources.typed_cir_modules, 1, null);
     defer mono_lowerer.deinit();
     var mono = try mono_lowerer.run(0);
+    defer mono.deinit();
     var lifted = try monotype_lifted.Lower.run(allocator, &mono);
+    defer lifted.deinit();
     var solved = try lambdasolved.Lower.run(allocator, &lifted);
+    defer solved.deinit();
     var executable = try lambdamono.Lower.run(allocator, &solved);
+    defer executable.deinit();
     const ir_result = try ir.Lower.run(allocator, &executable);
 
     return .{
@@ -887,17 +894,6 @@ fn pairHostedFn(ops_raw: *anyopaque, _: *anyopaque, args_raw: *anyopaque) callco
     const args: *const PairArgs = @ptrCast(@alignCast(args_raw));
     ops.dbg(args.first.asSlice());
     ops.dbg(args.second.asSlice());
-}
-
-fn identityBoxedFn(ops_raw: *anyopaque, ret_raw: *anyopaque, args_raw: *anyopaque) callconv(.c) void {
-    const ops: *builtins.host_abi.RocOps = @ptrCast(@alignCast(ops_raw));
-    const ret_ptr: *usize = @ptrCast(@alignCast(ret_raw));
-    const arg_ptr: *const usize = @ptrCast(@alignCast(args_raw));
-    const boxed = arg_ptr.*;
-    if (boxed != 0) {
-        builtins.utils.increfDataPtrC(@ptrFromInt(boxed), 1, ops);
-    }
-    ret_ptr.* = boxed;
 }
 
 fn attachHostedFns(runtime_env: *RuntimeHostEnv, hosted_fns: []const builtins.host_abi.HostedFn) void {

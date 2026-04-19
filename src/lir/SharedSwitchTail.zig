@@ -107,14 +107,6 @@ pub const Pass = struct {
         }
     }
 
-    fn hasMultipleIncoming(self: *const Pass, stmt_id: CFStmtId) bool {
-        return (self.incoming_counts.get(@intFromEnum(stmt_id)) orelse 0) > 1;
-    }
-
-    fn cloneLinearWithNext(self: *Pass, stmt: CFStmt, next: CFStmtId) Allocator.Error!CFStmtId {
-        return self.store.addCFStmt(linearWithNext(stmt, next));
-    }
-
     fn linearWithNext(stmt: CFStmt, next: CFStmtId) CFStmt {
         return switch (stmt) {
             .assign_symbol => |assign| .{ .assign_symbol = .{

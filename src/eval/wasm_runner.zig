@@ -200,8 +200,13 @@ pub fn runWasmStr(
         if (wasm_crash_state == .crashed) {
             return error.Crash;
         }
-        std.debug.assert(err != error.TrapUnreachable);
-        return error.WasmExecFailed;
+        switch (err) {
+            error.TrapUnreachable => {
+                std.debug.assert(false);
+                unreachable;
+            },
+            else => return error.WasmExecFailed,
+        }
     };
 
     const str_ptr: u32 = @bitCast(returns[0].I32);

@@ -8,31 +8,9 @@ type=expr
 list.map(fn)
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - can_field_access.md:1:1:1:5
-UNDEFINED VARIABLE - can_field_access.md:1:10:1:12
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `list` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**can_field_access.md:1:1:1:5:**
-```roc
-list.map(fn)
-```
-^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `fn` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**can_field_access.md:1:10:1:12:**
-```roc
-list.map(fn)
-```
-         ^^
-
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
@@ -40,10 +18,10 @@ EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-field-access
-	(e-ident (raw "list"))
-	(e-apply
-		(e-ident (raw "map"))
+(e-method-call (method ".map")
+	(receiver
+		(e-ident (raw "list")))
+	(args
 		(e-ident (raw "fn"))))
 ~~~
 # FORMATTED
@@ -52,7 +30,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-field-access (field "map")
+(e-method-call (method "map")
 	(receiver
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(args

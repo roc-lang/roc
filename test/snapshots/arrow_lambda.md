@@ -59,10 +59,10 @@ EndOfFile,
 					(args
 						(p-ident (raw "s")))
 					(e-if-then-else
-						(e-field-access
-							(e-ident (raw "s"))
-							(e-apply
-								(e-ident (raw "is_empty"))))
+						(e-method-call (method ".is_empty")
+							(receiver
+								(e-ident (raw "s")))
+							(args))
 						(e-string
 							(e-string-part (raw "empty")))
 						(e-string
@@ -105,7 +105,7 @@ NO CHANGE
 				(e-if
 					(if-branches
 						(if-branch
-							(e-field-access (field "is_empty")
+							(e-method-call (method "is_empty")
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "s"))))

@@ -2,7 +2,6 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const base = @import("base");
 const solved = @import("lambdasolved");
 const mono = @import("type.zig");
 const symbol_mod = @import("symbol");

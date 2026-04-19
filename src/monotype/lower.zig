@@ -350,10 +350,6 @@ const Ctx = struct {
         return self.source_modules.moduleCount();
     }
 
-    fn getTypeIdentText(self: *const Ctx, module_idx: u32, ident: base.Ident.Idx) []const u8 {
-        return self.typedCirModule(module_idx).getIdent(ident);
-    }
-
     fn getOrCreateTopLevelSymbol(
         self: *Ctx,
         module_idx: u32,
@@ -2993,16 +2989,6 @@ pub const Lowerer = struct {
         bytes: []const u8,
     ) std.mem.Allocator.Error!base.StringLiteral.Idx {
         return self.strings.insert(self.allocator, bytes);
-    }
-
-    fn makeRuntimeErrorExpr(
-        self: *Lowerer,
-        ty: type_mod.TypeId,
-    ) std.mem.Allocator.Error!ast.ExprId {
-        return try self.program.store.addExpr(.{
-            .ty = ty,
-            .data = .{ .runtime_error = try self.internStringLiteral("runtime error") },
-        });
     }
 
     fn copySourceStringLiteral(
@@ -5880,78 +5866,6 @@ pub const Lowerer = struct {
         });
     }
 
-    fn primitiveMethodTypeMatches(self: *const Lowerer, prim: type_mod.Prim, type_ident: base.Ident.Idx) bool {
-        const text = self.ctx.idents.getText(type_ident);
-        return switch (prim) {
-            .bool => std.mem.eql(u8, text, "Bool") or std.mem.eql(u8, text, "Builtin.Bool"),
-            .str => std.mem.eql(u8, text, "Str") or std.mem.eql(u8, text, "Builtin.Str"),
-            .u8 => std.mem.eql(u8, text, "U8") or std.mem.eql(u8, text, "Num.U8") or std.mem.eql(u8, text, "Builtin.Num.U8"),
-            .i8 => std.mem.eql(u8, text, "I8") or std.mem.eql(u8, text, "Num.I8") or std.mem.eql(u8, text, "Builtin.Num.I8"),
-            .u16 => std.mem.eql(u8, text, "U16") or std.mem.eql(u8, text, "Num.U16") or std.mem.eql(u8, text, "Builtin.Num.U16"),
-            .i16 => std.mem.eql(u8, text, "I16") or std.mem.eql(u8, text, "Num.I16") or std.mem.eql(u8, text, "Builtin.Num.I16"),
-            .u32 => std.mem.eql(u8, text, "U32") or std.mem.eql(u8, text, "Num.U32") or std.mem.eql(u8, text, "Builtin.Num.U32"),
-            .i32 => std.mem.eql(u8, text, "I32") or std.mem.eql(u8, text, "Num.I32") or std.mem.eql(u8, text, "Builtin.Num.I32"),
-            .u64 => std.mem.eql(u8, text, "U64") or std.mem.eql(u8, text, "Num.U64") or std.mem.eql(u8, text, "Builtin.Num.U64"),
-            .i64 => std.mem.eql(u8, text, "I64") or std.mem.eql(u8, text, "Num.I64") or std.mem.eql(u8, text, "Builtin.Num.I64"),
-            .u128 => std.mem.eql(u8, text, "U128") or std.mem.eql(u8, text, "Num.U128") or std.mem.eql(u8, text, "Builtin.Num.U128"),
-            .i128 => std.mem.eql(u8, text, "I128") or std.mem.eql(u8, text, "Num.I128") or std.mem.eql(u8, text, "Builtin.Num.I128"),
-            .f32 => std.mem.eql(u8, text, "F32") or std.mem.eql(u8, text, "Num.F32") or std.mem.eql(u8, text, "Builtin.Num.F32"),
-            .f64 => std.mem.eql(u8, text, "F64") or std.mem.eql(u8, text, "Num.F64") or std.mem.eql(u8, text, "Builtin.Num.F64"),
-            .dec => std.mem.eql(u8, text, "Dec") or std.mem.eql(u8, text, "Num.Dec") or std.mem.eql(u8, text, "Builtin.Num.Dec"),
-            .erased => false,
-        };
-    }
-
-    fn findPrimitiveAttachedMethodTarget(self: *Lowerer, prim: type_mod.Prim, method_ident: base.Ident.Idx) Symbol {
-        var iter = self.attached_method_index.iterator();
-        var matched: ?Symbol = null;
-        while (iter.next()) |entry| {
-            const key = entry.key_ptr.*;
-            if (key.method_ident != method_ident) continue;
-            if (!self.primitiveMethodTypeMatches(prim, key.type_ident)) continue;
-            if (matched) |existing| {
-                if (existing != entry.value_ptr.*) {
-                    debugPanic("monotype invariant violated: multiple primitive attached method targets", .{});
-                }
-            } else {
-                matched = entry.value_ptr.*;
-            }
-        }
-        return matched orelse debugPanic("monotype invariant violated: missing primitive attached method target", .{});
-    }
-
-    fn findBuiltinAttachedMethodTarget(
-        self: *Lowerer,
-        owner: symbol_mod.BuiltinAttachedMethodOwner,
-        method_ident: base.Ident.Idx,
-    ) Symbol {
-        return self.builtin_attached_method_index.get(.{
-            .owner = owner,
-            .method_ident = method_ident,
-        }) orelse debugPanic("monotype invariant violated: missing builtin attached method target", .{});
-    }
-
-    fn findAttachedMethodTargetFromType(
-        self: *Lowerer,
-        receiver_ty: type_mod.TypeId,
-        method_module_idx: u32,
-        method_name: base.Ident.Idx,
-    ) std.mem.Allocator.Error!Symbol {
-        try self.buildAttachedMethodIndex();
-        const method_ident = try self.ctx.copyExecutableIdent(method_module_idx, method_name);
-        return switch (self.ctx.types.getTypePreservingNominal(receiver_ty)) {
-            .nominal => |nominal| self.attached_method_index.get(.{
-                .module_idx = nominal.module_idx,
-                .type_ident = nominal.ident,
-                .method_ident = method_ident,
-            }) orelse debugPanic("monotype invariant violated: missing nominal attached method target", .{}),
-            .primitive => |prim| self.findPrimitiveAttachedMethodTarget(prim, method_ident),
-            .list => self.findBuiltinAttachedMethodTarget(.list, method_ident),
-            .box => self.findBuiltinAttachedMethodTarget(.box, method_ident),
-            else => debugPanic("monotype invariant violated: attached method receiver type is not nominal/primitive/builtin", .{}),
-        };
-    }
-
     fn lowerMethodCallExpr(
         self: *Lowerer,
         module_idx: u32,
@@ -6539,23 +6453,6 @@ pub const Lowerer = struct {
         return try self.program.store.addExprSpan(out);
     }
 
-    fn lowerExprSliceWithExpectedType(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeScope,
-        env: BindingEnv,
-        exprs: []const CIR.Expr.Idx,
-        expected_ty: type_mod.TypeId,
-        expected_var: ?Var,
-    ) std.mem.Allocator.Error!ast.Span(ast.ExprId) {
-        const out = try self.allocator.alloc(ast.ExprId, exprs.len);
-        defer self.allocator.free(out);
-        for (exprs, 0..) |expr_idx, i| {
-            out[i] = try self.lowerExprWithExpectedType(module_idx, type_scope, env, expr_idx, expected_ty, expected_var);
-        }
-        return try self.program.store.addExprSpan(out);
-    }
-
     fn lowerHomogeneousBinopArgs(
         self: *Lowerer,
         module_idx: u32,
@@ -6571,43 +6468,6 @@ pub const Lowerer = struct {
             try self.lowerExprWithExpectedType(module_idx, type_scope, env, rhs_expr_idx, operand_ty, operand_var),
         };
         return self.program.store.addExprSpan(&lowered);
-    }
-
-    fn lowerRecordFieldsWithExpectedType(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeScope,
-        env: BindingEnv,
-        _: type_mod.TypeId,
-        span: CIR.RecordField.Span,
-    ) std.mem.Allocator.Error!ast.Span(ast.FieldExpr) {
-        const typed_cir_module = self.ctx.typedCirModule(module_idx);
-        const fields = typed_cir_module.sliceRecordFields(span);
-        const out = try self.allocator.alloc(ast.FieldExpr, fields.len);
-        defer self.allocator.free(out);
-
-        for (fields, 0..) |field_idx, i| {
-            const field = typed_cir_module.getRecordField(field_idx);
-            out[i] = .{
-                .name = try self.ctx.copyExecutableIdent(module_idx, field.name),
-                .value = try self.lowerExprWithExpectedType(
-                    module_idx,
-                    type_scope,
-                    env,
-                    field.value,
-                    try self.requireExprType(module_idx, type_scope, field.value),
-                    try self.exprResultVar(module_idx, type_scope, env, field.value),
-                ),
-            };
-        }
-
-        std.mem.sort(ast.FieldExpr, out, &self.ctx.idents, struct {
-            fn lessThan(idents: *const base.Ident.Store, a: ast.FieldExpr, b: ast.FieldExpr) bool {
-                return std.mem.order(u8, idents.getText(a.name), idents.getText(b.name)) == .lt;
-            }
-        }.lessThan);
-
-        return try self.program.store.addFieldExprSpan(out);
     }
 
     fn lowerTagExprWithExpectedType(
@@ -7683,34 +7543,6 @@ pub const Lowerer = struct {
         return try self.requireExprType(module_idx, type_scope, expr_idx);
     }
 
-    fn lookupTrySuffixPayloadType(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeScope,
-        _: BindingEnv,
-        match_expr: CIR.Expr.Match,
-    ) std.mem.Allocator.Error!?type_mod.TypeId {
-        const typed_cir_module = self.ctx.typedCirModule(module_idx);
-        const branches = typed_cir_module.matchBranchSlice(match_expr.branches);
-        if (branches.len == 0) return null;
-
-        const ok_branch = typed_cir_module.getMatchBranch(branches[0]);
-        const branch_patterns = typed_cir_module.sliceMatchBranchPatterns(ok_branch.patterns);
-        if (branch_patterns.len == 0) return null;
-
-        const branch_pattern = typed_cir_module.getMatchBranchPattern(branch_patterns[0]);
-        const tag_info = self.lookupSingleTagPayloadPattern(module_idx, branch_pattern.pattern) orelse return null;
-        const cond_ty = try self.requireExprType(module_idx, type_scope, match_expr.cond);
-        const payload_tys = try self.requireTagPayloadTypesFromMonotype(module_idx, cond_ty, tag_info.tag_name);
-        if (payload_tys.len != 1) {
-            return debugPanic(
-                "monotype try-suffix invariant violated: expected exactly one payload type for single-payload tag pattern",
-                .{},
-            );
-        }
-        return payload_tys[0];
-    }
-
     fn lookupSingleTagPayloadPattern(
         self: *Lowerer,
         module_idx: u32,
@@ -7728,10 +7560,6 @@ pub const Lowerer = struct {
             .nominal_external => |nominal| self.lookupSingleTagPayloadPattern(module_idx, nominal.backing_pattern),
             else => null,
         };
-    }
-
-    fn makeEmptyRecordType(self: *Lowerer) std.mem.Allocator.Error!type_mod.TypeId {
-        return try self.makeUnitType();
     }
 
     fn normalizeDefaultNumericLiteralType(
@@ -8231,17 +8059,6 @@ pub const Lowerer = struct {
         };
     }
 
-    fn isDefaultDecLiteralExpr(expr: CIR.Expr) bool {
-        return switch (expr) {
-            .e_num => |num| switch (num.kind) {
-                .num_unbound, .int_unbound => true,
-                else => false,
-            },
-            .e_dec, .e_dec_small => true,
-            else => false,
-        };
-    }
-
     fn makeUnitArgWithType(self: *Lowerer, unit_ty: type_mod.TypeId) std.mem.Allocator.Error!ast.TypedSymbol {
         return .{
             .ty = unit_ty,
@@ -8282,16 +8099,6 @@ pub const Lowerer = struct {
             !try self.patternIsIrrefutableStructural(module_idx, type_scope, pattern_idx);
     }
 
-    fn makePatternSourceBind(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeScope,
-        pattern_idx: CIR.Pattern.Idx,
-    ) std.mem.Allocator.Error!ast.TypedSymbol {
-        const ty = try self.requirePatternType(module_idx, type_scope, pattern_idx);
-        return self.makePatternSourceBindWithType(module_idx, pattern_idx, ty);
-    }
-
     fn makePatternSourceBindWithType(
         self: *Lowerer,
         module_idx: u32,
@@ -8304,26 +8111,6 @@ pub const Lowerer = struct {
             else => try self.ctx.addSyntheticSymbol(base.Ident.Idx.NONE),
         };
         return .{ .ty = ty, .symbol = symbol };
-    }
-
-    fn collectStructuralBindingDecls(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeScope,
-        source: ast.TypedSymbol,
-        pattern_idx: CIR.Pattern.Idx,
-        env: *BindingEnv,
-        decls: *std.ArrayList(BindingDecl),
-    ) std.mem.Allocator.Error!void {
-        return self.collectStructuralBindingDeclsWithSolvedVar(
-            module_idx,
-            type_scope,
-            source,
-            null,
-            pattern_idx,
-            env,
-            decls,
-        );
     }
 
     fn collectStructuralBindingDeclsWithSolvedVar(
@@ -8739,19 +8526,6 @@ pub const Lowerer = struct {
             },
             else => debugTodoPattern(pattern),
         }
-    }
-
-    fn lowerStructuralPatWithSource(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeScope,
-        pattern_idx: CIR.Pattern.Idx,
-    ) std.mem.Allocator.Error!ast.PatId {
-        const source = try self.makePatternSourceBind(module_idx, type_scope, pattern_idx);
-        return try self.program.store.addPat(.{
-            .ty = source.ty,
-            .data = .{ .var_ = source.symbol },
-        });
     }
 
     fn lowerStructuralPatWithType(
@@ -9198,17 +8972,6 @@ pub const Lowerer = struct {
         }
     }
 
-    fn bindPatternEnvFromType(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeScope,
-        pattern_idx: CIR.Pattern.Idx,
-        source_ty: type_mod.TypeId,
-        env: *BindingEnv,
-    ) std.mem.Allocator.Error!void {
-        return self.bindPatternEnvFromTypeWithSolvedVar(module_idx, type_scope, pattern_idx, source_ty, null, env);
-    }
-
     fn bindPatternEnvFromTypeWithSolvedVar(
         self: *Lowerer,
         module_idx: u32,
@@ -9339,26 +9102,6 @@ pub const Lowerer = struct {
         }
     }
 
-    fn requirePatternBinder(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeScope,
-        pattern_idx: CIR.Pattern.Idx,
-    ) std.mem.Allocator.Error!ast.TypedSymbol {
-        const pattern = self.ctx.typedCirModule(module_idx).pattern(pattern_idx).data;
-        return switch (pattern) {
-            .assign => |assign| .{
-                .ty = try self.requirePatternType(module_idx, type_scope, pattern_idx),
-                .symbol = try self.ctx.getOrCreatePatternSymbol(module_idx, pattern_idx, assign.ident),
-            },
-            .as => |as_pat| .{
-                .ty = try self.requirePatternType(module_idx, type_scope, pattern_idx),
-                .symbol = try self.ctx.getOrCreatePatternSymbol(module_idx, pattern_idx, as_pat.ident),
-            },
-            else => debugTodoPattern(pattern),
-        };
-    }
-
     fn requirePatternSymbolOnly(
         self: *Lowerer,
         module_idx: u32,
@@ -9443,17 +9186,6 @@ pub const Lowerer = struct {
                 null,
             else => null,
         };
-    }
-
-    fn scopedExprResultVar(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeScope,
-        env: BindingEnv,
-        expr_idx: CIR.Expr.Idx,
-    ) std.mem.Allocator.Error!Var {
-        return self.lookupSpecializedExprVar(module_idx, env, expr_idx) orelse
-            try self.instantiateSourceExprVar(type_scope, module_idx, expr_idx);
     }
 
     fn scopedSolvedExprResultVar(
@@ -9549,16 +9281,6 @@ pub const Lowerer = struct {
         const scoped = try self.instantiateSourceVarFresh(type_scope, module_idx, source_var);
         try type_scope.memo.expr_source_var_map.put(key, scoped);
         return scoped;
-    }
-
-    fn instantiateSourceExprType(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeScope,
-        expr_idx: CIR.Expr.Idx,
-    ) std.mem.Allocator.Error!type_mod.TypeId {
-        const scoped = try self.instantiateSourceExprVar(type_scope, module_idx, expr_idx);
-        return try self.instantiateVarType(module_idx, type_scope, scoped);
     }
 
     fn instantiateScopedVar(
@@ -9834,29 +9556,6 @@ fn builtinNumPrimInStore(idents: *const base.Ident.Store, ident: base.Ident.Idx)
     if (std.mem.eql(u8, text, "F64")) return .f64;
     if (std.mem.eql(u8, text, "Dec")) return .dec;
     return null;
-}
-
-fn isBuiltinBoolTagUnion(env: *const ModuleEnv, tags_slice: anytype) bool {
-    if (tags_slice.len != 2) return false;
-
-    var saw_true = false;
-    var saw_false = false;
-    for (0..tags_slice.len) |i| {
-        const name = tags_slice.items(.name)[i];
-        const args = env.types.sliceVars(tags_slice.items(.args)[i]);
-        if (args.len != 0) return false;
-        if (name.eql(env.idents.true_tag)) {
-            saw_true = true;
-            continue;
-        }
-        if (name.eql(env.idents.false_tag)) {
-            saw_false = true;
-            continue;
-        }
-        return false;
-    }
-
-    return saw_true and saw_false;
 }
 
 fn isBuiltinBoolTagUnionSlice(

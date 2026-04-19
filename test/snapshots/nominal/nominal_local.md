@@ -142,24 +142,7 @@ test = |{}| {
 					(ty-lookup (name "U8") (builtin))))))
 	(d-let
 		(p-assign (ident "test"))
-		(e-lambda
-			(args
-				(p-record-destructure
-					(destructs)))
-			(e-block
-				(s-nominal-decl
-					(ty-header (name "Utf8Format"))
-					(ty-record))
-				(s-let
-					(p-assign (ident "fmt"))
-					(e-tag (name "Utf8Format")))
-				(e-call
-					(e-lookup-external
-						(builtin))
-					(e-string
-						(e-literal (string "hi")))
-					(e-lookup-local
-						(p-assign (ident "fmt")))))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-nominal-decl
 		(ty-header (name "Utf8Format"))
 		(ty-record)))

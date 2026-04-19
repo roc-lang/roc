@@ -41,12 +41,17 @@ fn runDevBackendHostSelfTest(
     defer allocator.free(cache_path);
     try tmp_dir.dir.makePath("roc-cache");
 
+    const zig_local_cache_path = try std.fs.path.join(allocator, &.{ tmp_path, "zig-local-cache" });
+    defer allocator.free(zig_local_cache_path);
+    try tmp_dir.dir.makePath("zig-local-cache");
+
     const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_path});
     defer allocator.free(output_arg);
 
     var env_map = try std.process.getEnvMap(allocator);
     defer env_map.deinit();
     try env_map.put("ROC_CACHE_DIR", cache_path);
+    try env_map.put("ZIG_LOCAL_CACHE_DIR", zig_local_cache_path);
 
     const build_result = try std.process.Child.run(.{
         .allocator = allocator,

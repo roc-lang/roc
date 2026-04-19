@@ -43,17 +43,10 @@ const allocateWithRefcountC = builtins.utils.allocateWithRefcountC;
 const increfDataPtrC = builtins.utils.increfDataPtrC;
 const decrefDataPtrC = builtins.utils.decrefDataPtrC;
 const freeDataPtrC = builtins.utils.freeDataPtrC;
-const rcNone = builtins.utils.rcNone;
-const copy_fallback = dev_wrappers.copy_fallback;
 
 // List builtin functions - using C-compatible wrappers to avoid ABI issues
 // with 24-byte RocList struct returns on aarch64
 const RocList = builtins.list.RocList;
-const listConcat = builtins.list.listConcat;
-const listPrepend = builtins.list.listPrepend;
-const listReplace = builtins.list.listReplace;
-const listReserve = builtins.list.listReserve;
-const listReleaseExcessCapacity = builtins.list.listReleaseExcessCapacity;
 
 // String builtins
 const strToUtf8C = builtins.str.strToUtf8C;
@@ -95,16 +88,6 @@ const RcHelperKey = layout.RcHelperKey;
 
 // Control flow statement types (for two-pass compilation)
 const CFStmtId = lir.CFStmtId;
-
-fn builtinInternalLayoutContainsRefcounted(ls: *const LayoutStore, comptime site: []const u8, layout_idx: layout.Idx) bool {
-    ownership_boundary.builtinRuntimeInternal(site);
-    return ls.layoutContainsRefcounted(ls.getLayout(layout_idx));
-}
-
-fn builtinInternalLayoutValContainsRefcounted(ls: *const LayoutStore, comptime site: []const u8, layout_val: layout.Layout) bool {
-    ownership_boundary.builtinRuntimeInternal(site);
-    return ls.layoutContainsRefcounted(layout_val);
-}
 
 fn explicitRcLayoutValContainsRefcounted(ls: *const LayoutStore, comptime site: []const u8, layout_val: layout.Layout) bool {
     ownership_boundary.explicitLirRcExecution(site);
@@ -506,188 +489,6 @@ fn wrapStrWithAsciiUppercased(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, s
 fn wrapStrFromUtf8Lossy(out: *RocStr, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, roc_ops: *RocOps) callconv(.c) void {
     const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     out.* = strFromUtf8Lossy(list, roc_ops);
-}
-
-/// Wrapper: escape special characters and wrap in double quotes for Str.inspect
-fn wrapStrEscapeAndQuote(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, roc_ops: *RocOps) callconv(.c) void {
-    // Reconstruct the RocStr so asSlice() handles both small and large strings
-    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
-    const slice = s.asSlice();
-
-    // Count extra bytes needed for escaping backslashes and quotes
-    var extra: usize = 0;
-    for (slice) |ch| {
-        if (ch == '\\' or ch == '"') extra += 1;
-    }
-
-    const result_len = slice.len + extra + 2; // +2 for surrounding quotes
-
-    const small_string_size = @sizeOf(RocStr);
-    if (result_len < small_string_size) {
-        // Small string: build inline
-        var buf: [small_string_size]u8 = .{0} ** small_string_size;
-        buf[0] = '"';
-        var pos: usize = 1;
-        for (slice) |ch| {
-            if (ch == '\\' or ch == '"') {
-                buf[pos] = '\\';
-                pos += 1;
-            }
-            buf[pos] = ch;
-            pos += 1;
-        }
-        buf[pos] = '"';
-        buf[small_string_size - 1] = @intCast(result_len | 0x80);
-        out.* = @bitCast(buf);
-    } else {
-        // Large string: allocate heap memory
-        const heap_ptr = allocateWithRefcountC(result_len, 1, false, roc_ops);
-        heap_ptr[0] = '"';
-        var pos: usize = 1;
-        for (slice) |ch| {
-            if (ch == '\\' or ch == '"') {
-                heap_ptr[pos] = '\\';
-                pos += 1;
-            }
-            heap_ptr[pos] = ch;
-            pos += 1;
-        }
-        heap_ptr[pos] = '"';
-        out.* = .{ .bytes = heap_ptr, .length = result_len, .capacity_or_alloc_ptr = result_len };
-    }
-}
-
-/// Wrapper: listConcat(RocList, RocList, alignment, element_width, ..., *RocOps) -> RocList
-fn wrapListConcat(out: *RocList, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, alignment: u32, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
-    const a = RocList{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
-    const b = RocList{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
-    out.* = listConcat(a, b, alignment, element_width, elements_refcounted, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), roc_ops);
-}
-
-/// Wrapper: listPrepend(RocList, alignment, element, element_width, ..., *RocOps) -> RocList
-fn wrapListPrepend(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element: ?[*]u8, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
-    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listPrepend(list, alignment, element, element_width, elements_refcounted, null, @ptrCast(&rcNone), @ptrCast(&copy_fallback), roc_ops);
-}
-
-/// Wrapper: listReplace for list_set
-fn wrapListReplace(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, index: u64, element: ?[*]u8, element_width: usize, elements_refcounted: bool, out_element: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
-    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listReplace(list, alignment, index, element, element_width, elements_refcounted, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), out_element, @ptrCast(&copy_fallback), roc_ops);
-}
-
-/// Wrapper: listReserve
-fn wrapListReserve(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, spare: u64, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
-    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listReserve(list, alignment, spare, element_width, elements_refcounted, null, @ptrCast(&rcNone), .Immutable, roc_ops);
-}
-
-/// Wrapper: listReleaseExcessCapacity
-fn wrapListReleaseExcessCapacity(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
-    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listReleaseExcessCapacity(list, alignment, element_width, elements_refcounted, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), .Immutable, roc_ops);
-}
-
-/// Context passed through the opaque `cmp_data` pointer to the sort comparison trampoline.
-const SortCmpContext = extern struct {
-    roc_fn_addr: usize,
-    element_width: usize,
-};
-
-/// C-callable comparison trampoline for listSortWith.
-/// Loads element values from pointers and calls the compiled Roc comparison function.
-fn sortCmpTrampoline(cmp_data: ?[*]u8, a_ptr: ?[*]u8, b_ptr: ?[*]u8) callconv(.c) u8 {
-    const ctx: *const SortCmpContext = @ptrCast(@alignCast(cmp_data));
-    const ew = ctx.element_width;
-
-    if (ew <= 8) {
-        // Safe to pass values directly: single-register types (u8..u64) have
-        // identical layouts in both C callconv and the Roc internal calling
-        // convention on all platforms, so no ABI mismatch is possible.
-        const cmp_fn: *const fn (u64, u64) callconv(.c) u8 = @ptrFromInt(ctx.roc_fn_addr);
-        var a_val: u64 = 0;
-        var b_val: u64 = 0;
-        if (a_ptr) |ap| @memcpy(@as([*]u8, @ptrCast(&a_val))[0..ew], ap[0..ew]);
-        if (b_ptr) |bp| @memcpy(@as([*]u8, @ptrCast(&b_val))[0..ew], bp[0..ew]);
-        return cmp_fn(a_val, b_val);
-    } else {
-        // For ew > 8 (multi-register types like Dec/i128/u128 and large structs),
-        // we pass element pointers directly. The comparator lambda is compiled with
-        // force_pass_by_ptr so its prologue loads values from these pointers.
-        //
-        // This avoids ABI mismatches between the Zig callconv(.c) and the Roc
-        // internal calling convention. For example:
-        // - Windows C ABI passes u128 by pointer (RCX=&a, RDX=&b), but the Roc
-        //   lambda's bindLambdaParams may convert only the first param to pointer
-        //   and pass the second in registers (RCX=&a, RDX=b_low, R8=b_high).
-        // - System V C ABI passes large structs by pointer, but bindLambdaParams
-        //   may keep one param in registers if it fits.
-        const cmp_fn: *const fn (?[*]u8, ?[*]u8) callconv(.c) u8 = @ptrFromInt(ctx.roc_fn_addr);
-        return cmp_fn(a_ptr, b_ptr);
-    }
-}
-
-/// Wrapper: listSortWith — sorts a list using a compiled Roc comparison function.
-/// Uses a simple insertion sort to avoid ABI complexities with fluxsort.
-fn wrapListSortWith(
-    out: *RocList,
-    list_bytes: ?[*]u8,
-    list_len: usize,
-    list_cap: usize,
-    cmp_fn_addr: usize,
-    alignment: u32,
-    element_width: usize,
-    elements_refcounted: bool,
-    roc_ops: *RocOps,
-) callconv(.c) void {
-    if (list_len < 2) {
-        out.* = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-        return;
-    }
-
-    // Allocate a new list for the sorted result
-    const total_bytes = list_len * element_width;
-    const sorted_bytes = allocateWithRefcountC(total_bytes, alignment, elements_refcounted, roc_ops);
-    if (list_bytes) |src| {
-        @memcpy(sorted_bytes[0..total_bytes], src[0..total_bytes]);
-    }
-
-    // Insertion sort using the comparison trampoline
-    const cmp_ctx = SortCmpContext{
-        .roc_fn_addr = cmp_fn_addr,
-        .element_width = element_width,
-    };
-
-    var temp_buf: [256]u8 align(16) = undefined;
-
-    var i: usize = 1;
-    while (i < list_len) : (i += 1) {
-        // Save element[i] to temp
-        const elem_i = sorted_bytes + i * element_width;
-        @memcpy(temp_buf[0..element_width], elem_i[0..element_width]);
-
-        // Shift elements right until we find the insertion point
-        var j: usize = i;
-        while (j > 0) {
-            const elem_j_minus_1 = sorted_bytes + (j - 1) * element_width;
-            // Compare temp (element being inserted) with element[j-1]
-            const cmp_result = sortCmpTrampoline(@ptrCast(@constCast(&cmp_ctx)), &temp_buf, elem_j_minus_1);
-            if (cmp_result != 2) break; // not LT, stop shifting (EQ=0, GT=1)
-            // Shift element[j-1] to element[j]
-            const elem_j = sorted_bytes + j * element_width;
-            @memcpy(elem_j[0..element_width], elem_j_minus_1[0..element_width]);
-            j -= 1;
-        }
-        // Insert temp at position j
-        const insert_pos = sorted_bytes + j * element_width;
-        @memcpy(insert_pos[0..element_width], temp_buf[0..element_width]);
-    }
-
-    out.* = RocList{
-        .bytes = sorted_bytes,
-        .length = list_len,
-        .capacity_or_alloc_ptr = list_len,
-    };
 }
 
 const LirProcSpec = lir.LirProcSpec;
@@ -4406,7 +4207,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const null_patch = try self.emitJumpIfEqual();
 
             try self.codegen.emitLoadImm(masked_reg, 7);
-            try self.emitAndRegs(.w64, masked_reg, ptr_reg, masked_reg);
+            try self.emitAndRegs(.w64, masked_reg, masked_reg, ptr_reg);
             try self.emitCmpImm(masked_reg, 0);
             const aligned_patch = try self.emitJumpIfEqual();
 
@@ -4461,38 +4262,60 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Small RocStrs are stored inline and identified by the sign bit of cap.
             try self.codegen.emitLoadImm(tmp_reg, std.math.minInt(i64));
-            try self.emitAndRegs(.w64, tmp_reg, cap_reg, tmp_reg);
+            try self.emitAndRegs(.w64, tmp_reg, tmp_reg, cap_reg);
             try self.emitCmpImm(tmp_reg, 0);
             const small_patch = try self.emitJumpIfNotEqual();
 
-            // Non-small RocStrs must have a non-null, aligned bytes pointer.
+            // Non-small RocStrs must have a non-null bytes pointer.
             try self.emitCmpImm(ptr_reg, 0);
             const ptr_non_null_patch = try self.emitJumpIfNotEqual();
             try self.emitDebugCrashInvalidStrLocal(local, "null bytes pointer");
             const after_null = self.codegen.currentOffset();
             self.codegen.patchJump(ptr_non_null_patch, after_null);
 
+            // Seamless slices store an interior bytes pointer plus the original
+            // allocation pointer in capacity_or_alloc_ptr. Their bytes pointer
+            // may be arbitrarily offset, so validate the stored allocation
+            // pointer instead of requiring bytes alignment.
+            try self.codegen.emitLoadImm(tmp_reg, std.math.minInt(i64));
+            try self.emitAndRegs(.w64, tmp_reg, tmp_reg, len_reg);
+            try self.emitCmpImm(tmp_reg, 0);
+            const non_seamless_patch = try self.emitJumpIfEqual();
+
+            try self.emitShlImm(.w64, tmp_reg, cap_reg, 1);
+            try self.emitCmpImm(tmp_reg, 0);
+            const alloc_non_null_patch = try self.emitJumpIfNotEqual();
+            try self.emitDebugCrashInvalidStrLocal(local, "null allocation pointer");
+            const after_alloc_null = self.codegen.currentOffset();
+            self.codegen.patchJump(alloc_non_null_patch, after_alloc_null);
+
+            try self.codegen.emitLoadImm(ptr_reg, @alignOf(usize) - 1);
+            try self.emitAndRegs(.w64, ptr_reg, ptr_reg, tmp_reg);
+            try self.emitCmpImm(ptr_reg, 0);
+            const alloc_aligned_patch = try self.emitJumpIfEqual();
+            try self.emitDebugCrashInvalidStrLocal(local, "misaligned allocation pointer");
+            const after_alloc_align = self.codegen.currentOffset();
+            self.codegen.patchJump(alloc_aligned_patch, after_alloc_align);
+
+            const seamless_done_patch = try self.codegen.emitJump();
+            const after_seamless = self.codegen.currentOffset();
+            self.codegen.patchJump(non_seamless_patch, after_seamless);
+
+            // Non-small RocStrs must satisfy len <= capacity.
             try self.codegen.emitLoadImm(tmp_reg, @alignOf(usize) - 1);
-            try self.emitAndRegs(.w64, tmp_reg, ptr_reg, tmp_reg);
+            try self.emitAndRegs(.w64, tmp_reg, tmp_reg, ptr_reg);
             try self.emitCmpImm(tmp_reg, 0);
             const ptr_aligned_patch = try self.emitJumpIfEqual();
             try self.emitDebugCrashInvalidStrLocal(local, "misaligned bytes pointer");
-            const after_align = self.codegen.currentOffset();
-            self.codegen.patchJump(ptr_aligned_patch, after_align);
+            const after_ptr_align = self.codegen.currentOffset();
+            self.codegen.patchJump(ptr_aligned_patch, after_ptr_align);
 
-            // Seamless slices store a pointer in capacity_or_alloc_ptr; skip len<=cap check.
-            try self.codegen.emitLoadImm(tmp_reg, std.math.minInt(i64));
-            try self.emitAndRegs(.w64, tmp_reg, len_reg, tmp_reg);
-            try self.emitCmpImm(tmp_reg, 0);
-            const seamless_patch = try self.emitJumpIfNotEqual();
-
-            // Non-small RocStrs must satisfy len <= capacity.
             try self.emitCmpReg(len_reg, cap_reg);
             const len_ok_patch = try self.codegen.emitCondJump(condBelowOrEqual());
             try self.emitDebugCrashInvalidStrLocal(local, "length exceeds capacity");
             const done = self.codegen.currentOffset();
             self.codegen.patchJump(len_ok_patch, done);
-            self.codegen.patchJump(seamless_patch, done);
+            self.codegen.patchJump(seamless_done_patch, done);
             self.codegen.patchJump(small_patch, done);
         }
 
@@ -6408,62 +6231,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .general_reg = result_reg };
         }
 
-        /// Fast bytewise tag union comparison when no variants contain heap types.
-        fn generateTagUnionBytewiseComparison(
-            self: *Self,
-            lhs_base: i32,
-            rhs_base: i32,
-            total_size: u32,
-            op: anytype,
-        ) Allocator.Error!ValueLocation {
-            const result_reg = try self.allocTempGeneral();
-            try self.codegen.emitLoadImm(result_reg, 1);
-
-            const tmp_a = try self.allocTempGeneral();
-            const tmp_b = try self.allocTempGeneral();
-
-            var cmp_off: u32 = 0;
-            while (cmp_off < total_size) {
-                const lhs_off = lhs_base + @as(i32, @intCast(cmp_off));
-                const rhs_off = rhs_base + @as(i32, @intCast(cmp_off));
-
-                try self.codegen.emitLoadStack(.w64, tmp_a, lhs_off);
-                try self.codegen.emitLoadStack(.w64, tmp_b, rhs_off);
-
-                const remaining = total_size - cmp_off;
-                if (remaining < 8) {
-                    const mask: u64 = (@as(u64, 1) << @intCast(remaining * 8)) - 1;
-                    const mask_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(mask_reg, @bitCast(mask));
-                    try self.emitAndRegs(.w64, tmp_a, tmp_a, mask_reg);
-                    try self.emitAndRegs(.w64, tmp_b, tmp_b, mask_reg);
-                    self.codegen.freeGeneral(mask_reg);
-                }
-
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.cmp(.w64, tmp_a, tmp_b);
-                    try self.codegen.emit.csel(.w64, result_reg, result_reg, .ZRSP, .eq);
-                } else {
-                    try self.codegen.emit.cmpRegReg(.w64, tmp_a, tmp_b);
-                    const zero_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(zero_reg, 0);
-                    try self.codegen.emit.cmovcc(.not_equal, .w64, result_reg, zero_reg);
-                    self.codegen.freeGeneral(zero_reg);
-                }
-
-                cmp_off += 8;
-            }
-
-            self.codegen.freeGeneral(tmp_a);
-            self.codegen.freeGeneral(tmp_b);
-
-            if (op != .num_is_eq) {
-                try self.emitXorImm(.w64, result_reg, result_reg, 1);
-            }
-
-            return .{ .general_reg = result_reg };
-        }
-
         /// for each field type (i128 for Dec fields, i64 for smaller fields, etc.)
         /// Compare a single field/element by its layout type, writing 1 (equal) or 0 (not equal)
         /// into result_reg. Dispatches on layout type rather than byte size to correctly
@@ -8060,17 +7827,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!void {
             ownership_boundary.explicitLirRcExecution("dev.emitExplicitRcHelperCallAtStackOffset");
             try self.emitRawRcHelperCallAtStackOffset(op, base_offset, layout_idx, count);
-        }
-
-        fn emitBuiltinInternalRcHelperCallForValue(
-            self: *Self,
-            op: RcOp,
-            value_loc: ValueLocation,
-            layout_idx: layout.Idx,
-            count: u16,
-        ) Allocator.Error!void {
-            ownership_boundary.builtinRuntimeInternal("dev.emitBuiltinInternalRcHelperCallForValue");
-            try self.emitRawRcHelperCallForValue(op, value_loc, layout_idx, count);
         }
 
         fn emitRawRcHelperCallFromPtrReg(
@@ -10114,12 +9870,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .noreturn => unreachable,
                 else => unreachable,
             }
-        }
-
-        /// Convert callable values stored on stack to a concrete stack ValueLocation
-        /// based on the expected return layout.
-        fn normalizeResultLocForLayout(_: *Self, loc: ValueLocation, _: layout.Idx) ValueLocation {
-            return loc;
         }
 
         /// Normalize immediate literal representation to match the target layout.

@@ -15,9 +15,29 @@ type=repl
 » !Bool.True or !Bool.True
 ~~~
 # OUTPUT
-Crash: Compile-time error encountered at runtime
+**DOES NOT EXIST**
+`Bool.true` does not exist.
+
+`Bool` is in scope, but it has no associated `true`.
+
+It's referenced here:
+**repl:1:1:1:10:**
+```roc
+Bool.true
+```
+^^^^^^^^^
 ---
-Crash: Compile-time error encountered at runtime
+**DOES NOT EXIST**
+`Bool.false` does not exist.
+
+`Bool` is in scope, but it has no associated `false`.
+
+It's referenced here:
+**repl:1:1:1:11:**
+```roc
+Bool.false
+```
+^^^^^^^^^^
 ---
 True
 ---

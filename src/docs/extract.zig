@@ -304,20 +304,14 @@ pub fn extractModuleDocs(gpa: Allocator, module_env: *const ModuleEnv, package_n
             if (parent_idx_opt) |parent_idx| {
                 const parent = &entries_list.items[parent_idx];
 
-                // Duplicate the method entry with short name
-                const short_name = try gpa.dupe(u8, method_short_name);
-                errdefer gpa.free(short_name);
-
-                var method_entry = entry.*; // Copy entry
-                method_entry.name = short_name; // Use short name
+                const method_entry = try moveEntryForReparenting(gpa, entry, method_short_name);
 
                 // Add to parent's children
                 try appendChildEntry(gpa, parent, method_entry);
 
                 // Remove from top-level list (preserving source order)
-                const removed = entries_list.orderedRemove(i);
-                gpa.free(removed.children);
-                gpa.free(removed.name);
+                var removed = entries_list.orderedRemove(i);
+                removed.deinit(gpa);
                 continue; // Don't increment i, check same position again
             }
         }
@@ -453,11 +447,7 @@ fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel
             if (parent_idx_opt) |parent_idx| {
                 const parent_ptr = &entries_list.items[parent_idx];
 
-                // Duplicate the method entry with short name
-                const short_name = try gpa.dupe(u8, method_short_name);
-
-                var method_entry = entry.*;
-                method_entry.name = short_name;
+                const method_entry = try moveEntryForReparenting(gpa, entry, method_short_name);
 
                 // Check if remainder has more dots — if so, use reparentDottedChildInto
                 if (std.mem.indexOfScalar(u8, method_short_name, '.')) |_| {
@@ -473,9 +463,8 @@ fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel
                 }
 
                 // Remove from top-level list (preserving source order)
-                const removed = entries_list.orderedRemove(j);
-                gpa.free(removed.children);
-                gpa.free(removed.name);
+                var removed = entries_list.orderedRemove(j);
+                removed.deinit(gpa);
                 continue;
             }
         }
@@ -1777,6 +1766,27 @@ fn appendChildEntry(gpa: Allocator, parent: *DocModel.DocEntry, child: DocModel.
     new_children[old.len] = child;
     gpa.free(old);
     parent.children = new_children;
+}
+
+fn moveEntryForReparenting(
+    gpa: Allocator,
+    entry: *DocModel.DocEntry,
+    short_name: []const u8,
+) !DocModel.DocEntry {
+    const new_name = try gpa.dupe(u8, short_name);
+    errdefer gpa.free(new_name);
+
+    const empty_children = try gpa.alloc(DocModel.DocEntry, 0);
+    errdefer gpa.free(empty_children);
+
+    var moved = entry.*;
+    moved.name = new_name;
+
+    entry.children = empty_children;
+    entry.type_signature = null;
+    entry.doc_comment = null;
+
+    return moved;
 }
 
 fn trimLeft(s: []const u8) []const u8 {

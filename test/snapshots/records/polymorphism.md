@@ -14,15 +14,15 @@ type=expr
 }
 ~~~
 # EXPECTED
-MISSING METHOD - polymorphism.md:6:29:6:35
+MISSING METHOD - polymorphism.md:6:5:6:37
 # PROBLEMS
 **MISSING METHOD**
 This **to_str** method is being called on a value whose type doesn't have that method:
-**polymorphism.md:6:29:6:35:**
+**polymorphism.md:6:5:6:37:**
 ```roc
     { pair1, pair2, pair3 }.to_str()
 ```
-                            ^^^^^^
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 The value's type, which does not have a method named **to_str**, is:
 
@@ -78,13 +78,13 @@ EndOfFile,
 				(e-ident (raw "make_pair"))
 				(e-tag (raw "True"))
 				(e-tag (raw "False"))))
-		(e-field-access
-			(e-record
-				(field (field "pair1"))
-				(field (field "pair2"))
-				(field (field "pair3")))
-			(e-apply
-				(e-ident (raw "to_str"))))))
+		(e-method-call (method ".to_str")
+			(receiver
+				(e-record
+					(field (field "pair1"))
+					(field (field "pair2"))
+					(field (field "pair3"))))
+			(args))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -136,7 +136,7 @@ EndOfFile,
 				(p-assign (ident "make_pair")))
 			(e-tag (name "True"))
 			(e-tag (name "False"))))
-	(e-field-access (field "to_str")
+	(e-method-call (method "to_str")
 		(receiver
 			(e-record
 				(fields

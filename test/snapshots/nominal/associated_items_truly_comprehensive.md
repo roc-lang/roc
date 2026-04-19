@@ -483,6 +483,9 @@ UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:382:20:382:24
 UNUSED VARIABLE - associated_items_truly_comprehensive.md:382:20:382:24
 UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:388:12:388:16
 UNUSED VARIABLE - associated_items_truly_comprehensive.md:388:12:388:16
+CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:170:9:170:13
+CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:173:5:173:9
+CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:13:167:17
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `val4` in this scope.
@@ -528,6 +531,42 @@ The unused variable is declared here:
     val1 = val2 + 1                                         # Unqualified
 ```
            ^^^^
+
+
+**CIRCULAR VALUE DEFINITION**
+The value `associated_items_truly_comprehensive.D3_Pattern2.L2.val2` is part of a recursive non-function definition cycle.
+
+Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.
+
+**associated_items_truly_comprehensive.md:170:9:170:13:**
+```roc
+        val2 = D3_Pattern2.L2.L3.val3 + 10      # Forward ref to L3 val (qualified)
+```
+        ^^^^
+
+
+**CIRCULAR VALUE DEFINITION**
+The value `associated_items_truly_comprehensive.D3_Pattern2.val1` is part of a recursive non-function definition cycle.
+
+Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.
+
+**associated_items_truly_comprehensive.md:173:5:173:9:**
+```roc
+    val1 = D3_Pattern2.L2.val2 + 5              # Forward ref to L2 val (qualified)
+```
+    ^^^^
+
+
+**CIRCULAR VALUE DEFINITION**
+The value `associated_items_truly_comprehensive.D3_Pattern2.L2.L3.val3` is part of a recursive non-function definition cycle.
+
+Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.
+
+**associated_items_truly_comprehensive.md:167:13:167:17:**
+```roc
+            val3 = val2 + val1                  # Forward refs to L2 and L1 vals (unqualified)
+```
+            ^^^^
 
 
 # TOKENS
@@ -2640,23 +2679,13 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "100")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern2.L2.L3.val3"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern2.L2.val2")))
-			(e-lookup-local
-				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern2.val1")))))
+		(e-runtime-error (tag "circular_value_definition")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern2.L2.val2"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern2.L2.L3.val3")))
-			(e-num (value "10"))))
+		(e-runtime-error (tag "circular_value_definition")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern2.val1"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern2.L2.val2")))
-			(e-num (value "5"))))
+		(e-runtime-error (tag "circular_value_definition")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern3.L2.L3.val3"))
 		(e-num (value "1000")))
@@ -3611,9 +3640,9 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
-		(patt (type "e where [e.plus : e, e -> e]"))
-		(patt (type "e where [e.plus : e, e -> e]"))
-		(patt (type "e where [e.plus : e, e -> e]"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
@@ -3945,9 +3974,9 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
-		(expr (type "e where [e.plus : e, e -> e]"))
-		(expr (type "e where [e.plus : e, e -> e]"))
-		(expr (type "e where [e.plus : e, e -> e]"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))

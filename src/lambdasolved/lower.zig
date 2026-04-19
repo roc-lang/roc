@@ -232,19 +232,6 @@ const Lowerer = struct {
         };
     }
 
-    const DebugMonoTypeText = struct {
-        text: []const u8,
-        owned: bool,
-    };
-
-    fn debugMonotypeTypeSummary(self: *Lowerer, ty: LiftedType.TypeId) DebugMonoTypeText {
-        var out = std.ArrayList(u8).empty;
-        self.debugWriteMonotypeType(&out, ty) catch {
-            return .{ .text = "<debug-print-failed>", .owned = false };
-        };
-        return .{ .text = out.toOwnedSlice(self.allocator) catch "<oom>", .owned = true };
-    }
-
     fn debugWriteMonotypeType(self: *Lowerer, out: *std.ArrayList(u8), ty: LiftedType.TypeId) std.mem.Allocator.Error!void {
         switch (self.input.types.getTypePreservingNominal(ty)) {
             .placeholder => try out.appendSlice(self.allocator, "<placeholder>"),
@@ -2531,16 +2518,6 @@ const Lowerer = struct {
         };
     }
 
-    fn sourceSymbolFromOrigin(origin: symbol_mod.BindingOrigin) ?Symbol {
-        return switch (origin) {
-            .specialized_top_level_def => |info| Symbol.fromRaw(info.source_symbol),
-            .specialized_local_fn => |info| Symbol.fromRaw(info.source_symbol),
-            .lifted_local_fn => |info| Symbol.fromRaw(info.source_symbol),
-            .lifted_local_fn_alias => |info| Symbol.fromRaw(info.source_symbol),
-            else => null,
-        };
-    }
-
     fn reorderDefsByScc(self: *Lowerer) std.mem.Allocator.Error!void {
         const sccs = try self.computeSccs();
         defer self.freeSccs(sccs);
@@ -3748,11 +3725,6 @@ fn sortFieldsByName(idents: *const base.Ident.Store, fields: []type_mod.Field) v
 fn debugPanic(comptime msg: []const u8, args: anytype) noreturn {
     @branchHint(.cold);
     std.debug.panic(msg, args);
-}
-
-fn debugTodoLowLevel(op: base.LowLevel) noreturn {
-    @branchHint(.cold);
-    std.debug.panic("TODO lambdasolved low-level op {s}", .{@tagName(op)});
 }
 
 test "lambdasolved lower tests" {

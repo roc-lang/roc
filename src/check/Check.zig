@@ -7526,10 +7526,6 @@ fn nominalIsBoxType(self: *Self, nominal_type: types_mod.NominalType) bool {
         nominal_type.ident.ident_idx.eql(self.cir.idents.box);
 }
 
-fn varContainsUnboxedFunction(self: *Self, var_: Var) bool {
-    return self.varContainsUnboxedFunctionInternal(var_, false);
-}
-
 fn varContainsUnboxedFunctionInHostedSignature(self: *Self, var_: Var) bool {
     return self.varContainsUnboxedFunctionInHostedSignatureInternal(var_, true);
 }

@@ -69,10 +69,10 @@ EndOfFile,
 				(args
 					(p-ident (raw "list"))
 					(p-ident (raw "fn")))
-				(e-field-access
-					(e-ident (raw "list"))
-					(e-apply
-						(e-ident (raw "map"))
+				(e-method-call (method ".map")
+					(receiver
+						(e-ident (raw "list")))
+					(args
 						(e-ident (raw "fn"))))))
 		(s-decl
 			(p-ident (raw "main!"))
@@ -106,7 +106,7 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 			(args
 				(p-assign (ident "list"))
 				(p-assign (ident "fn")))
-			(e-field-access (field "map")
+			(e-method-call (method "map")
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "list"))))

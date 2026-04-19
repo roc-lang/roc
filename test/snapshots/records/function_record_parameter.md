@@ -27,10 +27,10 @@ EndOfFile,
 		(e-string-part (raw "Hello "))
 		(e-ident (raw "name"))
 		(e-string-part (raw ", you are "))
-		(e-field-access
-			(e-ident (raw "age"))
-			(e-apply
-				(e-ident (raw "to_str"))))
+		(e-method-call (method ".to_str")
+			(receiver
+				(e-ident (raw "age")))
+			(args))
 		(e-string-part (raw " years old"))))
 ~~~
 # FORMATTED
@@ -54,7 +54,7 @@ NO CHANGE
 		(e-lookup-local
 			(p-assign (ident "name")))
 		(e-literal (string ", you are "))
-		(e-field-access (field "to_str")
+		(e-method-call (method "to_str")
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "age"))))

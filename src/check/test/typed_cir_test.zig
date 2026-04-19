@@ -1,9 +1,6 @@
 //! Tests for the typed CIR module and view APIs.
 
 const std = @import("std");
-const can = @import("can");
-
-const CIR = can.CIR;
 const TestEnv = @import("./TestEnv.zig");
 const TypedCIR = @import("../typed_cir.zig");
 

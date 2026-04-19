@@ -476,13 +476,17 @@ fn evaluateFromSharedMemory(entry_idx: u32, host_roc_ops: *RocOps, ret_ptr: *any
     defer mono_lowerer.deinit();
     const entry_symbol = try mono_lowerer.specializeTopLevelDef(primary_module_idx, entry_def_idx.?);
     var mono = try mono_lowerer.run(primary_module_idx);
+    defer mono.deinit();
     var lifted = try monotype_lifted.Lower.run(wrapped_allocator, &mono);
+    defer lifted.deinit();
     var solved = try lambdasolved.Lower.run(wrapped_allocator, &lifted);
+    defer solved.deinit();
     const entrypoints = [_]symbol.Symbol{entry_symbol};
     var mono_executable = try lambdamono.Lower.runWithEntrypoints(wrapped_allocator, &solved, &entrypoints);
     const entrypoint_wrappers = mono_executable.entrypoint_wrappers;
     mono_executable.entrypoint_wrappers = &.{};
     defer if (entrypoint_wrappers.len > 0) wrapped_allocator.free(entrypoint_wrappers);
+    defer mono_executable.deinit();
     const entry_symbol_for_lir = if (entrypoint_wrappers.len == 0)
         entry_symbol
     else

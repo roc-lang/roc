@@ -15,19 +15,15 @@ const check = @import("check");
 const compile = @import("compile");
 const types = @import("types");
 const collections = @import("collections");
-const import_mapping_mod = types.import_mapping;
 const eval = @import("eval");
 const layout = @import("layout");
 const tracy = @import("tracy");
-const roc_target = @import("roc_target");
 const monotype = @import("monotype");
 const monotype_lifted = @import("monotype_lifted");
 const lambdasolved = @import("lambdasolved");
 const lambdamono = @import("lambdamono");
 const ir = @import("ir");
 const lir = @import("lir");
-const symbol = @import("symbol");
-
 // Module tracing flag - enabled via `zig build -Dtrace-modules`
 const trace_modules = if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
 
@@ -119,17 +115,6 @@ fn wasmFree(_: *anyopaque, buf: []u8, alignment: std.mem.Alignment, _: usize) vo
 extern fn roc_alloc(size: usize, alignment: u32) callconv(.c) ?*anyopaque;
 extern fn roc_realloc(ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.c) ?*anyopaque;
 extern fn roc_dealloc(ptr: *anyopaque, alignment: u32) callconv(.c) void;
-
-// Static empty import mapping for shim (no type name resolution needed)
-// Lazy-initialized to use the properly wrapped allocator
-var shim_import_mapping: ?import_mapping_mod.ImportMapping = null;
-
-fn getShimImportMapping() *import_mapping_mod.ImportMapping {
-    if (shim_import_mapping == null) {
-        shim_import_mapping = import_mapping_mod.ImportMapping.init(wrapped_allocator);
-    }
-    return &shim_import_mapping.?;
-}
 
 const SharedMemoryAllocator = if (is_wasm32) struct {} else ipc.SharedMemoryAllocator;
 
@@ -574,12 +559,16 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     defer mono_lowerer.deinit();
     const entry_symbol = try mono_lowerer.specializeTopLevelDef(primary_module_idx, entry_def_idx);
     var mono = try mono_lowerer.run(primary_module_idx);
+    defer mono.deinit();
     var lifted = try monotype_lifted.Lower.run(wrapped_allocator, &mono);
+    defer lifted.deinit();
     var solved = try lambdasolved.Lower.run(wrapped_allocator, &lifted);
+    defer solved.deinit();
     var executable = try lambdamono.Lower.runWithEntrypoints(wrapped_allocator, &solved, &.{entry_symbol});
     const entrypoint_wrappers = executable.entrypoint_wrappers;
     executable.entrypoint_wrappers = &.{};
     defer if (entrypoint_wrappers.len > 0) wrapped_allocator.free(entrypoint_wrappers);
+    defer executable.deinit();
     const entry_symbol_for_lir = if (entrypoint_wrappers.len == 0)
         entry_symbol
     else
@@ -624,35 +613,6 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     };
 
     interpreter.dropValue(eval_result.value, proc.ret_layout);
-}
-
-/// Resolve arg_layouts and ret_layout from the CIR function type of an entrypoint expression.
-fn resolveEntrypointLayouts(
-    env_ptr: *ModuleEnv,
-    expr_idx: CIR.Expr.Idx,
-    allocator: std.mem.Allocator,
-) !struct { arg_layouts: []const layout.Idx, ret_layout: layout.Idx } {
-    const expr_type_var = can.ModuleEnv.varFrom(expr_idx);
-    const resolved = env_ptr.types.resolveVar(expr_type_var);
-    const maybe_func = resolved.desc.content.unwrapFunc();
-
-    if (maybe_func) |func| {
-        const arg_vars = env_ptr.types.sliceVars(func.args);
-        var arg_layouts = try allocator.alloc(layout.Idx, arg_vars.len);
-        var type_scope = types.TypeScope.init(allocator);
-        defer type_scope.deinit();
-        for (arg_vars, 0..) |arg_var, i| {
-            arg_layouts[i] = try layout.fromTypeVar(env_ptr, arg_var, &type_scope, null);
-        }
-        const ret_layout = try layout.fromTypeVar(env_ptr, func.ret, &type_scope, null);
-        return .{ .arg_layouts = arg_layouts, .ret_layout = ret_layout };
-    }
-
-    // Non-function entrypoint (zero args) — the expression's type is the return type
-    var type_scope = types.TypeScope.init(allocator);
-    defer type_scope.deinit();
-    const ret_layout = try layout.fromTypeVar(env_ptr, expr_type_var, &type_scope, null);
-    return .{ .arg_layouts = &.{}, .ret_layout = ret_layout };
 }
 
 /// Result of setting up module environments
@@ -934,41 +894,4 @@ fn setupModuleEnvFromSerialized(roc_ops: *RocOps, base_ptr: [*]align(1) u8, allo
         .primary_env = env_ptrs[primary_env_index],
         .app_env = env_ptrs[app_env_index],
     };
-}
-
-/// Create interpreter instance (global setup was done in initializeOnce)
-/// This is now lightweight and safe to call per-evaluation since it doesn't modify global state.
-fn createInterpreter(env_ptr: *ModuleEnv, app_env: ?*ModuleEnv, builtin_modules: *const eval.BuiltinModules, roc_ops: *RocOps) ShimError!Interpreter {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const allocator = wrapped_allocator;
-
-    // Use builtin types from the loaded builtin modules
-    const builtin_types = builtin_modules.asBuiltinTypes();
-    const builtin_module_env = builtin_modules.builtin_module.env;
-
-    // Create a copy of the global imported_envs slice for this interpreter instance
-    // The interpreter takes ownership and will free this on deinit
-    const global_envs = global_full_imported_envs.?;
-    const imported_envs = allocator.dupe(*const can.ModuleEnv, global_envs) catch {
-        roc_ops.crash("Failed to duplicate imported envs slice");
-        return error.OutOfMemory;
-    };
-
-    traceDbg(roc_ops, "=== Creating Interpreter ===", .{});
-    traceDbg(roc_ops, "imported_envs.len={d}, primary=\"{s}\"", .{ imported_envs.len, env_ptr.module_name });
-
-    var interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, builtin_module_env, imported_envs, getShimImportMapping(), app_env, global_constant_strings_arena, roc_target.RocTarget.detectNative()) catch {
-        roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
-        return error.InterpreterSetupFailed;
-    };
-
-    // Setup for-clause type mappings from platform to app
-    interpreter.setupForClauseTypeMappings(env_ptr) catch {
-        roc_ops.crash("INTERPRETER SHIM: Failed to setup for-clause type mappings");
-        return error.InterpreterSetupFailed;
-    };
-
-    return interpreter;
 }

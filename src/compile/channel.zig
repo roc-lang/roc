@@ -155,11 +155,8 @@ pub fn Channel(comptime T: type) type {
                     return error.Timeout;
                 }
                 const remaining = @as(u64, @intCast(deadline - now));
-                self.not_full.timedWait(&self.mutex, remaining) catch |err| {
-                    if (err != error.Timeout) {
-                        std.debug.assert(false);
-                        unreachable;
-                    }
+                self.not_full.timedWait(&self.mutex, remaining) catch |err| switch (err) {
+                    error.Timeout => {},
                 };
             }
 
@@ -210,11 +207,8 @@ pub fn Channel(comptime T: type) type {
                     return null; // Timeout
                 }
                 const remaining = @as(u64, @intCast(deadline - now));
-                self.not_empty.timedWait(&self.mutex, remaining) catch |err| {
-                    if (err != error.Timeout) {
-                        std.debug.assert(false);
-                        unreachable;
-                    }
+                self.not_empty.timedWait(&self.mutex, remaining) catch |err| switch (err) {
+                    error.Timeout => {},
                 };
             }
 

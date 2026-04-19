@@ -15,39 +15,9 @@ type=expr
 }
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - let_shadows_capture.md:4:9:4:10
-UNUSED VARIABLE - let_shadows_capture.md:2:5:2:6
+NIL
 # PROBLEMS
-**DUPLICATE DEFINITION**
-The name `x` is being redeclared in this scope.
-
-The redeclaration is here:
-**let_shadows_capture.md:4:9:4:10:**
-```roc
-        x = 10
-```
-        ^
-
-But `x` was already defined here:
-**let_shadows_capture.md:2:5:2:6:**
-```roc
-    x = 5
-```
-    ^
-
-
-**UNUSED VARIABLE**
-Variable `x` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
-**let_shadows_capture.md:2:5:2:6:**
-```roc
-    x = 5
-```
-    ^
-
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly,

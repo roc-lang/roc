@@ -56,11 +56,11 @@ PARSE ERROR - qualified_type_canonicalization.md:8:14:8:18
 MODULE NOT FOUND - qualified_type_canonicalization.md:9:1:9:13
 MODULE NOT FOUND - qualified_type_canonicalization.md:10:1:10:40
 MODULE NOT FOUND - qualified_type_canonicalization.md:11:1:11:32
-UNDECLARED TYPE - qualified_type_canonicalization.md:15:19:15:24
+MODULE NOT FOUND - qualified_type_canonicalization.md:15:19:15:24
 MODULE NOT IMPORTED - qualified_type_canonicalization.md:22:23:22:44
 DOES NOT EXIST - qualified_type_canonicalization.md:23:23:23:32
 MISSING NESTED TYPE - qualified_type_canonicalization.md:26:14:26:21
-UNDECLARED TYPE - qualified_type_canonicalization.md:31:16:31:21
+MODULE NOT FOUND - qualified_type_canonicalization.md:31:16:31:21
 UNUSED VARIABLE - qualified_type_canonicalization.md:35:17:35:22
 MISSING NESTED TYPE - qualified_type_canonicalization.md:39:13:39:20
 MODULE NOT IMPORTED - qualified_type_canonicalization.md:39:49:39:70
@@ -137,10 +137,10 @@ import ExternalModule as ExtMod
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**UNDECLARED TYPE**
-The type _Color_ is not declared in this scope.
+**MODULE NOT FOUND**
+The type `RGB` is qualified by the module `Color`, but that module was not found in this Roc project.
 
-This type is referenced here:
+You're attempting to use this type here:
 **qualified_type_canonicalization.md:15:19:15:24:**
 ```roc
 simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
@@ -180,10 +180,10 @@ resultType : Try.Try(I32, Str)
              ^^^^^^^
 
 
-**UNDECLARED TYPE**
-The type _Color_ is not declared in this scope.
+**MODULE NOT FOUND**
+The type `RGB` is qualified by the module `Color`, but that module was not found in this Roc project.
 
-This type is referenced here:
+You're attempting to use this type here:
 **qualified_type_canonicalization.md:31:16:31:21:**
 ```roc
 getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
@@ -456,7 +456,7 @@ transform = |result|
 (can-ir
 	(d-let
 		(p-assign (ident "simpleQualified"))
-		(e-runtime-error (tag "undeclared_type"))
+		(e-runtime-error (tag "type_from_missing_module"))
 		(annotation
 			(ty-lookup (name "RGB") (external-module "Color"))))
 	(d-let
@@ -485,7 +485,7 @@ transform = |result|
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-runtime-error (tag "undeclared_type")))
+			(e-runtime-error (tag "type_from_missing_module")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-record)

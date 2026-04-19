@@ -19,41 +19,15 @@ main = {
 }
 ~~~
 # EXPECTED
-TYPE MODULE MISSING MATCHING TYPE - StructuralMethodError.md:2:1:12:2
-MISSING METHOD - StructuralMethodError.md:11:7:11:12
+MISSING METHOD - StructuralMethodError.md:11:5:11:14
 # PROBLEMS
-**TYPE MODULE MISSING MATCHING TYPE**
-Type modules must have a nominal type declaration matching the module name.
-
-This file is named `StructuralMethodError`.roc, but no top-level nominal type named `StructuralMethodError` was found.
-
-Add a nominal type like:
-`StructuralMethodError := ...`
-or:
-`StructuralMethodError :: ...` (opaque nominal type)
-**StructuralMethodError.md:2:1:12:2:**
-```roc
-Person := {}.{
-  greet : Person -> Str
-  greet = |_| "Hello"
-}
-
-# This should error: calling a method on an anonymous record,
-# even though Person has compatible backing type
-main = {
-    x = {}
-    x.greet()
-}
-```
-
-
 **MISSING METHOD**
 This **greet** method is being called on a value whose type doesn't have that method:
-**StructuralMethodError.md:11:7:11:12:**
+**StructuralMethodError.md:11:5:11:14:**
 ```roc
     x.greet()
 ```
-      ^^^^^
+    ^^^^^^^^^
 
 The value's type, which does not have a method named **greet**, is:
 
@@ -99,10 +73,10 @@ EndOfFile,
 					(s-decl
 						(p-ident (raw "x"))
 						(e-record))
-					(e-field-access
-						(e-ident (raw "x"))
-						(e-apply
-							(e-ident (raw "greet")))))))))
+					(e-method-call (method ".greet")
+						(receiver
+							(e-ident (raw "x")))
+						(args)))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -135,15 +109,7 @@ main = {
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-block
-			(s-let
-				(p-assign (ident "x"))
-				(e-empty_record))
-			(e-field-access (field "greet")
-				(receiver
-					(e-lookup-local
-						(p-assign (ident "x"))))
-				(args))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-nominal-decl
 		(ty-header (name "Person"))
 		(ty-record)))

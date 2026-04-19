@@ -1687,6 +1687,38 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .type_from_missing_module => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "MODULE NOT FOUND", .runtime_error);
+
+            const type_name_bytes = self.getIdent(data.type_name);
+            const type_name = try report.addOwnedString(type_name_bytes);
+
+            const module_name_bytes = self.getIdent(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+
+            try report.document.addText("The type ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(" is qualified by the module ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(", but that module was not found in this Roc project.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("You're attempting to use this type here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .value_not_exposed => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -2528,7 +2560,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
-        else => unreachable, // All diagnostics must have explicit handlers
+        else => std.debug.panic("Unhandled canonicalize diagnostic in diagnosticToReport: {s}", .{@tagName(diagnostic)}),
     };
 }
 

@@ -21,7 +21,6 @@ PARSE ERROR - type_shadowing_across_scopes.md:9:5:9:8
 PARSE ERROR - type_shadowing_across_scopes.md:9:21:9:28
 PARSE ERROR - type_shadowing_across_scopes.md:9:28:9:29
 PARSE ERROR - type_shadowing_across_scopes.md:10:1:10:2
-TYPE REDECLARED - type_shadowing_across_scopes.md:1:1:1:28
 MALFORMED TYPE - type_shadowing_across_scopes.md:9:21:9:28
 UNUSED VARIABLE - type_shadowing_across_scopes.md:4:16:4:20
 # PROBLEMS
@@ -65,24 +64,6 @@ This is an unexpected parsing error. Please check your syntax.
 **type_shadowing_across_scopes.md:10:1:10:2:**
 ```roc
 }
-```
-^
-
-
-**TYPE REDECLARED**
-The type _Try_ is being redeclared.
-
-The redeclaration is here:
-**type_shadowing_across_scopes.md:1:1:1:28:**
-```roc
-Try(a, b) : [Ok(a), Err(b)]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-But _Try_ was already declared here:
-**type_shadowing_across_scopes.md:1:1:1:1:**
-```roc
-Try(a, b) : [Ok(a), Err(b)]
 ```
 ^
 

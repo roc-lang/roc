@@ -4825,27 +4825,6 @@ pub const Interpreter = struct {
         };
     }
 
-    /// Get the Ok payload type variable from a Try type
-    fn getTryOkPayloadVar(self: *Interpreter, result_rt_var: types.Var) !?types.Var {
-        const resolved = self.resolveBaseVar(result_rt_var);
-        std.debug.assert(resolved.desc.content == .structure and resolved.desc.content.structure == .tag_union);
-
-        var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
-        defer tag_list.deinit();
-        try self.appendUnionTags(result_rt_var, &tag_list);
-
-        const ok_ident = self.env.idents.ok;
-        for (tag_list.items) |tag_info| {
-            if (tag_info.name.eql(ok_ident)) {
-                const arg_vars = self.runtime_types.sliceVars(tag_info.args);
-                if (arg_vars.len >= 1) {
-                    return arg_vars[0];
-                }
-            }
-        }
-        return null;
-    }
-
     /// Get Ok and Err tag indices from a Try type
     fn getTryTagIndices(self: *Interpreter, result_rt_var: types.Var) !struct { ok: ?usize, err: ?usize } {
         const resolved = self.resolveBaseVar(result_rt_var);
@@ -6719,89 +6698,6 @@ pub const Interpreter = struct {
             },
             else => return error.TypeMismatch,
         }
-    }
-
-    /// Evaluates the box intrinsic, creating a boxed value from the input.
-    /// Returns the boxed result value. Caller is responsible for decref on arg_value.
-    fn evalBoxIntrinsic(
-        self: *Interpreter,
-        arg_value: StackValue,
-        return_expr_idx: can.CIR.Expr.Idx,
-        roc_ops: *RocOps,
-    ) !StackValue {
-        traceDbg(roc_ops, "evalBoxIntrinsic: entering with arg_value.layout.tag={s}", .{@tagName(arg_value.layout.tag)});
-        const return_ct_var = can.ModuleEnv.varFrom(return_expr_idx);
-        traceDbg(roc_ops, "evalBoxIntrinsic: return_ct_var obtained", .{});
-        const return_rt_var = try self.translateTypeVar(self.env, return_ct_var);
-        traceDbg(roc_ops, "evalBoxIntrinsic: return_rt_var translated", .{});
-        const box_layout = try self.getRuntimeLayout(return_rt_var);
-        traceDbg(roc_ops, "evalBoxIntrinsic: box_layout.tag={s}", .{@tagName(box_layout.tag)});
-        return try self.makeBoxValueFromLayout(box_layout, arg_value, roc_ops, return_rt_var);
-    }
-
-    /// Evaluates the unbox intrinsic, extracting the value from a box.
-    /// Returns the unboxed result value. Caller is responsible for decref on boxed_value.
-    fn evalUnboxIntrinsic(
-        self: *Interpreter,
-        boxed_value: StackValue,
-        value_stack: *ValueStack,
-        roc_ops: *RocOps,
-    ) !void {
-        // Get the element rt_var from the Box type's type argument
-        const elem_rt_var = blk: {
-            const box_resolved = self.runtime_types.resolveVar(boxed_value.rt_var);
-            if (box_resolved.desc.content == .structure) {
-                const flat = box_resolved.desc.content.structure;
-                if (flat == .nominal_type) {
-                    const nom = flat.nominal_type;
-                    const type_args = self.runtime_types.sliceVars(nom.vars.nonempty);
-                    if (type_args.len > 0) {
-                        break :blk type_args[0];
-                    }
-                }
-            }
-            // Fallback: create a fresh var
-            break :blk try self.runtime_types.fresh();
-        };
-
-        if (boxed_value.layout.tag == .box_of_zst) {
-            // Zero-sized type - return empty value
-            const elem_layout = layout.Layout.zst();
-            var result = try self.pushRaw(elem_layout, 0, elem_rt_var);
-            result.is_initialized = true;
-            try value_stack.push(result);
-            return;
-        }
-
-        if (boxed_value.layout.tag == .box) {
-            // Get element layout info
-            const box_info = self.runtime_layout_store.getBoxInfo(boxed_value.layout);
-
-            // Get pointer to heap data from the box
-            const data_ptr = boxed_value.getBoxedData().?;
-
-            // Allocate stack space and copy the value
-            var result = try self.pushRaw(box_info.elem_layout, 0, elem_rt_var);
-            if (box_info.elem_size > 0 and result.ptr != null) {
-                @memcpy(
-                    @as([*]u8, @ptrCast(result.ptr.?))[0..box_info.elem_size],
-                    data_ptr[0..box_info.elem_size],
-                );
-            }
-            result.is_initialized = true;
-
-            // If the element is refcounted, increment its refcount since we're
-            // creating a new reference (the box still holds its own reference)
-            if (box_info.contains_refcounted) {
-                result.incref(&self.runtime_layout_store, roc_ops);
-            }
-
-            try value_stack.push(result);
-            return;
-        }
-
-        self.triggerCrash("unbox intrinsic: expected box layout but got different type", false, roc_ops);
-        return error.TypeMismatch;
     }
 
     fn makeRenderCtx(self: *Interpreter) render_helpers.RenderCtx {

@@ -21,9 +21,6 @@ const ownership_boundary = lir.OwnershipBoundary;
 const RcHelperKey = layout.RcHelperKey;
 const RcHelperPlan = layout.RcHelperPlan;
 const RcListPlan = layout.ListPlan;
-const RcBoxPlan = layout.BoxPlan;
-const RcStructPlan = layout.StructPlan;
-const RcTagUnionPlan = layout.TagUnionPlan;
 const ProcLocalId = LIR.LocalId;
 const ProcLocalSpan = LIR.LocalSpan;
 const RefOp = LIR.RefOp;
@@ -36,7 +33,6 @@ const BlockType = WasmModule.BlockType;
 
 const LirProcSpec = LIR.LirProcSpec;
 const CFStmtId = LIR.CFStmtId;
-const JoinPointId = LIR.JoinPointId;
 const RcOpKind = enum { incref, decref, free };
 
 const LayoutStore = layout.Store;
@@ -723,18 +719,6 @@ fn emitExplicitRcForValueLocal(
     try self.emitRawRcForValueLocal(kind, value_local, value_vt, layout_idx, inc_count);
 }
 
-fn emitBuiltinInternalRcForValueLocal(
-    self: *Self,
-    comptime kind: RcOpKind,
-    value_local: u32,
-    value_vt: ValType,
-    layout_idx: layout.Idx,
-    inc_count: u16,
-) Allocator.Error!void {
-    ownership_boundary.builtinRuntimeInternal("wasm.emitBuiltinInternalRcForValueLocal");
-    try self.emitRawRcForValueLocal(kind, value_local, value_vt, layout_idx, inc_count);
-}
-
 fn emitRawDirectRcPlan(
     self: *Self,
     helper_key: RcHelperKey,
@@ -886,28 +870,6 @@ fn normalizeCompositeValuePtr(self: *Self, value_ptr_local: u32, layout_idx: lay
 
     self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
     return normalized;
-}
-
-/// Emit RC ops for a value addressed by `value_ptr_local`.
-fn emitRawRcAtPtr(
-    self: *Self,
-    comptime kind: RcOpKind,
-    value_ptr_local: u32,
-    layout_idx: layout.Idx,
-    inc_count: u16,
-) Allocator.Error!void {
-    try self.emitRawRcHelperCallForValuePtr(kind, value_ptr_local, layout_idx, inc_count);
-}
-
-fn emitBuiltinInternalRcAtPtr(
-    self: *Self,
-    comptime kind: RcOpKind,
-    value_ptr_local: u32,
-    layout_idx: layout.Idx,
-    inc_count: u16,
-) Allocator.Error!void {
-    ownership_boundary.builtinRuntimeInternal("wasm.emitBuiltinInternalRcAtPtr");
-    try self.emitRawRcAtPtr(kind, value_ptr_local, layout_idx, inc_count);
 }
 
 fn emitDecodeListAllocPtr(self: *Self, list_ptr_local: u32, out_alloc_ptr: u32, out_is_slice: u32) Allocator.Error!void {
@@ -1382,16 +1344,6 @@ fn emitBuiltinInternalStrRc(self: *Self, comptime kind: RcOpKind, str_ptr_local:
     }
 
     self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
-}
-
-fn emitBuiltinInternalBoxRc(self: *Self, comptime kind: RcOpKind, box_ptr_local: u32, box_layout_idx: layout.Idx, inc_count: u16) Allocator.Error!void {
-    const box_abi = self.getLayoutStore().builtinBoxAbi(box_layout_idx);
-
-    switch (kind) {
-        .incref => try self.emitDataPtrIncref(box_ptr_local, inc_count),
-        .decref => try self.emitDataPtrDecref(box_ptr_local, box_abi.elem_alignment, box_abi.contains_refcounted),
-        .free => try self.emitDataPtrFree(box_ptr_local, box_abi.elem_alignment, box_abi.contains_refcounted),
-    }
 }
 
 fn emitRawRcHelperCallByKey(
@@ -1904,11 +1856,6 @@ fn procLocalByteSize(self: *Self, value: ProcLocalId) u32 {
 /// Check if a local produces a composite value (stored in stack memory).
 fn isCompositeLocal(self: *const Self, value: ProcLocalId) bool {
     return self.isCompositeLayout(self.store.getLocal(value).layout_idx);
-}
-
-/// Explicit local bindings are already stabilized in the caller's frame.
-fn procLocalNeedsCompositeCallStabilization(_: *const Self, _: ProcLocalId) bool {
-    return false;
 }
 
 /// Check if a layout represents a composite type stored in stack memory.

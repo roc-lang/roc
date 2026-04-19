@@ -624,10 +624,6 @@ pub const Store = struct {
         try self.scratch_intern_key.appendSlice(self.allocator, std.mem.asBytes(&copy));
     }
 
-    fn appendInternKeyTypeId(self: *Store, id: TypeId) std.mem.Allocator.Error!void {
-        try self.appendInternKeyValue(@as(u32, @intCast(@intFromEnum(id))));
-    }
-
     fn lookupInternedScratchKey(self: *Store) ?TypeId {
         return self.interned_types.get(self.scratch_intern_key.items);
     }

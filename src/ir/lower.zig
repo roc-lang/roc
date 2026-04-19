@@ -1,6 +1,5 @@
 //! Lower lambdamono into cor-style IR.
 
-const builtin = @import("builtin");
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
@@ -8,7 +7,6 @@ const lambdamono = @import("lambdamono");
 const type_mod = lambdamono.Type;
 const symbol_mod = @import("symbol");
 const ast = @import("ast.zig");
-const layout_mod = @import("layout");
 const ir_layout = @import("layout.zig");
 
 const Symbol = symbol_mod.Symbol;
@@ -956,16 +954,6 @@ const Lowerer = struct {
         block.setTerm(.{ .value = join });
     }
 
-    fn lowerBlockExpr(
-        self: *Lowerer,
-        block: *LoweredBlock,
-        env: []const EnvEntry,
-        stmts_span: lambdamono.Ast.Span(lambdamono.Ast.StmtId),
-        final_expr: lambdamono.Ast.ExprId,
-    ) std.mem.Allocator.Error!void {
-        try self.lowerBlockExprReplacingRuntimeError(block, env, stmts_span, final_expr, null);
-    }
-
     fn lowerBlockExprReplacingRuntimeError(
         self: *Lowerer,
         block: *LoweredBlock,
@@ -1263,11 +1251,6 @@ const Lowerer = struct {
 fn debugPanic(comptime msg: []const u8) noreturn {
     @branchHint(.cold);
     std.debug.panic("{s}", .{msg});
-}
-
-fn debugTodoLowLevel(op: base.LowLevel) noreturn {
-    @branchHint(.cold);
-    std.debug.panic("TODO ir low-level op {s}", .{@tagName(op)});
 }
 
 test "ir lower tests" {

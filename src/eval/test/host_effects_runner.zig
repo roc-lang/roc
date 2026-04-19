@@ -12,7 +12,6 @@
 //! order, and whether execution returned or terminated via crash.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const posix = std.posix;
 const eval = @import("eval");
 const harness = @import("test_harness");

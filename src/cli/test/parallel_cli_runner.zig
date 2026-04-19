@@ -19,6 +19,7 @@ const Allocator = std.mem.Allocator;
 
 const harness = @import("test_harness");
 const platform_config = @import("platform_config.zig");
+const util = @import("util.zig");
 
 // Test spec types
 
@@ -206,36 +207,12 @@ fn deserializeResult(buf: []const u8, gpa: Allocator) ?TestResult {
 
 var roc_binary_path: []const u8 = "";
 
-var next_cache_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
-
-fn createIsolatedCacheDir(allocator: Allocator) ![]u8 {
-    const cache_id = next_cache_id.fetchAdd(1, .monotonic);
-    const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{d}", .{
-        @as(u64, @intCast(std.time.nanoTimestamp())),
-        cache_id,
-    });
-    defer allocator.free(cache_leaf);
-
-    const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
-    defer allocator.free(cwd_path);
-
-    const cache_rel = try std.fs.path.join(allocator, &.{ ".zig-cache", "roc-test-cache", cache_leaf });
-    defer allocator.free(cache_rel);
-
-    std.fs.cwd().makePath(cache_rel) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
-
-    return std.fs.path.join(allocator, &.{ cwd_path, cache_rel });
-}
-
 fn runSingleTest(allocator: Allocator, spec: CliTestSpec) TestResult {
     var timer = harness.Timer.start() catch return .{ .status = .crash, .message = "no clock" };
 
-    const cache_dir = createIsolatedCacheDir(allocator) catch
-        return .{ .status = .crash, .message = "failed to create cache dir" };
-    defer std.fs.cwd().deleteTree(cache_dir) catch {};
+    const cache_dirs = util.createIsolatedTestCacheDirs(allocator) catch
+        return .{ .status = .crash, .message = "failed to create cache dirs" };
+    defer cache_dirs.deinit(allocator);
 
     const pid = std.c.getpid();
     const output_name = std.fmt.allocPrint(allocator, "./.test_output_{d}", .{pid}) catch
@@ -245,7 +222,9 @@ fn runSingleTest(allocator: Allocator, spec: CliTestSpec) TestResult {
     var env_map = std.process.getEnvMap(allocator) catch
         return .{ .status = .crash, .message = "failed to get env" };
     defer env_map.deinit();
-    env_map.put("ROC_CACHE_DIR", cache_dir) catch
+    env_map.put("ROC_CACHE_DIR", cache_dirs.roc_cache_dir) catch
+        return .{ .status = .crash, .message = "failed to set roc cache env" };
+    env_map.put("ZIG_LOCAL_CACHE_DIR", cache_dirs.zig_local_cache_dir) catch
         return .{ .status = .crash, .message = "failed to set env" };
 
     // Step 1: Build

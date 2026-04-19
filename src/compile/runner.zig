@@ -21,8 +21,6 @@ const platform_requirements = @import("platform_requirements.zig");
 const ModuleEnv = can.ModuleEnv;
 const BuiltinModules = eval.BuiltinModules;
 const RocOps = builtins.host_abi.RocOps;
-const Symbol = @import("symbol").Symbol;
-
 /// Public struct `LoweringModuleEnvs`.
 pub const LoweringModuleEnvs = struct {
     allocator: std.mem.Allocator,
@@ -166,11 +164,16 @@ pub fn runViaInterpreter(
 
     const entry_symbol = try mono_lowerer.specializeTopLevelDef(entry_idx, entry_def_idx);
     var mono = try mono_lowerer.run(entry_idx);
+    defer mono.deinit();
 
     var lifted = try monotype_lifted.Lower.run(gpa, &mono);
+    defer lifted.deinit();
     var solved = try lambdasolved.Lower.run(gpa, &lifted);
+    defer solved.deinit();
     var executable = try lambdamono.Lower.runWithEntrypoints(gpa, &solved, &.{entry_symbol});
+    defer executable.deinit();
     var lowered_ir = try ir.Lower.run(gpa, &executable);
+    defer lowered_ir.deinit();
 
     var lir_result = try lir.FromIr.run(
         gpa,
@@ -258,11 +261,16 @@ pub fn runViaDev(
 
     const entry_symbol = try mono_lowerer.specializeTopLevelDef(entry_idx, entry_def_idx);
     var mono = try mono_lowerer.run(entry_idx);
+    defer mono.deinit();
 
     var lifted = try monotype_lifted.Lower.run(gpa, &mono);
+    defer lifted.deinit();
     var solved = try lambdasolved.Lower.run(gpa, &lifted);
+    defer solved.deinit();
     var executable = try lambdamono.Lower.runWithEntrypoints(gpa, &solved, &.{entry_symbol});
+    defer executable.deinit();
     var lowered_ir = try ir.Lower.run(gpa, &executable);
+    defer lowered_ir.deinit();
 
     var lir_result = try lir.FromIr.run(
         gpa,

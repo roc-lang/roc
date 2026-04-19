@@ -4327,9 +4327,12 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     }
 
     var mono = try mono_lowerer.run(platform_module_idx);
+    defer mono.deinit();
 
     var lifted = try monotype_lifted.Lower.run(ctx.gpa, &mono);
+    defer lifted.deinit();
     var solved = try lambdasolved.Lower.run(ctx.gpa, &lifted);
+    defer solved.deinit();
 
     const entrypoint_symbols = try ctx.gpa.alloc(symbol.Symbol, pending_entrypoint_symbols.items.len);
     defer ctx.gpa.free(entrypoint_symbols);
@@ -4341,6 +4344,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const entrypoint_wrappers = executable.entrypoint_wrappers;
     executable.entrypoint_wrappers = &.{};
     defer if (entrypoint_wrappers.len > 0) ctx.gpa.free(entrypoint_wrappers);
+    defer executable.deinit();
     var lowered_ir = try ir.Lower.run(ctx.gpa, &executable);
     var lowered_ir_live = true;
     defer if (lowered_ir_live) lowered_ir.deinit();
@@ -4420,7 +4424,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         &lir_result.layouts,
         entrypoints.items,
         procs,
-        roc_target.RocTarget.detectNative(),
+        target,
         obj_path,
     ) catch |err| {
         std.log.err("Native compilation failed: {}", .{err});
@@ -6990,7 +6994,7 @@ fn rocDocs(ctx: *CliContext, args: cli_args.DocsArgs) !void {
     // Generate documentation for all packages and modules
     try generateDocs(ctx, &result_with_env.build_env, args.path, args.output);
 
-    stdout.print("\nDocumentation generation complete for {s}\n", .{args.path}) catch {};
+    stdout.print("\nGenerated docs for {s}\n", .{args.path}) catch {};
 
     // Start HTTP server if --serve flag is enabled
     if (args.serve) {

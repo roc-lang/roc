@@ -9,43 +9,9 @@ type=expr
 b)} lines of text due to the template parts"
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - string_multiline_formatting_(due_to_templating_not_multiline_string_literal)_1.md:1:26:1:35
-UNDEFINED VARIABLE - string_multiline_formatting_(due_to_templating_not_multiline_string_literal)_1.md:1:36:1:37
-UNDEFINED VARIABLE - string_multiline_formatting_(due_to_templating_not_multiline_string_literal)_1.md:2:1:2:2
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `some_func` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**string_multiline_formatting_(due_to_templating_not_multiline_string_literal)_1.md:1:26:1:35:**
-```roc
-"This is a string with ${some_func(a, #This is a comment
-```
-                         ^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `a` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**string_multiline_formatting_(due_to_templating_not_multiline_string_literal)_1.md:1:36:1:37:**
-```roc
-"This is a string with ${some_func(a, #This is a comment
-```
-                                   ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `b` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**string_multiline_formatting_(due_to_templating_not_multiline_string_literal)_1.md:2:1:2:2:**
-```roc
-b)} lines of text due to the template parts"
-```
-^
-
-
+NIL
 # TOKENS
 ~~~zig
 StringStart,StringPart,OpenStringInterpolation,LowerIdent,NoSpaceOpenRound,LowerIdent,Comma,

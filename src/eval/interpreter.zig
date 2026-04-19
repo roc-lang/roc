@@ -143,6 +143,22 @@ const InterpreterRocEnv = struct {
         return self.caller_roc_ops;
     }
 
+    fn recordCrash(self: *InterpreterRocEnv, msg: []const u8) void {
+        self.crashed = true;
+        if (self.crash_message) |old| self.allocator.free(old);
+        self.crash_message = self.allocator.dupe(u8, msg) catch null;
+    }
+
+    fn reportCrash(self: *InterpreterRocEnv, msg: []const u8) void {
+        const caller_roc_ops = self.currentRocOps();
+        const roc_crashed = RocCrashed{
+            .utf8_bytes = @constCast(msg.ptr),
+            .len = msg.len,
+        };
+        caller_roc_ops.roc_crashed(&roc_crashed, caller_roc_ops.env);
+        self.recordCrash(msg);
+    }
+
     fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
         ownership_boundary.builtinRuntimeInternal("interpreter.rocAllocFn");
         const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
@@ -186,12 +202,8 @@ const InterpreterRocEnv = struct {
 
     fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.c) void {
         const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
-        const caller_roc_ops = self.currentRocOps();
-        caller_roc_ops.roc_crashed(roc_crashed, caller_roc_ops.env);
-        self.crashed = true;
         const msg = roc_crashed.utf8_bytes[0..roc_crashed.len];
-        if (self.crash_message) |old| self.allocator.free(old);
-        self.crash_message = self.allocator.dupe(u8, msg) catch null;
+        self.reportCrash(msg);
         const active_jmp_buf = self.active_jmp_buf orelse {
             debugPrint(
                 "LIR/interpreter invariant violated: roc_crashed fired without an active jump buffer\n",
@@ -385,8 +397,8 @@ pub const Interpreter = struct {
     }
 
     fn triggerCrash(self: *LirInterpreter, message: []const u8) Error {
-        self.roc_ops.crash(message);
-        unreachable;
+        self.roc_env.reportCrash(message);
+        return error.Crash;
     }
 
     fn invariantFailed(_: *const LirInterpreter, comptime fmt: []const u8, args: anytype) noreturn {
@@ -919,20 +931,6 @@ pub const Interpreter = struct {
                 => break,
             };
         }
-    }
-
-    fn debugPrintIndexedLayoutShape(self: *LirInterpreter, index: usize, layout_idx: layout_mod.Idx) void {
-        debugPrint("  field[{d}] layout tree:\n", .{index});
-        var visited = std.ArrayList(u32).empty;
-        defer visited.deinit(self.allocator);
-        self.debugPrintLayoutShapeLines(layout_idx, 2, &visited);
-    }
-
-    fn debugPrintLayoutShape(self: *LirInterpreter, label: []const u8, layout_idx: layout_mod.Idx) void {
-        debugPrint("{s}:\n", .{label});
-        var visited = std.ArrayList(u32).empty;
-        defer visited.deinit(self.allocator);
-        self.debugPrintLayoutShapeLines(layout_idx, 1, &visited);
     }
 
     fn debugPrintLayoutShapeLines(

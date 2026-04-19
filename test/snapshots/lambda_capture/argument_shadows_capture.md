@@ -11,39 +11,9 @@ type=expr
 }
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - argument_shadows_capture.md:3:7:3:8
-UNUSED VARIABLE - argument_shadows_capture.md:2:5:2:6
+NIL
 # PROBLEMS
-**DUPLICATE DEFINITION**
-The name `x` is being redeclared in this scope.
-
-The redeclaration is here:
-**argument_shadows_capture.md:3:7:3:8:**
-```roc
-    (|x| x)(10) # Should not capture outer `x` -- this should give a shadowing warning
-```
-      ^
-
-But `x` was already defined here:
-**argument_shadows_capture.md:2:5:2:6:**
-```roc
-    x = 5
-```
-    ^
-
-
-**UNUSED VARIABLE**
-Variable `x` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
-**argument_shadows_capture.md:2:5:2:6:**
-```roc
-    x = 5
-```
-    ^
-
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly,

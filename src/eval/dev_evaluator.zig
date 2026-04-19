@@ -119,11 +119,16 @@ pub const DevEvaluator = struct {
         var mono_lowerer = try monotype.Lower.Lowerer.init(self.allocator, &typed_cir_modules, builtin_idx, null);
         defer mono_lowerer.deinit();
         var mono = try mono_lowerer.runRootExpr(@intCast(module_idx), expr_idx);
+        defer mono.deinit();
 
         var lifted = try monotype_lifted.Lower.run(self.allocator, &mono);
+        defer lifted.deinit();
         var solved = try lambdasolved.Lower.run(self.allocator, &lifted);
+        defer solved.deinit();
         var executable = try lambdamono.Lower.run(self.allocator, &solved);
+        defer executable.deinit();
         var lowered_ir = try ir.Lower.run(self.allocator, &executable);
+        defer lowered_ir.deinit();
 
         var lir_result = try lir.FromIr.run(
             self.allocator,

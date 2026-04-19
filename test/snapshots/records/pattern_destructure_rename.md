@@ -10,19 +10,9 @@ match person {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - pattern_destructure_rename.md:1:7:1:13
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**pattern_destructure_rename.md:1:7:1:13:**
-```roc
-match person {
-```
-      ^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -45,10 +35,10 @@ EndOfFile,
 				(e-string-part (raw "User "))
 				(e-ident (raw "userName"))
 				(e-string-part (raw " is "))
-				(e-field-access
-					(e-ident (raw "userAge"))
-					(e-apply
-						(e-ident (raw "to_str"))))
+				(e-method-call (method ".to_str")
+					(receiver
+						(e-ident (raw "userAge")))
+					(args))
 				(e-string-part (raw " years old"))))))
 ~~~
 # FORMATTED
@@ -81,7 +71,7 @@ match person {
 						(e-lookup-local
 							(p-assign (ident "userName")))
 						(e-literal (string " is "))
-						(e-field-access (field "to_str")
+						(e-method-call (method "to_str")
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "userAge"))))
