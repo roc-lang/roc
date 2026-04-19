@@ -6376,6 +6376,16 @@ fn mkTypeMethodCallConstraint(
     _ = try self.unify(constrained_var, dispatcher_var, env);
 }
 
+fn recordResolvedMethodCallFn(
+    self: *Self,
+    constraint: StaticDispatchConstraint,
+    resolved_method_var: Var,
+) void {
+    const site_expr_var = constraint.site_expr_var orelse return;
+    const expr_idx: CIR.Expr.Idx = @enumFromInt(@intFromEnum(site_expr_var));
+    self.cir.setMethodCallFnVar(expr_idx, constraint.fn_name, constraint.origin, resolved_method_var);
+}
+
 // problems //
 
 // copy type from other module //
@@ -6888,6 +6898,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
 
                     // Then, lookup the inferred constraint in the actual list of rigid constraints
                     if (self.ident_to_var_map.get(constraint.fn_name)) |rigid_var| {
+                        self.recordResolvedMethodCallFn(constraint, rigid_var);
                         // Unify the actual function var against the inferred var
                         //
                         // TODO: For better error messages, we should check if these
@@ -6970,21 +6981,25 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         // If this constraint is already an error, the skip this pass
                         continue;
                     }
-                    if (constraint.fn_name.eql(self.cir.idents.is_eq) and
+                    const method_ident = if (constraint.fn_name.eql(self.cir.idents.is_eq) and
                         self.nominalSupportsImplicitIsEq(nominal_type))
-                    {
-                        try self.satisfyImplicitEqualityConstraint(
-                            deferred_constraint.var_,
-                            constraint.fn_var,
-                            env,
-                            region,
+                    blk: {
+                        const exact_method_ident = original_env.lookupMethodIdentFromEnvConst(
+                            self.cir,
+                            nominal_type.ident.ident_idx,
+                            constraint.fn_name,
                         );
-                        continue;
-                    }
-
-                    // Look up the method in the original env using index-based lookup.
-                    // Methods are stored with qualified names like "Type.method" (or "Module.Type.method" for builtins).
-                    const method_ident = original_env.lookupMethodIdentFromEnvConst(self.cir, nominal_type.ident.ident_idx, constraint.fn_name) orelse {
+                        if (exact_method_ident == null) {
+                            try self.satisfyImplicitEqualityConstraint(
+                                deferred_constraint.var_,
+                                constraint.fn_var,
+                                env,
+                                region,
+                            );
+                            continue;
+                        }
+                        break :blk exact_method_ident.?;
+                    } else original_env.lookupMethodIdentFromEnvConst(self.cir, nominal_type.ident.ident_idx, constraint.fn_name) orelse {
                         // Method name doesn't exist in target module
                         try self.reportConstraintError(
                             deferred_constraint.var_,
@@ -7100,6 +7115,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
 
                     // Unwrap the constraint type
                     const constraint_fn = constraint_fn_resolved.unwrapFunc() orelse {
+                        self.recordResolvedMethodCallFn(constraint, method_var);
                         _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                             .method_type = .{
                                 .constraint_var = constraint.fn_var,
@@ -7111,6 +7127,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         continue;
                     };
 
+                    self.recordResolvedMethodCallFn(constraint, method_var);
                     const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                         .method_type = .{
                             .constraint_var = deferred_constraint.var_,
@@ -7308,6 +7325,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     };
 
                     const constraint_fn = constraint_fn_resolved.unwrapFunc() orelse {
+                        self.recordResolvedMethodCallFn(constraint, method_var);
                         _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                             .method_type = .{
                                 .constraint_var = constraint.fn_var,
@@ -7319,6 +7337,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         continue;
                     };
 
+                    self.recordResolvedMethodCallFn(constraint, method_var);
                     const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                         .method_type = .{
                             .constraint_var = deferred_constraint.var_,

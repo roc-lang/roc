@@ -23,8 +23,6 @@ pub const Result = struct {
     types: type_mod.Store,
     strings: base.StringLiteral.Store,
     idents: base.Ident.Store,
-    attached_method_index: symbol_mod.AttachedMethodIndex,
-    builtin_attached_method_index: symbol_mod.BuiltinAttachedMethodIndex,
     runtime_inspect_symbols: std.AutoHashMap(Symbol, Symbol),
 
     pub fn deinit(self: *Result) void {
@@ -34,8 +32,6 @@ pub const Result = struct {
         self.types.deinit();
         self.strings.deinit(self.store.allocator);
         self.idents.deinit(self.store.allocator);
-        self.attached_method_index.deinit();
-        self.builtin_attached_method_index.deinit();
         self.runtime_inspect_symbols.deinit();
     }
 
@@ -48,8 +44,6 @@ pub const Result = struct {
             .types = type_mod.Store.init(allocator),
             .strings = .{},
             .idents = try base.Ident.Store.initCapacity(allocator, 1),
-            .attached_method_index = symbol_mod.AttachedMethodIndex.init(allocator),
-            .builtin_attached_method_index = symbol_mod.BuiltinAttachedMethodIndex.init(allocator),
             .runtime_inspect_symbols = std.AutoHashMap(Symbol, Symbol).init(allocator),
         };
         return result;
@@ -155,8 +149,6 @@ const Lowerer = struct {
             .types = self.types,
             .strings = self.input.strings,
             .idents = self.input.idents,
-            .attached_method_index = self.input.attached_method_index,
-            .builtin_attached_method_index = self.input.builtin_attached_method_index,
             .runtime_inspect_symbols = self.input.runtime_inspect_symbols,
         };
 
@@ -166,8 +158,6 @@ const Lowerer = struct {
         self.input.symbols = symbol_mod.Store.init(self.allocator);
         self.input.strings = .{};
         self.input.idents = try base.Ident.Store.initCapacity(self.allocator, 1);
-        self.input.attached_method_index = symbol_mod.AttachedMethodIndex.init(self.allocator);
-        self.input.builtin_attached_method_index = symbol_mod.BuiltinAttachedMethodIndex.init(self.allocator);
         self.input.runtime_inspect_symbols = std.AutoHashMap(Symbol, Symbol).init(self.allocator);
         return result;
     }

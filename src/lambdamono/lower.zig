@@ -1993,6 +1993,7 @@ const Lowerer = struct {
         mono_cache: lower_type.MonoCache,
         env: []EnvEntry,
         fn_ty: TypeVarId,
+        target_symbol: Symbol,
         step_arg_tys: []TypeVarId,
         step_result_tys: []TypeVarId,
 
@@ -2239,78 +2240,67 @@ const Lowerer = struct {
 
     fn freezeMethodCallWorld(
         self: *Lowerer,
-        source_types: *const solved.Type.Store,
+        current_types: *const solved.Type.Store,
         venv: []const EnvEntry,
-        target_symbol: Symbol,
+        method_fn_ty: TypeVarId,
+        method_name: base.Ident.Idx,
         receiver_ty: TypeVarId,
-        arg_tys: []const TypeVarId,
-        step_result_tys: []const TypeVarId,
+        explicit_step_arg_tys: []const TypeVarId,
+        explicit_step_result_tys: []const TypeVarId,
+        actual_arg_tys: []const TypeVarId,
     ) std.mem.Allocator.Error!FrozenMethodCallWorld {
-        const entry = specializations.lookupFnExact(self.fenv, target_symbol) orelse
-            debugPanic("lambdamono.lower.freezeMethodCallWorld missing exact target function");
         var inst = InstScope.init(self.allocator);
         errdefer inst.deinit();
         var mono_cache = lower_type.MonoCache.init(self.allocator);
         errdefer mono_cache.deinit();
 
-        const exact_fn_ty = try self.cloneInstType(&inst, entry.fn_ty);
-        var unify_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
-        defer unify_mapping.deinit();
+        var explicit_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
+        defer explicit_mapping.deinit();
+        var current_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
+        defer current_mapping.deinit();
 
-        const cloned_receiver_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &unify_mapping, receiver_ty);
-        const cloned_arg_tys = try self.allocator.alloc(TypeVarId, arg_tys.len);
-        defer self.allocator.free(cloned_arg_tys);
-        for (arg_tys, 0..) |arg_ty, i| {
-            cloned_arg_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &unify_mapping, arg_ty);
+        const cloned_method_fn_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, &self.input.types, &explicit_mapping, method_fn_ty);
+        const cloned_receiver_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, current_types, &current_mapping, receiver_ty);
+        const cloned_step_arg_tys = try self.allocator.alloc(TypeVarId, explicit_step_arg_tys.len);
+        errdefer self.allocator.free(cloned_step_arg_tys);
+        for (explicit_step_arg_tys, 0..) |step_arg_ty, i| {
+            cloned_step_arg_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, &self.input.types, &explicit_mapping, step_arg_ty);
         }
-        const cloned_step_result_tys = try self.allocator.alloc(TypeVarId, step_result_tys.len);
-        defer self.allocator.free(cloned_step_result_tys);
-        for (step_result_tys, 0..) |step_result_ty, i| {
-            cloned_step_result_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &unify_mapping, step_result_ty);
-        }
-
-        var steps = std.ArrayList(TypeVarId).empty;
-        defer steps.deinit(self.allocator);
-
-        if (cloned_step_result_tys.len != cloned_arg_tys.len + 1) {
-            debugPanic("lambdamono.lower.freezeMethodCallWorld explicit step result arity mismatch");
+        const cloned_step_result_tys = try self.allocator.alloc(TypeVarId, explicit_step_result_tys.len);
+        errdefer self.allocator.free(cloned_step_result_tys);
+        for (explicit_step_result_tys, 0..) |step_result_ty, i| {
+            cloned_step_result_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, &self.input.types, &explicit_mapping, step_result_ty);
         }
 
-        var current_fn_ty = exact_fn_ty;
-        {
+        if (cloned_step_arg_tys.len != actual_arg_tys.len + 1 or cloned_step_result_tys.len != cloned_step_arg_tys.len) {
+            debugPanic("lambdamono.lower.freezeMethodCallWorld explicit step arity mismatch");
+        }
+
+        try self.unifyIn(&inst.types, cloned_step_arg_tys[0], cloned_receiver_ty);
+        for (actual_arg_tys, 0..) |arg_ty, i| {
+            const cloned_actual_arg_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, current_types, &current_mapping, arg_ty);
+            try self.unifyIn(&inst.types, cloned_step_arg_tys[i + 1], cloned_actual_arg_ty);
+        }
+
+        var current_fn_ty = cloned_method_fn_ty;
+        for (cloned_step_arg_tys, cloned_step_result_tys) |step_arg_ty, step_result_ty| {
             const fn_parts = inst.types.fnShape(current_fn_ty);
-            try self.unifyIn(&inst.types, fn_parts.arg, cloned_receiver_ty);
-            try self.unifyIn(&inst.types, fn_parts.ret, cloned_step_result_tys[0]);
-            current_fn_ty = cloned_step_result_tys[0];
-            try steps.append(self.allocator, current_fn_ty);
-        }
-
-        for (cloned_arg_tys, 0..) |arg_ty, i| {
-            const fn_parts = inst.types.fnShape(current_fn_ty);
-            try self.unifyIn(&inst.types, fn_parts.arg, arg_ty);
-            const step_result_ty = cloned_step_result_tys[i + 1];
+            try self.unifyIn(&inst.types, fn_parts.arg, step_arg_ty);
             try self.unifyIn(&inst.types, fn_parts.ret, step_result_ty);
-            try steps.append(self.allocator, step_result_ty);
             current_fn_ty = step_result_ty;
         }
 
-        const all_step_arg_tys = try self.allocator.alloc(TypeVarId, cloned_arg_tys.len + 1);
-        errdefer self.allocator.free(all_step_arg_tys);
-        all_step_arg_tys[0] = cloned_receiver_ty;
-        for (cloned_arg_tys, 0..) |arg_ty, i| {
-            all_step_arg_tys[i + 1] = arg_ty;
-        }
-        const out_step_result_tys = try self.allocator.dupe(TypeVarId, steps.items);
-        errdefer self.allocator.free(out_step_result_tys);
-        const cloned_env = try self.cloneEnvIntoInstFromStoreWithMapping(&inst, &mono_cache, source_types, &unify_mapping, venv);
+        const target_symbol = self.requireExactResolvedMethodTarget(&inst.types, cloned_method_fn_ty, method_name);
+        const cloned_env = try self.cloneEnvIntoInstFromStoreWithMapping(&inst, &mono_cache, current_types, &current_mapping, venv);
 
         return .{
             .inst = inst,
             .mono_cache = mono_cache,
             .env = cloned_env,
-            .fn_ty = exact_fn_ty,
-            .step_arg_tys = all_step_arg_tys,
-            .step_result_tys = out_step_result_tys,
+            .fn_ty = cloned_method_fn_ty,
+            .target_symbol = target_symbol,
+            .step_arg_tys = cloned_step_arg_tys,
+            .step_result_tys = cloned_step_result_tys,
         };
     }
 
@@ -2381,72 +2371,65 @@ const Lowerer = struct {
 
     fn freezeTypeMethodCallWorld(
         self: *Lowerer,
-        source_types: *const solved.Type.Store,
+        current_types: *const solved.Type.Store,
         venv: []const EnvEntry,
-        target_symbol: Symbol,
-        arg_tys: []const TypeVarId,
-        step_result_tys: []const TypeVarId,
+        method_fn_ty: TypeVarId,
+        method_name: base.Ident.Idx,
+        explicit_step_arg_tys: []const TypeVarId,
+        explicit_step_result_tys: []const TypeVarId,
+        actual_arg_tys: []const TypeVarId,
     ) std.mem.Allocator.Error!FrozenMethodCallWorld {
-        const entry = specializations.lookupFnExact(self.fenv, target_symbol) orelse
-            debugPanic("lambdamono.lower.freezeTypeMethodCallWorld missing exact target function");
         var inst = InstScope.init(self.allocator);
         errdefer inst.deinit();
         var mono_cache = lower_type.MonoCache.init(self.allocator);
         errdefer mono_cache.deinit();
 
-        const exact_fn_ty = try self.cloneInstType(&inst, entry.fn_ty);
+        var explicit_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
+        defer explicit_mapping.deinit();
+        var current_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
+        defer current_mapping.deinit();
 
-        var unify_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
-        defer unify_mapping.deinit();
-
-        const cloned_arg_tys = try self.allocator.alloc(TypeVarId, arg_tys.len);
-        defer self.allocator.free(cloned_arg_tys);
-        for (arg_tys, 0..) |arg_ty, i| {
-            cloned_arg_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &unify_mapping, arg_ty);
+        const cloned_method_fn_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, &self.input.types, &explicit_mapping, method_fn_ty);
+        const cloned_step_arg_tys = try self.allocator.alloc(TypeVarId, explicit_step_arg_tys.len);
+        errdefer self.allocator.free(cloned_step_arg_tys);
+        for (explicit_step_arg_tys, 0..) |step_arg_ty, i| {
+            cloned_step_arg_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, &self.input.types, &explicit_mapping, step_arg_ty);
         }
-        const cloned_step_result_tys = try self.allocator.alloc(TypeVarId, step_result_tys.len);
-        defer self.allocator.free(cloned_step_result_tys);
-        for (step_result_tys, 0..) |step_result_ty, i| {
-            cloned_step_result_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &unify_mapping, step_result_ty);
-        }
-
-        var steps = std.ArrayList(TypeVarId).empty;
-        defer steps.deinit(self.allocator);
-
-        const expected_step_count = if (cloned_arg_tys.len == 0) 1 else cloned_arg_tys.len;
-        if (cloned_step_result_tys.len != expected_step_count) {
-            debugPanic("lambdamono.lower.freezeTypeMethodCallWorld explicit step result arity mismatch");
+        const cloned_step_result_tys = try self.allocator.alloc(TypeVarId, explicit_step_result_tys.len);
+        errdefer self.allocator.free(cloned_step_result_tys);
+        for (explicit_step_result_tys, 0..) |step_result_ty, i| {
+            cloned_step_result_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, &self.input.types, &explicit_mapping, step_result_ty);
         }
 
-        var current_fn_ty = exact_fn_ty;
-        if (cloned_arg_tys.len == 0) {
+        const expected_step_count = if (actual_arg_tys.len == 0) 1 else actual_arg_tys.len;
+        if (cloned_step_arg_tys.len != expected_step_count or cloned_step_result_tys.len != expected_step_count) {
+            debugPanic("lambdamono.lower.freezeTypeMethodCallWorld explicit step arity mismatch");
+        }
+
+        for (actual_arg_tys, 0..) |arg_ty, i| {
+            const cloned_actual_arg_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, current_types, &current_mapping, arg_ty);
+            try self.unifyIn(&inst.types, cloned_step_arg_tys[i], cloned_actual_arg_ty);
+        }
+
+        var current_fn_ty = cloned_method_fn_ty;
+        for (cloned_step_arg_tys, cloned_step_result_tys) |step_arg_ty, step_result_ty| {
             const fn_parts = inst.types.fnShape(current_fn_ty);
-            try self.unifyIn(&inst.types, fn_parts.ret, cloned_step_result_tys[0]);
-            try steps.append(self.allocator, cloned_step_result_tys[0]);
-        } else {
-            for (cloned_arg_tys, 0..) |arg_ty, i| {
-                const fn_parts = inst.types.fnShape(current_fn_ty);
-                try self.unifyIn(&inst.types, fn_parts.arg, arg_ty);
-                const step_result_ty = cloned_step_result_tys[i];
-                try self.unifyIn(&inst.types, fn_parts.ret, step_result_ty);
-                try steps.append(self.allocator, step_result_ty);
-                current_fn_ty = step_result_ty;
-            }
+            try self.unifyIn(&inst.types, fn_parts.arg, step_arg_ty);
+            try self.unifyIn(&inst.types, fn_parts.ret, step_result_ty);
+            current_fn_ty = step_result_ty;
         }
 
-        const all_step_arg_tys = try self.allocator.dupe(TypeVarId, cloned_arg_tys);
-        errdefer self.allocator.free(all_step_arg_tys);
-        const out_step_result_tys = try self.allocator.dupe(TypeVarId, steps.items);
-        errdefer self.allocator.free(out_step_result_tys);
-        const cloned_env = try self.cloneEnvIntoInstFromStoreWithMapping(&inst, &mono_cache, source_types, &unify_mapping, venv);
+        const target_symbol = self.requireExactResolvedMethodTarget(&inst.types, cloned_method_fn_ty, method_name);
+        const cloned_env = try self.cloneEnvIntoInstFromStoreWithMapping(&inst, &mono_cache, current_types, &current_mapping, venv);
 
         return .{
             .inst = inst,
             .mono_cache = mono_cache,
             .env = cloned_env,
-            .fn_ty = exact_fn_ty,
-            .step_arg_tys = all_step_arg_tys,
-            .step_result_tys = out_step_result_tys,
+            .fn_ty = cloned_method_fn_ty,
+            .target_symbol = target_symbol,
+            .step_arg_tys = cloned_step_arg_tys,
+            .step_result_tys = cloned_step_result_tys,
         };
     }
 
@@ -4552,399 +4535,32 @@ const Lowerer = struct {
         };
     }
 
-    fn findPrimitiveAttachedMethodTarget(self: *Lowerer, prim: type_mod.Prim, method_name: base.Ident.Idx) Symbol {
-        var iter = self.input.attached_method_index.iterator();
-        var matched: ?Symbol = null;
-        while (iter.next()) |entry| {
-            const key = entry.key_ptr.*;
-            if (key.method_ident != method_name) continue;
-            if (!self.primitiveMethodTypeMatches(prim, key.type_ident)) continue;
-            if (matched) |existing| {
-                if (existing != entry.value_ptr.*) {
-                    const type_text = self.input.idents.getText(key.type_ident);
-                    const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
-                    debugPanicFmt(
-                        "lambdamono.lower.findPrimitiveAttachedMethodTarget found multiple targets for {s}.{s}",
-                        .{ type_text, method_text },
-                    );
-                }
-            } else {
-                matched = entry.value_ptr.*;
-            }
-        }
-
-        return matched orelse {
-            const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
-            debugPanicFmt(
-                "lambdamono.lower.findPrimitiveAttachedMethodTarget missing attached method target for primitive {s}.{s}",
-                .{ @tagName(prim), method_text },
-            );
-        };
-    }
-
-    fn findBuiltinAttachedMethodTarget(
+    fn requireExactResolvedMethodTarget(
         self: *Lowerer,
-        owner: symbol_mod.BuiltinAttachedMethodOwner,
+        solved_types: *const solved.Type.Store,
+        method_fn_ty: TypeVarId,
         method_name: base.Ident.Idx,
     ) Symbol {
-        return self.input.builtin_attached_method_index.get(.{
-            .owner = owner,
-            .method_ident = method_name,
-        }) orelse {
-            const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
-            debugPanicFmt(
-                "lambdamono.lower.findBuiltinAttachedMethodTarget missing attached method target for builtin {s}.{s}",
-                .{ @tagName(owner), method_text },
-            );
-        };
-    }
-
-    fn findAttachedMethodTargetForInstantiatedSource(
-        self: *Lowerer,
-        solved_types: *solved.Type.Store,
-        receiver_ty: TypeVarId,
-        method_name: base.Ident.Idx,
-    ) Symbol {
-        const root = solved_types.unlinkPreservingNominal(receiver_ty);
-        const node = solved_types.getNode(root);
-        if (node == .nominal) {
-            const nominal = node.nominal;
-            const key = symbol_mod.AttachedMethodKey{
-                .module_idx = nominal.module_idx,
-                .type_ident = nominal.ident,
-                .method_ident = method_name,
-            };
-            return self.input.attached_method_index.get(key) orelse {
-                const type_text = if (nominal.ident.isNone()) "<none>" else self.input.idents.getText(nominal.ident);
-                const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
-                debugPanicFmt(
-                    "lambdamono.lower.findAttachedMethodTargetForInstantiatedSource missing attached method target for {s}.{s}",
-                    .{ type_text, method_text },
-                );
-            };
-        }
-
-        switch (node) {
-            .content => |content| switch (content) {
-                .primitive => |prim| return self.findPrimitiveAttachedMethodTarget(prim, method_name),
-                .list => return self.findBuiltinAttachedMethodTarget(.list, method_name),
-                .box => return self.findBuiltinAttachedMethodTarget(.box, method_name),
-                .tag_union => |tags_span| {
-                    const tags = solved_types.sliceTags(tags_span.tags);
-                    if (tags.len != 1) {
-                        return self.findTagUnionAttachedMethodTarget(solved_types, tags, method_name);
-                    }
-                    const owner_ident = tags[0].name;
-                    var found: ?Symbol = null;
-                    var iter = self.input.attached_method_index.iterator();
-                    while (iter.next()) |entry| {
-                        const key = entry.key_ptr.*;
-                        if (key.method_ident != method_name) continue;
-                        if (key.type_ident != owner_ident) continue;
-                        if (found) |existing| {
-                            if (existing != entry.value_ptr.*) {
-                                const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
-                                debugPanicFmt(
-                                    "lambdamono.lower.findAttachedMethodTargetForInstantiatedSource found multiple singleton nominal-backing targets for method {s}",
-                                    .{method_text},
-                                );
-                            }
-                        } else {
-                            found = entry.value_ptr.*;
-                        }
-                    }
-                    return if (found) |symbol| symbol else {
-                        const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
-                        const type_text = if (owner_ident.isNone()) "<none>" else self.input.idents.getText(owner_ident);
-                        debugPanicFmt(
-                            "lambdamono.lower.findAttachedMethodTargetForInstantiatedSource missing singleton nominal-backing target for {s}.{s}",
-                            .{ type_text, method_text },
-                        );
-                    };
-                },
-                else => {
-                    const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
+        if (solved_types.exactTargetForResolvedFn(method_fn_ty)) |symbol| return symbol;
+        const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
+        switch (solved_types.lambdaRepr(method_fn_ty)) {
+            .erased => debugPanicFmt(
+                "lambdamono.lower.requireExactResolvedMethodTarget method_fn_ty was erased for method {s}",
+                .{method_text},
+            ),
+            .lset => |lambdas| {
+                if (lambdas.len == 0) {
                     debugPanicFmt(
-                        "lambdamono.lower.findAttachedMethodTargetForInstantiatedSource expected nominal or primitive receiver for method {s}, got content {s} at {d}",
-                        .{ method_text, @tagName(content), @intFromEnum(root) },
-                    );
-                },
-            },
-            else => {
-                const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
-                debugPanicFmt(
-                    "lambdamono.lower.findAttachedMethodTargetForInstantiatedSource expected resolved receiver for method {s}, got node {s} at {d}",
-                    .{ method_text, @tagName(node), @intFromEnum(root) },
-                );
-            },
-        }
-        unreachable;
-    }
-
-    fn tagUnionShapesMatch(
-        self: *Lowerer,
-        solved_types: *solved.Type.Store,
-        candidate_ty: TypeVarId,
-        expected_tags: []const solved.Type.Tag,
-    ) bool {
-        const candidate_root = solved_types.unlinkPreservingNominal(candidate_ty);
-        const candidate_node = solved_types.getNode(candidate_root);
-        const candidate_tags = switch (candidate_node) {
-            .nominal => |nominal| return self.tagUnionShapesMatch(solved_types, nominal.backing, expected_tags),
-            .content => |content| switch (content) {
-                .tag_union => |tag_union| solved_types.sliceTags(tag_union.tags),
-                else => return false,
-            },
-            else => return false,
-        };
-
-        if (candidate_tags.len != expected_tags.len) return false;
-        for (candidate_tags, expected_tags) |candidate_tag, expected_tag| {
-            if (candidate_tag.name != expected_tag.name) return false;
-            if (solved_types.sliceTypeVarSpan(candidate_tag.args).len != solved_types.sliceTypeVarSpan(expected_tag.args).len) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    fn findTagUnionAttachedMethodTarget(
-        self: *Lowerer,
-        _: *solved.Type.Store,
-        tags: []const solved.Type.Tag,
-        method_name: base.Ident.Idx,
-    ) Symbol {
-        var found: ?Symbol = null;
-        var iter = self.input.attached_method_index.iterator();
-        while (iter.next()) |entry| {
-            const key = entry.key_ptr.*;
-            if (key.method_ident != method_name) continue;
-
-            const symbol = entry.value_ptr.*;
-            const exact = specializations.lookupFnExact(self.fenv, symbol) orelse {
-                debugPanic("lambdamono.lower.findTagUnionAttachedMethodTarget missing exact method function");
-            };
-
-            var candidate_inst = InstScope.init(self.allocator);
-            defer candidate_inst.deinit();
-
-            const candidate_fn_ty = self.cloneInstType(&candidate_inst, exact.fn_ty) catch unreachable;
-            const candidate_arg_ty = candidate_inst.types.fnShape(candidate_fn_ty).arg;
-            if (!self.tagUnionShapesMatch(&candidate_inst.types, candidate_arg_ty, tags)) continue;
-
-            if (found) |existing| {
-                if (existing != symbol) {
-                    const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
-                    debugPanicFmt(
-                        "lambdamono.lower.findTagUnionAttachedMethodTarget found multiple tag-union targets for method {s}",
+                        "lambdamono.lower.requireExactResolvedMethodTarget method_fn_ty had empty lambda set for method {s}",
                         .{method_text},
                     );
                 }
-            } else {
-                found = symbol;
-            }
-        }
-
-        return found orelse {
-            const method_text = if (method_name.isNone()) "<none>" else self.input.idents.getText(method_name);
-            debugPanicFmt(
-                "lambdamono.lower.findTagUnionAttachedMethodTarget missing tag-union target for method {s}",
-                .{method_text},
-            );
-        };
-    }
-
-    fn maybeAttachedMethodTargetFromRefinedFnType(
-        _: *Lowerer,
-        solved_types: *solved.Type.Store,
-        method_fn_ty: TypeVarId,
-        _: base.Ident.Idx,
-    ) ?Symbol {
-        return switch (solved_types.lambdaRepr(method_fn_ty)) {
-            .erased => null,
-            .lset => |lambdas| {
-                if (lambdas.len != 1) return null;
-                return lambdas[0].symbol;
+                debugPanicFmt(
+                    "lambdamono.lower.requireExactResolvedMethodTarget method_fn_ty had {d} lambdas for method {s}; first={d}",
+                    .{ lambdas.len, method_text, lambdas[0].symbol.raw() },
+                );
             },
-        };
-    }
-
-    fn resolveTypeMethodTargetFromCurrentCall(
-        self: *Lowerer,
-        inst: *InstScope,
-        venv: []const EnvEntry,
-        method_call: @FieldType(solved.Ast.Expr.Data, "type_method_call"),
-        explicit_step_arg_tys: []const TypeVarId,
-        explicit_step_result_tys: []const TypeVarId,
-    ) std.mem.Allocator.Error!Symbol {
-        var target_inst = InstScope.init(self.allocator);
-        defer target_inst.deinit();
-
-        var snapshot_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
-        defer snapshot_mapping.deinit();
-
-        const cloned_dispatcher_ty = try self.cloneTypeIntoInstFromStoreWithMapping(
-            &target_inst,
-            &self.input.types,
-            &snapshot_mapping,
-            method_call.dispatcher_ty,
-        );
-        const cloned_method_fn_ty = try self.cloneTypeIntoInstFromStoreWithMapping(
-            &target_inst,
-            &self.input.types,
-            &snapshot_mapping,
-            method_call.method_fn_ty,
-        );
-
-        const method_args = self.input.store.sliceExprSpan(method_call.args);
-        const expected_step_count = if (method_args.len == 0) 1 else method_args.len;
-        if (explicit_step_arg_tys.len != expected_step_count or explicit_step_result_tys.len != expected_step_count) {
-            debugPanic("lambdamono.lower.resolveTypeMethodTargetFromCurrentCall explicit step arity mismatch");
         }
-
-        const cloned_step_arg_tys = try self.allocator.alloc(TypeVarId, explicit_step_arg_tys.len);
-        defer self.allocator.free(cloned_step_arg_tys);
-        for (explicit_step_arg_tys, 0..) |step_arg_ty, i| {
-            cloned_step_arg_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(
-                &target_inst,
-                &self.input.types,
-                &snapshot_mapping,
-                step_arg_ty,
-            );
-        }
-
-        const cloned_step_result_tys = try self.allocator.alloc(TypeVarId, explicit_step_result_tys.len);
-        defer self.allocator.free(cloned_step_result_tys);
-        for (explicit_step_result_tys, 0..) |step_result_ty, i| {
-            cloned_step_result_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(
-                &target_inst,
-                &self.input.types,
-                &snapshot_mapping,
-                step_result_ty,
-            );
-        }
-
-        for (method_args, 0..) |arg_expr_id, i| {
-            const actual_arg_ty = try self.instantiatedSourceTypeForExpr(inst, venv, arg_expr_id);
-            const cloned_actual_arg_ty = try self.cloneTypeIntoInstFromStore(
-                &target_inst,
-                &inst.types,
-                actual_arg_ty,
-            );
-            try self.unifyIn(&target_inst.types, cloned_step_arg_tys[i], cloned_actual_arg_ty);
-        }
-
-        var current_fn_ty = cloned_method_fn_ty;
-        for (cloned_step_arg_tys, cloned_step_result_tys) |step_arg_ty, step_result_ty| {
-            const fn_parts = target_inst.types.fnShape(current_fn_ty);
-            try self.unifyIn(&target_inst.types, fn_parts.arg, step_arg_ty);
-            try self.unifyIn(&target_inst.types, fn_parts.ret, step_result_ty);
-            current_fn_ty = step_result_ty;
-        }
-
-        if (self.maybeAttachedMethodTargetFromRefinedFnType(
-            &target_inst.types,
-            cloned_method_fn_ty,
-            method_call.method_name,
-        )) |symbol| {
-            return symbol;
-        }
-
-        return self.findAttachedMethodTargetForInstantiatedSource(
-            &target_inst.types,
-            cloned_dispatcher_ty,
-            method_call.method_name,
-        );
-    }
-
-    fn resolveMethodTargetFromCurrentCall(
-        self: *Lowerer,
-        inst: *InstScope,
-        venv: []const EnvEntry,
-        method_call: @FieldType(solved.Ast.Expr.Data, "method_call"),
-        explicit_step_arg_tys: []const TypeVarId,
-        explicit_step_result_tys: []const TypeVarId,
-    ) std.mem.Allocator.Error!Symbol {
-        var target_inst = InstScope.init(self.allocator);
-        defer target_inst.deinit();
-
-        var snapshot_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
-        defer snapshot_mapping.deinit();
-
-        const cloned_method_fn_ty = try self.cloneTypeIntoInstFromStoreWithMapping(
-            &target_inst,
-            &self.input.types,
-            &snapshot_mapping,
-            method_call.method_fn_ty,
-        );
-
-        const expected_step_count = self.input.store.sliceExprSpan(method_call.args).len + 1;
-        if (explicit_step_arg_tys.len != expected_step_count or explicit_step_result_tys.len != expected_step_count) {
-            debugPanic("lambdamono.lower.resolveMethodTargetFromCurrentCall explicit step arity mismatch");
-        }
-
-        const cloned_step_arg_tys = try self.allocator.alloc(TypeVarId, explicit_step_arg_tys.len);
-        defer self.allocator.free(cloned_step_arg_tys);
-        for (explicit_step_arg_tys, 0..) |step_arg_ty, i| {
-            cloned_step_arg_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(
-                &target_inst,
-                &self.input.types,
-                &snapshot_mapping,
-                step_arg_ty,
-            );
-        }
-
-        const cloned_step_result_tys = try self.allocator.alloc(TypeVarId, explicit_step_result_tys.len);
-        defer self.allocator.free(cloned_step_result_tys);
-        for (explicit_step_result_tys, 0..) |step_result_ty, i| {
-            cloned_step_result_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(
-                &target_inst,
-                &self.input.types,
-                &snapshot_mapping,
-                step_result_ty,
-            );
-        }
-
-        const actual_receiver_ty = try self.instantiatedSourceTypeForExpr(inst, venv, method_call.receiver);
-        const cloned_actual_receiver_ty = try self.cloneTypeIntoInstFromStore(
-            &target_inst,
-            &inst.types,
-            actual_receiver_ty,
-        );
-        try self.unifyIn(&target_inst.types, cloned_step_arg_tys[0], cloned_actual_receiver_ty);
-
-        const method_args = self.input.store.sliceExprSpan(method_call.args);
-        for (method_args, 0..) |arg_expr_id, i| {
-            const actual_arg_ty = try self.instantiatedSourceTypeForExpr(inst, venv, arg_expr_id);
-            const cloned_actual_arg_ty = try self.cloneTypeIntoInstFromStore(
-                &target_inst,
-                &inst.types,
-                actual_arg_ty,
-            );
-            try self.unifyIn(&target_inst.types, cloned_step_arg_tys[i + 1], cloned_actual_arg_ty);
-        }
-
-        var current_fn_ty = cloned_method_fn_ty;
-        for (cloned_step_arg_tys, cloned_step_result_tys) |step_arg_ty, step_result_ty| {
-            const fn_parts = target_inst.types.fnShape(current_fn_ty);
-            try self.unifyIn(&target_inst.types, fn_parts.arg, step_arg_ty);
-            try self.unifyIn(&target_inst.types, fn_parts.ret, step_result_ty);
-            current_fn_ty = step_result_ty;
-        }
-
-        if (self.maybeAttachedMethodTargetFromRefinedFnType(
-            &target_inst.types,
-            cloned_method_fn_ty,
-            method_call.method_name,
-        )) |symbol| {
-            return symbol;
-        }
-
-        return self.findAttachedMethodTargetForInstantiatedSource(
-            &target_inst.types,
-            cloned_step_arg_tys[0],
-            method_call.method_name,
-        );
     }
 
     const CallTarget = union(enum) {
@@ -5175,32 +4791,23 @@ const Lowerer = struct {
         const method_args = self.input.store.sliceExprSpan(method_call.args);
         const explicit_step_arg_tys = self.input.types.sliceTypeVarSpan(method_call.step_arg_tys);
         const explicit_step_result_tys = self.input.types.sliceTypeVarSpan(method_call.step_result_tys);
-        const instantiated_step_arg_tys = try self.allocator.alloc(TypeVarId, explicit_step_arg_tys.len);
-        defer self.allocator.free(instantiated_step_arg_tys);
-        for (explicit_step_arg_tys, 0..) |step_arg_ty, i| {
-            instantiated_step_arg_tys[i] = try self.cloneInstType(inst, step_arg_ty);
-        }
-        const target_symbol = try self.resolveMethodTargetFromCurrentCall(
-            inst,
-            venv,
-            method_call,
-            explicit_step_arg_tys,
-            explicit_step_result_tys,
-        );
-        const instantiated_step_result_tys = try self.allocator.alloc(TypeVarId, explicit_step_result_tys.len);
-        defer self.allocator.free(instantiated_step_result_tys);
-        for (explicit_step_result_tys, 0..) |step_result_ty, i| {
-            instantiated_step_result_tys[i] = try self.cloneInstType(inst, step_result_ty);
+        const actual_arg_tys = try self.allocator.alloc(TypeVarId, method_args.len);
+        defer self.allocator.free(actual_arg_tys);
+        for (method_args, 0..) |arg_expr_id, i| {
+            actual_arg_tys[i] = try self.instantiatedSourceTypeForExpr(inst, venv, arg_expr_id);
         }
         var frozen = try self.freezeMethodCallWorld(
             &inst.types,
             venv,
-            target_symbol,
+            method_call.method_fn_ty,
+            method_call.method_name,
             receiver_source_ty,
-            instantiated_step_arg_tys[1..],
-            instantiated_step_result_tys,
+            explicit_step_arg_tys,
+            explicit_step_result_tys,
+            actual_arg_tys,
         );
         defer frozen.deinit(self.allocator);
+        const target_symbol = frozen.target_symbol;
         var current_fn_ty = frozen.fn_ty;
         const step_arg_tys = frozen.step_arg_tys;
         const step_result_tys = frozen.step_result_tys;
@@ -5325,39 +4932,25 @@ const Lowerer = struct {
         const method_args = self.input.store.sliceExprSpan(method_call.args);
         const explicit_step_arg_tys = self.input.types.sliceTypeVarSpan(method_call.step_arg_tys);
         const explicit_step_result_tys = self.input.types.sliceTypeVarSpan(method_call.step_result_tys);
-        const target_symbol = try self.resolveTypeMethodTargetFromCurrentCall(
-            inst,
-            venv,
-            method_call,
-            explicit_step_arg_tys,
-            explicit_step_result_tys,
-        );
-        const instantiated_step_arg_tys = try self.allocator.alloc(TypeVarId, explicit_step_arg_tys.len);
-        defer self.allocator.free(instantiated_step_arg_tys);
-        for (explicit_step_arg_tys, 0..) |step_arg_ty, i| {
-            instantiated_step_arg_tys[i] = try self.cloneInstType(inst, step_arg_ty);
-        }
-        const instantiated_step_result_tys = try self.allocator.alloc(TypeVarId, explicit_step_result_tys.len);
-        defer self.allocator.free(instantiated_step_result_tys);
-        for (explicit_step_result_tys, 0..) |step_result_ty, i| {
-            instantiated_step_result_tys[i] = try self.cloneInstType(inst, step_result_ty);
+        const actual_arg_tys = try self.allocator.alloc(TypeVarId, method_args.len);
+        defer self.allocator.free(actual_arg_tys);
+        for (method_args, 0..) |arg_expr_id, i| {
+            actual_arg_tys[i] = try self.instantiatedSourceTypeForExpr(inst, venv, arg_expr_id);
         }
         var frozen = try self.freezeTypeMethodCallWorld(
             &inst.types,
             venv,
-            target_symbol,
-            instantiated_step_arg_tys,
-            instantiated_step_result_tys,
+            method_call.method_fn_ty,
+            method_call.method_name,
+            explicit_step_arg_tys,
+            explicit_step_result_tys,
+            actual_arg_tys,
         );
         defer frozen.deinit(self.allocator);
+        const target_symbol = frozen.target_symbol;
         var current_fn_ty = frozen.fn_ty;
         const step_arg_tys = frozen.step_arg_tys;
         const step_result_tys = frozen.step_result_tys;
-
-        const expected_step_count = if (method_args.len == 0) 1 else method_args.len;
-        if (instantiated_step_result_tys.len != expected_step_count) {
-            debugPanic("lambdamono.lower.specializeTypeMethodCallExpr explicit step result arity mismatch");
-        }
 
         if (method_args.len == 0) {
             const unit_ty = try self.lowerExecutableTypeFromSolvedIn(&frozen.inst.types, &frozen.mono_cache, step_arg_tys[0]);

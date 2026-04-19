@@ -3492,6 +3492,25 @@ pub fn recordMethodCallFn(
     });
 }
 
+pub fn setMethodCallFnVar(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    method_name: Ident.Idx,
+    origin: types_mod.StaticDispatchConstraint.Origin,
+    fn_var: TypeVar,
+) void {
+    for (self.method_call_fns.items.items) |*entry| {
+        if (entry.expr_idx != expr_idx or entry.method_name != method_name or entry.origin != origin) continue;
+        entry.fn_var = fn_var;
+        return;
+    }
+
+    std.debug.panic(
+        "ModuleEnv invariant violated: missing dispatch-call fn for expr {d} method {s}",
+        .{ @intFromEnum(expr_idx), self.getIdent(method_name) },
+    );
+}
+
 /// Public function `methodCallFnVar`.
 pub fn methodCallFnVar(
     self: *const Self,

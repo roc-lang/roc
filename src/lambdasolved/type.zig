@@ -400,6 +400,13 @@ pub const Store = struct {
         return member.captures.len == 0;
     }
 
+    pub fn exactTargetForResolvedFn(self: *const Store, fn_ty: TypeVarId) ?Symbol {
+        return switch (self.lambdaRepr(fn_ty)) {
+            .erased => null,
+            .lset => |lambdas| if (lambdas.len == 1) lambdas[0].symbol else null,
+        };
+    }
+
     pub fn structuralKeyOwned(self: *const Store, ty: TypeVarId) std.mem.Allocator.Error![]u8 {
         var serializer = StructuralKeySerializer{
             .allocator = self.allocator,
