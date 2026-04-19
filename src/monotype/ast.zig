@@ -59,7 +59,7 @@ pub const Pat = struct {
 pub const LetFn = struct {
     recursive: bool,
     bind: TypedSymbol,
-    arg: TypedSymbol,
+    args: Span(TypedSymbol),
     body: ExprId,
 };
 
@@ -87,11 +87,6 @@ pub const FieldExpr = struct {
     value: ExprId,
 };
 
-pub const MethodKind = enum {
-    ordinary,
-    implicit_eq,
-};
-
 /// Public struct `Expr`.
 pub const Expr = struct {
     ty: TypeId,
@@ -116,9 +111,12 @@ pub const Expr = struct {
             field: base.Ident.Idx,
             field_index: u16,
         },
+        structural_eq: struct {
+            lhs: ExprId,
+            rhs: ExprId,
+        },
         method_call: struct {
             receiver: ExprId,
-            kind: MethodKind,
             method_fn_ty: TypeId,
             method_name: base.Ident.Idx,
             args: Span(ExprId),
@@ -134,12 +132,12 @@ pub const Expr = struct {
             rest: ExprId,
         },
         clos: struct {
-            arg: TypedSymbol,
+            args: Span(TypedSymbol),
             body: ExprId,
         },
         call: struct {
             func: ExprId,
-            arg: ExprId,
+            args: Span(ExprId),
         },
         inspect: ExprId,
         low_level: struct {

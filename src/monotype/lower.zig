@@ -218,23 +218,15 @@ const Ctx = struct {
             return self.source_module.methodCallConstraintFnVar(idx);
         }
 
-        pub fn methodCallIsImplicitEq(
-            self: @This(),
-            idx: CIR.Expr.Idx,
-            origin: types.StaticDispatchConstraint.Origin,
-        ) bool {
-            return self.source_module.methodCallIsImplicitEq(idx, origin);
-        }
-
         pub fn binopConstraintFnVar(self: @This(), idx: CIR.Expr.Idx, method_name: Ident.Idx) ?Var {
             return self.source_module.binopConstraintFnVar(idx, method_name);
         }
 
-        pub fn curriedFnShape(self: @This(), fn_var: Var) std.mem.Allocator.Error!typed_cir.Module.CurriedFnShape {
-            return self.source_module.curriedFnShape(fn_var);
+        pub fn fnShape(self: @This(), fn_var: Var) std.mem.Allocator.Error!typed_cir.Module.FnShape {
+            return self.source_module.fnShape(fn_var);
         }
 
-        pub fn lambdaFnShape(self: @This(), fn_var: Var, explicit_arg_count: usize) std.mem.Allocator.Error!typed_cir.Module.CurriedFnShape {
+        pub fn lambdaFnShape(self: @This(), fn_var: Var, explicit_arg_count: usize) std.mem.Allocator.Error!typed_cir.Module.FnShape {
             return self.source_module.lambdaFnShape(fn_var, explicit_arg_count);
         }
 
@@ -904,7 +896,9 @@ pub const Lowerer = struct {
         switch (def.*) {
             .let_fn => |*let_fn| {
                 try self.finalizeTypedSymbol(&let_fn.bind);
-                try self.finalizeTypedSymbol(&let_fn.arg);
+                for (self.program.store.sliceTypedSymbolSpanMut(let_fn.args)) |*arg| {
+                    try self.finalizeTypedSymbol(arg);
+                }
                 try self.finalizeExprById(let_fn.body, visited);
             },
             .let_val => |*let_val| {
@@ -937,7 +931,9 @@ pub const Lowerer = struct {
         switch (stmt.*) {
             .local_fn => |*let_fn| {
                 try self.finalizeTypedSymbol(&let_fn.bind);
-                try self.finalizeTypedSymbol(&let_fn.arg);
+                for (self.program.store.sliceTypedSymbolSpanMut(let_fn.args)) |*arg| {
+                    try self.finalizeTypedSymbol(arg);
+                }
                 try self.finalizeExprById(let_fn.body, visited);
             },
             .decl => |*decl| {
@@ -992,17 +988,36 @@ pub const Lowerer = struct {
                 }
             },
             .access => |access| try self.finalizeExprById(access.record, visited),
+            .structural_eq => |eq| {
+                try self.finalizeExprById(eq.lhs, visited);
+                try self.finalizeExprById(eq.rhs, visited);
+            },
+            .method_call => |method_call| {
+                try self.finalizeExprById(method_call.receiver, visited);
+                for (self.program.store.sliceExprSpan(method_call.args)) |arg_expr| {
+                    try self.finalizeExprById(arg_expr, visited);
+                }
+            },
+            .type_method_call => |method_call| {
+                for (self.program.store.sliceExprSpan(method_call.args)) |arg_expr| {
+                    try self.finalizeExprById(arg_expr, visited);
+                }
+            },
             .let_ => |*let_expr| {
                 try self.finalizeLetDef(&let_expr.def, visited);
                 try self.finalizeExprById(let_expr.rest, visited);
             },
             .clos => |*clos| {
-                try self.finalizeTypedSymbol(&clos.arg);
+                for (self.program.store.sliceTypedSymbolSpanMut(clos.args)) |*arg| {
+                    try self.finalizeTypedSymbol(arg);
+                }
                 try self.finalizeExprById(clos.body, visited);
             },
             .call => |call| {
                 try self.finalizeExprById(call.func, visited);
-                try self.finalizeExprById(call.arg, visited);
+                for (self.program.store.sliceExprSpan(call.args)) |arg_expr| {
+                    try self.finalizeExprById(arg_expr, visited);
+                }
             },
             .inspect => |inner| try self.finalizeExprById(inner, visited),
             .low_level => |low_level| {
@@ -1058,7 +1073,9 @@ pub const Lowerer = struct {
         switch (def.value) {
             .fn_ => |*let_fn| {
                 try self.finalizeTypedSymbol(&let_fn.bind);
-                try self.finalizeTypedSymbol(&let_fn.arg);
+                for (self.program.store.sliceTypedSymbolSpanMut(let_fn.args)) |*arg| {
+                    try self.finalizeTypedSymbol(arg);
+                }
                 try self.finalizeExprById(let_fn.body, visited);
             },
             .hosted_fn => |*hosted_fn| {
@@ -1466,7 +1483,7 @@ pub const Lowerer = struct {
         const bind_ty = if (expected_var) |scoped_expected_var|
             try self.instantiateVarType(module_idx, type_scope, scoped_expected_var)
         else
-            try self.ctx.types.addType(try self.buildCurriedFuncType(arg_tys, try self.instantiateSourceVarType(module_idx, type_scope, source_fn_shape.ret)));
+            try self.ctx.types.addType(try self.buildFunctionType(arg_tys, try self.instantiateSourceVarType(module_idx, type_scope, source_fn_shape.ret), &.{}));
         const lowered = try self.program.store.addDef(.{
             .bind = .{
                 .ty = bind_ty,
@@ -1645,12 +1662,13 @@ pub const Lowerer = struct {
                     try self.ctx.types.addType(.{
                         .func = .{
                             .arg = first_arg.ty,
+                            .lambdas = &.{},
                             .ret = self.program.store.getExpr(body).ty,
                         },
                     }),
                 .symbol = bind_symbol,
             },
-            .arg = first_arg,
+            .args = try self.program.store.addTypedSymbolSpan(&[_]ast.TypedSymbol{first_arg}),
             .body = body,
         };
     }
@@ -1723,11 +1741,12 @@ pub const Lowerer = struct {
             .ty = try self.ctx.types.addType(.{
                 .func = .{
                     .arg = first_arg.ty,
+                    .lambdas = &.{},
                     .ret = result_ty,
                 },
             }),
             .data = .{ .clos = .{
-                .arg = first_arg,
+                .args = try self.program.store.addTypedSymbolSpan(&[_]ast.TypedSymbol{first_arg}),
                 .body = body,
             } },
         });
@@ -1939,6 +1958,7 @@ pub const Lowerer = struct {
             actual_ret_ty = try self.ctx.types.addType(.{
                 .func = .{
                     .arg = arg_tys[i - 1],
+                    .lambdas = &.{},
                     .ret = actual_ret_ty,
                 },
             });
@@ -2555,17 +2575,31 @@ pub const Lowerer = struct {
                     .field_index = try self.requireExprFieldIndex(module_idx, type_scope, expr.idx),
                 } };
             },
+            .e_structural_eq => |eq| .{ .structural_eq = .{
+                .lhs = try self.lowerExpr(module_idx, type_scope, env, eq.lhs),
+                .rhs = try self.lowerExpr(module_idx, type_scope, env, eq.rhs),
+            } },
             .e_method_call => |method_call| blk: {
                 const method_fn_var = typed_cir_module.methodCallConstraintFnVar(expr.idx) orelse debugPanic(
                     "monotype invariant violated: method call expr {d} ({s}) missing checked callable type",
                     .{ @intFromEnum(expr.idx), self.ctx.typedCirModule(module_idx).getIdent(method_call.method_name) },
                 );
+                const lowered_receiver = try self.lowerExpr(module_idx, type_scope, env, method_call.receiver);
+                const lowered_args = try self.lowerExprSlice(module_idx, type_scope, env, typed_cir_module.sliceExpr(method_call.args));
+                const method_fn_ty_base = try self.instantiateSourceVarType(module_idx, type_scope, method_fn_var);
+                const method_fn_ty = if (typed_cir_module.methodCallResolvedTarget(expr.idx, .method_call)) |target|
+                    try self.stampCallableTarget(
+                        module_idx,
+                        method_fn_ty_base,
+                        self.requireResolvedMethodTargetSymbol(module_idx, target),
+                    )
+                else
+                    method_fn_ty_base;
                 break :blk .{ .method_call = .{
-                    .receiver = try self.lowerExpr(module_idx, type_scope, env, method_call.receiver),
-                    .kind = self.methodCallKind(module_idx, expr.idx, .method_call),
-                    .method_fn_ty = try self.instantiateSourceVarType(module_idx, type_scope, method_fn_var),
+                    .receiver = lowered_receiver,
+                    .method_fn_ty = method_fn_ty,
                     .method_name = try self.ctx.copyExecutableIdent(module_idx, method_call.method_name),
-                    .args = try self.lowerExprSlice(module_idx, type_scope, env, typed_cir_module.sliceExpr(method_call.args)),
+                    .args = lowered_args,
                 } };
             },
             .e_type_method_call => |method_call| blk: {
@@ -2574,13 +2608,22 @@ pub const Lowerer = struct {
                     "monotype invariant violated: type method call expr {d} ({s}) missing checked callable type",
                     .{ @intFromEnum(expr.idx), self.ctx.typedCirModule(module_idx).getIdent(method_call.method_name) },
                 );
+                const method_fn_ty_base = try self.instantiateSourceVarType(module_idx, type_scope, method_fn_var);
+                const method_fn_ty = if (typed_cir_module.methodCallResolvedTarget(expr.idx, .method_call)) |target|
+                    try self.stampCallableTarget(
+                        module_idx,
+                        method_fn_ty_base,
+                        self.requireResolvedMethodTargetSymbol(module_idx, target),
+                    )
+                else
+                    method_fn_ty_base;
                 break :blk .{ .type_method_call = .{
                     .dispatcher_ty = try self.instantiateSourceVarType(
                         module_idx,
                         type_scope,
                         ModuleEnv.varFrom(alias_stmt.s_type_var_alias.type_var_anno),
                     ),
-                    .method_fn_ty = try self.instantiateSourceVarType(module_idx, type_scope, method_fn_var),
+                    .method_fn_ty = method_fn_ty,
                     .method_name = try self.ctx.copyExecutableIdent(module_idx, method_call.method_name),
                     .args = try self.lowerExprSlice(module_idx, type_scope, env, typed_cir_module.sliceExpr(method_call.args)),
                 } };
@@ -3141,7 +3184,7 @@ pub const Lowerer = struct {
         const arg_patterns = typed_cir_module.slicePatterns(args_span);
         const source_expr_var = self.ctx.typedCirModule(module_idx).expr(source_expr_idx).ty();
         const source_fn_var = source_expr_var;
-        var source_fn_shape = try typed_cir_module.curriedFnShape(source_fn_var);
+        var source_fn_shape = try typed_cir_module.fnShape(source_fn_var);
         defer source_fn_shape.deinit(self.allocator);
         const first_arg_ty = if (arg_patterns.len == 0)
             self.requireFunctionType(closure_ty).arg
@@ -3230,7 +3273,7 @@ pub const Lowerer = struct {
         return .{
             .ty = closure_ty,
             .data = .{
-                .arg = arg,
+                .args = try self.program.store.addTypedSymbolSpan(&[_]ast.TypedSymbol{arg}),
                 .body = body,
             },
         };
@@ -5915,12 +5958,20 @@ pub const Lowerer = struct {
                 try self.exprResultVar(module_idx, type_scope, env, arg_expr_idx),
             );
         }
+        const method_fn_ty_base = try self.instantiateSourceVarType(module_idx, type_scope, method_fn_var);
+        const method_fn_ty = if (self.ctx.typedCirModule(module_idx).methodCallResolvedTarget(expr_idx, method_call_origin)) |target|
+            try self.stampCallableTarget(
+                module_idx,
+                method_fn_ty_base,
+                self.requireResolvedMethodTargetSymbol(module_idx, target),
+            )
+        else
+            method_fn_ty_base;
         return try self.program.store.addExpr(.{
             .ty = result_ty,
             .data = .{ .method_call = .{
                 .receiver = lowered_receiver,
-                .kind = self.methodCallKind(module_idx, expr_idx, method_call_origin),
-                .method_fn_ty = try self.instantiateSourceVarType(module_idx, type_scope, method_fn_var),
+                .method_fn_ty = method_fn_ty,
                 .method_name = try self.ctx.copyExecutableIdent(module_idx, lookup_name),
                 .args = try self.program.store.addExprSpan(lowered_args),
             } },
@@ -5960,11 +6011,20 @@ pub const Lowerer = struct {
                 try self.exprResultVar(module_idx, type_scope, env, arg_expr_idx),
             );
         }
+        const method_fn_ty_base = try self.instantiateSourceVarType(module_idx, type_scope, method_fn_var);
+        const method_fn_ty = if (typed_cir_module.methodCallResolvedTarget(expr_idx, .method_call)) |target|
+            try self.stampCallableTarget(
+                module_idx,
+                method_fn_ty_base,
+                self.requireResolvedMethodTargetSymbol(module_idx, target),
+            )
+        else
+            method_fn_ty_base;
         return try self.program.store.addExpr(.{
             .ty = result_ty,
             .data = .{ .type_method_call = .{
                 .dispatcher_ty = dispatcher_ty,
-                .method_fn_ty = try self.instantiateSourceVarType(module_idx, type_scope, method_fn_var),
+                .method_fn_ty = method_fn_ty,
                 .method_name = try self.ctx.copyExecutableIdent(module_idx, method_call.method_name),
                 .args = try self.program.store.addExprSpan(lowered_args),
             } },
@@ -6009,27 +6069,27 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!LoweredCall {
         const unit_ty = try self.ctx.types.addType(.{ .record = .{ .fields = &.{} } });
         var fn_ty = current_fn_ty;
-        var func_expr = current_expr;
+        const lowered_args = try self.allocator.alloc(ast.ExprId, if (arg_exprs.len == 0) @as(usize, 1) else arg_exprs.len);
+        defer self.allocator.free(lowered_args);
 
         if (arg_exprs.len == 0) {
             const fn_parts = self.requireFunctionType(fn_ty);
-            const unit_expr = try self.program.store.addExpr(.{
+            lowered_args[0] = try self.program.store.addExpr(.{
                 .ty = unit_ty,
                 .data = .unit,
             });
             return .{
                 .data = .{
-                    .func = func_expr,
-                    .arg = unit_expr,
+                    .func = current_expr,
+                    .args = try self.program.store.addExprSpan(lowered_args),
                 },
                 .result_ty = fn_parts.ret,
             };
         }
 
-        var current_data: @FieldType(ast.Expr.Data, "call") = undefined;
         for (arg_exprs, 0..) |arg_expr_idx, i| {
             const fn_parts = self.requireFunctionType(fn_ty);
-            const lowered_arg = try self.lowerExprWithExpectedType(
+            lowered_args[i] = try self.lowerExprWithExpectedType(
                 module_idx,
                 type_scope,
                 env,
@@ -6037,23 +6097,16 @@ pub const Lowerer = struct {
                 fn_parts.arg,
                 try self.exprResultVar(module_idx, type_scope, env, arg_expr_idx),
             );
-            current_data = .{
-                .func = func_expr,
-                .arg = lowered_arg,
-            };
-            if (i + 1 == arg_exprs.len) {
-                return .{
-                    .data = current_data,
-                    .result_ty = fn_parts.ret,
-                };
-            }
-            func_expr = try self.program.store.addExpr(.{
-                .ty = fn_parts.ret,
-                .data = .{ .call = current_data },
-            });
             fn_ty = fn_parts.ret;
         }
-        unreachable;
+
+        return .{
+            .data = .{
+                .func = current_expr,
+                .args = try self.program.store.addExprSpan(lowered_args),
+            },
+            .result_ty = fn_ty,
+        };
     }
 
     fn lowerExprWithExpectedType(
@@ -6296,6 +6349,27 @@ pub const Lowerer = struct {
             .e_lookup_local => try self.lowerSolvedExpr(module_idx, type_scope, env, expr),
             .e_lookup_external => try self.lowerSolvedExpr(module_idx, type_scope, env, expr),
             .e_field_access => |_| try self.lowerSolvedExpr(module_idx, type_scope, env, expr),
+            .e_structural_eq => |eq| try self.program.store.addExpr(.{
+                .ty = target_ty,
+                .data = .{ .structural_eq = .{
+                    .lhs = try self.lowerExprWithExpectedType(
+                        module_idx,
+                        type_scope,
+                        env,
+                        eq.lhs,
+                        try self.requireExprType(module_idx, type_scope, eq.lhs),
+                        try self.exprResultVar(module_idx, type_scope, env, eq.lhs),
+                    ),
+                    .rhs = try self.lowerExprWithExpectedType(
+                        module_idx,
+                        type_scope,
+                        env,
+                        eq.rhs,
+                        try self.requireExprType(module_idx, type_scope, eq.rhs),
+                        try self.exprResultVar(module_idx, type_scope, env, eq.rhs),
+                    ),
+                } },
+            }),
             .e_method_call => |method_call| blk: {
                 const method_fn_var = typed_cir_module.methodCallConstraintFnVar(expr.idx) orelse debugPanic(
                     "monotype invariant violated: method call expr {d} ({s}) missing checked callable type",
@@ -7366,6 +7440,11 @@ pub const Lowerer = struct {
                 try self.collectSolvedExprInfo(module_idx, type_scope, env, solved_module.expr(field_access.receiver));
                 break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
+            .e_structural_eq => |eq| blk: {
+                try self.collectSolvedExprInfo(module_idx, type_scope, env, solved_module.expr(eq.lhs));
+                try self.collectSolvedExprInfo(module_idx, type_scope, env, solved_module.expr(eq.rhs));
+                break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
+            },
             .e_method_call => |method_call| blk: {
                 try self.collectSolvedExprInfo(module_idx, type_scope, env, solved_module.expr(method_call.receiver));
                 for (typed_cir_module.sliceExpr(method_call.args)) |arg_expr| {
@@ -7623,7 +7702,7 @@ pub const Lowerer = struct {
                     for (arg_slice, 0..) |arg_var, i| {
                         arg_ids[i] = try self.lowerInstantiatedType(module_idx, type_scope, arg_var);
                     }
-                    break :blk try self.buildCurriedFuncType(arg_ids, try self.lowerInstantiatedType(module_idx, type_scope, func.ret));
+                    break :blk try self.buildFunctionType(arg_ids, try self.lowerInstantiatedType(module_idx, type_scope, func.ret), &.{});
                 },
                 .tag_union => |tag_union| try self.lowerTagUnionContent(module_idx, type_scope, tag_union.tags, tag_union.ext),
                 .record => |record| try self.lowerRecordContent(module_idx, type_scope, record.fields, record.ext),
@@ -9356,14 +9435,19 @@ pub const Lowerer = struct {
         }
     }
 
-    fn buildCurriedFuncType(
+    fn buildFunctionType(
         self: *Lowerer,
         arg_ids: []const type_mod.TypeId,
         ret_id: type_mod.TypeId,
+        lambdas: []const Symbol,
     ) std.mem.Allocator.Error!type_mod.Content {
         if (arg_ids.len == 0) {
             const unit_ty = try self.ctx.types.addType(.{ .record = .{ .fields = &.{} } });
-            return .{ .func = .{ .arg = unit_ty, .ret = ret_id } };
+            return .{ .func = .{
+                .arg = unit_ty,
+                .lambdas = try self.ctx.types.dupeSymbols(lambdas),
+                .ret = ret_id,
+            } };
         }
 
         var current_ret = ret_id;
@@ -9372,11 +9456,62 @@ pub const Lowerer = struct {
             current_ret = try self.ctx.types.addType(.{
                 .func = .{
                     .arg = arg_ids[i - 1],
+                    .lambdas = try self.ctx.types.dupeSymbols(lambdas),
                     .ret = current_ret,
                 },
             });
         }
         return self.ctx.types.getType(current_ret);
+    }
+
+    fn requireResolvedMethodTargetSymbol(
+        self: *const Lowerer,
+        current_module_idx: u32,
+        target: typed_cir.ResolvedMethodTarget,
+    ) Symbol {
+        const target_module_name = self.ctx.typedCirModule(current_module_idx).getIdent(target.module_name);
+        const target_module_idx = self.ctx.source_modules.moduleIdxByName(target_module_name) orelse
+            debugPanic(
+                "monotype invariant violated: missing module for explicit resolved method target {s}",
+                .{target_module_name},
+            );
+        return self.lookupTopLevelDefSymbol(target_module_idx, target.def_idx) orelse
+            debugPanic(
+                "monotype invariant violated: missing top-level symbol for explicit resolved method target {d}:{d}",
+                .{ target_module_idx, @intFromEnum(target.def_idx) },
+            );
+    }
+
+    fn stampCallableTarget(
+        self: *Lowerer,
+        _: u32,
+        fn_ty: type_mod.TypeId,
+        target_symbol: Symbol,
+    ) std.mem.Allocator.Error!type_mod.TypeId {
+        var arg_ids = std.ArrayList(type_mod.TypeId).empty;
+        defer arg_ids.deinit(self.allocator);
+
+        var current_ty = fn_ty;
+        while (true) {
+            switch (self.ctx.types.getType(current_ty)) {
+                .func => |func| {
+                    try arg_ids.append(self.allocator, func.arg);
+                    current_ty = func.ret;
+                },
+                else => break,
+            }
+        }
+
+        if (arg_ids.items.len == 0) {
+            debugPanic(
+                "monotype invariant violated: attempted to stamp explicit callable target on non-function type {d}",
+                .{@intFromEnum(fn_ty)},
+            );
+        }
+
+        return try self.ctx.types.addType(
+            try self.buildFunctionType(arg_ids.items, current_ty, &.{target_symbol}),
+        );
     }
 
     fn requireFunctionType(self: *Lowerer, fn_ty: type_mod.TypeId) @FieldType(type_mod.Content, "func") {
@@ -9398,16 +9533,6 @@ pub const Lowerer = struct {
             }
         }
         return null;
-    }
-
-    fn methodCallKind(
-        self: *Lowerer,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        origin: types.StaticDispatchConstraint.Origin,
-    ) ast.MethodKind {
-        const typed_cir_module = self.ctx.typedCirModule(module_idx);
-        return if (typed_cir_module.methodCallIsImplicitEq(expr_idx, origin)) .implicit_eq else .ordinary;
     }
 
     fn lowerResolvedTargetCallee(

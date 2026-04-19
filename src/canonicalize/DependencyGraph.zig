@@ -198,6 +198,11 @@ fn collectExprDependencies(
             }
         },
 
+        .e_structural_eq => |eq| {
+            try collectExprDependencies(cir, eq.lhs, dependencies, allocator);
+            try collectExprDependencies(cir, eq.rhs, dependencies, allocator);
+        },
+
         .e_type_method_call => |call| {
             for (cir.store.sliceExpr(call.args)) |arg_idx| {
                 try collectExprDependencies(cir, arg_idx, dependencies, allocator);

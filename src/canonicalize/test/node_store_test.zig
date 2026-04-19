@@ -389,6 +389,12 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(gpa, CIR.Expr{
+        .e_structural_eq = .{
+            .lhs = rand_idx(CIR.Expr.Idx),
+            .rhs = rand_idx(CIR.Expr.Idx),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
         .e_type_method_call = .{
             .type_var_alias_stmt = rand_idx(CIR.Statement.Idx),
             .method_name = rand_ident_idx(),

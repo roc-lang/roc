@@ -954,7 +954,9 @@ const Lowerer = struct {
                 const args = self.input.store.sliceExprSpan(ll.args);
                 if (args.len != 1) break :blk null;
                 const arg_expr = self.input.store.getExpr(args[0]);
-                if (arg_expr.data != .var_ or arg_expr.data.var_ != entry.fn_def.arg.symbol) break :blk null;
+                const fn_args = self.input.store.sliceTypedSymbolSpan(entry.fn_def.args);
+                if (fn_args.len != 1) break :blk null;
+                if (arg_expr.data != .var_ or arg_expr.data.var_ != fn_args[0].symbol) break :blk null;
                 break :blk switch (ll.op) {
                     .box_box, .box_unbox => ll.op,
                     else => null,
@@ -1994,12 +1996,8 @@ const Lowerer = struct {
         env: []EnvEntry,
         fn_ty: TypeVarId,
         target_symbol: Symbol,
-        step_arg_tys: []TypeVarId,
-        step_result_tys: []TypeVarId,
 
         fn deinit(self: *FrozenMethodCallWorld, allocator: std.mem.Allocator) void {
-            allocator.free(self.step_arg_tys);
-            allocator.free(self.step_result_tys);
             allocator.free(self.env);
             self.mono_cache.deinit();
             self.inst.deinit();
@@ -2244,8 +2242,6 @@ const Lowerer = struct {
         venv: []const EnvEntry,
         method_fn_ty: TypeVarId,
         receiver_ty: TypeVarId,
-        explicit_step_arg_tys: []const TypeVarId,
-        explicit_step_result_tys: []const TypeVarId,
         actual_arg_tys: []const TypeVarId,
     ) std.mem.Allocator.Error!FrozenMethodCallWorld {
         var inst = InstScope.init(self.allocator);
@@ -2260,40 +2256,26 @@ const Lowerer = struct {
 
         const cloned_method_fn_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, &self.input.types, &explicit_mapping, method_fn_ty);
         const cloned_receiver_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, current_types, &current_mapping, receiver_ty);
-        const cloned_step_arg_tys = try self.allocator.alloc(TypeVarId, explicit_step_arg_tys.len);
-        errdefer self.allocator.free(cloned_step_arg_tys);
-        for (explicit_step_arg_tys, 0..) |step_arg_ty, i| {
-            cloned_step_arg_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, &self.input.types, &explicit_mapping, step_arg_ty);
-        }
-        const cloned_step_result_tys = try self.allocator.alloc(TypeVarId, explicit_step_result_tys.len);
-        errdefer self.allocator.free(cloned_step_result_tys);
-        for (explicit_step_result_tys, 0..) |step_result_ty, i| {
-            cloned_step_result_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, &self.input.types, &explicit_mapping, step_result_ty);
-        }
-
-        if (cloned_step_arg_tys.len != actual_arg_tys.len + 1 or cloned_step_result_tys.len != cloned_step_arg_tys.len) {
-            debugPanic("lambdamono.lower.freezeMethodCallWorld explicit step arity mismatch");
-        }
-
-        try self.unifyIn(&inst.types, cloned_step_arg_tys[0], cloned_receiver_ty);
-        for (actual_arg_tys, 0..) |arg_ty, i| {
-            const cloned_actual_arg_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, current_types, &current_mapping, arg_ty);
-            try self.unifyIn(&inst.types, cloned_step_arg_tys[i + 1], cloned_actual_arg_ty);
-        }
-
-        var refined_method_fn_ty = cloned_method_fn_ty;
-        for (cloned_step_arg_tys, cloned_step_result_tys) |step_arg_ty, step_result_ty| {
-            const fn_parts = inst.types.fnShape(refined_method_fn_ty);
-            try self.unifyIn(&inst.types, fn_parts.arg, step_arg_ty);
-            try self.unifyIn(&inst.types, fn_parts.ret, step_result_ty);
-            refined_method_fn_ty = fn_parts.ret;
-        }
 
         const target_symbol = inst.types.requireExactTargetForResolvedFn(cloned_method_fn_ty);
         const entry = specializations.lookupFnExact(self.fenv, target_symbol) orelse
             debugPanic("lambdamono.lower.freezeMethodCallWorld missing exact target function");
         const initial_fn_ty = try self.cloneInstType(&inst, entry.fn_ty);
         try self.unifyIn(&inst.types, cloned_method_fn_ty, initial_fn_ty);
+
+        var current_fn_ty = cloned_method_fn_ty;
+        {
+            const fn_parts = inst.types.fnShape(current_fn_ty);
+            try self.unifyIn(&inst.types, fn_parts.arg, cloned_receiver_ty);
+            current_fn_ty = fn_parts.ret;
+        }
+        for (actual_arg_tys) |arg_ty| {
+            const cloned_actual_arg_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, current_types, &current_mapping, arg_ty);
+            const fn_parts = inst.types.fnShape(current_fn_ty);
+            try self.unifyIn(&inst.types, fn_parts.arg, cloned_actual_arg_ty);
+            current_fn_ty = fn_parts.ret;
+        }
+
         const cloned_env = try self.cloneEnvIntoInstFromStoreWithMapping(&inst, &mono_cache, current_types, &current_mapping, venv);
 
         return .{
@@ -2302,8 +2284,6 @@ const Lowerer = struct {
             .env = cloned_env,
             .fn_ty = initial_fn_ty,
             .target_symbol = target_symbol,
-            .step_arg_tys = cloned_step_arg_tys,
-            .step_result_tys = cloned_step_result_tys,
         };
     }
 
@@ -2360,7 +2340,11 @@ const Lowerer = struct {
         while (true) {
             const current_expr = self.input.store.getExpr(current_expr_id);
             if (current_expr.data != .call) break;
-            try args.append(self.allocator, current_expr.data.call.arg);
+            const current_args = self.input.store.sliceExprSpan(current_expr.data.call.args);
+            var i = current_args.len;
+            while (i > 0) : (i -= 1) {
+                try args.append(self.allocator, current_args[i - 1]);
+            }
             current_expr_id = current_expr.data.call.func;
         }
 
@@ -2378,8 +2362,6 @@ const Lowerer = struct {
         venv: []const EnvEntry,
         _: TypeVarId,
         method_fn_ty: TypeVarId,
-        explicit_step_arg_tys: []const TypeVarId,
-        explicit_step_result_tys: []const TypeVarId,
         actual_arg_tys: []const TypeVarId,
     ) std.mem.Allocator.Error!FrozenMethodCallWorld {
         var inst = InstScope.init(self.allocator);
@@ -2393,40 +2375,21 @@ const Lowerer = struct {
         defer current_mapping.deinit();
 
         const cloned_method_fn_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, &self.input.types, &explicit_mapping, method_fn_ty);
-        const cloned_step_arg_tys = try self.allocator.alloc(TypeVarId, explicit_step_arg_tys.len);
-        errdefer self.allocator.free(cloned_step_arg_tys);
-        for (explicit_step_arg_tys, 0..) |step_arg_ty, i| {
-            cloned_step_arg_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, &self.input.types, &explicit_mapping, step_arg_ty);
-        }
-        const cloned_step_result_tys = try self.allocator.alloc(TypeVarId, explicit_step_result_tys.len);
-        errdefer self.allocator.free(cloned_step_result_tys);
-        for (explicit_step_result_tys, 0..) |step_result_ty, i| {
-            cloned_step_result_tys[i] = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, &self.input.types, &explicit_mapping, step_result_ty);
-        }
-
-        const expected_step_count = if (actual_arg_tys.len == 0) 1 else actual_arg_tys.len;
-        if (cloned_step_arg_tys.len != expected_step_count or cloned_step_result_tys.len != expected_step_count) {
-            debugPanic("lambdamono.lower.freezeTypeMethodCallWorld explicit step arity mismatch");
-        }
-
-        for (actual_arg_tys, 0..) |arg_ty, i| {
-            const cloned_actual_arg_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, current_types, &current_mapping, arg_ty);
-            try self.unifyIn(&inst.types, cloned_step_arg_tys[i], cloned_actual_arg_ty);
-        }
-
-        var refined_method_fn_ty = cloned_method_fn_ty;
-        for (cloned_step_arg_tys, cloned_step_result_tys) |step_arg_ty, step_result_ty| {
-            const fn_parts = inst.types.fnShape(refined_method_fn_ty);
-            try self.unifyIn(&inst.types, fn_parts.arg, step_arg_ty);
-            try self.unifyIn(&inst.types, fn_parts.ret, step_result_ty);
-            refined_method_fn_ty = fn_parts.ret;
-        }
 
         const target_symbol = inst.types.requireExactTargetForResolvedFn(cloned_method_fn_ty);
         const entry = specializations.lookupFnExact(self.fenv, target_symbol) orelse
             debugPanic("lambdamono.lower.freezeTypeMethodCallWorld missing exact target function");
         const initial_fn_ty = try self.cloneInstType(&inst, entry.fn_ty);
         try self.unifyIn(&inst.types, cloned_method_fn_ty, initial_fn_ty);
+
+        var current_fn_ty = cloned_method_fn_ty;
+        for (actual_arg_tys) |arg_ty| {
+            const cloned_actual_arg_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, current_types, &current_mapping, arg_ty);
+            const fn_parts = inst.types.fnShape(current_fn_ty);
+            try self.unifyIn(&inst.types, fn_parts.arg, cloned_actual_arg_ty);
+            current_fn_ty = fn_parts.ret;
+        }
+
         const cloned_env = try self.cloneEnvIntoInstFromStoreWithMapping(&inst, &mono_cache, current_types, &current_mapping, venv);
 
         return .{
@@ -2435,8 +2398,6 @@ const Lowerer = struct {
             .env = cloned_env,
             .fn_ty = initial_fn_ty,
             .target_symbol = target_symbol,
-            .step_arg_tys = cloned_step_arg_tys,
-            .step_result_tys = cloned_step_result_tys,
         };
     }
 
@@ -2445,7 +2406,11 @@ const Lowerer = struct {
         defer frozen.deinit();
         const fn_body = pending.fn_def.body;
         const frozen_captures = frozen.inst.types.sliceCaptures(frozen.capture_span);
-        const fn_arg_symbol = pending.fn_def.arg.symbol;
+        const fn_args = self.input.store.sliceTypedSymbolSpan(pending.fn_def.args);
+        if (fn_args.len != 1) {
+            debugPanic("lambdamono.lower.specializeFn expected unary fn args during partial n-ary port", .{});
+        }
+        const fn_arg_symbol = fn_args[0].symbol;
 
         const specialized_arg_exec_ty = try self.lowerExecutableTypeFromSolvedIn(&frozen.inst.types, &frozen.mono_cache, frozen.fn_shape.arg);
         switch (frozen.inst.types.lambdaRepr(frozen.fn_ty)) {
@@ -2854,6 +2819,13 @@ const Lowerer = struct {
                 };
             },
             .call => |call| try self.specializeCallExpr(inst, mono_cache, venv, expr_id, call, ty),
+            .structural_eq => |eq| try self.specializeStructuralEqExpr(
+                inst,
+                mono_cache,
+                venv,
+                eq,
+                default_ty,
+            ),
             .method_call => |method_call| try self.specializeMethodCallExpr(
                 inst,
                 mono_cache,
@@ -4467,10 +4439,15 @@ const Lowerer = struct {
                 .symbol = capture.symbol,
                 .ty = capture.ty,
                 .exec_ty = field_info.ty,
-                .exact_fn_symbol = null,
+                .exact_fn_symbol = self.exactCallableSymbolForBinding(capture.symbol),
             };
         }
         return out;
+    }
+
+    fn exactCallableSymbolForBinding(self: *const Lowerer, symbol: Symbol) ?Symbol {
+        if (self.input.exact_callable_aliases.get(symbol)) |exact| return exact;
+        return if (specializations.lookupFnExact(self.fenv, symbol) != null) symbol else null;
     }
 
     fn lookupCaptureEnvEntry(
@@ -4490,7 +4467,7 @@ const Lowerer = struct {
         if (expr.data != .var_) return null;
         const symbol = expr.data.var_;
         if (symbol.isNone()) return null;
-        return if (specializations.lookupFnExact(self.fenv, symbol) != null) symbol else null;
+        return self.exactCallableSymbolForBinding(symbol);
     }
 
     fn directCallableSymbolFromExpr(
@@ -4736,34 +4713,25 @@ const Lowerer = struct {
         }
     }
 
-    fn specializeImplicitEqMethodCallExpr(
+    fn specializeStructuralEqExpr(
         self: *Lowerer,
         inst: *InstScope,
         mono_cache: *lower_type.MonoCache,
         venv: []const EnvEntry,
-        method_call: @FieldType(solved.Ast.Expr.Data, "method_call"),
+        eq: @FieldType(solved.Ast.Expr.Data, "structural_eq"),
         expected_exec_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!SpecializedExprLowering {
-        if (!std.mem.eql(u8, self.input.idents.getText(method_call.method_name), "is_eq")) {
-            debugPanic("lambdamono.lower.specializeImplicitEqMethodCallExpr only supports is_eq");
-        }
-
-        const method_args = self.input.store.sliceExprSpan(method_call.args);
-        if (method_args.len != 1) {
-            debugPanic("lambdamono.lower.specializeImplicitEqMethodCallExpr expected exactly one argument");
-        }
-
-        const receiver_source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, method_call.receiver);
-        const arg_source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, method_args[0]);
+        const receiver_source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, eq.lhs);
+        const arg_source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, eq.rhs);
         const receiver_exec_ty = try self.lowerExecutableTypeFromSolvedIn(&inst.types, mono_cache, receiver_source_ty);
         const arg_exec_ty = try self.lowerExecutableTypeFromSolvedIn(&inst.types, mono_cache, arg_source_ty);
-        self.requireExecutableType(receiver_exec_ty, arg_exec_ty, "specializeImplicitEqMethodCallExpr.operand");
+        self.requireExecutableType(receiver_exec_ty, arg_exec_ty, "specializeStructuralEqExpr.operand");
 
         var lowered_receiver = try self.specializeExprAtSourceTy(
             inst,
             mono_cache,
             venv,
-            method_call.receiver,
+            eq.lhs,
             receiver_source_ty,
         );
         if (!self.types.equalIds(self.output.getExpr(lowered_receiver).ty, receiver_exec_ty)) {
@@ -4780,7 +4748,7 @@ const Lowerer = struct {
             inst,
             mono_cache,
             venv,
-            method_args[0],
+            eq.rhs,
             arg_source_ty,
         );
         if (!self.types.equalIds(self.output.getExpr(lowered_arg).ty, receiver_exec_ty)) {
@@ -4808,7 +4776,7 @@ const Lowerer = struct {
     fn specializeMethodCallExpr(
         self: *Lowerer,
         inst: *InstScope,
-        mono_cache: *lower_type.MonoCache,
+        _: *lower_type.MonoCache,
         venv: []const EnvEntry,
         method_call: @FieldType(solved.Ast.Expr.Data, "method_call"),
         _: TypeVarId,
@@ -4816,20 +4784,6 @@ const Lowerer = struct {
     ) std.mem.Allocator.Error!SpecializedExprLowering {
         const receiver_source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, method_call.receiver);
         const method_args = self.input.store.sliceExprSpan(method_call.args);
-        const explicit_step_arg_tys = self.input.types.sliceTypeVarSpan(method_call.step_arg_tys);
-        const explicit_step_result_tys = self.input.types.sliceTypeVarSpan(method_call.step_result_tys);
-        switch (method_call.kind) {
-            .implicit_eq => {
-                return self.specializeImplicitEqMethodCallExpr(
-                    inst,
-                    mono_cache,
-                    venv,
-                    method_call,
-                    expected_exec_ty,
-                );
-            },
-            else => {},
-        }
         const actual_arg_tys = try self.allocator.alloc(TypeVarId, method_args.len);
         defer self.allocator.free(actual_arg_tys);
         for (method_args, 0..) |arg_expr_id, i| {
@@ -4840,26 +4794,23 @@ const Lowerer = struct {
             venv,
             method_call.method_fn_ty,
             receiver_source_ty,
-            explicit_step_arg_tys,
-            explicit_step_result_tys,
             actual_arg_tys,
         );
         defer frozen.deinit(self.allocator);
         const target_symbol = frozen.target_symbol;
         var current_fn_ty = frozen.fn_ty;
-        const step_arg_tys = frozen.step_arg_tys;
-        const step_result_tys = frozen.step_result_tys;
+        const receiver_fn_parts = frozen.inst.types.fnShape(current_fn_ty);
         var lowered_receiver = try self.specializeExprAtSourceTy(
             &frozen.inst,
             &frozen.mono_cache,
             frozen.env,
             method_call.receiver,
-            step_arg_tys[0],
+            receiver_fn_parts.arg,
         );
         const exact_receiver_exec_ty = try self.lowerExecutableTypeFromSolvedIn(
             &frozen.inst.types,
             &frozen.mono_cache,
-            frozen.inst.types.fnShape(current_fn_ty).arg,
+            receiver_fn_parts.arg,
         );
         if (!self.types.equalIds(self.output.getExpr(lowered_receiver).ty, exact_receiver_exec_ty)) {
             lowered_receiver = try self.emitExplicitBridgeExpr(lowered_receiver, exact_receiver_exec_ty);
@@ -4870,7 +4821,7 @@ const Lowerer = struct {
                 .data = self.output.getExpr(diverging).data,
             };
         }
-        const first_result_source_ty = step_result_tys[0];
+        const first_result_source_ty = receiver_fn_parts.ret;
         const first_call_target: CallTarget = .{ .exact_top_level = target_symbol };
         const first_result_exec_ty = try self.lowerAppliedResultExecutableType(
             &frozen.inst.types,
@@ -4891,45 +4842,49 @@ const Lowerer = struct {
         );
         var current_expr = first_result.expr;
         current_fn_ty = first_result.next_fn_ty;
-        if (method_args.len == 0 and step_result_tys.len > 1) {
-            if (step_arg_tys.len != 2 or step_result_tys.len != 2) {
-                debugPanic("lambdamono.lower.specializeMethodCallExpr zero-arg step arity mismatch");
+        if (method_args.len == 0) {
+            switch (frozen.inst.types.getNode(frozen.inst.types.unlinkConst(current_fn_ty))) {
+                .content => |content| if (content == .func) {
+                    const unit_fn_parts = frozen.inst.types.fnShape(current_fn_ty);
+                    const unit_ty = try self.lowerExecutableTypeFromSolvedIn(&frozen.inst.types, &frozen.mono_cache, unit_fn_parts.arg);
+                    const unit_expr = try self.output.addExpr(.{
+                        .ty = unit_ty,
+                        .data = .unit,
+                    });
+                    const call_target: CallTarget = .{ .expr = current_expr };
+                    const unit_result_exec_ty = try self.lowerAppliedResultExecutableType(
+                        &frozen.inst.types,
+                        &frozen.mono_cache,
+                        call_target,
+                        current_fn_ty,
+                        unit_fn_parts.ret,
+                    );
+                    const applied = try self.applyCallArg(
+                        &frozen.inst,
+                        &frozen.mono_cache,
+                        frozen.env,
+                        call_target,
+                        null,
+                        current_fn_ty,
+                        unit_expr,
+                        unit_result_exec_ty,
+                    );
+                    current_expr = applied.expr;
+                    current_fn_ty = applied.next_fn_ty;
+                },
+                else => {},
             }
-            const unit_ty = try self.lowerExecutableTypeFromSolvedIn(&frozen.inst.types, &frozen.mono_cache, step_arg_tys[1]);
-            const unit_expr = try self.output.addExpr(.{
-                .ty = unit_ty,
-                .data = .unit,
-            });
-            const call_target: CallTarget = .{ .expr = current_expr };
-            const unit_result_exec_ty = try self.lowerAppliedResultExecutableType(
-                &frozen.inst.types,
-                &frozen.mono_cache,
-                call_target,
-                current_fn_ty,
-                step_result_tys[1],
-            );
-            const applied = try self.applyCallArg(
-                &frozen.inst,
-                &frozen.mono_cache,
-                frozen.env,
-                call_target,
-                null,
-                current_fn_ty,
-                unit_expr,
-                unit_result_exec_ty,
-            );
-            current_expr = applied.expr;
-            current_fn_ty = applied.next_fn_ty;
         }
-        for (method_args, 0..) |arg_expr_id, i| {
+        for (method_args) |arg_expr_id| {
+            const fn_parts = frozen.inst.types.fnShape(current_fn_ty);
             const lowered_arg = try self.specializeExprAtSourceTy(
                 &frozen.inst,
                 &frozen.mono_cache,
                 frozen.env,
                 arg_expr_id,
-                step_arg_tys[i + 1],
+                fn_parts.arg,
             );
-            const step_result_source_ty = step_result_tys[i + 1];
+            const step_result_source_ty = fn_parts.ret;
             const call_target: CallTarget = .{ .expr = current_expr };
             const step_result_exec_ty = try self.lowerAppliedResultExecutableType(
                 &frozen.inst.types,
@@ -4968,8 +4923,6 @@ const Lowerer = struct {
         _: type_mod.TypeId,
     ) std.mem.Allocator.Error!SpecializedExprLowering {
         const method_args = self.input.store.sliceExprSpan(method_call.args);
-        const explicit_step_arg_tys = self.input.types.sliceTypeVarSpan(method_call.step_arg_tys);
-        const explicit_step_result_tys = self.input.types.sliceTypeVarSpan(method_call.step_result_tys);
         const actual_arg_tys = try self.allocator.alloc(TypeVarId, method_args.len);
         defer self.allocator.free(actual_arg_tys);
         for (method_args, 0..) |arg_expr_id, i| {
@@ -4980,18 +4933,15 @@ const Lowerer = struct {
             venv,
             method_call.dispatcher_ty,
             method_call.method_fn_ty,
-            explicit_step_arg_tys,
-            explicit_step_result_tys,
             actual_arg_tys,
         );
         defer frozen.deinit(self.allocator);
         const target_symbol = frozen.target_symbol;
         var current_fn_ty = frozen.fn_ty;
-        const step_arg_tys = frozen.step_arg_tys;
-        const step_result_tys = frozen.step_result_tys;
 
         if (method_args.len == 0) {
-            const unit_ty = try self.lowerExecutableTypeFromSolvedIn(&frozen.inst.types, &frozen.mono_cache, step_arg_tys[0]);
+            const fn_parts = frozen.inst.types.fnShape(current_fn_ty);
+            const unit_ty = try self.lowerExecutableTypeFromSolvedIn(&frozen.inst.types, &frozen.mono_cache, fn_parts.arg);
             const unit_expr = try self.output.addExpr(.{
                 .ty = unit_ty,
                 .data = .unit,
@@ -5002,7 +4952,7 @@ const Lowerer = struct {
                 &frozen.mono_cache,
                 unit_call_target,
                 current_fn_ty,
-                step_result_tys[0],
+                fn_parts.ret,
             );
             const applied = try self.applyCallArg(
                 &frozen.inst,
@@ -5022,14 +4972,15 @@ const Lowerer = struct {
         }
         var current_expr: ?ast.ExprId = null;
         for (method_args, 0..) |arg_expr_id, i| {
+            const fn_parts = frozen.inst.types.fnShape(current_fn_ty);
             const lowered_arg = try self.specializeExprAtSourceTy(
                 &frozen.inst,
                 &frozen.mono_cache,
                 frozen.env,
                 arg_expr_id,
-                step_arg_tys[i],
+                fn_parts.arg,
             );
-            const step_result_source_ty = step_result_tys[i];
+            const step_result_source_ty = fn_parts.ret;
             const call_target: CallTarget = if (i == 0)
                 .{ .exact_top_level = target_symbol }
             else

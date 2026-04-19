@@ -14,7 +14,7 @@ const StringLiteral = base.StringLiteral;
 const CommonIdents = ModuleEnv.CommonIdents;
 const EvaluationOrder = can.DependencyGraph.EvaluationOrder;
 const CompactWriter = collections.CompactWriter;
-
+pub const ResolvedMethodTarget = ModuleEnv.MethodCallFn.ResolvedTarget;
 const CachedModule = struct {
     env: *ModuleEnv,
     buffer: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
@@ -25,16 +25,10 @@ const OwnedCheckedModule = struct {
     owned_source: ?[]u8 = null,
 };
 
-const MethodCallFactKey = struct {
-    expr_idx: u32,
-    origin: types.StaticDispatchConstraint.Origin,
-};
-
 const ModuleData = struct {
     env: *ModuleEnv,
     top_level_defs_by_ident: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Def.Idx) = .{},
     required_lookup_targets: std.AutoHashMapUnmanaged(u32, CIR.Def.Idx) = .{},
-    implicit_eq_method_calls: std.AutoHashMapUnmanaged(MethodCallFactKey, void) = .{},
     ownership: union(enum) {
         borrowed,
         owned_checked: OwnedCheckedModule,
@@ -71,7 +65,6 @@ const ModuleData = struct {
     fn deinit(self: *ModuleData, allocator: Allocator) void {
         self.top_level_defs_by_ident.deinit(allocator);
         self.required_lookup_targets.deinit(allocator);
-        self.implicit_eq_method_calls.deinit(allocator);
         switch (self.ownership) {
             .borrowed => {},
             .owned_checked => |owned| {
@@ -165,29 +158,6 @@ pub const Modules = struct {
             }
         }
 
-        for (modules, 0..) |*module_data, i| {
-            const module_ = Module{
-                .allocator = allocator,
-                .module_idx = @intCast(i),
-                .data_store = module_data,
-            };
-            _ = module_;
-            for (module_data.env.method_call_fns.items.items) |entry| {
-                switch (entry.resolution) {
-                    .ordinary => continue,
-                    .implicit_eq => {},
-                }
-                try module_data.implicit_eq_method_calls.put(
-                    allocator,
-                    .{
-                        .expr_idx = @intFromEnum(entry.expr_idx),
-                        .origin = entry.origin,
-                    },
-                    {},
-                );
-            }
-        }
-
         return .{
             .allocator = allocator,
             .modules = modules,
@@ -252,7 +222,7 @@ pub const Module = struct {
     data_store: *ModuleData,
 
     /// Function-shape view recovered from checked function types.
-    pub const CurriedFnShape = struct {
+    pub const FnShape = struct {
         args: []Var,
         ret: Var,
 
@@ -321,17 +291,6 @@ pub const Module = struct {
 
     pub fn requiredLookupTarget(self: @This(), requires_idx: u32) ?CIR.Def.Idx {
         return self.data_store.required_lookup_targets.get(requires_idx);
-    }
-
-    pub fn methodCallIsImplicitEq(
-        self: @This(),
-        expr_idx: CIR.Expr.Idx,
-        origin: types.StaticDispatchConstraint.Origin,
-    ) bool {
-        return self.data_store.implicit_eq_method_calls.contains(.{
-            .expr_idx = @intFromEnum(expr_idx),
-            .origin = origin,
-        });
     }
 
     pub fn nodeTag(self: @This(), idx: CIR.Node.Idx) CIR.Node.Tag {
@@ -412,13 +371,26 @@ pub const Module = struct {
         return self.env().methodCallFnVar(idx, method_name, .method_call);
     }
 
+    pub fn methodCallResolvedTarget(
+        self: @This(),
+        expr_idx: CIR.Expr.Idx,
+        origin: types.StaticDispatchConstraint.Origin,
+    ) ?ResolvedMethodTarget {
+        for (self.env().method_call_fns.items.items) |entry| {
+            if (entry.expr_idx == expr_idx and entry.origin == origin) {
+                return entry.resolved_target;
+            }
+        }
+        return null;
+    }
+
     /// Return the checked function var associated with a desugared binop dispatch, if any.
     pub fn binopConstraintFnVar(self: @This(), idx: CIR.Expr.Idx, method_name: Ident.Idx) ?Var {
         return self.env().methodCallFnVar(idx, method_name, .desugared_binop);
     }
 
     /// Flatten a checked function type into its argument list and final return var.
-    pub fn curriedFnShape(self: @This(), fn_var: Var) Allocator.Error!CurriedFnShape {
+    pub fn fnShape(self: @This(), fn_var: Var) Allocator.Error!FnShape {
         var args = std.ArrayList(Var).empty;
         errdefer args.deinit(self.allocator);
         const ret = try self.appendCurriedFnArgs(&args, fn_var);
@@ -429,7 +401,7 @@ pub const Module = struct {
     }
 
     /// Recover the checked source-level function boundary for a lambda definition.
-    pub fn lambdaFnShape(self: @This(), fn_var: Var, explicit_arg_count: usize) Allocator.Error!CurriedFnShape {
+    pub fn lambdaFnShape(self: @This(), fn_var: Var, explicit_arg_count: usize) Allocator.Error!FnShape {
         var args = std.ArrayList(Var).empty;
         errdefer args.deinit(self.allocator);
 

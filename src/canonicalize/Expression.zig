@@ -352,6 +352,15 @@ pub const Expr = union(enum) {
         method_name: Ident.Idx,
         args: Expr.Span,
     },
+    /// Structural equality chosen explicitly by the checker.
+    ///
+    /// This is not method dispatch. It represents the semantic case where
+    /// equality is satisfied structurally rather than via a user-defined
+    /// `is_eq` method.
+    e_structural_eq: struct {
+        lhs: Expr.Idx,
+        rhs: Expr.Idx,
+    },
     /// Method call expression rooted in a type-var alias namespace.
     ///
     /// ```roc
@@ -1192,6 +1201,27 @@ pub const Expr = union(enum) {
                     try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
                 }
                 try tree.endNode(args_begin, args_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_structural_eq => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-structural-eq");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                const lhs_begin = tree.beginNode();
+                try tree.pushStaticAtom("lhs");
+                const lhs_attrs = tree.beginNode();
+                try ir.store.getExpr(e.lhs).pushToSExprTree(ir, tree, e.lhs);
+                try tree.endNode(lhs_begin, lhs_attrs);
+
+                const rhs_begin = tree.beginNode();
+                try tree.pushStaticAtom("rhs");
+                const rhs_attrs = tree.beginNode();
+                try ir.store.getExpr(e.rhs).pushToSExprTree(ir, tree, e.rhs);
+                try tree.endNode(rhs_begin, rhs_attrs);
 
                 try tree.endNode(begin, attrs);
             },

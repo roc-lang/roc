@@ -231,7 +231,7 @@ const FindLookupContext = struct {
                     ctx.result = expr_idx;
                 }
             },
-            .e_method_call, .e_type_method_call => {
+            .e_method_call, .e_type_method_call, .e_structural_eq => {
                 const size = regionSize(region);
                 if (size < ctx.best_size) {
                     ctx.best_size = size;

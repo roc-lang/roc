@@ -527,16 +527,16 @@ pub const RequiredType = struct {
 
 /// Public struct `MethodCallFn`.
 pub const MethodCallFn = struct {
-    pub const Resolution = enum(u8) {
-        ordinary,
-        implicit_eq,
+    pub const ResolvedTarget = struct {
+        module_name: Ident.Idx,
+        def_idx: CIR.Def.Idx,
     };
 
     expr_idx: CIR.Expr.Idx,
     method_name: Ident.Idx,
     origin: types_mod.StaticDispatchConstraint.Origin,
     fn_var: TypeVar,
-    resolution: Resolution,
+    resolved_target: ?ResolvedTarget,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -3495,7 +3495,7 @@ pub fn recordMethodCallFn(
         .method_name = method_name,
         .origin = origin,
         .fn_var = fn_var,
-        .resolution = .ordinary,
+        .resolved_target = null,
     });
 }
 
@@ -3518,20 +3518,21 @@ pub fn setMethodCallFnVar(
     );
 }
 
-pub fn setMethodCallImplicitEq(
+pub fn setMethodCallResolvedTarget(
     self: *Self,
     expr_idx: CIR.Expr.Idx,
     method_name: Ident.Idx,
     origin: types_mod.StaticDispatchConstraint.Origin,
+    target: MethodCallFn.ResolvedTarget,
 ) void {
     for (self.method_call_fns.items.items) |*entry| {
         if (entry.expr_idx != expr_idx or entry.method_name != method_name or entry.origin != origin) continue;
-        entry.resolution = .implicit_eq;
+        entry.resolved_target = target;
         return;
     }
 
     std.debug.panic(
-        "ModuleEnv invariant violated: missing dispatch-call implicit eq for expr {d} method {s}",
+        "ModuleEnv invariant violated: missing dispatch-call resolved target for expr {d} method {s}",
         .{ @intFromEnum(expr_idx), self.getIdent(method_name) },
     );
 }

@@ -203,6 +203,12 @@ pub fn CirVisitor(comptime Context: type) type {
                         if (self.stopped) return;
                     }
                 },
+                .e_structural_eq => |eq| {
+                    self.walkExpr(store, eq.lhs);
+                    if (self.stopped) return;
+                    self.walkExpr(store, eq.rhs);
+                    if (self.stopped) return;
+                },
                 .e_type_method_call => |method_call| {
                     for (store.sliceExpr(method_call.args)) |arg| {
                         self.walkExpr(store, arg);

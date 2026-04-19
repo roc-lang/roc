@@ -412,6 +412,11 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             }
             try self.write(")");
         },
+        .e_structural_eq => |eq| {
+            try self.emitExpr(eq.lhs);
+            try self.write(" == ");
+            try self.emitExpr(eq.rhs);
+        },
         .e_type_method_call => |method_call| {
             try self.writer().print("__type_var_alias_{d}__", .{@intFromEnum(method_call.type_var_alias_stmt)});
             try self.write(".");

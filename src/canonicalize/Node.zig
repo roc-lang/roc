@@ -66,6 +66,7 @@ pub const Tag = enum {
     record_destruct,
     expr_field_access,
     expr_method_call,
+    expr_structural_eq,
     expr_type_method_call,
     expr_static_dispatch,
     expr_external_lookup,
@@ -299,6 +300,7 @@ pub const Payload = extern union {
     expr_string: ExprString,
     expr_field_access: ExprFieldAccess,
     expr_method_call: ExprMethodCall,
+    expr_structural_eq: ExprStructuralEq,
     expr_type_method_call: ExprTypeMethodCall,
     expr_hosted_lambda: ExprHostedLambda,
     expr_low_level: ExprLowLevel,
@@ -614,6 +616,12 @@ pub const Payload = extern union {
         receiver: u32,
         method_name: u32,
         args_span2_idx: u32,
+    };
+
+    pub const ExprStructuralEq = extern struct {
+        lhs: u32,
+        rhs: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     pub const ExprTypeMethodCall = extern struct {

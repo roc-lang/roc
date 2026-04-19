@@ -152,8 +152,10 @@ const Lowerer = struct {
             try self.binding_types.put(def.bind.symbol, def.bind.ty);
             switch (def.value) {
                 .fn_ => |fn_def| {
-                    self.assertPublishedType(fn_def.arg.ty, "monotype fn arg");
-                    try self.binding_types.put(fn_def.arg.symbol, fn_def.arg.ty);
+                    for (self.input.program.store.sliceTypedSymbolSpan(fn_def.args)) |arg| {
+                        self.assertPublishedType(arg.ty, "monotype fn arg");
+                        try self.binding_types.put(arg.symbol, arg.ty);
+                    }
                     try self.collectBindingTypesExpr(fn_def.body);
                 },
                 .hosted_fn => |hosted_fn| {
@@ -208,7 +210,9 @@ const Lowerer = struct {
                 break :blk try self.emitDef(.{
                     .bind = .{ .ty = def.bind.ty, .symbol = def.bind.symbol },
                     .value = .{ .fn_ = .{
-                        .arg = .{ .ty = fn_def.arg.ty, .symbol = fn_def.arg.symbol },
+                        .args = try self.output.addTypedSymbolSpan(
+                            self.input.program.store.sliceTypedSymbolSpan(fn_def.args),
+                        ),
                         .captures = try self.output.addTypedSymbolSpan(&.{}),
                         .body = lowered_body.expr,
                     } },
@@ -298,26 +302,34 @@ const Lowerer = struct {
                     } },
                 });
             },
+            .structural_eq => |eq| {
+                lowered.expr = try self.output.addExpr(.{
+                    .ty = expr.ty,
+                    .data = .{ .structural_eq = .{
+                        .lhs = try self.lowerExprInto(&lowered.lifted_defs, venv, eq.lhs),
+                        .rhs = try self.lowerExprInto(&lowered.lifted_defs, venv, eq.rhs),
+                    } },
+                });
+            },
             .method_call => |method_call| {
                 lowered.expr = try self.output.addExpr(.{
-                .ty = expr.ty,
-                .data = .{ .method_call = .{
-                    .receiver = try self.lowerExprInto(&lowered.lifted_defs, venv, method_call.receiver),
-                    .kind = method_call.kind,
-                    .method_fn_ty = method_call.method_fn_ty,
-                    .method_name = method_call.method_name,
-                    .args = try self.lowerExprSpan(&lowered.lifted_defs, venv, method_call.args),
+                    .ty = expr.ty,
+                    .data = .{ .method_call = .{
+                        .receiver = try self.lowerExprInto(&lowered.lifted_defs, venv, method_call.receiver),
+                        .method_fn_ty = method_call.method_fn_ty,
+                        .method_name = method_call.method_name,
+                        .args = try self.lowerExprSpan(&lowered.lifted_defs, venv, method_call.args),
                     } },
                 });
             },
             .type_method_call => |method_call| {
                 lowered.expr = try self.output.addExpr(.{
-                .ty = expr.ty,
-                .data = .{ .type_method_call = .{
-                    .dispatcher_ty = method_call.dispatcher_ty,
-                    .method_fn_ty = method_call.method_fn_ty,
-                    .method_name = method_call.method_name,
-                    .args = try self.lowerExprSpan(&lowered.lifted_defs, venv, method_call.args),
+                    .ty = expr.ty,
+                    .data = .{ .type_method_call = .{
+                        .dispatcher_ty = method_call.dispatcher_ty,
+                        .method_fn_ty = method_call.method_fn_ty,
+                        .method_name = method_call.method_name,
+                        .args = try self.lowerExprSpan(&lowered.lifted_defs, venv, method_call.args),
                     } },
                 });
             },
@@ -339,7 +351,13 @@ const Lowerer = struct {
                     const recursive_venv = try self.extendRename(venv, let_fn.bind.symbol, lifted_symbol);
                     defer self.allocator.free(recursive_venv);
 
-                    const captures = try self.computeCaptures(recursive_venv, &.{ let_fn.bind.symbol, let_fn.arg.symbol }, let_fn.body);
+                    const let_fn_args = self.input.program.store.sliceTypedSymbolSpan(let_fn.args);
+                    const bound_symbols = try self.allocator.alloc(Symbol, let_fn_args.len + 1);
+                    defer self.allocator.free(bound_symbols);
+                    bound_symbols[0] = let_fn.bind.symbol;
+                    for (let_fn_args, 0..) |arg, i| bound_symbols[i + 1] = arg.symbol;
+
+                    const captures = try self.computeCaptures(recursive_venv, bound_symbols, let_fn.body);
                     defer self.allocator.free(captures);
 
                     var lowered_body = try self.lowerExpr(recursive_venv, let_fn.body);
@@ -349,7 +367,7 @@ const Lowerer = struct {
                     try lowered.lifted_defs.append(self.allocator, .{
                         .bind = .{ .ty = let_fn.bind.ty, .symbol = lifted_symbol },
                         .value = .{ .fn_ = .{
-                            .arg = .{ .ty = let_fn.arg.ty, .symbol = let_fn.arg.symbol },
+                            .args = try self.output.addTypedSymbolSpan(let_fn_args),
                             .captures = try self.output.addTypedSymbolSpan(captures),
                             .body = lowered_body.expr,
                         } },
@@ -379,7 +397,12 @@ const Lowerer = struct {
                 },
             },
             .clos => |clos| {
-                const captures = try self.computeCaptures(venv, &.{clos.arg.symbol}, clos.body);
+                const clos_args = self.input.program.store.sliceTypedSymbolSpan(clos.args);
+                const bound_symbols = try self.allocator.alloc(Symbol, clos_args.len);
+                defer self.allocator.free(bound_symbols);
+                for (clos_args, 0..) |arg, i| bound_symbols[i] = arg.symbol;
+
+                const captures = try self.computeCaptures(venv, bound_symbols, clos.body);
                 defer self.allocator.free(captures);
 
                 var lowered_body = try self.lowerExpr(venv, clos.body);
@@ -387,10 +410,15 @@ const Lowerer = struct {
                 try lowered.lifted_defs.appendSlice(self.allocator, lowered_body.lifted_defs.items);
 
                 const lifted_symbol = try self.freshLiftedClosureSymbol();
+                const lowered_args = try self.allocator.alloc(ast.TypedSymbol, clos_args.len);
+                defer self.allocator.free(lowered_args);
+                for (clos_args, 0..) |arg, i| {
+                    lowered_args[i] = .{ .ty = arg.ty, .symbol = arg.symbol };
+                }
                 try lowered.lifted_defs.append(self.allocator, .{
                     .bind = .{ .ty = expr.ty, .symbol = lifted_symbol },
                     .value = .{ .fn_ = .{
-                        .arg = .{ .ty = clos.arg.ty, .symbol = clos.arg.symbol },
+                        .args = try self.output.addTypedSymbolSpan(lowered_args),
                         .captures = try self.output.addTypedSymbolSpan(captures),
                         .body = lowered_body.expr,
                     } },
@@ -405,7 +433,7 @@ const Lowerer = struct {
                     .ty = expr.ty,
                     .data = .{ .call = .{
                         .func = try self.lowerExprInto(&lowered.lifted_defs, venv, call.func),
-                        .arg = try self.lowerExprInto(&lowered.lifted_defs, venv, call.arg),
+                        .args = try self.lowerExprSpan(&lowered.lifted_defs, venv, call.args),
                     } },
                 });
             },
@@ -710,11 +738,13 @@ const Lowerer = struct {
                     body_venv = try self.pushRename(body_venv, &owned_body_venv, other.letfn.bind.symbol, target_symbol);
                 }
 
-                const captures = try self.computeCaptures(
-                    body_venv,
-                    &.{ member.letfn.bind.symbol, member.letfn.arg.symbol },
-                    member.letfn.body,
-                );
+                const member_args = self.input.program.store.sliceTypedSymbolSpan(member.letfn.args);
+                const bound_symbols = try self.allocator.alloc(Symbol, member_args.len + 1);
+                defer self.allocator.free(bound_symbols);
+                bound_symbols[0] = member.letfn.bind.symbol;
+                for (member_args, 0..) |arg, i| bound_symbols[i + 1] = arg.symbol;
+
+                const captures = try self.computeCaptures(body_venv, bound_symbols, member.letfn.body);
                 defer self.allocator.free(captures);
 
                 const next_needs_alias = captures.len != 0;
@@ -748,11 +778,13 @@ const Lowerer = struct {
                 body_venv = try self.pushRename(body_venv, &owned_body_venv, other.letfn.bind.symbol, target_symbol);
             }
 
-            const captures = try self.computeCaptures(
-                body_venv,
-                &.{ member.letfn.bind.symbol, member.letfn.arg.symbol },
-                member.letfn.body,
-            );
+            const member_args = self.input.program.store.sliceTypedSymbolSpan(member.letfn.args);
+            const bound_symbols = try self.allocator.alloc(Symbol, member_args.len + 1);
+            defer self.allocator.free(bound_symbols);
+            bound_symbols[0] = member.letfn.bind.symbol;
+            for (member_args, 0..) |arg, i| bound_symbols[i + 1] = arg.symbol;
+
+            const captures = try self.computeCaptures(body_venv, bound_symbols, member.letfn.body);
             defer self.allocator.free(captures);
 
             var lowered_body = try self.lowerExpr(body_venv, member.letfn.body);
@@ -765,7 +797,9 @@ const Lowerer = struct {
             try lifted_defs.append(self.allocator, .{
                 .bind = .{ .ty = member.letfn.bind.ty, .symbol = member.lifted_symbol },
                 .value = .{ .fn_ = .{
-                    .arg = .{ .ty = member.letfn.arg.ty, .symbol = member.letfn.arg.symbol },
+                    .args = try self.output.addTypedSymbolSpan(
+                        self.input.program.store.sliceTypedSymbolSpan(member.letfn.args),
+                    ),
                     .captures = lowered_members[member_i].captures,
                     .body = lowered_members[member_i].body,
                 } },
@@ -933,6 +967,10 @@ const Lowerer = struct {
                 }
             },
             .access => |access| try self.collectFreeVarsExpr(access.record, bound, free),
+            .structural_eq => |eq| {
+                try self.collectFreeVarsExpr(eq.lhs, bound, free);
+                try self.collectFreeVarsExpr(eq.rhs, bound, free);
+            },
             .method_call => |method_call| {
                 try self.collectFreeVarsExpr(method_call.receiver, bound, free);
                 for (self.input.program.store.sliceExprSpan(method_call.args)) |arg| {
@@ -955,22 +993,37 @@ const Lowerer = struct {
                     const inserted_bind = try self.bindTemporarily(bound, let_fn.bind.symbol);
                     defer self.unbindTemporarily(bound, let_fn.bind.symbol, inserted_bind);
 
-                    const inserted_arg = try self.bindTemporarily(bound, let_fn.arg.symbol);
-                    defer self.unbindTemporarily(bound, let_fn.arg.symbol, inserted_arg);
+                    const let_fn_args = self.input.program.store.sliceTypedSymbolSpan(let_fn.args);
+                    const inserted_args = try self.allocator.alloc(bool, let_fn_args.len);
+                    defer self.allocator.free(inserted_args);
+                    for (let_fn_args, 0..) |arg, i| {
+                        inserted_args[i] = try self.bindTemporarily(bound, arg.symbol);
+                    }
+                    defer for (let_fn_args, inserted_args) |arg, inserted| {
+                        self.unbindTemporarily(bound, arg.symbol, inserted);
+                    };
 
                     try self.collectFreeVarsExpr(let_fn.body, bound, free);
-                    self.unbindTemporarily(bound, let_fn.arg.symbol, inserted_arg);
                     try self.collectFreeVarsExpr(let_expr.rest, bound, free);
                 },
             },
             .clos => |clos| {
-                const inserted_arg = try self.bindTemporarily(bound, clos.arg.symbol);
-                defer self.unbindTemporarily(bound, clos.arg.symbol, inserted_arg);
+                const clos_args = self.input.program.store.sliceTypedSymbolSpan(clos.args);
+                const inserted_args = try self.allocator.alloc(bool, clos_args.len);
+                defer self.allocator.free(inserted_args);
+                for (clos_args, 0..) |arg, i| {
+                    inserted_args[i] = try self.bindTemporarily(bound, arg.symbol);
+                }
+                defer for (clos_args, inserted_args) |arg, inserted| {
+                    self.unbindTemporarily(bound, arg.symbol, inserted);
+                };
                 try self.collectFreeVarsExpr(clos.body, bound, free);
             },
             .call => |call| {
                 try self.collectFreeVarsExpr(call.func, bound, free);
-                try self.collectFreeVarsExpr(call.arg, bound, free);
+                for (self.input.program.store.sliceExprSpan(call.args)) |arg| {
+                    try self.collectFreeVarsExpr(arg, bound, free);
+                }
             },
             .inspect => |value| try self.collectFreeVarsExpr(value, bound, free),
             .low_level => |ll| for (self.input.program.store.sliceExprSpan(ll.args)) |arg| try self.collectFreeVarsExpr(arg, bound, free),
@@ -1041,8 +1094,15 @@ const Lowerer = struct {
                 const inserted_bind = try self.bindTemporarily(bound, local_fn.bind.symbol);
                 defer self.unbindTemporarily(bound, local_fn.bind.symbol, inserted_bind);
 
-                const inserted_arg = try self.bindTemporarily(bound, local_fn.arg.symbol);
-                defer self.unbindTemporarily(bound, local_fn.arg.symbol, inserted_arg);
+                const local_fn_args = self.input.program.store.sliceTypedSymbolSpan(local_fn.args);
+                const inserted_args = try self.allocator.alloc(bool, local_fn_args.len);
+                defer self.allocator.free(inserted_args);
+                for (local_fn_args, 0..) |arg, i| {
+                    inserted_args[i] = try self.bindTemporarily(bound, arg.symbol);
+                }
+                defer for (local_fn_args, inserted_args) |arg, inserted| {
+                    self.unbindTemporarily(bound, arg.symbol, inserted);
+                };
 
                 try self.collectFreeVarsExpr(local_fn.body, bound, free);
             },
@@ -1105,8 +1165,15 @@ const Lowerer = struct {
                     try added.append(self.allocator, local_fn.bind.symbol);
                 }
 
-                const inserted_arg = try self.bindTemporarily(bound, local_fn.arg.symbol);
-                defer self.unbindTemporarily(bound, local_fn.arg.symbol, inserted_arg);
+                const local_fn_args = self.input.program.store.sliceTypedSymbolSpan(local_fn.args);
+                const inserted_args = try self.allocator.alloc(bool, local_fn_args.len);
+                defer self.allocator.free(inserted_args);
+                for (local_fn_args, 0..) |arg, i| {
+                    inserted_args[i] = try self.bindTemporarily(bound, arg.symbol);
+                }
+                defer for (local_fn_args, inserted_args) |arg, inserted| {
+                    self.unbindTemporarily(bound, arg.symbol, inserted);
+                };
 
                 try self.collectFreeVarsExpr(local_fn.body, bound, free);
             },
@@ -1270,6 +1337,10 @@ const Lowerer = struct {
                 }
             },
             .access => |access| try self.collectBindingTypesExpr(access.record),
+            .structural_eq => |eq| {
+                try self.collectBindingTypesExpr(eq.lhs);
+                try self.collectBindingTypesExpr(eq.rhs);
+            },
             .method_call => |method_call| {
                 try self.collectBindingTypesExpr(method_call.receiver);
                 for (self.input.program.store.sliceExprSpan(method_call.args)) |arg| {
@@ -1289,18 +1360,24 @@ const Lowerer = struct {
                 },
                 .let_fn => |let_fn| {
                     try self.binding_types.put(let_fn.bind.symbol, let_fn.bind.ty);
-                    try self.binding_types.put(let_fn.arg.symbol, let_fn.arg.ty);
+                    for (self.input.program.store.sliceTypedSymbolSpan(let_fn.args)) |arg| {
+                        try self.binding_types.put(arg.symbol, arg.ty);
+                    }
                     try self.collectBindingTypesExpr(let_fn.body);
                     try self.collectBindingTypesExpr(let_expr.rest);
                 },
             },
             .clos => |clos| {
-                try self.binding_types.put(clos.arg.symbol, clos.arg.ty);
+                for (self.input.program.store.sliceTypedSymbolSpan(clos.args)) |arg| {
+                    try self.binding_types.put(arg.symbol, arg.ty);
+                }
                 try self.collectBindingTypesExpr(clos.body);
             },
             .call => |call| {
                 try self.collectBindingTypesExpr(call.func);
-                try self.collectBindingTypesExpr(call.arg);
+                for (self.input.program.store.sliceExprSpan(call.args)) |arg| {
+                    try self.collectBindingTypesExpr(arg);
+                }
             },
             .inspect => |value| try self.collectBindingTypesExpr(value),
             .low_level => |ll| for (self.input.program.store.sliceExprSpan(ll.args)) |arg| try self.collectBindingTypesExpr(arg),
@@ -1356,7 +1433,9 @@ const Lowerer = struct {
         switch (stmt) {
             .local_fn => |local_fn| {
                 try self.binding_types.put(local_fn.bind.symbol, local_fn.bind.ty);
-                try self.binding_types.put(local_fn.arg.symbol, local_fn.arg.ty);
+                for (self.input.program.store.sliceTypedSymbolSpan(local_fn.args)) |arg| {
+                    try self.binding_types.put(arg.symbol, arg.ty);
+                }
                 try self.collectBindingTypesExpr(local_fn.body);
             },
             .decl => |decl| {

@@ -291,7 +291,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 73;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 46;
+pub const MODULEENV_EXPR_NODE_COUNT = 47;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 17;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -949,6 +949,13 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 } },
             } };
         },
+        .expr_structural_eq => {
+            const p = payload.expr_structural_eq;
+            return CIR.Expr{ .e_structural_eq = .{
+                .lhs = @enumFromInt(p.lhs),
+                .rhs = @enumFromInt(p.rhs),
+            } };
+        },
         .expr_type_method_call => {
             const p = payload.expr_type_method_call;
             const args_span = store.span2_data.items.items[p.args_span2_idx];
@@ -1047,6 +1054,24 @@ pub fn replaceExprWithTuple(
     node.setPayload(.{ .expr_tuple = .{
         .elems_start = @intCast(index_data_start),
         .elems_len = @intCast(elem_indices.len),
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Replaces an existing expression with an explicit structural equality node.
+/// This is used when the checker has already decided that equality is structural
+/// rather than an attached method dispatch.
+pub fn replaceExprWithStructuralEq(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    lhs: CIR.Expr.Idx,
+    rhs: CIR.Expr.Idx,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    var node = Node.init(.expr_structural_eq);
+    node.setPayload(.{ .expr_structural_eq = .{
+        .lhs = @intFromEnum(lhs),
+        .rhs = @intFromEnum(rhs),
     } });
     store.nodes.set(node_idx, node);
 }
@@ -2008,6 +2033,13 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .receiver = @intFromEnum(e.receiver),
                 .method_name = @bitCast(e.method_name),
                 .args_span2_idx = args_span2_idx,
+            } });
+        },
+        .e_structural_eq => |e| {
+            node.tag = .expr_structural_eq;
+            node.setPayload(.{ .expr_structural_eq = .{
+                .lhs = @intFromEnum(e.lhs),
+                .rhs = @intFromEnum(e.rhs),
             } });
         },
         .e_type_method_call => |e| {

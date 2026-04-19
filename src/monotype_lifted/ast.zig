@@ -68,8 +68,6 @@ pub const FieldExpr = struct {
     value: ExprId,
 };
 
-pub const MethodKind = monotype.Ast.MethodKind;
-
 /// Public struct `Expr`.
 pub const Expr = struct {
     ty: TypeId,
@@ -94,9 +92,12 @@ pub const Expr = struct {
             field: base.Ident.Idx,
             field_index: u16,
         },
+        structural_eq: struct {
+            lhs: ExprId,
+            rhs: ExprId,
+        },
         method_call: struct {
             receiver: ExprId,
-            kind: MethodKind,
             method_fn_ty: TypeId,
             method_name: base.Ident.Idx,
             args: Span(ExprId),
@@ -114,7 +115,7 @@ pub const Expr = struct {
         },
         call: struct {
             func: ExprId,
-            arg: ExprId,
+            args: Span(ExprId),
         },
         inspect: ExprId,
         low_level: struct {
@@ -189,7 +190,7 @@ pub const Stmt = union(enum) {
 
 /// Public struct `FnDef`.
 pub const FnDef = struct {
-    arg: TypedSymbol,
+    args: Span(TypedSymbol),
     captures: Span(TypedSymbol),
     body: ExprId,
 };

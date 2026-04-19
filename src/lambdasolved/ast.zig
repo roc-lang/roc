@@ -68,8 +68,6 @@ pub const FieldExpr = struct {
     value: ExprId,
 };
 
-pub const MethodKind = lifted.Ast.MethodKind;
-
 /// Public struct `Expr`.
 pub const Expr = struct {
     ty: TypeVarId,
@@ -95,22 +93,21 @@ pub const Expr = struct {
             field: base.Ident.Idx,
             field_index: u16,
         },
+        structural_eq: struct {
+            lhs: ExprId,
+            rhs: ExprId,
+        },
         method_call: struct {
             receiver: ExprId,
-            kind: MethodKind,
             method_fn_ty: TypeVarId,
             method_name: base.Ident.Idx,
             args: Span(ExprId),
-            step_arg_tys: type_mod.Span(TypeVarId),
-            step_result_tys: type_mod.Span(TypeVarId),
         },
         type_method_call: struct {
             dispatcher_ty: TypeVarId,
             method_fn_ty: TypeVarId,
             method_name: base.Ident.Idx,
             args: Span(ExprId),
-            step_arg_tys: type_mod.Span(TypeVarId),
-            step_result_tys: type_mod.Span(TypeVarId),
         },
         let_: struct {
             bind: TypedSymbol,
@@ -119,7 +116,7 @@ pub const Expr = struct {
         },
         call: struct {
             func: ExprId,
-            arg: ExprId,
+            args: Span(ExprId),
         },
         inspect: ExprId,
         low_level: struct {
@@ -193,7 +190,7 @@ pub const Stmt = union(enum) {
 
 /// Public struct `FnDef`.
 pub const FnDef = struct {
-    arg: TypedSymbol,
+    args: Span(TypedSymbol),
     body: ExprId,
 };
 

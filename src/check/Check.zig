@@ -4859,6 +4859,15 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 );
             }
         },
+        .e_structural_eq => |eq| {
+            does_fx = try self.checkExpr(eq.lhs, env, Expected.none()) or does_fx;
+            does_fx = try self.checkExpr(eq.rhs, env, Expected.none()) or does_fx;
+
+            const lhs_var = ModuleEnv.varFrom(eq.lhs);
+            const rhs_var = ModuleEnv.varFrom(eq.rhs);
+            _ = try self.unify(lhs_var, rhs_var, env);
+            _ = try self.unify(try self.freshBool(env, expr_region), expr_var, env);
+        },
         .e_type_method_call => |method_call| {
             const arg_expr_idxs = self.cir.store.sliceExpr(method_call.args);
             const arg_vars = try self.gpa.alloc(Var, arg_expr_idxs.len);
@@ -6380,19 +6389,38 @@ fn recordResolvedMethodCall(
     self: *Self,
     constraint: StaticDispatchConstraint,
     resolved_method_var: Var,
+    resolved_target: ?ModuleEnv.MethodCallFn.ResolvedTarget,
 ) std.mem.Allocator.Error!void {
     const site_expr_var = constraint.site_expr_var orelse return;
     const expr_idx: CIR.Expr.Idx = @enumFromInt(@intFromEnum(site_expr_var));
     self.cir.setMethodCallFnVar(expr_idx, constraint.fn_name, constraint.origin, resolved_method_var);
+    if (resolved_target) |target| {
+        self.cir.setMethodCallResolvedTarget(expr_idx, constraint.fn_name, constraint.origin, target);
+    }
 }
 
-fn recordImplicitEqMethodCall(
+fn rewriteImplicitEqMethodCallAsStructuralEq(
     self: *Self,
     constraint: StaticDispatchConstraint,
 ) void {
     const site_expr_var = constraint.site_expr_var orelse return;
     const expr_idx: CIR.Expr.Idx = @enumFromInt(@intFromEnum(site_expr_var));
-    self.cir.setMethodCallImplicitEq(expr_idx, constraint.fn_name, constraint.origin);
+    if (constraint.origin != .method_call) return;
+
+    switch (self.cir.store.getExpr(expr_idx)) {
+        .e_method_call => |method_call| {
+            const args = self.cir.store.sliceExpr(method_call.args);
+            if (args.len != 1) {
+                std.debug.panic(
+                    "type checker invariant violated: structural equality method call expected exactly one argument, found {d}",
+                    .{args.len},
+                );
+            }
+
+            self.cir.store.replaceExprWithStructuralEq(expr_idx, method_call.receiver, args[0]);
+        },
+        else => {},
+    }
 }
 
 // problems //
@@ -6907,7 +6935,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
 
                     // Then, lookup the inferred constraint in the actual list of rigid constraints
                     if (self.ident_to_var_map.get(constraint.fn_name)) |rigid_var| {
-                        try self.recordResolvedMethodCall(constraint, rigid_var);
+                        try self.recordResolvedMethodCall(constraint, rigid_var, null);
                         // Unify the actual function var against the inferred var
                         //
                         // TODO: For better error messages, we should check if these
@@ -7124,7 +7152,10 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
 
                     // Unwrap the constraint type
                     const constraint_fn = constraint_fn_resolved.unwrapFunc() orelse {
-                        try self.recordResolvedMethodCall(constraint, method_var);
+                        try self.recordResolvedMethodCall(constraint, method_var, .{
+                            .module_name = original_module_ident,
+                            .def_idx = def_idx,
+                        });
                         _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                             .method_type = .{
                                 .constraint_var = constraint.fn_var,
@@ -7136,7 +7167,10 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         continue;
                     };
 
-                    try self.recordResolvedMethodCall(constraint, method_var);
+                    try self.recordResolvedMethodCall(constraint, method_var, .{
+                        .module_name = original_module_ident,
+                        .def_idx = def_idx,
+                    });
                     const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                         .method_type = .{
                             .constraint_var = deferred_constraint.var_,
@@ -7334,7 +7368,10 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     };
 
                     const constraint_fn = constraint_fn_resolved.unwrapFunc() orelse {
-                        try self.recordResolvedMethodCall(constraint, method_var);
+                        try self.recordResolvedMethodCall(constraint, method_var, .{
+                            .module_name = original_module_ident,
+                            .def_idx = def_idx,
+                        });
                         _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                             .method_type = .{
                                 .constraint_var = constraint.fn_var,
@@ -7346,7 +7383,10 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         continue;
                     };
 
-                    try self.recordResolvedMethodCall(constraint, method_var);
+                    try self.recordResolvedMethodCall(constraint, method_var, .{
+                        .module_name = original_module_ident,
+                        .def_idx = def_idx,
+                    });
                     const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                         .method_type = .{
                             .constraint_var = deferred_constraint.var_,
@@ -7636,7 +7676,7 @@ fn satisfyImplicitEqualityConstraint(
     _ = try self.unify(dispatcher_var, args[0], env);
     _ = try self.unify(dispatcher_var, args[1], env);
     _ = try self.unify(try self.freshBool(env, region), resolved_func.ret, env);
-    self.recordImplicitEqMethodCall(constraint);
+    self.rewriteImplicitEqMethodCallAsStructuralEq(constraint);
 }
 
 /// Check if a type variable supports is_eq by resolving it and checking its content

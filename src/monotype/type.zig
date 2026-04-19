@@ -3,10 +3,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
+const symbol_mod = @import("symbol");
 /// Public enum `TypeId`.
 pub const TypeId = enum(u32) { _ };
 /// Public value `TypeIds`.
 pub const TypeIds = []const TypeId;
+pub const Symbol = symbol_mod.Symbol;
+pub const Symbols = []const Symbol;
 
 /// Public enum `Prim`.
 pub const Prim = enum(u16) {
@@ -62,6 +65,7 @@ pub const Content = union(enum) {
     link: TypeId,
     func: struct {
         arg: TypeId,
+        lambdas: Symbols,
         ret: TypeId,
     },
     nominal: Nominal,
@@ -174,6 +178,11 @@ pub const Store = struct {
         return try self.allocator.dupe(TypeId, ids);
     }
 
+    pub fn dupeSymbols(self: *const Store, symbols: []const Symbol) std.mem.Allocator.Error![]const Symbol {
+        if (symbols.len == 0) return &.{};
+        return try self.allocator.dupe(Symbol, symbols);
+    }
+
     pub fn dupeTags(self: *const Store, tags: []const Tag) std.mem.Allocator.Error![]const Tag {
         if (tags.len == 0) return &.{};
 
@@ -250,6 +259,9 @@ pub const Store = struct {
 
     fn freeOwnedContent(self: *Store, content: Content) void {
         switch (content) {
+            .func => |func| {
+                if (func.lambdas.len > 0) self.allocator.free(func.lambdas);
+            },
             .nominal => |nominal| {
                 if (nominal.args.len > 0) self.allocator.free(nominal.args);
             },
@@ -529,6 +541,7 @@ pub const Store = struct {
             .primitive => |prim| .{ .primitive = prim },
             .func => |func| .{ .func = .{
                 .arg = try self.internTypeIdInner(func.arg, active),
+                .lambdas = try self.dupeSymbols(func.lambdas),
                 .ret = try self.internTypeIdInner(func.ret, active),
             } },
             .nominal => |nominal| blk: {
@@ -688,6 +701,10 @@ pub const Store = struct {
                     .func => |func| {
                         try self_builder.store.appendInternKeyValue(@as(u8, 11));
                         try self_builder.serializeType(func.arg);
+                        try self_builder.store.appendInternKeyValue(@as(u32, @intCast(func.lambdas.len)));
+                        for (func.lambdas) |symbol| {
+                            try self_builder.store.appendInternKeyValue(symbol.raw());
+                        }
                         try self_builder.serializeType(func.ret);
                     },
                     .nominal => |nominal| {
@@ -815,6 +832,10 @@ pub const Store = struct {
             .func => |func| blk: {
                 const right_func = right.func;
                 if (!try self.equalIdsVisited(func.arg, right_func.arg, visited)) break :blk false;
+                if (func.lambdas.len != right_func.lambdas.len) break :blk false;
+                for (func.lambdas, right_func.lambdas) |left_lambda, right_lambda| {
+                    if (left_lambda != right_lambda) break :blk false;
+                }
                 break :blk try self.equalIdsVisited(func.ret, right_func.ret, visited);
             },
             .list => |elem| self.equalIdsVisited(elem, right.list, visited),
@@ -903,6 +924,7 @@ test "keyId does not intern abstract leaves" {
         const ret_ty = try store.addType(.placeholder);
         const func_ty = try store.addType(.{ .func = .{
             .arg = arg_ty,
+            .lambdas = &.{},
             .ret = ret_ty,
         } });
 
@@ -915,6 +937,7 @@ test "keyId does not intern abstract leaves" {
         const ret_ty = try store.addType(.unbd);
         const func_ty = try store.addType(.{ .func = .{
             .arg = arg_ty,
+            .lambdas = &.{},
             .ret = ret_ty,
         } });
 
@@ -932,10 +955,12 @@ test "keyId does not intern concrete function shapes" {
     const i64_ty = try store.internResolved(.{ .primitive = .i64 });
     const fn_a = try store.addType(.{ .func = .{
         .arg = i64_ty,
+        .lambdas = &.{},
         .ret = i64_ty,
     } });
     const fn_b = try store.addType(.{ .func = .{
         .arg = i64_ty,
+        .lambdas = &.{},
         .ret = i64_ty,
     } });
 
@@ -953,6 +978,7 @@ test "keyId does not intern containers with function leaves" {
     const i64_ty = try store.internResolved(.{ .primitive = .i64 });
     const fn_ty = try store.addType(.{ .func = .{
         .arg = i64_ty,
+        .lambdas = &.{},
         .ret = i64_ty,
     } });
     const record_a = try store.addType(.{ .record = .{ .fields = try store.dupeFields(&.{.{
