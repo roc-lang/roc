@@ -2293,7 +2293,6 @@ const Lowerer = struct {
         venv: []const EnvEntry,
         func_ty: TypeVarId,
         arg_tys: []const TypeVarId,
-        step_result_tys: []const TypeVarId,
     ) std.mem.Allocator.Error!FrozenCallWorld {
         var inst = InstScope.init(self.allocator);
         errdefer inst.deinit();
@@ -2304,18 +2303,13 @@ const Lowerer = struct {
         defer mapping.deinit();
 
         const cloned_fn_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &mapping, func_ty);
-        if (arg_tys.len != step_result_tys.len) {
-            debugPanic("lambdamono.lower.freezeCallWorld explicit step result arity mismatch");
-        }
 
         var current_fn_ty = cloned_fn_ty;
-        for (arg_tys, step_result_tys) |arg_ty, result_ty| {
+        for (arg_tys) |arg_ty| {
             const cloned_arg_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &mapping, arg_ty);
-            const cloned_result_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &mapping, result_ty);
             const fn_parts = inst.types.fnShape(current_fn_ty);
             try self.unifyIn(&inst.types, fn_parts.arg, cloned_arg_ty);
-            try self.unifyIn(&inst.types, fn_parts.ret, cloned_result_ty);
-            current_fn_ty = cloned_result_ty;
+            current_fn_ty = fn_parts.ret;
         }
 
         const cloned_env = try self.cloneEnvIntoInstFromStoreWithMapping(&inst, &mono_cache, source_types, &mapping, venv);
@@ -2331,7 +2325,6 @@ const Lowerer = struct {
     fn collectCallChain(
         self: *Lowerer,
         expr_id: solved.Ast.ExprId,
-        _: TypeVarId,
     ) std.mem.Allocator.Error!CallChain {
         var args = std.ArrayList(solved.Ast.ExprId).empty;
         defer args.deinit(self.allocator);
@@ -5022,30 +5015,21 @@ const Lowerer = struct {
         venv: []const EnvEntry,
         expr_id: solved.Ast.ExprId,
         _: @FieldType(solved.Ast.Expr.Data, "call"),
-        source_result_ty: TypeVarId,
+        _: TypeVarId,
     ) std.mem.Allocator.Error!SpecializedExprLowering {
-        var chain = try self.collectCallChain(expr_id, source_result_ty);
+        var chain = try self.collectCallChain(expr_id);
         defer chain.deinit(self.allocator);
 
         const base_func_source = self.input.store.getExpr(chain.base_func);
         const func_ty = try self.instantiatedSourceTypeForExpr(inst, venv, chain.base_func);
         const arg_source_tys = try self.allocator.alloc(TypeVarId, chain.args.len);
         defer self.allocator.free(arg_source_tys);
-        const step_result_tys = try self.allocator.alloc(TypeVarId, chain.args.len);
-        defer self.allocator.free(step_result_tys);
 
-        var current_expr_id = expr_id;
-        var current_result_ty = source_result_ty;
-        var reverse_i: usize = chain.args.len;
-        while (reverse_i > 0) {
-            reverse_i -= 1;
-            arg_source_tys[reverse_i] = try self.instantiatedSourceTypeForExpr(inst, venv, chain.args[reverse_i]);
-            step_result_tys[reverse_i] = current_result_ty;
-            current_expr_id = self.input.store.getExpr(current_expr_id).data.call.func;
-            current_result_ty = try self.instantiatedSourceTypeForExpr(inst, venv, current_expr_id);
+        for (chain.args, 0..) |arg_expr_id, i| {
+            arg_source_tys[i] = try self.instantiatedSourceTypeForExpr(inst, venv, arg_expr_id);
         }
 
-        var frozen = try self.freezeCallWorld(&inst.types, venv, func_ty, arg_source_tys, step_result_tys);
+        var frozen = try self.freezeCallWorld(&inst.types, venv, func_ty, arg_source_tys);
         defer frozen.deinit(self.allocator);
         const frozen_fn_ty = frozen.fn_ty;
 

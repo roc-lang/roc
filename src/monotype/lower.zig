@@ -484,6 +484,16 @@ pub const Lowerer = struct {
         data: @FieldType(ast.Expr.Data, "clos"),
     };
 
+    const PreparedLambdaArgs = struct {
+        args: []ast.TypedSymbol,
+        solved_vars: []?Var,
+
+        fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+            allocator.free(self.args);
+            allocator.free(self.solved_vars);
+        }
+    };
+
     const TypedBinding = struct {
         symbol: symbol_mod.Symbol,
         solved_var: ?Var = null,
@@ -1594,63 +1604,21 @@ pub const Lowerer = struct {
         const arg_patterns = typed_cir_module.slicePatterns(lambda.args);
         var source_fn_shape = try typed_cir_module.lambdaFnShape(source_fn_var, arg_patterns.len);
         defer source_fn_shape.deinit(self.allocator);
+        var prepared_args = try self.prepareLambdaArgs(module_idx, type_scope, source_fn_shape.args, arg_patterns);
+        defer prepared_args.deinit(self.allocator);
         const result_var = try self.instantiateSourceExprVar(type_scope, module_idx, lambda.body);
         const result_ty = try self.instantiateVarType(module_idx, type_scope, result_var);
-
-        const first_arg_source_var = if (source_fn_shape.args.len == 0) null else source_fn_shape.args[0];
-        const first_arg_ty = if (first_arg_source_var) |source_arg_var|
-            try self.instantiateSourceVarType(module_idx, type_scope, source_arg_var)
-        else
-            try self.makeUnitType();
-        const first_arg_pattern = if (arg_patterns.len == 0) null else arg_patterns[0];
-        const first_arg = if (first_arg_pattern) |pattern_idx|
-            try self.bindLambdaArg(module_idx, type_scope, pattern_idx, first_arg_ty)
-        else
-            try self.makeUnitArgWithType(first_arg_ty);
-
-        const body = if (first_arg_pattern) |pattern_idx| blk: {
-            break :blk try self.lowerLambdaBodyWithPattern(
-                module_idx,
-                type_scope,
-                incoming_env,
-                first_arg,
-                first_arg_source_var,
-                pattern_idx,
-                result_ty,
-                result_var,
-                arg_patterns.len <= 1,
-                lambda.body,
-                if (arg_patterns.len <= 1) null else arg_patterns[1..],
-                source_fn_var,
-                1,
-            );
-        } else if (arg_patterns.len <= 1) blk: {
-            const body_expect = self.requireLambdaBodyReturnExpectation(module_idx, result_ty, result_var);
-            try self.collectExprInfoWithResultVar(
-                module_idx,
-                type_scope,
-                incoming_env,
-                lambda.body,
-                body_expect.solved_var,
-            );
-            try self.finalizeExprTypes(module_idx, type_scope);
-            try self.finalizePatternTypes(module_idx, type_scope);
-            break :blk try self.lowerExprWithExpectedType(
-                module_idx,
-                type_scope,
-                incoming_env,
-                lambda.body,
-                body_expect.ty,
-                body_expect.solved_var,
-            );
-        } else try self.lowerCurriedClosureChain(
+        const body = try self.lowerLambdaBodyForArgs(
             module_idx,
             type_scope,
             incoming_env,
-            source_fn_var,
-            1,
-            arg_patterns[1..],
+            prepared_args.args,
+            prepared_args.solved_vars,
+            arg_patterns,
+            0,
             lambda.body,
+            result_ty,
+            result_var,
         );
 
         return .{
@@ -1658,120 +1626,87 @@ pub const Lowerer = struct {
             .bind = .{
                 .ty = if (expected_var) |scoped_expected_var|
                     try self.instantiateVarType(module_idx, type_scope, scoped_expected_var)
-                else
-                    try self.ctx.types.addType(.{
-                        .func = .{
-                            .arg = first_arg.ty,
-                            .lambdas = &.{},
-                            .ret = self.program.store.getExpr(body).ty,
-                        },
-                    }),
+                else blk: {
+                    const arg_tys = try self.allocator.alloc(type_mod.TypeId, prepared_args.args.len);
+                    defer self.allocator.free(arg_tys);
+                    for (prepared_args.args, 0..) |arg, i| arg_tys[i] = arg.ty;
+                    break :blk try self.ctx.types.addType(
+                        try self.buildFunctionType(arg_tys, self.program.store.getExpr(body).ty, &.{}),
+                    );
+                },
                 .symbol = bind_symbol,
             },
-            .args = try self.program.store.addTypedSymbolSpan(&[_]ast.TypedSymbol{first_arg}),
+            .args = try self.program.store.addTypedSymbolSpan(prepared_args.args),
             .body = body,
         };
     }
 
-    fn lowerCurriedClosureChain(
+    fn prepareLambdaArgs(
         self: *Lowerer,
         module_idx: u32,
         type_scope: *TypeScope,
-        incoming_env: BindingEnv,
-        source_fn_var: ?Var,
-        next_arg_index: usize,
-        remaining_arg_patterns: []const CIR.Pattern.Idx,
-        body_expr_idx: CIR.Expr.Idx,
-    ) std.mem.Allocator.Error!ast.ExprId {
-        std.debug.assert(remaining_arg_patterns.len > 0);
-        const typed_cir_module = self.ctx.typedCirModule(module_idx);
-        const source_fn_var_unwrapped = source_fn_var orelse
-            debugPanic("monotype lambda invariant violated: missing source function seed in module {d}", .{module_idx});
-        const explicit_arg_count = next_arg_index + remaining_arg_patterns.len;
-        var source_fn_shape = try typed_cir_module.lambdaFnShape(source_fn_var_unwrapped, explicit_arg_count);
-        defer source_fn_shape.deinit(self.allocator);
-        if (next_arg_index >= source_fn_shape.args.len) {
-            debugPanic(
-                "monotype lambda invariant violated: missing curried arg {d} in module {d}",
-                .{ next_arg_index, module_idx },
-            );
-        }
-        const first_arg_source_var = source_fn_shape.args[next_arg_index];
-        const first_arg_ty = try self.instantiateSourceVarType(module_idx, type_scope, first_arg_source_var);
-        const source_result_var = source_fn_shape.ret;
-        const source_result_ty = try self.instantiateSourceVarType(module_idx, type_scope, source_result_var);
-        const scoped_result_var = try self.instantiateSourceVar(type_scope, module_idx, source_result_var);
-        const remaining_after_current = remaining_arg_patterns.len - 1;
-        const result_ty = if (remaining_after_current == 0)
-            source_result_ty
-        else
-            try self.buildRemainingCurriedClosureTypeFromFunctionType(
-                module_idx,
-                type_scope,
-                source_fn_shape.args,
-                next_arg_index + 1,
-                remaining_after_current,
-                source_result_ty,
-            );
-        const final_result_var = if (remaining_after_current == 0) scoped_result_var else null;
-        const first_pattern = remaining_arg_patterns[0];
-        const first_arg = try self.bindLambdaArg(
-            module_idx,
-            type_scope,
-            first_pattern,
-            first_arg_ty,
-        );
-        const body = try self.lowerLambdaBodyWithPattern(
-            module_idx,
-            type_scope,
-            incoming_env,
-            first_arg,
-            first_arg_source_var,
-            first_pattern,
-            result_ty,
-            final_result_var,
-            remaining_arg_patterns.len == 1,
-            body_expr_idx,
-            if (remaining_arg_patterns.len == 1) null else remaining_arg_patterns[1..],
-            source_fn_var,
-            next_arg_index + 1,
-        );
+        source_arg_vars: []const Var,
+        arg_patterns: []const CIR.Pattern.Idx,
+    ) std.mem.Allocator.Error!PreparedLambdaArgs {
+        const args = try self.allocator.alloc(ast.TypedSymbol, source_arg_vars.len);
+        errdefer self.allocator.free(args);
+        const solved_vars = try self.allocator.alloc(?Var, source_arg_vars.len);
+        errdefer self.allocator.free(solved_vars);
 
-        return try self.program.store.addExpr(.{
-            .ty = try self.ctx.types.addType(.{
-                .func = .{
-                    .arg = first_arg.ty,
-                    .lambdas = &.{},
-                    .ret = result_ty,
-                },
-            }),
-            .data = .{ .clos = .{
-                .args = try self.program.store.addTypedSymbolSpan(&[_]ast.TypedSymbol{first_arg}),
-                .body = body,
-            } },
-        });
+        for (source_arg_vars, 0..) |source_arg_var, i| {
+            const arg_ty = try self.instantiateSourceVarType(module_idx, type_scope, source_arg_var);
+            if (i < arg_patterns.len) {
+                args[i] = try self.bindLambdaArg(module_idx, type_scope, arg_patterns[i], arg_ty);
+                solved_vars[i] = try self.instantiateSourceVar(type_scope, module_idx, source_arg_var);
+            } else {
+                args[i] = try self.makeUnitArgWithType(arg_ty);
+                solved_vars[i] = null;
+            }
+        }
+
+        return .{
+            .args = args,
+            .solved_vars = solved_vars,
+        };
     }
 
-    fn lowerLambdaBodyWithPattern(
+    fn lowerLambdaBodyForArgs(
         self: *Lowerer,
         module_idx: u32,
         type_scope: *TypeScope,
         incoming_env: BindingEnv,
-        arg_bind: ast.TypedSymbol,
-        arg_solved_var: ?Var,
-        pattern_idx: CIR.Pattern.Idx,
+        args: []const ast.TypedSymbol,
+        arg_solved_vars: []const ?Var,
+        arg_patterns: []const CIR.Pattern.Idx,
+        next_arg_index: usize,
+        body_expr_idx: CIR.Expr.Idx,
         result_ty: type_mod.TypeId,
         expected_result_var: ?Var,
-        is_final_arg: bool,
-        body_expr_idx: CIR.Expr.Idx,
-        remaining_arg_patterns: ?[]const CIR.Pattern.Idx,
-        source_fn_var: ?Var,
-        next_arg_index: usize,
     ) std.mem.Allocator.Error!ast.ExprId {
-        const scoped_arg_solved_var = if (arg_solved_var) |var_|
-            try self.instantiateSourceVar(type_scope, module_idx, var_)
-        else
-            null;
+        if (next_arg_index >= arg_patterns.len) {
+            const body_expect = self.requireLambdaBodyReturnExpectation(module_idx, result_ty, expected_result_var);
+            try self.collectExprInfoWithResultVar(
+                module_idx,
+                type_scope,
+                incoming_env,
+                body_expr_idx,
+                body_expect.solved_var,
+            );
+            try self.finalizeExprTypes(module_idx, type_scope);
+            try self.finalizePatternTypes(module_idx, type_scope);
+            return self.lowerExprWithExpectedType(
+                module_idx,
+                type_scope,
+                incoming_env,
+                body_expr_idx,
+                body_expect.ty,
+                body_expect.solved_var,
+            );
+        }
+
+        const arg_bind = args[next_arg_index];
+        const scoped_arg_solved_var = arg_solved_vars[next_arg_index];
+        const pattern_idx = arg_patterns[next_arg_index];
         try self.collectPatternInfo(module_idx, type_scope, pattern_idx);
         try self.recordPatternStructuralInfoFromSourceType(
             module_idx,
@@ -1794,33 +1729,17 @@ pub const Lowerer = struct {
                 &body_env,
                 &binding_decls,
             );
-            const body = if (is_final_arg) blk: {
-                const body_expect = self.requireLambdaBodyReturnExpectation(module_idx, result_ty, expected_result_var);
-                try self.collectExprInfoWithResultVar(
-                    module_idx,
-                    type_scope,
-                    body_env,
-                    body_expr_idx,
-                    body_expect.solved_var,
-                );
-                try self.finalizeExprTypes(module_idx, type_scope);
-                try self.finalizePatternTypes(module_idx, type_scope);
-                break :blk try self.lowerExprWithExpectedType(
-                    module_idx,
-                    type_scope,
-                    body_env,
-                    body_expr_idx,
-                    body_expect.ty,
-                    body_expect.solved_var,
-                );
-            } else try self.lowerCurriedClosureChain(
+            const body = try self.lowerLambdaBodyForArgs(
                 module_idx,
                 type_scope,
                 body_env,
-                source_fn_var,
-                next_arg_index,
-                remaining_arg_patterns.?,
+                args,
+                arg_solved_vars,
+                arg_patterns,
+                next_arg_index + 1,
                 body_expr_idx,
+                result_ty,
+                expected_result_var,
             );
             return self.wrapExprWithBindingDecls(body, binding_decls.items);
         }
@@ -1844,7 +1763,7 @@ pub const Lowerer = struct {
                 pattern_idx,
                 pattern_idx,
                 null,
-                if (is_final_arg) body_expr_idx else body_expr_idx,
+                body_expr_idx,
                 predicate_mismatch_expr,
             );
         }
@@ -1870,33 +1789,17 @@ pub const Lowerer = struct {
             &branch_env,
             &binding_decls,
         );
-        const matched_body = if (is_final_arg) blk: {
-            const body_expect = self.requireLambdaBodyReturnExpectation(module_idx, result_ty, expected_result_var);
-            try self.collectExprInfoWithResultVar(
-                module_idx,
-                type_scope,
-                branch_env,
-                body_expr_idx,
-                body_expect.solved_var,
-            );
-            try self.finalizeExprTypes(module_idx, type_scope);
-            try self.finalizePatternTypes(module_idx, type_scope);
-            break :blk try self.lowerExprWithExpectedType(
-                module_idx,
-                type_scope,
-                branch_env,
-                body_expr_idx,
-                body_expect.ty,
-                body_expect.solved_var,
-            );
-        } else try self.lowerCurriedClosureChain(
+        const matched_body = try self.lowerLambdaBodyForArgs(
             module_idx,
             type_scope,
             branch_env,
-            source_fn_var,
-            next_arg_index,
-            remaining_arg_patterns.?,
+            args,
+            arg_solved_vars,
+            arg_patterns,
+            next_arg_index + 1,
             body_expr_idx,
+            result_ty,
+            expected_result_var,
         );
         const branch_result_ty = self.program.store.getExpr(matched_body).ty;
         const mismatch_expr = try self.program.store.addExpr(.{
@@ -1919,51 +1822,6 @@ pub const Lowerer = struct {
                 .branches = try self.program.store.addBranchSpan(&branches),
             } },
         });
-    }
-
-    fn buildRemainingCurriedClosureTypeFromFunctionType(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeScope,
-        source_arg_vars: []const Var,
-        next_arg_index: usize,
-        remaining_arity: usize,
-        final_result_ty: type_mod.TypeId,
-    ) std.mem.Allocator.Error!type_mod.TypeId {
-        const total_args = source_arg_vars.len;
-        if (next_arg_index + remaining_arity > total_args) {
-            return debugPanic(
-                "monotype lambda invariant violated: lambda arg range [{d}, {d}) exceeded function arity {d} in module {d}",
-                .{ next_arg_index, next_arg_index + remaining_arity, total_args, module_idx },
-            );
-        }
-
-        if (remaining_arity == 0) {
-            return final_result_ty;
-        }
-        const arg_tys = try self.allocator.alloc(type_mod.TypeId, remaining_arity);
-        defer self.allocator.free(arg_tys);
-
-        for (0..remaining_arity) |i| {
-            arg_tys[i] = try self.instantiateSourceVarType(
-                module_idx,
-                type_scope,
-                source_arg_vars[next_arg_index + i],
-            );
-        }
-
-        var actual_ret_ty = final_result_ty;
-        var i = remaining_arity;
-        while (i > 0) : (i -= 1) {
-            actual_ret_ty = try self.ctx.types.addType(.{
-                .func = .{
-                    .arg = arg_tys[i - 1],
-                    .lambdas = &.{},
-                    .ret = actual_ret_ty,
-                },
-            });
-        }
-        return actual_ret_ty;
     }
 
     fn bindExprResultVar(
@@ -3184,31 +3042,12 @@ pub const Lowerer = struct {
         const arg_patterns = typed_cir_module.slicePatterns(args_span);
         const source_expr_var = self.ctx.typedCirModule(module_idx).expr(source_expr_idx).ty();
         const source_fn_var = source_expr_var;
-        var source_fn_shape = try typed_cir_module.fnShape(source_fn_var);
+        var source_fn_shape = try typed_cir_module.lambdaFnShape(source_fn_var, arg_patterns.len);
         defer source_fn_shape.deinit(self.allocator);
-        const first_arg_ty = if (arg_patterns.len == 0)
-            self.requireFunctionType(closure_ty).arg
-        else blk: {
-            if (source_fn_shape.args.len == 0) {
-                debugPanic("monotype closure invariant violated: missing first arg in module {d}", .{module_idx});
-            }
-            break :blk try self.instantiateSourceVarType(
-                module_idx,
-                scope,
-                source_fn_shape.args[0],
-            );
-        };
+        var prepared_args = try self.prepareLambdaArgs(module_idx, scope, source_fn_shape.args, arg_patterns);
+        defer prepared_args.deinit(self.allocator);
         const result_var = try self.instantiateSourceExprVar(scope, module_idx, body_expr_idx);
         const result_ty = try self.instantiateVarType(module_idx, scope, result_var);
-        const first_arg_solved_var = if (arg_patterns.len == 0 or source_fn_shape.args.len == 0)
-            null
-        else
-            try self.instantiateSourceVar(scope, module_idx, source_fn_shape.args[0]);
-        const first_arg_pattern = if (arg_patterns.len == 0) null else arg_patterns[0];
-        const arg = if (first_arg_pattern) |pattern_idx|
-            try self.bindLambdaArg(module_idx, scope, pattern_idx, first_arg_ty)
-        else
-            try self.makeUnitArgWithType(first_arg_ty);
 
         var captured_env = try self.captureDeclarationBindingEnv(type_scope, env);
         defer {
@@ -3221,59 +3060,23 @@ pub const Lowerer = struct {
 
         var body_env = try self.restoreDeclarationBindingEnv(scope, captured_env);
         defer body_env.deinit();
-        var binding_decls = std.ArrayList(BindingDecl).empty;
-        defer binding_decls.deinit(self.allocator);
-        if (first_arg_pattern) |pattern_idx| {
-            try self.collectStructuralBindingDeclsWithSolvedVar(
-                module_idx,
-                scope,
-                arg,
-                first_arg_solved_var,
-                pattern_idx,
-                &body_env,
-                &binding_decls,
-            );
-        }
-
-        const body = if (arg_patterns.len <= 1) blk: {
-            const body_expect = self.requireLambdaBodyReturnExpectation(module_idx, result_ty, result_var);
-            try self.collectExprInfoWithResultVar(
-                module_idx,
-                scope,
-                body_env,
-                body_expr_idx,
-                body_expect.solved_var,
-            );
-            try self.finalizeExprTypes(module_idx, scope);
-            try self.finalizePatternTypes(module_idx, scope);
-            break :blk try self.wrapExprWithBindingDecls(
-                try self.lowerExprWithExpectedType(
-                    module_idx,
-                    scope,
-                    body_env,
-                    body_expr_idx,
-                    body_expect.ty,
-                    body_expect.solved_var,
-                ),
-                binding_decls.items,
-            );
-        } else try self.wrapExprWithBindingDecls(
-            try self.lowerCurriedClosureChain(
-                module_idx,
-                scope,
-                body_env,
-                source_fn_var,
-                1,
-                arg_patterns[1..],
-                body_expr_idx,
-            ),
-            binding_decls.items,
+        const body = try self.lowerLambdaBodyForArgs(
+            module_idx,
+            scope,
+            body_env,
+            prepared_args.args,
+            prepared_args.solved_vars,
+            arg_patterns,
+            0,
+            body_expr_idx,
+            result_ty,
+            result_var,
         );
 
         return .{
             .ty = closure_ty,
             .data = .{
-                .args = try self.program.store.addTypedSymbolSpan(&[_]ast.TypedSymbol{arg}),
+                .args = try self.program.store.addTypedSymbolSpan(prepared_args.args),
                 .body = body,
             },
         };
