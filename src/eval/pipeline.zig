@@ -614,7 +614,9 @@ fn debugValidateMonotypeTypes(types_store: *const monotype.Type.Store) void {
             },
             .primitive => {},
             .func => |func| {
-                debugAssertValidMonoTypeRef(@enumFromInt(@as(u32, @intCast(i))), "func.arg", func.arg, type_len);
+                for (func.args) |arg| {
+                    debugAssertValidMonoTypeRef(@enumFromInt(@as(u32, @intCast(i))), "func.arg", arg, type_len);
+                }
                 debugAssertValidMonoTypeRef(@enumFromInt(@as(u32, @intCast(i))), "func.ret", func.ret, type_len);
             },
             .list => |elem| {

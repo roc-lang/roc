@@ -2205,7 +2205,7 @@ pub const Lowerer = struct {
                 return special;
             }
 
-            const lowered_call = try self.lowerCurriedCall(
+            const lowered_call = try self.lowerCall(
                 module_idx,
                 type_scope,
                 env,
@@ -5834,7 +5834,7 @@ pub const Lowerer = struct {
         });
     }
 
-    fn lowerCurriedCall(
+    fn lowerCall(
         self: *Lowerer,
         module_idx: u32,
         type_scope: *TypeScope,
@@ -5851,7 +5851,7 @@ pub const Lowerer = struct {
             current_fn_ty,
             try self.exprResultVar(module_idx, type_scope, env, func_expr_idx),
         );
-        return self.lowerCurriedCallFromLoweredHead(
+        return self.lowerCallFromLoweredHead(
             module_idx,
             type_scope,
             env,
@@ -5861,7 +5861,7 @@ pub const Lowerer = struct {
         );
     }
 
-    fn lowerCurriedCallFromLoweredHead(
+    fn lowerCallFromLoweredHead(
         self: *Lowerer,
         module_idx: u32,
         type_scope: *TypeScope,
@@ -5870,37 +5870,27 @@ pub const Lowerer = struct {
         current_fn_ty: type_mod.TypeId,
         arg_exprs: []const CIR.Expr.Idx,
     ) std.mem.Allocator.Error!LoweredCall {
-        const unit_ty = try self.ctx.types.addType(.{ .record = .{ .fields = &.{} } });
-        var fn_ty = current_fn_ty;
-        const lowered_args = try self.allocator.alloc(ast.ExprId, if (arg_exprs.len == 0) @as(usize, 1) else arg_exprs.len);
-        defer self.allocator.free(lowered_args);
-
-        if (arg_exprs.len == 0) {
-            const fn_parts = self.requireFunctionType(fn_ty);
-            lowered_args[0] = try self.program.store.addExpr(.{
-                .ty = unit_ty,
-                .data = .unit,
-            });
-            return .{
-                .data = .{
-                    .func = current_expr,
-                    .args = try self.program.store.addExprSpan(lowered_args),
-                },
-                .result_ty = fn_parts.ret,
-            };
+        const fn_parts = self.requireFunctionType(current_fn_ty);
+        const fn_args = fn_parts.args;
+        if (arg_exprs.len != fn_args.len) {
+            debugPanic(
+                "monotype call invariant violated: lowered call must be saturated with exactly {d} args but received {d}",
+                .{ fn_args.len, arg_exprs.len },
+            );
         }
 
-        for (arg_exprs, 0..) |arg_expr_idx, i| {
-            const fn_parts = self.requireFunctionType(fn_ty);
+        const lowered_args = try self.allocator.alloc(ast.ExprId, arg_exprs.len);
+        defer self.allocator.free(lowered_args);
+
+        for (arg_exprs, fn_args, 0..) |arg_expr_idx, expected_arg_ty, i| {
             lowered_args[i] = try self.lowerExprWithExpectedType(
                 module_idx,
                 type_scope,
                 env,
                 arg_expr_idx,
-                fn_parts.arg,
+                expected_arg_ty,
                 try self.exprResultVar(module_idx, type_scope, env, arg_expr_idx),
             );
-            fn_ty = fn_parts.ret;
         }
 
         return .{
@@ -5908,7 +5898,7 @@ pub const Lowerer = struct {
                 .func = current_expr,
                 .args = try self.program.store.addExprSpan(lowered_args),
             },
-            .result_ty = fn_ty,
+            .result_ty = fn_parts.ret,
         };
     }
 
@@ -6007,7 +5997,7 @@ pub const Lowerer = struct {
                         .data = self.program.store.getExpr(special).data,
                     });
                 }
-                const lowered_call = try self.lowerCurriedCall(
+                const lowered_call = try self.lowerCall(
                     module_idx,
                     type_scope,
                     env,
@@ -9244,27 +9234,13 @@ pub const Lowerer = struct {
         ret_id: type_mod.TypeId,
         lambdas: []const Symbol,
     ) std.mem.Allocator.Error!type_mod.Content {
-        if (arg_ids.len == 0) {
-            const unit_ty = try self.ctx.types.addType(.{ .record = .{ .fields = &.{} } });
-            return .{ .func = .{
-                .arg = unit_ty,
+        return .{
+            .func = .{
+                .args = try self.ctx.types.dupeTypeIds(arg_ids),
                 .lambdas = try self.ctx.types.dupeSymbols(lambdas),
                 .ret = ret_id,
-            } };
-        }
-
-        var current_ret = ret_id;
-        var i = arg_ids.len;
-        while (i > 0) : (i -= 1) {
-            current_ret = try self.ctx.types.addType(.{
-                .func = .{
-                    .arg = arg_ids[i - 1],
-                    .lambdas = try self.ctx.types.dupeSymbols(lambdas),
-                    .ret = current_ret,
-                },
-            });
-        }
-        return self.ctx.types.getType(current_ret);
+            },
+        };
     }
 
     fn requireResolvedMethodTargetSymbol(
@@ -9291,29 +9267,9 @@ pub const Lowerer = struct {
         fn_ty: type_mod.TypeId,
         target_symbol: Symbol,
     ) std.mem.Allocator.Error!type_mod.TypeId {
-        var arg_ids = std.ArrayList(type_mod.TypeId).empty;
-        defer arg_ids.deinit(self.allocator);
-
-        var current_ty = fn_ty;
-        while (true) {
-            switch (self.ctx.types.getType(current_ty)) {
-                .func => |func| {
-                    try arg_ids.append(self.allocator, func.arg);
-                    current_ty = func.ret;
-                },
-                else => break,
-            }
-        }
-
-        if (arg_ids.items.len == 0) {
-            debugPanic(
-                "monotype invariant violated: attempted to stamp explicit callable target on non-function type {d}",
-                .{@intFromEnum(fn_ty)},
-            );
-        }
-
+        const fn_shape = self.requireFunctionType(fn_ty);
         return try self.ctx.types.addType(
-            try self.buildFunctionType(arg_ids.items, current_ty, &.{target_symbol}),
+            try self.buildFunctionType(fn_shape.args, fn_shape.ret, &.{target_symbol}),
         );
     }
 

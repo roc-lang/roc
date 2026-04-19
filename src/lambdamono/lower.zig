@@ -115,9 +115,13 @@ const Lowerer = struct {
     };
 
     const CallSpecialization = struct {
-        arg_ty: type_mod.TypeId,
+        args_tys: []const type_mod.TypeId,
         ret_ty: type_mod.TypeId,
         capture_ty: ?type_mod.TypeId,
+
+        fn deinit(self: *const @This(), allocator: std.mem.Allocator) void {
+            if (self.args_tys.len != 0) allocator.free(self.args_tys);
+        }
     };
 
     const TopLevelValueSource = union(enum) {
@@ -427,36 +431,14 @@ const Lowerer = struct {
         }
     }
 
-    fn collectCurriedSignature(
+    fn collectFunctionSignature(
         self: *Lowerer,
         fn_ty: TypeVarId,
         args: *std.ArrayList(TypeVarId),
-        rets: *std.ArrayList(TypeVarId),
     ) std.mem.Allocator.Error!TypeVarId {
-        var visited = std.AutoHashMap(TypeVarId, void).init(self.allocator);
-        defer visited.deinit();
-        var current = fn_ty;
-        while (true) {
-            if (visited.contains(current)) {
-                debugPanic("lambdamono.lower entrypoint wrapper detected recursive function type");
-            }
-            try visited.put(current, {});
-            const id = self.input.types.unlink(current);
-            switch (self.input.types.getNode(id)) {
-                .nominal => |nominal| {
-                    current = nominal.backing;
-                },
-                .content => |content| switch (content) {
-                    .func => |func| {
-                        try args.append(self.allocator, func.arg);
-                        try rets.append(self.allocator, func.ret);
-                        current = func.ret;
-                    },
-                    else => return current,
-                },
-                else => return current,
-            }
-        }
+        const fn_shape = self.input.types.fnShape(fn_ty);
+        try args.appendSlice(self.allocator, self.input.types.sliceTypeVarSpan(fn_shape.args));
+        return fn_shape.ret;
     }
 
     fn buildEntrypointWrappers(self: *Lowerer) std.mem.Allocator.Error!void {
@@ -467,9 +449,6 @@ const Lowerer = struct {
 
         var arg_vars = std.ArrayList(TypeVarId).empty;
         defer arg_vars.deinit(self.allocator);
-        var ret_vars = std.ArrayList(TypeVarId).empty;
-        defer ret_vars.deinit(self.allocator);
-
         for (self.entrypoints, 0..) |entry_symbol, entry_idx| {
             self.entrypoint_wrappers[entry_idx] = entry_symbol;
 
@@ -486,25 +465,7 @@ const Lowerer = struct {
                 continue;
 
             arg_vars.clearRetainingCapacity();
-            ret_vars.clearRetainingCapacity();
-            const final_ret = try self.collectCurriedSignature(entry_fn_ty, &arg_vars, &ret_vars);
-            if (arg_vars.items.len == 0) {
-                if (comptime builtin.mode == .Debug) {
-                    std.debug.assert(final_ret == entry_fn_ty);
-                } else if (final_ret != entry_fn_ty) {
-                    unreachable;
-                }
-            } else {
-                const last_ret = ret_vars.items[ret_vars.items.len - 1];
-                if (comptime builtin.mode == .Debug) {
-                    std.debug.assert(final_ret == last_ret);
-                } else if (final_ret != last_ret) {
-                    unreachable;
-                }
-            }
-            if (arg_vars.items.len != ret_vars.items.len) {
-                debugPanic("lambdamono.lower entrypoint wrapper arity mismatch");
-            }
+            const final_ret = try self.collectFunctionSignature(entry_fn_ty, &arg_vars);
 
             const needs_wrapper = if (specializations.lookupFnExact(self.fenv, entry_symbol)) |_|
                 arg_vars.items.len > 1
@@ -529,15 +490,11 @@ const Lowerer = struct {
             const arg_count = arg_vars.items.len;
             const arg_exec_tys = try self.allocator.alloc(type_mod.TypeId, arg_count);
             defer self.allocator.free(arg_exec_tys);
-            const ret_exec_tys = try self.allocator.alloc(type_mod.TypeId, arg_count);
-            defer self.allocator.free(ret_exec_tys);
 
             for (arg_vars.items, 0..) |arg_ty, i| {
                 arg_exec_tys[i] = try self.lowerExecutableTypeWithBoxErasure(&self.input.types, &mono_cache, arg_ty);
             }
-            for (ret_vars.items, 0..) |ret_ty, i| {
-                ret_exec_tys[i] = try self.lowerExecutableTypeWithBoxErasure(&self.input.types, &mono_cache, ret_ty);
-            }
+            const final_ret_exec_ty = try self.lowerExecutableTypeWithBoxErasure(&self.input.types, &mono_cache, final_ret);
 
             const entry_name = self.input.idents.getText(self.input.symbols.get(entry_symbol).name);
             const wrapper_name = try std.fmt.allocPrint(self.allocator, "{s}__entrypoint", .{entry_name});
@@ -562,16 +519,12 @@ const Lowerer = struct {
 
             const args_span = try self.output.addTypedSymbolSpan(wrapper_args);
             var current_expr: ast.ExprId = undefined;
-            var inst = InstScope.init(self.allocator);
-            defer inst.deinit();
-
             if (specializations.lookupFnExact(self.fenv, entry_symbol)) |_| {
-                var first_arg_buf = [_]ast.ExprId{arg_exprs[0]};
                 current_expr = try self.output.addExpr(.{
-                    .ty = ret_exec_tys[0],
+                    .ty = final_ret_exec_ty,
                     .data = .{ .call = .{
                         .proc = entry_symbol,
-                        .args = try self.output.addExprSpan(&first_arg_buf),
+                        .args = try self.output.addExprSpan(arg_exprs),
                     } },
                 });
             } else {
@@ -584,31 +537,19 @@ const Lowerer = struct {
                 if (arg_count == 0) {
                     current_expr = func_expr;
                 } else {
+                    var inst = InstScope.init(self.allocator);
+                    defer inst.deinit();
                     current_expr = try self.applyFuncValue(
-                        &self.input.types,
+                        &inst.types,
                         &mono_cache,
                         func_expr,
                         entry_fn_ty,
                         func_exec_ty,
-                        arg_exprs[0],
-                        ret_exec_tys[0],
+                        try self.output.addExprSpan(arg_exprs),
+                        final_ret_exec_ty,
                         null,
                     );
                 }
-            }
-
-            var i: usize = 1;
-            while (i < arg_count) : (i += 1) {
-                current_expr = try self.applyFuncValue(
-                    &self.input.types,
-                    &mono_cache,
-                    current_expr,
-                    ret_vars.items[i - 1],
-                    ret_exec_tys[i - 1],
-                    arg_exprs[i],
-                    ret_exec_tys[i],
-                    null,
-                );
             }
 
             const def_id = try self.output.addDef(.{
@@ -877,23 +818,25 @@ const Lowerer = struct {
         defer mono_cache.deinit();
 
         const solved_fn_ty = try self.cloneInstType(&inst, bind.ty);
+        const fn_shape = inst.types.fnShape(solved_fn_ty);
+        const solved_arg_tys = inst.types.sliceTypeVarSpan(fn_shape.args);
         const hosted_args = self.input.store.sliceTypedSymbolSpan(hosted_fn.args);
+        if (solved_arg_tys.len != hosted_args.len) {
+            debugPanic("lambdamono.lower.lowerHostedDef hosted arg arity mismatch");
+        }
         const lowered_args = try self.allocator.alloc(ast.TypedSymbol, hosted_args.len);
         defer self.allocator.free(lowered_args);
 
-        var current_fn_ty = solved_fn_ty;
-        for (hosted_args, 0..) |arg, i| {
-            const fn_parts = inst.types.fnShape(current_fn_ty);
+        for (hosted_args, solved_arg_tys, 0..) |arg, solved_arg_ty, i| {
             lowered_args[i] = .{
-                .ty = try self.lowerExecutableTypeFromSolvedIn(&inst.types, &mono_cache, fn_parts.arg),
+                .ty = try self.lowerExecutableTypeFromSolvedIn(&inst.types, &mono_cache, solved_arg_ty),
                 .symbol = arg.symbol,
             };
-            current_fn_ty = fn_parts.ret;
         }
 
         return .{
             .bind = bind.symbol,
-            .result_ty = try self.lowerExecutableTypeFromSolvedIn(&inst.types, &mono_cache, current_fn_ty),
+            .result_ty = try self.lowerExecutableTypeFromSolvedIn(&inst.types, &mono_cache, fn_shape.ret),
             .value = .{ .hosted_fn = .{
                 .bind = bind.symbol,
                 .args = try self.output.addTypedSymbolSpan(lowered_args),
@@ -911,21 +854,34 @@ const Lowerer = struct {
         requested_ty: TypeVarId,
     ) std.mem.Allocator.Error!CallSpecialization {
         const requested_fn = solved_types.fnShape(requested_ty);
+        const requested_args = solved_types.sliceTypeVarSpan(requested_fn.args);
         const builtin_boundary = self.boxBoundaryBuiltinOp(requested_name);
-        const arg_ty = if (builtin_boundary) |op|
-            switch (op) {
-                .box_box => try self.lowerBoxBoundaryCallableTypeIn(solved_types, mono_cache, requested_fn.arg),
-                .box_unbox => try self.lowerBoxedBoundaryCallableTypeIn(solved_types, mono_cache, requested_fn.arg),
-                else => unreachable,
+        const args_tys = if (builtin_boundary) |op| blk: {
+            if (requested_args.len != 1) {
+                debugPanic("lambdamono.lower.buildLsetSpecializationSig box boundary expected unary callable");
             }
-        else
-            try self.lowerExecutableTypeFromSolvedIn(solved_types, mono_cache, requested_fn.arg);
+            const lowered = try self.allocator.alloc(type_mod.TypeId, 1);
+            errdefer self.allocator.free(lowered);
+            lowered[0] = switch (op) {
+                .box_box => try self.lowerBoxBoundaryCallableTypeIn(solved_types, mono_cache, requested_args[0]),
+                .box_unbox => try self.lowerBoxedBoundaryCallableTypeIn(solved_types, mono_cache, requested_args[0]),
+                else => unreachable,
+            };
+            break :blk lowered;
+        } else blk: {
+            const lowered = try self.allocator.alloc(type_mod.TypeId, requested_args.len);
+            errdefer self.allocator.free(lowered);
+            for (requested_args, 0..) |arg_ty, i| {
+                lowered[i] = try self.lowerExecutableTypeFromSolvedIn(solved_types, mono_cache, arg_ty);
+            }
+            break :blk lowered;
+        };
         const ret_ty = if (builtin_boundary) |op|
-            try self.boxBoundaryResultTypeFromArg(op, arg_ty)
+            try self.boxBoundaryResultTypeFromArg(op, args_tys[0])
         else
             try self.lowerExecutableTypeFromSolvedIn(solved_types, mono_cache, requested_fn.ret);
         return .{
-            .arg_ty = arg_ty,
+            .args_tys = args_tys,
             .ret_ty = ret_ty,
             .capture_ty = requested_capture_ty,
         };
@@ -1972,7 +1928,6 @@ const Lowerer = struct {
 
     const SpecializedFn = struct {
         fn_def: ast.FnDef,
-        arg_ty: type_mod.TypeId,
         ret_ty: type_mod.TypeId,
     };
 
@@ -1981,7 +1936,6 @@ const Lowerer = struct {
         mono_cache: lower_type.MonoCache,
         fn_ty: TypeVarId,
         fn_shape: solved.Type.FnShape,
-        requested_fn_shape: solved.Type.FnShape,
         capture_span: solved.Type.Span(solved.Type.Capture),
 
         fn deinit(self: *FrozenFnWorld) void {
@@ -2048,18 +2002,15 @@ const Lowerer = struct {
         errdefer mono_cache.deinit();
 
         const fn_ty = try self.cloneInstType(&inst, pending.fn_ty);
-        const requested_ty = try self.cloneTypeIntoInstFromStore(&inst, &pending.requested_types, pending.requested_ty);
-        const requested_snapshot_ty = try self.cloneTypeIntoInstFromStore(&inst, &pending.requested_types, pending.requested_ty);
-        const requested_fn_shape = inst.types.fnShape(requested_snapshot_ty);
-        try self.unifyIn(&inst.types, fn_ty, requested_ty);
         const member = inst.types.requireLambdaMember(fn_ty, pending.name);
+        const requested_ty = try self.cloneTypeIntoInstFromStore(&inst, &pending.requested_types, pending.requested_ty);
+        try self.unifyIn(&inst.types, fn_ty, requested_ty);
 
         return .{
             .inst = inst,
             .mono_cache = mono_cache,
             .fn_ty = fn_ty,
             .fn_shape = inst.types.fnShape(fn_ty),
-            .requested_fn_shape = requested_fn_shape,
             .capture_span = member.lambda.captures,
         };
     }
@@ -2147,11 +2098,19 @@ const Lowerer = struct {
                 try mapping.put(id, placeholder);
                 const node = switch (content) {
                     .primitive => solved.Type.Node{ .content = .{ .primitive = content.primitive } },
-                    .func => solved.Type.Node{ .content = .{ .func = .{
-                        .arg = try self.cloneTypeFromStoreRec(target_types, source_types, mapping, content.func.arg),
-                        .lset = try self.cloneTypeFromStoreRec(target_types, source_types, mapping, content.func.lset),
-                        .ret = try self.cloneTypeFromStoreRec(target_types, source_types, mapping, content.func.ret),
-                    } } },
+                    .func => |func| blk2: {
+                        const args = source_types.sliceTypeVarSpan(func.args);
+                        const out_args = try self.allocator.alloc(TypeVarId, args.len);
+                        defer self.allocator.free(out_args);
+                        for (args, 0..) |arg, i| {
+                            out_args[i] = try self.cloneTypeFromStoreRec(target_types, source_types, mapping, arg);
+                        }
+                        break :blk2 solved.Type.Node{ .content = .{ .func = .{
+                            .args = try target_types.addTypeVarSpan(out_args),
+                            .lset = try self.cloneTypeFromStoreRec(target_types, source_types, mapping, func.lset),
+                            .ret = try self.cloneTypeFromStoreRec(target_types, source_types, mapping, func.ret),
+                        } } };
+                    },
                     .list => |elem| solved.Type.Node{ .content = .{
                         .list = try self.cloneTypeFromStoreRec(target_types, source_types, mapping, elem),
                     } },
@@ -2263,17 +2222,15 @@ const Lowerer = struct {
         const initial_fn_ty = try self.cloneInstType(&inst, entry.fn_ty);
         try self.unifyIn(&inst.types, cloned_method_fn_ty, initial_fn_ty);
 
-        var current_fn_ty = cloned_method_fn_ty;
-        {
-            const fn_parts = inst.types.fnShape(current_fn_ty);
-            try self.unifyIn(&inst.types, fn_parts.arg, cloned_receiver_ty);
-            current_fn_ty = fn_parts.ret;
+        const fn_shape = inst.types.fnShape(cloned_method_fn_ty);
+        const fn_arg_tys = inst.types.sliceTypeVarSpan(fn_shape.args);
+        if (fn_arg_tys.len != actual_arg_tys.len + 1) {
+            debugPanic("lambdamono.lower.freezeMethodCallWorld method arg arity mismatch");
         }
-        for (actual_arg_tys) |arg_ty| {
+        try self.unifyIn(&inst.types, fn_arg_tys[0], cloned_receiver_ty);
+        for (actual_arg_tys, 0..) |arg_ty, i| {
             const cloned_actual_arg_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, current_types, &current_mapping, arg_ty);
-            const fn_parts = inst.types.fnShape(current_fn_ty);
-            try self.unifyIn(&inst.types, fn_parts.arg, cloned_actual_arg_ty);
-            current_fn_ty = fn_parts.ret;
+            try self.unifyIn(&inst.types, fn_arg_tys[i + 1], cloned_actual_arg_ty);
         }
 
         const cloned_env = try self.cloneEnvIntoInstFromStoreWithMapping(&inst, &mono_cache, current_types, &current_mapping, venv);
@@ -2303,13 +2260,14 @@ const Lowerer = struct {
         defer mapping.deinit();
 
         const cloned_fn_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &mapping, func_ty);
-
-        var current_fn_ty = cloned_fn_ty;
-        for (arg_tys) |arg_ty| {
+        const fn_shape = inst.types.fnShape(cloned_fn_ty);
+        const fn_arg_tys = inst.types.sliceTypeVarSpan(fn_shape.args);
+        if (fn_arg_tys.len != arg_tys.len) {
+            debugPanic("lambdamono.lower.freezeCallWorld call arg arity mismatch");
+        }
+        for (arg_tys, 0..) |arg_ty, i| {
             const cloned_arg_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, source_types, &mapping, arg_ty);
-            const fn_parts = inst.types.fnShape(current_fn_ty);
-            try self.unifyIn(&inst.types, fn_parts.arg, cloned_arg_ty);
-            current_fn_ty = fn_parts.ret;
+            try self.unifyIn(&inst.types, fn_arg_tys[i], cloned_arg_ty);
         }
 
         const cloned_env = try self.cloneEnvIntoInstFromStoreWithMapping(&inst, &mono_cache, source_types, &mapping, venv);
@@ -2375,12 +2333,14 @@ const Lowerer = struct {
         const initial_fn_ty = try self.cloneInstType(&inst, entry.fn_ty);
         try self.unifyIn(&inst.types, cloned_method_fn_ty, initial_fn_ty);
 
-        var current_fn_ty = cloned_method_fn_ty;
-        for (actual_arg_tys) |arg_ty| {
+        const fn_shape = inst.types.fnShape(cloned_method_fn_ty);
+        const fn_arg_tys = inst.types.sliceTypeVarSpan(fn_shape.args);
+        if (fn_arg_tys.len != actual_arg_tys.len) {
+            debugPanic("lambdamono.lower.freezeTypeMethodCallWorld method arg arity mismatch");
+        }
+        for (actual_arg_tys, 0..) |arg_ty, i| {
             const cloned_actual_arg_ty = try self.cloneTypeIntoInstFromStoreWithMapping(&inst, current_types, &current_mapping, arg_ty);
-            const fn_parts = inst.types.fnShape(current_fn_ty);
-            try self.unifyIn(&inst.types, fn_parts.arg, cloned_actual_arg_ty);
-            current_fn_ty = fn_parts.ret;
+            try self.unifyIn(&inst.types, fn_arg_tys[i], cloned_actual_arg_ty);
         }
 
         const cloned_env = try self.cloneEnvIntoInstFromStoreWithMapping(&inst, &mono_cache, current_types, &current_mapping, venv);
@@ -2400,12 +2360,15 @@ const Lowerer = struct {
         const fn_body = pending.fn_def.body;
         const frozen_captures = frozen.inst.types.sliceCaptures(frozen.capture_span);
         const fn_args = self.input.store.sliceTypedSymbolSpan(pending.fn_def.args);
-        if (fn_args.len != 1) {
-            debugPanic("lambdamono.lower.specializeFn expected unary fn args during partial n-ary port", .{});
+        const requested_arg_tys = frozen.inst.types.sliceTypeVarSpan(frozen.fn_shape.args);
+        if (fn_args.len != requested_arg_tys.len) {
+            debugPanic("lambdamono.lower.specializeFn function arg arity mismatch");
         }
-        const fn_arg_symbol = fn_args[0].symbol;
-
-        const specialized_arg_exec_ty = try self.lowerExecutableTypeFromSolvedIn(&frozen.inst.types, &frozen.mono_cache, frozen.fn_shape.arg);
+        const specialized_arg_exec_tys = try self.allocator.alloc(type_mod.TypeId, requested_arg_tys.len);
+        defer self.allocator.free(specialized_arg_exec_tys);
+        for (requested_arg_tys, 0..) |arg_ty, i| {
+            specialized_arg_exec_tys[i] = try self.lowerExecutableTypeFromSolvedIn(&frozen.inst.types, &frozen.mono_cache, arg_ty);
+        }
         switch (frozen.inst.types.lambdaRepr(frozen.fn_ty)) {
             .lset => {},
             .erased => debugPanic("lambdamono.lower.specializeFn expected concrete solved lambda-set type"),
@@ -2421,20 +2384,23 @@ const Lowerer = struct {
         const result: ast.FnDef = switch (pending.repr_mode) {
             .natural => if (frozen_captures.len == 0) .{
                 .args = blk: {
-                    break :blk try self.output.addTypedSymbolSpan(&.{.{
-                        .ty = specialized_arg_exec_ty,
-                        .symbol = fn_arg_symbol,
-                    }});
+                    const lowered_args = try self.allocator.alloc(ast.TypedSymbol, fn_args.len);
+                    defer self.allocator.free(lowered_args);
+                    for (fn_args, specialized_arg_exec_tys, 0..) |arg, exec_ty, i| {
+                        lowered_args[i] = .{
+                            .ty = exec_ty,
+                            .symbol = arg.symbol,
+                        };
+                    }
+                    break :blk try self.output.addTypedSymbolSpan(lowered_args);
                 },
                 .body = blk: {
+                    const body_env = try self.buildFnBodyEnv(requested_arg_tys, specialized_arg_exec_tys, fn_args, &[_]EnvEntry{});
+                    defer self.allocator.free(body_env);
                     const body = try self.specializeExprAtSourceTy(
                         &frozen.inst,
                         &frozen.mono_cache,
-                        &.{.{
-                            .symbol = fn_arg_symbol,
-                            .ty = frozen.fn_shape.arg,
-                            .exec_ty = specialized_arg_exec_ty,
-                        }},
+                        body_env,
                         fn_body,
                         frozen.fn_shape.ret,
                     );
@@ -2452,13 +2418,11 @@ const Lowerer = struct {
                     break :blk bridged;
                 },
             } else blk: {
-                const arg_ty = frozen.fn_shape.arg;
                 const captures_symbol = try self.input.symbols.add(base.Ident.Idx.NONE, .synthetic);
                 const capture_exec_ty = try self.lowerCaptureRecordTypeFromSolved(&frozen.inst.types, &frozen.mono_cache, frozen_captures);
-                const arg_exec_ty = specialized_arg_exec_ty;
                 const capture_env = try self.captureBindingsFromCaptures(frozen_captures, capture_exec_ty);
                 defer self.allocator.free(capture_env);
-                const body_env = try self.buildFnBodyEnv(arg_ty, arg_exec_ty, fn_arg_symbol, capture_env);
+                const body_env = try self.buildFnBodyEnv(requested_arg_tys, specialized_arg_exec_tys, fn_args, capture_env);
                 defer self.allocator.free(body_env);
 
                 var body = try self.specializeExprAtSourceTy(
@@ -2483,17 +2447,19 @@ const Lowerer = struct {
                     capture_env,
                     body,
                 );
-                var args_buf = [_]ast.TypedSymbol{
-                    .{
-                        .ty = arg_exec_ty,
-                        .symbol = fn_arg_symbol,
-                    },
-                    .{
-                        .ty = capture_exec_ty,
-                        .symbol = captures_symbol,
-                    },
+                const lowered_args = try self.allocator.alloc(ast.TypedSymbol, fn_args.len + 1);
+                defer self.allocator.free(lowered_args);
+                for (fn_args, specialized_arg_exec_tys, 0..) |arg, exec_ty, i| {
+                    lowered_args[i] = .{
+                        .ty = exec_ty,
+                        .symbol = arg.symbol,
+                    };
+                }
+                lowered_args[fn_args.len] = .{
+                    .ty = capture_exec_ty,
+                    .symbol = captures_symbol,
                 };
-                const args_span = try self.output.addTypedSymbolSpan(&args_buf);
+                const args_span = try self.output.addTypedSymbolSpan(lowered_args);
                 final_ret_ty = fn_ret_exec_ty;
                 break :blk .{
                     .args = args_span,
@@ -2501,8 +2467,6 @@ const Lowerer = struct {
                 };
             },
             .erased_boundary => blk: {
-                const arg_ty = frozen.fn_shape.arg;
-                const arg_exec_ty = specialized_arg_exec_ty;
                 var captures_ty: ?type_mod.TypeId = null;
                 var capture_env: []EnvEntry = &[_]EnvEntry{};
                 defer if (capture_env.len != 0) self.allocator.free(capture_env);
@@ -2511,7 +2475,7 @@ const Lowerer = struct {
                     captures_ty = lowered_capture_ty;
                     capture_env = try self.captureBindingsFromCaptures(frozen_captures, lowered_capture_ty);
                 }
-                const body_env = try self.buildFnBodyEnv(arg_ty, arg_exec_ty, fn_arg_symbol, capture_env);
+                const body_env = try self.buildFnBodyEnv(requested_arg_tys, specialized_arg_exec_tys, fn_args, capture_env);
                 defer self.allocator.free(body_env);
 
                 var body = try self.specializeExprAtSourceTy(
@@ -2546,47 +2510,68 @@ const Lowerer = struct {
                     body = try self.bindCaptureLets(captures_symbol, captures_ty.?, capture_env, body);
                     final_ret_ty = fn_ret_exec_ty;
                     break :blk .{
-                        .args = try self.output.addTypedSymbolSpan(&.{
-                            .{
-                                .ty = arg_exec_ty,
-                                .symbol = fn_arg_symbol,
-                            },
-                            .{
+                        .args = blk_args: {
+                            const lowered_args = try self.allocator.alloc(ast.TypedSymbol, fn_args.len + 1);
+                            defer self.allocator.free(lowered_args);
+                            for (fn_args, specialized_arg_exec_tys, 0..) |arg, exec_ty, i| {
+                                lowered_args[i] = .{
+                                    .ty = exec_ty,
+                                    .symbol = arg.symbol,
+                                };
+                            }
+                            lowered_args[fn_args.len] = .{
                                 .ty = captures_ty.?,
                                 .symbol = captures_symbol,
-                            },
-                        }),
+                            };
+                            break :blk_args try self.output.addTypedSymbolSpan(lowered_args);
+                        },
                         .body = body,
                     };
                 }
                 final_ret_ty = fn_ret_exec_ty;
                 break :blk .{
-                    .args = try self.output.addTypedSymbolSpan(&.{.{
-                        .ty = arg_exec_ty,
-                        .symbol = fn_arg_symbol,
-                    }}),
+                    .args = blk_args: {
+                        const lowered_args = try self.allocator.alloc(ast.TypedSymbol, fn_args.len);
+                        defer self.allocator.free(lowered_args);
+                        for (fn_args, specialized_arg_exec_tys, 0..) |arg, exec_ty, i| {
+                            lowered_args[i] = .{
+                                .ty = exec_ty,
+                                .symbol = arg.symbol,
+                            };
+                        }
+                        break :blk_args try self.output.addTypedSymbolSpan(lowered_args);
+                    },
                     .body = body,
                 };
             },
         };
         return .{
             .fn_def = result,
-            .arg_ty = specialized_arg_exec_ty,
             .ret_ty = final_ret_ty,
         };
     }
 
     fn buildFnBodyEnv(
         self: *Lowerer,
-        arg_ty: TypeVarId,
-        arg_exec_ty: type_mod.TypeId,
-        arg_symbol: Symbol,
+        arg_tys: []const TypeVarId,
+        arg_exec_tys: []const type_mod.TypeId,
+        args: []const solved.Ast.TypedSymbol,
         capture_env: []const EnvEntry,
     ) std.mem.Allocator.Error![]EnvEntry {
-        const out = try self.allocator.alloc(EnvEntry, capture_env.len + 1);
-        out[0] = .{ .symbol = arg_symbol, .ty = arg_ty, .exec_ty = arg_exec_ty, .exact_fn_symbol = null };
+        if (arg_tys.len != arg_exec_tys.len or arg_tys.len != args.len) {
+            debugPanic("lambdamono.lower.buildFnBodyEnv arg arity mismatch");
+        }
+        const out = try self.allocator.alloc(EnvEntry, capture_env.len + args.len);
+        for (args, arg_tys, arg_exec_tys, 0..) |arg, arg_ty, arg_exec_ty, i| {
+            out[i] = .{
+                .symbol = arg.symbol,
+                .ty = arg_ty,
+                .exec_ty = arg_exec_ty,
+                .exact_fn_symbol = null,
+            };
+        }
         for (capture_env, 0..) |capture, i| {
-            out[i + 1] = capture;
+            out[i + args.len] = capture;
         }
         return out;
     }
@@ -5406,11 +5391,19 @@ const Lowerer = struct {
                 try inst.mapping.put(id, placeholder);
                 const node = switch (content) {
                     .primitive => solved.Type.Node{ .content = .{ .primitive = content.primitive } },
-                    .func => solved.Type.Node{ .content = .{ .func = .{
-                        .arg = try self.cloneInstType(inst, content.func.arg),
-                        .lset = try self.cloneInstType(inst, content.func.lset),
-                        .ret = try self.cloneInstType(inst, content.func.ret),
-                    } } },
+                    .func => |func| blk2: {
+                        const args = self.input.types.sliceTypeVarSpan(func.args);
+                        const out_args = try self.allocator.alloc(TypeVarId, args.len);
+                        defer self.allocator.free(out_args);
+                        for (args, 0..) |arg, i| {
+                            out_args[i] = try self.cloneInstType(inst, arg);
+                        }
+                        break :blk2 solved.Type.Node{ .content = .{ .func = .{
+                            .args = try inst.types.addTypeVarSpan(out_args),
+                            .lset = try self.cloneInstType(inst, func.lset),
+                            .ret = try self.cloneInstType(inst, func.ret),
+                        } } };
+                    },
                     .list => |elem| solved.Type.Node{ .content = .{
                         .list = try self.cloneInstType(inst, elem),
                     } },
@@ -5617,11 +5610,18 @@ const Lowerer = struct {
             },
             .func => |func| switch (right) {
                 .func => |other| {
-                    try self.unifyRec(types, func.arg, other.arg, visited);
+                    const func_args = types.sliceTypeVarSpan(func.args);
+                    const other_args = types.sliceTypeVarSpan(other.args);
+                    if (func_args.len != other_args.len) {
+                        debugPanicFmt("lambdamono.lower.unify incompatible function arity: left={d} right={d}", .{ func_args.len, other_args.len });
+                    }
+                    for (func_args, other_args) |left_arg, right_arg| {
+                        try self.unifyRec(types, left_arg, right_arg, visited);
+                    }
                     try self.unifyRec(types, func.lset, other.lset, visited);
                     try self.unifyRec(types, func.ret, other.ret, visited);
                     return .{ .func = .{
-                        .arg = func.arg,
+                        .args = func.args,
                         .lset = func.lset,
                         .ret = func.ret,
                     } };

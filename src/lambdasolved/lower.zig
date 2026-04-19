@@ -243,7 +243,10 @@ const Lowerer = struct {
             .primitive => |prim| try out.appendSlice(self.allocator, @tagName(prim)),
             .func => |func| {
                 try out.appendSlice(self.allocator, "Fn(");
-                try self.debugWriteMonotypeType(out, func.arg);
+                for (func.args, 0..) |arg, i| {
+                    if (i != 0) try out.appendSlice(self.allocator, ", ");
+                    try self.debugWriteMonotypeType(out, arg);
+                }
                 if (func.lambdas.len != 0) {
                     try out.appendSlice(self.allocator, " {");
                     for (func.lambdas, 0..) |lambda, i| {
@@ -589,8 +592,13 @@ const Lowerer = struct {
                 } };
             },
             .func => |func| blk: {
+                const lowered_args = try self.allocator.alloc(TypeVarId, func.args.len);
+                defer self.allocator.free(lowered_args);
+                for (func.args, 0..) |arg, i| {
+                    lowered_args[i] = try self.instantiateTypeRec(arg, cache);
+                }
                 break :blk type_mod.Node{ .content = .{ .func = .{
-                    .arg = try self.instantiateTypeRec(func.arg, cache),
+                    .args = try self.types.addTypeVarSpan(lowered_args),
                     .lset = if (func.lambdas.len == 0)
                         try self.types.freshUnbd()
                     else
@@ -735,11 +743,19 @@ const Lowerer = struct {
             },
             .content => |content| switch (content) {
                 .primitive => type_mod.Node{ .content = .{ .primitive = content.primitive } },
-                .func => type_mod.Node{ .content = .{ .func = .{
-                    .arg = try self.snapshotTypeRec(content.func.arg, mapping),
-                    .lset = try self.snapshotTypeRec(content.func.lset, mapping),
-                    .ret = try self.snapshotTypeRec(content.func.ret, mapping),
-                } } },
+                .func => blk: {
+                    const src_args = self.types.sliceTypeVarSpan(content.func.args);
+                    const out_args = try self.allocator.alloc(TypeVarId, src_args.len);
+                    defer self.allocator.free(out_args);
+                    for (src_args, 0..) |arg, i| {
+                        out_args[i] = try self.snapshotTypeRec(arg, mapping);
+                    }
+                    break :blk type_mod.Node{ .content = .{ .func = .{
+                        .args = try self.types.addTypeVarSpan(out_args),
+                        .lset = try self.snapshotTypeRec(content.func.lset, mapping),
+                        .ret = try self.snapshotTypeRec(content.func.ret, mapping),
+                    } } };
+                },
                 .list => |elem| type_mod.Node{ .content = .{
                     .list = try self.snapshotTypeRec(elem, mapping),
                 } },
@@ -843,33 +859,17 @@ const Lowerer = struct {
         return arg_tys;
     }
 
-    fn buildCurriedSolvedFunctionType(
+    fn buildSolvedFunctionType(
         self: *Lowerer,
         arg_tys: []const TypeVarId,
         lset_ty: TypeVarId,
         ret_ty: TypeVarId,
     ) std.mem.Allocator.Error!TypeVarId {
-        if (arg_tys.len == 0) {
-            const unit_ty = try self.types.freshContent(.{ .record = .{
-                .fields = type_mod.Span(type_mod.Field).empty(),
-            } });
-            return try self.types.freshContent(.{ .func = .{
-                .arg = unit_ty,
-                .lset = lset_ty,
-                .ret = ret_ty,
-            } });
-        }
-
-        var current_ret = ret_ty;
-        var i = arg_tys.len;
-        while (i > 0) : (i -= 1) {
-            current_ret = try self.types.freshContent(.{ .func = .{
-                .arg = arg_tys[i - 1],
-                .lset = lset_ty,
-                .ret = current_ret,
-            } });
-        }
-        return current_ret;
+        return try self.types.freshContent(.{ .func = .{
+            .args = try self.types.addTypeVarSpan(arg_tys),
+            .lset = lset_ty,
+            .ret = ret_ty,
+        } });
     }
 
     fn freshWantedFunctionType(
@@ -877,25 +877,7 @@ const Lowerer = struct {
         arg_tys: []const TypeVarId,
         ret_ty: TypeVarId,
     ) std.mem.Allocator.Error!TypeVarId {
-        return try self.buildCurriedSolvedFunctionType(arg_tys, try self.types.freshUnbd(), ret_ty);
-    }
-
-    fn countFunctionArgs(self: *Lowerer, fn_ty: TypeVarId) usize {
-        var count: usize = 0;
-        var current = self.types.unlinkPreservingNominal(fn_ty);
-        while (true) {
-            switch (self.types.getNode(current)) {
-                .nominal => |nominal| current = self.types.unlinkPreservingNominal(nominal.backing),
-                .content => |content| switch (content) {
-                    .func => |func| {
-                        count += 1;
-                        current = self.types.unlinkPreservingNominal(func.ret);
-                    },
-                    else => return count,
-                },
-                else => return count,
-            }
-        }
+        return try self.buildSolvedFunctionType(arg_tys, try self.types.freshUnbd(), ret_ty);
     }
 
     fn assertSaturatedFunctionCall(
@@ -904,7 +886,7 @@ const Lowerer = struct {
         provided_arg_count: usize,
         comptime panic_msg: []const u8,
     ) std.mem.Allocator.Error!void {
-        const expected_arg_count = self.countFunctionArgs(fn_ty);
+        const expected_arg_count = self.types.sliceTypeVarSpan(self.types.fnShape(fn_ty).args).len;
         if (provided_arg_count != expected_arg_count) {
             return debugPanic(panic_msg, .{});
         }
@@ -1259,7 +1241,7 @@ const Lowerer = struct {
         const arg_tys = try self.allocator.alloc(TypeVarId, fn_args.len);
         defer self.allocator.free(arg_tys);
         for (fn_args, 0..) |arg, i| arg_tys[i] = arg.ty;
-        const fn_ty = try self.buildCurriedSolvedFunctionType(arg_tys, lset_ty, fn_ret_ty);
+        const fn_ty = try self.buildSolvedFunctionType(arg_tys, lset_ty, fn_ret_ty);
         try self.unify(fn_entry.ty, fn_ty);
 
         const body_ty = try self.inferExpr(body_env, fn_def.body);
@@ -1920,8 +1902,13 @@ const Lowerer = struct {
         return switch (left) {
             .primitive => |prim| prim == right.primitive or prim == .dec or right.primitive == .dec,
             .func => |func| {
-                return self.typesCompatibleRec(func.arg, right.func.arg, visited) and
-                    self.typesCompatibleRec(func.ret, right.func.ret, visited) and
+                const left_args = self.types.sliceTypeVarSpan(func.args);
+                const right_args = self.types.sliceTypeVarSpan(right.func.args);
+                if (left_args.len != right_args.len) return false;
+                for (left_args, right_args) |left_arg, right_arg| {
+                    if (!self.typesCompatibleRec(left_arg, right_arg, visited)) return false;
+                }
+                return self.typesCompatibleRec(func.ret, right.func.ret, visited) and
                     self.typesCompatibleRec(func.lset, right.func.lset, visited);
             },
             .list => |elem| self.typesCompatibleRec(elem, right.list, visited),
@@ -2696,7 +2683,7 @@ const Lowerer = struct {
                 .func => |func| blk: {
                     if (func.ret == new_ret) break :blk id;
                     break :blk try self.types.freshContent(.{ .func = .{
-                        .arg = func.arg,
+                        .args = func.args,
                         .lset = func.lset,
                         .ret = new_ret,
                     } });
@@ -2721,7 +2708,7 @@ const Lowerer = struct {
                 .func => |func| blk: {
                     if (func.lset == new_lset) break :blk id;
                     break :blk try self.types.freshContent(.{ .func = .{
-                        .arg = func.arg,
+                        .args = func.args,
                         .lset = new_lset,
                         .ret = func.ret,
                     } });
@@ -2770,14 +2757,23 @@ const Lowerer = struct {
                 .func => |template_func| switch (self.types.getNode(actual_id)) {
                     .content => |actual_content| switch (actual_content) {
                         .func => |actual_func| blk: {
-                            const arg = try self.overlayErasureTemplateRec(template_func.arg, actual_func.arg, visited);
+                            const template_args = self.types.sliceTypeVarSpan(template_func.args);
+                            const actual_args = self.types.sliceTypeVarSpan(actual_func.args);
+                            if (template_args.len != actual_args.len) break :blk actual_ty;
+                            const arg_out = try self.allocator.alloc(TypeVarId, template_args.len);
+                            defer self.allocator.free(arg_out);
+                            var args_changed = false;
+                            for (template_args, actual_args, 0..) |template_arg, actual_arg, i| {
+                                arg_out[i] = try self.overlayErasureTemplateRec(template_arg, actual_arg, visited);
+                                if (arg_out[i] != actual_arg) args_changed = true;
+                            }
                             const ret = try self.overlayErasureTemplateRec(template_func.ret, actual_func.ret, visited);
                             const lset = actual_func.lset;
-                            if (arg == actual_func.arg and lset == actual_func.lset and ret == actual_func.ret) {
+                            if (!args_changed and lset == actual_func.lset and ret == actual_func.ret) {
                                 break :blk actual_ty;
                             }
                             break :blk try self.types.freshContent(.{ .func = .{
-                                .arg = arg,
+                                .args = try self.types.addTypeVarSpan(arg_out),
                                 .lset = lset,
                                 .ret = ret,
                             } });
@@ -3222,9 +3218,13 @@ const Lowerer = struct {
             },
             .content => |content| switch (content) {
                 .primitive => false,
-                .func => |func| try self.isGeneralizedRec(func.arg, visited) or
-                    try self.isGeneralizedRec(func.lset, visited) or
-                    try self.isGeneralizedRec(func.ret, visited),
+                .func => |func| blk: {
+                    for (self.types.sliceTypeVarSpan(func.args)) |arg| {
+                        if (try self.isGeneralizedRec(arg, visited)) break :blk true;
+                    }
+                    break :blk try self.isGeneralizedRec(func.lset, visited) or
+                        try self.isGeneralizedRec(func.ret, visited);
+                },
                 .list => |elem| try self.isGeneralizedRec(elem, visited),
                 .box => |elem| try self.isGeneralizedRec(elem, visited),
                 .tuple => |elems| blk: {
@@ -3304,11 +3304,19 @@ const Lowerer = struct {
             },
             .content => |content| switch (content) {
                 .primitive => type_mod.Node{ .content = .{ .primitive = content.primitive } },
-                .func => type_mod.Node{ .content = .{ .func = .{
-                    .arg = try self.instantiateGeneralizedRec(content.func.arg, mapping),
-                    .lset = try self.instantiateGeneralizedRec(content.func.lset, mapping),
-                    .ret = try self.instantiateGeneralizedRec(content.func.ret, mapping),
-                } } },
+                .func => blk: {
+                    const src_args = self.types.sliceTypeVarSpan(content.func.args);
+                    const out_args = try self.allocator.alloc(TypeVarId, src_args.len);
+                    defer self.allocator.free(out_args);
+                    for (src_args, 0..) |arg, i| {
+                        out_args[i] = try self.instantiateGeneralizedRec(arg, mapping);
+                    }
+                    break :blk type_mod.Node{ .content = .{ .func = .{
+                        .args = try self.types.addTypeVarSpan(out_args),
+                        .lset = try self.instantiateGeneralizedRec(content.func.lset, mapping),
+                        .ret = try self.instantiateGeneralizedRec(content.func.ret, mapping),
+                    } } };
+                },
                 .list => |elem| type_mod.Node{ .content = .{
                     .list = try self.instantiateGeneralizedRec(elem, mapping),
                 } },
@@ -3426,9 +3434,13 @@ const Lowerer = struct {
             },
             .content => |content| switch (content) {
                 .primitive => false,
-                .func => |func| try self.occursRec(needle, func.arg, visited) or
-                    try self.occursRec(needle, func.lset, visited) or
-                    try self.occursRec(needle, func.ret, visited),
+                .func => |func| blk: {
+                    for (self.types.sliceTypeVarSpan(func.args)) |arg| {
+                        if (try self.occursRec(needle, arg, visited)) break :blk true;
+                    }
+                    break :blk try self.occursRec(needle, func.lset, visited) or
+                        try self.occursRec(needle, func.ret, visited);
+                },
                 .list => |elem| try self.occursRec(needle, elem, visited),
                 .box => |elem| try self.occursRec(needle, elem, visited),
                 .tuple => |elems| blk: {
@@ -3494,7 +3506,9 @@ const Lowerer = struct {
             .content => |content| switch (content) {
                 .primitive => {},
                 .func => |func| {
-                    try self.generalizeRec(venv, func.arg, visited);
+                    for (self.types.sliceTypeVarSpan(func.args)) |arg| {
+                        try self.generalizeRec(venv, arg, visited);
+                    }
                     try self.generalizeRec(venv, func.lset, visited);
                     try self.generalizeRec(venv, func.ret, visited);
                 },
@@ -3758,7 +3772,10 @@ const Lowerer = struct {
                     if (depth == 0) {
                         try out.appendSlice(self.allocator, "...");
                     } else {
-                        try self.debugWriteTypeSummary(out, func.arg, depth - 1);
+                        for (self.types.sliceTypeVarSpan(func.args), 0..) |arg, i| {
+                            if (i != 0) try out.appendSlice(self.allocator, ", ");
+                            try self.debugWriteTypeSummary(out, arg, depth - 1);
+                        }
                         try out.appendSlice(self.allocator, " -> ");
                         try self.debugWriteTypeSummary(out, func.ret, depth - 1);
                     }
@@ -3922,7 +3939,14 @@ const Lowerer = struct {
                 break :blk .{ .content = .{ .primitive = prim } };
             },
             .func => |func| blk: {
-                try self.unifyRec(func.arg, right.func.arg, visited);
+                const left_args = self.types.sliceTypeVarSpan(func.args);
+                const right_args = self.types.sliceTypeVarSpan(right.func.args);
+                if (left_args.len != right_args.len) {
+                    return debugPanic("lambdasolved.unify incompatible function arity", .{});
+                }
+                for (left_args, right_args) |left_arg, right_arg| {
+                    try self.unifyRec(left_arg, right_arg, visited);
+                }
                 try self.unifyRec(func.lset, right.func.lset, visited);
                 try self.unifyRec(func.ret, right.func.ret, visited);
                 break :blk .{ .content = .{ .func = func } };

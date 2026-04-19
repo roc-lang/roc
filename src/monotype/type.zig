@@ -64,7 +64,7 @@ pub const Content = union(enum) {
     unbd,
     link: TypeId,
     func: struct {
-        arg: TypeId,
+        args: TypeIds,
         lambdas: Symbols,
         ret: TypeId,
     },
@@ -260,6 +260,7 @@ pub const Store = struct {
     fn freeOwnedContent(self: *Store, content: Content) void {
         switch (content) {
             .func => |func| {
+                if (func.args.len > 0) self.allocator.free(func.args);
                 if (func.lambdas.len > 0) self.allocator.free(func.lambdas);
             },
             .nominal => |nominal| {
@@ -305,7 +306,9 @@ pub const Store = struct {
             => {},
             .link => unreachable,
             .func => |func| {
-                self.debugValidateTypeGraphInner(func.arg, visited);
+                for (func.args) |arg| {
+                    self.debugValidateTypeGraphInner(arg, visited);
+                }
                 self.debugValidateTypeGraphInner(func.ret, visited);
             },
             .nominal => |nominal| {
@@ -349,8 +352,12 @@ pub const Store = struct {
             .placeholder => true,
             .unbd, .primitive => false,
             .link => unreachable,
-            .func => |func| try self.containsPlaceholderVisited(func.arg, visited) or
-                try self.containsPlaceholderVisited(func.ret, visited),
+            .func => |func| blk: {
+                for (func.args) |arg| {
+                    if (try self.containsPlaceholderVisited(arg, visited)) break :blk true;
+                }
+                break :blk try self.containsPlaceholderVisited(func.ret, visited);
+            },
             .nominal => |nominal| {
                 for (nominal.args) |arg| {
                     if (try self.containsPlaceholderVisited(arg, visited)) return true;
@@ -395,8 +402,12 @@ pub const Store = struct {
             .placeholder, .unbd => true,
             .primitive => false,
             .link => unreachable,
-            .func => |func| try self.containsAbstractLeafVisited(func.arg, visited) or
-                try self.containsAbstractLeafVisited(func.ret, visited),
+            .func => |func| blk: {
+                for (func.args) |arg| {
+                    if (try self.containsAbstractLeafVisited(arg, visited)) break :blk true;
+                }
+                break :blk try self.containsAbstractLeafVisited(func.ret, visited);
+            },
             .nominal => |nominal| {
                 for (nominal.args) |arg| {
                     if (try self.containsAbstractLeafVisited(arg, visited)) return true;
@@ -485,8 +496,12 @@ pub const Store = struct {
             .unbd => true,
             .link => unreachable,
             .primitive => true,
-            .func => |func| try self.isFullyResolvedVisited(func.arg, visited) and
-                try self.isFullyResolvedVisited(func.ret, visited),
+            .func => |func| blk: {
+                for (func.args) |arg| {
+                    if (!try self.isFullyResolvedVisited(arg, visited)) break :blk false;
+                }
+                break :blk try self.isFullyResolvedVisited(func.ret, visited);
+            },
             .nominal => |nominal| {
                 for (nominal.args) |arg| {
                     if (!try self.isFullyResolvedVisited(arg, visited)) return false;
@@ -540,7 +555,14 @@ pub const Store = struct {
             .unbd => .unbd,
             .primitive => |prim| .{ .primitive = prim },
             .func => |func| .{ .func = .{
-                .arg = try self.internTypeIdInner(func.arg, active),
+                .args = blk: {
+                    const lowered_args = try self.allocator.alloc(TypeId, func.args.len);
+                    errdefer self.allocator.free(lowered_args);
+                    for (func.args, 0..) |arg, i| {
+                        lowered_args[i] = try self.internTypeIdInner(arg, active);
+                    }
+                    break :blk lowered_args;
+                },
                 .lambdas = try self.dupeSymbols(func.lambdas),
                 .ret = try self.internTypeIdInner(func.ret, active),
             } },
@@ -700,7 +722,10 @@ pub const Store = struct {
                     },
                     .func => |func| {
                         try self_builder.store.appendInternKeyValue(@as(u8, 11));
-                        try self_builder.serializeType(func.arg);
+                        try self_builder.store.appendInternKeyValue(@as(u32, @intCast(func.args.len)));
+                        for (func.args) |arg| {
+                            try self_builder.serializeType(arg);
+                        }
                         try self_builder.store.appendInternKeyValue(@as(u32, @intCast(func.lambdas.len)));
                         for (func.lambdas) |symbol| {
                             try self_builder.store.appendInternKeyValue(symbol.raw());
@@ -831,7 +856,10 @@ pub const Store = struct {
             .primitive => |prim| prim == right.primitive,
             .func => |func| blk: {
                 const right_func = right.func;
-                if (!try self.equalIdsVisited(func.arg, right_func.arg, visited)) break :blk false;
+                if (func.args.len != right_func.args.len) break :blk false;
+                for (func.args, right_func.args) |left_arg, right_arg| {
+                    if (!try self.equalIdsVisited(left_arg, right_arg, visited)) break :blk false;
+                }
                 if (func.lambdas.len != right_func.lambdas.len) break :blk false;
                 for (func.lambdas, right_func.lambdas) |left_lambda, right_lambda| {
                     if (left_lambda != right_lambda) break :blk false;
@@ -923,7 +951,7 @@ test "keyId does not intern abstract leaves" {
         const arg_ty = try store.addType(.placeholder);
         const ret_ty = try store.addType(.placeholder);
         const func_ty = try store.addType(.{ .func = .{
-            .arg = arg_ty,
+            .args = try store.dupeTypeIds(&.{arg_ty}),
             .lambdas = &.{},
             .ret = ret_ty,
         } });
@@ -936,7 +964,7 @@ test "keyId does not intern abstract leaves" {
         const arg_ty = try store.addType(.unbd);
         const ret_ty = try store.addType(.unbd);
         const func_ty = try store.addType(.{ .func = .{
-            .arg = arg_ty,
+            .args = try store.dupeTypeIds(&.{arg_ty}),
             .lambdas = &.{},
             .ret = ret_ty,
         } });
@@ -954,12 +982,12 @@ test "keyId does not intern concrete function shapes" {
 
     const i64_ty = try store.internResolved(.{ .primitive = .i64 });
     const fn_a = try store.addType(.{ .func = .{
-        .arg = i64_ty,
+        .args = try store.dupeTypeIds(&.{i64_ty}),
         .lambdas = &.{},
         .ret = i64_ty,
     } });
     const fn_b = try store.addType(.{ .func = .{
-        .arg = i64_ty,
+        .args = try store.dupeTypeIds(&.{i64_ty}),
         .lambdas = &.{},
         .ret = i64_ty,
     } });
@@ -977,7 +1005,7 @@ test "keyId does not intern containers with function leaves" {
 
     const i64_ty = try store.internResolved(.{ .primitive = .i64 });
     const fn_ty = try store.addType(.{ .func = .{
-        .arg = i64_ty,
+        .args = try store.dupeTypeIds(&.{i64_ty}),
         .lambdas = &.{},
         .ret = i64_ty,
     } });

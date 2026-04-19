@@ -49,7 +49,7 @@ pub const Lambda = struct {
 
 /// Public struct `FnShape`.
 pub const FnShape = struct {
-    arg: TypeVarId,
+    args: Span(TypeVarId),
     lset: TypeVarId,
     ret: TypeVarId,
 };
@@ -81,7 +81,7 @@ pub const Field = struct {
 /// Public union `Content`.
 pub const Content = union(enum) {
     func: struct {
-        arg: TypeVarId,
+        args: Span(TypeVarId),
         lset: TypeVarId,
         ret: TypeVarId,
     },
@@ -322,7 +322,7 @@ pub const Store = struct {
         return switch (self.getNode(id)) {
             .content => |content| switch (content) {
                 .func => |func| .{
-                    .arg = func.arg,
+                    .args = func.args,
                     .lset = func.lset,
                     .ret = func.ret,
                 },
@@ -506,7 +506,12 @@ pub const Store = struct {
                     },
                     .func => |right_func| switch (left_content) {
                         .func => |left_func| blk: {
-                            if (!try self.equalIdsVisited(left_func.arg, right_func.arg, visited)) break :blk false;
+                            const left_args = self.sliceTypeVarSpan(left_func.args);
+                            const right_args = self.sliceTypeVarSpan(right_func.args);
+                            if (left_args.len != right_args.len) break :blk false;
+                            for (left_args, right_args) |left_arg, right_arg| {
+                                if (!try self.equalIdsVisited(left_arg, right_arg, visited)) break :blk false;
+                            }
                             if (!try self.equalIdsVisited(left_func.lset, right_func.lset, visited)) break :blk false;
                             if (!try self.equalIdsVisited(left_func.ret, right_func.ret, visited)) break :blk false;
                             break :blk true;
@@ -658,7 +663,9 @@ const StructuralKeySerializer = struct {
             .content => |content| switch (content) {
                 .func => |func| {
                     try self.out.append(self.allocator, 'f');
-                    try self.writeType(func.arg);
+                    const args = self.store.sliceTypeVarSpan(func.args);
+                    try self.writeU32(@intCast(args.len));
+                    for (args) |arg| try self.writeType(arg);
                     try self.writeType(func.lset);
                     try self.writeType(func.ret);
                 },

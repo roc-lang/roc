@@ -393,7 +393,7 @@ pub const Module = struct {
     pub fn fnShape(self: @This(), fn_var: Var) Allocator.Error!FnShape {
         var args = std.ArrayList(Var).empty;
         errdefer args.deinit(self.allocator);
-        const ret = try self.appendCurriedFnArgs(&args, fn_var);
+        const ret = try self.appendFnArgs(&args, fn_var);
         return .{
             .args = try args.toOwnedSlice(self.allocator),
             .ret = ret,
@@ -557,7 +557,7 @@ pub const Module = struct {
         return self.env().store.sliceMatchBranchPatterns(span);
     }
 
-    fn appendCurriedFnArgs(self: @This(), args: *std.ArrayList(Var), fn_var: Var) Allocator.Error!Var {
+    fn appendFnArgs(self: @This(), args: *std.ArrayList(Var), fn_var: Var) Allocator.Error!Var {
         const store = self.typeStoreConst();
         var current = fn_var;
         while (true) {

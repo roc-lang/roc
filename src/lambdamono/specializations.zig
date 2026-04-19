@@ -201,17 +201,25 @@ fn cloneTypeRec(
                 .backing = try cloneTypeRec(allocator, source_types, target_types, mapping, nominal.backing),
             } });
             break :blk placeholder;
-        },
-        .content => |content| blk: {
-            const placeholder = try target_types.freshUnbd();
-            try mapping.put(id, placeholder);
-            const node = switch (content) {
-                .primitive => solved.Type.Node{ .content = .{ .primitive = content.primitive } },
-                .func => solved.Type.Node{ .content = .{ .func = .{
-                    .arg = try cloneTypeRec(allocator, source_types, target_types, mapping, content.func.arg),
-                    .lset = try cloneTypeRec(allocator, source_types, target_types, mapping, content.func.lset),
-                    .ret = try cloneTypeRec(allocator, source_types, target_types, mapping, content.func.ret),
-                } } },
+            },
+            .content => |content| blk: {
+                const placeholder = try target_types.freshUnbd();
+                try mapping.put(id, placeholder);
+                const node = switch (content) {
+                    .primitive => solved.Type.Node{ .content = .{ .primitive = content.primitive } },
+                    .func => |func| blk2: {
+                        const args = source_types.sliceTypeVarSpan(func.args);
+                        const out_args = try allocator.alloc(TypeVarId, args.len);
+                        defer allocator.free(out_args);
+                        for (args, 0..) |arg, i| {
+                            out_args[i] = try cloneTypeRec(allocator, source_types, target_types, mapping, arg);
+                        }
+                        break :blk2 solved.Type.Node{ .content = .{ .func = .{
+                            .args = try target_types.addTypeVarSpan(out_args),
+                            .lset = try cloneTypeRec(allocator, source_types, target_types, mapping, func.lset),
+                            .ret = try cloneTypeRec(allocator, source_types, target_types, mapping, func.ret),
+                        } } };
+                    },
                 .list => |elem| solved.Type.Node{ .content = .{
                     .list = try cloneTypeRec(allocator, source_types, target_types, mapping, elem),
                 } },
