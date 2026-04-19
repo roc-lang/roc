@@ -693,9 +693,9 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) !Report {
         try report.document.addLineBreaks(2);
         try report.document.addText("Suggested Actions:");
         try report.document.addLineBreak();
-        try report.document.addSuggestion("- If there is newer version of the platform available, try updating to that one");
+        try report.document.addSuggestion("1. If there is newer version of the platform available, try updating to that one");
         try report.document.addLineBreak();
-        try report.document.addSuggestion("- Verify the URL and ensure it matches a valid platform release");
+        try report.document.addSuggestion("2. Verify the URL and ensure it matches a valid platform release");
         try report.document.addLineBreak();
     } else {
         try report.document.addText("Failed to download from ");
