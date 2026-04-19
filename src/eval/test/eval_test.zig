@@ -2057,6 +2057,25 @@ test "if block with local bindings - regression" {
     , 0, .no_trace);
 }
 
+test "bare underscore assignment" {
+    try runExpectI64(
+        \\{
+        \\    _ = 42
+        \\    1
+        \\}
+    , 1, .no_trace);
+}
+
+test "bare underscore assignment discards expression" {
+    try runExpectI64(
+        \\{
+        \\    x = 10
+        \\    _ = x + 5
+        \\    x
+        \\}
+    , 10, .no_trace);
+}
+
 test "List.len returns proper U64 nominal type for method calls - regression" {
     // Regression test for InvalidMethodReceiver when calling methods on List.len result
     // Bug report: `n = List.len([]); _str = n.to_str()` crashed with InvalidMethodReceiver
@@ -4205,6 +4224,54 @@ test "dev: Str.inspect through polymorphic wrapper" {
     , "\"42\"");
 }
 
+test "dev: tuple match - first branch matches" {
+    try runDevOnlyExpectStr(
+        \\match (1, 2) {
+        \\    (1, 2) => "1, 2 (correct)"
+        \\    _ => "any (incorrect)"
+        \\}
+    , "\"1, 2 (correct)\"");
+}
+
+test "dev: tuple match - wildcard branch matches when first does not" {
+    try runDevOnlyExpectStr(
+        \\match (1, 2) {
+        \\    (3, 4) => "3, 4 (incorrect)"
+        \\    _ => "any (correct)"
+        \\}
+    , "\"any (correct)\"");
+}
+
+test "dev: tuple match - wildcard branch matches when two tuple branches do not" {
+    try runDevOnlyExpectStr(
+        \\match (1, 2) {
+        \\    (5, 6) => "5, 6 (incorrect)"
+        \\    (3, 4) => "3, 4 (incorrect)"
+        \\    _ => "any (correct)"
+        \\}
+    , "\"any (correct)\"");
+}
+
+test "dev: tuple match - second tuple branch matches" {
+    try runDevOnlyExpectStr(
+        \\match (1, 2) {
+        \\    (5, 6) => "5, 6 (incorrect)"
+        \\    (1, 2) => "1, 2 (correct)"
+        \\    (3, 4) => "3, 4 (incorrect)"
+        \\    _ => "any (incorrect)"
+        \\}
+    , "\"1, 2 (correct)\"");
+}
+
+test "dev: str match - wildcard branch matches when literal does not" {
+    try runDevOnlyExpectStr(
+        \\match "foo" {
+        \\    "bar" => "bar (incorrect)"
+        \\    _ => "any (correct)"
+        \\}
+    , "\"any (correct)\"");
+}
+
 test "focused: polymorphic additional specialization via List.append (non-eq)" {
     try runExpectI64(
         \\{
@@ -4466,4 +4533,17 @@ test "Set.map - deduplicates after transform" {
     try runExpectI64(
         \\Set.from_list([1.I64, 2, 3, 4]).map(|x| x / 2).len()
     , 3, .no_trace);
+}
+
+test "issue 9342: passing lambda to function ignoring its parameter should not panic" {
+    // Regression test for GitHub issue #9342
+    // Passing a lambda to a function that ignores its parameter caused a
+    // panic in monomorphization: "bindFlatTypeMonotypes mismatch:
+    // flat_type=fn_unbound mono=unit"
+    try runExpectI64(
+        \\{
+        \\    foo = |_f| 42.I64
+        \\    foo(|a| a)
+        \\}
+    , 42, .no_trace);
 }

@@ -1000,6 +1000,92 @@ test "roc test with nested list chunks does not panic on layout upgrade (dev)" {
     return error.SkipZigTest;
 }
 
+fn testFailureOutputContainsSourceSnippet(opt: []const u8) !void {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+
+    // Output should contain line-numbered source lines with │ prefix
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "\u{2502}") != null); // │
+
+    // Output should contain the failing source expression
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "add(1, 1) == 3") != null);
+}
+
+test "roc test failure output contains source snippet (interpreter)" {
+    try testFailureOutputContainsSourceSnippet("--opt=interpreter");
+}
+test "roc test failure output contains source snippet (dev)" {
+    // TODO: dev backend compilation fails for test/cli/SomeFailTests.roc
+    return error.SkipZigTest;
+}
+
+fn testFailureOutputContainsDocComment(opt: []const u8) !void {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "test", opt }, "test/cli/FailWithDocComment.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+
+    // Output should contain the doc comment text
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "## This test should fail") != null);
+
+    // Output should still contain the source snippet with line numbers
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "add(1, 1) == 3") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "\u{2502}") != null);
+}
+
+test "roc test failure output contains doc comment (interpreter)" {
+    try testFailureOutputContainsDocComment("--opt=interpreter");
+}
+test "roc test failure output contains doc comment (dev)" {
+    // TODO: dev backend compilation fails for test/cli/FailWithDocComment.roc
+    return error.SkipZigTest;
+}
+
+fn testVerboseAndNonVerboseFailureFormatMatch(opt: []const u8) !void {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var env_map1 = try createPerTestCacheEnv(gpa);
+    defer env_map1.deinit();
+    var env_map2 = try createPerTestCacheEnv(gpa);
+    defer env_map2.deinit();
+
+    const non_verbose = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc", &env_map1);
+    defer gpa.free(non_verbose.stdout);
+    defer gpa.free(non_verbose.stderr);
+
+    const verbose = try util.runRocWithEnv(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc", &env_map2);
+    defer gpa.free(verbose.stdout);
+    defer gpa.free(verbose.stderr);
+
+    try testing.expect(non_verbose.term == .Exited and non_verbose.term.Exited == 1);
+    try testing.expect(verbose.term == .Exited and verbose.term.Exited == 1);
+
+    // Both modes should contain the same formatting elements for failures
+    for ([_][]const u8{ "\u{2502}", "add(1, 1) == 3" }) |needle| {
+        try testing.expect(std.mem.indexOf(u8, non_verbose.stderr, needle) != null);
+        try testing.expect(std.mem.indexOf(u8, verbose.stderr, needle) != null);
+    }
+}
+
+test "roc test verbose and non-verbose failure format match (interpreter)" {
+    try testVerboseAndNonVerboseFailureFormatMatch("--opt=interpreter");
+}
+test "roc test verbose and non-verbose failure format match (dev)" {
+    // TODO: dev backend compilation fails for test/cli/SomeFailTests.roc
+    return error.SkipZigTest;
+}
+
 // Exit code tests for warnings
 
 test "roc check returns exit code 2 for warnings" {
@@ -1528,8 +1614,7 @@ test "echo platform: all_syntax_test.roc prints expected output (dev backend)" {
     try util.checkSuccess(run_result);
 
     try std.testing.expectEqualStrings(all_syntax_dev_expected_stdout, run_result.stdout);
-    // TODO: dev backend doesn't produce dbg output
-    try std.testing.expectEqualStrings("", run_result.stderr);
+    try std.testing.expectEqualStrings(all_syntax_expected_stderr, run_result.stderr);
 }
 
 test "echo platform: roc test all_syntax_test.roc passes" {
@@ -1543,4 +1628,32 @@ test "echo platform: roc test all_syntax_test.roc passes" {
 
     const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
     try std.testing.expect(has_passed);
+}
+
+test "roc docs Builtin.roc succeeds" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "docs", "--no-cache" }, "src/build/roc/Builtin.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try util.checkSuccess(result);
+
+    const has_generated = std.mem.indexOf(u8, result.stdout, "Generated docs for") != null;
+    try testing.expect(has_generated);
+}
+
+test "roc test complex_package --verbose passes all tests" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "test", "--no-cache", "--verbose" }, "test/complex_package/main.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try util.checkSuccess(result);
+
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "tests passed") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "PASS") != null);
 }

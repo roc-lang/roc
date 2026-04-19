@@ -68,6 +68,7 @@ Let's take a look at `main!` next:
 ```ruby
 main! = |_args| {
     Stdout.line!("Hello, World!")
+    Ok({})
 }
 ```
 
@@ -102,10 +103,11 @@ As you might also guess, `Stderr.line!` prints to stderr instead. (After adding 
 We can make our program interactive by replacing `main!` with a mix of `Stdout` and `Stdin`:
 
 ```ruby
-main! = || {
+main! = |_args| {
     Stdout.line!("What's your name?")
     name = Stdin.line!()
     Stdout.line!("Hello, ${name}!")
+    Ok({})
 }
 ```
 

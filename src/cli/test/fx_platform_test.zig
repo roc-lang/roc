@@ -381,8 +381,16 @@ test "fx platform dbg missing return value (interpreter)" {
 }
 
 test "fx platform dbg missing return value (dev backend)" {
-    // TODO: dev backend fails with LIR/codegen invariant violated (stack_str result with non-string layout)
-    return error.SkipZigTest;
+    const allocator = testing.allocator;
+
+    const run_result = try util.runRoc(allocator, &.{"--opt=dev"}, "test/fx/dbg_missing_return.roc");
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try util.checkSuccess(run_result);
+
+    // Verify that the dbg output was printed
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "this should work now") != null);
 }
 
 test "fx platform check unused state var reports correct errors" {

@@ -57,8 +57,8 @@
             .hash = "zstd-1.5.7-1-KEItkAMwAAD6OKY3m0OOmXG7aL-aLUfrDqbP5J5oYapU",
         },
         .kcov = .{
-            .url = "git+https://github.com/roc-lang/zig-kcov.git?ref=kcov-zig#498ecb81d201b99d60197718043594b2100c1ca1",
-            .hash = "kcov-42.0.1-EuAG4aiZCwBdCw44LJMKF4n1-NuOWHnShjEumttr7C5B",
+            .url = "git+https://github.com/roc-lang/zig-kcov.git?ref=kcov-zig#5134813cb804570603b86336050ee134c326816e",
+            .hash = "kcov-42.0.1-EuAG4V2cCwBn2HR1B9rgCHiEk9VmUb3zb_wWC-dCww9z",
             .lazy = true,
         },
     },

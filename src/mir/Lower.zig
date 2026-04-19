@@ -107,6 +107,11 @@ type_var_seen: std.AutoHashMap(types.Var, Monotype.Idx),
 /// specialization bindings so monotype construction never pollutes them.
 nominal_cycle_breakers: std.AutoHashMap(types.Var, Monotype.Idx),
 
+/// Tracks nominal type identifiers currently being expanded during str_inspect lowering
+/// to detect cycles in recursive types (e.g. `Node := [Text(Str), Element(Str, List(Node))]`).
+/// Key is the ident_idx of the nominal type cast to u32.
+inspect_visited_nominals: std.AutoHashMap(u32, void),
+
 /// Cache for already-lowered symbol definitions (avoids re-lowering).
 /// Key is @bitCast(MIR.Symbol) → u64.
 lowered_symbols: std.AutoHashMap(u64, MIR.ExprId),
@@ -207,6 +212,7 @@ pub fn init(
         .symbol_monotypes = std.AutoHashMap(u64, Monotype.Idx).init(allocator),
         .type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
+        .inspect_visited_nominals = std.AutoHashMap(u32, void).init(allocator),
         .lowered_symbols = std.AutoHashMap(u64, MIR.ExprId).init(allocator),
         .lowered_proc_insts = std.AutoHashMap(u32, MIR.ProcId).init(allocator),
         .symbol_metadata = std.AutoHashMap(u64, SymbolMetadata).init(allocator),
@@ -243,6 +249,7 @@ pub fn deinit(self: *Self) void {
     self.symbol_monotypes.deinit();
     self.type_var_seen.deinit();
     self.nominal_cycle_breakers.deinit();
+    self.inspect_visited_nominals.deinit();
     self.lowered_symbols.deinit();
     self.lowered_proc_insts.deinit();
     self.symbol_metadata.deinit();
@@ -2050,6 +2057,18 @@ fn lowerStrInspectNominal(
         return self.emitMirStrLiteral("<opaque>", region);
     }
 
+    // Detect cycles in recursive nominal types (e.g. Node := [Text(Str), Element(Str, List(Node))]).
+    // If we're already inspecting this nominal type's backing type, emit a placeholder
+    // to break the infinite compile-time expansion.
+    // This check is placed after builtin handling so that nested builtins like
+    // List(List(F64)) are not falsely detected as cycles.
+    const nominal_key: u32 = @bitCast(nominal.ident.ident_idx);
+    if (self.inspect_visited_nominals.contains(nominal_key)) {
+        return self.emitMirStrLiteral("<...>", region);
+    }
+    try self.inspect_visited_nominals.put(nominal_key, {});
+    defer _ = self.inspect_visited_nominals.remove(nominal_key);
+
     return self.lowerStrInspectExpr(type_env, value_expr, type_env.types.getNominalBackingVar(nominal), region);
 }
 
@@ -3225,7 +3244,30 @@ fn lowerExprWithMonotypeOverride(
         },
         .e_dbg => |dbg_expr| {
             const inner = try self.lowerExpr(dbg_expr.expr);
-            return try self.store.addExpr(self.allocator, .{ .dbg_expr = .{ .expr = inner } }, monotype, region);
+            const inner_mono = self.store.typeOf(inner);
+            const inner_type_var = ModuleEnv.varFrom(dbg_expr.expr);
+
+            // Bind the inner value to a synthetic variable to avoid double evaluation
+            const bind = try self.makeSyntheticBind(inner_mono, false);
+            const lookup = try self.emitMirLookup(bind.symbol, inner_mono, region);
+            const formatted = try self.lowerStrInspectExpr(module_env, lookup, inner_type_var, region);
+            try self.registerBoundSymbolDefIfNeeded(bind.pattern, inner);
+
+            const dbg_mir = try self.store.addExpr(self.allocator, .{ .dbg_expr = .{
+                .expr = lookup,
+                .formatted = formatted,
+            } }, monotype, region);
+
+            const stmts = try self.store.addStmts(self.allocator, &.{MIR.Stmt{
+                .decl_const = .{ .pattern = bind.pattern, .expr = inner },
+            }});
+
+            return try self.store.addExpr(
+                self.allocator,
+                .{ .block = .{ .stmts = stmts, .final_expr = dbg_mir } },
+                monotype,
+                region,
+            );
         },
         .e_expect => |expect| {
             const body = try self.lowerExpr(expect.body);
@@ -6165,10 +6207,25 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                 try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = expr } });
             },
             .s_dbg => |s_dbg| {
-                const expr = try self.lowerExpr(s_dbg.expr);
-                const expr_type = self.store.typeOf(expr);
-                const wildcard = try self.store.addPattern(self.allocator, .wildcard, expr_type);
-                try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = expr } });
+                const inner = try self.lowerExpr(s_dbg.expr);
+                const inner_mono = self.store.typeOf(inner);
+                const inner_type_var = ModuleEnv.varFrom(s_dbg.expr);
+
+                // Bind the inner value to a synthetic variable to avoid double evaluation
+                const bind = try self.makeSyntheticBind(inner_mono, false);
+                const lookup = try self.emitMirLookup(bind.symbol, inner_mono, stmt_region);
+                const formatted = try self.lowerStrInspectExpr(module_env, lookup, inner_type_var, stmt_region);
+                try self.registerBoundSymbolDefIfNeeded(bind.pattern, inner);
+
+                const unit_monotype = self.store.monotype_store.unit_idx;
+                const dbg_mir = try self.store.addExpr(self.allocator, .{ .dbg_expr = .{
+                    .expr = lookup,
+                    .formatted = formatted,
+                } }, unit_monotype, stmt_region);
+
+                try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = bind.pattern, .expr = inner } });
+                const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
+                try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = dbg_mir } });
             },
             .s_expect => |s_expect| {
                 const body = try self.lowerExpr(s_expect.body);

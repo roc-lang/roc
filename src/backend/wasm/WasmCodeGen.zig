@@ -2355,7 +2355,7 @@ fn exprNeedsCompositeCallStabilization(self: *const Self, expr_id: LirExprId) bo
         .incref => |inc| self.exprNeedsCompositeCallStabilization(inc.value),
         .decref => |dec| self.exprNeedsCompositeCallStabilization(dec.value),
         .free => |f| self.exprNeedsCompositeCallStabilization(f.value),
-        .dbg => |d| self.exprNeedsCompositeCallStabilization(d.expr),
+        .dbg => |d| self.exprNeedsCompositeCallStabilization(d.expr) or self.exprNeedsCompositeCallStabilization(d.formatted),
         .expect => |e| self.exprNeedsCompositeCallStabilization(e.body),
         .if_then_else => |ite| blk: {
             const branches = self.store.getIfBranches(ite.branches);

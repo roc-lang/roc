@@ -144,6 +144,9 @@ pub const BuiltinFn = enum {
     str_from_utf8,
     str_escape_and_quote,
 
+    // Debug
+    roc_dbg,
+
     // List operations
     list_with_capacity,
     list_append_unsafe,
@@ -230,6 +233,9 @@ pub const BuiltinFn = enum {
             .str_from_utf8_lossy => "roc_builtins_str_from_utf8_lossy",
             .str_from_utf8 => "roc_builtins_str_from_utf8",
             .str_escape_and_quote => "roc_builtins_str_escape_and_quote",
+
+            // Debug
+            .roc_dbg => "roc_builtins_roc_dbg",
 
             // List operations
             .list_with_capacity => "roc_builtins_list_with_capacity",
@@ -461,6 +467,13 @@ fn wrapStrFromUtf8(out: [*]u8, list_bytes: ?[*]u8, list_len: usize, list_cap: us
     const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     const result = strFromUtf8C(list, .Immutable, roc_ops);
     @as(*FromUtf8Try, @ptrCast(@alignCast(out))).* = result;
+}
+
+/// Wrapper: call roc_dbg with a formatted RocStr
+fn wrapRocDbg(str_bytes: ?[*]u8, str_len: usize, str_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    const slice = s.asSlice();
+    roc_ops.dbg(slice);
 }
 
 /// Wrapper: escape special characters and wrap in double quotes for Str.inspect
@@ -7405,6 +7418,147 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        /// Emit runtime checks for a pattern used in a match arm. Literal patterns
+        /// (int/str) produce compare-and-jump sequences whose fail-jump patch location
+        /// is appended to `fail_patches`. Struct and as-patterns recurse into their
+        /// contents. Bind and wildcard patterns emit nothing because they always match.
+        ///
+        /// The top-level match switch in generateMatch / generateMatchStmt handles
+        /// literal / tag / list / wildcard / bind patterns directly at the scrutinee
+        /// root. This helper is used when a pattern is nested inside a struct_ (e.g.,
+        /// a tuple pattern like `(1, 2)` whose fields are int_literal patterns) and
+        /// the scrutinee value must be compared field-by-field. Callers must pass a
+        /// `value_loc` that is stable across the emitted comparisons (for example,
+        /// a stack-backed location obtained via `ensureOnStack`).
+        fn emitPatternChecks(
+            self: *Self,
+            pattern_id: LirPatternId,
+            value_loc: ValueLocation,
+            value_layout_idx: layout.Idx,
+            fail_patches: *std.ArrayList(usize),
+        ) Allocator.Error!void {
+            const ls = self.layout_store;
+            const pattern = self.store.getPattern(pattern_id);
+
+            switch (pattern) {
+                .bind, .wildcard => {},
+
+                .int_literal => |int_lit| {
+                    try self.emitIntPatternCheck(int_lit.value, value_loc);
+                    const patch = try self.emitJumpIfNotEqual();
+                    try fail_patches.append(self.allocator, patch);
+                },
+
+                .str_literal => |str_lit_idx| {
+                    try self.emitStringPatternCheck(str_lit_idx, value_loc);
+                    const patch = try self.emitJumpIfEqual();
+                    try fail_patches.append(self.allocator, patch);
+                },
+
+                .struct_ => |struct_pat| {
+                    const struct_layout_val = ls.getLayout(struct_pat.struct_layout);
+                    if (struct_layout_val.tag != .struct_) return;
+
+                    const field_patterns = self.store.getPatternSpan(struct_pat.fields);
+                    if (field_patterns.len == 0) return;
+
+                    const base_offset: i32 = switch (value_loc) {
+                        .stack => |s| s.offset,
+                        .stack_i128, .stack_str => |off| off,
+                        .list_stack => |info| info.struct_offset,
+                        else => {
+                            if (builtin.mode == .Debug) {
+                                std.debug.panic(
+                                    "LIR/codegen invariant violated: emitPatternChecks struct expected stack value location, got {s}",
+                                    .{@tagName(value_loc)},
+                                );
+                            }
+                            unreachable;
+                        },
+                    };
+
+                    for (field_patterns, 0..) |field_pattern_id, field_idx| {
+                        const field_offset = ls.getStructFieldOffset(
+                            struct_layout_val.data.struct_.idx,
+                            @intCast(field_idx),
+                        );
+                        const field_layout_idx = ls.getStructFieldLayout(
+                            struct_layout_val.data.struct_.idx,
+                            @intCast(field_idx),
+                        );
+                        const field_loc = self.stackLocationForLayout(
+                            field_layout_idx,
+                            base_offset + @as(i32, @intCast(field_offset)),
+                        );
+
+                        try self.emitPatternChecks(
+                            field_pattern_id,
+                            field_loc,
+                            field_layout_idx,
+                            fail_patches,
+                        );
+                    }
+                },
+
+                .tag => |tag_pat| {
+                    const value_layout_val = ls.getLayout(value_layout_idx);
+                    if (value_layout_val.tag != .tag_union) return;
+
+                    const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
+                    const tu_disc_offset: i32 = @intCast(tu_data.discriminant_offset);
+                    const tu_disc_size: u8 = tu_data.discriminant_size;
+                    const tu_total_size: u32 = tu_data.size;
+                    const disc_use_w32 = (tu_disc_offset + 8 > @as(i32, @intCast(tu_total_size)));
+
+                    const disc_reg = try self.loadAndMaskDiscriminant(
+                        value_loc,
+                        disc_use_w32,
+                        tu_disc_offset,
+                        tu_disc_size,
+                    );
+                    try self.emitCmpImm(disc_reg, @intCast(tag_pat.discriminant));
+                    self.codegen.freeGeneral(disc_reg);
+                    const patch = try self.emitJumpIfNotEqual();
+                    try fail_patches.append(self.allocator, patch);
+
+                    try self.emitInnerTagArgDiscriminantChecks(
+                        tag_pat,
+                        value_loc,
+                        value_layout_idx,
+                        value_layout_val,
+                        fail_patches,
+                    );
+                },
+
+                .list => |list_pat| {
+                    try self.emitListLengthCheck(list_pat, value_loc);
+                    const is_exact_match = list_pat.rest.isNone();
+                    const patch = if (is_exact_match)
+                        try self.emitJumpIfNotEqual()
+                    else
+                        try self.emitJumpIfLessThan();
+                    try fail_patches.append(self.allocator, patch);
+
+                    try self.emitListLiteralChecks(list_pat, value_loc, fail_patches);
+                },
+
+                .as_pattern => |as_pat| {
+                    try self.emitPatternChecks(
+                        as_pat.inner,
+                        value_loc,
+                        value_layout_idx,
+                        fail_patches,
+                    );
+                },
+
+                .float_literal => {
+                    // Float literal comparisons inside struct fields are not yet
+                    // emitted by the dev backend. Leave as always-match to preserve
+                    // existing behaviour until a float compare helper exists.
+                },
+            }
+        }
+
         /// Bind tag payload fields to symbols after a tag pattern match.
         /// Computes the payload location for each arg and delegates to bindPattern,
         /// which handles all pattern types (bind, wildcard, tag, struct, list, as_pattern, etc.).
@@ -8273,26 +8427,53 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                     },
                     .struct_ => {
-                        // Struct destructuring always matches - bind fields and generate body
-                        // Ensure the value is on the stack for field access
+                        // Ensure the value is on the stack so both the field-level
+                        // checks and the field bindings address the same memory.
                         const value_size = ls.layoutSizeAlign(value_layout_val).size;
                         const stack_off = try self.ensureOnStack(value_loc, value_size);
-                        try self.bindPattern(branch.pattern, .{ .stack = .{ .offset = stack_off } });
+                        const stable_loc: ValueLocation = .{ .stack = .{ .offset = stack_off } };
+
+                        const is_last_branch = (i == branches.len - 1);
+
+                        // A struct_ pattern only "always matches" when every field is a
+                        // bind/wildcard. Tuple patterns like `(1, 2)` lower to a struct_
+                        // whose fields are int_literal patterns, and those require
+                        // runtime comparisons. Collect any fail-jump patches here so
+                        // they all target the start of the next branch.
+                        var field_fail_patches = std.ArrayList(usize).empty;
+                        defer field_fail_patches.deinit(self.allocator);
+                        if (!is_last_branch) {
+                            try self.emitPatternChecks(
+                                branch.pattern,
+                                stable_loc,
+                                when_expr.value_layout,
+                                &field_fail_patches,
+                            );
+                        }
+
+                        try self.bindPattern(branch.pattern, stable_loc);
 
                         const guard_patch = try self.emitGuardCheck(branch.guard);
-                        if (guard_patch) |gp| {
-                            const body_loc = try self.generateExpr(branch.body);
-                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
-                            if (i < branches.len - 1) {
-                                const end_patch = try self.codegen.emitJump();
-                                try end_patches.append(self.allocator, end_patch);
+
+                        const body_loc = try self.generateExpr(branch.body);
+                        try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+
+                        const unconditional = field_fail_patches.items.len == 0 and guard_patch == null;
+
+                        if (!is_last_branch and !unconditional) {
+                            const end_patch = try self.codegen.emitJump();
+                            try end_patches.append(self.allocator, end_patch);
+
+                            const next_branch_offset = self.codegen.currentOffset();
+                            for (field_fail_patches.items) |patch| {
+                                self.codegen.patchJump(patch, next_branch_offset);
                             }
-                            self.codegen.patchJump(gp, self.codegen.currentOffset());
-                        } else {
-                            const body_loc = try self.generateExpr(branch.body);
-                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
-                            break;
                         }
+                        if (guard_patch) |patch| {
+                            self.codegen.patchJump(patch, self.codegen.currentOffset());
+                        }
+
+                        if (unconditional) break;
                     },
                     .as_pattern => |as_pat| {
                         // As-pattern: bind the whole value to the symbol, then match the inner pattern
@@ -9983,10 +10164,29 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .immediate_i64 = 0 };
         }
 
-        /// Generate code for dbg expression (prints and returns value)
+        /// Generate code for dbg expression (prints formatted value via roc_dbg, returns inner value)
         fn generateDbg(self: *Self, dbg_expr: anytype) Allocator.Error!ValueLocation {
-            // dbg evaluates its expression and returns the value.
-            // Debug printing is handled by the interpreter side in tests.
+            // Evaluate the formatted string expression
+            const formatted_loc = try self.generateExpr(dbg_expr.formatted);
+            const str_off = try self.ensureOnStack(formatted_loc, roc_str_size);
+
+            // Call wrapRocDbg(str_bytes, str_len, str_cap, roc_ops)
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addMemArg(frame_ptr, str_off);
+            try builder.addMemArg(frame_ptr, str_off + 8);
+            try builder.addMemArg(frame_ptr, str_off + 16);
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, @intFromPtr(&wrapRocDbg), .roc_dbg);
+
+            // When the dbg expression's result type is zero-sized (e.g., when dbg
+            // is the last expression in a unit-returning function), the inner value
+            // is not needed as a return value.
+            if (self.getLayoutSize(dbg_expr.result_layout) == 0) {
+                return .{ .immediate_i64 = 0 };
+            }
+
+            // Evaluate and return the original value expression
             return try self.generateExpr(dbg_expr.expr);
         }
 
@@ -15289,22 +15489,45 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                     },
                     .struct_ => {
+                        // Ensure the value is on the stack so both the field-level
+                        // checks and the field bindings address the same memory.
                         const value_size = ls.layoutSizeAlign(value_layout_val).size;
                         const stack_off = try self.ensureOnStack(value_loc, value_size);
-                        try self.bindPattern(branch.pattern, .{ .stack = .{ .offset = stack_off } });
+                        const stable_loc: ValueLocation = .{ .stack = .{ .offset = stack_off } };
+
+                        var field_fail_patches = std.ArrayList(usize).empty;
+                        defer field_fail_patches.deinit(self.allocator);
+                        if (!is_last_branch) {
+                            try self.emitPatternChecks(
+                                branch.pattern,
+                                stable_loc,
+                                ms.value_layout,
+                                &field_fail_patches,
+                            );
+                        }
+
+                        try self.bindPattern(branch.pattern, stable_loc);
 
                         const guard_patch = try self.emitGuardCheck(branch.guard);
-                        if (guard_patch) |gp| {
-                            try self.generateStmt(branch.body);
-                            if (!is_last_branch) {
-                                const end_patch = try self.codegen.emitJump();
-                                try end_patches.append(self.allocator, end_patch);
+
+                        try self.generateStmt(branch.body);
+
+                        const unconditional = field_fail_patches.items.len == 0 and guard_patch == null;
+
+                        if (!is_last_branch and !unconditional) {
+                            const end_patch = try self.codegen.emitJump();
+                            try end_patches.append(self.allocator, end_patch);
+
+                            const next_branch_offset = self.codegen.currentOffset();
+                            for (field_fail_patches.items) |patch| {
+                                self.codegen.patchJump(patch, next_branch_offset);
                             }
-                            self.codegen.patchJump(gp, self.codegen.currentOffset());
-                        } else {
-                            try self.generateStmt(branch.body);
-                            break;
                         }
+                        if (guard_patch) |patch| {
+                            self.codegen.patchJump(patch, self.codegen.currentOffset());
+                        }
+
+                        if (unconditional) break;
                     },
                     .as_pattern => |as_pat| {
                         const symbol_key: u64 = @bitCast(as_pat.symbol);
