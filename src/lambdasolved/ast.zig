@@ -68,7 +68,7 @@ pub const FieldExpr = struct {
     value: ExprId,
 };
 
-pub const MethodTarget = lifted.Ast.MethodTarget;
+pub const MethodKind = lifted.Ast.MethodKind;
 
 /// Public struct `Expr`.
 pub const Expr = struct {
@@ -97,7 +97,7 @@ pub const Expr = struct {
         },
         method_call: struct {
             receiver: ExprId,
-            target: MethodTarget,
+            kind: MethodKind,
             method_fn_ty: TypeVarId,
             method_name: base.Ident.Idx,
             args: Span(ExprId),
@@ -106,7 +106,6 @@ pub const Expr = struct {
         },
         type_method_call: struct {
             dispatcher_ty: TypeVarId,
-            target: MethodTarget,
             method_fn_ty: TypeVarId,
             method_name: base.Ident.Idx,
             args: Span(ExprId),

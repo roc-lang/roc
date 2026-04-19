@@ -68,7 +68,7 @@ pub const FieldExpr = struct {
     value: ExprId,
 };
 
-pub const MethodTarget = monotype.Ast.MethodTarget;
+pub const MethodKind = monotype.Ast.MethodKind;
 
 /// Public struct `Expr`.
 pub const Expr = struct {
@@ -96,14 +96,13 @@ pub const Expr = struct {
         },
         method_call: struct {
             receiver: ExprId,
-            target: MethodTarget,
+            kind: MethodKind,
             method_fn_ty: TypeId,
             method_name: base.Ident.Idx,
             args: Span(ExprId),
         },
         type_method_call: struct {
             dispatcher_ty: TypeId,
-            target: MethodTarget,
             method_fn_ty: TypeId,
             method_name: base.Ident.Idx,
             args: Span(ExprId),

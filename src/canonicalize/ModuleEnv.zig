@@ -528,8 +528,7 @@ pub const RequiredType = struct {
 /// Public struct `MethodCallFn`.
 pub const MethodCallFn = struct {
     pub const Resolution = enum(u8) {
-        unresolved,
-        resolved_target,
+        ordinary,
         implicit_eq,
     };
 
@@ -538,8 +537,6 @@ pub const MethodCallFn = struct {
     origin: types_mod.StaticDispatchConstraint.Origin,
     fn_var: TypeVar,
     resolution: Resolution,
-    resolved_target_module_ident: Ident.Idx,
-    resolved_target_def_idx: CIR.Def.Idx,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -3498,9 +3495,7 @@ pub fn recordMethodCallFn(
         .method_name = method_name,
         .origin = origin,
         .fn_var = fn_var,
-        .resolution = if (method_name.eql(self.idents.is_eq)) .implicit_eq else .unresolved,
-        .resolved_target_module_ident = Ident.Idx.NONE,
-        .resolved_target_def_idx = @enumFromInt(0),
+        .resolution = .ordinary,
     });
 }
 
@@ -3523,28 +3518,6 @@ pub fn setMethodCallFnVar(
     );
 }
 
-pub fn setMethodCallResolvedTarget(
-    self: *Self,
-    expr_idx: CIR.Expr.Idx,
-    method_name: Ident.Idx,
-    origin: types_mod.StaticDispatchConstraint.Origin,
-    target_module_ident: Ident.Idx,
-    target_def_idx: CIR.Def.Idx,
-) void {
-    for (self.method_call_fns.items.items) |*entry| {
-        if (entry.expr_idx != expr_idx or entry.method_name != method_name or entry.origin != origin) continue;
-        entry.resolution = .resolved_target;
-        entry.resolved_target_module_ident = target_module_ident;
-        entry.resolved_target_def_idx = target_def_idx;
-        return;
-    }
-
-    std.debug.panic(
-        "ModuleEnv invariant violated: missing dispatch-call target for expr {d} method {s}",
-        .{ @intFromEnum(expr_idx), self.getIdent(method_name) },
-    );
-}
-
 pub fn setMethodCallImplicitEq(
     self: *Self,
     expr_idx: CIR.Expr.Idx,
@@ -3554,8 +3527,6 @@ pub fn setMethodCallImplicitEq(
     for (self.method_call_fns.items.items) |*entry| {
         if (entry.expr_idx != expr_idx or entry.method_name != method_name or entry.origin != origin) continue;
         entry.resolution = .implicit_eq;
-        entry.resolved_target_module_ident = Ident.Idx.NONE;
-        entry.resolved_target_def_idx = @enumFromInt(0);
         return;
     }
 

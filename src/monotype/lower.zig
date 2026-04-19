@@ -218,12 +218,12 @@ const Ctx = struct {
             return self.source_module.methodCallConstraintFnVar(idx);
         }
 
-        pub fn methodCallTarget(
+        pub fn methodCallIsImplicitEq(
             self: @This(),
             idx: CIR.Expr.Idx,
             origin: types.StaticDispatchConstraint.Origin,
-        ) ?typed_cir.Module.MethodCallTarget {
-            return self.source_module.methodCallTarget(idx, origin);
+        ) bool {
+            return self.source_module.methodCallIsImplicitEq(idx, origin);
         }
 
         pub fn binopConstraintFnVar(self: @This(), idx: CIR.Expr.Idx, method_name: Ident.Idx) ?Var {
@@ -2562,7 +2562,7 @@ pub const Lowerer = struct {
                 );
                 break :blk .{ .method_call = .{
                     .receiver = try self.lowerExpr(module_idx, type_scope, env, method_call.receiver),
-                    .target = self.methodCallTarget(module_idx, expr.idx, .method_call),
+                    .kind = self.methodCallKind(module_idx, expr.idx, .method_call),
                     .method_fn_ty = try self.instantiateSourceVarType(module_idx, type_scope, method_fn_var),
                     .method_name = try self.ctx.copyExecutableIdent(module_idx, method_call.method_name),
                     .args = try self.lowerExprSlice(module_idx, type_scope, env, typed_cir_module.sliceExpr(method_call.args)),
@@ -2580,7 +2580,6 @@ pub const Lowerer = struct {
                         type_scope,
                         ModuleEnv.varFrom(alias_stmt.s_type_var_alias.type_var_anno),
                     ),
-                    .target = self.methodCallTarget(module_idx, expr.idx, .method_call),
                     .method_fn_ty = try self.instantiateSourceVarType(module_idx, type_scope, method_fn_var),
                     .method_name = try self.ctx.copyExecutableIdent(module_idx, method_call.method_name),
                     .args = try self.lowerExprSlice(module_idx, type_scope, env, typed_cir_module.sliceExpr(method_call.args)),
@@ -5920,7 +5919,7 @@ pub const Lowerer = struct {
             .ty = result_ty,
             .data = .{ .method_call = .{
                 .receiver = lowered_receiver,
-                .target = self.methodCallTarget(module_idx, expr_idx, method_call_origin),
+                .kind = self.methodCallKind(module_idx, expr_idx, method_call_origin),
                 .method_fn_ty = try self.instantiateSourceVarType(module_idx, type_scope, method_fn_var),
                 .method_name = try self.ctx.copyExecutableIdent(module_idx, lookup_name),
                 .args = try self.program.store.addExprSpan(lowered_args),
@@ -5965,7 +5964,6 @@ pub const Lowerer = struct {
             .ty = result_ty,
             .data = .{ .type_method_call = .{
                 .dispatcher_ty = dispatcher_ty,
-                .target = self.methodCallTarget(module_idx, expr_idx, .method_call),
                 .method_fn_ty = try self.instantiateSourceVarType(module_idx, type_scope, method_fn_var),
                 .method_name = try self.ctx.copyExecutableIdent(module_idx, method_call.method_name),
                 .args = try self.program.store.addExprSpan(lowered_args),
@@ -9402,21 +9400,14 @@ pub const Lowerer = struct {
         return null;
     }
 
-    fn methodCallTarget(
+    fn methodCallKind(
         self: *Lowerer,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
         origin: types.StaticDispatchConstraint.Origin,
-    ) ast.MethodTarget {
+    ) ast.MethodKind {
         const typed_cir_module = self.ctx.typedCirModule(module_idx);
-        const target = typed_cir_module.methodCallTarget(expr_idx, origin) orelse return .unresolved;
-        return switch (target) {
-            .implicit_eq => .implicit_eq,
-            .exact => |exact| .{ .exact_symbol = self.lookupTopLevelDefSymbol(exact.module_idx, exact.def_idx) orelse debugPanic(
-                "monotype invariant violated: unresolved explicit method target {d}:{d} for expr {d}",
-                .{ exact.module_idx, @intFromEnum(exact.def_idx), @intFromEnum(expr_idx) },
-            ) },
-        };
+        return if (typed_cir_module.methodCallIsImplicitEq(expr_idx, origin)) .implicit_eq else .ordinary;
     }
 
     fn lowerResolvedTargetCallee(

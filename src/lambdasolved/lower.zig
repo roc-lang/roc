@@ -319,7 +319,7 @@ const Lowerer = struct {
             } },
             .method_call => |method_call| .{ .method_call = .{
                 .receiver = try self.instantiateExpr(method_call.receiver),
-                .target = method_call.target,
+                .kind = method_call.kind,
                 .method_fn_ty = try self.instantiateType(method_call.method_fn_ty),
                 .method_name = method_call.method_name,
                 .args = try self.instantiateExprSpan(method_call.args),
@@ -328,7 +328,6 @@ const Lowerer = struct {
             } },
             .type_method_call => |method_call| .{ .type_method_call = .{
                 .dispatcher_ty = try self.instantiateType(method_call.dispatcher_ty),
-                .target = method_call.target,
                 .method_fn_ty = try self.instantiateType(method_call.method_fn_ty),
                 .method_name = method_call.method_name,
                 .args = try self.instantiateExprSpan(method_call.args),
@@ -1165,13 +1164,6 @@ const Lowerer = struct {
             },
             .method_call => |method_call| blk: {
                 const receiver = method_call.receiver;
-                switch (method_call.target) {
-                    .exact_symbol => |target_symbol| {
-                        const exact_target_ty = try self.requireCallableTypeForSymbol(venv, target_symbol);
-                        try self.unify(method_call.method_fn_ty, exact_target_ty);
-                    },
-                    else => {},
-                }
                 const method_fn_ty = method_call.method_fn_ty;
                 const method_args = self.output.sliceExprSpan(method_call.args);
                 const receiver_ty = try self.inferExpr(venv, receiver);
@@ -1219,7 +1211,7 @@ const Lowerer = struct {
                 const out_expr = &self.output.exprs.items[@intFromEnum(expr_id)];
                 var snapshot_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
                 defer snapshot_mapping.deinit();
-                out_expr.data.method_call.target = method_call.target;
+                out_expr.data.method_call.kind = method_call.kind;
                 out_expr.data.method_call.method_fn_ty = try self.snapshotTypeRec(method_fn_ty, &snapshot_mapping);
                 out_expr.data.method_call.step_arg_tys = try self.snapshotTypeVarSpanWithMapping(step_arg_tys.items, &snapshot_mapping);
                 out_expr.data.method_call.step_result_tys = try self.snapshotTypeVarSpanWithMapping(step_result_tys.items, &snapshot_mapping);
@@ -1227,13 +1219,6 @@ const Lowerer = struct {
             },
             .type_method_call => |method_call| blk: {
                 const dispatcher_ty = method_call.dispatcher_ty;
-                switch (method_call.target) {
-                    .exact_symbol => |target_symbol| {
-                        const exact_target_ty = try self.requireCallableTypeForSymbol(venv, target_symbol);
-                        try self.unify(method_call.method_fn_ty, exact_target_ty);
-                    },
-                    else => {},
-                }
                 const method_fn_ty = method_call.method_fn_ty;
                 const method_args = self.output.sliceExprSpan(method_call.args);
                 var current_fn_ty = method_fn_ty;
@@ -1264,7 +1249,6 @@ const Lowerer = struct {
                 var snapshot_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
                 defer snapshot_mapping.deinit();
                 out_expr.data.type_method_call.dispatcher_ty = try self.snapshotTypeRec(dispatcher_ty, &snapshot_mapping);
-                out_expr.data.type_method_call.target = method_call.target;
                 out_expr.data.type_method_call.method_fn_ty = try self.snapshotTypeRec(method_fn_ty, &snapshot_mapping);
                 out_expr.data.type_method_call.step_arg_tys = try self.snapshotTypeVarSpanWithMapping(step_arg_tys.items, &snapshot_mapping);
                 out_expr.data.type_method_call.step_result_tys = try self.snapshotTypeVarSpanWithMapping(step_result_tys.items, &snapshot_mapping);

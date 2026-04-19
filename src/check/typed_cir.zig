@@ -25,15 +25,7 @@ const OwnedCheckedModule = struct {
     owned_source: ?[]u8 = null,
 };
 
-const MethodCallTargetData = union(enum) {
-    exact: struct {
-        module_idx: u32,
-        def_idx: CIR.Def.Idx,
-    },
-    implicit_eq,
-};
-
-const MethodCallTargetKey = struct {
+const MethodCallFactKey = struct {
     expr_idx: u32,
     origin: types.StaticDispatchConstraint.Origin,
 };
@@ -42,7 +34,7 @@ const ModuleData = struct {
     env: *ModuleEnv,
     top_level_defs_by_ident: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Def.Idx) = .{},
     required_lookup_targets: std.AutoHashMapUnmanaged(u32, CIR.Def.Idx) = .{},
-    method_call_targets: std.AutoHashMapUnmanaged(MethodCallTargetKey, MethodCallTargetData) = .{},
+    implicit_eq_method_calls: std.AutoHashMapUnmanaged(MethodCallFactKey, void) = .{},
     ownership: union(enum) {
         borrowed,
         owned_checked: OwnedCheckedModule,
@@ -79,7 +71,7 @@ const ModuleData = struct {
     fn deinit(self: *ModuleData, allocator: Allocator) void {
         self.top_level_defs_by_ident.deinit(allocator);
         self.required_lookup_targets.deinit(allocator);
-        self.method_call_targets.deinit(allocator);
+        self.implicit_eq_method_calls.deinit(allocator);
         switch (self.ownership) {
             .borrowed => {},
             .owned_checked => |owned| {
@@ -181,30 +173,17 @@ pub const Modules = struct {
             };
             _ = module_;
             for (module_data.env.method_call_fns.items.items) |entry| {
-                const target_data: MethodCallTargetData = switch (entry.resolution) {
-                    .unresolved => continue,
-                    .implicit_eq => .implicit_eq,
-                    .resolved_target => blk: {
-                        const target_module_name = module_data.env.getIdent(entry.resolved_target_module_ident);
-                        const target_module_idx = module_idxs_by_name.get(target_module_name) orelse {
-                            std.debug.panic(
-                                "typed_cir invariant violated: unknown resolved method target module {s}",
-                                .{target_module_name},
-                            );
-                        };
-                        break :blk .{ .exact = .{
-                            .module_idx = target_module_idx,
-                            .def_idx = entry.resolved_target_def_idx,
-                        } };
-                    },
-                };
-                try module_data.method_call_targets.put(
+                switch (entry.resolution) {
+                    .ordinary => continue,
+                    .implicit_eq => {},
+                }
+                try module_data.implicit_eq_method_calls.put(
                     allocator,
                     .{
                         .expr_idx = @intFromEnum(entry.expr_idx),
                         .origin = entry.origin,
                     },
-                    target_data,
+                    {},
                 );
             }
         }
@@ -271,16 +250,6 @@ pub const Module = struct {
     allocator: Allocator,
     module_idx: u32,
     data_store: *ModuleData,
-
-    pub const MethodCallExactTarget = struct {
-        module_idx: u32,
-        def_idx: CIR.Def.Idx,
-    };
-
-    pub const MethodCallTarget = union(enum) {
-        exact: MethodCallExactTarget,
-        implicit_eq,
-    };
 
     /// Function-shape view recovered from checked function types.
     pub const CurriedFnShape = struct {
@@ -354,22 +323,15 @@ pub const Module = struct {
         return self.data_store.required_lookup_targets.get(requires_idx);
     }
 
-    pub fn methodCallTarget(
+    pub fn methodCallIsImplicitEq(
         self: @This(),
         expr_idx: CIR.Expr.Idx,
         origin: types.StaticDispatchConstraint.Origin,
-    ) ?MethodCallTarget {
-        const target = self.data_store.method_call_targets.get(.{
+    ) bool {
+        return self.data_store.implicit_eq_method_calls.contains(.{
             .expr_idx = @intFromEnum(expr_idx),
             .origin = origin,
-        }) orelse return null;
-        return switch (target) {
-            .exact => |exact| .{ .exact = .{
-                .module_idx = exact.module_idx,
-                .def_idx = exact.def_idx,
-            } },
-            .implicit_eq => .implicit_eq,
-        };
+        });
     }
 
     pub fn nodeTag(self: @This(), idx: CIR.Node.Idx) CIR.Node.Tag {

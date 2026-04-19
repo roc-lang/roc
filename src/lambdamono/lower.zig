@@ -2242,7 +2242,6 @@ const Lowerer = struct {
         self: *Lowerer,
         current_types: *const solved.Type.Store,
         venv: []const EnvEntry,
-        explicit_target_symbol: Symbol,
         method_fn_ty: TypeVarId,
         receiver_ty: TypeVarId,
         explicit_step_arg_tys: []const TypeVarId,
@@ -2290,10 +2289,7 @@ const Lowerer = struct {
             refined_method_fn_ty = fn_parts.ret;
         }
 
-        const target_symbol = if (!explicit_target_symbol.isNone())
-            explicit_target_symbol
-        else
-            inst.types.requireExactTargetForResolvedFn(cloned_method_fn_ty);
+        const target_symbol = inst.types.requireExactTargetForResolvedFn(cloned_method_fn_ty);
         const entry = specializations.lookupFnExact(self.fenv, target_symbol) orelse
             debugPanic("lambdamono.lower.freezeMethodCallWorld missing exact target function");
         const initial_fn_ty = try self.cloneInstType(&inst, entry.fn_ty);
@@ -2381,7 +2377,6 @@ const Lowerer = struct {
         current_types: *const solved.Type.Store,
         venv: []const EnvEntry,
         _: TypeVarId,
-        explicit_target_symbol: Symbol,
         method_fn_ty: TypeVarId,
         explicit_step_arg_tys: []const TypeVarId,
         explicit_step_result_tys: []const TypeVarId,
@@ -2427,10 +2422,7 @@ const Lowerer = struct {
             refined_method_fn_ty = fn_parts.ret;
         }
 
-        const target_symbol = if (!explicit_target_symbol.isNone())
-            explicit_target_symbol
-        else
-            inst.types.requireExactTargetForResolvedFn(cloned_method_fn_ty);
+        const target_symbol = inst.types.requireExactTargetForResolvedFn(cloned_method_fn_ty);
         const entry = specializations.lookupFnExact(self.fenv, target_symbol) orelse
             debugPanic("lambdamono.lower.freezeTypeMethodCallWorld missing exact target function");
         const initial_fn_ty = try self.cloneInstType(&inst, entry.fn_ty);
@@ -4826,7 +4818,7 @@ const Lowerer = struct {
         const method_args = self.input.store.sliceExprSpan(method_call.args);
         const explicit_step_arg_tys = self.input.types.sliceTypeVarSpan(method_call.step_arg_tys);
         const explicit_step_result_tys = self.input.types.sliceTypeVarSpan(method_call.step_result_tys);
-        switch (method_call.target) {
+        switch (method_call.kind) {
             .implicit_eq => {
                 return self.specializeImplicitEqMethodCallExpr(
                     inst,
@@ -4846,10 +4838,6 @@ const Lowerer = struct {
         var frozen = try self.freezeMethodCallWorld(
             &inst.types,
             venv,
-            switch (method_call.target) {
-                .exact_symbol => |target_symbol| target_symbol,
-                else => Symbol.none,
-            },
             method_call.method_fn_ty,
             receiver_source_ty,
             explicit_step_arg_tys,
@@ -4991,11 +4979,6 @@ const Lowerer = struct {
             &inst.types,
             venv,
             method_call.dispatcher_ty,
-            switch (method_call.target) {
-                .exact_symbol => |target_symbol| target_symbol,
-                .implicit_eq => debugPanic("lambdamono.lower.specializeTypeMethodCallExpr implicit_eq target is invalid"),
-                .unresolved => Symbol.none,
-            },
             method_call.method_fn_ty,
             explicit_step_arg_tys,
             explicit_step_result_tys,
