@@ -11,6 +11,7 @@ const collections = @import("collections");
 const Allocators = base.Allocators;
 
 const Check = @import("../Check.zig");
+const TypedCIR = @import("../typed_cir.zig");
 const report_mod = @import("../report.zig");
 
 const testing = std.testing;
@@ -27,6 +28,8 @@ const LoadedModule = struct {
         // Only free the hashmap that was allocated during deserialization
         // Most other data (like the SafeList contents) points into the buffer
         self.env.imports.map.deinit(self.gpa);
+        // Free any runtime insert buffers allocated after deserialization.
+        self.env.common.idents.interner.deinit(self.gpa);
 
         // Free the buffer (the env points into this buffer for most data)
         self.gpa.free(self.buffer);
@@ -118,6 +121,7 @@ builtin_module: LoadedModule,
 owns_builtin_module: bool,
 /// Heap-allocated source buffer owned by this TestEnv (if any)
 owned_source: ?[]u8 = null,
+published_owns_module_env: bool = false,
 
 /// Test environment for canonicalization testing, providing a convenient wrapper around ModuleEnv, AST, and Can.
 const TestEnv = @This();
@@ -419,11 +423,12 @@ pub fn deinit(self: *TestEnv) void {
 
     // ModuleEnv.deinit calls self.common.deinit() to clean up CommonEnv's internals
     // Since common is now a value field, we don't need to free it separately
-    self.module_env.deinit();
-    self.gpa.destroy(self.module_env);
-
-    if (self.owned_source) |buffer| {
-        self.gpa.free(buffer);
+    if (!self.published_owns_module_env) {
+        self.module_env.deinit();
+        self.gpa.destroy(self.module_env);
+        if (self.owned_source) |buffer| {
+            self.gpa.free(buffer);
+        }
     }
 
     self.module_envs.deinit();
@@ -432,6 +437,17 @@ pub fn deinit(self: *TestEnv) void {
     if (self.owns_builtin_module) {
         self.builtin_module.deinit();
     }
+}
+
+/// Transfer ownership of the published checked module into a typed-CIR source module.
+pub fn takePublishedSourceModule(self: *TestEnv) TypedCIR.Modules.SourceModule {
+    self.published_owns_module_env = true;
+    const owned_source = self.owned_source;
+    self.owned_source = null;
+    return .{ .owned_checked = .{
+        .env = self.module_env,
+        .owned_source = owned_source,
+    } };
 }
 
 /// Get the inferred type of the last declaration and compare it to the provided
@@ -595,6 +611,38 @@ pub fn assertOneTypeErrorMsg(self: *TestEnv, expected: []const u8) !void {
 
     try renderReportToMarkdownBuffer(&report_buf, &report);
 
+    try testing.expectEqualStrings(expected, report_buf.items);
+}
+
+/// Assert that canonicalization produced exactly one diagnostic with the expected title.
+pub fn assertOneCanError(self: *TestEnv, expected: []const u8) !void {
+    try self.assertNoParseProblems();
+
+    const diagnostics = try self.module_env.getDiagnostics();
+    defer self.gpa.free(diagnostics);
+
+    try testing.expectEqual(@as(usize, 1), diagnostics.len);
+    var report = try self.module_env.diagnosticToReport(diagnostics[0], self.gpa, self.module_env.module_name);
+    defer report.deinit();
+
+    try testing.expectEqualStrings(expected, report.title);
+}
+
+/// Assert that canonicalization produced exactly one diagnostic with the expected rendered message.
+pub fn assertOneCanErrorMsg(self: *TestEnv, expected: []const u8) !void {
+    try self.assertNoParseProblems();
+
+    const diagnostics = try self.module_env.getDiagnostics();
+    defer self.gpa.free(diagnostics);
+
+    try testing.expectEqual(@as(usize, 1), diagnostics.len);
+    var report = try self.module_env.diagnosticToReport(diagnostics[0], self.gpa, self.module_env.module_name);
+    defer report.deinit();
+
+    var report_buf = try std.array_list.Managed(u8).initCapacity(self.gpa, 256);
+    defer report_buf.deinit();
+
+    try renderReportToMarkdownBuffer(&report_buf, &report);
     try testing.expectEqualStrings(expected, report_buf.items);
 }
 

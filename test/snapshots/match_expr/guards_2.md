@@ -116,7 +116,7 @@ describe = |value| match value {
 							(value
 								(e-string
 									(e-literal (string "long list starting with "))
-									(e-dot-access (field "to_str")
+									(e-field-access (field "to_str")
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "first"))))
@@ -140,7 +140,7 @@ describe = |value| match value {
 							(value
 								(e-string
 									(e-literal (string "pair of equal values: "))
-									(e-dot-access (field "to_str")
+									(e-field-access (field "to_str")
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "x"))))

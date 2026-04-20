@@ -155,7 +155,9 @@ pub fn Channel(comptime T: type) type {
                     return error.Timeout;
                 }
                 const remaining = @as(u64, @intCast(deadline - now));
-                _ = self.not_full.timedWait(&self.mutex, remaining) catch {};
+                self.not_full.timedWait(&self.mutex, remaining) catch |err| switch (err) {
+                    error.Timeout => {},
+                };
             }
 
             if (self.closed) {
@@ -205,7 +207,9 @@ pub fn Channel(comptime T: type) type {
                     return null; // Timeout
                 }
                 const remaining = @as(u64, @intCast(deadline - now));
-                _ = self.not_empty.timedWait(&self.mutex, remaining) catch {};
+                self.not_empty.timedWait(&self.mutex, remaining) catch |err| switch (err) {
+                    error.Timeout => {},
+                };
             }
 
             // If empty and closed, return null

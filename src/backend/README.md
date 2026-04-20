@@ -18,21 +18,9 @@ you can enable hex dumping of the generated machine code.
 
 ### Enable Hex Dump
 
-In `src/eval/test/helpers.zig`, set the `dump_generated_code_hex` constant to `true`:
-
-```zig
-const dump_generated_code_hex = true;  // Set to true to enable
-```
-
-This will print the raw bytes of generated code when tests run:
-
-```
-=== Generated Code (93 bytes, entry_offset=0) ===
-0000: 55 48 89 E5 53 41 54 48  81 EC 00 04 00 00 48 89  |UH..SATH......H.|
-0010: CB 49 89 D4 4C 89 A5 D8  FF FF FF 48 B9 30 00 00  |.I..L......H.0..|
-...
-=== End Generated Code ===
-```
+Use a targeted debug print in the backend code path you are investigating and
+re-run the relevant eval test. The inspect-only eval harness no longer keeps a
+test-helper-specific generated-code dump switch.
 
 ### Disassembling the Output
 

@@ -8,19 +8,9 @@ type=expr
 foo
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - expr_ident_simple.md:1:1:1:4
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `foo` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**expr_ident_simple.md:1:1:1:4:**
-```roc
-foo
-```
-^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,

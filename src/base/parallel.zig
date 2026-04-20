@@ -10,6 +10,9 @@ const Allocator = std.mem.Allocator;
 /// process() and eliminate all threading code via DCE on those targets.
 pub const is_freestanding = builtin.os.tag == .freestanding;
 
+/// Thread type alias that avoids referencing std.Thread on freestanding targets.
+const Thread = if (is_freestanding) struct {} else std.Thread;
+
 /// Atomic type for thread-safe usize operations
 pub const AtomicUsize = std.atomic.Value(usize);
 
@@ -50,7 +53,10 @@ fn workerThread(comptime T: type, ctx: WorkerContext(T)) void {
             if (i >= ctx.work_item_count) break;
 
             // Clear arena between work items
-            _ = arena.reset(.retain_capacity);
+            const reset_ok = arena.reset(.retain_capacity);
+            if (!reset_ok) {
+                // Reset still succeeded functionally; retain_capacity failed.
+            }
 
             ctx.worker_fn(arena.allocator(), ctx.context, i);
         }
@@ -119,17 +125,17 @@ pub fn process(
             workerThread(T, ctx);
         } else {
             const thread_count = @min(
-                if (options.max_threads == 0) std.Thread.getCpuCount() catch 1 else options.max_threads,
+                if (options.max_threads == 0) Thread.getCpuCount() catch 1 else options.max_threads,
                 work_item_count,
             );
 
             var index = AtomicUsize.init(0);
             const fixed_stack_thread_count: usize = 16;
-            var threads: [fixed_stack_thread_count]std.Thread = undefined;
-            var extra_threads: std.array_list.Managed(std.Thread) = undefined;
+            var threads: [fixed_stack_thread_count]Thread = undefined;
+            var extra_threads: std.array_list.Managed(Thread) = undefined;
 
             if (thread_count > fixed_stack_thread_count) {
-                extra_threads = std.array_list.Managed(std.Thread).init(allocator);
+                extra_threads = std.array_list.Managed(Thread).init(allocator);
             }
 
             for (0..thread_count) |i| {
@@ -142,9 +148,9 @@ pub fn process(
                     .options = options,
                 };
                 if (i < threads.len) {
-                    threads[i] = try std.Thread.spawn(.{}, workerThread, .{ T, ctx });
+                    threads[i] = try Thread.spawn(.{}, workerThread, .{ T, ctx });
                 } else {
-                    try extra_threads.append(try std.Thread.spawn(.{}, workerThread, .{ T, ctx }));
+                    try extra_threads.append(try Thread.spawn(.{}, workerThread, .{ T, ctx }));
                 }
             }
 
@@ -170,8 +176,7 @@ test "process basic functionality" {
     };
 
     const TestWorker = struct {
-        fn worker(worker_allocator: std.mem.Allocator, item: *MyContext, item_id: usize) void {
-            _ = worker_allocator; // unused in this test
+        fn worker(_: std.mem.Allocator, item: *MyContext, item_id: usize) void {
             const value = item.items[item_id];
             if (value < 0) {
                 item.outputs[item_id] = -1;

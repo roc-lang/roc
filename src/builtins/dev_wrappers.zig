@@ -56,15 +56,15 @@ const fromUtf8Lossy = str.fromUtf8Lossy;
 const listConcat = list.listConcat;
 const listPrepend = list.listPrepend;
 const listSublist = list.listSublist;
+const listDropAt = list.listDropAt;
 const listReplace = list.listReplace;
 const listReserve = list.listReserve;
 const listReleaseExcessCapacity = list.listReleaseExcessCapacity;
 const listWithCapacity = list.listWithCapacity;
 const listAppendUnsafe = list.listAppendUnsafe;
-const listAppendSafeC = list.listAppendSafeC;
 const listDecref = list.listDecref;
 const RcDropFn = *const fn (?[*]u8, *RocOps) callconv(.c) void;
-const SortCmpFn = *const fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.c) u8;
+const RcIncFn = *const fn (?[*]u8, u64, *RocOps) callconv(.c) void;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // String Wrappers
@@ -229,18 +229,23 @@ fn writeDiscriminant(out: [*]u8, offset: u32, size: u32, value: u64) void {
     }
 }
 
-/// Converts a UTF-8 byte list to a RocStr, writing the full result union (string or error details) to an output buffer.
-pub fn roc_builtins_str_from_utf8_result(
-    out: [*]u8,
-    list_bytes: ?[*]u8,
-    list_len: usize,
-    list_cap: usize,
+/// Public value `StrFromUtf8Layout`.
+pub const StrFromUtf8Layout = extern struct {
     ok_tag: u64,
     err_tag: u64,
     outer_disc_offset: u32,
     outer_disc_size: u32,
     err_index_offset: u32,
     err_problem_offset: u32,
+};
+
+/// Converts a UTF-8 byte list to a RocStr, writing the full result union (string or error details) to an output buffer.
+pub fn roc_builtins_str_from_utf8_result(
+    out: [*]u8,
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    layout: *const StrFromUtf8Layout,
     roc_ops: *RocOps,
 ) callconv(.c) void {
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
@@ -248,13 +253,13 @@ pub fn roc_builtins_str_from_utf8_result(
 
     if (result.is_ok) {
         utils.writeAs(RocStr, out, result.string, @src());
-        writeDiscriminant(out, outer_disc_offset, outer_disc_size, ok_tag);
+        writeDiscriminant(out, layout.outer_disc_offset, layout.outer_disc_size, layout.ok_tag);
         return;
     }
 
-    utils.writeAs(u64, out + err_index_offset, result.byte_index, @src());
-    utils.writeAs(u8, out + err_problem_offset, @intFromEnum(result.problem_code), @src());
-    writeDiscriminant(out, outer_disc_offset, outer_disc_size, err_tag);
+    utils.writeAs(u64, out + layout.err_index_offset, result.byte_index, @src());
+    utils.writeAs(u8, out + layout.err_problem_offset, @intFromEnum(result.problem_code), @src());
+    writeDiscriminant(out, layout.outer_disc_offset, layout.outer_disc_size, layout.err_tag);
 }
 
 /// Converts a UTF-8 byte list to a RocStr, returning the result components via separate out-pointers.
@@ -327,6 +332,12 @@ pub fn roc_builtins_str_escape_and_quote(out: *RocStr, str_bytes: ?[*]u8, str_le
     }
 }
 
+/// Wrapper: project a runtime RocStr to the host dbg ABI using the actual RocStr representation.
+pub fn roc_builtins_dbg_str(str_bytes: ?[*]u8, str_len: usize, str_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    roc_ops.dbg(s.asSlice());
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // List Wrappers
 // ═══════════════════════════════════════════════════════════════════════════
@@ -347,6 +358,11 @@ const FlatListElementDecrefContext = struct {
 
 const CallbackElementDecrefContext = struct {
     callback: RcDropFn,
+    roc_ops: *RocOps,
+};
+
+const CallbackElementIncrefContext = struct {
+    callback: RcIncFn,
     roc_ops: *RocOps,
 };
 
@@ -380,63 +396,20 @@ fn callbackListElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c)
     ctx.callback(element, ctx.roc_ops);
 }
 
+fn callbackListElementIncref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
+    if (element == null) return;
+    const ctx_ptr = context orelse unreachable;
+    const ctx: *const CallbackElementIncrefContext = utils.alignedPtrCast(
+        *const CallbackElementIncrefContext,
+        @as([*]u8, @ptrCast(ctx_ptr)),
+        @src(),
+    );
+    ctx.callback(element, 1, ctx.roc_ops);
+}
+
 /// Wrapper: listWithCapacity
 pub fn roc_builtins_list_with_capacity(out: *RocList, capacity: u64, alignment: u32, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
     out.* = listWithCapacity(capacity, alignment, element_width, elements_refcounted, null, @ptrCast(&rcNone), roc_ops);
-}
-
-/// Wrapper: listSortWith using a backend-provided comparator trampoline.
-pub fn roc_builtins_list_sort_with(
-    out: *RocList,
-    list_bytes: ?[*]u8,
-    list_len: usize,
-    list_cap: usize,
-    cmp_fn_ptr: ?*const anyopaque,
-    cmp_data: ?[*]u8,
-    alignment: u32,
-    element_width: usize,
-    roc_ops: *RocOps,
-) callconv(.c) void {
-    if (list_len < 2 or element_width == 0) {
-        out.* = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-        return;
-    }
-
-    const total_bytes = list_len * element_width;
-    const sorted_bytes = allocateWithRefcountC(total_bytes, alignment, false, roc_ops);
-    if (list_bytes) |src| {
-        @memcpy(sorted_bytes[0..total_bytes], src[0..total_bytes]);
-    }
-
-    const cmp_fn: SortCmpFn = @ptrFromInt(@intFromPtr(cmp_fn_ptr orelse unreachable));
-    const temp_ptr: [*]u8 = @ptrCast(roc_ops.alloc(@max(@as(usize, alignment), 1), element_width));
-    defer roc_ops.dealloc(temp_ptr, @max(@as(usize, alignment), 1));
-
-    var i: usize = 1;
-    while (i < list_len) : (i += 1) {
-        const elem_i = sorted_bytes + i * element_width;
-        @memcpy(temp_ptr[0..element_width], elem_i[0..element_width]);
-
-        var j: usize = i;
-        while (j > 0) {
-            const prev_elem = sorted_bytes + (j - 1) * element_width;
-            const cmp_result = cmp_fn(cmp_data, temp_ptr, prev_elem);
-            if (cmp_result != 2) break;
-
-            const dst_elem = sorted_bytes + j * element_width;
-            @memcpy(dst_elem[0..element_width], prev_elem[0..element_width]);
-            j -= 1;
-        }
-
-        const insert_pos = sorted_bytes + j * element_width;
-        @memcpy(insert_pos[0..element_width], temp_ptr[0..element_width]);
-    }
-
-    out.* = .{
-        .bytes = sorted_bytes,
-        .length = list_len,
-        .capacity_or_alloc_ptr = list_len,
-    };
 }
 
 /// Wrapper: listAppendUnsafe
@@ -446,40 +419,142 @@ pub fn roc_builtins_list_append_unsafe(out: *RocList, list_bytes: ?[*]u8, list_l
 }
 
 /// Wrapper: listConcat(RocList, RocList, alignment, element_width, ..., *RocOps) -> RocList
-pub fn roc_builtins_list_concat(out: *RocList, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, alignment: u32, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
+pub fn roc_builtins_list_concat(out: *RocList, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, alignment: u32, element_width: usize, elements_refcounted: bool, element_incref: ?RcIncFn, element_decref: ?RcDropFn, roc_ops: *RocOps) callconv(.c) void {
     const a = RocList{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
     const b = RocList{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
-    out.* = listConcat(a, b, alignment, element_width, elements_refcounted, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), roc_ops);
+    if (elements_refcounted) {
+        var inc_ctx = CallbackElementIncrefContext{
+            .callback = element_incref orelse unreachable,
+            .roc_ops = roc_ops,
+        };
+        var dec_ctx = CallbackElementDecrefContext{
+            .callback = element_decref orelse unreachable,
+            .roc_ops = roc_ops,
+        };
+        out.* = listConcat(
+            a,
+            b,
+            alignment,
+            element_width,
+            true,
+            @ptrCast(&inc_ctx),
+            &callbackListElementIncref,
+            @ptrCast(&dec_ctx),
+            &callbackListElementDecref,
+            roc_ops,
+        );
+    } else {
+        out.* = listConcat(a, b, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), roc_ops);
+    }
 }
 
 /// Wrapper: listPrepend(RocList, alignment, element, element_width, ..., *RocOps) -> RocList
-pub fn roc_builtins_list_prepend(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element: ?[*]u8, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
+pub fn roc_builtins_list_prepend(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element: ?[*]u8, element_width: usize, elements_refcounted: bool, element_incref: ?RcIncFn, roc_ops: *RocOps) callconv(.c) void {
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listPrepend(l, alignment, element, element_width, elements_refcounted, null, @ptrCast(&rcNone), @ptrCast(&copy_fallback), roc_ops);
+    if (elements_refcounted) {
+        var inc_ctx = CallbackElementIncrefContext{
+            .callback = element_incref orelse unreachable,
+            .roc_ops = roc_ops,
+        };
+        out.* = listPrepend(l, alignment, element, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&copy_fallback), roc_ops);
+    } else {
+        out.* = listPrepend(l, alignment, element, element_width, false, null, @ptrCast(&rcNone), @ptrCast(&copy_fallback), roc_ops);
+    }
 }
 
 /// Wrapper: listSublist for drop_first/drop_last/take_first/take_last
-pub fn roc_builtins_list_sublist(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, start: u64, len: u64, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
+pub fn roc_builtins_list_sublist(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, start: u64, len: u64, elements_refcounted: bool, element_decref: ?RcDropFn, roc_ops: *RocOps) callconv(.c) void {
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listSublist(l, alignment, element_width, elements_refcounted, start, len, null, @ptrCast(&rcNone), roc_ops);
+    if (elements_refcounted) {
+        var dec_ctx = CallbackElementDecrefContext{
+            .callback = element_decref orelse unreachable,
+            .roc_ops = roc_ops,
+        };
+        out.* = listSublist(l, alignment, element_width, true, start, len, @ptrCast(&dec_ctx), &callbackListElementDecref, roc_ops);
+    } else {
+        out.* = listSublist(l, alignment, element_width, false, start, len, null, @ptrCast(&rcNone), roc_ops);
+    }
+}
+
+/// Wrapper: listDropAt(list, index) -> List
+pub fn roc_builtins_list_drop_at(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, index: u64, elements_refcounted: bool, element_incref: ?RcIncFn, element_decref: ?RcDropFn, roc_ops: *RocOps) callconv(.c) void {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    if (elements_refcounted) {
+        var inc_ctx = CallbackElementIncrefContext{
+            .callback = element_incref orelse unreachable,
+            .roc_ops = roc_ops,
+        };
+        var dec_ctx = CallbackElementDecrefContext{
+            .callback = element_decref orelse unreachable,
+            .roc_ops = roc_ops,
+        };
+        out.* = listDropAt(l, alignment, element_width, true, index, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, roc_ops);
+    } else {
+        out.* = listDropAt(l, alignment, element_width, false, index, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), roc_ops);
+    }
 }
 
 /// Wrapper: listReplace for list_set
-pub fn roc_builtins_list_replace(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, index: u64, element: ?[*]u8, element_width: usize, out_element: ?[*]u8, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
+pub fn roc_builtins_list_replace(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, index: u64, element: ?[*]u8, element_width: usize, out_element: ?[*]u8, elements_refcounted: bool, element_incref: ?RcIncFn, element_decref: ?RcDropFn, roc_ops: *RocOps) callconv(.c) void {
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listReplace(l, alignment, index, element, element_width, elements_refcounted, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), out_element, @ptrCast(&copy_fallback), roc_ops);
+    if (elements_refcounted) {
+        var inc_ctx = CallbackElementIncrefContext{
+            .callback = element_incref orelse unreachable,
+            .roc_ops = roc_ops,
+        };
+        var dec_ctx = CallbackElementDecrefContext{
+            .callback = element_decref orelse unreachable,
+            .roc_ops = roc_ops,
+        };
+        out.* = listReplace(l, alignment, index, element, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, out_element, @ptrCast(&copy_fallback), roc_ops);
+    } else {
+        out.* = listReplace(l, alignment, index, element, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), out_element, @ptrCast(&copy_fallback), roc_ops);
+    }
 }
 
 /// Wrapper: listReserve
-pub fn roc_builtins_list_reserve(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, spare: u64, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
+pub fn roc_builtins_list_reserve(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, spare: u64, element_width: usize, elements_refcounted: bool, element_incref: ?RcIncFn, roc_ops: *RocOps) callconv(.c) void {
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listReserve(l, alignment, spare, element_width, elements_refcounted, null, @ptrCast(&rcNone), .Immutable, roc_ops);
+    if (elements_refcounted) {
+        var inc_ctx = CallbackElementIncrefContext{
+            .callback = element_incref orelse unreachable,
+            .roc_ops = roc_ops,
+        };
+        out.* = listReserve(l, alignment, spare, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, .Immutable, roc_ops);
+    } else {
+        out.* = listReserve(l, alignment, spare, element_width, false, null, @ptrCast(&rcNone), .Immutable, roc_ops);
+    }
 }
 
 /// Wrapper: listReleaseExcessCapacity
-pub fn roc_builtins_list_release_excess_capacity(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
+pub fn roc_builtins_list_release_excess_capacity(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, elements_refcounted: bool, element_incref: ?RcIncFn, element_decref: ?RcDropFn, roc_ops: *RocOps) callconv(.c) void {
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listReleaseExcessCapacity(l, alignment, element_width, elements_refcounted, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), .Immutable, roc_ops);
+    if (elements_refcounted) {
+        var inc_ctx = CallbackElementIncrefContext{
+            .callback = element_incref orelse unreachable,
+            .roc_ops = roc_ops,
+        };
+        var dec_ctx = CallbackElementDecrefContext{
+            .callback = element_decref orelse unreachable,
+            .roc_ops = roc_ops,
+        };
+        out.* = listReleaseExcessCapacity(l, alignment, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, .Immutable, roc_ops);
+    } else {
+        out.* = listReleaseExcessCapacity(l, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), .Immutable, roc_ops);
+    }
+}
+
+/// Wrapper: incref a list with refcounted elements.
+pub fn roc_builtins_list_incref(
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    amount: isize,
+    elements_refcounted: bool,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    list.listIncref(l, amount, elements_refcounted, roc_ops);
 }
 
 /// Wrapper: decref a List(Str), including decref of each string element when unique
@@ -669,13 +744,32 @@ pub fn roc_builtins_free_data_ptr(ptr: ?[*]u8, alignment: u32, elements_refcount
 // Numeric Wrappers
 // ═══════════════════════════════════════════════════════════════════════════
 
+fn writeRocStrFromSlice(out: *RocStr, slice: []const u8, roc_ops: *RocOps) void {
+    const small_string_size = @sizeOf(RocStr);
+
+    if (slice.len < small_string_size) {
+        var buf: [small_string_size]u8 = .{0} ** small_string_size;
+        @memcpy(buf[0..slice.len], slice);
+        buf[small_string_size - 1] = @intCast(slice.len | 0x80);
+        out.* = @bitCast(buf);
+    } else {
+        const heap_ptr = allocateWithRefcountC(slice.len, 1, false, roc_ops);
+        @memcpy(heap_ptr[0..slice.len], slice);
+        out.* = .{
+            .bytes = heap_ptr,
+            .length = slice.len,
+            .capacity_or_alloc_ptr = slice.len,
+        };
+    }
+}
+
 /// Wrapper: decToStrC (decomposed i128)
 pub fn roc_builtins_dec_to_str(out: *RocStr, value_low: u64, value_high: u64, roc_ops: *RocOps) callconv(.c) void {
     const value: i128 = @bitCast(i128h.from_u64_pair(value_low, value_high));
     const d = dec.RocDec{ .num = value };
     var buf: [dec.RocDec.max_str_length]u8 = undefined;
     const slice = d.format_to_buf(&buf);
-    out.* = RocStr.init(&buf, slice.len, roc_ops);
+    writeRocStrFromSlice(out, slice, roc_ops);
 }
 
 // ── Numeric conversion wrappers ──
@@ -1018,11 +1112,33 @@ pub fn roc_builtins_num_rem_trunc_i128(out_low: *u64, out_high: *u64, a_low: u64
     out_high.* = i128h.hi64(@as(u128, @bitCast(result)));
 }
 
-// ── List append safe wrapper ──
+// ── i128/u128 shift wrappers (decomposed) ──
 
-/// List append safe (simplified - copy=copy_fallback)
-pub fn roc_builtins_list_append_safe(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, element: ?[*]const u8, alignment: u32, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
-    listAppendSafeC(out, list_bytes, list_len, list_cap, @constCast(element), alignment, element_width, elements_refcounted, @ptrCast(&copy_fallback), roc_ops);
+/// u128 shift left (decomposed): out = a << shift_amount
+pub fn roc_builtins_num_shl_u128(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, shift_amount: u8) callconv(.c) void {
+    const a: u128 = i128h.from_u64_pair(a_low, a_high);
+    const s: u7 = @intCast(shift_amount & 127);
+    const result = i128h.shl(a, s);
+    out_low.* = @truncate(result);
+    out_high.* = i128h.hi64(result);
+}
+
+/// i128 arithmetic shift right (decomposed): out = a >> shift_amount (sign-extending)
+pub fn roc_builtins_num_shr_i128(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, shift_amount: u8) callconv(.c) void {
+    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
+    const s: u7 = @intCast(shift_amount & 127);
+    const result: u128 = @bitCast(i128h.shr_i128(a, s));
+    out_low.* = @truncate(result);
+    out_high.* = i128h.hi64(result);
+}
+
+/// u128 logical shift right (decomposed): out = a >> shift_amount (zero-fill)
+pub fn roc_builtins_num_shr_u128(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, shift_amount: u8) callconv(.c) void {
+    const a: u128 = i128h.from_u64_pair(a_low, a_high);
+    const s: u7 = @intCast(shift_amount & 127);
+    const result = i128h.shr(a, s);
+    out_low.* = @truncate(result);
+    out_high.* = i128h.hi64(result);
 }
 
 // ── Numeric-to-string wrappers ──
@@ -1093,7 +1209,7 @@ pub fn roc_builtins_int_to_str(out: *RocStr, val_low: u64, val_high: u64, int_wi
         },
         else => unreachable,
     };
-    out.* = RocStr.init(&buf, result.len, roc_ops);
+    writeRocStrFromSlice(out, result, roc_ops);
 }
 
 /// Unified float-to-string wrapper: dispatches on is_f32.
@@ -1109,7 +1225,19 @@ pub fn roc_builtins_float_to_str(out: *RocStr, val_bits: u64, is_f32: bool, roc_
         const f64_val: f64 = @bitCast(val_bits);
         break :blk i128h.f64_to_str(&buf, f64_val);
     };
-    out.* = RocStr.init(&buf, result.len, roc_ops);
+    writeRocStrFromSlice(out, result, roc_ops);
+}
+
+test "direct float wrapper f32" {
+    var env = utils.TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+
+    var out: RocStr = undefined;
+    const bits: u32 = @bitCast(@as(f32, 3.14));
+    roc_builtins_float_to_str(&out, bits, true, env.getOps());
+    defer out.decref(env.getOps());
+
+    try std.testing.expectEqualStrings("3.140000104904175", out.asSlice());
 }
 
 // ── Numeric-from-string wrappers ──

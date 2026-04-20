@@ -284,8 +284,7 @@ pub const PackageState = struct {
     /// Package shorthands (alias -> target package name)
     shorthands: std.StringHashMap([]const u8),
 
-    pub fn init(gpa: Allocator, name: []const u8, root_dir: []const u8) PackageState {
-        _ = gpa; // Used for consistency but not needed for empty init
+    pub fn init(name: []const u8, root_dir: []const u8) PackageState {
         return .{
             .name = name,
             .root_dir = root_dir,
@@ -614,7 +613,7 @@ pub const Coordinator = struct {
         }
 
         const pkg = try self.gpa.create(PackageState);
-        pkg.* = PackageState.init(self.gpa, try self.gpa.dupe(u8, name), try self.gpa.dupe(u8, root_dir));
+        pkg.* = PackageState.init(try self.gpa.dupe(u8, name), try self.gpa.dupe(u8, root_dir));
         try self.packages.put(pkg.name, pkg);
         return pkg;
     }
@@ -2565,7 +2564,7 @@ test "Coordinator isComplete logic" {
     try std.testing.expect(!coord.isComplete());
 
     // Clear task but add inflight
-    _ = coord.task_channel.tryRecv();
+    if (coord.task_channel.tryRecv()) |_| {} else {}
     coord.inflight.store(1, .release);
     try std.testing.expect(!coord.isComplete());
 
@@ -2606,7 +2605,7 @@ test "Coordinator isComplete with multi_threaded max_threads=0 (inline fallback)
     try std.testing.expectEqual(@as(usize, 0), coord.inflight.load(.monotonic));
 
     // Drain the task — should be complete again
-    _ = coord.task_channel.tryRecv();
+    if (coord.task_channel.tryRecv()) |_| {} else {}
     try std.testing.expect(coord.isComplete());
 }
 

@@ -232,8 +232,8 @@ pub const CommonIdents = extern struct {
             .f32 = try common.insertIdent(gpa, Ident.for_text("F32")),
             .f64 = try common.insertIdent(gpa, Ident.for_text("F64")),
             .dec = try common.insertIdent(gpa, Ident.for_text("Dec")),
-            .builtin_try = try common.insertIdent(gpa, Ident.for_text("Try")),
-            .builtin_numeral = try common.insertIdent(gpa, Ident.for_text("Num.Numeral")),
+            .builtin_try = try common.insertIdent(gpa, Ident.for_text("Builtin.Try")),
+            .builtin_numeral = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Numeral")),
             .builtin_str = try common.insertIdent(gpa, Ident.for_text("Builtin.Str")),
             .u8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U8")),
             .i8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I8")),
@@ -326,8 +326,8 @@ pub const CommonIdents = extern struct {
             .f32 = common.findIdent("F32") orelse unreachable,
             .f64 = common.findIdent("F64") orelse unreachable,
             .dec = common.findIdent("Dec") orelse unreachable,
-            .builtin_try = common.findIdent("Try") orelse unreachable,
-            .builtin_numeral = common.findIdent("Num.Numeral") orelse unreachable,
+            .builtin_try = common.findIdent("Builtin.Try") orelse unreachable,
+            .builtin_numeral = common.findIdent("Builtin.Num.Numeral") orelse unreachable,
             .builtin_str = common.findIdent("Builtin.Str") orelse unreachable,
             .u8_type = common.findIdent("Builtin.Num.U8") orelse unreachable,
             .i8_type = common.findIdent("Builtin.Num.I8") orelse unreachable,
@@ -607,6 +607,94 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     };
 }
 
+/// Public function `cloneForEval`.
+pub fn cloneForEval(self: *const Self, gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
+    var common = try self.common.clone(gpa);
+    errdefer common.deinit(gpa);
+
+    var types = try self.types.clone(gpa);
+    errdefer types.deinit();
+
+    var requires_types = try self.requires_types.clone(gpa);
+    errdefer requires_types.deinit(gpa);
+
+    var for_clause_aliases = try self.for_clause_aliases.clone(gpa);
+    errdefer for_clause_aliases.deinit(gpa);
+
+    var provides_entries = try self.provides_entries.clone(gpa);
+    errdefer provides_entries.deinit(gpa);
+
+    var external_decls = try self.external_decls.clone(gpa);
+    errdefer external_decls.deinit(gpa);
+
+    var imports = try self.imports.clone(gpa);
+    errdefer imports.deinit(gpa);
+
+    var store = try self.store.clone(gpa);
+    errdefer store.deinit();
+
+    var deferred_numeric_literals = try self.deferred_numeric_literals.clone(gpa);
+    errdefer deferred_numeric_literals.deinit(gpa);
+
+    var import_mapping = types_mod.import_mapping.ImportMapping.init(gpa);
+    errdefer import_mapping.deinit();
+    {
+        var it = self.import_mapping.iterator();
+        while (it.next()) |entry| {
+            try import_mapping.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+    }
+
+    var method_idents = try self.method_idents.clone(gpa);
+    errdefer method_idents.deinit(gpa);
+
+    var rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){};
+    errdefer rigid_vars.deinit(gpa);
+    {
+        var it = self.rigid_vars.iterator();
+        while (it.next()) |entry| {
+            try rigid_vars.put(gpa, entry.key_ptr.*, entry.value_ptr.*);
+        }
+    }
+
+    var evaluation_order: ?*DependencyGraph.EvaluationOrder = null;
+    if (self.evaluation_order) |order| {
+        const cloned_order = try gpa.create(DependencyGraph.EvaluationOrder);
+        cloned_order.* = try order.clone(gpa);
+        errdefer cloned_order.deinit();
+        errdefer gpa.destroy(cloned_order);
+        evaluation_order = cloned_order;
+    }
+
+    return Self{
+        .gpa = gpa,
+        .common = common,
+        .types = types,
+        .module_kind = self.module_kind,
+        .all_defs = self.all_defs,
+        .all_statements = self.all_statements,
+        .exports = self.exports,
+        .requires_types = requires_types,
+        .for_clause_aliases = for_clause_aliases,
+        .provides_entries = provides_entries,
+        .rigid_vars = rigid_vars,
+        .builtin_statements = self.builtin_statements,
+        .external_decls = external_decls,
+        .imports = imports,
+        .module_name = self.module_name,
+        .display_module_name_idx = self.display_module_name_idx,
+        .qualified_module_ident = self.qualified_module_ident,
+        .diagnostics = self.diagnostics,
+        .store = store,
+        .evaluation_order = evaluation_order,
+        .idents = CommonIdents.find(&common),
+        .deferred_numeric_literals = deferred_numeric_literals,
+        .import_mapping = import_mapping,
+        .method_idents = method_idents,
+        .defer_numeric_defaults = self.defer_numeric_defaults,
+    };
+}
+
 /// Deinitialize the module environment.
 pub fn deinit(self: *Self) void {
     self.common.deinit(self.gpa);
@@ -702,8 +790,7 @@ pub const castIdx = CIR.castIdx;
 
 /// Retrieve all diagnostics collected during canonicalization.
 pub fn getDiagnostics(self: *Self) std.mem.Allocator.Error![]CIR.Diagnostic {
-    const all_diagnostics = try self.store.diagnosticSpanFrom(0);
-    const diagnostic_indices = self.store.sliceDiagnostics(all_diagnostics);
+    const diagnostic_indices = self.store.sliceDiagnostics(self.diagnostics);
     const diagnostics = try self.gpa.alloc(CIR.Diagnostic, diagnostic_indices.len);
     for (diagnostic_indices, 0..) |diagnostic_idx, i| {
         diagnostics[i] = self.store.getDiagnostic(diagnostic_idx);
@@ -793,6 +880,77 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addLineBreak();
             try report.document.addReflowingText("Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .circular_value_definition => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const ident_name = self.getIdent(data.ident);
+
+            var report = Report.init(allocator, "CIRCULAR VALUE DEFINITION", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.document.addReflowingText("The value ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" is part of a recursive non-function definition cycle.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .erroneous_value_use => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const ident_name = self.getIdent(data.ident);
+
+            var report = Report.init(allocator, "ERRONEOUS VALUE USE", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.document.addReflowingText("This use of ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" was rewritten to crash because the referenced top-level value failed type checking earlier.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Fix the earlier type error instead of trying to execute this value.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .erroneous_value_expr => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "ERRONEOUS VALUE", .runtime_error);
+            try report.document.addReflowingText("This expression was rewritten to crash because it failed type checking.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Fix the earlier type error instead of trying to execute this expression.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
@@ -1494,6 +1652,38 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" is not exposed by the module ");
             try report.document.addInlineCode(module_name);
             try report.document.addReflowingText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("You're attempting to use this type here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .type_from_missing_module => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "MODULE NOT FOUND", .runtime_error);
+
+            const type_name_bytes = self.getIdent(data.type_name);
+            const type_name = try report.addOwnedString(type_name_bytes);
+
+            const module_name_bytes = self.getIdent(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+
+            try report.document.addText("The type ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(" is qualified by the module ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(", but that module was not found in this Roc project.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
@@ -2351,7 +2541,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
-        else => unreachable, // All diagnostics must have explicit handlers
+        else => std.debug.panic("Unhandled canonicalize diagnostic in diagnosticToReport: {s}", .{@tagName(diagnostic)}),
     };
 }
 
@@ -2807,6 +2997,30 @@ pub fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
     return self.getIdent(idx);
 }
 
+/// Builds a mapping from platform for-clause alias ident indices to the
+/// equivalent ident indices in the app module's store.
+///
+/// This encapsulates all cross-module string-based ident resolution so that
+/// downstream code (e.g. in src/eval/) only needs to do index lookups via `map.get()`.
+pub fn buildPlatformToAppIdentMap(
+    self: *const Self,
+    gpa: std.mem.Allocator,
+    app_env: *const Self,
+) std.mem.Allocator.Error!std.AutoHashMap(Ident.Idx, Ident.Idx) {
+    var map = std.AutoHashMap(Ident.Idx, Ident.Idx).init(gpa);
+    errdefer map.deinit();
+    const all_aliases = self.for_clause_aliases.items.items;
+    for (self.requires_types.items.items) |required_type| {
+        const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
+        for (type_aliases_slice) |alias| {
+            if (app_env.common.findIdentFrom(&self.common, alias.alias_name)) |app_ident| {
+                try map.put(alias.alias_name, app_ident);
+            }
+        }
+    }
+    return map;
+}
+
 /// Helper function to generate the S-expression node for the entire module.
 /// If a single expression is provided, only that expression is returned.
 pub fn pushToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *SExprTree) std.mem.Allocator.Error!void {
@@ -3259,7 +3473,6 @@ pub fn lookupMethodIdentConst(self: *const Self, type_ident: Ident.Idx, method_i
 /// - method_ident: The method's identifier index in source_env
 ///
 /// Returns the qualified method's ident index if found, or null if the method doesn't exist.
-/// Falls back to string-based getMethodIdent for backward compatibility with pre-compiled modules.
 pub fn lookupMethodIdentFromEnv(self: *Self, source_env: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
     // First, try to find the type and method idents in our own ident store
     const type_name = source_env.getIdent(type_ident);
@@ -3269,19 +3482,11 @@ pub fn lookupMethodIdentFromEnv(self: *Self, source_env: *const Self, type_ident
     const local_type_ident = self.common.findIdent(type_name) orelse return null;
     const local_method_ident = self.common.findIdent(method_name) orelse return null;
 
-    // Try index-based lookup first (O(log n))
-    if (self.lookupMethodIdent(local_type_ident, local_method_ident)) |result| {
-        return result;
-    }
-
-    // Fall back to string-based lookup for backward compatibility with pre-compiled modules
-    // that don't have method_idents populated. This can be removed once all modules are recompiled.
-    return self.getMethodIdent(type_name, method_name);
+    return self.lookupMethodIdent(local_type_ident, local_method_ident);
 }
 
 /// Const version of lookupMethodIdentFromEnv for use with immutable module environments.
 /// Safe to use on deserialized modules since method_idents is already sorted.
-/// Falls back to string-based getMethodIdent for backward compatibility with pre-compiled modules.
 pub fn lookupMethodIdentFromEnvConst(self: *const Self, source_env: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
     // First, try to find the type and method idents in our own ident store
     const type_name = source_env.getIdent(type_ident);
@@ -3291,19 +3496,11 @@ pub fn lookupMethodIdentFromEnvConst(self: *const Self, source_env: *const Self,
     const local_type_ident = self.common.findIdent(type_name) orelse return null;
     const local_method_ident = self.common.findIdent(method_name) orelse return null;
 
-    // Try index-based lookup first (O(log n))
-    if (self.lookupMethodIdentConst(local_type_ident, local_method_ident)) |result| {
-        return result;
-    }
-
-    // Fall back to string-based lookup for backward compatibility with pre-compiled modules
-    // that don't have method_idents populated. This can be removed once all modules are recompiled.
-    return self.getMethodIdent(type_name, method_name);
+    return self.lookupMethodIdentConst(local_type_ident, local_method_ident);
 }
 
 /// Looks up a method identifier when the type and method idents come from different source environments.
 /// This is needed when e.g. type_ident is from runtime layout store and method_ident is from CIR.
-/// Falls back to string-based getMethodIdent for backward compatibility with pre-compiled modules.
 pub fn lookupMethodIdentFromTwoEnvsConst(
     self: *const Self,
     type_source_env: *const Self,
@@ -3319,14 +3516,7 @@ pub fn lookupMethodIdentFromTwoEnvsConst(
     const local_type_ident = self.common.findIdent(type_name) orelse return null;
     const local_method_ident = self.common.findIdent(method_name) orelse return null;
 
-    // Try index-based lookup first (O(log n))
-    if (self.lookupMethodIdentConst(local_type_ident, local_method_ident)) |result| {
-        return result;
-    }
-
-    // Fall back to string-based lookup for backward compatibility with pre-compiled modules
-    // that don't have method_idents populated. This can be removed once all modules are recompiled.
-    return self.getMethodIdent(type_name, method_name);
+    return self.lookupMethodIdentConst(local_type_ident, local_method_ident);
 }
 
 /// Returns the line start positions for source code position mapping.

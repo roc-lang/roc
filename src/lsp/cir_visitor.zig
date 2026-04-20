@@ -191,14 +191,48 @@ pub fn CirVisitor(comptime Context: type) type {
                 .e_unary_not => |u| {
                     self.walkExpr(store, u.expr);
                 },
-                .e_dot_access => |dot| {
-                    self.walkExpr(store, dot.receiver);
+                .e_field_access => |field_access| {
+                    self.walkExpr(store, field_access.receiver);
                     if (self.stopped) return;
-                    if (dot.args) |args_span| {
-                        for (store.sliceExpr(args_span)) |arg| {
-                            self.walkExpr(store, arg);
-                            if (self.stopped) return;
-                        }
+                },
+                .e_method_call => |method_call| {
+                    self.walkExpr(store, method_call.receiver);
+                    if (self.stopped) return;
+                    for (store.sliceExpr(method_call.args)) |arg| {
+                        self.walkExpr(store, arg);
+                        if (self.stopped) return;
+                    }
+                },
+                .e_dispatch_call => |method_call| {
+                    self.walkExpr(store, method_call.receiver);
+                    if (self.stopped) return;
+                    for (store.sliceExpr(method_call.args)) |arg| {
+                        self.walkExpr(store, arg);
+                        if (self.stopped) return;
+                    }
+                },
+                .e_structural_eq => |eq| {
+                    self.walkExpr(store, eq.lhs);
+                    if (self.stopped) return;
+                    self.walkExpr(store, eq.rhs);
+                    if (self.stopped) return;
+                },
+                .e_method_eq => |eq| {
+                    self.walkExpr(store, eq.lhs);
+                    if (self.stopped) return;
+                    self.walkExpr(store, eq.rhs);
+                    if (self.stopped) return;
+                },
+                .e_type_method_call => |method_call| {
+                    for (store.sliceExpr(method_call.args)) |arg| {
+                        self.walkExpr(store, arg);
+                        if (self.stopped) return;
+                    }
+                },
+                .e_type_dispatch_call => |method_call| {
+                    for (store.sliceExpr(method_call.args)) |arg| {
+                        self.walkExpr(store, arg);
+                        if (self.stopped) return;
                     }
                 },
                 .e_tuple_access => |ta| {
@@ -260,18 +294,11 @@ pub fn CirVisitor(comptime Context: type) type {
                     if (self.stopped) return;
                     self.walkExpr(store, for_expr.body);
                 },
-                .e_type_var_dispatch => |tvd| {
-                    for (store.sliceExpr(tvd.args)) |arg| {
-                        self.walkExpr(store, arg);
-                        if (self.stopped) return;
-                    }
-                },
                 .e_hosted_lambda => |hosted| {
                     for (store.slicePatterns(hosted.args)) |arg_idx| {
                         self.walkPattern(store, arg_idx);
                         if (self.stopped) return;
                     }
-                    self.walkExpr(store, hosted.body);
                 },
                 .e_run_low_level => |run_low_level| {
                     for (store.sliceExpr(run_low_level.args)) |arg_idx| {

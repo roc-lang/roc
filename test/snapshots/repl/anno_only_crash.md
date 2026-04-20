@@ -9,8 +9,16 @@ type=repl
 » foo("test")
 ~~~
 # OUTPUT
-Crash: Compile-time error encountered at runtime
+Parse error: Type annotations are not supported in the REPL yet
 ---
-Crash: Cannot call function: compile-time error (ident_not_in_scope)
+**UNDEFINED VARIABLE**
+Nothing is named `foo` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**repl:1:1:1:4:**
+```roc
+foo("test")
+```
+^^^
 # PROBLEMS
 NIL

@@ -886,7 +886,7 @@ is_named_color = |str| {
 				(s-let
 					(p-assign (ident "rounded"))
 					(e-binop (op "div")
-						(e-dot-access (field "to_frac")
+						(e-field-access (field "to_frac")
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "a"))))
@@ -918,7 +918,7 @@ is_named_color = |str| {
 			(e-block
 				(s-let
 					(p-assign (ident "bytes"))
-					(e-dot-access (field "to_utf8")
+					(e-field-access (field "to_utf8")
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "str"))))
@@ -980,36 +980,36 @@ is_named_color = |str| {
 										(s-let
 											(p-assign (ident "is_valid"))
 											(e-binop (op "and")
-												(e-dot-access (field "is_char_in_hex_range")
+												(e-field-access (field "is_char_in_hex_range")
 													(receiver
 														(e-lookup-local
 															(p-assign (ident "a"))))
 													(args))
 												(e-binop (op "and")
-													(e-dot-access (field "is_char_in_hex_range")
+													(e-field-access (field "is_char_in_hex_range")
 														(receiver
 															(e-lookup-local
 																(p-assign (ident "b"))))
 														(args))
 													(e-binop (op "and")
-														(e-dot-access (field "is_char_in_hex_range")
+														(e-field-access (field "is_char_in_hex_range")
 															(receiver
 																(e-lookup-local
 																	(p-assign (ident "c"))))
 															(args))
 														(e-binop (op "and")
-															(e-dot-access (field "is_char_in_hex_range")
+															(e-field-access (field "is_char_in_hex_range")
 																(receiver
 																	(e-lookup-local
 																		(p-assign (ident "d"))))
 																(args))
 															(e-binop (op "and")
-																(e-dot-access (field "is_char_in_hex_range")
+																(e-field-access (field "is_char_in_hex_range")
 																	(receiver
 																		(e-lookup-local
 																			(p-assign (ident "e"))))
 																	(args))
-																(e-dot-access (field "is_char_in_hex_range")
+																(e-field-access (field "is_char_in_hex_range")
 																	(receiver
 																		(e-lookup-local
 																			(p-assign (ident "f"))))
@@ -1148,7 +1148,7 @@ is_named_color = |str| {
 			(e-if
 				(if-branches
 					(if-branch
-						(e-dot-access (field "is_named_color")
+						(e-field-access (field "is_named_color")
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "str"))))
@@ -1197,7 +1197,7 @@ is_named_color = |str| {
 									(e-literal (string "AntiqueWhite")))
 								(e-string
 									(e-literal (string "Aqua")))))))
-				(e-dot-access (field "contains")
+				(e-field-access (field "contains")
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "colors"))))
@@ -1222,7 +1222,7 @@ is_named_color = |str| {
 				(ty-lookup (name "Str") (builtin)))))
 	(s-expect
 		(e-binop (op "eq")
-			(e-dot-access (field "to_str")
+			(e-field-access (field "to_str")
 				(receiver
 					(e-call
 						(e-lookup-local
@@ -1235,7 +1235,7 @@ is_named_color = |str| {
 				(e-literal (string "rgb(124, 56, 245)")))))
 	(s-expect
 		(e-binop (op "eq")
-			(e-dot-access (field "to_str")
+			(e-field-access (field "to_str")
 				(receiver
 					(e-call
 						(e-lookup-local
@@ -1249,7 +1249,7 @@ is_named_color = |str| {
 				(e-literal (string "rgba(124, 56, 245, 1.0)")))))
 	(s-expect
 		(e-binop (op "eq")
-			(e-dot-access (field "map_ok")
+			(e-field-access (field "map_ok")
 				(receiver
 					(e-call
 						(e-lookup-local

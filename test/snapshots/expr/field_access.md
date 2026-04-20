@@ -38,7 +38,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dot-access (field "name")
+(e-field-access (field "name")
 	(receiver
 		(e-runtime-error (tag "ident_not_in_scope"))))
 ~~~

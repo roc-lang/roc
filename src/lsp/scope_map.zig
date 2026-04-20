@@ -250,8 +250,42 @@ pub const ScopeMap = struct {
                     try self.traverseExpr(module_env, field.value, scope_end, depth + 1);
                 }
             },
-            .e_dot_access => |dot| {
-                try self.traverseExpr(module_env, dot.receiver, scope_end, depth + 1);
+            .e_field_access => |field_access| {
+                try self.traverseExpr(module_env, field_access.receiver, scope_end, depth + 1);
+            },
+            .e_method_call => |method_call| {
+                try self.traverseExpr(module_env, method_call.receiver, scope_end, depth + 1);
+                const args = module_env.store.sliceExpr(method_call.args);
+                for (args) |arg_idx| {
+                    try self.traverseExpr(module_env, arg_idx, scope_end, depth + 1);
+                }
+            },
+            .e_dispatch_call => |method_call| {
+                try self.traverseExpr(module_env, method_call.receiver, scope_end, depth + 1);
+                const args = module_env.store.sliceExpr(method_call.args);
+                for (args) |arg_idx| {
+                    try self.traverseExpr(module_env, arg_idx, scope_end, depth + 1);
+                }
+            },
+            .e_structural_eq => |eq| {
+                try self.traverseExpr(module_env, eq.lhs, scope_end, depth + 1);
+                try self.traverseExpr(module_env, eq.rhs, scope_end, depth + 1);
+            },
+            .e_method_eq => |eq| {
+                try self.traverseExpr(module_env, eq.lhs, scope_end, depth + 1);
+                try self.traverseExpr(module_env, eq.rhs, scope_end, depth + 1);
+            },
+            .e_type_method_call => |method_call| {
+                const args = module_env.store.sliceExpr(method_call.args);
+                for (args) |arg_idx| {
+                    try self.traverseExpr(module_env, arg_idx, scope_end, depth + 1);
+                }
+            },
+            .e_type_dispatch_call => |method_call| {
+                const args = module_env.store.sliceExpr(method_call.args);
+                for (args) |arg_idx| {
+                    try self.traverseExpr(module_env, arg_idx, scope_end, depth + 1);
+                }
             },
             .e_tuple_access => |ta| {
                 try self.traverseExpr(module_env, ta.tuple, scope_end, depth + 1);
@@ -274,15 +308,7 @@ pub const ScopeMap = struct {
             .e_nominal_external => |nominal| {
                 try self.traverseExpr(module_env, nominal.backing_expr, scope_end, depth + 1);
             },
-            .e_hosted_lambda => |hosted| {
-                // Hosted lambda parameters are visible within the body
-                const body_region = module_env.store.getExprRegion(hosted.body);
-                const args = module_env.store.slicePatterns(hosted.args);
-                for (args) |arg_pattern| {
-                    try self.extractBindingsFromPattern(module_env, arg_pattern, body_region.start.offset, body_region.end.offset, true, depth + 1);
-                }
-                try self.traverseExpr(module_env, hosted.body, body_region.end.offset, depth + 1);
-            },
+            .e_hosted_lambda => |_| {},
             .e_for => |for_expr| {
                 // For loop variable is visible within the body
                 const body_region = module_env.store.getExprRegion(for_expr.body);
@@ -325,7 +351,6 @@ pub const ScopeMap = struct {
             .e_crash,
             .e_ellipsis,
             .e_anno_only,
-            .e_type_var_dispatch,
             .e_bytes_literal,
             => {},
         }

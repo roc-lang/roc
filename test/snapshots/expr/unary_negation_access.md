@@ -40,7 +40,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-unary-minus
-	(e-dot-access (field "field")
+	(e-field-access (field "field")
 		(receiver
 			(e-runtime-error (tag "ident_not_in_scope")))))
 ~~~

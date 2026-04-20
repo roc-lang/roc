@@ -292,7 +292,10 @@ pub fn introduceTypeDecl(
             .local_nominal => |stmt| TypeIntroduceResult{ .redeclared_error = stmt },
             .local_alias => |stmt| TypeIntroduceResult{ .type_alias_redeclared = stmt },
             .associated_nominal => |stmt| TypeIntroduceResult{ .nominal_type_redeclared = stmt },
-            .external_nominal => TypeIntroduceResult{ .nominal_type_redeclared = type_decl },
+            .external_nominal => blk: {
+                try scope.type_bindings.put(gpa, name, TypeBinding{ .local_nominal = type_decl });
+                break :blk TypeIntroduceResult{ .success = {} };
+            },
         };
     }
 
@@ -328,7 +331,14 @@ pub fn introduceTypeDeclWithKind(
             .local_nominal => |stmt| TypeIntroduceResult{ .redeclared_error = stmt },
             .local_alias => |stmt| TypeIntroduceResult{ .type_alias_redeclared = stmt },
             .associated_nominal => |stmt| TypeIntroduceResult{ .nominal_type_redeclared = stmt },
-            .external_nominal => TypeIntroduceResult{ .nominal_type_redeclared = type_decl },
+            .external_nominal => blk: {
+                const binding = if (is_alias)
+                    TypeBinding{ .local_alias = type_decl }
+                else
+                    TypeBinding{ .local_nominal = type_decl };
+                try scope.type_bindings.put(gpa, name, binding);
+                break :blk TypeIntroduceResult{ .success = {} };
+            },
         };
     }
 

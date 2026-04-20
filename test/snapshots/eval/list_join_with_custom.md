@@ -444,7 +444,7 @@ expect output == "div | span | p"
 			(ty-lookup (name "Html") (local))))
 	(d-let
 		(p-assign (ident "output"))
-		(e-dot-access (field "to_str")
+		(e-field-access (field "to_str")
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "result"))))

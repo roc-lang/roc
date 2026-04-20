@@ -357,8 +357,54 @@ Builtin :: [].{
 		concat : List(item), List(item) -> List(item)
 		## Create a list with space for at least capacity elements
 		with_capacity : U64 -> List(item)
+		## Ensure this list has room for at least spare additional elements.
+		reserve : List(item), U64 -> List(item)
+		reserve = |list, spare| list_reserve(list, spare)
+		## Reduce memory usage by trimming unused capacity.
+		release_excess_capacity : List(item) -> List(item)
+		release_excess_capacity = |list| list_release_excess_capacity(list)
 		## Sort with a custom comparison function
 		sort_with : List(item), (item, item -> [LT, EQ, GT]) -> List(item)
+		sort_with = |list, order| {
+			list_len = List.len(list)
+
+			if list_len < 2 {
+				list
+			} else {
+				match List.first(list) {
+					Ok(pivot) => {
+						rest = List.drop_first(list, 1)
+						less_or_equal = 
+							List.keep_if(
+								rest,
+								|item|
+									match order(item, pivot) {
+										LT => True
+										EQ => True
+										GT => False
+									},
+							)
+						greater = 
+							List.keep_if(
+								rest,
+								|item|
+									match order(item, pivot) {
+										LT => False
+										EQ => False
+										GT => True
+									},
+							)
+
+						List.concat(
+							List.sort_with(less_or_equal, order),
+							List.concat(List.single(pivot), List.sort_with(greater, order)),
+						)
+					}
+
+					Err(_) => list
+				}
+			}
+		}
 
 		is_eq : List(item), List(item) -> Bool
 			where [item.is_eq : item, item -> Bool]
@@ -388,7 +434,10 @@ Builtin :: [].{
 		##     |> List.append(3)
 		## ```
 		append : List(a), a -> List(a)
-		append = |list, item| list_append_unsafe(list, item)
+		append = |list, item| {
+			reserved = List.reserve(list, 1)
+			list_append_unsafe(reserved, item)
+		}
 
 		## Returns the first element in the list, or `ListWasEmpty` if it was empty.
 		## ```roc
@@ -2043,6 +2092,7 @@ Builtin :: [].{
 			} else {
 				False
 			}
+			is_eq : F32, F32 -> Bool
 			is_negative : F32 -> Bool
 			is_negative = |self| self < 0
 			is_positive : F32 -> Bool
@@ -2120,6 +2170,7 @@ Builtin :: [].{
 			} else {
 				False
 			}
+			is_eq : F64, F64 -> Bool
 			is_negative : F64 -> Bool
 			is_negative = |self| self < 0
 			is_positive : F64 -> Bool
@@ -2226,6 +2277,12 @@ list_get_unsafe : List(item), U64 -> item
 
 # Implemented by the compiler, does not perform bounds checks
 list_append_unsafe : List(item), item -> List(item)
+
+# Implemented by the compiler, ensures at least spare additional elements of capacity
+list_reserve : List(item), U64 -> List(item)
+
+# Implemented by the compiler, trims unused list capacity
+list_release_excess_capacity : List(item) -> List(item)
 
 # Unsafe conversion functions - these return simple records instead of Try types
 # They are low-level operations that get replaced by the compiler

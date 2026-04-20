@@ -246,6 +246,11 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(gpa, CIR.Expr{
+        .e_bytes_literal = .{
+            .literal = rand_idx(StringLiteral.Idx),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
         .e_lookup_local = .{
             .pattern_idx = rand_idx(CIR.Pattern.Idx),
         },
@@ -370,11 +375,54 @@ test "NodeStore round trip - Expressions" {
         .e_unary_not = CIR.Expr.UnaryNot.init(rand_idx(CIR.Expr.Idx)),
     });
     try expressions.append(gpa, CIR.Expr{
-        .e_dot_access = .{
+        .e_field_access = .{
             .receiver = rand_idx(CIR.Expr.Idx),
             .field_name = rand_ident_idx(),
             .field_name_region = rand_region(),
-            .args = null,
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_method_call = .{
+            .receiver = rand_idx(CIR.Expr.Idx),
+            .method_name = rand_ident_idx(),
+            .args = CIR.Expr.Span{ .span = rand_span() },
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_dispatch_call = .{
+            .receiver = rand_idx(CIR.Expr.Idx),
+            .method_name = rand_ident_idx(),
+            .args = CIR.Expr.Span{ .span = rand_span() },
+            .constraint_fn_var = rand_idx(types.Var),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_structural_eq = .{
+            .lhs = rand_idx(CIR.Expr.Idx),
+            .rhs = rand_idx(CIR.Expr.Idx),
+            .negated = rand.random().boolean(),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_method_eq = .{
+            .lhs = rand_idx(CIR.Expr.Idx),
+            .rhs = rand_idx(CIR.Expr.Idx),
+            .negated = rand.random().boolean(),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_type_method_call = .{
+            .type_var_alias_stmt = rand_idx(CIR.Statement.Idx),
+            .method_name = rand_ident_idx(),
+            .args = CIR.Expr.Span{ .span = rand_span() },
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_type_dispatch_call = .{
+            .type_var_alias_stmt = rand_idx(CIR.Statement.Idx),
+            .method_name = rand_ident_idx(),
+            .args = CIR.Expr.Span{ .span = rand_span() },
+            .constraint_fn_var = rand_idx(types.Var),
         },
     });
     try expressions.append(gpa, CIR.Expr{
@@ -401,12 +449,6 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(gpa, CIR.Expr{
-        .e_dec = .{
-            .value = RocDec{ .num = 123456789 },
-            .has_suffix = false,
-        },
-    });
-    try expressions.append(gpa, CIR.Expr{
         .e_nominal_external = .{
             .module_idx = rand_idx_u16(CIR.Import.Idx),
             .target_node_idx = rand.random().int(u16),
@@ -427,7 +469,6 @@ test "NodeStore round trip - Expressions" {
             .symbol_name = rand_ident_idx(),
             .index = rand.random().int(u32),
             .args = CIR.Pattern.Span{ .span = rand_span() },
-            .body = rand_idx(CIR.Expr.Idx),
         },
     });
     try expressions.append(gpa, CIR.Expr{
@@ -442,13 +483,6 @@ test "NodeStore round trip - Expressions" {
             .patt = rand_idx(CIR.Pattern.Idx),
             .expr = rand_idx(CIR.Expr.Idx),
             .body = rand_idx(CIR.Expr.Idx),
-        },
-    });
-    try expressions.append(gpa, CIR.Expr{
-        .e_type_var_dispatch = .{
-            .type_var_alias_stmt = rand_idx(CIR.Statement.Idx),
-            .method_name = rand_ident_idx(),
-            .args = .{ .span = .{ .start = rand.random().int(u32), .len = rand.random().int(u32) } },
         },
     });
     try expressions.append(gpa, CIR.Expr{
@@ -518,6 +552,26 @@ test "NodeStore round trip - Diagnostics" {
     try diagnostics.append(gpa, CIR.Diagnostic{
         .self_referential_definition = .{
             .ident = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .circular_value_definition = .{
+            .ident = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .erroneous_value_use = .{
+            .ident = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .erroneous_value_expr = .{
             .region = rand_region(),
         },
     });

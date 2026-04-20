@@ -30,7 +30,7 @@ result2 = c.plus(d)
 # EXPECTED
 MISSING METHOD - plus_operator_vs_method.md:11:11:11:16
 + - :0:0:0:0
-MISSING METHOD - plus_operator_vs_method.md:21:13:21:17
+MISSING METHOD - plus_operator_vs_method.md:21:11:21:20
 # PROBLEMS
 **MISSING METHOD**
 The value before this **+** operator has a type that doesn't have a **plus** method:
@@ -48,11 +48,11 @@ The value's type, which does not have a method named **plus**, is:
 
 **MISSING METHOD**
 This **plus** method is being called on a value whose type doesn't have that method:
-**plus_operator_vs_method.md:21:13:21:17:**
+**plus_operator_vs_method.md:21:11:21:20:**
 ```roc
 result2 = c.plus(d)
 ```
-            ^^^^
+          ^^^^^^^^^
 
 The value's type, which does not have a method named **plus**, is:
 
@@ -130,10 +130,10 @@ EndOfFile,
 			(ty (name "MyType")))
 		(s-decl
 			(p-ident (raw "result2"))
-			(e-field-access
-				(e-ident (raw "c"))
-				(e-apply
-					(e-ident (raw "plus"))
+			(e-method-call (method ".plus")
+				(receiver
+					(e-ident (raw "c")))
+				(args
 					(e-ident (raw "d")))))))
 ~~~
 # FORMATTED
@@ -186,7 +186,7 @@ NO CHANGE
 			(ty-lookup (name "MyType") (local))))
 	(d-let
 		(p-assign (ident "result2"))
-		(e-dot-access (field "plus")
+		(e-method-call (method "plus")
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "c"))))
@@ -205,7 +205,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
+		(patt (type "MyType"))
 		(patt (type "MyType"))
 		(patt (type "Error"))
 		(patt (type "MyType"))
@@ -215,7 +215,7 @@ NO CHANGE
 		(nominal (type "MyType")
 			(ty-header (name "MyType"))))
 	(expressions
-		(expr (type "Error"))
+		(expr (type "MyType"))
 		(expr (type "MyType"))
 		(expr (type "Error"))
 		(expr (type "MyType"))

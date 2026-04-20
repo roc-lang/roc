@@ -880,7 +880,7 @@ comptime {
 }
 
 test {
-    _ = std.testing.refAllDeclsRecursive(@This());
+    std.testing.refAllDeclsRecursive(@This());
 }
 
 /// Helper function to convert the AST to a human friendly representation in S-expression format
@@ -2618,6 +2618,12 @@ pub const Expr = union(enum) {
         region: TokenizedRegion,
     },
     field_access: BinOp,
+    method_call: struct {
+        receiver: Expr.Idx,
+        method_token: Token.Idx,
+        args: Expr.Span,
+        region: TokenizedRegion,
+    },
     /// Tuple element access: `tuple.0`, `tuple.1`, etc.
     tuple_access: struct {
         /// The tuple expression being accessed
@@ -2626,7 +2632,7 @@ pub const Expr = union(enum) {
         elem_token: Token.Idx,
         region: TokenizedRegion,
     },
-    local_dispatch: BinOp,
+    arrow_call: BinOp,
     bin_op: BinOp,
     suffix_single_question: Unary,
     unary_op: Unary,
@@ -2706,8 +2712,9 @@ pub const Expr = union(enum) {
             .record => |e| e.region,
             .tuple => |e| e.region,
             .field_access => |e| e.region,
+            .method_call => |e| e.region,
             .tuple_access => |e| e.region,
-            .local_dispatch => |e| e.region,
+            .arrow_call => |e| e.region,
             .lambda => |e| e.region,
             .record_updater => |e| e.region,
             .bin_op => |e| e.region,
@@ -3050,6 +3057,29 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
+            .method_call => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-method-call");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                try tree.pushStringPair("method", ast.resolve(a.method_token));
+                const attrs = tree.beginNode();
+
+                const receiver = tree.beginNode();
+                try tree.pushStaticAtom("receiver");
+                const receiver_attrs = tree.beginNode();
+                try ast.store.getExpr(a.receiver).pushToSExprTree(gpa, env, ast, tree);
+                try tree.endNode(receiver, receiver_attrs);
+
+                const args = tree.beginNode();
+                try tree.pushStaticAtom("args");
+                const args_attrs = tree.beginNode();
+                for (ast.store.exprSlice(a.args)) |arg_id| {
+                    try ast.store.getExpr(arg_id).pushToSExprTree(gpa, env, ast, tree);
+                }
+                try tree.endNode(args, args_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
             .tuple_access => |a| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-tuple-access");
@@ -3064,9 +3094,9 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .local_dispatch => |a| {
+            .arrow_call => |a| {
                 const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-local-dispatch");
+                try tree.pushStaticAtom("e-arrow-call");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 const attrs = tree.beginNode();
 

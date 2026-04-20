@@ -17,7 +17,7 @@ const build_options = @import("build_options");
 const reporting = @import("reporting");
 const eval = @import("eval");
 const check = @import("check");
-const unbundle = @import("unbundle");
+const unbundle = if (is_freestanding) struct {} else @import("unbundle");
 const Io = @import("io").Io;
 
 const Report = reporting.Report;
@@ -35,6 +35,7 @@ const ModuleTimingInfo = compile_package.TimingInfo;
 const ImportResolver = compile_package.ImportResolver;
 const ScheduleHook = compile_package.ScheduleHook;
 const CacheManager = @import("cache_manager.zig").CacheManager;
+const platform_requirements = @import("platform_requirements.zig");
 
 // Actor model components
 const coordinator_mod = @import("coordinator.zig");
@@ -62,10 +63,14 @@ else
     null;
 
 fn nativeFetchUrlImpl(_: ?*anyopaque, allocator: Allocator, url: []const u8, dest_path: []const u8) Io.FetchUrlError!void {
-    var alloc = allocator;
-    unbundle.download.downloadAndExtract(&alloc, url, dest_path) catch {
+    if (comptime is_freestanding) {
         return error.DownloadFailed;
-    };
+    } else {
+        var alloc = allocator;
+        unbundle.download.downloadAndExtract(&alloc, url, dest_path) catch {
+            return error.DownloadFailed;
+        };
+    }
 }
 
 fn freeSlice(gpa: Allocator, s: []u8) void {
@@ -423,13 +428,16 @@ pub const BuildEnv = struct {
             .root_dir = pkg_root_dir,
         });
 
-        // Transfer provides entries and targets_config from header to package for platform roots
-        if (header_info.kind == .platform) {
+        // Transfer provides entries from header to package for app or platform roots.
+        // For platforms, also transfer targets_config.
+        if (header_info.kind == .platform or header_info.kind == .app or header_info.kind == .default_app) {
             if (self.packages.getPtr(pkg_name)) |pkg| {
                 pkg.provides_entries = header_info.provides_entries;
                 header_info.provides_entries = .{}; // Prevent double-free in deinit
-                pkg.targets_config = header_info.targets_config;
-                header_info.targets_config = null; // Prevent double-free in deinit
+                if (header_info.kind == .platform) {
+                    pkg.targets_config = header_info.targets_config;
+                    header_info.targets_config = null; // Prevent double-free in deinit
+                }
             }
         }
 
@@ -970,40 +978,12 @@ pub const BuildEnv = struct {
         );
         defer checker.deinit();
 
-        // Build the platform-to-app ident translation map
-        // This translates platform requirement idents to app idents by name
-        var platform_to_app_idents = std.AutoHashMap(base.Ident.Idx, base.Ident.Idx).init(self.gpa);
+        var platform_to_app_idents = try platform_requirements.buildPlatformToAppIdents(
+            self.gpa,
+            platform_root_env,
+            app_root_env,
+        );
         defer platform_to_app_idents.deinit();
-
-        // Enable runtime inserts on the app's interner so we can add new idents from platform
-        // (the app's interner may be deserialized from cache and not support inserts by default)
-        // Use app_root_env.gpa so the memory is freed by the same allocator during ModuleEnv.deinit()
-        try app_root_env.common.idents.interner.enableRuntimeInserts(app_root_env.gpa);
-
-        for (platform_root_env.requires_types.items.items) |required_type| {
-            const platform_ident_text = platform_root_env.getIdent(required_type.ident);
-            if (app_root_env.common.findIdent(platform_ident_text)) |app_ident| {
-                try platform_to_app_idents.put(required_type.ident, app_ident);
-            }
-
-            // Also add for-clause type alias names (Model, model) to the translation map
-            const all_aliases = platform_root_env.for_clause_aliases.items.items;
-            const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
-            for (type_aliases_slice) |alias| {
-                // Add alias name (e.g., "Model") - look up in app's ident store first,
-                // and only insert if not found (avoids error on deserialized interners).
-                const alias_name_text = platform_root_env.getIdent(alias.alias_name);
-                const alias_app_ident = app_root_env.common.findIdent(alias_name_text) orelse
-                    try app_root_env.common.insertIdent(app_root_env.gpa, base.Ident.for_text(alias_name_text));
-                try platform_to_app_idents.put(alias.alias_name, alias_app_ident);
-
-                // Add rigid name (e.g., "model") - look up first, only insert if not found.
-                const rigid_name_text = platform_root_env.getIdent(alias.rigid_name);
-                const rigid_app_ident = app_root_env.common.findIdent(rigid_name_text) orelse
-                    try app_root_env.common.insertIdent(app_root_env.gpa, base.Ident.for_text(rigid_name_text));
-                try platform_to_app_idents.put(alias.rigid_name, rigid_app_ident);
-            }
-        }
 
         // Check platform requirements against app exports
         try checker.checkPlatformRequirements(platform_root_env, &platform_to_app_idents);
@@ -1636,13 +1616,17 @@ pub const BuildEnv = struct {
 
         // Validate URL and extract hash
         const base58_hash = download.validateUrl(url) catch |err| {
-            std.log.err("Invalid package URL: {s} ({})", .{ url, err });
+            if (comptime !is_freestanding) {
+                std.log.err("Invalid package URL: {s} ({})", .{ url, err });
+            }
             return error.InvalidUrl;
         };
 
         // Get cache directory
         const cache_dir_path = self.getRocCacheDir(self.gpa) catch {
-            std.log.err("Could not determine cache directory", .{});
+            if (comptime !is_freestanding) {
+                std.log.err("Could not determine cache directory", .{});
+            }
             return error.NoCacheDir;
         };
         defer self.gpa.free(cache_dir_path);
@@ -1655,7 +1639,9 @@ pub const BuildEnv = struct {
             var d = std.fs.cwd().openDir(package_dir_path, .{}) catch |err| switch (err) {
                 error.FileNotFound => break :blk false,
                 else => {
-                    std.log.err("Failed to access package directory: {}", .{err});
+                    if (comptime !is_freestanding) {
+                        std.log.err("Failed to access package directory: {}", .{err});
+                    }
                     return error.FileError;
                 },
             };
@@ -1665,11 +1651,15 @@ pub const BuildEnv = struct {
 
         if (!already_cached) {
             // Not cached - need to download
-            std.log.info("Downloading package from {s}...", .{url});
+            if (comptime !is_freestanding) {
+                std.log.info("Downloading package from {s}...", .{url});
+            }
 
             // Create cache directory structure
             std.fs.cwd().makePath(cache_dir_path) catch |make_err| {
-                std.log.err("Failed to create cache directory: {}", .{make_err});
+                if (comptime !is_freestanding) {
+                    std.log.err("Failed to create cache directory: {}", .{make_err});
+                }
                 return error.FileError;
             };
 
@@ -1677,7 +1667,9 @@ pub const BuildEnv = struct {
             std.fs.cwd().makeDir(package_dir_path) catch |make_err| switch (make_err) {
                 error.PathAlreadyExists => {}, // Race condition, another process created it
                 else => {
-                    std.log.err("Failed to create package directory: {}", .{make_err});
+                    if (comptime !is_freestanding) {
+                        std.log.err("Failed to create package directory: {}", .{make_err});
+                    }
                     return error.FileError;
                 },
             };
@@ -1685,11 +1677,15 @@ pub const BuildEnv = struct {
             // Download and extract via io vtable (path-based, no Dir handle needed)
             self.filesystem.fetchUrl(self.gpa, url, package_dir_path) catch |fetch_err| {
                 std.fs.cwd().deleteTree(package_dir_path) catch {};
-                std.log.err("Failed to download package: {} (url: {s})", .{ fetch_err, url });
+                if (comptime !is_freestanding) {
+                    std.log.err("Failed to download package: {} (url: {s})", .{ fetch_err, url });
+                }
                 return error.DownloadFailed;
             };
 
-            std.log.info("Package cached at {s}", .{package_dir_path});
+            if (comptime !is_freestanding) {
+                std.log.info("Package cached at {s}", .{package_dir_path});
+            }
         }
 
         // Packages must have a main.roc entry point
@@ -1698,7 +1694,9 @@ pub const BuildEnv = struct {
         };
         std.fs.cwd().access(source_path, .{}) catch {
             self.gpa.free(source_path);
-            std.log.err("No main.roc found in package at {s}", .{package_dir_path});
+            if (comptime !is_freestanding) {
+                std.log.err("No main.roc found in package at {s}", .{package_dir_path});
+            }
             return error.NoPackageSource;
         };
         self.gpa.free(package_dir_path);
@@ -2022,7 +2020,7 @@ pub const BuildEnv = struct {
         while (it.next()) |e| {
             const pkg_name = e.key_ptr.*;
             const sched = e.value_ptr.*;
-            _ = self.packages.get(pkg_name).?;
+            std.debug.assert(self.packages.get(pkg_name) != null);
             var mi = sched.moduleNamesIterator();
             while (mi.next()) |me| {
                 const mod = me.key_ptr.*;
@@ -2271,7 +2269,7 @@ pub const BuildEnv = struct {
                     .is_app = is_app,
                     .is_platform_sibling = is_platform_sibling,
                     .depth = sched_mod.depth,
-                    .provides_entries = if (is_platform_main)
+                    .provides_entries = if (is_platform_main or is_app)
                         if (pkg_ptr) |p| p.provides_entries.items else &.{}
                     else
                         &.{},
@@ -2643,6 +2641,40 @@ pub const BuildEnv = struct {
                                 .platform_env = platform_module.env,
                                 .entrypoint_expr = def.expr,
                                 .app_module_env = app_module_env,
+                                .provides_entries = provides_entries,
+                            };
+                        }
+                    }
+                }
+            }
+
+            return error.NoModulesCompiled;
+        }
+
+        /// Find the entrypoint expression from the app's provides entries.
+        /// Used when the app module itself is the runnable entrypoint (e.g. glue specs).
+        pub fn findAppEntrypoint(self: *const ResolvedModules) !EntrypointInfo {
+            const app_idx = findAppModuleIndex(self.compiled_modules) orelse
+                return error.NoModulesCompiled;
+            const app_module = self.compiled_modules[app_idx];
+            const provides_entries = app_module.provides_entries;
+            if (provides_entries.len == 0) return error.NoModulesCompiled;
+
+            const app_env = app_module.env;
+            const app_defs = app_env.store.sliceDefs(app_env.all_defs);
+
+            for (provides_entries) |entry| {
+                for (app_defs) |def_idx| {
+                    const def = app_env.store.getDef(def_idx);
+                    const pattern = app_env.store.getPattern(def.pattern);
+                    if (pattern == .assign) {
+                        const ident_name = app_env.getIdent(pattern.assign.ident);
+                        if (std.mem.eql(u8, ident_name, entry.roc_ident)) {
+                            return .{
+                                .platform_idx = app_idx,
+                                .platform_env = app_env,
+                                .entrypoint_expr = def.expr,
+                                .app_module_env = app_env,
                                 .provides_entries = provides_entries,
                             };
                         }

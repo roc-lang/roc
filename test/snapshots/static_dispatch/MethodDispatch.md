@@ -135,10 +135,10 @@ EndOfFile,
 			(e-lambda
 				(args
 					(p-ident (raw "x")))
-				(e-field-access
-					(e-ident (raw "x"))
-					(e-apply
-						(e-ident (raw "get_value"))))))
+				(e-method-call (method ".get_value")
+					(receiver
+						(e-ident (raw "x")))
+					(args))))
 		(s-type-anno (name "modify")
 			(ty-fn
 				(ty-var (raw "a"))
@@ -160,10 +160,10 @@ EndOfFile,
 				(args
 					(p-ident (raw "x"))
 					(p-ident (raw "fn")))
-				(e-field-access
-					(e-ident (raw "x"))
-					(e-apply
-						(e-ident (raw "transform"))
+				(e-method-call (method ".transform")
+					(receiver
+						(e-ident (raw "x")))
+					(args
 						(e-ident (raw "fn"))))))
 		(s-type-anno (name "container")
 			(ty (name "Container")))
@@ -185,10 +185,10 @@ EndOfFile,
 			(ty (name "Str")))
 		(s-decl
 			(p-ident (raw "directCall"))
-			(e-field-access
-				(e-ident (raw "myContainer"))
-				(e-apply
-					(e-ident (raw "get_value")))))
+			(e-method-call (method ".get_value")
+				(receiver
+					(e-ident (raw "myContainer")))
+				(args)))
 		(s-type-anno (name "result1")
 			(ty (name "Str")))
 		(s-decl
@@ -271,7 +271,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dot-access (field "get_value")
+			(e-method-call (method "get_value")
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -291,7 +291,7 @@ NO CHANGE
 			(args
 				(p-assign (ident "x"))
 				(p-assign (ident "fn")))
-			(e-dot-access (field "transform")
+			(e-method-call (method "transform")
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -335,7 +335,7 @@ NO CHANGE
 			(ty-lookup (name "Container") (local))))
 	(d-let
 		(p-assign (ident "directCall"))
-		(e-dot-access (field "get_value")
+		(e-method-call (method "get_value")
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "myContainer"))))

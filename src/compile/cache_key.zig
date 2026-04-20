@@ -69,7 +69,7 @@ pub const CacheKey = struct {
 
         // Convert to hex string
         const filename = try allocator.alloc(u8, combined_hash.len * 2);
-        _ = std.fmt.bufPrint(filename, "{x}", .{&combined_hash}) catch unreachable;
+        std.fmt.bufPrint(filename, "{x}", .{&combined_hash}) catch unreachable;
 
         return filename;
     }

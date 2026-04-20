@@ -2,6 +2,7 @@
 const std = @import("std");
 
 pub const SExprTree = @import("SExprTree.zig");
+pub const HostedProc = @import("HostedProc.zig").HostedProc;
 pub const Ident = @import("Ident.zig");
 pub const Region = @import("Region.zig");
 pub const StringLiteral = @import("StringLiteral.zig");
@@ -26,8 +27,10 @@ pub const module_path = @import("module_path.zig");
 pub const url = @import("url.zig");
 
 test {
-    _ = @import("Ident.zig");
-    _ = @import("module_path.zig");
+    const ident = @import("Ident.zig");
+    const module_path_mod = @import("module_path.zig");
+    std.testing.refAllDecls(ident);
+    std.testing.refAllDecls(module_path_mod);
 }
 
 /// Whether a function calls itself.

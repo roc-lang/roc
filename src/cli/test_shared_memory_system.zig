@@ -169,14 +169,14 @@ test "integration - shared memory setup and parsing" {
     // Clean up shared memory resources
     defer {
         if (comptime builtin.os.tag == .windows) {
-            _ = @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
-            _ = @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
+            @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
+            @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
         } else {
             const posix = struct {
                 extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
                 extern "c" fn close(fd: c_int) c_int;
             };
-            _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
+            std.debug.assert(posix.munmap(shm_handle.ptr, shm_handle.mapped_size) == 0);
             _ = posix.close(shm_handle.fd);
         }
     }
@@ -229,14 +229,14 @@ test "integration - compilation pipeline for different platforms" {
         // Clean up shared memory resources
         defer {
             if (comptime builtin.os.tag == .windows) {
-                _ = @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
-                _ = @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
+                @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
+                @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
             } else {
                 const posix = struct {
                     extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
                     extern "c" fn close(fd: c_int) c_int;
                 };
-                _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
+                std.debug.assert(posix.munmap(shm_handle.ptr, shm_handle.mapped_size) == 0);
                 _ = posix.close(shm_handle.fd);
             }
         }
@@ -281,14 +281,14 @@ test "integration - error handling for non-existent file" {
         // Clean up shared memory resources if somehow successful
         defer {
             if (comptime builtin.os.tag == .windows) {
-                _ = @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
-                _ = @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
+                @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
+                @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
             } else {
                 const posix = struct {
                     extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
                     extern "c" fn close(fd: c_int) c_int;
                 };
-                _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
+                std.debug.assert(posix.munmap(shm_handle.ptr, shm_handle.mapped_size) == 0);
                 _ = posix.close(shm_handle.fd);
             }
         }
@@ -346,14 +346,14 @@ test "integration - automatic module dependency ordering" {
     // Clean up shared memory resources
     defer {
         if (comptime builtin.os.tag == .windows) {
-            _ = @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
-            _ = @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
+            @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
+            @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
         } else {
             const posix = struct {
                 extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
                 extern "c" fn close(fd: c_int) c_int;
             };
-            _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
+            std.debug.assert(posix.munmap(shm_handle.ptr, shm_handle.mapped_size) == 0);
             _ = posix.close(shm_handle.fd);
         }
     }
@@ -404,14 +404,14 @@ test "integration - transitive module imports (module A imports module B)" {
     // Clean up shared memory resources
     defer {
         if (comptime builtin.os.tag == .windows) {
-            _ = @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
-            _ = @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
+            @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
+            @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
         } else {
             const posix = struct {
                 extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
                 extern "c" fn close(fd: c_int) c_int;
             };
-            _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
+            std.debug.assert(posix.munmap(shm_handle.ptr, shm_handle.mapped_size) == 0);
             _ = posix.close(shm_handle.fd);
         }
     }
@@ -469,14 +469,14 @@ test "integration - diamond dependency pattern (A imports B and C, both import D
     // Clean up shared memory resources
     defer {
         if (comptime builtin.os.tag == .windows) {
-            _ = @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
-            _ = @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
+            @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
+            @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
         } else {
             const posix = struct {
                 extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
                 extern "c" fn close(fd: c_int) c_int;
             };
-            _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
+            std.debug.assert(posix.munmap(shm_handle.ptr, shm_handle.mapped_size) == 0);
             _ = posix.close(shm_handle.fd);
         }
     }
@@ -523,14 +523,14 @@ test "integration - direct Core and Utils calls from app" {
     // Clean up shared memory resources
     defer {
         if (comptime builtin.os.tag == .windows) {
-            _ = @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
-            _ = @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
+            @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
+            @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
         } else {
             const posix = struct {
                 extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
                 extern "c" fn close(fd: c_int) c_int;
             };
-            _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
+            std.debug.assert(posix.munmap(shm_handle.ptr, shm_handle.mapped_size) == 0);
             _ = posix.close(shm_handle.fd);
         }
     }

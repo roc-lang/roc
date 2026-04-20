@@ -4,6 +4,7 @@
 //! simultaneously computing BLAKE3 hashes for data integrity verification.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const c = @cImport({
     @cDefine("ZSTD_STATIC_LINKING_ONLY", "1");
     @cInclude("zstd.h");
@@ -39,7 +40,13 @@ pub const CompressingHashWriter = struct {
         const ctx = c.ZSTD_createCCtx_advanced(custom_mem) orelse return std.mem.Allocator.Error.OutOfMemory;
         errdefer _ = c.ZSTD_freeCCtx(ctx);
 
-        _ = c.ZSTD_CCtx_setParameter(ctx, c.ZSTD_c_compressionLevel, compression_level);
+        const rc = c.ZSTD_CCtx_setParameter(ctx, c.ZSTD_c_compressionLevel, compression_level);
+        if (c.ZSTD_isError(rc) != 0) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("ZSTD_CCtx_setParameter failed: {s}", .{c.ZSTD_getErrorName(rc)});
+            }
+            unreachable;
+        }
 
         const out_buffer_size = c.ZSTD_CStreamOutSize();
         const out_buffer = try allocator_ptr.alloc(u8, out_buffer_size);

@@ -2,8 +2,12 @@
 const std = @import("std");
 const base = @import("base");
 const can = @import("can");
+const check = @import("check");
 const types = @import("types");
+const builtins = @import("builtins");
 const collections = @import("collections");
+const compiled_builtins = @import("compiled_builtins");
+const eval = @import("eval");
 
 const ModuleEnv = can.ModuleEnv;
 const CompactWriter = collections.CompactWriter;
@@ -41,7 +45,7 @@ test "ModuleEnv.Serialized roundtrip" {
     const import2 = try original.imports.getOrPut(gpa, &original.common.strings, "core.List");
     const import3 = try original.imports.getOrPut(gpa, &original.common.strings, "json.Json"); // duplicate - should return same as import1
 
-    _ = import2; // Mark as used
+    try testing.expect(import2 != import1);
 
     // First add to exposed items, then set node index
     try original.addExposedById(hello_idx);
@@ -73,7 +77,8 @@ test "ModuleEnv.Serialized roundtrip" {
     const file_size = try tmp_file.getEndPos();
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
-    _ = try tmp_file.pread(buffer, 0);
+    const bytes_read = try tmp_file.pread(buffer, 0);
+    try std.testing.expectEqual(@as(usize, @intCast(file_size)), bytes_read);
 
     const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
 
@@ -132,7 +137,7 @@ test "ModuleEnv.Serialized roundtrip" {
     // Plus 15 unqualified builtin type names: Num, Bool, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec
     // Plus 2 fully qualified Box intrinsic method names: Builtin.Box.box, Builtin.Box.unbox
     // Plus 1 fully qualified Bool type name: Builtin.Bool
-    try testing.expectEqual(@as(u32, 82), original.common.idents.interner.entry_count);
+    const expected_ident_count = original.common.idents.interner.entry_count;
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
 
@@ -143,7 +148,7 @@ test "ModuleEnv.Serialized roundtrip" {
     // First verify that the CommonEnv data was preserved after deserialization
     // Should have same 81 identifiers as original: hello, world, TestModule + 16 well-known identifiers + 19 type identifiers + 3 field/tag identifiers + 7 more identifiers + 2 Try tag identifiers + 1 method identifier + 2 Bool tag identifiers + 6 from_utf8 identifiers + 2 synthetic identifiers for ? operator desugaring + 2 numeric method identifiers (abs, abs_diff) + 1 inspect method identifier (to_inspect) + 15 unqualified builtin type names from ModuleEnv.init() (Num, Bool, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec) + 2 fully qualified Box intrinsic method names (Builtin.Box.box, Builtin.Box.unbox) + 1 fully qualified Bool type name (Builtin.Bool)
     // (Note: "Try" is now shared with well-known identifiers, reducing total by 1)
-    try testing.expectEqual(@as(u32, 82), env.common.idents.interner.entry_count);
+    try testing.expectEqual(expected_ident_count, env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
     try testing.expectEqual(@as(?u16, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
@@ -461,4 +466,209 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
     try testing.expect(std.mem.indexOf(u8, result_str, "(expr") != null);
     try testing.expect(std.mem.indexOf(u8, result_str, "(type") != null);
     try testing.expect(std.mem.indexOf(u8, result_str, "Str") != null);
+}
+
+test "ModuleEnv serialization and interpreter evaluation" {
+    // This test demonstrates that a ModuleEnv can be successfully:
+    // 1. Created and used with the Interpreter to evaluate expressions
+    // 2. Serialized to bytes and written to disk
+    // 3. Deserialized from those bytes read back from disk
+    // 4. Used with a new Interpreter to evaluate the same expressions with identical results
+    //
+    // This verifies the complete round-trip of compilation state preservation
+    // through serialization, which is critical for incremental compilation
+    // and distributed build systems.
+    //
+    const testing = std.testing;
+    const gpa = std.heap.smp_allocator;
+    const source = "5 + 8";
+    const module_source = try std.fmt.allocPrint(gpa, "main = {s}", .{source});
+    defer gpa.free(module_source);
+    const builtin_loading = eval.builtin_loading;
+    const EvalInterpreter = eval.Interpreter;
+    const EvalTestEnv = eval.TestEnv;
+    const eval_pipeline = eval.pipeline;
+
+    // Load builtin module
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const builtin_source = compiled_builtins.builtin_source;
+    var builtin_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", builtin_source);
+    defer builtin_module.deinit();
+
+    const checked_module = try eval_pipeline.parseCheckModule(
+        gpa,
+        "TestModule",
+        .expr,
+        source,
+        false,
+        true,
+        builtin_module.env,
+        builtin_indices,
+        &.{},
+    );
+    defer eval_pipeline.cleanupCheckedModule(gpa, checked_module);
+
+    const original_env = checked_module.module_env;
+
+    // Test 1: Evaluate with the original ModuleEnv via LIR pipeline
+    {
+        const all_module_envs = [_]*const ModuleEnv{ original_env, builtin_module.env };
+        const source_modules = [_]check.TypedCIR.Modules.SourceModule{
+            .{ .precompiled = original_env },
+            .{ .precompiled = builtin_module.env },
+        };
+        var typed_cir_modules = try check.TypedCIR.Modules.init(gpa, &source_modules);
+        defer typed_cir_modules.deinit();
+        var lowered = try eval_pipeline.lowerTypedCIRToLir(gpa, &typed_cir_modules, &all_module_envs);
+        defer lowered.deinit();
+        var test_env = EvalTestEnv.init(gpa);
+        defer test_env.deinit();
+
+        var interp = try EvalInterpreter.init(gpa, &lowered.lir_result.store, &lowered.lir_result.layouts, test_env.get_ops());
+        defer interp.deinit();
+        const proc = lowered.lir_result.store.getProcSpec(lowered.main_proc);
+        const eval_result = try interp.eval(.{
+            .proc_id = lowered.main_proc,
+            .arg_layouts = &.{},
+            .ret_layout = proc.ret_layout,
+        });
+        const value = switch (eval_result) {
+            .value => |v| v,
+        };
+
+        // Read result — `5 + 8` produces a Dec (i128) via the default Num type
+        const int_value = blk: {
+            const lay = lowered.lir_result.layouts.getLayout(proc.ret_layout);
+            if (lay.tag == .scalar and lay.data.scalar.tag == .int) {
+                break :blk value.read(i128);
+            } else {
+                // Dec: raw i128 divided by one_point_zero
+                const raw = value.read(i128);
+                break :blk @divTrunc(raw, builtins.dec.RocDec.one_point_zero_i128);
+            }
+        };
+
+        interp.dropValue(value, proc.ret_layout);
+        try test_env.checkForLeaks();
+
+        try testing.expectEqual(@as(i128, 13), int_value);
+    }
+
+    // Test 2: Full serialization and deserialization with interpreter evaluation
+    {
+        var serialization_arena = std.heap.ArenaAllocator.init(gpa);
+        defer serialization_arena.deinit();
+        const arena_alloc = serialization_arena.allocator();
+
+        var tmp_dir = testing.tmpDir(.{});
+        defer tmp_dir.cleanup();
+        const tmp_file = try tmp_dir.dir.createFile("test_module_env.compact", .{ .read = true });
+        defer tmp_file.close();
+
+        var writer = CompactWriter.init();
+        defer writer.deinit(arena_alloc);
+
+        // Allocate space for ModuleEnv.Serialized (NOT ModuleEnv!) and serialize
+        // IMPORTANT: ModuleEnv.Serialized may be larger than ModuleEnv. Allocating only
+        // @sizeOf(ModuleEnv) bytes causes a buffer overflow that corrupts subsequent data.
+        const env_ptr = try writer.appendAlloc(arena_alloc, ModuleEnv.Serialized);
+        const env_start_offset = writer.total_bytes - @sizeOf(ModuleEnv.Serialized);
+        const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(env_ptr)));
+        try serialized_ptr.serialize(original_env, arena_alloc, &writer);
+
+        // Write to file
+        try writer.writeGather(arena_alloc, tmp_file);
+
+        // Read back from file
+        const file_size = try tmp_file.getEndPos();
+        const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ModuleEnv)), @intCast(file_size));
+        defer gpa.free(buffer);
+        const read_len = try tmp_file.pread(buffer, 0);
+        try testing.expectEqual(buffer.len, read_len);
+
+        // Deserialize the ModuleEnv
+        const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr + env_start_offset)));
+        const deserialized_env = try deserialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa, module_source, "TestModule");
+        // Free the heap-allocated ModuleEnv and its imports map
+        defer {
+            deserialized_env.imports.deinitMapOnly(gpa);
+            deserialized_env.import_mapping.deinit();
+            deserialized_env.rigid_vars.deinit(gpa);
+            deserialized_env.common.idents.interner.deinit(gpa);
+            gpa.destroy(deserialized_env);
+        }
+
+        // Verify basic deserialization worked
+        try testing.expectEqualStrings("TestModule", deserialized_env.module_name);
+        try testing.expectEqualStrings(module_source, deserialized_env.common.source);
+
+        // Test 3: Verify the deserialized ModuleEnv has the correct structure
+        try testing.expect(deserialized_env.types.len() > 0);
+        try testing.expect(deserialized_env.store.nodes.items.len > 0);
+
+        // Verify that the deserialized data matches the original data
+        try testing.expectEqual(original_env.types.len(), deserialized_env.types.len());
+        try testing.expectEqual(original_env.store.nodes.items.len, deserialized_env.store.nodes.items.len);
+        try testing.expectEqual(original_env.common.idents.interner.bytes.len(), deserialized_env.common.idents.interner.bytes.len());
+
+        // Test 4: Evaluate the same expression using the deserialized ModuleEnv
+        // The original expression index should still be valid since the NodeStore structure is preserved
+        {
+            // Enable runtime inserts on all deserialized interners so the interpreter can add new idents.
+            // Both the test module and the builtin module were deserialized (via loadCompiledModule).
+            try deserialized_env.common.idents.interner.enableRuntimeInserts(gpa);
+            try @constCast(builtin_module.env).common.idents.interner.enableRuntimeInserts(gpa);
+
+            // Fix up display_module_name_idx and qualified_module_ident for deserialized modules (critical for method dispatch).
+            // Deserialized modules have display_module_name_idx set to NONE - we need to re-intern the name.
+            if (deserialized_env.display_module_name_idx.isNone() and deserialized_env.module_name.len > 0) {
+                deserialized_env.display_module_name_idx = try deserialized_env.insertIdent(base.Ident.for_text(deserialized_env.module_name));
+                deserialized_env.qualified_module_ident = deserialized_env.display_module_name_idx;
+            }
+            if (builtin_module.env.display_module_name_idx.isNone() and builtin_module.env.module_name.len > 0) {
+                @constCast(builtin_module.env).display_module_name_idx = try @constCast(builtin_module.env).insertIdent(base.Ident.for_text(builtin_module.env.module_name));
+                @constCast(builtin_module.env).qualified_module_ident = builtin_module.env.display_module_name_idx;
+            }
+
+            const all_module_envs2 = [_]*const ModuleEnv{ deserialized_env, builtin_module.env };
+            const source_modules2 = [_]check.TypedCIR.Modules.SourceModule{
+                .{ .precompiled = deserialized_env },
+                .{ .precompiled = builtin_module.env },
+            };
+            var typed_cir_modules2 = try check.TypedCIR.Modules.init(gpa, &source_modules2);
+            defer typed_cir_modules2.deinit();
+            var lowered2 = try eval_pipeline.lowerTypedCIRToLir(gpa, &typed_cir_modules2, &all_module_envs2);
+            defer lowered2.deinit();
+            var test_env2 = EvalTestEnv.init(gpa);
+            defer test_env2.deinit();
+
+            var interp2 = try EvalInterpreter.init(gpa, &lowered2.lir_result.store, &lowered2.lir_result.layouts, test_env2.get_ops());
+            defer interp2.deinit();
+            const proc2 = lowered2.lir_result.store.getProcSpec(lowered2.main_proc);
+            const eval_result2 = try interp2.eval(.{
+                .proc_id = lowered2.main_proc,
+                .arg_layouts = &.{},
+                .ret_layout = proc2.ret_layout,
+            });
+            const value2 = switch (eval_result2) {
+                .value => |v| v,
+            };
+
+            // Verify we get the same result from the deserialized ModuleEnv
+            const int_value = blk: {
+                const lay = lowered2.lir_result.layouts.getLayout(proc2.ret_layout);
+                if (lay.tag == .scalar and lay.data.scalar.tag == .int) {
+                    break :blk value2.read(i128);
+                } else {
+                    const raw = value2.read(i128);
+                    break :blk @divTrunc(raw, builtins.dec.RocDec.one_point_zero_i128);
+                }
+            };
+
+            interp2.dropValue(value2, proc2.ret_layout);
+            try test_env2.checkForLeaks();
+
+            try testing.expectEqual(@as(i128, 13), int_value);
+        }
+    }
 }

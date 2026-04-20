@@ -26,13 +26,11 @@ const increfDataPtrC = utils.increfDataPtrC;
 
 /// Pointer to the bytes of a list element or similar data
 pub const Opaque = ?[*]u8;
-const CompareFn = *const fn (Opaque, Opaque, Opaque) callconv(.c) u8;
 const CopyFn = *const fn (Opaque, Opaque) callconv(.c) void;
 /// Function copying data between 2 Opaques with a slot for the element's width
 pub const CopyFallbackFn = *const fn (Opaque, Opaque, usize) callconv(.c) void;
 
 const Inc = *const fn (?*anyopaque, ?[*]u8) callconv(.c) void;
-const IncN = *const fn (?*anyopaque, ?[*]u8, usize) callconv(.c) void;
 const Dec = *const fn (?*anyopaque, ?[*]u8) callconv(.c) void;
 
 /// A bit mask were the only set bit is the bit indicating if the List is a seamless slice.
@@ -161,8 +159,11 @@ pub const RocList = extern struct {
     }
 
     pub fn incref(self: RocList, amount: isize, elements_refcounted: bool, roc_ops: *RocOps) void {
-        // If the list is unique and not a seamless slice, the length needs to be store on the heap if the elements are refcounted.
-        if (elements_refcounted and self.isUnique(roc_ops) and !self.isSeamlessSlice()) {
+        // Seamless slices of refcounted lists need the original allocation's element
+        // count recorded in the heap header. Once a non-slice list becomes shared,
+        // that count must already be present because later slice teardown will read it
+        // from the shared allocation.
+        if (elements_refcounted and !self.isSeamlessSlice()) {
             if (self.getAllocationDataPtr(roc_ops)) |source| {
                 // - 1 is refcount.
                 // - 2 is size on heap.
@@ -1025,11 +1026,19 @@ pub fn listDropAt(
     const size = list.len();
     const size_u64 = @as(u64, @intCast(size));
 
-    // NOTE
-    // we need to return an empty list explicitly,
-    // because we rely on the pointer field being null if the list is empty
-    // which also requires duplicating the utils.decref call to spend the RC token
-    if (size <= 1) {
+    // Empty lists lower to the canonical null-pointer representation. Since
+    // listDropAt consumes its input, spend the ownership token and return the
+    // canonical empty result.
+    if (size == 0) {
+        list.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
+        return RocList.empty();
+    }
+
+    if (drop_index_u64 >= size_u64) {
+        return list;
+    }
+
+    if (size == 1) {
         list.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
         return RocList.empty();
     }
@@ -1122,57 +1131,6 @@ pub fn listDropAt(
     } else {
         return RocList.empty();
     }
-}
-
-/// Sort list elements using provided comparison function for custom ordering.
-pub fn listSortWith(
-    input: RocList,
-    cmp: CompareFn,
-    cmp_data: Opaque,
-    inc_n_context: ?*anyopaque,
-    inc_n_data: IncN,
-    data_is_owned: bool,
-    alignment: u32,
-    element_width: usize,
-    elements_refcounted: bool,
-    inc_context: ?*anyopaque,
-    inc: Inc,
-    dec_context: ?*anyopaque,
-    dec: Dec,
-    copy: CopyFn,
-    roc_ops: *RocOps,
-) callconv(.c) RocList {
-    if (input.len() < 2) {
-        return input;
-    }
-    var list = input.makeUnique(
-        alignment,
-        element_width,
-        elements_refcounted,
-        inc_context,
-        inc,
-        dec_context,
-        dec,
-        roc_ops,
-    );
-
-    if (list.bytes) |source_ptr| {
-        @import("sort.zig").fluxsort(
-            source_ptr,
-            list.len(),
-            cmp,
-            cmp_data,
-            data_is_owned,
-            inc_n_context,
-            inc_n_data,
-            element_width,
-            alignment,
-            copy,
-            roc_ops,
-        );
-    }
-
-    return list;
 }
 
 // SWAP ELEMENTS
@@ -2052,6 +2010,34 @@ test "listAppendUnsafe with pre-allocated capacity" {
     try std.testing.expect(elements_ptr != null);
     const elements = elements_ptr.?[0..list_with_capacity.len()];
     try std.testing.expectEqual(@as(u16, 9999), elements[0]);
+}
+
+test "listReserve followed by listAppendUnsafe reuses reserved allocation" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var list = RocList.empty();
+    list = listReserve(list, @alignOf(u16), 2, @sizeOf(u16), false, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
+
+    const reserved_ptr = list.bytes;
+    try std.testing.expect(list.getCapacity() >= 2);
+
+    const first: u16 = 11;
+    list = listAppendUnsafe(list, @as(?[*]u8, @ptrCast(@constCast(&first))), @sizeOf(u16), &copy_fallback);
+    try std.testing.expectEqual(reserved_ptr, list.bytes);
+
+    const second: u16 = 22;
+    list = listAppendUnsafe(list, @as(?[*]u8, @ptrCast(@constCast(&second))), @sizeOf(u16), &copy_fallback);
+    try std.testing.expectEqual(reserved_ptr, list.bytes);
+    try std.testing.expectEqual(@as(usize, 2), list.len());
+
+    const elements_ptr = list.elements(u16);
+    try std.testing.expect(elements_ptr != null);
+    const elements = elements_ptr.?[0..list.len()];
+    try std.testing.expectEqual(@as(u16, 11), elements[0]);
+    try std.testing.expectEqual(@as(u16, 22), elements[1]);
+
+    defer list.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
 }
 
 test "listPrepend basic functionality" {
@@ -2950,7 +2936,7 @@ test "listAllocationPtr basic functionality" {
     // The allocation pointer should be valid and accessible
     if (alloc_ptr) |ptr| {
         // Should be able to access the data through the allocation pointer
-        _ = ptr; // Just verify it's not null
+        try std.testing.expect(@intFromPtr(ptr) != 0);
     }
 }
 
@@ -2963,7 +2949,9 @@ test "listAllocationPtr empty list" {
 
     const alloc_ptr = listAllocationPtr(empty_list, test_env.getOps());
     // Empty lists may have null allocation pointer
-    _ = alloc_ptr; // Just verify the function doesn't crash
+    if (alloc_ptr) |ptr| {
+        try std.testing.expect(@intFromPtr(ptr) != 0);
+    }
 }
 
 test "listIncref and listDecref public functions" {

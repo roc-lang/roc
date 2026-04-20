@@ -79,7 +79,7 @@ main! = |_| {}
 		(e-lambda
 			(args
 				(p-assign (ident "record")))
-			(e-dot-access (field "field")
+			(e-field-access (field "field")
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "record"))))))

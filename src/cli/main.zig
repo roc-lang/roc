@@ -21,6 +21,13 @@
 //! For detailed documentation, see `src/interpreter_shim/README.md`.
 
 const std = @import("std");
+const ir = @import("ir");
+const lambdamono = @import("lambdamono");
+const lambdasolved = @import("lambdasolved");
+const lir = @import("lir");
+const monotype = @import("monotype");
+const monotype_lifted = @import("monotype_lifted");
+const symbol = @import("symbol");
 
 /// Configure std library logging to suppress debug messages in production.
 /// This prevents debug logs from polluting stderr which should only contain
@@ -584,12 +591,31 @@ var debug_allocator: std.heap.DebugAllocator(.{}) = .{
     .backing_allocator = std.heap.c_allocator,
 };
 
+fn renderValidationError(
+    allocator: std.mem.Allocator,
+    result: platform_validation.ValidationResult,
+    stderr: anytype,
+) void {
+    const rendered = platform_validation.renderValidationError(allocator, result, stderr);
+    if (rendered) {} else {}
+}
+
+fn renderDiagnostics(build_env: *BuildEnv, stderr: anytype) void {
+    const diag = build_env.renderDiagnostics(stderr);
+    if (diag.errors > 0) {} else {}
+}
+
 /// The CLI entrypoint for the Roc compiler.
 pub fn main() !void {
     // Install stack overflow handler early, before any significant work.
     // This gives us a helpful error message instead of a generic segfault
     // if the compiler blows the stack (e.g., due to infinite recursion in type translation).
-    _ = base.stack_overflow.install();
+    const stack_overflow_installed = base.stack_overflow.install();
+    if (comptime builtin.mode == .Debug) {
+        std.debug.assert(stack_overflow_installed);
+    } else if (!stack_overflow_installed) {
+        unreachable;
+    }
 
     var gpa_tracy: tracy.TracyAllocator(null) = undefined;
     var gpa, const is_safe = gpa: {
@@ -911,7 +937,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
 
     switch (args.opt.toBackend()) {
         .dev, .llvm => return rocRunDevShim(ctx, args),
-        .interpreter => {},
+        .interpreter, .wasm => {},
     }
 
     // Initialize cache - used to store our shim, and linked interpreter executables in cache
@@ -1004,7 +1030,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
                     const result = platform_validation.targets_validator.ValidationResult{
                         .invalid_target = .{ .target_str = target_str },
                     };
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.InvalidTarget;
                 };
 
@@ -1017,7 +1043,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
                         .exe,
                         validation.config,
                     );
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.UnsupportedTarget;
                 }
             } else {
@@ -1033,7 +1059,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
                         .exe,
                         validation.config,
                     );
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.UnsupportedTarget;
                 }
             }
@@ -1254,7 +1280,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
             _ = ipc.platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
         } else {
             _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
-            _ = c.close(shm_handle.fd);
+            if (c.close(shm_handle.fd) != 0) {}
         }
     }
 
@@ -1344,7 +1370,7 @@ fn rocRunDevShim(ctx: *CliContext, args: cli_args.RunArgs) !void {
                     const result = platform_validation.targets_validator.ValidationResult{
                         .invalid_target = .{ .target_str = target_str },
                     };
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.InvalidTarget;
                 };
 
@@ -1357,7 +1383,7 @@ fn rocRunDevShim(ctx: *CliContext, args: cli_args.RunArgs) !void {
                         .exe,
                         validation.config,
                     );
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.UnsupportedTarget;
                 }
             } else {
@@ -1371,7 +1397,7 @@ fn rocRunDevShim(ctx: *CliContext, args: cli_args.RunArgs) !void {
                         .exe,
                         validation.config,
                     );
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.UnsupportedTarget;
                 }
             }
@@ -1599,7 +1625,7 @@ fn rocRunDevShim(ctx: *CliContext, args: cli_args.RunArgs) !void {
             _ = ipc.platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
         } else {
             _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
-            _ = c.close(shm_handle.fd);
+            if (c.close(shm_handle.fd) != 0) {}
         }
     }
 
@@ -1793,12 +1819,12 @@ fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: [
     build_env.filesystem = .{ .ctx = @ptrCast(&cli_echo_state), .vtable = cli_echo_vtable };
 
     build_env.discoverDependencies(args.path) catch |err| {
-        _ = build_env.renderDiagnostics(ctx.io.stderr());
+        renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
 
     build_env.compileDiscovered() catch |err| {
-        _ = build_env.renderDiagnostics(ctx.io.stderr());
+        renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
 
@@ -1817,37 +1843,37 @@ fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: [
     var result_buf: [16]u8 align(16) = undefined;
 
     switch (args.opt.toBackend()) {
-        .dev, .llvm => {
-            runViaDev(
-                ctx.gpa,
-                entry.platform_env,
-                resolved.all_module_envs,
-                entry.app_module_env,
-                entry.entrypoint_expr,
-                &roc_ops,
-                @ptrCast(&cli_args_list),
-                @ptrCast(&result_buf),
-            ) catch |err| {
-                std.debug.print("Dev backend execution error: {}\n", .{err});
-                std.process.exit(1);
-            };
+        .interpreter => compile.runner.runViaInterpreter(
+            ctx.gpa,
+            @constCast(entry.platform_env),
+            build_env.builtin_modules,
+            resolved.all_module_envs,
+            entry.app_module_env,
+            entry.entrypoint_expr,
+            &roc_ops,
+            @ptrCast(&cli_args_list),
+            @ptrCast(&result_buf),
+        ) catch |err| {
+            std.debug.print("Execution error: {}\n", .{err});
+            std.process.exit(1);
         },
-        .interpreter => {
-            compile.runner.runViaInterpreter(
-                ctx.gpa,
-                entry.platform_env,
-                build_env.builtin_modules,
-                resolved.all_module_envs,
-                entry.app_module_env,
-                entry.entrypoint_expr,
-                &roc_ops,
-                @ptrCast(&cli_args_list),
-                @ptrCast(&result_buf),
-                target,
-            ) catch |err| {
-                std.debug.print("Execution error: {}\n", .{err});
-                std.process.exit(1);
-            };
+        .dev => compile.runner.runViaDev(
+            ctx.gpa,
+            @constCast(entry.platform_env),
+            build_env.builtin_modules,
+            resolved.all_module_envs,
+            entry.app_module_env,
+            entry.entrypoint_expr,
+            &roc_ops,
+            @ptrCast(&cli_args_list),
+            @ptrCast(&result_buf),
+        ) catch |err| {
+            std.debug.print("Execution error: {}\n", .{err});
+            std.process.exit(1);
+        },
+        else => {
+            std.debug.print("Execution error: backend unavailable\n", .{});
+            std.process.exit(1);
         },
     }
 
@@ -2027,12 +2053,12 @@ fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_h
             const result = platform_validation.targets_validator.ValidationResult{
                 .process_crashed = .{ .exit_code = exit_code, .is_access_violation = true },
             };
-            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            renderValidationError(ctx.gpa, result, ctx.io.stderr());
         } else if (exit_code >= 0xC0000000) { // NT status codes for exceptions
             const result = platform_validation.targets_validator.ValidationResult{
                 .process_crashed = .{ .exit_code = exit_code, .is_access_violation = false },
             };
-            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            renderValidationError(ctx.gpa, result, ctx.io.stderr());
         }
         // Propagate the exit code (truncated to u8 for compatibility)
         std.process.exit(@truncate(exit_code));
@@ -2158,7 +2184,7 @@ fn runWithPosixFdInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle:
             const result = platform_validation.targets_validator.ValidationResult{
                 .process_signaled = .{ .signal = signal },
             };
-            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            renderValidationError(ctx.gpa, result, ctx.io.stderr());
             // Standard POSIX convention: exit with 128 + signal number
             std.process.exit(128 +| @as(u8, @truncate(signal)));
         },
@@ -2309,6 +2335,19 @@ pub fn setupSharedMemoryWithCoordinator(ctx: *CliContext, roc_file_path: []const
         has_platform = true;
         extractExposedModulesFromPlatform(ctx, pmp, &exposed_modules) catch {
             has_platform = false;
+        };
+    }
+
+    var entrypoint_names = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 32) catch {
+        return error.OutOfMemory;
+    };
+    defer entrypoint_names.deinit();
+    if (platform_main_path) |pmp| {
+        extractEntrypointDefNamesFromPlatform(ctx, pmp, &entrypoint_names) catch |err| {
+            return ctx.fail(.{ .entrypoint_extraction_failed = .{
+                .path = pmp,
+                .reason = @errorName(err),
+            } });
         };
     }
 
@@ -2525,13 +2564,32 @@ pub fn setupSharedMemoryWithCoordinator(ctx: *CliContext, roc_file_path: []const
     var def_indices_offset: u64 = 0;
     if (platform_main_env_offset != 0) {
         const platform_env: *ModuleEnv = @ptrFromInt(@as(usize, @intCast(platform_main_env_offset + shm_base_addr)));
-        const exports_slice = platform_env.store.sliceDefs(platform_env.exports);
-        entry_count = @intCast(exports_slice.len);
+        const platform_defs = platform_env.store.sliceDefs(platform_env.all_defs);
+        entry_count = @intCast(entrypoint_names.items.len);
 
         if (entry_count > 0) {
-            const def_indices_ptr = try shm_allocator.alloc(u32, exports_slice.len);
+            const def_indices_ptr = try shm_allocator.alloc(u32, entrypoint_names.items.len);
             def_indices_offset = @intFromPtr(def_indices_ptr.ptr) - shm_base_addr;
-            for (exports_slice, 0..) |def_idx, i| {
+            for (entrypoint_names.items, 0..) |entry_name, i| {
+                var found_def: ?can.CIR.Def.Idx = null;
+                for (platform_defs) |def_idx| {
+                    const def = platform_env.store.getDef(def_idx);
+                    const pattern = platform_env.store.getPattern(def.pattern);
+                    switch (pattern) {
+                        .assign => |assign| {
+                            const ident_name = platform_env.getIdent(assign.ident);
+                            if (std.mem.eql(u8, ident_name, entry_name)) {
+                                found_def = def_idx;
+                                break;
+                            }
+                        },
+                        else => {},
+                    }
+                }
+                const def_idx = found_def orelse {
+                    std.log.err("Entrypoint '{s}' not found in platform module", .{entry_name});
+                    return error.NoEntrypointsLowered;
+                };
                 def_indices_ptr[i] = @intFromEnum(def_idx);
             }
         }
@@ -2868,32 +2926,12 @@ fn checkPlatformRequirementsFromCoordinator(
     );
     defer checker.deinit();
 
-    // Build the platform-to-app ident translation map
-    // This translates platform requirement idents to app idents by name
-    var platform_to_app_idents = std.AutoHashMap(base.Ident.Idx, base.Ident.Idx).init(ctx.gpa);
+    var platform_to_app_idents = try compile.platform_requirements.buildPlatformToAppIdents(
+        ctx.gpa,
+        pf_root_env,
+        app_root_env,
+    );
     defer platform_to_app_idents.deinit();
-
-    for (pf_root_env.requires_types.items.items) |required_type| {
-        const platform_ident_text = pf_root_env.getIdent(required_type.ident);
-        if (app_root_env.common.findIdent(platform_ident_text)) |app_ident| {
-            try platform_to_app_idents.put(required_type.ident, app_ident);
-        }
-
-        // Also add for-clause type alias names (Model, model) to the translation map
-        const all_aliases = pf_root_env.for_clause_aliases.items.items;
-        const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
-        for (type_aliases_slice) |alias| {
-            // Add alias name (e.g., "Model")
-            const alias_name_text = pf_root_env.getIdentText(alias.alias_name);
-            const alias_app_ident = try app_root_env.common.insertIdent(ctx.gpa, base.Ident.for_text(alias_name_text));
-            try platform_to_app_idents.put(alias.alias_name, alias_app_ident);
-
-            // Add rigid name (e.g., "model")
-            const rigid_name_text = pf_root_env.getIdentText(alias.rigid_name);
-            const rigid_app_ident = try app_root_env.common.insertIdent(ctx.gpa, base.Ident.for_text(rigid_name_text));
-            try platform_to_app_idents.put(alias.rigid_name, rigid_app_ident);
-        }
-    }
 
     // Check platform requirements against app exports
     try checker.checkPlatformRequirements(pf_root_env, &platform_to_app_idents);
@@ -3020,7 +3058,7 @@ fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHa
     const shm_name = "/ROC_FILE_TO_INTERPRET";
 
     // Unlink any existing shared memory object first
-    _ = posix.shm_unlink(shm_name);
+    posix.shm_unlink(shm_name) catch {};
 
     // Create shared memory object
     const shm_fd = posix.shm_open(shm_name, 0x0002 | 0x0200, 0o666); // O_RDWR | O_CREAT
@@ -3030,7 +3068,7 @@ fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHa
 
     // Set the size of the shared memory object
     if (c.ftruncate(shm_fd, @intCast(total_size)) != 0) {
-        _ = c.close(shm_fd);
+        if (c.close(shm_fd) != 0) {}
         return error.SharedMemoryTruncateFailed;
     }
 
@@ -3045,7 +3083,7 @@ fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHa
     );
     // mmap returns MAP_FAILED ((void*)-1) on error, not NULL
     if (mapped_ptr == posix.MAP_FAILED) {
-        _ = c.close(shm_fd);
+        if (c.close(shm_fd) != 0) {}
         return error.SharedMemoryMapFailed;
     }
     const mapped_memory = @as([*]u8, @ptrCast(mapped_ptr))[0..total_size];
@@ -3441,13 +3479,52 @@ fn extractEntrypointsFromPlatform(ctx: *CliContext, roc_file_path: []const u8, e
     }
 }
 
+/// Extract Roc identifier names (not FFI symbols) from the platform provides record.
+fn extractEntrypointDefNamesFromPlatform(ctx: *CliContext, roc_file_path: []const u8, entrypoints: *std.array_list.Managed([]const u8)) !void {
+    var source = std.fs.cwd().readFileAlloc(ctx.gpa, roc_file_path, std.math.maxInt(usize)) catch return error.NoPlatformFound;
+    source = base.source_utils.normalizeLineEndingsRealloc(ctx.gpa, source) catch |err| {
+        ctx.gpa.free(source);
+        return err;
+    };
+    defer ctx.gpa.free(source);
+
+    const module_name = try base.module_path.getModuleNameAlloc(ctx.arena, roc_file_path);
+
+    var env = ModuleEnv.init(ctx.gpa, source) catch return error.ParseFailed;
+    defer env.deinit();
+
+    env.common.source = source;
+    env.module_name = module_name;
+    try env.common.calcLineStarts(ctx.gpa);
+
+    var allocators2: Allocators = undefined;
+    allocators2.initInPlace(ctx.gpa);
+    defer allocators2.deinit();
+
+    const parse_ast = parse.parse(&allocators2, &env.common) catch return error.ParseFailed;
+    defer parse_ast.deinit();
+
+    const file_node = parse_ast.store.getFile();
+    const header = parse_ast.store.getHeader(file_node.header);
+
+    switch (header) {
+        .platform => |platform_header| {
+            const provides_coll = parse_ast.store.getCollection(platform_header.provides);
+            const provides_fields = parse_ast.store.recordFieldSlice(.{ .span = provides_coll.span });
+            for (provides_fields) |field_idx| {
+                const field = parse_ast.store.getRecordField(field_idx);
+                try entrypoints.append(try ctx.arena.dupe(u8, parse_ast.resolve(field.name)));
+            }
+        },
+        else => return error.NoPlatformFound,
+    }
+}
+
 /// Extract the embedded roc_shim library to the specified path for the given target.
 /// This library contains the shim code that runs in child processes to read ModuleEnv from shared memory.
 /// For native builds and roc run, use the native shim (pass null or native target).
 /// For cross-compilation, pass the target to get the appropriate shim.
-pub fn extractReadRocFilePathShimLibrary(ctx: *CliContext, output_path: []const u8, target: ?RocTarget) !void {
-    _ = ctx; // unused but kept for consistency
-
+pub fn extractReadRocFilePathShimLibrary(_: *CliContext, output_path: []const u8, target: ?RocTarget) !void {
     if (builtin.is_test) {
         // In test mode, create an empty file to avoid embedding issues
         const shim_file = try std.fs.cwd().createFile(output_path, .{});
@@ -3614,7 +3691,7 @@ fn validateBundleWithCoordinator(
         if (build_env.getPlatformTargetsConfig()) |tc| {
             const pf_dir = std.fs.path.dirname(pf) orelse ".";
             if (platform_validation.validateAllTargetFilesExist(ctx.arena, tc, pf_dir)) |result| {
-                _ = platform_validation.renderValidationError(ctx.gpa, result, stderr);
+                renderValidationError(ctx.gpa, result, stderr);
                 return switch (result) {
                     .missing_target_file => error.MissingTargetFile,
                     .missing_files_directory => error.MissingFilesDirectory,
@@ -3920,7 +3997,7 @@ fn rocBuild(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             // Use native code generation backend
             try rocBuildNative(ctx, args);
         },
-        .interpreter => {
+        .interpreter, .wasm => {
             // Use embedded interpreter build approach
             // This compiles the Roc app, serializes the ModuleEnv, and embeds it in the binary
             try rocBuildEmbedded(ctx, args);
@@ -3981,7 +4058,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     // Phase 2: Discover dependencies (parses headers once, extracts TargetsConfig)
     build_env.discoverDependencies(args.path) catch |err| {
-        _ = build_env.renderDiagnostics(ctx.io.stderr());
+        renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
 
@@ -4002,7 +4079,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             const result = platform_validation.targets_validator.ValidationResult{
                 .invalid_target = .{ .target_str = target_str },
             };
-            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            renderValidationError(ctx.gpa, result, ctx.io.stderr());
             return error.InvalidTarget;
         };
 
@@ -4019,7 +4096,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                 .exe,
                 targets_config,
             );
-            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            renderValidationError(ctx.gpa, result, ctx.io.stderr());
             return error.UnsupportedTarget;
         };
 
@@ -4066,7 +4143,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                 .host_os = @tagName(builtin.target.os.tag),
             },
         };
-        _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+        renderValidationError(ctx.gpa, result, ctx.io.stderr());
         return error.UnsupportedCrossCompilation;
     }
 
@@ -4074,11 +4151,24 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const target_arch = target.toCpuArch();
     const target_os = target.toOsTag();
     switch (target_arch) {
-        .x86_64, .aarch64, .wasm32 => {}, // Supported
+        .x86_64, .aarch64 => {}, // Supported
+        .wasm32 => {
+            // TODO: wasm32 builds require linking app code with roc_builtins.o via wasm-ld.
+            // The WasmCodeGen currently produces a final linked module with host function imports
+            // rather than a relocatable object with symbol references. To support `roc build`
+            // for wasm32, WasmCodeGen needs to emit relocatable .o files that wasm-ld can link
+            // with the builtins and platform host. See TODO_RELOC_WASM_OBJ_BUILTIN.md for the
+            // full implementation plan.
+            const stderr = ctx.io.stderr();
+            try stderr.print("Error: `roc build` for wasm32 is not yet supported.\n\n", .{});
+            try stderr.print("The wasm32 backend can currently only be used for evaluation (e.g. eval tests),\n", .{});
+            try stderr.print("not for producing standalone .wasm binaries.\n", .{});
+            return error.UnsupportedTarget;
+        },
         else => {
             const stderr = ctx.io.stderr();
             try stderr.print("Error: The dev backend does not support the '{s}' architecture.\n\n", .{@tagName(target_arch)});
-            try stderr.print("Supported architectures: x86_64, aarch64, wasm32\n", .{});
+            try stderr.print("Supported architectures: x86_64, aarch64\n", .{});
             return error.UnsupportedTarget;
         },
     }
@@ -4110,7 +4200,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     build_env.setTarget(target);
 
     build_env.compileDiscovered() catch |err| {
-        _ = build_env.renderDiagnostics(ctx.io.stderr());
+        renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
 
@@ -4138,101 +4228,41 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         } });
     };
     const platform_module = plat.module;
-    const platform_idx = plat.platform_idx;
     const provides_entries = plat.provides_entries;
     std.log.debug("Found {} provides entries", .{provides_entries.len});
 
-    // Lambda lifting and lambda set inference are now handled during CIR→MIR and MIR→LIR lowering.
+    // Lambda lifting and lambda set inference are handled during monotype and lambda-lowering.
     try resolved.processHostedFunctions(ctx.gpa, null);
 
-    // Create layout store
-    std.log.debug("Creating layout store...", .{});
-    const builtin_str = if (all_module_envs.len > 0)
-        all_module_envs[0].idents.builtin_str
-    else
-        null;
+    const builtin_module_env = build_env.builtin_modules.builtin_module.env;
+    const builtin_str = builtin_module_env.idents.builtin_str;
 
-    var layout_store = layout.Store.init(all_module_envs, builtin_str, ctx.gpa, base.target.TargetUsize.native) catch {
-        std.log.err("Failed to create layout store", .{});
-        return error.LayoutStoreFailed;
+    const platform_module_idx: u32 = for (all_module_envs, 0..) |module_env, i| {
+        if (module_env == platform_module.env) break @intCast(i);
+    } else {
+        std.log.err("Platform module not found in module envs", .{});
+        return error.InternalError;
     };
-    defer layout_store.deinit();
 
-    const app_module_idx = plat.app_module_idx;
-    std.log.debug("App module index: {?}", .{app_module_idx});
-
-    // Lower CIR → MIR → LIR
-    const mir = @import("mir");
-    const MIR = mir.MIR;
-    const lir = @import("lir");
-
-    std.log.debug("Creating MIR/LIR stores and lowering expressions...", .{});
-    const platform_module_idx: u32 = @intCast(platform_idx + 1);
-    const platform_types = &all_module_envs[platform_module_idx].types;
-
-    var mir_store = MIR.Store.init(ctx.gpa) catch {
-        std.log.err("Failed to create MIR store", .{});
-        return error.OutOfMemory;
+    const builtin_module_idx: u32 = for (all_module_envs, 0..) |module_env, i| {
+        if (module_env == builtin_module_env) break @intCast(i);
+    } else {
+        std.log.err("Builtin module not found in module envs", .{});
+        return error.InternalError;
     };
-    defer mir_store.deinit(ctx.gpa);
-
-    const types_mod = @import("types");
-    const findTypeAliasBodyVar = struct {
-        fn run(module_env: *const can.ModuleEnv, name: base.Ident.Idx) ?types_mod.Var {
-            const stmts_slice = module_env.store.sliceStatements(module_env.all_statements);
-            for (stmts_slice) |stmt_idx| {
-                const stmt = module_env.store.getStatement(stmt_idx);
-                switch (stmt) {
-                    .s_alias_decl => |alias| {
-                        const header = module_env.store.getTypeHeader(alias.header);
-                        if (header.relative_name.eql(name)) {
-                            return can.ModuleEnv.varFrom(alias.anno);
-                        }
-                    },
-                    else => {},
-                }
-            }
-            return null;
-        }
-    }.run;
-
-    var platform_type_scope = types_mod.TypeScope.init(ctx.gpa);
-    defer platform_type_scope.deinit();
-
-    if (app_module_idx) |resolved_app_module_idx| {
-        try platform_type_scope.scopes.append(types_mod.VarMap.init(ctx.gpa));
-        const rigid_scope = &platform_type_scope.scopes.items[0];
-        const app_env = all_module_envs[resolved_app_module_idx];
-        const platform_env = all_module_envs[platform_module_idx];
-        const all_aliases = platform_env.for_clause_aliases.items.items;
-
-        for (platform_env.requires_types.items.items) |required_type| {
-            const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
-            for (type_aliases_slice) |alias| {
-                const alias_stmt = platform_env.store.getStatement(alias.alias_stmt_idx);
-                std.debug.assert(alias_stmt == .s_alias_decl);
-                const alias_body_var = can.ModuleEnv.varFrom(alias_stmt.s_alias_decl.anno);
-                const alias_stmt_var = can.ModuleEnv.varFrom(alias.alias_stmt_idx);
-                const app_alias_name = app_env.common.findIdent(platform_env.getIdentText(alias.alias_name)) orelse continue;
-                const app_var = findTypeAliasBodyVar(app_env, app_alias_name) orelse continue;
-                try rigid_scope.put(alias_body_var, app_var);
-                try rigid_scope.put(alias_stmt_var, app_var);
-            }
-        }
-    }
 
     const platform_defs = platform_module.env.store.sliceDefs(platform_module.env.all_defs);
 
     const PendingEntrypointSource = struct {
         ffi_symbol: []const u8,
         roc_ident: []const u8,
-        expr_idx: can.CIR.Expr.Idx,
+        def_idx: can.CIR.Def.Idx,
     };
     var pending_entrypoint_sources = try std.ArrayList(PendingEntrypointSource).initCapacity(ctx.gpa, provides_entries.len);
     defer pending_entrypoint_sources.deinit(ctx.gpa);
 
     for (provides_entries) |entry| {
-        var found_expr: ?can.CIR.Expr.Idx = null;
+        var found_def: ?can.CIR.Def.Idx = null;
         for (platform_defs) |def_idx| {
             const def = platform_module.env.store.getDef(def_idx);
             const pattern = platform_module.env.store.getPattern(def.pattern);
@@ -4240,7 +4270,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                 .assign => |assign| {
                     const ident_name = platform_module.env.getIdent(assign.ident);
                     if (std.mem.eql(u8, ident_name, entry.roc_ident)) {
-                        found_expr = def.expr;
+                        found_def = def_idx;
                         break;
                     }
                 },
@@ -4248,11 +4278,11 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             }
         }
 
-        if (found_expr) |expr_idx| {
+        if (found_def) |def_idx| {
             try pending_entrypoint_sources.append(ctx.gpa, .{
                 .ffi_symbol = entry.ffi_symbol,
                 .roc_ident = entry.roc_ident,
-                .expr_idx = expr_idx,
+                .def_idx = def_idx,
             });
         } else {
             std.log.warn("Entrypoint '{s}' not found in platform module", .{entry.roc_ident});
@@ -4264,146 +4294,109 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         return error.NoEntrypointsLowered;
     }
 
-    const entrypoint_root_exprs = try ctx.arena.alloc(can.CIR.Expr.Idx, pending_entrypoint_sources.items.len);
-    for (pending_entrypoint_sources.items, 0..) |entrypoint_source, i| {
-        entrypoint_root_exprs[i] = entrypoint_source.expr_idx;
-    }
-
-    var monomorphization = blk: {
-        const mono = if (app_module_idx) |resolved_app_module_idx|
-            mir.Monomorphize.runRootsWithTypeScope(
-                ctx.gpa,
-                all_module_envs,
-                platform_types,
-                platform_module_idx,
-                app_module_idx,
-                entrypoint_root_exprs,
-                platform_module_idx,
-                &platform_type_scope,
-                resolved_app_module_idx,
-            )
-        else
-            mir.Monomorphize.runRoots(
-                ctx.gpa,
-                all_module_envs,
-                platform_types,
-                platform_module_idx,
-                app_module_idx,
-                entrypoint_root_exprs,
-            );
-        break :blk mono catch {
-            std.log.err("Failed to monomorphize platform module", .{});
-            return error.OutOfMemory;
-        };
-    };
-    defer monomorphization.deinit(ctx.gpa);
-
-    var mir_lower = mir.Lower.init(ctx.gpa, &mir_store, &monomorphization, all_module_envs, platform_types, platform_module_idx, app_module_idx) catch {
-        std.log.err("Failed to create MIR lowerer", .{});
-        return error.OutOfMemory;
-    };
-    defer mir_lower.deinit();
-
-    if (app_module_idx) |resolved_app_module_idx| {
-        try mir_lower.setTypeScope(platform_module_idx, &platform_type_scope, resolved_app_module_idx);
-    }
-
-    // Find and lower entrypoint expressions from platform module
-    // The platform's provides clause maps Roc identifiers to FFI symbols
-    // e.g., provides { main_for_host!: "main" } means we look for main_for_host! in platform
-    const PendingEntrypoint = struct {
+    const PendingEntrypointSymbol = struct {
         ffi_symbol: []const u8,
-        mir_expr_id: MIR.ExprId,
-        ret_type_var: @import("types").Var,
-        arg_layouts: []const layout.Idx,
+        roc_ident: []const u8,
+        symbol: symbol.Symbol,
     };
-    var pending_entrypoints = try std.ArrayList(PendingEntrypoint).initCapacity(ctx.gpa, provides_entries.len);
-    defer pending_entrypoints.deinit(ctx.gpa);
+    var pending_entrypoint_symbols = try std.ArrayList(PendingEntrypointSymbol).initCapacity(ctx.gpa, pending_entrypoint_sources.items.len);
+    defer pending_entrypoint_symbols.deinit(ctx.gpa);
 
-    var type_layout_resolver = layout.TypeLayoutResolver.init(&layout_store);
-    defer type_layout_resolver.deinit();
+    std.log.debug("Lowering expressions...", .{});
 
-    for (pending_entrypoint_sources.items) |entry| {
-        const expr_idx = entry.expr_idx;
-        const expr_type_var = can.ModuleEnv.varFrom(expr_idx);
-        const resolved_expr_var = platform_types.resolveVar(expr_type_var);
-        const maybe_func = resolved_expr_var.desc.content.unwrapFunc();
+    var source_modules = try ctx.gpa.alloc(check.TypedCIR.Modules.SourceModule, all_module_envs.len);
+    defer ctx.gpa.free(source_modules);
+    for (all_module_envs, 0..) |module_env, i| {
+        source_modules[i] = .{ .precompiled = module_env };
+    }
 
-        var arg_layouts: []const layout.Idx = &.{};
-        var ret_type_var = expr_type_var;
+    var typed_cir_modules = try check.TypedCIR.Modules.init(ctx.gpa, source_modules);
+    defer typed_cir_modules.deinit();
+    try compile.platform_requirements.populateRequiredLookupTargets(&typed_cir_modules, plat.app_module_idx);
 
-        if (maybe_func) |func| {
-            const arg_vars = platform_types.sliceVars(func.args);
-            if (arg_vars.len > 0) {
-                var mutable_arg_layouts = try ctx.arena.alloc(layout.Idx, arg_vars.len);
-                for (arg_vars, 0..) |arg_var, i| {
-                    mutable_arg_layouts[i] = try type_layout_resolver.resolve(
-                        platform_module_idx,
-                        arg_var,
-                        &platform_type_scope,
-                        app_module_idx,
-                    );
-                }
-                arg_layouts = mutable_arg_layouts;
-            }
-            ret_type_var = func.ret;
-        }
+    var mono_lowerer = try monotype.Lower.Lowerer.init(ctx.gpa, &typed_cir_modules, builtin_module_idx, plat.app_module_idx);
+    defer mono_lowerer.deinit();
 
-        // Lower CIR → MIR
-        const mir_expr_id = mir_lower.lowerExpr(expr_idx) catch |err| {
-            std.log.err("Failed to lower expression for entrypoint {s} ({s}): {}", .{ entry.roc_ident, entry.ffi_symbol, err });
-            continue;
-        };
-
-        try pending_entrypoints.append(ctx.gpa, .{
-            .ffi_symbol = entry.ffi_symbol,
-            .mir_expr_id = mir_expr_id,
-            .ret_type_var = ret_type_var,
-            .arg_layouts = arg_layouts,
+    for (pending_entrypoint_sources.items) |pending| {
+        const entry_symbol = try mono_lowerer.specializeTopLevelDef(platform_module_idx, pending.def_idx);
+        try pending_entrypoint_symbols.append(ctx.gpa, .{
+            .ffi_symbol = pending.ffi_symbol,
+            .roc_ident = pending.roc_ident,
+            .symbol = entry_symbol,
         });
-
-        std.log.debug("Found entrypoint: {s} -> roc__{s}", .{ entry.roc_ident, entry.ffi_symbol });
     }
 
-    if (pending_entrypoints.items.len == 0) {
-        std.log.err("No entrypoints could be lowered", .{});
-        return error.NoEntrypointsLowered;
+    var mono = try mono_lowerer.run(platform_module_idx);
+    defer mono.deinit();
+
+    var lifted = try monotype_lifted.Lower.run(ctx.gpa, &mono);
+    defer lifted.deinit();
+    var solved = try lambdasolved.Lower.run(ctx.gpa, &lifted);
+    defer solved.deinit();
+
+    const entrypoint_symbols = try ctx.gpa.alloc(symbol.Symbol, pending_entrypoint_symbols.items.len);
+    defer ctx.gpa.free(entrypoint_symbols);
+    for (pending_entrypoint_symbols.items, 0..) |pending, i| {
+        entrypoint_symbols[i] = pending.symbol;
     }
 
-    // Run lambda set inference after MIR lowering so the store sees the actual entrypoint graph.
-    var lambda_set_store = mir.LambdaSet.infer(ctx.gpa, &mir_store, all_module_envs) catch return error.OutOfMemory;
-    defer lambda_set_store.deinit(ctx.gpa);
+    var executable = try lambdamono.Lower.runWithEntrypoints(ctx.gpa, &solved, entrypoint_symbols);
+    const entrypoint_wrappers = executable.entrypoint_wrappers;
+    executable.entrypoint_wrappers = &.{};
+    defer if (entrypoint_wrappers.len > 0) ctx.gpa.free(entrypoint_wrappers);
+    defer executable.deinit();
+    var lowered_ir = try ir.Lower.run(ctx.gpa, &executable);
+    var lowered_ir_live = true;
+    defer if (lowered_ir_live) lowered_ir.deinit();
 
-    var lir_store = lir.LirExprStore.init(ctx.gpa);
-    defer lir_store.deinit();
+    var module_envs_const = try ctx.gpa.alloc(*const ModuleEnv, all_module_envs.len);
+    defer ctx.gpa.free(module_envs_const);
+    for (all_module_envs, 0..) |module_env, i| module_envs_const[i] = module_env;
 
-    var mir_to_lir = lir.MirToLir.init(ctx.gpa, &mir_store, &lir_store, &layout_store, &lambda_set_store, all_module_envs[0].idents.true_tag);
-    defer mir_to_lir.deinit();
+    var lir_result = try lir.FromIr.run(
+        ctx.gpa,
+        module_envs_const,
+        builtin_str,
+        base.target.TargetUsize.native,
+        &lowered_ir,
+    );
+    lowered_ir_live = false;
+    defer lir_result.deinit();
+    try lir.Ownership.inferProcResultContracts(ctx.gpa, &lir_result.store, &lir_result.layouts);
+    try lir.RcInsert.run(ctx.gpa, &lir_result.store, &lir_result.layouts);
 
-    var entrypoints = try std.ArrayList(backend.Entrypoint).initCapacity(ctx.gpa, pending_entrypoints.items.len);
+    if (entrypoint_wrappers.len != 0 and
+        entrypoint_wrappers.len != pending_entrypoint_symbols.items.len)
+    {
+        std.log.err("Entrypoint wrapper count mismatch (got {d}, expected {d})", .{
+            entrypoint_wrappers.len,
+            pending_entrypoint_symbols.items.len,
+        });
+        return error.InternalError;
+    }
+    var entrypoints = try std.ArrayList(backend.Entrypoint).initCapacity(ctx.gpa, pending_entrypoint_symbols.items.len);
     defer entrypoints.deinit(ctx.gpa);
 
-    for (pending_entrypoints.items) |pending| {
-        const ret_layout = type_layout_resolver.resolve(
-            platform_module_idx,
-            pending.ret_type_var,
-            &platform_type_scope,
-            app_module_idx,
-        ) catch {
-            std.log.err("Failed to get layout for entrypoint {s}", .{pending.ffi_symbol});
+    for (pending_entrypoint_symbols.items, 0..) |pending, i| {
+        const entry_symbol = if (entrypoint_wrappers.len == 0)
+            pending.symbol
+        else
+            entrypoint_wrappers[i];
+        const proc_id = lir_result.proc_ids_by_symbol.get(entry_symbol.raw()) orelse {
+            std.log.err("Entrypoint '{s}' proc not found in LIR", .{pending.roc_ident});
             continue;
         };
-
-        const entry_proc = mir_to_lir.lowerEntrypointProc(pending.mir_expr_id, pending.arg_layouts, ret_layout) catch |err| {
-            std.log.err("Failed to lower entrypoint proc {s}: {}", .{ pending.ffi_symbol, err });
-            continue;
-        };
-
+        const proc_spec = lir_result.store.getProcSpec(proc_id);
+        const arg_locals = lir_result.store.getLocalSpan(proc_spec.args);
+        const arg_layouts = try ctx.arena.alloc(layout.Idx, arg_locals.len);
+        for (arg_locals, 0..) |local_id, arg_i| {
+            arg_layouts[arg_i] = lir_result.store.getLocal(local_id).layout_idx;
+        }
         try entrypoints.append(ctx.gpa, .{
             .symbol_name = try std.fmt.allocPrint(ctx.arena, "roc__{s}", .{pending.ffi_symbol}),
-            .proc = entry_proc,
-            .arg_layouts = pending.arg_layouts,
-            .ret_layout = ret_layout,
+            .proc = proc_id,
+            .arg_layouts = arg_layouts,
+            .ret_layout = proc_spec.ret_layout,
         });
     }
 
@@ -4412,10 +4405,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         return error.NoEntrypointsLowered;
     }
 
-    lir.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(ctx.gpa, &lir_store, &layout_store);
-
-    // Get procedures from the LIR store
-    const procs = lir_store.getProcSpecs();
+    const procs = lir_result.store.getProcSpecs();
 
     // Compile to object file
     std.log.debug("Generating native code...", .{});
@@ -4430,8 +4420,8 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const obj_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, obj_filename });
 
     object_compiler.compileToObjectFileAndWrite(
-        &lir_store,
-        &layout_store,
+        &lir_result.store,
+        &lir_result.layouts,
         entrypoints.items,
         procs,
         target,
@@ -4478,7 +4468,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                             .expected_full_path = full_path,
                         },
                     };
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.MissingTargetFile;
                 };
 
@@ -4634,7 +4624,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     // Phase 2: Discover dependencies (parses headers once, extracts TargetsConfig)
     build_env.discoverDependencies(args.path) catch |err| {
-        _ = build_env.renderDiagnostics(ctx.io.stderr());
+        renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
 
@@ -4656,7 +4646,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             const result = platform_validation.targets_validator.ValidationResult{
                 .invalid_target = .{ .target_str = target_str },
             };
-            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            renderValidationError(ctx.gpa, result, ctx.io.stderr());
             return error.InvalidTarget;
         };
 
@@ -4674,7 +4664,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                 .exe, // Show exe as the expected type for error message
                 targets_config,
             );
-            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            renderValidationError(ctx.gpa, result, ctx.io.stderr());
             return error.UnsupportedTarget;
         };
 
@@ -4741,7 +4731,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     build_env.setTarget(target);
 
     build_env.compileDiscovered() catch |err| {
-        _ = build_env.renderDiagnostics(ctx.io.stderr());
+        renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
 
@@ -4789,7 +4779,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                 .host_os = @tagName(host_os),
             },
         };
-        _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+        renderValidationError(ctx.gpa, result, ctx.io.stderr());
         return error.UnsupportedCrossCompilation;
     }
 
@@ -4825,7 +4815,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                             .expected_full_path = full_path,
                         },
                     };
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.MissingTargetFile;
                 };
 
@@ -5520,7 +5510,6 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
         root_env,
         builtin_module_env,
         builtin_indices,
-        null,
     ) catch |err| {
         try stderr.print("Failed to create import mapping: {}\n", .{err});
         return err;
@@ -5543,7 +5532,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
         builtin_types,
         builtin_module_env,
         &import_mapping,
-        RocTarget.detectNative(),
+        roc_target.RocTarget.detectNative(),
         null,
     ) catch |err| {
         try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});
@@ -5805,7 +5794,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                 }
             }
         },
-        .interpreter => {
+        .interpreter, .wasm => {
             // Run tests using interpreter backend (TestRunner)
 
             // Run tests in the root module
@@ -5865,7 +5854,6 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                     mod_env,
                     builtin_module_env,
                     builtin_indices,
-                    null,
                 ) catch continue;
                 defer mod_import_mapping.deinit();
 
@@ -6100,91 +6088,7 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) glue.GlueError!void {
     }, temp_dir);
 }
 
-/// Run a compiled Roc entrypoint through the dev backend (native code generation).
-/// Resolves entrypoint layouts, JIT-compiles CIR to native code via DevEvaluator,
-/// and executes via the RocCall ABI.
-fn runViaDev(
-    gpa: std.mem.Allocator,
-    platform_env: *ModuleEnv,
-    all_module_envs: []*ModuleEnv,
-    app_module_env: ?*ModuleEnv,
-    entrypoint_expr: can.CIR.Expr.Idx,
-    roc_ops: *echo_platform.host_abi.RocOps,
-    args_ptr: ?*anyopaque,
-    result_ptr: *anyopaque,
-) !void {
-    const types = @import("types");
-    const DevEvaluator = eval.DevEvaluator;
-    const ExecutableMemory = eval.ExecutableMemory;
-
-    var dev_eval = DevEvaluator.init(gpa, null) catch {
-        return error.DevEvaluatorFailed;
-    };
-    defer dev_eval.deinit();
-
-    // Resolve entrypoint layouts from the CIR expression's type
-    const layout_store_ptr = try dev_eval.ensureGlobalLayoutStore(all_module_envs);
-    const module_idx: u32 = for (all_module_envs, 0..) |env, i| {
-        if (env == platform_env) break @intCast(i);
-    } else return error.DevEvaluatorFailed;
-
-    const expr_type_var = ModuleEnv.varFrom(entrypoint_expr);
-    const resolved_type = platform_env.types.resolveVar(expr_type_var);
-    const maybe_func = resolved_type.desc.content.unwrapFunc();
-
-    var arg_layouts_buf: [16]layout.Idx = undefined;
-    var arg_layouts_len: usize = 0;
-    var ret_layout: layout.Idx = undefined;
-
-    if (maybe_func) |func| {
-        const arg_vars = platform_env.types.sliceVars(func.args);
-        var type_scope = types.TypeScope.init(gpa);
-        defer type_scope.deinit();
-        for (arg_vars, 0..) |arg_var, i| {
-            arg_layouts_buf[i] = layout_store_ptr.fromTypeVar(module_idx, arg_var, &type_scope, null) catch return error.DevEvaluatorFailed;
-        }
-        arg_layouts_len = arg_vars.len;
-        ret_layout = layout_store_ptr.fromTypeVar(module_idx, func.ret, &type_scope, null) catch return error.DevEvaluatorFailed;
-    } else {
-        var type_scope = types.TypeScope.init(gpa);
-        defer type_scope.deinit();
-        ret_layout = layout_store_ptr.fromTypeVar(module_idx, expr_type_var, &type_scope, null) catch return error.DevEvaluatorFailed;
-    }
-
-    const arg_layouts: []const layout.Idx = arg_layouts_buf[0..arg_layouts_len];
-
-    // Generate native code using the RocCall ABI entrypoint wrapper
-    var code_result = dev_eval.generateEntrypointCode(
-        platform_env,
-        entrypoint_expr,
-        all_module_envs,
-        app_module_env,
-        arg_layouts,
-        ret_layout,
-    ) catch {
-        return error.DevEvaluatorFailed;
-    };
-    defer code_result.deinit();
-
-    if (code_result.code.len == 0) {
-        return error.DevEvaluatorFailed;
-    }
-
-    // Make the generated code executable and run it
-    var executable = ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch {
-        return error.DevEvaluatorFailed;
-    };
-    defer executable.deinit();
-
-    // Use the DevEvaluator's RocOps (with setjmp/longjmp crash protection)
-    // so roc_crashed returns an error rather than calling std.process.exit(1).
-    dev_eval.roc_ops.hosted_fns = roc_ops.hosted_fns;
-
-    dev_eval.callRocABIWithCrashProtection(&executable, result_ptr, args_ptr) catch |err| switch (err) {
-        error.RocCrashed => return error.DevEvaluatorFailed,
-        error.Segfault => return error.DevEvaluatorFailed,
-    };
-}
+// runViaDev was consolidated into eval.runner.run(.dev, ...)
 
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.
 /// Recurses into directories to search for Roc files.
@@ -6423,11 +6327,10 @@ const CheckResultWithBuildEnv = struct {
 fn checkFileWithBuildEnvPreserved(
     ctx: *CliContext,
     filepath: []const u8,
-    collect_timing: bool,
+    _: bool,
     cache_config: CacheConfig,
     max_threads: ?usize,
 ) BuildAppError!CheckResultWithBuildEnv {
-    _ = collect_timing; // Timing is always collected by BuildEnv
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -6533,11 +6436,10 @@ fn checkFileWithBuildEnvPreserved(
 fn checkFileWithBuildEnv(
     ctx: *CliContext,
     filepath: []const u8,
-    collect_timing: bool,
+    _: bool,
     cache_config: CacheConfig,
     max_threads: ?usize,
 ) BuildAppError!CheckResult {
-    _ = collect_timing; // Timing is always collected by BuildEnv
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -7092,14 +6994,7 @@ fn rocDocs(ctx: *CliContext, args: cli_args.DocsArgs) !void {
     // Generate documentation for all packages and modules
     try generateDocs(ctx, &result_with_env.build_env, args.path, args.output);
 
-    const output_display_path = if (std.fs.path.isAbsolute(args.output) or
-        std.mem.startsWith(u8, args.output, "./") or
-        std.mem.startsWith(u8, args.output, "../"))
-        args.output
-    else
-        try std.fmt.allocPrint(ctx.arena, "./{s}", .{args.output});
-
-    stdout.print("\nGenerated docs for {s}\nOutput in {s}\n", .{ args.path, output_display_path }) catch {};
+    stdout.print("\nGenerated docs for {s}\n", .{args.path}) catch {};
 
     // Start HTTP server if --serve flag is enabled
     if (args.serve) {

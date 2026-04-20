@@ -33,14 +33,11 @@ fn aggregatorFilters(module_type: ModuleType) []const []const u8 {
         .check => &.{"check tests"},
         .parse => &.{"parser tests"},
         .layout => &.{"layout tests"},
-        .interpreter_layout => &.{},
         .values => &.{"values tests"},
-        .interpreter_values => &.{},
         .eval => &.{"eval tests"},
         .ipc => &.{"ipc tests"},
         .repl => &.{"repl tests"},
         .fmt => &.{"fmt tests"},
-        .mir => &.{"mir tests"},
         else => &.{},
     };
 }
@@ -273,7 +270,7 @@ pub const ModuleTest = struct {
 /// unnamed wrappers) so callers can correct the reported totals.
 pub const ModuleTestsResult = struct {
     /// Compile/run steps for each module's tests, in creation order.
-    tests: [27]ModuleTest,
+    tests: [32]ModuleTest,
     /// Number of synthetic passes the summary must subtract when filters were injected.
     /// Includes aggregator ensures and unconditional wrapper tests.
     forced_passes: usize,
@@ -297,7 +294,6 @@ pub const ModuleType = enum {
     layout,
     interpreter_layout,
     values,
-    interpreter_values,
     eval,
     ipc,
     repl,
@@ -308,8 +304,13 @@ pub const ModuleType = enum {
     base58,
     lsp,
     backend,
-    mir,
     lir,
+    symbol,
+    monotype,
+    monotype_lifted,
+    lambdasolved,
+    lambdamono,
+    ir,
     roc_target,
     sljmp,
     echo_platform,
@@ -331,14 +332,13 @@ pub const ModuleType = enum {
             .parse => &.{ .tracy, .collections, .base, .reporting },
             .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting, .build_options },
             .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting },
-            .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can, .mir },
+            .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
             .interpreter_layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
             .values => &.{ .collections, .base, .builtins, .layout },
-            .interpreter_values => &.{ .collections, .base, .builtins, .interpreter_layout },
-            .eval => &.{ .tracy, .io, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .interpreter_layout, .values, .interpreter_values, .build_options, .reporting, .backend, .mir, .lir, .roc_target, .sljmp },
-            .compile => &.{ .tracy, .build_options, .io, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target },
+            .eval => &.{ .tracy, .io, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .interpreter_layout, .values, .build_options, .reporting, .backend, .lir, .symbol, .monotype, .monotype_lifted, .lambdasolved, .lambdamono, .ir, .roc_target, .sljmp },
+            .compile => &.{ .tracy, .build_options, .io, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target, .backend, .lir, .symbol, .monotype, .monotype_lifted, .lambdasolved, .lambdamono, .ir, .sljmp },
             .ipc => &.{},
-            .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .values, .eval, .backend, .roc_target },
+            .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .values, .eval, .backend, .roc_target, .lir, .monotype, .monotype_lifted, .lambdasolved, .lambdamono, .ir },
             .fmt => &.{ .base, .parse, .collections, .can, .io, .tracy },
             .watch => &.{.build_options},
             .bundle => &.{ .base, .collections, .base58, .unbundle },
@@ -346,8 +346,13 @@ pub const ModuleType = enum {
             .base58 => &.{},
             .lsp => &.{ .compile, .reporting, .build_options, .io, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
             .backend => &.{ .base, .layout, .builtins, .can, .lir, .roc_target },
-            .mir => &.{ .base, .can, .types, .builtins, .parse, .check, .collections, .reporting, .build_options, .tracy },
-            .lir => &.{ .base, .layout, .types, .mir, .can },
+            .lir => &.{ .base, .layout, .types, .can, .ir },
+            .symbol => &.{.base},
+            .monotype => &.{ .base, .types, .can, .check, .symbol },
+            .monotype_lifted => &.{ .base, .types, .symbol, .monotype },
+            .lambdasolved => &.{ .base, .types, .symbol, .monotype_lifted },
+            .lambdamono => &.{ .base, .types, .symbol, .lambdasolved, .layout },
+            .ir => &.{ .base, .types, .symbol, .lambdamono, .layout },
             .roc_target => &.{.base},
             .sljmp => &.{},
             .echo_platform => &.{.builtins},
@@ -375,7 +380,6 @@ pub const RocModules = struct {
     layout: *Module,
     interpreter_layout: *Module,
     values: *Module,
-    interpreter_values: *Module,
     eval: *Module,
     ipc: *Module,
     repl: *Module,
@@ -386,8 +390,13 @@ pub const RocModules = struct {
     base58: *Module,
     lsp: *Module,
     backend: *Module,
-    mir: *Module,
     lir: *Module,
+    symbol: *Module,
+    monotype: *Module,
+    monotype_lifted: *Module,
+    lambdasolved: *Module,
+    lambdamono: *Module,
+    ir: *Module,
     roc_target: *Module,
     sljmp: *Module,
     echo_platform: *Module,
@@ -418,7 +427,6 @@ pub const RocModules = struct {
             .layout = b.addModule("layout", .{ .root_source_file = b.path("src/layout/mod.zig") }),
             .interpreter_layout = b.addModule("interpreter_layout", .{ .root_source_file = b.path("src/interpreter_layout/mod.zig") }),
             .values = b.addModule("values", .{ .root_source_file = b.path("src/values/mod.zig") }),
-            .interpreter_values = b.addModule("interpreter_values", .{ .root_source_file = b.path("src/interpreter_values/mod.zig") }),
             .eval = b.addModule("eval", .{ .root_source_file = b.path("src/eval/mod.zig") }),
             .ipc = b.addModule("ipc", .{ .root_source_file = b.path("src/ipc/mod.zig") }),
             .repl = b.addModule("repl", .{ .root_source_file = b.path("src/repl/mod.zig") }),
@@ -429,8 +437,13 @@ pub const RocModules = struct {
             .base58 = b.addModule("base58", .{ .root_source_file = b.path("src/base58/mod.zig") }),
             .lsp = b.addModule("lsp", .{ .root_source_file = b.path("src/lsp/mod.zig") }),
             .backend = b.addModule("backend", .{ .root_source_file = b.path("src/backend/mod.zig") }),
-            .mir = b.addModule("mir", .{ .root_source_file = b.path("src/mir/mod.zig") }),
             .lir = b.addModule("lir", .{ .root_source_file = b.path("src/lir/mod.zig") }),
+            .symbol = b.addModule("symbol", .{ .root_source_file = b.path("src/symbol/mod.zig") }),
+            .monotype = b.addModule("monotype", .{ .root_source_file = b.path("src/monotype/mod.zig") }),
+            .monotype_lifted = b.addModule("monotype_lifted", .{ .root_source_file = b.path("src/monotype_lifted/mod.zig") }),
+            .lambdasolved = b.addModule("lambdasolved", .{ .root_source_file = b.path("src/lambdasolved/mod.zig") }),
+            .lambdamono = b.addModule("lambdamono", .{ .root_source_file = b.path("src/lambdamono/mod.zig") }),
+            .ir = b.addModule("ir", .{ .root_source_file = b.path("src/ir/mod.zig") }),
             .roc_target = b.addModule("roc_target", .{ .root_source_file = b.path("src/target/mod.zig") }),
             .sljmp = b.addModule("sljmp", .{ .root_source_file = b.path("src/sljmp/mod.zig") }),
             .echo_platform = b.addModule("echo_platform", .{ .root_source_file = b.path("src/echo_platform/mod.zig") }),
@@ -467,7 +480,6 @@ pub const RocModules = struct {
             .layout,
             .interpreter_layout,
             .values,
-            .interpreter_values,
             .eval,
             .ipc,
             .repl,
@@ -478,8 +490,13 @@ pub const RocModules = struct {
             .base58,
             .lsp,
             .backend,
-            .mir,
             .lir,
+            .symbol,
+            .monotype,
+            .monotype_lifted,
+            .lambdasolved,
+            .lambdamono,
+            .ir,
             .roc_target,
             .sljmp,
             .echo_platform,
@@ -514,6 +531,7 @@ pub const RocModules = struct {
         step.root_module.addImport("io", self.io);
         step.root_module.addImport("build_options", self.build_options);
         step.root_module.addImport("layout", self.layout);
+        step.root_module.addImport("interpreter_layout", self.interpreter_layout);
         step.root_module.addImport("eval", self.eval);
         step.root_module.addImport("repl", self.repl);
         step.root_module.addImport("fmt", self.fmt);
@@ -521,8 +539,13 @@ pub const RocModules = struct {
         step.root_module.addImport("base58", self.base58);
         step.root_module.addImport("roc_target", self.roc_target);
         step.root_module.addImport("backend", self.backend);
-        step.root_module.addImport("mir", self.mir);
         step.root_module.addImport("lir", self.lir);
+        step.root_module.addImport("symbol", self.symbol);
+        step.root_module.addImport("monotype", self.monotype);
+        step.root_module.addImport("monotype_lifted", self.monotype_lifted);
+        step.root_module.addImport("lambdasolved", self.lambdasolved);
+        step.root_module.addImport("lambdamono", self.lambdamono);
+        step.root_module.addImport("ir", self.ir);
         step.root_module.addImport("sljmp", self.sljmp);
         step.root_module.addImport("echo_platform", self.echo_platform);
         step.root_module.addImport("docs", self.docs);
@@ -562,7 +585,6 @@ pub const RocModules = struct {
             .layout => self.layout,
             .interpreter_layout => self.interpreter_layout,
             .values => self.values,
-            .interpreter_values => self.interpreter_values,
             .eval => self.eval,
             .ipc => self.ipc,
             .repl => self.repl,
@@ -573,8 +595,13 @@ pub const RocModules = struct {
             .base58 => self.base58,
             .lsp => self.lsp,
             .backend => self.backend,
-            .mir => self.mir,
             .lir => self.lir,
+            .symbol => self.symbol,
+            .monotype => self.monotype,
+            .monotype_lifted => self.monotype_lifted,
+            .lambdasolved => self.lambdasolved,
+            .lambdamono => self.lambdamono,
+            .ir => self.ir,
             .roc_target => self.roc_target,
             .sljmp => self.sljmp,
             .echo_platform => self.echo_platform,
@@ -612,8 +639,8 @@ pub const RocModules = struct {
             .check,
             .io,
             .layout,
+            .interpreter_layout,
             .values,
-            .eval,
             .ipc,
             .repl,
             .fmt,
@@ -623,8 +650,13 @@ pub const RocModules = struct {
             .base58,
             .lsp,
             .backend,
-            .mir,
             .lir,
+            .symbol,
+            .monotype,
+            .monotype_lifted,
+            .lambdasolved,
+            .lambdamono,
+            .ir,
             .sljmp,
             .echo_platform,
             .docs,
@@ -651,7 +683,8 @@ pub const RocModules = struct {
                     // Bundle module needs libc for C zstd (unbundle uses stdlib zstd)
                     // Eval/repl modules need libc for setjmp/longjmp crash protection
                     // sljmp module needs libc for setjmp/longjmp functions
-                    .link_libc = (module_type == .ipc or module_type == .bundle or module_type == .eval or module_type == .repl or module_type == .sljmp),
+                    // compile/lsp modules transitively depend on eval->sljmp, so also need libc
+                    .link_libc = (module_type == .ipc or module_type == .bundle or module_type == .eval or module_type == .repl or module_type == .sljmp or module_type == .compile or module_type == .lsp),
                 }),
                 .filters = filter_injection.filters,
             });

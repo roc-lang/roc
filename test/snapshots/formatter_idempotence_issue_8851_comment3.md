@@ -34,7 +34,7 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "a"))
 			(e-field-access
-				(e-local-dispatch
+				(e-arrow-call
 					(e-int (raw "0"))
 					(e-ident (raw "b")))
 				(e-apply
@@ -50,7 +50,7 @@ a = 0->b()
 (can-ir
 	(d-let
 		(p-assign (ident "a"))
-		(e-dot-access (field "c")
+		(e-field-access (field "c")
 			(receiver
 				(e-call
 					(e-runtime-error (tag "ident_not_in_scope"))

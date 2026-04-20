@@ -1,12 +1,12 @@
 //! LIR Code Generator
 //!
-//! This module generates native machine code from LIR expressions.
+//! This module generates native machine code from statement-only LIR procs.
 //! It uses the Emit.zig infrastructure for instruction encoding and
 //! ValueStorage.zig for register allocation.
 //!
 //! Pipeline position:
 //! ```
-//! CIR -> LIR Lowering -> LirCodeGen -> Machine Code
+//! CIR -> LIR -> LirCodeGen -> Machine Code
 //! ```
 //!
 //! Key properties:
@@ -15,12 +15,18 @@
 //! - Handles System V ABI (x86_64/aarch64) calling convention
 //! - Generates position-independent code with relocations
 //! - Supports x86_64 and aarch64 architectures
+//!
+//! Ownership boundary:
+//! - this backend may lower explicit LIR RC statements
+//! - builtin helper implementations may perform primitive-internal RC
+//! - ordinary codegen paths are forbidden from inventing RC policy
 
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
 const layout = @import("layout");
 const lir = @import("lir");
+const ownership_boundary = lir.OwnershipBoundary;
 const builtins = @import("builtins");
 const dev_wrappers = builtins.dev_wrappers;
 
@@ -37,19 +43,10 @@ const allocateWithRefcountC = builtins.utils.allocateWithRefcountC;
 const increfDataPtrC = builtins.utils.increfDataPtrC;
 const decrefDataPtrC = builtins.utils.decrefDataPtrC;
 const freeDataPtrC = builtins.utils.freeDataPtrC;
-const rcNone = builtins.utils.rcNone;
 
 // List builtin functions - using C-compatible wrappers to avoid ABI issues
 // with 24-byte RocList struct returns on aarch64
-const copy_fallback = builtins.list.copy_fallback;
 const RocList = builtins.list.RocList;
-
-// Additional list builtins (return RocList by value with callconv(.c))
-const listConcat = builtins.list.listConcat;
-const listPrepend = builtins.list.listPrepend;
-const listReplace = builtins.list.listReplace;
-const listReserve = builtins.list.listReserve;
-const listReleaseExcessCapacity = builtins.list.listReleaseExcessCapacity;
 
 // String builtins
 const strToUtf8C = builtins.str.strToUtf8C;
@@ -74,27 +71,51 @@ const strDropSuffix = builtins.str.strDropSuffix;
 const strWithAsciiLowercased = builtins.str.strWithAsciiLowercased;
 const strWithAsciiUppercased = builtins.str.strWithAsciiUppercased;
 const strFromUtf8Lossy = builtins.str.fromUtf8Lossy;
-const strFromUtf8C = builtins.str.fromUtf8C;
-const FromUtf8Try = builtins.str.FromUtf8Try;
 
 const Relocation = @import("Relocation.zig").Relocation;
+
 const StaticDataInterner = @import("StaticDataInterner.zig");
 
-const LirExprStore = lir.LirExprStore;
-const LirExpr = lir.LirExpr;
-const LirExprId = lir.LirExprId;
-const LirPatternId = lir.LirPatternId;
+const LirStore = lir.LirStore;
 const Symbol = lir.Symbol;
 const JoinPointId = lir.JoinPointId;
+const LocalId = lir.LocalId;
+const LocalSpan = lir.LocalSpan;
 // Layout store for accessing struct/tag field offsets
 const LayoutStore = layout.Store;
-const RcHelperResolver = layout.RcHelperResolver;
-const RcHelperKey = layout.RcHelperKey;
 const RcOp = layout.RcOp;
+const RcHelperKey = layout.RcHelperKey;
 
 // Control flow statement types (for two-pass compilation)
 const CFStmtId = lir.CFStmtId;
-const LayoutIdxSpan = lir.LayoutIdxSpan;
+
+fn explicitRcLayoutValContainsRefcounted(ls: *const LayoutStore, comptime site: []const u8, layout_val: layout.Layout) bool {
+    ownership_boundary.explicitLirRcExecution(site);
+    return ls.layoutContainsRefcounted(layout_val);
+}
+
+const BuiltinListAbi = struct {
+    elem_layout_idx: ?layout.Idx,
+    elem_layout: layout.Layout,
+    elem_size_align: layout.SizeAlign,
+    alignment_bytes: u32,
+    elements_refcounted: bool,
+};
+
+fn builtinInternalListAbi(ls: *const LayoutStore, comptime site: []const u8, list_layout_idx: layout.Idx) BuiltinListAbi {
+    ownership_boundary.builtinRuntimeInternal(site);
+    const abi = ls.builtinListAbi(list_layout_idx);
+    return .{
+        .elem_layout_idx = abi.elem_layout_idx,
+        .elem_layout = abi.elem_layout,
+        .elem_size_align = .{
+            .size = @intCast(abi.elem_size),
+            .alignment = layout.RocAlignment.fromByteUnits(@intCast(abi.elem_alignment)),
+        },
+        .alignment_bytes = abi.elem_alignment,
+        .elements_refcounted = abi.contains_refcounted,
+    };
+}
 
 /// Generation mode determines how builtin function calls are emitted.
 /// This is important because the dev backend can be used in two ways:
@@ -143,17 +164,16 @@ pub const BuiltinFn = enum {
     str_from_utf8_lossy,
     str_from_utf8,
     str_escape_and_quote,
-
-    // Debug
-    roc_dbg,
+    dbg_str,
 
     // List operations
     list_with_capacity,
     list_append_unsafe,
-    list_append_safe,
     list_concat,
     list_prepend,
     list_sublist,
+    list_incref,
+    list_drop_at,
     list_replace,
     list_reserve,
     list_release_excess_capacity,
@@ -164,7 +184,6 @@ pub const BuiltinFn = enum {
     list_free_flat_list,
     box_decref_with,
     box_free_with,
-    list_sort_with,
 
     // Numeric operations
     dec_to_str,
@@ -193,6 +212,9 @@ pub const BuiltinFn = enum {
     num_div_trunc_i128,
     num_rem_trunc_u128,
     num_rem_trunc_i128,
+    num_shl_u128,
+    num_shr_i128,
+    num_shr_u128,
     int_to_str,
     float_to_str,
     int_from_str,
@@ -231,19 +253,18 @@ pub const BuiltinFn = enum {
             .str_with_ascii_lowercased => "roc_builtins_str_with_ascii_lowercased",
             .str_with_ascii_uppercased => "roc_builtins_str_with_ascii_uppercased",
             .str_from_utf8_lossy => "roc_builtins_str_from_utf8_lossy",
-            .str_from_utf8 => "roc_builtins_str_from_utf8",
+            .str_from_utf8 => "roc_builtins_str_from_utf8_result",
             .str_escape_and_quote => "roc_builtins_str_escape_and_quote",
-
-            // Debug
-            .roc_dbg => "roc_builtins_roc_dbg",
+            .dbg_str => "roc_builtins_dbg_str",
 
             // List operations
             .list_with_capacity => "roc_builtins_list_with_capacity",
             .list_append_unsafe => "roc_builtins_list_append_unsafe",
-            .list_append_safe => "roc_builtins_list_append_safe",
             .list_concat => "roc_builtins_list_concat",
             .list_prepend => "roc_builtins_list_prepend",
             .list_sublist => "roc_builtins_list_sublist",
+            .list_incref => "roc_builtins_list_incref",
+            .list_drop_at => "roc_builtins_list_drop_at",
             .list_replace => "roc_builtins_list_replace",
             .list_reserve => "roc_builtins_list_reserve",
             .list_release_excess_capacity => "roc_builtins_list_release_excess_capacity",
@@ -254,7 +275,6 @@ pub const BuiltinFn = enum {
             .list_free_flat_list => "roc_builtins_list_free_flat_list",
             .box_decref_with => "roc_builtins_box_decref_with",
             .box_free_with => "roc_builtins_box_free_with",
-            .list_sort_with => "roc_builtins_list_sort_with",
 
             // Numeric operations
             .dec_to_str => "roc_builtins_dec_to_str",
@@ -283,6 +303,9 @@ pub const BuiltinFn = enum {
             .num_div_trunc_i128 => "roc_builtins_num_div_trunc_i128",
             .num_rem_trunc_u128 => "roc_builtins_num_rem_trunc_u128",
             .num_rem_trunc_i128 => "roc_builtins_num_rem_trunc_i128",
+            .num_shl_u128 => "roc_builtins_num_shl_u128",
+            .num_shr_i128 => "roc_builtins_num_shr_i128",
+            .num_shr_u128 => "roc_builtins_num_shr_u128",
             .int_to_str => "roc_builtins_int_to_str",
             .float_to_str => "roc_builtins_float_to_str",
             .int_from_str => "roc_builtins_int_from_str",
@@ -298,21 +321,7 @@ pub const BuiltinFn = enum {
 // Number-to-string C wrapper functions (explicit output pointer to avoid struct return ABI issues)
 const RocStr = builtins.str.RocStr;
 const RocOps = builtins.host_abi.RocOps;
-
-fn decToStrC(out: *RocStr, value: i128, roc_ops: *RocOps) callconv(.c) void {
-    const dec = builtins.dec.RocDec{ .num = value };
-    var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
-    const slice = dec.format_to_buf(&buf);
-    out.* = RocStr.init(&buf, slice.len, roc_ops);
-}
-
-/// Wrapper: decToStrC(i128, *RocOps) -> RocStr
-/// Decomposed: (out, value_low, value_high, roc_ops) -> void
-/// This avoids platform-specific i128 passing conventions (Windows ARM64 vs Unix aarch64).
-fn wrapDecToStr(out: *RocStr, value_low: u64, value_high: u64, roc_ops: *RocOps) callconv(.c) void {
-    const value: i128 = @bitCast((@as(u128, value_high) << 64) | @as(u128, value_low));
-    decToStrC(out, value, roc_ops);
-}
+const HostedFunctions = builtins.host_abi.HostedFunctions;
 
 // ── C wrapper functions for string/list builtins ──
 // These decompose 24-byte RocStr/RocList structs into individual 8-byte fields
@@ -330,6 +339,28 @@ fn wrapStrToUtf8(out: *RocList, str_bytes: ?[*]u8, str_len: usize, str_cap: usiz
 fn wrapStrConcat(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, roc_ops: *RocOps) callconv(.c) void {
     const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
     const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+
+    if (builtin.mode == .Debug) {
+        const debugAssertValidStr = struct {
+            fn check(label: []const u8, s: RocStr) void {
+                if (s.isSmallStr()) return;
+                if (s.bytes != null) return;
+
+                std.debug.print(
+                    "wrapStrConcat invalid RocStr {s}: len={d} cap=0x{x} raw_bytes=0x{x}\n",
+                    .{ label, s.len(), s.capacity_or_alloc_ptr, @intFromPtr(s.bytes) },
+                );
+                std.debug.panic(
+                    "LIR/codegen invariant violated: wrapStrConcat received invalid RocStr {s} (len={d}, cap=0x{x})",
+                    .{ label, s.len(), s.capacity_or_alloc_ptr },
+                );
+            }
+        }.check;
+
+        debugAssertValidStr("lhs", a);
+        debugAssertValidStr("rhs", b);
+    }
+
     out.* = strConcatC(a, b, roc_ops);
 }
 
@@ -462,207 +493,11 @@ fn wrapStrFromUtf8Lossy(out: *RocStr, list_bytes: ?[*]u8, list_len: usize, list_
     out.* = strFromUtf8Lossy(list, roc_ops);
 }
 
-/// Wrapper: fromUtf8C(RocList, UpdateMode, *RocOps) -> FromUtf8Try
-fn wrapStrFromUtf8(out: [*]u8, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, roc_ops: *RocOps) callconv(.c) void {
-    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    const result = strFromUtf8C(list, .Immutable, roc_ops);
-    @as(*FromUtf8Try, @ptrCast(@alignCast(out))).* = result;
-}
-
-/// Wrapper: call roc_dbg with a formatted RocStr
-fn wrapRocDbg(str_bytes: ?[*]u8, str_len: usize, str_cap: usize, roc_ops: *RocOps) callconv(.c) void {
-    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
-    const slice = s.asSlice();
-    roc_ops.dbg(slice);
-}
-
-/// Wrapper: escape special characters and wrap in double quotes for Str.inspect
-fn wrapStrEscapeAndQuote(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, roc_ops: *RocOps) callconv(.c) void {
-    // Reconstruct the RocStr so asSlice() handles both small and large strings
-    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
-    const slice = s.asSlice();
-
-    // Count extra bytes needed for escaping backslashes and quotes
-    var extra: usize = 0;
-    for (slice) |ch| {
-        if (ch == '\\' or ch == '"') extra += 1;
-    }
-
-    const result_len = slice.len + extra + 2; // +2 for surrounding quotes
-
-    const small_string_size = @sizeOf(RocStr);
-    if (result_len < small_string_size) {
-        // Small string: build inline
-        var buf: [small_string_size]u8 = .{0} ** small_string_size;
-        buf[0] = '"';
-        var pos: usize = 1;
-        for (slice) |ch| {
-            if (ch == '\\' or ch == '"') {
-                buf[pos] = '\\';
-                pos += 1;
-            }
-            buf[pos] = ch;
-            pos += 1;
-        }
-        buf[pos] = '"';
-        buf[small_string_size - 1] = @intCast(result_len | 0x80);
-        out.* = @bitCast(buf);
-    } else {
-        // Large string: allocate heap memory
-        const heap_ptr = allocateWithRefcountC(result_len, 1, false, roc_ops);
-        heap_ptr[0] = '"';
-        var pos: usize = 1;
-        for (slice) |ch| {
-            if (ch == '\\' or ch == '"') {
-                heap_ptr[pos] = '\\';
-                pos += 1;
-            }
-            heap_ptr[pos] = ch;
-            pos += 1;
-        }
-        heap_ptr[pos] = '"';
-        out.* = .{ .bytes = heap_ptr, .length = result_len, .capacity_or_alloc_ptr = result_len };
-    }
-}
-
-/// Wrapper: listConcat(RocList, RocList, alignment, element_width, ..., *RocOps) -> RocList
-fn wrapListConcat(out: *RocList, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, alignment: u32, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
-    const a = RocList{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
-    const b = RocList{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
-    out.* = listConcat(a, b, alignment, element_width, elements_refcounted, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), roc_ops);
-}
-
-/// Wrapper: listPrepend(RocList, alignment, element, element_width, ..., *RocOps) -> RocList
-fn wrapListPrepend(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element: ?[*]u8, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
-    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listPrepend(list, alignment, element, element_width, elements_refcounted, null, @ptrCast(&rcNone), @ptrCast(&copy_fallback), roc_ops);
-}
-
-/// Wrapper: listReplace for list_set
-fn wrapListReplace(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, index: u64, element: ?[*]u8, element_width: usize, elements_refcounted: bool, out_element: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
-    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listReplace(list, alignment, index, element, element_width, elements_refcounted, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), out_element, @ptrCast(&copy_fallback), roc_ops);
-}
-
-/// Wrapper: listReserve
-fn wrapListReserve(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, spare: u64, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
-    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listReserve(list, alignment, spare, element_width, elements_refcounted, null, @ptrCast(&rcNone), .Immutable, roc_ops);
-}
-
-/// Wrapper: listReleaseExcessCapacity
-fn wrapListReleaseExcessCapacity(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
-    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listReleaseExcessCapacity(list, alignment, element_width, elements_refcounted, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), .Immutable, roc_ops);
-}
-
-/// Context passed through the opaque `cmp_data` pointer to the sort comparison trampoline.
-const SortCmpContext = extern struct {
-    roc_fn_addr: usize,
-    element_width: usize,
-};
-
-/// C-callable comparison trampoline for listSortWith.
-/// Loads element values from pointers and calls the compiled Roc comparison function.
-fn sortCmpTrampoline(cmp_data: ?[*]u8, a_ptr: ?[*]u8, b_ptr: ?[*]u8) callconv(.c) u8 {
-    const ctx: *const SortCmpContext = @ptrCast(@alignCast(cmp_data));
-    const ew = ctx.element_width;
-
-    if (ew <= 8) {
-        // Safe to pass values directly: single-register types (u8..u64) have
-        // identical layouts in both C callconv and the Roc internal calling
-        // convention on all platforms, so no ABI mismatch is possible.
-        const cmp_fn: *const fn (u64, u64) callconv(.c) u8 = @ptrFromInt(ctx.roc_fn_addr);
-        var a_val: u64 = 0;
-        var b_val: u64 = 0;
-        if (a_ptr) |ap| @memcpy(@as([*]u8, @ptrCast(&a_val))[0..ew], ap[0..ew]);
-        if (b_ptr) |bp| @memcpy(@as([*]u8, @ptrCast(&b_val))[0..ew], bp[0..ew]);
-        return cmp_fn(a_val, b_val);
-    } else {
-        // For ew > 8 (multi-register types like Dec/i128/u128 and large structs),
-        // we pass element pointers directly. The comparator lambda is compiled with
-        // force_pass_by_ptr so its prologue loads values from these pointers.
-        //
-        // This avoids ABI mismatches between the Zig callconv(.c) and the Roc
-        // internal calling convention. For example:
-        // - Windows C ABI passes u128 by pointer (RCX=&a, RDX=&b), but the Roc
-        //   lambda's bindLambdaParams may convert only the first param to pointer
-        //   and pass the second in registers (RCX=&a, RDX=b_low, R8=b_high).
-        // - System V C ABI passes large structs by pointer, but bindLambdaParams
-        //   may keep one param in registers if it fits.
-        const cmp_fn: *const fn (?[*]u8, ?[*]u8) callconv(.c) u8 = @ptrFromInt(ctx.roc_fn_addr);
-        return cmp_fn(a_ptr, b_ptr);
-    }
-}
-
-/// Wrapper: listSortWith — sorts a list using a compiled Roc comparison function.
-/// Uses a simple insertion sort to avoid ABI complexities with fluxsort.
-fn wrapListSortWith(
-    out: *RocList,
-    list_bytes: ?[*]u8,
-    list_len: usize,
-    list_cap: usize,
-    cmp_fn_addr: usize,
-    alignment: u32,
-    element_width: usize,
-    elements_refcounted: bool,
-    roc_ops: *RocOps,
-) callconv(.c) void {
-    if (list_len < 2) {
-        out.* = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-        return;
-    }
-
-    // Allocate a new list for the sorted result
-    const total_bytes = list_len * element_width;
-    const sorted_bytes = allocateWithRefcountC(total_bytes, alignment, elements_refcounted, roc_ops);
-    if (list_bytes) |src| {
-        @memcpy(sorted_bytes[0..total_bytes], src[0..total_bytes]);
-    }
-
-    // Insertion sort using the comparison trampoline
-    const cmp_ctx = SortCmpContext{
-        .roc_fn_addr = cmp_fn_addr,
-        .element_width = element_width,
-    };
-
-    var temp_buf: [256]u8 align(16) = undefined;
-
-    var i: usize = 1;
-    while (i < list_len) : (i += 1) {
-        // Save element[i] to temp
-        const elem_i = sorted_bytes + i * element_width;
-        @memcpy(temp_buf[0..element_width], elem_i[0..element_width]);
-
-        // Shift elements right until we find the insertion point
-        var j: usize = i;
-        while (j > 0) {
-            const elem_j_minus_1 = sorted_bytes + (j - 1) * element_width;
-            // Compare temp (element being inserted) with element[j-1]
-            const cmp_result = sortCmpTrampoline(@ptrCast(@constCast(&cmp_ctx)), &temp_buf, elem_j_minus_1);
-            if (cmp_result != 2) break; // not LT, stop shifting (EQ=0, GT=1)
-            // Shift element[j-1] to element[j]
-            const elem_j = sorted_bytes + j * element_width;
-            @memcpy(elem_j[0..element_width], elem_j_minus_1[0..element_width]);
-            j -= 1;
-        }
-        // Insert temp at position j
-        const insert_pos = sorted_bytes + j * element_width;
-        @memcpy(insert_pos[0..element_width], temp_buf[0..element_width]);
-    }
-
-    out.* = RocList{
-        .bytes = sorted_bytes,
-        .length = list_len,
-        .capacity_or_alloc_ptr = list_len,
-    };
-}
-
 const LirProcSpec = lir.LirProcSpec;
 
 const Allocator = std.mem.Allocator;
 
-/// Code generator for LIR expressions
+/// Code generator for statement-only LIR procs
 /// Parameterized by RocTarget for cross-compilation support
 pub fn LirCodeGen(comptime target: RocTarget) type {
     // Validate target architecture is supported
@@ -680,12 +515,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
     // Size of a RocStr struct: ptr + length + capacity = 3 × pointer size (24 bytes on 64-bit)
     const roc_str_size: u32 = 3 * target_ptr_size;
+    const small_str_max_len: u32 = roc_str_size - 1;
 
     // Size of a RocList struct: ptr + length + capacity = 3 × pointer size (24 bytes on 64-bit)
     const roc_list_size: u32 = 3 * target_ptr_size;
-
-    // Maximum length for small string optimization (struct size minus length byte, 23 bytes on 64-bit)
-    const small_str_max_len: u32 = roc_str_size - 1;
 
     // Select architecture-specific types based on target
     const CodeGen = if (arch == .x86_64)
@@ -748,7 +581,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         codegen: CodeGen,
 
         /// The LIR store containing expressions to compile
-        store: *const LirExprStore,
+        store: *const LirStore,
 
         /// Layout store for accessing struct/tag field offsets
         layout_store: *const LayoutStore,
@@ -756,23 +589,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Static data interner for string literals
         static_interner: ?*StaticDataInterner,
 
-        /// Map from Symbol to value location (register or stack slot)
-        symbol_locations: std.AutoHashMap(u64, ValueLocation),
+        /// Map from LIR local id to value location (register or stack slot)
+        local_locations: std.AutoHashMap(u32, ValueLocation),
 
-        /// Map from mutable variable symbol to fixed stack slot info
-        /// Mutable variables need fixed slots so re-bindings can update the value at runtime
-        mutable_var_slots: std.AutoHashMap(u64, MutableVarInfo),
+        /// Current proc argument span, used only for debug invariant reporting.
+        current_proc_args: ?LocalSpan = null,
 
         /// Map from JoinPointId to code offset (for recursive closure jumps)
         join_points: std.AutoHashMap(u32, usize),
 
-        /// Current recursive context (for detecting recursive calls)
-        /// When set, lookups of this symbol should jump to the join point instead of re-entering
-        current_recursive_symbol: ?Symbol,
-        current_recursive_join_point: ?JoinPointId,
-
-        /// The symbol currently being bound (during let statement processing).
-        current_binding_symbol: ?Symbol,
+        /// Map from CFStmtId to generated code offset.
+        /// Dev codegen must treat LIR control flow as a graph, not a tree:
+        /// shared continuations are emitted once and later paths jump to the
+        /// already-generated block instead of regenerating it.
+        stmt_locations: std.AutoHashMap(u32, usize),
 
         /// Registry of compiled procedures (proc-spec id -> CompiledProc)
         /// Used to find call targets during second pass
@@ -784,14 +614,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Pending calls that need to be patched after all procedures are compiled
         pending_calls: std.ArrayList(PendingCall),
 
+        /// Pending proc-address literals that need to be patched after all procedures are compiled.
+        pending_proc_addrs: std.ArrayList(PendingProcAddr),
+
         /// Map from JoinPointId to list of jumps that target it (for patching)
         join_point_jumps: std.AutoHashMap(u32, std.ArrayList(JumpRecord)),
 
-        /// Map from JoinPointId to parameter layouts (for i128 handling in rebind)
-        join_point_param_layouts: std.AutoHashMap(u32, LayoutIdxSpan),
-
-        /// Map from JoinPointId to parameter patterns (for rebinding to correct stack slots)
-        join_point_param_patterns: std.AutoHashMap(u32, lir.LirPatternSpan),
+        /// Map from JoinPointId to parameters (for rebinding to correct stack slots)
+        join_point_params: std.AutoHashMap(u32, LocalSpan),
 
         /// Tracks positions of BL/CALL instructions to compiled nested proc_specs.
         /// When deferred-prologue compilation shifts a proc body (extract, prepend prologue,
@@ -812,10 +642,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// early return jumps to point to the epilogue.
         early_return_patches: std.ArrayList(usize),
 
-        /// Stack of forward-jump patches for break expressions inside loops.
-        /// Each generateForLoop/generateWhileLoop saves the length, and after
-        /// body generation, patches all new entries to the loop exit offset.
-        loop_break_patches: std.ArrayList(usize),
+        /// Stack of active `for_list` continue targets.
+        /// `loop_continue` lowers by jumping to the innermost active loop header.
+        loop_continue_targets: std.ArrayList(usize),
 
         /// Stack slot where early return value is stored during deferred-prologue proc compilation.
         early_return_result_slot: ?i32 = null,
@@ -828,6 +657,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Proc currently being compiled, for debug-time invariant reporting.
         current_proc_name: ?Symbol = null,
+
+        /// Statement currently being generated, for debug-time invariant reporting.
+        current_stmt_id: ?CFStmtId = null,
 
         /// Stack slot where the hidden return pointer is saved (for return-by-pointer
         /// convention used when the return type exceeds the register limit).
@@ -883,8 +715,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             code_end: usize,
             /// The symbol this procedure is bound to
             name: Symbol,
-            /// Declared argument layouts for ABI-correct call lowering.
-            arg_layouts: LayoutIdxSpan,
+            /// Declared arguments for ABI-correct call lowering.
+            args: LocalSpan,
         };
 
         const unresolved_proc_code_start = std.math.maxInt(usize);
@@ -894,6 +726,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             /// Offset where the call instruction is (needs patching)
             call_site: usize,
             /// The proc being called
+            target_proc: lir.LIR.LirProcSpecId,
+        };
+
+        /// A pending ADR/LEA proc-address literal that needs to be patched once the target proc is compiled.
+        pub const PendingProcAddr = struct {
+            /// Offset where the ADR/LEA instruction starts
+            instr_offset: usize,
+            /// The proc whose address should be materialized
             target_proc: lir.LIR.LirProcSpecId,
         };
 
@@ -954,8 +794,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             general_reg: GeneralReg,
             /// Value is in a float register
             float_reg: FloatReg,
-            /// Value is on the stack at given offset from frame pointer
-            stack: struct { offset: i32, size: ValueSize = .qword },
+            /// Value is on the stack at given offset from frame pointer.
+            /// `layout_idx` preserves the semantic interpretation for narrow integer loads.
+            stack: struct {
+                offset: i32,
+                size: ValueSize = .qword,
+                layout_idx: layout.Idx = .u64,
+            },
             /// 128-bit value on the stack (16 bytes: low at offset, high at offset+8)
             stack_i128: i32,
             /// 24-byte string value on the stack (for RocStr: ptr/data, len, capacity)
@@ -1026,7 +871,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Target is determined at compile time via the LirCodeGen(target) parameter
         pub fn init(
             allocator: Allocator,
-            store: *const LirExprStore,
+            store: *const LirStore,
             layout_store_opt: *const LayoutStore,
             static_interner: ?*StaticDataInterner,
         ) Allocator.Error!Self {
@@ -1037,22 +882,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .store = store,
                 .layout_store = layout_store_opt,
                 .static_interner = static_interner,
-                .symbol_locations = std.AutoHashMap(u64, ValueLocation).init(allocator),
-                .mutable_var_slots = std.AutoHashMap(u64, MutableVarInfo).init(allocator),
+                .local_locations = std.AutoHashMap(u32, ValueLocation).init(allocator),
                 .join_points = std.AutoHashMap(u32, usize).init(allocator),
-                .current_recursive_symbol = null,
-                .current_recursive_join_point = null,
-                .current_binding_symbol = null,
+                .stmt_locations = std.AutoHashMap(u32, usize).init(allocator),
                 .proc_registry = std.AutoHashMap(u32, CompiledProc).init(allocator),
                 .compiled_rc_helpers = std.AutoHashMap(u64, usize).init(allocator),
                 .pending_calls = std.ArrayList(PendingCall).empty,
+                .pending_proc_addrs = std.ArrayList(PendingProcAddr).empty,
                 .join_point_jumps = std.AutoHashMap(u32, std.ArrayList(JumpRecord)).init(allocator),
-                .join_point_param_layouts = std.AutoHashMap(u32, LayoutIdxSpan).init(allocator),
-                .join_point_param_patterns = std.AutoHashMap(u32, lir.LirPatternSpan).init(allocator),
+                .join_point_params = std.AutoHashMap(u32, LocalSpan).init(allocator),
                 .internal_call_patches = std.ArrayList(InternalCallPatch).empty,
                 .internal_addr_patches = std.ArrayList(InternalAddrPatch).empty,
                 .early_return_patches = std.ArrayList(usize).empty,
-                .loop_break_patches = std.ArrayList(usize).empty,
+                .loop_continue_targets = std.ArrayList(usize).empty,
                 .scratch_arg_locs = try base.Scratch(ValueLocation).init(allocator),
                 .scratch_arg_infos = try base.Scratch(ArgInfo).init(allocator),
                 .scratch_pass_by_ptr = try base.Scratch(bool).init(allocator),
@@ -1063,24 +905,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Clean up resources
         pub fn deinit(self: *Self) void {
             self.codegen.deinit();
-            self.symbol_locations.deinit();
-            self.mutable_var_slots.deinit();
+            self.local_locations.deinit();
             self.join_points.deinit();
+            self.stmt_locations.deinit();
             self.proc_registry.deinit();
             self.compiled_rc_helpers.deinit();
             self.pending_calls.deinit(self.allocator);
+            self.pending_proc_addrs.deinit(self.allocator);
             // Clean up the nested ArrayLists in join_point_jumps
             var it = self.join_point_jumps.valueIterator();
             while (it.next()) |list| {
                 list.deinit(self.allocator);
             }
             self.join_point_jumps.deinit();
-            self.join_point_param_layouts.deinit();
-            self.join_point_param_patterns.deinit();
+            self.join_point_params.deinit();
             self.internal_call_patches.deinit(self.allocator);
             self.internal_addr_patches.deinit(self.allocator);
             self.early_return_patches.deinit(self.allocator);
-            self.loop_break_patches.deinit(self.allocator);
+            self.loop_continue_targets.deinit(self.allocator);
             self.scratch_arg_locs.deinit();
             self.scratch_arg_infos.deinit();
             self.scratch_pass_by_ptr.deinit();
@@ -1090,27 +932,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Reset the code generator for generating a new expression
         pub fn reset(self: *Self) void {
             self.codegen.reset();
-            self.symbol_locations.clearRetainingCapacity();
-            self.mutable_var_slots.clearRetainingCapacity();
+            self.local_locations.clearRetainingCapacity();
             self.join_points.clearRetainingCapacity();
-            self.current_recursive_symbol = null;
-            self.current_recursive_join_point = null;
-            self.current_binding_symbol = null;
+            self.stmt_locations.clearRetainingCapacity();
             self.proc_registry.clearRetainingCapacity();
             self.compiled_rc_helpers.clearRetainingCapacity();
             self.pending_calls.clearRetainingCapacity();
+            self.pending_proc_addrs.clearRetainingCapacity();
             // Clear nested ArrayLists
             var it = self.join_point_jumps.valueIterator();
             while (it.next()) |list| {
                 list.clearRetainingCapacity();
             }
             self.join_point_jumps.clearRetainingCapacity();
-            self.join_point_param_layouts.clearRetainingCapacity();
-            self.join_point_param_patterns.clearRetainingCapacity();
+            self.join_point_params.clearRetainingCapacity();
             self.internal_call_patches.clearRetainingCapacity();
             self.internal_addr_patches.clearRetainingCapacity();
             self.early_return_patches.clearRetainingCapacity();
-            self.loop_break_patches.clearRetainingCapacity();
+            self.loop_continue_targets.clearRetainingCapacity();
         }
 
         fn cloneJoinPointJumpsMap(
@@ -1139,19 +978,38 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             map.deinit();
         }
 
+        const StmtEnvSnapshot = struct {
+            local_locations: std.AutoHashMap(u32, ValueLocation),
+
+            fn deinit(self: *StmtEnvSnapshot) void {
+                self.local_locations.deinit();
+            }
+        };
+
+        fn captureStmtEnv(self: *Self) Allocator.Error!StmtEnvSnapshot {
+            return .{
+                .local_locations = try self.local_locations.clone(),
+            };
+        }
+
+        fn restoreStmtEnv(self: *Self, snapshot: *const StmtEnvSnapshot) Allocator.Error!void {
+            self.local_locations.deinit();
+            self.local_locations = try snapshot.local_locations.clone();
+        }
+
         fn clearFunctionControlFlowState(self: *Self) void {
             self.join_points.clearRetainingCapacity();
+            self.stmt_locations.clearRetainingCapacity();
             var it = self.join_point_jumps.valueIterator();
             while (it.next()) |list| {
                 list.clearRetainingCapacity();
             }
             self.join_point_jumps.clearRetainingCapacity();
-            self.join_point_param_layouts.clearRetainingCapacity();
-            self.join_point_param_patterns.clearRetainingCapacity();
-            self.loop_break_patches.clearRetainingCapacity();
+            self.join_point_params.clearRetainingCapacity();
+            self.loop_continue_targets.clearRetainingCapacity();
         }
 
-        /// Generate code for a LIR expression
+        /// Generate code for a compiled root proc.
         ///
         /// The generated code follows the calling convention:
         /// - First arg (RDI/X0) contains the pointer to the result buffer
@@ -1161,13 +1019,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// For tuples, pass tuple_len > 1 to copy all elements to the result buffer.
         pub fn generateCode(
             self: *Self,
-            expr_id: LirExprId,
+            root_proc_id: lir.LIR.LirProcSpecId,
             result_layout: layout.Idx,
             tuple_len: usize,
         ) Allocator.Error!CodeResult {
             // Clear any leftover state from compileAllProcSpecs
-            self.symbol_locations.clearRetainingCapacity();
-            self.mutable_var_slots.clearRetainingCapacity();
+            self.local_locations.clearRetainingCapacity();
             self.codegen.callee_saved_used = 0;
 
             // Initialize stack_offset to reserve space for callee-saved area
@@ -1237,10 +1094,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.callee_saved_available &= ~(@as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RBX));
             }
 
-            // Generate code for the expression.
-            // In the new pipeline, MIR→LIR generates all closure dispatch as generic LIR
-            // constructs, so the result is always a plain value — never a lambda/closure.
-            const final_result = try self.generateExpr(expr_id);
+            const root_proc = try self.compiledProcForId(root_proc_id);
+            const final_result = try self.generateCallToCompiledProc(root_proc, &.{}, &.{}, result_layout);
             const actual_ret_layout = result_layout;
 
             // Store result to the saved result pointer
@@ -1294,6 +1149,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Root-body direct calls and nested helper offsets shift with the prepended prologue.
             self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, std.math.maxInt(u64));
             self.shiftPendingCalls(body_start, body_end, prologue_size);
+            self.shiftPendingProcAddrs(body_start, body_end, prologue_size);
             self.repatchInternalCalls(body_start, body_end, prologue_size, body_start);
             self.repatchInternalAddrPatches(body_start, body_end, prologue_size, body_start);
 
@@ -1354,62 +1210,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// Get the concrete layout of a value-producing expression.
-        /// This is total for all value expressions; non-value expressions panic in debug.
-        fn exprLayout(self: *Self, expr_id: LirExprId) layout.Idx {
-            const expr = self.store.getExpr(expr_id);
-            return switch (expr) {
-                // Expressions that store their layout
-                .struct_ => |s| s.struct_layout,
-                .tag => |tag| tag.union_layout,
-                .lookup => |lookup| lookup.layout_idx,
-                .cell_load => |load| load.layout_idx,
-                .struct_access => |sa| sa.field_layout,
-                .proc_call => |call| call.ret_layout,
-                .low_level => |ll| ll.ret_layout,
-                .hosted_call => |hc| hc.ret_layout,
-                // Compound expressions with result layouts
-                .if_then_else => |ite| ite.result_layout,
-                .match_expr => |w| w.result_layout,
-                .block => |b| b.result_layout,
-                .dbg => |d| d.result_layout,
-                .expect => |e| e.result_layout,
-                .early_return => |er| er.ret_layout,
-                .discriminant_switch => |ds| ds.result_layout,
-                .tag_payload_access => |tpa| tpa.payload_layout,
-                .zero_arg_tag => |zat| zat.union_layout,
-                .nominal => |nom| nom.nominal_layout,
-                // Literals with known layouts
-                .f64_literal => .f64,
-                .f32_literal => .f32,
-                .bool_literal => .bool,
-                .dec_literal => .dec,
-                .i64_literal => |i| i.layout_idx,
-                .i128_literal => |i| i.layout_idx,
-                .str_literal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote => .str,
-                .empty_list => |l| l.list_layout,
-                .list => |l| l.list_layout,
-                // Loops return unit (ZST)
-                .for_loop, .while_loop => .zst,
-                // Statements, not value-producing expressions
-                .incref, .decref, .free => .zst,
-                // Noreturn
-                .crash, .runtime_error, .break_expr => {
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic(
-                            "LIR/codegen invariant violated: exprLayout called on non-value expression {s}",
-                            .{@tagName(expr)},
-                        );
-                    }
-                    unreachable;
-                },
-            };
+        fn localMetadata(self: *Self, local: LocalId) lir.Local {
+            return self.store.getLocal(local);
         }
 
-        /// Generate code for an expression. The result is ALWAYS in a stable location
-        /// (stack, immediate, lambda_code, closure_value) — never a bare register.
-        fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!ValueLocation {
-            const loc = try self.generateExprRaw(expr_id);
+        fn localLayout(self: *Self, local: LocalId) layout.Idx {
+            return self.localMetadata(local).layout_idx;
+        }
+
+        fn localKey(local: LocalId) u32 {
+            return @intFromEnum(local);
+        }
+
+        fn valueLayout(self: *Self, local: LocalId) layout.Idx {
+            return self.localLayout(local);
+        }
+
+        /// Generate code for a local reference. The result is ALWAYS in a stable location.
+        fn emitValueLocal(self: *Self, local: LocalId) Allocator.Error!ValueLocation {
+            const loc = try self.emitValueLocalRaw(local);
             return self.stabilize(loc);
         }
 
@@ -1432,124 +1251,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
         }
 
-        /// Generate code for an expression (raw — may return bare register locations).
-        fn generateExprRaw(self: *Self, expr_id: LirExprId) Allocator.Error!ValueLocation {
-            if (builtin.mode == .Debug and @intFromEnum(expr_id) >= self.store.exprs.items.len) {
-                std.debug.panic(
-                    "LirCodeGen: invalid expr_id {d} while compiling proc {d} (store len {d})",
-                    .{
-                        @intFromEnum(expr_id),
-                        if (self.current_proc_name) |sym| @as(u64, @bitCast(sym)) else 0,
-                        self.store.exprs.items.len,
-                    },
-                );
-            }
-            const expr = self.store.getExpr(expr_id);
-
-            return switch (expr) {
-                // Literals
-                .i64_literal => |val| .{ .immediate_i64 = val.value },
-                .i128_literal => |val| try self.generateI128Literal(val.value),
-                .f64_literal => |val| .{ .immediate_f64 = val },
-                .f32_literal => |val| .{ .immediate_f64 = @floatCast(val) },
-                .bool_literal => |val| .{ .immediate_i64 = if (val) 1 else 0 },
-                .dec_literal => |val| try self.generateI128Literal(val),
-
-                // Lookups
-                .lookup => |lookup| try self.generateLookup(lookup.symbol, lookup.layout_idx),
-                .cell_load => |load| try self.generateCellLoad(load.cell, load.layout_idx),
-
-                // Control flow
-                .if_then_else => |ite| try self.generateIfThenElse(ite),
-                .match_expr => |m| try self.generateMatch(m),
-
-                // Blocks
-                .block => |block| try self.generateBlock(block),
-                // Function calls and lambdas
-                .proc_call => |call| try self.generateCall(call),
-
-                // Structs (records, tuples, empty records)
-                .struct_ => |s| try self.generateStruct(s),
-                .struct_access => |sa| try self.generateStructAccess(sa),
-
-                // Tags (tagged unions)
-                .zero_arg_tag => |tag| try self.generateZeroArgTag(tag),
-                .tag => |tag| try self.generateTag(tag),
-
-                // Lists (not fully implemented - returns placeholder for now)
-                .list => |list| try self.generateList(list),
-                .empty_list => try self.generateEmptyList(),
-
-                // Low-level operations
-                .low_level => |ll| try self.generateLowLevel(ll),
-
-                // Hosted function calls (platform-provided effects)
-                .hosted_call => |hc| try self.generateHostedCall(hc),
-
-                // Nominal types (transparent wrappers)
-                .nominal => |nom| try self.generateExpr(nom.backing_expr),
-
-                // String literals
-                .str_literal => |str_idx| try self.generateStrLiteral(str_idx),
-
-                // Reference counting operations
-                .incref => |rc_op| try self.generateIncref(rc_op),
-                .decref => |rc_op| try self.generateDecref(rc_op),
-                .free => |rc_op| try self.generateFree(rc_op),
-
-                // For loop over a list
-                .for_loop => |for_loop| try self.generateForLoop(for_loop),
-
-                // While loop
-                .while_loop => |while_loop| try self.generateWhileLoop(while_loop),
-
-                // Early return from a block
-                .early_return => |er| try self.generateEarlyReturn(er),
-
-                // Break out of a loop
-                .break_expr => try self.generateBreak(),
-
-                // Debug and assertions
-                .dbg => |dbg_expr| try self.generateDbg(dbg_expr),
-                .expect => |expect_expr| try self.generateExpect(expect_expr),
-
-                // Crash and runtime errors
-                .crash => |crash| {
-                    const msg = self.store.getString(crash.msg);
-                    try self.emitRocCrash(msg);
-                    try self.emitTrap();
-                    return .noreturn;
-                },
-                .runtime_error => {
-                    try self.emitRocCrash("hit a runtime error");
-                    try self.emitTrap();
-                    return .noreturn;
-                },
-
-                // String formatting for inspect
-                .str_concat => |exprs| try self.generateStrConcat(exprs),
-                .int_to_str => |its| try self.generateIntToStr(its),
-                .float_to_str => |fts| try self.generateFloatToStr(fts),
-                .dec_to_str => |dec_expr| try self.generateDecToStr(dec_expr),
-                .str_escape_and_quote => |quote_expr| try self.generateStrEscapeAndQuote(quote_expr),
-
-                // Discriminant switch for tag unions
-                .discriminant_switch => |ds| try self.generateDiscriminantSwitch(ds),
-
-                // Extract payload from a tag union value (used inside discriminant_switch branches)
-                .tag_payload_access => |tpa| try self.generateTagPayloadAccess(tpa),
-            };
+        /// Generate code for a local reference (raw — may return bare register locations).
+        fn emitValueLocalRaw(self: *Self, local: LocalId) Allocator.Error!ValueLocation {
+            return try self.generateLookup(local);
         }
 
         /// Generate code for low-level operations
         fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!ValueLocation {
-            const args = self.store.getExprSpan(ll.args);
+            const args = self.store.getLocalSpan(ll.args);
 
             switch (ll.op) {
                 .list_len => {
                     // List is a (ptr, len, capacity) triple - length is at offset 8
                     std.debug.assert(args.len >= 1);
-                    const list_loc = try self.generateExpr(args[0]);
+                    const list_loc = try self.emitValueLocal(args[0]);
 
                     // Get base offset from either stack or list_stack location
                     const base_offset: i32 = switch (list_loc) {
@@ -1580,25 +1295,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const roc_ops_reg = self.roc_ops_reg orelse {
                         unreachable;
                     };
-                    const capacity_loc = try self.generateExpr(args[0]);
+                    const capacity_loc = try self.emitValueLocal(args[0]);
 
                     // Get element layout from return type (which is List(elem))
                     const ls = self.layout_store;
-                    const ret_layout = ls.getLayout(ll.ret_layout);
-
-                    const elem_size_align: layout.SizeAlign = switch (ret_layout.tag) {
-                        .list => blk: {
-                            const elem_layout = ls.getLayout(ret_layout.data.list);
-                            break :blk ls.layoutSizeAlign(elem_layout);
-                        },
-                        .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                        else => unreachable, // list_with_capacity must return a list
-                    };
+                    const list_abi = builtinInternalListAbi(ls, "dev.list_with_capacity.builtin_list_abi", ll.ret_layout);
 
                     const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_with_capacity);
-
-                    // Convert RocAlignment enum to actual byte alignment
-                    const alignment_bytes = elem_size_align.alignment.toByteUnits();
 
                     // Allocate stack space for result (RocList = 24 bytes)
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
@@ -1606,22 +1309,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const cap_reg = try self.ensureInGeneralReg(capacity_loc);
                     const base_reg = frame_ptr;
 
-                    // Determine if elements contain refcounted data
-                    const elements_refcounted: bool = blk: {
-                        if (ret_layout.tag == .list) {
-                            break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list));
-                        }
-                        break :blk false;
-                    };
-
                     // roc_builtins_list_with_capacity(out, capacity, alignment, element_width, elements_refcounted, roc_ops)
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     try builder.addLeaArg(base_reg, result_offset);
                     try builder.addRegArg(cap_reg);
                     self.codegen.freeGeneral(cap_reg);
-                    try builder.addImmArg(@intCast(alignment_bytes));
-                    try builder.addImmArg(@intCast(elem_size_align.size));
-                    try builder.addImmArg(if (elements_refcounted) 1 else 0);
+                    try builder.addImmArg(@intCast(list_abi.alignment_bytes));
+                    try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                    try builder.addImmArg(if (list_abi.elements_refcounted) 1 else 0);
                     try builder.addRegArg(roc_ops_reg);
                     try self.callBuiltin(&builder, fn_addr, .list_with_capacity);
 
@@ -1636,7 +1331,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .list_append_unsafe => {
                     // list_append(list, element) -> List
-                    // Uses SAFE listAppendSafeC that reserves capacity if needed
                     if (args.len != 2) {
                         unreachable;
                     }
@@ -1647,10 +1341,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     };
 
                     // Generate list argument (must be on stack - 24 bytes)
-                    const list_loc = try self.generateExpr(args[0]);
+                    const list_loc = try self.emitValueLocal(args[0]);
 
                     // Generate element value
-                    const elem_loc = try self.generateExpr(args[1]);
+                    const elem_loc = try self.emitValueLocal(args[1]);
                     const ret_layout_val = ls.getLayout(ll.ret_layout);
                     if (builtin.mode == .Debug and ret_layout_val.tag != .list and ret_layout_val.tag != .list_of_zst) {
                         std.debug.panic(
@@ -1659,7 +1353,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         );
                     }
                     if (builtin.mode == .Debug) {
-                        const list_layout_idx = self.exprLayout(args[0]);
+                        const list_layout_idx = self.valueLayout(args[0]);
                         const list_layout_val = ls.getLayout(list_layout_idx);
                         switch (list_layout_val.tag) {
                             .list => {},
@@ -1710,55 +1404,27 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     };
 
                     // Ensure element is on stack
-                    const elem_offset: i32 = try self.ensureOnStack(elem_loc, elem_size_align.size);
+                    const elem_offset: i32 = if (is_zst)
+                        self.codegen.allocStackSlot(1)
+                    else
+                        try self.ensureOnStack(elem_loc, elem_size_align.size);
 
                     // Allocate result slot (24 bytes for RocList)
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
-                    // For ZST (zero-sized types), use the unsafe version since no capacity is needed.
-                    // For regular elements, use the safe version that reserves capacity.
                     const base_reg = frame_ptr;
+                    const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_append_unsafe);
 
-                    if (is_zst) {
-                        // ZST: use listAppendUnsafeC (fewer args, doesn't need capacity reservation)
-                        const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_append_unsafe);
-
-                        // roc_builtins_list_append_unsafe(out, list_bytes, list_len, list_cap, element, element_width, roc_ops)
-                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                        try builder.addLeaArg(base_reg, result_offset);
-                        try builder.addMemArg(base_reg, list_offset);
-                        try builder.addMemArg(base_reg, list_offset + 8);
-                        try builder.addMemArg(base_reg, list_offset + 16);
-                        try builder.addLeaArg(base_reg, elem_offset);
-                        try builder.addImmArg(0); // elem_width = 0 for ZST
-                        try builder.addRegArg(roc_ops_reg);
-                        try self.callBuiltin(&builder, fn_addr, .list_append_unsafe);
-                    } else {
-                        // Non-ZST: use listAppendSafeC which reserves capacity
-                        const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_append_safe);
-                        const alignment_bytes = elem_size_align.alignment.toByteUnits();
-
-                        // Determine if elements contain refcounted data
-                        const elements_refcounted: bool = blk: {
-                            if (ret_layout_val.tag == .list) {
-                                break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout_val.data.list));
-                            }
-                            break :blk false;
-                        };
-
-                        // roc_builtins_list_append_safe(out, list_bytes, list_len, list_cap, element, alignment, element_width, elements_refcounted, roc_ops)
-                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                        try builder.addLeaArg(base_reg, result_offset);
-                        try builder.addMemArg(base_reg, list_offset);
-                        try builder.addMemArg(base_reg, list_offset + 8);
-                        try builder.addMemArg(base_reg, list_offset + 16);
-                        try builder.addLeaArg(base_reg, elem_offset);
-                        try builder.addImmArg(@intCast(alignment_bytes));
-                        try builder.addImmArg(@intCast(elem_size_align.size));
-                        try builder.addImmArg(if (elements_refcounted) 1 else 0);
-                        try builder.addRegArg(roc_ops_reg);
-                        try self.callBuiltin(&builder, fn_addr, .list_append_safe);
-                    }
+                    // roc_builtins_list_append_unsafe(out, list_bytes, list_len, list_cap, element, element_width, roc_ops)
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addLeaArg(base_reg, result_offset);
+                    try builder.addMemArg(base_reg, list_offset);
+                    try builder.addMemArg(base_reg, list_offset + 8);
+                    try builder.addMemArg(base_reg, list_offset + 16);
+                    try builder.addLeaArg(base_reg, elem_offset);
+                    try builder.addImmArg(if (is_zst) 0 else @as(i64, @intCast(elem_size_align.size)));
+                    try builder.addRegArg(roc_ops_reg);
+                    try self.callBuiltin(&builder, fn_addr, .list_append_unsafe);
 
                     // Return as .list_stack so recursive calls properly detect this as a list argument
                     return .{
@@ -1772,8 +1438,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_get_unsafe => {
                     // list_get_unsafe(list, index) -> element
                     std.debug.assert(args.len >= 2);
-                    const list_loc = try self.generateExpr(args[0]);
-                    const index_loc = try self.generateExpr(args[1]);
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const index_loc = try self.emitValueLocal(args[1]);
 
                     // Get base offset of list struct
                     const list_base: i32 = switch (list_loc) {
@@ -1783,7 +1449,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     };
 
                     const ls = self.layout_store;
-                    const list_layout_idx = self.exprLayout(args[0]);
+                    const list_layout_idx = self.valueLayout(args[0]);
                     const list_layout_val = ls.getLayout(list_layout_idx);
                     const list_elem_layout: layout.Idx = switch (list_layout_val.tag) {
                         .list => list_layout_val.data.list,
@@ -1799,8 +1465,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
                     };
 
-                    if (builtin.mode == .Debug) {
-                        if (!try self.layoutsStructurallyCompatible(ll.ret_layout, list_elem_layout)) {
+                    if (builtin.mode == .Debug and ll.ret_layout != list_elem_layout) {
+                        const ret_layout_val = ls.getLayout(ll.ret_layout);
+                        const elem_layout_val = ls.getLayout(list_elem_layout);
+                        const ret_list_like = ret_layout_val.tag == .list or ret_layout_val.tag == .list_of_zst;
+                        const elem_list_like = elem_layout_val.tag == .list or elem_layout_val.tag == .list_of_zst;
+                        const ret_box_like = ret_layout_val.tag == .box or ret_layout_val.tag == .box_of_zst;
+                        const elem_box_like = elem_layout_val.tag == .box or elem_layout_val.tag == .box_of_zst;
+
+                        if (!(ret_list_like and elem_list_like) and !(ret_box_like and elem_box_like)) {
                             std.debug.panic(
                                 "LIR/codegen invariant violated: list_get_unsafe ret/elem layout mismatch (ret={d}, elem={d})",
                                 .{ @intFromEnum(ll.ret_layout), @intFromEnum(list_elem_layout) },
@@ -1898,31 +1571,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_concat => {
                     // list_concat(list_a, list_b) -> List
                     if (args.len != 2) unreachable;
-                    const list_a_loc = try self.generateExpr(args[0]);
-                    const list_b_loc = try self.generateExpr(args[1]);
+                    const list_a_loc = try self.emitValueLocal(args[0]);
+                    const list_b_loc = try self.emitValueLocal(args[1]);
 
                     const ls = self.layout_store;
                     const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
-                    const ret_layout = ls.getLayout(ll.ret_layout);
-                    const elem_size_align: layout.SizeAlign = switch (ret_layout.tag) {
-                        .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
-                        .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                        else => unreachable,
-                    };
-                    const elements_refcounted: bool = switch (ret_layout.tag) {
-                        .list => ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list)),
-                        else => false,
-                    };
+                    const list_abi = builtinInternalListAbi(ls, "dev.list_concat.builtin_list_abi", ll.ret_layout);
 
                     const list_a_off = try self.ensureOnStack(list_a_loc, roc_list_size);
                     const list_b_off = try self.ensureOnStack(list_b_loc, roc_list_size);
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
-                    const alignment_bytes = elem_size_align.alignment.toByteUnits();
-                    const fn_addr: usize = @intFromPtr(&wrapListConcat);
+                    const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_concat);
+                    const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
+                    defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
+                    const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
+                    defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
 
                     {
-                        // wrapListConcat(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, alignment, element_width, elements_refcounted, roc_ops)
+                        // wrapListConcat(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, alignment, element_width, elements_refcounted, element_incref, element_decref, roc_ops)
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -1933,9 +1600,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addMemArg(base_reg, list_b_off);
                         try builder.addMemArg(base_reg, list_b_off + 8);
                         try builder.addMemArg(base_reg, list_b_off + 16);
-                        try builder.addImmArg(@intCast(alignment_bytes));
-                        try builder.addImmArg(@intCast(elem_size_align.size));
-                        try builder.addImmArg(if (elements_refcounted) @as(usize, 1) else 0);
+                        try builder.addImmArg(@intCast(list_abi.alignment_bytes));
+                        try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                        try builder.addImmArg(if (list_abi.elements_refcounted) @as(usize, 1) else 0);
+                        if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                        if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
                         try builder.addRegArg(roc_ops_reg);
 
                         try self.callBuiltin(&builder, fn_addr, .list_concat);
@@ -1946,31 +1615,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_prepend => {
                     // list_prepend(list, element) -> List
                     if (args.len != 2) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
-                    const elem_loc = try self.generateExpr(args[1]);
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const elem_loc = try self.emitValueLocal(args[1]);
 
                     const ls = self.layout_store;
                     const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
-                    const ret_layout = ls.getLayout(ll.ret_layout);
-                    const elem_size_align: layout.SizeAlign = switch (ret_layout.tag) {
-                        .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
-                        .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                        else => unreachable,
-                    };
-                    const elements_refcounted: bool = switch (ret_layout.tag) {
-                        .list => ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list)),
-                        else => false,
-                    };
+                    const list_abi = builtinInternalListAbi(ls, "dev.list_prepend.builtin_list_abi", ll.ret_layout);
 
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
-                    const elem_off = try self.ensureOnStack(elem_loc, elem_size_align.size);
+                    const elem_off = try self.ensureOnStack(elem_loc, list_abi.elem_size_align.size);
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
-                    const alignment_bytes = elem_size_align.alignment.toByteUnits();
-                    const fn_addr: usize = @intFromPtr(&wrapListPrepend);
+                    const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_prepend);
+                    const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
+                    defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
 
                     {
-                        // wrapListPrepend(out, list_bytes, list_len, list_cap, alignment, element, element_width, elements_refcounted, roc_ops)
+                        // wrapListPrepend(out, list_bytes, list_len, list_cap, alignment, element, element_width, elements_refcounted, element_incref, roc_ops)
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -1978,10 +1639,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addMemArg(base_reg, list_off);
                         try builder.addMemArg(base_reg, list_off + 8);
                         try builder.addMemArg(base_reg, list_off + 16);
-                        try builder.addImmArg(@intCast(alignment_bytes));
+                        try builder.addImmArg(@intCast(list_abi.alignment_bytes));
                         try builder.addLeaArg(base_reg, elem_off);
-                        try builder.addImmArg(@intCast(elem_size_align.size));
-                        try builder.addImmArg(if (elements_refcounted) @as(usize, 1) else 0);
+                        try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                        try builder.addImmArg(if (list_abi.elements_refcounted) @as(usize, 1) else 0);
+                        if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
                         try builder.addRegArg(roc_ops_reg);
 
                         try self.callBuiltin(&builder, fn_addr, .list_prepend);
@@ -1992,29 +1654,29 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_drop_first => {
                     // list_drop_first(list, n) -> List  (sublist from index n to end)
                     if (args.len != 2) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
-                    const n_loc = try self.generateExpr(args[1]);
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const n_loc = try self.emitValueLocal(args[1]);
                     return try self.callListSublist(ll, list_loc, n_loc, .drop_first);
                 },
                 .list_drop_last => {
                     // list_drop_last(list, n) -> List  (sublist from 0 with len - n)
                     if (args.len != 2) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
-                    const n_loc = try self.generateExpr(args[1]);
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const n_loc = try self.emitValueLocal(args[1]);
                     return try self.callListSublist(ll, list_loc, n_loc, .drop_last);
                 },
                 .list_take_first => {
                     // list_take_first(list, n) -> List  (sublist from 0 with n elements)
                     if (args.len != 2) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
-                    const n_loc = try self.generateExpr(args[1]);
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const n_loc = try self.emitValueLocal(args[1]);
                     return try self.callListSublist(ll, list_loc, n_loc, .take_first);
                 },
                 .list_take_last => {
                     // list_take_last(list, n) -> List  (sublist from len - n to end)
                     if (args.len != 2) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
-                    const n_loc = try self.generateExpr(args[1]);
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const n_loc = try self.emitValueLocal(args[1]);
                     return try self.callListSublist(ll, list_loc, n_loc, .take_last);
                 },
                 // Safe integer widening (signed source -> larger signed target)
@@ -2026,7 +1688,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .i32_to_i64,
                 => {
                     std.debug.assert(args.len >= 1);
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const src_reg = try self.ensureInGeneralReg(src_loc);
                     // Sign-extend: shift left to put sign bit at bit 63, then arithmetic shift right
                     const src_bits: u8 = switch (ll.op) {
@@ -2056,7 +1718,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .u32_to_u64,
                 => {
                     std.debug.assert(args.len >= 1);
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const src_reg = try self.ensureInGeneralReg(src_loc);
                     // Zero-extend: mask off upper bits
                     const src_bits: u8 = switch (ll.op) {
@@ -2112,7 +1774,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .i64_to_u64_wrap,
                 => {
                     std.debug.assert(args.len >= 1);
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const src_reg = try self.ensureInGeneralReg(src_loc);
                     // Truncation: just mask the relevant bits
                     const dst_bits: u8 = switch (ll.op) {
@@ -2145,7 +1807,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .i64_to_f64,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const src_reg = try self.ensureInGeneralReg(src_loc);
 
                     // Sign-extend source to 64 bits
@@ -2184,7 +1846,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .u32_to_f64,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const src_reg = try self.ensureInGeneralReg(src_loc);
 
                     // Zero-extend source to 64 bits
@@ -2215,7 +1877,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .u64_to_f64,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const src_reg = try self.ensureInGeneralReg(src_loc);
                     const freg = self.codegen.allocFloat() orelse unreachable;
 
@@ -2279,7 +1941,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .f64_to_f32_wrap,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     return .{ .float_reg = try self.ensureInFloatReg(src_loc) };
                 },
 
@@ -2298,7 +1960,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .f64_to_i64_trunc,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const freg = try self.ensureInFloatReg(src_loc);
 
                     const dst_reg = self.codegen.allocGeneral() orelse unreachable;
@@ -2342,7 +2004,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .f64_to_u64_trunc,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const freg = try self.ensureInFloatReg(src_loc);
 
                     const dst_reg = self.codegen.allocGeneral() orelse unreachable;
@@ -2395,7 +2057,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .i64_to_u128_wrap,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const src_reg = try self.ensureInGeneralReg(src_loc);
 
                     const is_signed = switch (ll.op) {
@@ -2468,7 +2130,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .i128_to_u128_wrap,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const src_signedness: std.builtin.Signedness = switch (ll.op) {
                         .i128_to_i8_wrap, .i128_to_i16_wrap, .i128_to_i32_wrap, .i128_to_i64_wrap, .i128_to_u8_wrap, .i128_to_u16_wrap, .i128_to_u32_wrap, .i128_to_u64_wrap, .i128_to_u128_wrap => .signed,
                         else => .unsigned,
@@ -2513,7 +2175,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .u64_to_dec,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const src_reg = try self.ensureInGeneralReg(src_loc);
 
                     // Zero-extend source to 64 bits
@@ -2540,7 +2202,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .i64_to_dec,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const src_reg = try self.ensureInGeneralReg(src_loc);
 
                     // Sign-extend source to 64 bits
@@ -2573,7 +2235,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .dec_to_u64_trunc,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
 
                     // Call roc_builtins_dec_to_i64_trunc(low, high) -> i64
@@ -2608,7 +2270,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // ── Dec to i128 truncating ──
                 .dec_to_i128_trunc => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
                     const fn_addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_to_i64_trunc);
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -2629,7 +2291,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // ── Dec to u128 truncating ──
                 .dec_to_u128_trunc => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
                     const fn_addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_to_i64_trunc);
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -2649,14 +2311,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // ── Dec to float conversions ──
                 .dec_to_f64 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
                     return try self.callI128PartsToF64(parts, @intFromPtr(&dev_wrappers.roc_builtins_dec_to_f64), .dec_to_f64);
                 },
                 .dec_to_f32_wrap => {
                     // Dec to f32: convert to f64 first (f32 narrowing happens at store)
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
                     return try self.callI128PartsToF64(parts, @intFromPtr(&dev_wrappers.roc_builtins_dec_to_f64), .dec_to_f64);
                 },
@@ -2666,7 +2328,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .i128_to_f64,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const parts = try self.getI128Parts(src_loc, .signed);
                     return try self.callI128PartsToF64(parts, @intFromPtr(&dev_wrappers.roc_builtins_i128_to_f64), .i128_to_f64);
                 },
@@ -2674,7 +2336,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .u128_to_f64,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const parts = try self.getI128Parts(src_loc, .unsigned);
                     return try self.callI128PartsToF64(parts, @intFromPtr(&dev_wrappers.roc_builtins_u128_to_f64), .u128_to_f64);
                 },
@@ -2684,7 +2346,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .f64_to_i128_trunc,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const freg = try self.ensureInFloatReg(src_loc);
                     return try self.callF64ToI128(freg, @intFromPtr(&dev_wrappers.roc_builtins_f64_to_i128_trunc), .f64_to_i128_trunc);
                 },
@@ -2692,7 +2354,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .f64_to_u128_trunc,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const freg = try self.ensureInFloatReg(src_loc);
                     return try self.callF64ToI128(freg, @intFromPtr(&dev_wrappers.roc_builtins_f64_to_u128_trunc), .f64_to_u128_trunc);
                 },
@@ -2702,14 +2364,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .str_to_utf8 => {
                     // str_to_utf8(str) -> List(U8)
                     if (args.len != 1) unreachable;
-                    const str_loc = try self.generateExpr(args[0]);
+                    const str_loc = try self.emitValueLocal(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrToUtf8), .str_to_utf8, .list);
                 },
                 .str_is_eq => {
                     if (args.len != 2) unreachable;
-                    const a_loc = try self.generateExpr(args[0]);
-                    const b_loc = try self.generateExpr(args[1]);
+                    const a_loc = try self.emitValueLocal(args[0]);
+                    const b_loc = try self.emitValueLocal(args[1]);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     const eq_loc = try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrEqual), .str_equal);
@@ -2718,46 +2380,52 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .str_concat => {
                     if (args.len != 2) unreachable;
-                    const a_loc = try self.generateExpr(args[0]);
-                    const b_loc = try self.generateExpr(args[1]);
+                    const a_loc = try self.emitValueLocal(args[0]);
+                    const b_loc = try self.emitValueLocal(args[1]);
+                    if (builtin.mode == .Debug and (a_loc != .stack_str or b_loc != .stack_str)) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: str_concat expects stack_str args, got lhs={s} rhs={s}",
+                            .{ @tagName(a_loc), @tagName(b_loc) },
+                        );
+                    }
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2RocOpsToStr(a_off, b_off, @intFromPtr(&wrapStrConcat), .str_concat);
                 },
                 .str_contains => {
                     if (args.len != 2) unreachable;
-                    const a_loc = try self.generateExpr(args[0]);
-                    const b_loc = try self.generateExpr(args[1]);
+                    const a_loc = try self.emitValueLocal(args[0]);
+                    const b_loc = try self.emitValueLocal(args[1]);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrContains), .str_contains);
                 },
                 .str_starts_with => {
                     if (args.len != 2) unreachable;
-                    const a_loc = try self.generateExpr(args[0]);
-                    const b_loc = try self.generateExpr(args[1]);
+                    const a_loc = try self.emitValueLocal(args[0]);
+                    const b_loc = try self.emitValueLocal(args[1]);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrStartsWith), .str_starts_with);
                 },
                 .str_ends_with => {
                     if (args.len != 2) unreachable;
-                    const a_loc = try self.generateExpr(args[0]);
-                    const b_loc = try self.generateExpr(args[1]);
+                    const a_loc = try self.emitValueLocal(args[0]);
+                    const b_loc = try self.emitValueLocal(args[1]);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrEndsWith), .str_ends_with);
                 },
                 .str_count_utf8_bytes => {
                     if (args.len != 1) unreachable;
-                    const str_loc = try self.generateExpr(args[0]);
+                    const str_loc = try self.emitValueLocal(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1ToScalar(str_off, @intFromPtr(&wrapStrCountUtf8Bytes), .str_count_utf8_bytes);
                 },
                 .str_caseless_ascii_equals => {
                     if (args.len != 2) unreachable;
-                    const a_loc = try self.generateExpr(args[0]);
-                    const b_loc = try self.generateExpr(args[1]);
+                    const a_loc = try self.emitValueLocal(args[0]);
+                    const b_loc = try self.emitValueLocal(args[1]);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrCaselessAsciiEquals), .str_caseless_ascii_equals);
@@ -2765,35 +2433,35 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .str_repeat => {
                     // str_repeat(str, count) -> Str
                     if (args.len != 2) unreachable;
-                    const str_loc = try self.generateExpr(args[0]);
-                    const count_loc = try self.generateExpr(args[1]);
+                    const str_loc = try self.emitValueLocal(args[0]);
+                    const count_loc = try self.emitValueLocal(args[1]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     const count_off = try self.ensureOnStack(count_loc, 8);
                     return try self.callStr1U64RocOpsToStr(str_off, count_off, @intFromPtr(&wrapStrRepeat), .str_repeat);
                 },
                 .str_trim => {
                     if (args.len != 1) unreachable;
-                    const str_loc = try self.generateExpr(args[0]);
+                    const str_loc = try self.emitValueLocal(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrTrim), .str_trim, .str);
                 },
                 .str_trim_start => {
                     if (args.len != 1) unreachable;
-                    const str_loc = try self.generateExpr(args[0]);
+                    const str_loc = try self.emitValueLocal(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrTrimStart), .str_trim_start, .str);
                 },
                 .str_trim_end => {
                     if (args.len != 1) unreachable;
-                    const str_loc = try self.generateExpr(args[0]);
+                    const str_loc = try self.emitValueLocal(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrTrimEnd), .str_trim_end, .str);
                 },
                 .str_split_on => {
                     // str_split(str, delimiter) -> List(Str)
                     if (args.len != 2) unreachable;
-                    const a_loc = try self.generateExpr(args[0]);
-                    const b_loc = try self.generateExpr(args[1]);
+                    const a_loc = try self.emitValueLocal(args[0]);
+                    const b_loc = try self.emitValueLocal(args[1]);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2RocOpsToResult(a_off, b_off, @intFromPtr(&wrapStrSplit), .str_split, .list);
@@ -2801,8 +2469,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .str_join_with => {
                     // str_join_with(list, separator) -> Str
                     if (args.len != 2) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
-                    const sep_loc = try self.generateExpr(args[1]);
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const sep_loc = try self.emitValueLocal(args[1]);
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
                     const sep_off = try self.ensureOnStack(sep_loc, roc_str_size);
                     return try self.callStr2RocOpsToResult(list_off, sep_off, @intFromPtr(&wrapStrJoinWith), .str_join_with, .str);
@@ -2810,22 +2478,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .str_reserve => {
                     // str_reserve(str, spare) -> Str
                     if (args.len != 2) unreachable;
-                    const str_loc = try self.generateExpr(args[0]);
-                    const spare_loc = try self.generateExpr(args[1]);
+                    const str_loc = try self.emitValueLocal(args[0]);
+                    const spare_loc = try self.emitValueLocal(args[1]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     const spare_off = try self.ensureOnStack(spare_loc, 8);
                     return try self.callStr1U64RocOpsToStr(str_off, spare_off, @intFromPtr(&wrapStrReserve), .str_reserve);
                 },
                 .str_release_excess_capacity => {
                     if (args.len != 1) unreachable;
-                    const str_loc = try self.generateExpr(args[0]);
+                    const str_loc = try self.emitValueLocal(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrReleaseExcessCapacity), .str_release_excess_capacity, .str);
                 },
                 .str_with_capacity => {
                     // str_with_capacity(capacity) -> Str
                     if (args.len != 1) unreachable;
-                    const cap_loc = try self.generateExpr(args[0]);
+                    const cap_loc = try self.emitValueLocal(args[0]);
                     const roc_ops_reg = self.roc_ops_reg orelse unreachable;
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
                     const fn_addr: usize = @intFromPtr(&wrapStrWithCapacity);
@@ -2844,119 +2512,182 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .str_drop_prefix => {
                     if (args.len != 2) unreachable;
-                    const a_loc = try self.generateExpr(args[0]);
-                    const b_loc = try self.generateExpr(args[1]);
+                    const a_loc = try self.emitValueLocal(args[0]);
+                    const b_loc = try self.emitValueLocal(args[1]);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2RocOpsToResult(a_off, b_off, @intFromPtr(&wrapStrDropPrefix), .str_drop_prefix, .str);
                 },
                 .str_drop_suffix => {
                     if (args.len != 2) unreachable;
-                    const a_loc = try self.generateExpr(args[0]);
-                    const b_loc = try self.generateExpr(args[1]);
+                    const a_loc = try self.emitValueLocal(args[0]);
+                    const b_loc = try self.emitValueLocal(args[1]);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2RocOpsToResult(a_off, b_off, @intFromPtr(&wrapStrDropSuffix), .str_drop_suffix, .str);
                 },
                 .str_with_ascii_lowercased => {
                     if (args.len != 1) unreachable;
-                    const str_loc = try self.generateExpr(args[0]);
+                    const str_loc = try self.emitValueLocal(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrWithAsciiLowercased), .str_with_ascii_lowercased, .str);
                 },
                 .str_with_ascii_uppercased => {
                     if (args.len != 1) unreachable;
-                    const str_loc = try self.generateExpr(args[0]);
+                    const str_loc = try self.emitValueLocal(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrWithAsciiUppercased), .str_with_ascii_uppercased, .str);
                 },
                 .str_from_utf8_lossy => {
                     // str_from_utf8_lossy(list) -> Str
                     if (args.len != 1) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
+                    const list_loc = try self.emitValueLocal(args[0]);
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
                     return try self.callStr1RocOpsToResult(list_off, @intFromPtr(&wrapStrFromUtf8Lossy), .str_from_utf8_lossy, .str);
                 },
                 .str_from_utf8 => {
                     // str_from_utf8(list) -> Result Str [BadUtf8 {problem: Utf8Problem, index: U64}]
-                    // The C builtin returns FromUtf8Try {byte_index: u64, string: RocStr, is_ok: bool, problem_code: u8}
-                    // We must convert it to the Roc tag union layout.
                     if (args.len != 1) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
+                    const list_loc = try self.emitValueLocal(args[0]);
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
 
                     const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-                    const raw_size: i32 = @intCast(@sizeOf(FromUtf8Try));
-                    const raw_offset = self.codegen.allocStackSlot(raw_size);
-
-                    // Call C builtin: fn(out, list_bytes, list_len, list_cap, roc_ops) -> void
-                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                    try builder.addLeaArg(frame_ptr, raw_offset);
-                    try builder.addMemArg(frame_ptr, list_off);
-                    try builder.addMemArg(frame_ptr, list_off + 8);
-                    try builder.addMemArg(frame_ptr, list_off + 16);
-                    try builder.addRegArg(roc_ops_reg);
-                    try self.callBuiltin(&builder, @intFromPtr(&wrapStrFromUtf8), .str_from_utf8);
-
-                    // Now convert the C struct to a Roc tag union.
-                    // FromUtf8Try layout: byte_index(u64)@0, string(RocStr)@8, is_ok(bool)@32, problem_code(u8)@33
-                    // Result tag union: [Err [BadUtf8 {index: U64, problem: Utf8Problem}], Ok Str]
-                    //   Err(0): payload = {index: U64@0, problem: U8@8}
-                    //   Ok(1): payload = Str (24 bytes)@0
-                    //   discriminant at offset = max payload size = 24
                     const ls = self.layout_store;
                     const ret_layout_val = ls.getLayout(ll.ret_layout);
                     if (ret_layout_val.tag == .tag_union) {
                         const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
+                        const variants = ls.getTagUnionVariants(tu_data);
+                        var ok_disc: ?u16 = null;
+                        var err_disc: ?u16 = null;
+                        var err_record_idx: ?layout.StructIdx = null;
+                        for (0..variants.len) |i| {
+                            const v_payload = variants.get(@intCast(i)).payload_layout;
+                            const candidate = self.unwrapSingleFieldPayloadLayout(v_payload) orelse v_payload;
+                            if (candidate == .str) {
+                                ok_disc = @intCast(i);
+                            } else {
+                                err_disc = @intCast(i);
+                                const err_layout = ls.getLayout(candidate);
+                                err_record_idx = switch (err_layout.tag) {
+                                    .struct_ => err_layout.data.struct_.idx,
+                                    .tag_union => inner: {
+                                        const inner_tu = ls.getTagUnionData(err_layout.data.tag_union.idx);
+                                        const inner_v = ls.getTagUnionVariants(inner_tu);
+                                        if (inner_v.len == 0) break :inner null;
+                                        const inner_payload = inner_v.get(0).payload_layout;
+                                        const unwrapped = self.unwrapSingleFieldPayloadLayout(inner_payload) orelse inner_payload;
+                                        const inner_layout = ls.getLayout(unwrapped);
+                                        if (inner_layout.tag == .struct_) break :inner inner_layout.data.struct_.idx;
+                                        break :inner null;
+                                    },
+                                    else => null,
+                                };
+                            }
+                        }
+
+                        const resolved_ok = ok_disc orelse std.debug.panic(
+                            "LIR/codegen invariant violated: str_from_utf8 had no Ok(Str) variant",
+                            .{},
+                        );
+                        const resolved_err = err_disc orelse std.debug.panic(
+                            "LIR/codegen invariant violated: str_from_utf8 had no Err variant",
+                            .{},
+                        );
+                        const rec_idx = err_record_idx orelse std.debug.panic(
+                            "LIR/codegen invariant violated: str_from_utf8 could not resolve error record layout",
+                            .{},
+                        );
+                        const struct_data = ls.getStructData(rec_idx);
+                        const fields = ls.struct_fields.sliceRange(struct_data.getFields());
+                        var index_off: ?u32 = null;
+                        var index_size: ?u32 = null;
+                        var problem_off: ?u32 = null;
+                        var problem_size: ?u32 = null;
+                        for (0..fields.len) |i| {
+                            const field = fields.get(i);
+                            const field_layout = ls.getLayout(field.layout);
+                            const field_size = ls.layoutSizeAlign(field_layout).size;
+                            const field_off = ls.getStructFieldOffsetByOriginalIndex(rec_idx, field.index);
+                            switch (field_size) {
+                                8 => {
+                                    index_off = field_off;
+                                    index_size = field_size;
+                                },
+                                1 => {
+                                    problem_off = field_off;
+                                    problem_size = field_size;
+                                },
+                                else => {},
+                            }
+                        }
+                        const resolved_index_off = index_off orelse std.debug.panic(
+                            "LIR/codegen invariant violated: str_from_utf8 could not resolve index offset",
+                            .{},
+                        );
+                        const resolved_index_size = index_size orelse std.debug.panic(
+                            "LIR/codegen invariant violated: str_from_utf8 could not resolve index size",
+                            .{},
+                        );
+                        const resolved_problem_off = problem_off orelse std.debug.panic(
+                            "LIR/codegen invariant violated: str_from_utf8 could not resolve problem offset",
+                            .{},
+                        );
+                        const resolved_problem_size = problem_size orelse std.debug.panic(
+                            "LIR/codegen invariant violated: str_from_utf8 could not resolve problem size",
+                            .{},
+                        );
                         const tag_size = tu_data.size;
                         const disc_offset = tu_data.discriminant_offset;
                         const disc_size = tu_data.discriminant_size;
+                        if (builtin.mode == .Debug and resolved_index_size != 8) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: str_from_utf8 index size {d} != 8",
+                                .{resolved_index_size},
+                            );
+                        }
+                        if (builtin.mode == .Debug and resolved_problem_size != 1) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: str_from_utf8 problem size {d} != 1",
+                                .{resolved_problem_size},
+                            );
+                        }
 
                         const result_slot = self.codegen.allocStackSlot(tag_size);
                         try self.zeroStackArea(result_slot, tag_size);
 
-                        // Load is_ok byte from C struct (offset 32)
-                        const ok_reg = try self.allocTempGeneral();
-                        try self.emitLoadStackW8(ok_reg, raw_offset + 32);
-                        try self.emitCmpImm(ok_reg, 0);
-                        self.codegen.freeGeneral(ok_reg);
+                        const layout_slot = self.codegen.allocStackSlot(@sizeOf(dev_wrappers.StrFromUtf8Layout));
+                        const layout_reg = try self.allocTempGeneral();
+                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(resolved_ok))));
+                        try self.emitStore(.w64, frame_ptr, layout_slot, layout_reg);
+                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(resolved_err))));
+                        try self.emitStore(.w64, frame_ptr, layout_slot + 8, layout_reg);
+                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(disc_offset))));
+                        try self.emitStore(.w32, frame_ptr, layout_slot + 16, layout_reg);
+                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(disc_size))));
+                        try self.emitStore(.w32, frame_ptr, layout_slot + 20, layout_reg);
+                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(resolved_index_off))));
+                        try self.emitStore(.w32, frame_ptr, layout_slot + 24, layout_reg);
+                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(resolved_problem_off))));
+                        try self.emitStore(.w32, frame_ptr, layout_slot + 28, layout_reg);
+                        self.codegen.freeGeneral(layout_reg);
 
-                        // Jump to Err branch if is_ok == 0
-                        const err_patch = try self.codegen.emitCondJump(condEqual());
+                        // Call C builtin that writes the Roc tag union directly.
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        try builder.addLeaArg(frame_ptr, result_slot);
+                        try builder.addMemArg(frame_ptr, list_off);
+                        try builder.addMemArg(frame_ptr, list_off + 8);
+                        try builder.addMemArg(frame_ptr, list_off + 16);
+                        try builder.addLeaArg(frame_ptr, layout_slot);
+                        try builder.addRegArg(roc_ops_reg);
+                        try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_str_from_utf8_result), .str_from_utf8);
 
-                        // === OK branch: copy string (24 bytes from raw+8 to result+0) ===
-                        {
-                            const temp_reg = try self.allocTempGeneral();
-                            try self.copyChunked(temp_reg, frame_ptr, raw_offset + 8, frame_ptr, result_slot, 24);
-                            self.codegen.freeGeneral(temp_reg);
-                        }
-                        try self.storeDiscriminant(result_slot + @as(i32, @intCast(disc_offset)), 1, disc_size);
-                        const end_patch = try self.codegen.emitJump();
-
-                        // === ERR branch ===
-                        self.codegen.patchJump(err_patch, self.codegen.currentOffset());
-                        // Copy byte_index (8 bytes from raw+0 to result+0) as the 'index' field
-                        {
-                            const temp_reg = try self.allocTempGeneral();
-                            try self.copyChunked(temp_reg, frame_ptr, raw_offset, frame_ptr, result_slot, 8);
-                            self.codegen.freeGeneral(temp_reg);
-                        }
-                        // Copy problem_code (1 byte from raw+33 to result+8) as the 'problem' field
-                        {
-                            const prob_reg = try self.allocTempGeneral();
-                            try self.emitLoadStackW8(prob_reg, raw_offset + 33);
-                            try self.emitStoreStackW8(result_slot + 8, prob_reg);
-                            self.codegen.freeGeneral(prob_reg);
-                        }
-                        try self.storeDiscriminant(result_slot + @as(i32, @intCast(disc_offset)), 0, disc_size);
-
-                        // === END ===
-                        self.codegen.patchJump(end_patch, self.codegen.currentOffset());
-                        return .{ .stack = .{ .offset = result_slot } };
+                        return self.stackLocationForLayout(ll.ret_layout, result_slot);
                     }
 
-                    // Fallback: return raw C struct (for contexts that don't need tag union)
-                    return .{ .stack = .{ .offset = raw_offset } };
+                    std.debug.panic(
+                        "LIR/codegen invariant violated: str_from_utf8 expected tag union layout",
+                        .{},
+                    );
                 },
 
                 // ── Remaining list low-level operations ──
@@ -2964,35 +2695,29 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_set => {
                     // list_set(list, index, element) -> List
                     if (args.len != 3) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
-                    const index_loc = try self.generateExpr(args[1]);
-                    const elem_loc = try self.generateExpr(args[2]);
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const index_loc = try self.emitValueLocal(args[1]);
+                    const elem_loc = try self.emitValueLocal(args[2]);
 
                     const ls = self.layout_store;
                     const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
-                    const ret_layout = ls.getLayout(ll.ret_layout);
-                    const elem_size_align: layout.SizeAlign = switch (ret_layout.tag) {
-                        .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
-                        .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                        else => unreachable,
-                    };
-                    const elements_refcounted: bool = switch (ret_layout.tag) {
-                        .list => ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list)),
-                        else => false,
-                    };
+                    const list_abi = builtinInternalListAbi(ls, "dev.list_set.builtin_list_abi", ll.ret_layout);
 
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
                     const index_off = try self.ensureOnStack(index_loc, 8);
-                    const elem_off = try self.ensureOnStack(elem_loc, elem_size_align.size);
+                    const elem_off = try self.ensureOnStack(elem_loc, list_abi.elem_size_align.size);
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
                     // We need a scratch slot for the old element (out_element param)
-                    const old_elem_slot = self.codegen.allocStackSlot(@intCast(if (elem_size_align.size > 0) elem_size_align.size else 8));
-                    const alignment_bytes = elem_size_align.alignment.toByteUnits();
-                    const fn_addr: usize = @intFromPtr(&wrapListReplace);
+                    const old_elem_slot = self.codegen.allocStackSlot(@intCast(if (list_abi.elem_size_align.size > 0) list_abi.elem_size_align.size else 8));
+                    const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_replace);
+                    const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
+                    defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
+                    const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
+                    defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
 
                     {
-                        // wrapListReplace(out, list_bytes, list_len, list_cap, alignment, index, element, element_width, elements_refcounted, out_element, roc_ops)
+                        // wrapListReplace(out, list_bytes, list_len, list_cap, alignment, index, element, element_width, out_element, elements_refcounted, element_incref, element_decref, roc_ops)
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -3000,12 +2725,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addMemArg(base_reg, list_off);
                         try builder.addMemArg(base_reg, list_off + 8);
                         try builder.addMemArg(base_reg, list_off + 16);
-                        try builder.addImmArg(@intCast(alignment_bytes));
+                        try builder.addImmArg(@intCast(list_abi.alignment_bytes));
                         try builder.addMemArg(base_reg, index_off);
                         try builder.addLeaArg(base_reg, elem_off);
-                        try builder.addImmArg(@intCast(elem_size_align.size));
-                        try builder.addImmArg(if (elements_refcounted) @as(usize, 1) else 0);
+                        try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
                         try builder.addLeaArg(base_reg, old_elem_slot);
+                        try builder.addImmArg(if (list_abi.elements_refcounted) @as(usize, 1) else 0);
+                        if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                        if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
                         try builder.addRegArg(roc_ops_reg);
 
                         try self.callBuiltin(&builder, fn_addr, .list_replace);
@@ -3016,40 +2743,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_first => {
                     // list_first(list) -> element  (same as list_get at index 0)
                     if (args.len != 1) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
+                    const list_loc = try self.emitValueLocal(args[0]);
                     return try self.listGetAtConstIndex(list_loc, 0, ll.ret_layout);
                 },
                 .list_last => {
                     // list_last(list) -> element  (same as list_get at index len-1)
                     if (args.len != 1) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
+                    const list_loc = try self.emitValueLocal(args[0]);
                     return try self.listGetAtLastIndex(list_loc, ll.ret_layout);
-                },
-                .list_contains => {
-                    // list_contains(list, element) -> bool
-                    // Linear scan: iterate through list, compare each element
-                    if (args.len != 2) unreachable;
-                    const ls = self.layout_store;
-                    const list_layout_idx = self.exprLayout(args[0]);
-                    const list_layout = ls.getLayout(list_layout_idx);
-                    switch (list_layout.tag) {
-                        .list => {
-                            const list_loc = try self.generateExpr(args[0]);
-                            const needle_loc = try self.generateExpr(args[1]);
-                            return try self.generateListContains(
-                                list_loc,
-                                needle_loc,
-                                list_layout.data.list,
-                            );
-                        },
-                        .list_of_zst => {
-                            // ZST elements: contains = list is non-empty
-                            const list_loc = try self.generateExpr(args[0]);
-                            _ = try self.generateExpr(args[1]); // evaluate needle for side effects
-                            return try self.generateZstListContains(list_loc);
-                        },
-                        else => unreachable,
-                    }
                 },
                 .list_reverse => {
                     // list_reverse(list) -> List
@@ -3057,32 +2758,32 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Actually reverse needs a proper implementation. For now use sublist(0, len) and reverse.
                     // Simplest correct approach: allocate new list, copy elements in reverse order
                     if (args.len != 1) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
+                    const list_loc = try self.emitValueLocal(args[0]);
                     return try self.generateListReverse(list_loc, ll);
                 },
                 .list_reserve => {
                     // list_reserve(list, spare) -> List
                     if (args.len != 2) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
-                    const spare_loc = try self.generateExpr(args[1]);
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const spare_loc = try self.emitValueLocal(args[1]);
                     return try self.callListReserveOp(list_loc, spare_loc, ll);
                 },
                 .list_release_excess_capacity => {
                     // list_release_excess_capacity(list) -> List
                     if (args.len != 1) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
+                    const list_loc = try self.emitValueLocal(args[0]);
                     return try self.callListReleaseExcessCapOp(list_loc, ll);
                 },
                 .list_split_first => {
                     // list_split_first(list) -> {first: elem, rest: List}
                     if (args.len != 1) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
+                    const list_loc = try self.emitValueLocal(args[0]);
                     return try self.callListSplitOp(ll, list_loc, .first);
                 },
                 .list_split_last => {
                     // list_split_last(list) -> {rest: List, last: elem}
                     if (args.len != 1) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
+                    const list_loc = try self.emitValueLocal(args[0]);
                     return try self.callListSplitOp(ll, list_loc, .last);
                 },
 
@@ -3193,30 +2894,48 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return try self.generateFloatDecTryUnsafeConversion(ll, args);
                 },
 
-                // ── Generic numeric operations (not emitted by LIR lowering) ──
-                // The LIR lowering phase resolves these to type-specific operations
-                // (int_add_wrap, dec_add, float_add, etc.) before code generation.
-                .num_from_str => {
+                .u8_from_str,
+                .i8_from_str,
+                .u16_from_str,
+                .i16_from_str,
+                .u32_from_str,
+                .i32_from_str,
+                .u64_from_str,
+                .i64_from_str,
+                .u128_from_str,
+                .i128_from_str,
+                .dec_from_str,
+                .f32_from_str,
+                .f64_from_str,
+                => {
                     return try self.generateNumFromStr(ll, args);
                 },
                 .list_sublist => {
                     // list_sublist(list, {start, len}) -> List
                     if (args.len != 2) unreachable;
-                    const record_layout_idx = self.exprLayout(args[1]);
-                    const list_loc = try self.generateExpr(args[0]);
-                    const record_loc = try self.generateExpr(args[1]);
+                    const record_layout_idx = self.valueLayout(args[1]);
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const record_loc = try self.emitValueLocal(args[1]);
                     return try self.callListSublistFromRecord(ll, list_loc, record_loc, record_layout_idx);
                 },
+                .list_drop_at => {
+                    if (args.len != 2) unreachable;
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const index_loc = try self.emitValueLocal(args[1]);
+                    return try self.callListDropAt(ll, list_loc, index_loc);
+                },
                 .num_abs => {
-                    // Absolute value: for signed types, negate if negative; unsigned is no-op
-                    const val_loc = try self.generateExpr(args[0]);
-                    return try self.generateNumAbs(val_loc, ll.ret_layout);
+                    // Absolute value: classify signedness from the operand layout.
+                    // The result layout is not authoritative here because numeric methods
+                    // can return a different signedness than their operand.
+                    const val_loc = try self.emitValueLocal(args[0]);
+                    return try self.generateNumAbs(val_loc, self.valueLayout(args[0]));
                 },
                 .num_abs_diff => {
                     // |a - b|: compare and subtract in the correct order to avoid wrap/overflow
-                    const arg_layout = self.exprLayout(args[0]);
-                    const a_loc = try self.generateExpr(args[0]);
-                    const b_loc = try self.generateExpr(args[1]);
+                    const arg_layout = self.valueLayout(args[0]);
+                    const a_loc = try self.emitValueLocal(args[0]);
+                    const b_loc = try self.emitValueLocal(args[1]);
                     return try self.generateAbsDiff(a_loc, b_loc, ll.ret_layout, arg_layout);
                 },
 
@@ -3237,21 +2956,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_is_lt,
                 .num_is_lte,
                 => {
-                    const lhs_loc = try self.generateExpr(args[0]);
-                    const rhs_loc = try self.generateExpr(args[1]);
+                    const lhs_loc = try self.emitValueLocal(args[0]);
+                    const rhs_loc = try self.emitValueLocal(args[1]);
 
                     // For numeric/comparison ops, operand layout comes from arguments.
                     // Return layout can be Bool for comparisons, so don't key operand
                     // behavior off `ll.ret_layout`.
                     const operand_layout =
-                        self.exprLayout(args[0]);
+                        self.valueLayout(args[0]);
 
                     // With ANF, operands are always lookups or literals, so we
                     // dispatch structural equality purely by layout.
                     if (ll.op == .num_is_eq) {
                         {
                             const ls = self.layout_store;
-                            const layout_idx = self.exprLayout(args[0]);
+                            const layout_idx = self.valueLayout(args[0]);
                             const stored_layout = ls.getLayout(layout_idx);
                             if (stored_layout.tag == .struct_)
                                 return self.generateStructComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq);
@@ -3289,7 +3008,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
 
                 .num_negate => {
-                    const inner_loc = try self.generateExpr(args[0]);
+                    const inner_loc = try self.emitValueLocal(args[0]);
                     const is_float = ll.ret_layout == .f32 or ll.ret_layout == .f64;
                     const is_i128 = ll.ret_layout == .i128 or ll.ret_layout == .u128 or ll.ret_layout == .dec;
 
@@ -3335,12 +3054,99 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
 
                 .bool_not => {
-                    const inner_loc = try self.generateExpr(args[0]);
+                    const inner_loc = try self.emitValueLocal(args[0]);
                     const src_reg = try self.ensureInGeneralReg(inner_loc);
                     const result_reg = try self.allocTempGeneral();
-                    try self.codegen.emitXorImm(.w64, result_reg, src_reg, 1);
+                    try self.emitCmpImm(src_reg, 0);
+                    try self.emitSetCond(result_reg, condEqual());
                     self.codegen.freeGeneral(src_reg);
                     return .{ .general_reg = result_reg };
+                },
+
+                .u8_to_str => {
+                    const value_loc = try self.emitValueLocal(args[0]);
+                    return self.callIntToStr(value_loc, 1, false);
+                },
+                .i8_to_str => {
+                    const value_loc = try self.emitValueLocal(args[0]);
+                    return self.callIntToStr(value_loc, 1, true);
+                },
+                .u16_to_str => {
+                    const value_loc = try self.emitValueLocal(args[0]);
+                    return self.callIntToStr(value_loc, 2, false);
+                },
+                .i16_to_str => {
+                    const value_loc = try self.emitValueLocal(args[0]);
+                    return self.callIntToStr(value_loc, 2, true);
+                },
+                .u32_to_str => {
+                    const value_loc = try self.emitValueLocal(args[0]);
+                    return self.callIntToStr(value_loc, 4, false);
+                },
+                .i32_to_str => {
+                    const value_loc = try self.emitValueLocal(args[0]);
+                    return self.callIntToStr(value_loc, 4, true);
+                },
+                .u64_to_str => {
+                    const value_loc = try self.emitValueLocal(args[0]);
+                    return self.callIntToStr(value_loc, 8, false);
+                },
+                .i64_to_str => {
+                    const value_loc = try self.emitValueLocal(args[0]);
+                    return self.callIntToStr(value_loc, 8, true);
+                },
+                .u128_to_str => {
+                    const value_loc = try self.emitValueLocal(args[0]);
+                    return self.callIntToStr(value_loc, 16, false);
+                },
+                .i128_to_str => {
+                    const value_loc = try self.emitValueLocal(args[0]);
+                    return self.callIntToStr(value_loc, 16, true);
+                },
+                .dec_to_str => {
+                    const value_loc = try self.emitValueLocal(args[0]);
+                    return self.callDecToStr(value_loc);
+                },
+                .f32_to_str => {
+                    const value_loc = try self.emitValueLocal(args[0]);
+                    return self.callFloatToStr(value_loc, true);
+                },
+                .f64_to_str => {
+                    const value_loc = try self.emitValueLocal(args[0]);
+                    return self.callFloatToStr(value_loc, false);
+                },
+                .str_inspect => {
+                    if (args.len != 1) unreachable;
+                    const str_loc = try self.emitValueLocal(args[0]);
+                    const str_off = try self.ensureOnStack(str_loc, roc_str_size);
+                    return self.callStr1RocOpsToResult(
+                        str_off,
+                        @intFromPtr(&dev_wrappers.roc_builtins_str_escape_and_quote),
+                        .str_escape_and_quote,
+                        .str,
+                    );
+                },
+                .num_to_str => {
+                    const value_loc = try self.emitValueLocal(args[0]);
+                    return switch (self.valueLayout(args[0])) {
+                        .u8 => self.callIntToStr(value_loc, 1, false),
+                        .i8 => self.callIntToStr(value_loc, 1, true),
+                        .u16 => self.callIntToStr(value_loc, 2, false),
+                        .i16 => self.callIntToStr(value_loc, 2, true),
+                        .u32 => self.callIntToStr(value_loc, 4, false),
+                        .i32 => self.callIntToStr(value_loc, 4, true),
+                        .u64 => self.callIntToStr(value_loc, 8, false),
+                        .i64 => self.callIntToStr(value_loc, 8, true),
+                        .u128 => self.callIntToStr(value_loc, 16, false),
+                        .i128 => self.callIntToStr(value_loc, 16, true),
+                        .dec => self.callDecToStr(value_loc),
+                        .f32 => self.callFloatToStr(value_loc, true),
+                        .f64 => self.callFloatToStr(value_loc, false),
+                        else => std.debug.panic(
+                            "LirCodeGen invariant violated: num_to_str received non-numeric layout {s}",
+                            .{@tagName(self.valueLayout(args[0]))},
+                        ),
+                    };
                 },
 
                 // Unimplemented ops
@@ -3350,110 +3156,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_round,
                 .num_floor,
                 .num_ceiling,
-                .num_to_str,
-                .str_inspect,
-                .u8_to_str,
-                .i8_to_str,
-                .u16_to_str,
-                .i16_to_str,
-                .u32_to_str,
-                .i32_to_str,
-                .u64_to_str,
-                .i64_to_str,
-                .u128_to_str,
-                .i128_to_str,
-                .dec_to_str,
-                .f32_to_str,
-                .f64_to_str,
                 .num_from_numeral,
-                .list_drop_at,
                 .compare,
                 => {
                     std.debug.panic("UNIMPLEMENTED low-level op: {s}", .{@tagName(ll.op)});
-                },
-                .list_sort_with => {
-                    // list_sort_with(list, comparator) -> List
-                    if (args.len != 2) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
-
-                    const ls = self.layout_store;
-                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-
-                    const ret_layout = ls.getLayout(ll.ret_layout);
-                    const elem_size_align: layout.SizeAlign = switch (ret_layout.tag) {
-                        .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
-                        .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                        else => unreachable,
-                    };
-                    const elements_refcounted: bool = switch (ret_layout.tag) {
-                        .list => ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list)),
-                        else => false,
-                    };
-
-                    // The comparator proc must be explicit in LIR; codegen does not
-                    // recover callables from the function-value expression.
-                    if (ll.callable_proc.isNone()) {
-                        if (builtin.mode == .Debug) {
-                            std.debug.panic(
-                                "LIR/codegen invariant violated: list_sort_with is missing callable_proc metadata",
-                                .{},
-                            );
-                        }
-                        unreachable;
-                    }
-                    const cmp_code_offset: usize = try self.resolveComparatorOffset(ll.callable_proc);
-
-                    // Compute the absolute address of the lambda at runtime using
-                    // PC-relative addressing: emit LEA/ADR that resolves to the
-                    // lambda's code address when the instruction executes.
-                    const cmp_addr_slot = self.codegen.allocStackSlot(8);
-                    {
-                        const current = self.codegen.currentOffset();
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            // ADR X9, (target - current)
-                            const rel: i21 = @intCast(@as(i64, @intCast(cmp_code_offset)) - @as(i64, @intCast(current)));
-                            try self.codegen.emit.adr(.X9, rel);
-                            try self.codegen.emitStoreStack(.w64, cmp_addr_slot, .X9);
-                        } else {
-                            // LEA RAX, [RIP + (target - current - 7)]
-                            // 7 = size of the LEA instruction itself (REX + opcode + modrm + disp32)
-                            const rel: i32 = @intCast(@as(i64, @intCast(cmp_code_offset)) - @as(i64, @intCast(current)) - 7);
-                            try self.codegen.emit.leaRegRipRel(.RAX, rel);
-                            try self.codegen.emitStoreStack(.w64, cmp_addr_slot, .RAX);
-                        }
-
-                        // Record this as an internal address patch so deferred-prologue
-                        // proc body shifts can update it.
-                        try self.internal_addr_patches.append(self.allocator, .{
-                            .instr_offset = current,
-                            .target_offset = cmp_code_offset,
-                        });
-                    }
-
-                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
-                    const result_offset = self.codegen.allocStackSlot(roc_list_size);
-                    const alignment_bytes = elem_size_align.alignment.toByteUnits();
-                    const fn_addr: usize = @intFromPtr(&wrapListSortWith);
-
-                    {
-                        // wrapListSortWith(out, list_bytes, list_len, list_cap, cmp_fn_addr, alignment, element_width, elements_refcounted, roc_ops)
-                        const base_reg = frame_ptr;
-                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-
-                        try builder.addLeaArg(base_reg, result_offset);
-                        try builder.addMemArg(base_reg, list_off);
-                        try builder.addMemArg(base_reg, list_off + 8);
-                        try builder.addMemArg(base_reg, list_off + 16);
-                        try builder.addMemArg(base_reg, cmp_addr_slot);
-                        try builder.addImmArg(@intCast(alignment_bytes));
-                        try builder.addImmArg(@intCast(elem_size_align.size));
-                        try builder.addImmArg(if (elements_refcounted) @as(usize, 1) else 0);
-                        try builder.addRegArg(roc_ops_reg);
-
-                        try self.callBuiltin(&builder, fn_addr, .list_sort_with);
-                    }
-
-                    return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
                 },
                 .box_box => {
                     // Box.box(value) -> Box(value): heap-allocate and copy value
@@ -3463,19 +3169,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (ret_layout_data.tag == .box_of_zst) {
                         // Boxing a ZST: evaluate the expression (for side effects) but
                         // return a null-like pointer since there's no data to store.
-                        _ = try self.generateExpr(args[0]);
+                        _ = try self.emitValueLocal(args[0]);
                         const reg = try self.allocTempGeneral();
                         try self.codegen.emitLoadImm(reg, 0);
                         return .{ .general_reg = reg };
                     }
 
-                    const box_info = ls.getBoxInfo(ret_layout_data);
-                    const elem_size: u32 = box_info.elem_size;
-                    const elem_alignment: u32 = box_info.elem_alignment;
+                    const box_abi = ls.builtinBoxAbi(ll.ret_layout);
+                    const elem_size: u32 = box_abi.elem_size;
+                    const elem_alignment: u32 = box_abi.elem_alignment;
 
                     // Handle ZST element even when layout tag is .box (not .box_of_zst)
                     if (elem_size == 0) {
-                        _ = try self.generateExpr(args[0]);
+                        _ = try self.emitValueLocal(args[0]);
                         const reg = try self.allocTempGeneral();
                         try self.codegen.emitLoadImm(reg, 0);
                         return .{ .general_reg = reg };
@@ -3489,7 +3195,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                         try builder.addImmArg(@intCast(elem_size));
                         try builder.addImmArg(@intCast(elem_alignment));
-                        try builder.addImmArg(if (box_info.contains_refcounted) 1 else 0);
+                        try builder.addImmArg(if (box_abi.contains_refcounted) 1 else 0);
                         try builder.addRegArg(roc_ops_reg);
                         try self.callBuiltin(&builder, @intFromPtr(&allocateWithRefcountC), .allocate_with_refcount);
                     }
@@ -3497,7 +3203,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
 
                     // Generate the value expression
-                    const value_loc = try self.generateExpr(args[0]);
+                    const value_loc = try self.emitValueLocal(args[0]);
 
                     // Copy value to heap
                     const heap_ptr = try self.allocTempGeneral();
@@ -3515,29 +3221,29 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Box.unbox(box) -> value: dereference the box pointer
                     const ls = self.layout_store;
                     // The argument is the Box — get its layout to find element info
-                    const box_arg_layout = self.exprLayout(args[0]);
+                    const box_arg_layout = self.valueLayout(args[0]);
                     const box_layout_data = ls.getLayout(box_arg_layout);
 
                     if (box_layout_data.tag == .box_of_zst) {
                         // Unboxing a ZST: evaluate the box expression (for side effects)
                         // but return a ZST (no data).
-                        _ = try self.generateExpr(args[0]);
+                        _ = try self.emitValueLocal(args[0]);
                         return .{ .immediate_i64 = 0 };
                     }
 
-                    const box_info = ls.getBoxInfo(box_layout_data);
-                    const elem_size: u32 = box_info.elem_size;
+                    const box_abi = ls.builtinBoxAbi(box_arg_layout);
+                    const elem_size: u32 = box_abi.elem_size;
 
                     // Handle ZST element even when layout tag is .box (not .box_of_zst)
                     if (elem_size == 0) {
-                        _ = try self.generateExpr(args[0]);
+                        _ = try self.emitValueLocal(args[0]);
                         return .{ .immediate_i64 = 0 };
                     }
-                    const elem_layout_idx = box_info.elem_layout_idx;
-                    const elem_layout_data = box_info.elem_layout;
+                    const elem_layout_idx = box_abi.elem_layout_idx orelse .zst;
+                    const elem_layout_data = box_abi.elem_layout;
 
                     // Generate the box pointer expression
-                    const box_loc = try self.generateExpr(args[0]);
+                    const box_loc = try self.emitValueLocal(args[0]);
                     const box_reg = try self.ensureInGeneralReg(box_loc);
 
                     // Copy from heap to stack
@@ -3690,28 +3396,105 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .stack_str = result_offset };
         }
 
+        fn normalizeIntegerWidthInReg(self: *Self, reg: GeneralReg, int_width_bytes: u8, is_signed: bool) Allocator.Error!void {
+            const shift_amount: u6 = switch (int_width_bytes) {
+                1 => 56,
+                2 => 48,
+                4 => 32,
+                8, 16 => 0,
+                else => unreachable,
+            };
+            if (shift_amount == 0) return;
+
+            try self.emitShlImm(.w64, reg, reg, shift_amount);
+            if (is_signed) {
+                try self.emitAsrImm(.w64, reg, reg, shift_amount);
+            } else {
+                try self.emitLsrImm(.w64, reg, reg, shift_amount);
+            }
+        }
+
+        fn callIntToStr(self: *Self, value_loc: ValueLocation, int_width_bytes: u8, is_signed: bool) Allocator.Error!ValueLocation {
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const result_offset = self.codegen.allocStackSlot(roc_str_size);
+            const builtin_fn: BuiltinFn = .int_to_str;
+            const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_int_to_str);
+            const base_reg = frame_ptr;
+
+            const signedness: std.builtin.Signedness = if (is_signed) .signed else .unsigned;
+            const low_reg, const high_reg = blk: {
+                if (int_width_bytes == 16) {
+                    const parts = try self.getI128Parts(value_loc, signedness);
+                    break :blk .{ parts.low, parts.high };
+                }
+
+                const low = try self.ensureInGeneralReg(value_loc);
+                try self.normalizeIntegerWidthInReg(low, int_width_bytes, is_signed);
+                const high = try self.allocTempGeneral();
+                try self.emitSignExtendHighReg(high, low, signedness);
+                break :blk .{ low, high };
+            };
+            defer self.codegen.freeGeneral(low_reg);
+            defer self.codegen.freeGeneral(high_reg);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(base_reg, result_offset);
+            try builder.addRegArg(low_reg);
+            try builder.addRegArg(high_reg);
+            try builder.addImmArg(int_width_bytes);
+            try builder.addImmArg(if (is_signed) @as(u8, 1) else @as(u8, 0));
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
+
+            return .{ .stack_str = result_offset };
+        }
+
+        fn callDecToStr(self: *Self, value_loc: ValueLocation) Allocator.Error!ValueLocation {
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const result_offset = self.codegen.allocStackSlot(roc_str_size);
+            const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_dec_to_str);
+            const base_reg = frame_ptr;
+            const parts = try self.getI128Parts(value_loc, .signed);
+            defer self.codegen.freeGeneral(parts.low);
+            defer self.codegen.freeGeneral(parts.high);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(base_reg, result_offset);
+            try builder.addRegArg(parts.low);
+            try builder.addRegArg(parts.high);
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, fn_addr, .dec_to_str);
+
+            return .{ .stack_str = result_offset };
+        }
+
+        fn callFloatToStr(self: *Self, value_loc: ValueLocation, is_f32: bool) Allocator.Error!ValueLocation {
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const result_offset = self.codegen.allocStackSlot(roc_str_size);
+            const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_float_to_str);
+            const base_reg = frame_ptr;
+            const bits_reg = if (is_f32)
+                try self.materializeF32BitsInGeneralReg(value_loc)
+            else
+                try self.ensureInGeneralReg(value_loc);
+            defer self.codegen.freeGeneral(bits_reg);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(base_reg, result_offset);
+            try builder.addRegArg(bits_reg);
+            try builder.addImmArg(if (is_f32) @as(u8, 1) else @as(u8, 0));
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, fn_addr, .float_to_str);
+
+            return .{ .stack_str = result_offset };
+        }
+
         /// Helper for list_drop_first, list_drop_last, list_take_first, list_take_last
         /// These all map to listSublist with different start/len calculations
         fn callListSublist(self: *Self, ll: anytype, list_loc: ValueLocation, n_loc: ValueLocation, mode: enum { drop_first, drop_last, take_first, take_last }) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-            const elements_refcounted = blk: {
-                const ret_layout = ls.getLayout(ll.ret_layout);
-                break :blk switch (ret_layout.tag) {
-                    .list => ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list)),
-                    .list_of_zst => false,
-                    else => unreachable,
-                };
-            };
-
-            const elem_size_align: layout.SizeAlign = blk: {
-                const ret_layout = ls.getLayout(ll.ret_layout);
-                break :blk switch (ret_layout.tag) {
-                    .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
-                    .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                    else => unreachable,
-                };
-            };
+            const list_abi = builtinInternalListAbi(ls, "dev.callListSublist.builtin_list_abi", ll.ret_layout);
 
             const list_off = try self.ensureOnStack(list_loc, roc_list_size);
             const n_reg = try self.ensureInGeneralReg(n_loc);
@@ -3768,12 +3551,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Call roc_builtins_list_sublist(out, list_bytes, list_len, list_cap,
             // alignment, element_width, start, len, elements_refcounted, roc_ops)
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
-            const alignment_bytes = elem_size_align.alignment.toByteUnits();
             const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_sublist);
+            const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
+            defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
 
             {
                 // roc_builtins_list_sublist(out, list_bytes, list_len, list_cap,
-                // alignment, element_width, start, len, elements_refcounted, roc_ops)
+                // alignment, element_width, start, len, elements_refcounted, element_decref, roc_ops)
                 const base_reg = frame_ptr;
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -3781,11 +3565,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addMemArg(base_reg, list_off);
                 try builder.addMemArg(base_reg, list_off + 8);
                 try builder.addMemArg(base_reg, list_off + 16);
-                try builder.addImmArg(@intCast(alignment_bytes));
-                try builder.addImmArg(@intCast(elem_size_align.size));
+                try builder.addImmArg(@intCast(list_abi.alignment_bytes));
+                try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
                 try builder.addMemArg(base_reg, start_slot);
                 try builder.addMemArg(base_reg, len_slot);
-                try builder.addImmArg(if (elements_refcounted) 1 else 0);
+                try builder.addImmArg(if (list_abi.elements_refcounted) 1 else 0);
+                if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
                 try builder.addRegArg(roc_ops_reg);
 
                 try self.callBuiltin(&builder, fn_addr, .list_sublist);
@@ -3798,23 +3583,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn callListSublistFromRecord(self: *Self, ll: anytype, list_loc: ValueLocation, record_loc: ValueLocation, record_layout_idx: ?layout.Idx) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-            const elements_refcounted = blk: {
-                const ret_layout = ls.getLayout(ll.ret_layout);
-                break :blk switch (ret_layout.tag) {
-                    .list => ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list)),
-                    .list_of_zst => false,
-                    else => unreachable,
-                };
-            };
-
-            const elem_size_align: layout.SizeAlign = blk: {
-                const ret_layout = ls.getLayout(ll.ret_layout);
-                break :blk switch (ret_layout.tag) {
-                    .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
-                    .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                    else => unreachable,
-                };
-            };
+            const list_abi = builtinInternalListAbi(ls, "dev.callListSublistFromRecord.builtin_list_abi", ll.ret_layout);
 
             const record_layout = ls.getLayout(record_layout_idx orelse unreachable);
             const record_idx = record_layout.data.struct_.idx;
@@ -3852,25 +3621,61 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const record_off = try self.ensureOnStack(record_loc, record_size);
 
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
-            const alignment_bytes = elem_size_align.alignment.toByteUnits();
             const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_sublist);
+            const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
+            defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
 
             {
                 // roc_builtins_list_sublist(out, list_bytes, list_len, list_cap,
-                // alignment, element_width, start, len, elements_refcounted, roc_ops)
+                // alignment, element_width, start, len, elements_refcounted, element_decref, roc_ops)
                 const base_reg = frame_ptr;
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 try builder.addLeaArg(base_reg, result_offset);
                 try builder.addMemArg(base_reg, list_off);
                 try builder.addMemArg(base_reg, list_off + 8);
                 try builder.addMemArg(base_reg, list_off + 16);
-                try builder.addImmArg(@intCast(alignment_bytes));
-                try builder.addImmArg(@intCast(elem_size_align.size));
+                try builder.addImmArg(@intCast(list_abi.alignment_bytes));
+                try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
                 try builder.addMemArg(base_reg, record_off + start_field_off);
                 try builder.addMemArg(base_reg, record_off + len_field_off);
-                try builder.addImmArg(if (elements_refcounted) 1 else 0);
+                try builder.addImmArg(if (list_abi.elements_refcounted) 1 else 0);
+                if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
                 try builder.addRegArg(roc_ops_reg);
                 try self.callBuiltin(&builder, fn_addr, .list_sublist);
+            }
+
+            return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
+        }
+
+        fn callListDropAt(self: *Self, ll: anytype, list_loc: ValueLocation, index_loc: ValueLocation) Allocator.Error!ValueLocation {
+            const ls = self.layout_store;
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const list_abi = builtinInternalListAbi(ls, "dev.callListDropAt.builtin_list_abi", ll.ret_layout);
+
+            const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+            const index_off = try self.ensureOnStack(index_loc, 8);
+            const result_offset = self.codegen.allocStackSlot(roc_str_size);
+            const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_drop_at);
+            const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
+            defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
+            const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
+            defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
+
+            {
+                const base_reg = frame_ptr;
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addLeaArg(base_reg, result_offset);
+                try builder.addMemArg(base_reg, list_off);
+                try builder.addMemArg(base_reg, list_off + 8);
+                try builder.addMemArg(base_reg, list_off + 16);
+                try builder.addImmArg(@intCast(list_abi.alignment_bytes));
+                try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                try builder.addMemArg(base_reg, index_off);
+                try builder.addImmArg(if (list_abi.elements_refcounted) 1 else 0);
+                if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                try builder.addRegArg(roc_ops_reg);
+                try self.callBuiltin(&builder, fn_addr, .list_drop_at);
             }
 
             return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
@@ -3902,10 +3707,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const list_field_offset: i32 = if (field0_is_list) field0_offset else field1_offset;
             const elem_field_offset: i32 = if (field0_is_list) field1_offset else field0_offset;
             const elem_layout = if (field0_is_list) field1_layout else field0_layout;
+            const list_field_layout_idx = if (field0_is_list) field0_layout_idx else field1_layout_idx;
+            const list_abi = builtinInternalListAbi(ls, "dev.callListSplitOp.builtin_list_abi", list_field_layout_idx);
 
             const elem_size_align = ls.layoutSizeAlign(elem_layout);
             const elem_size: u32 = elem_size_align.size;
-            const alignment_bytes = elem_size_align.alignment.toByteUnits();
 
             // Ensure list is on stack
             const list_off = try self.ensureOnStack(list_loc, roc_list_size);
@@ -3950,21 +3756,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
                 self.codegen.freeGeneral(temp_reg);
                 self.codegen.freeGeneral(ptr_reg);
-
-                if (ls.layoutContainsRefcounted(elem_layout)) {
-                    try self.emitIncrefAtStackOffset(elem_dst, if (field0_is_list) field1_layout_idx else field0_layout_idx);
-                }
             }
-
-            const rest_list_layout_idx = if (field0_is_list) field0_layout_idx else field1_layout_idx;
-            const rest_elements_refcounted = blk: {
-                const rest_layout = ls.getLayout(rest_list_layout_idx);
-                break :blk switch (rest_layout.tag) {
-                    .list => ls.layoutContainsRefcounted(ls.getLayout(rest_layout.data.list)),
-                    .list_of_zst => false,
-                    else => unreachable,
-                };
-            };
 
             // Build rest list via roc_builtins_list_sublist, writing directly into result+list_field_offset
             // For split_first: start=1, len=len-1
@@ -4005,11 +3797,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addMemArg(frame_ptr, list_off);
                 try builder.addMemArg(frame_ptr, list_off + 8);
                 try builder.addMemArg(frame_ptr, list_off + 16);
-                try builder.addImmArg(@intCast(alignment_bytes));
+                try builder.addImmArg(@intCast(list_abi.alignment_bytes));
                 try builder.addImmArg(@intCast(elem_size));
                 try builder.addMemArg(frame_ptr, start_slot);
                 try builder.addMemArg(frame_ptr, sublist_len_slot);
-                try builder.addImmArg(if (rest_elements_refcounted) 1 else 0);
+                try builder.addImmArg(if (list_abi.elements_refcounted) 1 else 0);
                 try builder.addRegArg(roc_ops_reg);
                 try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_list_sublist), .list_sublist);
             }
@@ -4057,10 +3849,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             self.codegen.freeGeneral(temp_reg);
             self.codegen.freeGeneral(ptr_reg);
-
-            if (ls.layoutContainsRefcounted(ret_layout_val)) {
-                try self.emitIncrefAtStackOffset(elem_slot, ret_layout_idx);
-            }
 
             var result_loc: ValueLocation = if (ret_layout_idx == .i128 or ret_layout_idx == .u128 or ret_layout_idx == .dec)
                 .{ .stack_i128 = elem_slot }
@@ -4131,10 +3919,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(temp_reg);
             self.codegen.freeGeneral(addr_reg);
 
-            if (ls.layoutContainsRefcounted(ret_layout_val)) {
-                try self.emitIncrefAtStackOffset(elem_slot, ret_layout_idx);
-            }
-
             var result_loc: ValueLocation = if (ret_layout_idx == .i128 or ret_layout_idx == .u128 or ret_layout_idx == .dec)
                 .{ .stack_i128 = elem_slot }
             else if (ret_layout_idx == .str)
@@ -4148,393 +3932,34 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return result_loc;
         }
 
-        const HostedCallArg = struct {
-            loc: ValueLocation,
-            layout_idx: layout.Idx,
-        };
-
-        /// Generate code for hosted function calls (platform-provided effects).
-        /// Hosted functions follow the RocCall ABI: fn(roc_ops, ret_ptr, args_ptr) -> void
-        fn generateHostedCall(self: *Self, hc: anytype) Allocator.Error!ValueLocation {
-            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-
-            const ls = self.layout_store;
-            const explicit_args = self.store.getExprSpan(hc.args);
-            var hosted_args = std.ArrayList(HostedCallArg).empty;
-            defer hosted_args.deinit(self.allocator);
-
-            for (explicit_args) |arg_id| {
-                try hosted_args.append(self.allocator, .{
-                    .loc = try self.generateExpr(arg_id),
-                    .layout_idx = self.exprLayout(arg_id),
-                });
-            }
-
-            // Determine return value size
-            const ret_layout = ls.getLayout(hc.ret_layout);
-            const ret_size = ls.layoutSize(ret_layout);
-
-            // Allocate return slot (even for ZST, we need a valid pointer)
-            const ret_slot = if (ret_size > 0)
-                self.codegen.allocStackSlot(@intCast(ret_size))
-            else
-                self.codegen.allocStackSlot(8); // Minimum slot for ZST
-
-            // Marshal arguments into a contiguous buffer on the stack
-            // First, calculate total size needed for all arguments
-            var total_args_size: usize = 0;
-            for (hosted_args.items) |arg| {
-                const arg_layout = ls.getLayout(arg.layout_idx);
-                const arg_size = ls.layoutSize(arg_layout);
-                const arg_align = arg_layout.alignment(ls.targetUsize());
-                total_args_size = std.mem.alignForward(usize, total_args_size, arg_align.toByteUnits());
-                total_args_size += arg_size;
-            }
-
-            // Allocate args buffer (at least 8 bytes for empty args case)
-            const args_slot = self.codegen.allocStackSlot(@intCast(@max(total_args_size, 8)));
-
-            // Copy each argument into the args buffer
-            var offset: usize = 0;
-            for (hosted_args.items) |arg| {
-                const arg_layout = ls.getLayout(arg.layout_idx);
-                const arg_size = ls.layoutSize(arg_layout);
-                const arg_align = arg_layout.alignment(ls.targetUsize());
-                offset = std.mem.alignForward(usize, offset, arg_align.toByteUnits());
-
-                if (arg_size > 0) {
-                    const dest_offset: i32 = args_slot + @as(i32, @intCast(offset));
-                    try self.copyValueToStack(arg.loc, dest_offset, arg_size);
-                }
-                offset += arg_size;
-            }
-
-            // RocOps.hosted_fns is at offset 56 (7 pointers * 8 bytes)
-            // HostedFunctions.fns is at offset 8 within HostedFunctions (after count u32 + padding)
-            // So hosted_fns.fns is at roc_ops + 56 + 8 = roc_ops + 64
-
-            {
-                const base_reg = frame_ptr;
-
-                // Load function pointer into a register that won't conflict with
-                // CallBuilder's SCRATCH_REG (X9/R11) or param registers
-                const fn_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .R10;
-
-                // Load hosted_fns.fns pointer, then the specific function pointer
-                const fns_ptr_reg = try self.allocTempGeneral();
-                const fn_offset: i32 = @intCast(hc.index * 8);
-
-                try self.emitLoad(.w64, fns_ptr_reg, roc_ops_reg, 64);
-                try self.emitLoad(.w64, fn_ptr_reg, fns_ptr_reg, fn_offset);
-                self.codegen.freeGeneral(fns_ptr_reg);
-
-                // hosted_fn(roc_ops, ret_ptr, args_ptr) — 3 args via CallBuilder
-                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.addRegArg(roc_ops_reg);
-                try builder.addLeaArg(base_reg, ret_slot);
-                try builder.addLeaArg(base_reg, args_slot);
-                try builder.callReg(fn_ptr_reg);
-            }
-
-            // Return the result location based on return type
-            if (ret_size == 0) {
-                // ZST - return unit/empty record
-                return .{ .immediate_i64 = 0 };
-            } else if (hc.ret_layout == .i128 or hc.ret_layout == .u128 or hc.ret_layout == .dec) {
-                return .{ .stack_i128 = ret_slot };
-            } else if (hc.ret_layout == .str) {
-                return .{ .stack_str = ret_slot };
-            } else if (ret_layout.tag == .list or ret_layout.tag == .list_of_zst) {
-                return .{ .list_stack = .{ .struct_offset = ret_slot, .data_offset = 0, .num_elements = 0 } };
-            } else {
-                return .{ .stack = .{ .offset = ret_slot } };
-            }
-        }
-
-        /// Copy a value to a stack location
-        fn copyValueToStack(self: *Self, src_loc: ValueLocation, dest_offset: i32, size: usize) Allocator.Error!void {
-            if (size == 0) return;
-
-            switch (src_loc) {
-                .immediate_i64 => |val| {
-                    const temp = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(temp, val);
-                    try self.emitStore(.w64, frame_ptr, dest_offset, temp);
-                    self.codegen.freeGeneral(temp);
-                },
-                .general_reg => |reg| {
-                    try self.emitStore(.w64, frame_ptr, dest_offset, reg);
-                },
-                .stack => |s| {
-                    const src_offset = s.offset;
-                    try self.copyStackToStack(src_offset, dest_offset, size);
-                },
-                .stack_i128 => |src_offset| {
-                    try self.copyStackToStack(src_offset, dest_offset, 16);
-                },
-                .stack_str => |src_offset| {
-                    try self.copyStackToStack(src_offset, dest_offset, 24);
-                },
-                .list_stack => |ls_info| {
-                    try self.copyStackToStack(ls_info.struct_offset, dest_offset, 24);
-                },
-                else => unreachable,
-            }
-        }
-
-        /// Copy data from one stack location to another
-        fn copyStackToStack(self: *Self, src_offset: i32, dest_offset: i32, size: usize) Allocator.Error!void {
-            if (size == 0) return;
-
-            const temp = try self.allocTempGeneral();
-
-            // Copy 8 bytes at a time
-            var copied: usize = 0;
-            while (copied + 8 <= size) : (copied += 8) {
-                const src_off: i32 = src_offset + @as(i32, @intCast(copied));
-                const dest_off: i32 = dest_offset + @as(i32, @intCast(copied));
-                try self.emitLoad(.w64, temp, frame_ptr, src_off);
-                try self.emitStore(.w64, frame_ptr, dest_off, temp);
-            }
-
-            // Handle remaining bytes (1-7)
-            if (copied < size) {
-                const remaining = size - copied;
-                const src_off: i32 = src_offset + @as(i32, @intCast(copied));
-                const dest_off: i32 = dest_offset + @as(i32, @intCast(copied));
-
-                if (remaining >= 4) {
-                    try self.emitLoad(.w32, temp, frame_ptr, src_off);
-                    try self.emitStore(.w32, frame_ptr, dest_off, temp);
-                    copied += 4;
-                }
-
-                // Handle remaining 1-3 bytes byte-by-byte
-                if (copied < size) {
-                    const final_src: i32 = src_offset + @as(i32, @intCast(copied));
-                    const final_dest: i32 = dest_offset + @as(i32, @intCast(copied));
-                    const bytes_left = size - copied;
-                    for (0..bytes_left) |i| {
-                        const byte_src = final_src + @as(i32, @intCast(i));
-                        const byte_dest = final_dest + @as(i32, @intCast(i));
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emitLoadStackByte(temp, byte_src);
-                            try self.codegen.emitStoreStackByte(byte_dest, temp);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w8, temp, .RBP, byte_src);
-                            try self.codegen.emit.movMemReg(.w8, .RBP, byte_dest, temp);
-                        }
-                    }
-                }
-            }
-
-            self.codegen.freeGeneral(temp);
-        }
-
-        /// Generate list_contains: linear scan comparing each element
-        fn generateListContains(
-            self: *Self,
-            list_loc: ValueLocation,
-            needle_loc: ValueLocation,
-            elem_layout_idx: layout.Idx,
-        ) Allocator.Error!ValueLocation {
-            const ls = self.layout_store;
-            const elem_layout = ls.getLayout(elem_layout_idx);
-            const elem_sa = ls.layoutSizeAlign(elem_layout);
-            const elem_size: u32 = elem_sa.size;
-
-            const list_base: i32 = switch (list_loc) {
-                .stack => |s| s.offset,
-                .list_stack => |ls_info| ls_info.struct_offset,
-                .immediate_i64 => |val| {
-                    if (val != 0) unreachable;
-                    // Empty list: contains always returns false
-                    return .{ .immediate_i64 = 0 };
-                },
-                else => unreachable,
-            };
-
-            // Save needle to stack (handles any type/size)
-            const normalized_needle = self.coerceImmediateToLayout(needle_loc, elem_layout_idx);
-            const needle_slot = try self.ensureOnStack(normalized_needle, elem_size);
-
-            // Save list ptr and len to stack (they must survive compareFieldByLayout
-            // which may call builtins that clobber caller-saved registers)
-            const ptr_slot = self.codegen.allocStackSlot(8);
-            const len_slot = self.codegen.allocStackSlot(8);
-            {
-                const ptr_reg = try self.allocTempGeneral();
-                const len_reg = try self.allocTempGeneral();
-                try self.emitLoad(.w64, ptr_reg, frame_ptr, list_base);
-                try self.emitLoad(.w64, len_reg, frame_ptr, list_base + 8);
-                try self.codegen.emitStoreStack(.w64, ptr_slot, ptr_reg);
-                try self.codegen.emitStoreStack(.w64, len_slot, len_reg);
-                self.codegen.freeGeneral(ptr_reg);
-                self.codegen.freeGeneral(len_reg);
-            }
-
-            // Initialize counter and byte offset on stack, result = false
-            const ctr_slot = self.codegen.allocStackSlot(8);
-            const offset_slot = self.codegen.allocStackSlot(8);
-            const result_slot = self.codegen.allocStackSlot(8);
-            // Allocate 8-byte-aligned slot so 8-byte copy loop doesn't overflow
-            const elem_slot = self.codegen.allocStackSlot(@intCast(std.mem.alignForward(u32, elem_size, 8)));
-            {
-                const tmp = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(tmp, 0);
-                try self.codegen.emitStoreStack(.w64, ctr_slot, tmp);
-                try self.codegen.emitStoreStack(.w64, offset_slot, tmp);
-                try self.codegen.emitStoreStack(.w64, result_slot, tmp);
-                self.codegen.freeGeneral(tmp);
-            }
-
-            // Loop start
-            const loop_start = self.codegen.currentOffset();
-
-            // if ctr >= len, jump to end
-            {
-                const ctr_reg = try self.allocTempGeneral();
-                const len_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadStack(.w64, ctr_reg, ctr_slot);
-                try self.codegen.emitLoadStack(.w64, len_reg, len_slot);
-                try self.codegen.emit.cmpRegReg(.w64, ctr_reg, len_reg);
-                self.codegen.freeGeneral(ctr_reg);
-                self.codegen.freeGeneral(len_reg);
-            }
-            const exit_patch = try self.codegen.emitCondJump(condGreaterOrEqual());
-
-            // Copy element from heap (ptr + offset) to elem_slot
-            {
-                const ptr_reg = try self.allocTempGeneral();
-                const off_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadStack(.w64, ptr_reg, ptr_slot);
-                try self.codegen.emitLoadStack(.w64, off_reg, offset_slot);
-                // addr_reg = ptr + byte_offset
-                try self.emitAddRegs(.w64, ptr_reg, ptr_reg, off_reg);
-                self.codegen.freeGeneral(off_reg);
-
-                // Copy elem_size bytes from ptr_reg to elem_slot (8-byte chunks)
-                const tmp = try self.allocTempGeneral();
-                try self.copyChunked(tmp, ptr_reg, 0, frame_ptr, elem_slot, elem_size);
-                self.codegen.freeGeneral(tmp);
-                self.codegen.freeGeneral(ptr_reg);
-            }
-
-            // Compare element with needle using layout-aware comparison
-            const eq_reg = try self.allocTempGeneral();
-            try self.compareFieldByLayout(elem_slot, needle_slot, elem_layout_idx, elem_size, eq_reg);
-
-            // If equal, set result = true and jump to end
-            try self.emitCmpImm(eq_reg, 1);
-            self.codegen.freeGeneral(eq_reg);
-            const not_equal_patch = try self.codegen.emitCondJump(condNotEqual());
-            // Found! Set result = 1
-            {
-                const one_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(one_reg, 1);
-                try self.codegen.emitStoreStack(.w64, result_slot, one_reg);
-                self.codegen.freeGeneral(one_reg);
-            }
-            // Jump to end
-            const found_patch = try self.codegen.emitJump();
-            // Not equal: continue
-            self.codegen.patchJump(not_equal_patch, self.codegen.currentOffset());
-
-            // Increment counter and byte offset
-            {
-                const ctr_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadStack(.w64, ctr_reg, ctr_slot);
-                try self.emitAddImm(ctr_reg, ctr_reg, 1);
-                try self.codegen.emitStoreStack(.w64, ctr_slot, ctr_reg);
-                self.codegen.freeGeneral(ctr_reg);
-
-                const off_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadStack(.w64, off_reg, offset_slot);
-                try self.emitAddImm(off_reg, off_reg, @intCast(elem_size));
-                try self.codegen.emitStoreStack(.w64, offset_slot, off_reg);
-                self.codegen.freeGeneral(off_reg);
-            }
-
-            // Jump back to loop start
-            const back_patch = try self.codegen.emitJump();
-            self.codegen.patchJump(back_patch, loop_start);
-
-            // End: patch exit jumps
-            self.codegen.patchJump(exit_patch, self.codegen.currentOffset());
-            self.codegen.patchJump(found_patch, self.codegen.currentOffset());
-
-            // Load result from stack
-            const res_reg = try self.allocTempGeneral();
-            try self.codegen.emitLoadStack(.w64, res_reg, result_slot);
-            return .{ .general_reg = res_reg };
-        }
-
-        /// Generate list_contains for zero-sized element types: true iff list is non-empty
-        fn generateZstListContains(self: *Self, list_loc: ValueLocation) Allocator.Error!ValueLocation {
-            const list_base: i32 = switch (list_loc) {
-                .stack => |s| s.offset,
-                .list_stack => |ls_info| ls_info.struct_offset,
-                .immediate_i64 => |val| {
-                    if (val != 0) unreachable;
-                    return .{ .immediate_i64 = 0 };
-                },
-                else => unreachable,
-            };
-            const len_reg = try self.allocTempGeneral();
-            try self.emitLoad(.w64, len_reg, frame_ptr, list_base + 8);
-            const result_reg = try self.allocTempGeneral();
-            try self.emitCmpImm(len_reg, 0);
-            try self.emitSetCond(result_reg, condNotEqual());
-            self.codegen.freeGeneral(len_reg);
-            return .{ .general_reg = result_reg };
-        }
-
         /// Generate list_reverse: allocate new list, copy elements in reverse order
         fn generateListReverse(self: *Self, list_loc: ValueLocation, ll: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-
-            const elem_size_align: layout.SizeAlign = blk: {
-                const ret_layout = ls.getLayout(ll.ret_layout);
-                break :blk switch (ret_layout.tag) {
-                    .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
-                    .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                    else => unreachable,
-                };
-            };
+            const list_abi = builtinInternalListAbi(ls, "dev.generateListReverse.builtin_list_abi", ll.ret_layout);
 
             const list_off = try self.ensureOnStack(list_loc, roc_list_size);
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
-            const alignment_bytes = elem_size_align.alignment.toByteUnits();
 
             // Allocate list with same capacity as input length
             const cap_fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_with_capacity);
             const base_reg = frame_ptr;
-
-            // Determine if elements contain refcounted data
-            const elements_refcounted: bool = blk: {
-                const ret_layout_val = ls.getLayout(ll.ret_layout);
-                if (ret_layout_val.tag == .list) {
-                    break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout_val.data.list));
-                }
-                break :blk false;
-            };
 
             {
                 // roc_builtins_list_with_capacity(out, capacity, alignment, element_width, elements_refcounted, roc_ops)
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 try builder.addLeaArg(base_reg, result_offset);
                 try builder.addMemArg(base_reg, list_off + 8); // capacity = input length
-                try builder.addImmArg(@intCast(alignment_bytes));
-                try builder.addImmArg(@intCast(elem_size_align.size));
-                try builder.addImmArg(if (elements_refcounted) 1 else 0);
+                try builder.addImmArg(@intCast(list_abi.alignment_bytes));
+                try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                try builder.addImmArg(if (list_abi.elements_refcounted) 1 else 0);
                 try builder.addRegArg(roc_ops_reg);
                 try self.callBuiltin(&builder, cap_fn_addr, .list_with_capacity);
             }
 
             // Now copy elements in reverse. For each i from 0..len-1, copy src[len-1-i] to dst[i]
             // Use stack slots for loop state
-            if (elem_size_align.size == 0) {
+            if (list_abi.elem_size_align.size == 0) {
                 // ZST: just set the length
                 const len_reg = try self.allocTempGeneral();
                 try self.emitLoad(.w64, len_reg, frame_ptr, list_off + 8);
@@ -4576,7 +4001,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitSubRegs(.w64, si, si, ci);
 
                 // Compute src address and dst address
-                const elem_sz: i64 = @intCast(elem_size_align.size);
+                const elem_sz: i64 = @intCast(list_abi.elem_size_align.size);
                 const esz_reg = try self.allocTempGeneral();
                 try self.codegen.emitLoadImm(esz_reg, elem_sz);
 
@@ -4612,7 +4037,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Use copyChunked which handles non-8-aligned tails correctly,
                 // avoiding over-reads past the last element's allocation boundary.
                 const copy_tmp = try self.allocTempGeneral();
-                try self.copyChunked(copy_tmp, src_addr, 0, dst_addr, 0, elem_size_align.size);
+                try self.copyChunked(copy_tmp, src_addr, 0, dst_addr, 0, list_abi.elem_size_align.size);
                 self.codegen.freeGeneral(copy_tmp);
                 self.codegen.freeGeneral(src_addr);
                 self.codegen.freeGeneral(dst_addr);
@@ -4640,26 +4065,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn callListReserveOp(self: *Self, list_loc: ValueLocation, spare_loc: ValueLocation, ll: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-
-            const ret_layout = ls.getLayout(ll.ret_layout);
-            const elem_size_align: layout.SizeAlign = switch (ret_layout.tag) {
-                .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
-                .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                else => unreachable,
-            };
-            const elements_refcounted: bool = switch (ret_layout.tag) {
-                .list => ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list)),
-                else => false,
-            };
+            const list_abi = builtinInternalListAbi(ls, "dev.callListReserveOp.builtin_list_abi", ll.ret_layout);
 
             const list_off = try self.ensureOnStack(list_loc, roc_list_size);
             const spare_off = try self.ensureOnStack(spare_loc, 8);
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
-            const alignment_bytes = elem_size_align.alignment.toByteUnits();
-            const fn_addr: usize = @intFromPtr(&wrapListReserve);
+            const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_reserve);
+            const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
+            defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
 
             {
-                // wrapListReserve(out, list_bytes, list_len, list_cap, alignment, spare, element_width, elements_refcounted, roc_ops)
+                // wrapListReserve(out, list_bytes, list_len, list_cap, alignment, spare, element_width, elements_refcounted, element_incref, roc_ops)
                 const base_reg = frame_ptr;
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -4667,10 +4083,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addMemArg(base_reg, list_off);
                 try builder.addMemArg(base_reg, list_off + 8);
                 try builder.addMemArg(base_reg, list_off + 16);
-                try builder.addImmArg(@intCast(alignment_bytes));
+                try builder.addImmArg(@intCast(list_abi.alignment_bytes));
                 try builder.addMemArg(base_reg, spare_off);
-                try builder.addImmArg(@intCast(elem_size_align.size));
-                try builder.addImmArg(if (elements_refcounted) @as(usize, 1) else 0);
+                try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                try builder.addImmArg(if (list_abi.elements_refcounted) @as(usize, 1) else 0);
+                if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
                 try builder.addRegArg(roc_ops_reg);
 
                 try self.callBuiltin(&builder, fn_addr, .list_reserve);
@@ -4683,25 +4100,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn callListReleaseExcessCapOp(self: *Self, list_loc: ValueLocation, ll: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-
-            const ret_layout = ls.getLayout(ll.ret_layout);
-            const elem_size_align: layout.SizeAlign = switch (ret_layout.tag) {
-                .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
-                .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                else => unreachable,
-            };
-            const elements_refcounted: bool = switch (ret_layout.tag) {
-                .list => ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list)),
-                else => false,
-            };
+            const list_abi = builtinInternalListAbi(ls, "dev.callListReleaseExcessCapOp.builtin_list_abi", ll.ret_layout);
 
             const list_off = try self.ensureOnStack(list_loc, roc_list_size);
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
-            const alignment_bytes = elem_size_align.alignment.toByteUnits();
-            const fn_addr: usize = @intFromPtr(&wrapListReleaseExcessCapacity);
+            const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_release_excess_capacity);
+            const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
+            defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
+            const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
+            defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
 
             {
-                // wrapListReleaseExcessCapacity(out, list_bytes, list_len, list_cap, alignment, element_width, elements_refcounted, roc_ops)
+                // wrapListReleaseExcessCapacity(out, list_bytes, list_len, list_cap, alignment, element_width, elements_refcounted, element_incref, element_decref, roc_ops)
                 const base_reg = frame_ptr;
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -4709,9 +4119,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addMemArg(base_reg, list_off);
                 try builder.addMemArg(base_reg, list_off + 8);
                 try builder.addMemArg(base_reg, list_off + 16);
-                try builder.addImmArg(@intCast(alignment_bytes));
-                try builder.addImmArg(@intCast(elem_size_align.size));
-                try builder.addImmArg(if (elements_refcounted) @as(usize, 1) else 0);
+                try builder.addImmArg(@intCast(list_abi.alignment_bytes));
+                try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                try builder.addImmArg(if (list_abi.elements_refcounted) @as(usize, 1) else 0);
+                if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
                 try builder.addRegArg(roc_ops_reg);
 
                 try self.callBuiltin(&builder, fn_addr, .list_release_excess_capacity);
@@ -4726,46 +4138,650 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .immediate_i128 = val };
         }
 
-        /// Generate code for a symbol lookup
-        fn generateLookup(self: *Self, symbol: Symbol, layout_idx: layout.Idx) Allocator.Error!ValueLocation {
-            // Check if we have a location for this symbol
-            const symbol_key: u64 = @bitCast(symbol);
-            if (self.symbol_locations.get(symbol_key)) |loc| {
+        /// Generate code for a local lookup.
+        fn generateLookup(self: *Self, local: LocalId) Allocator.Error!ValueLocation {
+            const layout_idx = self.localLayout(local);
+            if (self.local_locations.get(localKey(local))) |loc| {
                 if (loc == .list_stack) {} else if (loc == .stack) {}
-                return loc;
-            }
-
-            // Symbol not found - it might be a top-level definition
-            if (self.store.getSymbolDef(symbol)) |def_expr_id| {
-                // Generate code for the definition
-                const loc = try self.generateExpr(def_expr_id);
-                // Refcounted top-level defs must not be cached as a single shared owner
-                // inside the current frame. Each lookup needs its own lifetime so RC
-                // insertion can clean it up after the surrounding use.
-                const layout_val = self.layout_store.getLayout(layout_idx);
-                if (!self.layout_store.layoutContainsRefcounted(layout_val)) {
-                    try self.symbol_locations.put(symbol_key, loc);
-                }
                 return loc;
             }
 
             if (std.debug.runtime_safety) {
                 std.debug.panic(
-                    "generateLookup: missing symbol location and symbol def for symbol={d} layout={d} current_proc={d}",
+                    "generateLookup: missing local location for local={d} layout={d} current_proc={d} current_stmt={d} current_stmt_tag={s}",
                     .{
-                        symbol.raw(),
+                        @intFromEnum(local),
                         @intFromEnum(layout_idx),
                         if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64),
+                        if (self.current_stmt_id) |stmt_id| @intFromEnum(stmt_id) else std.math.maxInt(u32),
+                        if (self.current_stmt_id) |stmt_id|
+                            @tagName(self.store.getCFStmt(stmt_id))
+                        else
+                            "none",
                     },
                 );
             }
             unreachable;
         }
 
+        fn bindAssignedLocal(self: *Self, local: LocalId, value_loc: ValueLocation) Allocator.Error!void {
+            const key = localKey(local);
+            const local_layout = self.localLayout(local);
+            if (self.local_locations.get(key)) |stable_loc| {
+                try self.storeValueIntoStableLocation(stable_loc, value_loc, local_layout);
+                try self.emitDebugAssertValidBoxLocal(local, stable_loc);
+                try self.emitDebugAssertValidStrLocal(local, stable_loc);
+                return;
+            }
+
+            const stable_loc = try self.materializeValueToStackForLayout(value_loc, local_layout);
+            try self.local_locations.put(key, stable_loc);
+            try self.emitDebugAssertValidBoxLocal(local, stable_loc);
+            try self.emitDebugAssertValidStrLocal(local, stable_loc);
+        }
+
+        fn emitDebugAssertValidBoxLocal(
+            self: *Self,
+            local: LocalId,
+            stable_loc: ValueLocation,
+        ) Allocator.Error!void {
+            if (comptime builtin.mode != .Debug) return;
+
+            const local_layout = self.localLayout(local);
+            const layout_val = self.layout_store.getLayout(local_layout);
+            if (layout_val.tag != .box) return;
+
+            const slot_offset: i32 = switch (stable_loc) {
+                .stack => |s| s.offset,
+                else => std.debug.panic(
+                    "LIR/codegen invariant violated: box local {d} did not lower to a stack stable location",
+                    .{@intFromEnum(local)},
+                ),
+            };
+
+            const ptr_reg = try self.allocTempGeneral();
+            const masked_reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(masked_reg);
+            defer self.codegen.freeGeneral(ptr_reg);
+
+            try self.emitLoad(.w64, ptr_reg, frame_ptr, slot_offset);
+            try self.emitCmpImm(ptr_reg, 0);
+            const null_patch = try self.emitJumpIfEqual();
+
+            try self.codegen.emitLoadImm(masked_reg, 7);
+            try self.emitAndRegs(.w64, masked_reg, masked_reg, ptr_reg);
+            try self.emitCmpImm(masked_reg, 0);
+            const aligned_patch = try self.emitJumpIfEqual();
+
+            const msg = try std.fmt.allocPrint(
+                self.allocator,
+                "LIR/codegen invariant violated: box local {d} received a non-aligned pointer at proc {d} stmt {d}",
+                .{
+                    @intFromEnum(local),
+                    if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64),
+                    if (self.current_stmt_id) |stmt_id| @intFromEnum(stmt_id) else std.math.maxInt(u32),
+                },
+            );
+            defer self.allocator.free(msg);
+            try self.emitRocCrash(msg);
+            try self.emitTrap();
+
+            const done = self.codegen.currentOffset();
+            self.codegen.patchJump(aligned_patch, done);
+            self.codegen.patchJump(null_patch, done);
+        }
+
+        fn emitDebugAssertValidStrLocal(
+            self: *Self,
+            local: LocalId,
+            stable_loc: ValueLocation,
+        ) Allocator.Error!void {
+            if (comptime builtin.mode != .Debug) return;
+
+            const runtime_layout = self.runtimeRepresentationLayoutIdx(self.localLayout(local));
+            if (runtime_layout != .str) return;
+
+            const slot_offset: i32 = switch (stable_loc) {
+                .stack_str => |offset| offset,
+                else => std.debug.panic(
+                    "LIR/codegen invariant violated: str local {d} did not lower to a stack_str stable location",
+                    .{@intFromEnum(local)},
+                ),
+            };
+
+            const ptr_reg = try self.allocTempGeneral();
+            const len_reg = try self.allocTempGeneral();
+            const cap_reg = try self.allocTempGeneral();
+            const tmp_reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(tmp_reg);
+            defer self.codegen.freeGeneral(cap_reg);
+            defer self.codegen.freeGeneral(len_reg);
+            defer self.codegen.freeGeneral(ptr_reg);
+
+            try self.emitLoad(.w64, ptr_reg, frame_ptr, slot_offset);
+            try self.emitLoad(.w64, len_reg, frame_ptr, slot_offset + 8);
+            try self.emitLoad(.w64, cap_reg, frame_ptr, slot_offset + 16);
+
+            // Small RocStrs are stored inline and identified by the sign bit of cap.
+            try self.codegen.emitLoadImm(tmp_reg, std.math.minInt(i64));
+            try self.emitAndRegs(.w64, tmp_reg, tmp_reg, cap_reg);
+            try self.emitCmpImm(tmp_reg, 0);
+            const small_patch = try self.emitJumpIfNotEqual();
+
+            // Non-small RocStrs must have a non-null bytes pointer.
+            try self.emitCmpImm(ptr_reg, 0);
+            const ptr_non_null_patch = try self.emitJumpIfNotEqual();
+            try self.emitDebugCrashInvalidStrLocal(local, "null bytes pointer");
+            const after_null = self.codegen.currentOffset();
+            self.codegen.patchJump(ptr_non_null_patch, after_null);
+
+            // Seamless slices store an interior bytes pointer plus the original
+            // allocation pointer in capacity_or_alloc_ptr. Their bytes pointer
+            // may be arbitrarily offset, so validate the stored allocation
+            // pointer instead of requiring bytes alignment.
+            try self.codegen.emitLoadImm(tmp_reg, std.math.minInt(i64));
+            try self.emitAndRegs(.w64, tmp_reg, tmp_reg, len_reg);
+            try self.emitCmpImm(tmp_reg, 0);
+            const non_seamless_patch = try self.emitJumpIfEqual();
+
+            try self.emitShlImm(.w64, tmp_reg, cap_reg, 1);
+            try self.emitCmpImm(tmp_reg, 0);
+            const alloc_non_null_patch = try self.emitJumpIfNotEqual();
+            try self.emitDebugCrashInvalidStrLocal(local, "null allocation pointer");
+            const after_alloc_null = self.codegen.currentOffset();
+            self.codegen.patchJump(alloc_non_null_patch, after_alloc_null);
+
+            try self.codegen.emitLoadImm(ptr_reg, @alignOf(usize) - 1);
+            try self.emitAndRegs(.w64, ptr_reg, ptr_reg, tmp_reg);
+            try self.emitCmpImm(ptr_reg, 0);
+            const alloc_aligned_patch = try self.emitJumpIfEqual();
+            try self.emitDebugCrashInvalidStrLocal(local, "misaligned allocation pointer");
+            const after_alloc_align = self.codegen.currentOffset();
+            self.codegen.patchJump(alloc_aligned_patch, after_alloc_align);
+
+            const seamless_done_patch = try self.codegen.emitJump();
+            const after_seamless = self.codegen.currentOffset();
+            self.codegen.patchJump(non_seamless_patch, after_seamless);
+
+            // Non-small RocStrs must satisfy len <= capacity.
+            try self.codegen.emitLoadImm(tmp_reg, @alignOf(usize) - 1);
+            try self.emitAndRegs(.w64, tmp_reg, tmp_reg, ptr_reg);
+            try self.emitCmpImm(tmp_reg, 0);
+            const ptr_aligned_patch = try self.emitJumpIfEqual();
+            try self.emitDebugCrashInvalidStrLocal(local, "misaligned bytes pointer");
+            const after_ptr_align = self.codegen.currentOffset();
+            self.codegen.patchJump(ptr_aligned_patch, after_ptr_align);
+
+            try self.emitCmpReg(len_reg, cap_reg);
+            const len_ok_patch = try self.codegen.emitCondJump(condBelowOrEqual());
+            try self.emitDebugCrashInvalidStrLocal(local, "length exceeds capacity");
+            const done = self.codegen.currentOffset();
+            self.codegen.patchJump(len_ok_patch, done);
+            self.codegen.patchJump(seamless_done_patch, done);
+            self.codegen.patchJump(small_patch, done);
+        }
+
+        fn emitDebugCrashInvalidStrLocal(self: *Self, local: LocalId, reason: []const u8) Allocator.Error!void {
+            const msg = try std.fmt.allocPrint(
+                self.allocator,
+                "LIR/codegen invariant violated: str local {d} received an invalid RocStr ({s}) at proc {d} stmt {d}",
+                .{
+                    @intFromEnum(local),
+                    reason,
+                    if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64),
+                    if (self.current_stmt_id) |stmt_id| @intFromEnum(stmt_id) else std.math.maxInt(u32),
+                },
+            );
+            defer self.allocator.free(msg);
+            try self.emitRocCrash(msg);
+            try self.emitTrap();
+        }
+
+        fn storeValueIntoStableLocation(
+            self: *Self,
+            stable_loc: ValueLocation,
+            value_loc: ValueLocation,
+            layout_idx: layout.Idx,
+        ) Allocator.Error!void {
+            const normalized = self.coerceImmediateToLayout(value_loc, layout_idx);
+            if (std.meta.eql(normalized, stable_loc)) return;
+
+            const size = self.getLayoutSize(layout_idx);
+            switch (stable_loc) {
+                .stack => |stack_loc| try self.copyBytesToStackOffset(stack_loc.offset, normalized, size),
+                .stack_i128 => |offset| {
+                    const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(layout_idx);
+                    try self.storeWideScalarToStackOffset(
+                        offset,
+                        normalized,
+                        switch (runtime_layout_idx) {
+                            .u128 => .unsigned,
+                            .i128, .dec => .signed,
+                            else => std.debug.panic(
+                                "LirCodeGen invariant violated: stack_i128 stable location used for non-wide layout {d}",
+                                .{@intFromEnum(runtime_layout_idx)},
+                            ),
+                        },
+                    );
+                },
+                .stack_str => |offset| try self.copyBytesToStackOffset(offset, normalized, roc_str_size),
+                .list_stack => |list_loc| try self.copyBytesToStackOffset(list_loc.struct_offset, normalized, roc_list_size),
+                else => std.debug.panic(
+                    "LirCodeGen invariant violated: assigned locals must use stack-backed stable locations, found {s}",
+                    .{@tagName(stable_loc)},
+                ),
+            }
+        }
+
+        fn storeWideScalarToStackOffset(
+            self: *Self,
+            dest_offset: i32,
+            loc: ValueLocation,
+            signedness: std.builtin.Signedness,
+        ) Allocator.Error!void {
+            switch (loc) {
+                .immediate_i128 => |val| {
+                    const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                    const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                    const reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(reg);
+                    try self.codegen.emitLoadImm(reg, @bitCast(low));
+                    try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                    try self.codegen.emitLoadImm(reg, @bitCast(high));
+                    try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
+                },
+                .immediate_i64 => |val| {
+                    const low: u64 = @bitCast(val);
+                    const high: u64 = switch (signedness) {
+                        .signed => if (val < 0) std.math.maxInt(u64) else 0,
+                        .unsigned => 0,
+                    };
+                    const reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(reg);
+                    try self.codegen.emitLoadImm(reg, @bitCast(low));
+                    try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                    try self.codegen.emitLoadImm(reg, @bitCast(high));
+                    try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
+                },
+                .general_reg => |reg| {
+                    const high_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(high_reg);
+                    try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                    switch (signedness) {
+                        .signed => {
+                            if (comptime target.toCpuArch() == .aarch64) {
+                                try self.codegen.emit.asrRegRegImm(.w64, high_reg, reg, 63);
+                            } else {
+                                try self.emitMovRegReg(high_reg, reg);
+                                try self.codegen.emit.sarRegImm8(.w64, high_reg, 63);
+                            }
+                        },
+                        .unsigned => try self.codegen.emitLoadImm(high_reg, 0),
+                    }
+                    try self.codegen.emitStoreStack(.w64, dest_offset + 8, high_reg);
+                },
+                .stack_i128 => |src_offset| {
+                    const temp_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(temp_reg);
+                    try self.codegen.emitLoadStack(.w64, temp_reg, src_offset);
+                    try self.codegen.emitStoreStack(.w64, dest_offset, temp_reg);
+                    try self.codegen.emitLoadStack(.w64, temp_reg, src_offset + 8);
+                    try self.codegen.emitStoreStack(.w64, dest_offset + 8, temp_reg);
+                },
+                .stack => |stack_loc| {
+                    const temp_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(temp_reg);
+                    try self.codegen.emitLoadStack(.w64, temp_reg, stack_loc.offset);
+                    try self.codegen.emitStoreStack(.w64, dest_offset, temp_reg);
+                    try self.codegen.emitLoadStack(.w64, temp_reg, stack_loc.offset + 8);
+                    try self.codegen.emitStoreStack(.w64, dest_offset + 8, temp_reg);
+                },
+                else => std.debug.panic(
+                    "LirCodeGen invariant violated: unsupported wide scalar spill from {s}",
+                    .{@tagName(loc)},
+                ),
+            }
+        }
+
+        fn ensureStableLocationForLocal(self: *Self, local: LocalId) Allocator.Error!void {
+            const key = localKey(local);
+            if (self.local_locations.contains(key)) return;
+
+            const local_layout = self.localLayout(local);
+            const size = self.getLayoutSize(local_layout);
+            const stable_loc = if (size == 0)
+                self.stackLocationForLayout(local_layout, 0)
+            else
+                self.stackLocationForLayout(local_layout, self.codegen.allocStackSlot(size));
+            try self.local_locations.put(key, stable_loc);
+        }
+
+        fn collectStmtReadLocals(
+            self: *Self,
+            stmt_id: CFStmtId,
+            locals: *std.AutoHashMap(u64, LocalId),
+            visited: *std.AutoHashMap(u32, void),
+        ) Allocator.Error!void {
+            const gop = try visited.getOrPut(@intFromEnum(stmt_id));
+            if (gop.found_existing) return;
+
+            switch (self.store.getCFStmt(stmt_id)) {
+                .assign_symbol => |assign| try self.collectStmtReadLocals(assign.next, locals, visited),
+                .assign_ref => |assign| {
+                    try locals.put(localKey(refOpSource(assign.op)), refOpSource(assign.op));
+                    try self.collectStmtReadLocals(assign.next, locals, visited);
+                },
+                .assign_literal => |assign| try self.collectStmtReadLocals(assign.next, locals, visited),
+                .assign_call => |assign| {
+                    for (self.store.getLocalSpan(assign.args)) |arg| {
+                        try locals.put(localKey(arg), arg);
+                    }
+                    try self.collectStmtReadLocals(assign.next, locals, visited);
+                },
+                .assign_call_erased => |assign| {
+                    try locals.put(localKey(assign.closure), assign.closure);
+                    for (self.store.getLocalSpan(assign.args)) |arg| {
+                        try locals.put(localKey(arg), arg);
+                    }
+                    try self.collectStmtReadLocals(assign.next, locals, visited);
+                },
+                .assign_low_level => |assign| {
+                    for (self.store.getLocalSpan(assign.args)) |arg| {
+                        try locals.put(localKey(arg), arg);
+                    }
+                    try self.collectStmtReadLocals(assign.next, locals, visited);
+                },
+                .assign_list => |assign| {
+                    for (self.store.getLocalSpan(assign.elems)) |elem| {
+                        try locals.put(localKey(elem), elem);
+                    }
+                    try self.collectStmtReadLocals(assign.next, locals, visited);
+                },
+                .assign_struct => |assign| {
+                    for (self.store.getLocalSpan(assign.fields)) |field| {
+                        try locals.put(localKey(field), field);
+                    }
+                    try self.collectStmtReadLocals(assign.next, locals, visited);
+                },
+                .assign_tag => |assign| {
+                    if (assign.payload) |payload| try locals.put(localKey(payload), payload);
+                    try self.collectStmtReadLocals(assign.next, locals, visited);
+                },
+                .set_local => |assign| {
+                    try locals.put(localKey(assign.target), assign.target);
+                    try locals.put(localKey(assign.value), assign.value);
+                    try self.collectStmtReadLocals(assign.next, locals, visited);
+                },
+                .debug => |debug_stmt| {
+                    try locals.put(localKey(debug_stmt.message), debug_stmt.message);
+                    try self.collectStmtReadLocals(debug_stmt.next, locals, visited);
+                },
+                .expect => |expect_stmt| {
+                    try locals.put(localKey(expect_stmt.condition), expect_stmt.condition);
+                    try self.collectStmtReadLocals(expect_stmt.next, locals, visited);
+                },
+                .runtime_error => {},
+                .incref => |inc| {
+                    try locals.put(localKey(inc.value), inc.value);
+                    try self.collectStmtReadLocals(inc.next, locals, visited);
+                },
+                .decref => |dec| {
+                    try locals.put(localKey(dec.value), dec.value);
+                    try self.collectStmtReadLocals(dec.next, locals, visited);
+                },
+                .free => |free_stmt| {
+                    try locals.put(localKey(free_stmt.value), free_stmt.value);
+                    try self.collectStmtReadLocals(free_stmt.next, locals, visited);
+                },
+                .switch_stmt => |sw| {
+                    try locals.put(localKey(sw.cond), sw.cond);
+                    for (self.store.getCFSwitchBranches(sw.branches)) |branch| {
+                        try self.collectStmtReadLocals(branch.body, locals, visited);
+                    }
+                    try self.collectStmtReadLocals(sw.default_branch, locals, visited);
+                },
+                .for_list => |for_stmt| {
+                    try locals.put(localKey(for_stmt.elem), for_stmt.elem);
+                    try locals.put(localKey(for_stmt.iterable), for_stmt.iterable);
+                    try self.collectStmtReadLocals(for_stmt.body, locals, visited);
+                    try self.collectStmtReadLocals(for_stmt.next, locals, visited);
+                },
+                .borrow_scope => |scope| {
+                    try self.collectStmtReadLocals(scope.body, locals, visited);
+                    try self.collectStmtReadLocals(scope.remainder, locals, visited);
+                },
+                .scope_exit => {},
+                .join => |join| {
+                    try self.collectStmtReadLocals(join.body, locals, visited);
+                    try self.collectStmtReadLocals(join.remainder, locals, visited);
+                },
+                .jump => |jump| {
+                    for (self.store.getLocalSpan(jump.args)) |arg| {
+                        try locals.put(localKey(arg), arg);
+                    }
+                },
+                .ret => |ret_stmt| try locals.put(localKey(ret_stmt.value), ret_stmt.value),
+                .crash => {},
+                .loop_continue => {},
+            }
+        }
+
+        fn collectStmtLocals(
+            self: *Self,
+            stmt_id: CFStmtId,
+            locals: *std.AutoHashMap(u64, LocalId),
+            visited: *std.AutoHashMap(u32, void),
+        ) Allocator.Error!void {
+            const gop = try visited.getOrPut(@intFromEnum(stmt_id));
+            if (gop.found_existing) return;
+
+            switch (self.store.getCFStmt(stmt_id)) {
+                .assign_symbol => |assign| {
+                    try locals.put(localKey(assign.target), assign.target);
+                    try self.collectStmtLocals(assign.next, locals, visited);
+                },
+                .assign_ref => |assign| {
+                    try locals.put(localKey(assign.target), assign.target);
+                    try locals.put(localKey(refOpSource(assign.op)), refOpSource(assign.op));
+                    try self.collectStmtLocals(assign.next, locals, visited);
+                },
+                .assign_literal => |assign| {
+                    try locals.put(localKey(assign.target), assign.target);
+                    try self.collectStmtLocals(assign.next, locals, visited);
+                },
+                .assign_call => |assign| {
+                    try locals.put(localKey(assign.target), assign.target);
+                    for (self.store.getLocalSpan(assign.args)) |arg| {
+                        try locals.put(localKey(arg), arg);
+                    }
+                    try self.collectStmtLocals(assign.next, locals, visited);
+                },
+                .assign_call_erased => |assign| {
+                    try locals.put(localKey(assign.target), assign.target);
+                    try locals.put(localKey(assign.closure), assign.closure);
+                    for (self.store.getLocalSpan(assign.args)) |arg| {
+                        try locals.put(localKey(arg), arg);
+                    }
+                    try self.collectStmtLocals(assign.next, locals, visited);
+                },
+                .assign_low_level => |assign| {
+                    try locals.put(localKey(assign.target), assign.target);
+                    for (self.store.getLocalSpan(assign.args)) |arg| {
+                        try locals.put(localKey(arg), arg);
+                    }
+                    try self.collectStmtLocals(assign.next, locals, visited);
+                },
+                .assign_list => |assign| {
+                    try locals.put(localKey(assign.target), assign.target);
+                    for (self.store.getLocalSpan(assign.elems)) |elem| {
+                        try locals.put(localKey(elem), elem);
+                    }
+                    try self.collectStmtLocals(assign.next, locals, visited);
+                },
+                .assign_struct => |assign| {
+                    try locals.put(localKey(assign.target), assign.target);
+                    for (self.store.getLocalSpan(assign.fields)) |field| {
+                        try locals.put(localKey(field), field);
+                    }
+                    try self.collectStmtLocals(assign.next, locals, visited);
+                },
+                .assign_tag => |assign| {
+                    try locals.put(localKey(assign.target), assign.target);
+                    if (assign.payload) |payload| try locals.put(localKey(payload), payload);
+                    try self.collectStmtLocals(assign.next, locals, visited);
+                },
+                .set_local => |assign| {
+                    try locals.put(localKey(assign.target), assign.target);
+                    try locals.put(localKey(assign.value), assign.value);
+                    try self.collectStmtLocals(assign.next, locals, visited);
+                },
+                .debug => |debug_stmt| {
+                    try locals.put(localKey(debug_stmt.message), debug_stmt.message);
+                    try self.collectStmtLocals(debug_stmt.next, locals, visited);
+                },
+                .expect => |expect_stmt| {
+                    try locals.put(localKey(expect_stmt.condition), expect_stmt.condition);
+                    try self.collectStmtLocals(expect_stmt.next, locals, visited);
+                },
+                .runtime_error => {},
+                .incref => |inc| {
+                    try locals.put(localKey(inc.value), inc.value);
+                    try self.collectStmtLocals(inc.next, locals, visited);
+                },
+                .decref => |dec| {
+                    try locals.put(localKey(dec.value), dec.value);
+                    try self.collectStmtLocals(dec.next, locals, visited);
+                },
+                .free => |free_stmt| {
+                    try locals.put(localKey(free_stmt.value), free_stmt.value);
+                    try self.collectStmtLocals(free_stmt.next, locals, visited);
+                },
+                .switch_stmt => |sw| {
+                    try locals.put(localKey(sw.cond), sw.cond);
+                    for (self.store.getCFSwitchBranches(sw.branches)) |branch| {
+                        try self.collectStmtLocals(branch.body, locals, visited);
+                    }
+                    try self.collectStmtLocals(sw.default_branch, locals, visited);
+                },
+                .for_list => |for_stmt| {
+                    try locals.put(localKey(for_stmt.elem), for_stmt.elem);
+                    try locals.put(localKey(for_stmt.iterable), for_stmt.iterable);
+                    try self.collectStmtLocals(for_stmt.body, locals, visited);
+                    try self.collectStmtLocals(for_stmt.next, locals, visited);
+                },
+                .borrow_scope => |scope| {
+                    try self.collectStmtLocals(scope.body, locals, visited);
+                    try self.collectStmtLocals(scope.remainder, locals, visited);
+                },
+                .scope_exit => {},
+                .join => |join| {
+                    for (self.store.getLocalSpan(join.params)) |param| {
+                        try locals.put(localKey(param), param);
+                    }
+                    try self.collectStmtLocals(join.body, locals, visited);
+                    try self.collectStmtLocals(join.remainder, locals, visited);
+                },
+                .jump => |jump| {
+                    for (self.store.getLocalSpan(jump.args)) |arg| {
+                        try locals.put(localKey(arg), arg);
+                    }
+                },
+                .ret => |ret_stmt| try locals.put(localKey(ret_stmt.value), ret_stmt.value),
+                .crash => {},
+                .loop_continue => {},
+            }
+        }
+
+        fn refOpSource(op: lir.RefOp) LocalId {
+            return switch (op) {
+                .local => |local| local,
+                .discriminant => |disc| disc.source,
+                .field => |field| field.source,
+                .tag_payload => |payload| payload.source,
+                .tag_payload_struct => |payload| payload.source,
+                .list_reinterpret => |list_bridge| list_bridge.backing_ref,
+                .nominal => |nominal| nominal.backing_ref,
+            };
+        }
+
+        fn ensureStableLocationsForStmtReads(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
+            var locals = std.AutoHashMap(u64, LocalId).init(self.allocator);
+            defer locals.deinit();
+            var visited = std.AutoHashMap(u32, void).init(self.allocator);
+            defer visited.deinit();
+
+            try self.collectStmtReadLocals(stmt_id, &locals, &visited);
+
+            var it = locals.valueIterator();
+            while (it.next()) |local| {
+                try self.ensureStableLocationForLocal(local.*);
+            }
+        }
+
+        fn ensureStableLocationsForStmtLocals(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
+            var locals = std.AutoHashMap(u64, LocalId).init(self.allocator);
+            defer locals.deinit();
+            var visited = std.AutoHashMap(u32, void).init(self.allocator);
+            defer visited.deinit();
+
+            try self.collectStmtLocals(stmt_id, &locals, &visited);
+
+            var it = locals.valueIterator();
+            while (it.next()) |local| {
+                try self.ensureStableLocationForLocal(local.*);
+            }
+        }
+
+        fn generateRefOp(self: *Self, op: lir.RefOp, target_layout: layout.Idx) Allocator.Error!ValueLocation {
+            return switch (op) {
+                .local => |local| blk: {
+                    const raw_loc = try self.emitValueLocal(local);
+                    break :blk self.requireExactValueLocationToLayout(
+                        raw_loc,
+                        self.localLayout(local),
+                        target_layout,
+                        "assign_ref.local",
+                    );
+                },
+                .discriminant => |disc| try self.generateDiscriminantAccess(.{
+                    .source = disc.source,
+                    .target_layout = target_layout,
+                }),
+                .field => |field| try self.generateStructAccess(.{
+                    .source = field.source,
+                    .field_idx = field.field_idx,
+                    .target_layout = target_layout,
+                }),
+                .tag_payload => |payload| try self.generateTagPayloadAccess(.{
+                    .source = payload.source,
+                    .payload_idx = payload.payload_idx,
+                    .tag_discriminant = payload.tag_discriminant,
+                    .target_layout = target_layout,
+                }),
+                .tag_payload_struct => |payload| try self.generateTagPayloadStructAccess(.{
+                    .source = payload.source,
+                    .tag_discriminant = payload.tag_discriminant,
+                    .target_layout = target_layout,
+                }),
+                .list_reinterpret => |list_bridge| self.requireExplicitListValueLocationToLayout(
+                    try self.emitValueLocal(list_bridge.backing_ref),
+                    self.localLayout(list_bridge.backing_ref),
+                    target_layout,
+                    "assign_ref.list_reinterpret",
+                ),
+                .nominal => |nominal| self.requireExplicitNominalValueLocationToLayout(
+                    try self.emitValueLocal(nominal.backing_ref),
+                    self.localLayout(nominal.backing_ref),
+                    target_layout,
+                    "assign_ref.nominal",
+                ),
+            };
+        }
+
         /// Generate integer binary operation
         fn generateIntBinop(
             self: *Self,
-            op: LirExpr.LowLevel,
+            op: lir.LowLevel,
             lhs_loc: ValueLocation,
             rhs_loc: ValueLocation,
             operand_layout: layout.Idx,
@@ -4780,21 +4796,40 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .i32 => 32,
                 else => 0,
             };
-            if (narrow_signed_shift > 0) {
-                try self.emitShlImm(.w64, lhs_reg, lhs_reg, narrow_signed_shift);
-                try self.emitAsrImm(.w64, lhs_reg, lhs_reg, narrow_signed_shift);
-                try self.emitShlImm(.w64, rhs_reg, rhs_reg, narrow_signed_shift);
-                try self.emitAsrImm(.w64, rhs_reg, rhs_reg, narrow_signed_shift);
-            }
-
-            // Allocate result register
-            const result_reg = try self.allocTempGeneral();
-
             // Determine if this is an unsigned type (for division/modulo/comparisons)
             const is_unsigned = switch (operand_layout) {
                 layout.Idx.u8, layout.Idx.u16, layout.Idx.u32, layout.Idx.u64, layout.Idx.u128 => true,
                 else => false,
             };
+
+            const is_shift_op = switch (op) {
+                .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by => true,
+                else => false,
+            };
+
+            if (narrow_signed_shift > 0 and !is_unsigned) {
+                if (op == .num_shift_right_zf_by) {
+                    try self.emitShlImm(.w64, lhs_reg, lhs_reg, narrow_signed_shift);
+                    try self.emitLsrImm(.w64, lhs_reg, lhs_reg, narrow_signed_shift);
+                } else {
+                    try self.emitShlImm(.w64, lhs_reg, lhs_reg, narrow_signed_shift);
+                    try self.emitAsrImm(.w64, lhs_reg, lhs_reg, narrow_signed_shift);
+                }
+
+                if (is_shift_op) {
+                    try self.emitShlImm(.w64, rhs_reg, rhs_reg, 56);
+                    try self.emitLsrImm(.w64, rhs_reg, rhs_reg, 56);
+                } else {
+                    try self.emitShlImm(.w64, rhs_reg, rhs_reg, narrow_signed_shift);
+                    try self.emitAsrImm(.w64, rhs_reg, rhs_reg, narrow_signed_shift);
+                }
+            } else if (is_shift_op) {
+                try self.emitShlImm(.w64, rhs_reg, rhs_reg, 56);
+                try self.emitLsrImm(.w64, rhs_reg, rhs_reg, 56);
+            }
+
+            // Allocate result register
+            const result_reg = try self.allocTempGeneral();
 
             switch (op) {
                 .num_plus => try self.codegen.emitAdd(.w64, result_reg, lhs_reg, rhs_reg),
@@ -4917,7 +4952,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate 128-bit integer binary operation
         fn generateI128Binop(
             self: *Self,
-            op: LirExpr.LowLevel,
+            op: lir.LowLevel,
             lhs_loc: ValueLocation,
             rhs_loc: ValueLocation,
             operand_layout: layout.Idx,
@@ -4925,16 +4960,32 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // For 128-bit operations, we work with the values as pairs of 64-bit words
             // Low word at offset 0, high word at offset 8
 
-            // Get low and high parts of both operands
             const signedness: std.builtin.Signedness = if (operand_layout == .u128) .unsigned else .signed;
             const lhs_parts = try self.getI128Parts(lhs_loc, signedness);
-            const rhs_parts = try self.getI128Parts(rhs_loc, signedness);
 
             // Allocate registers for result
             const result_low = try self.allocTempGeneral();
             const result_high = try self.allocTempGeneral();
 
             const is_unsigned = operand_layout == .u128;
+
+            if (op == .num_shift_left_by or op == .num_shift_right_by or op == .num_shift_right_zf_by) {
+                try self.callI128Shift(lhs_parts, rhs_loc, result_low, result_high, operand_layout, op);
+                self.codegen.freeGeneral(lhs_parts.low);
+                self.codegen.freeGeneral(lhs_parts.high);
+
+                const stack_offset = self.codegen.allocStackSlot(16);
+                try self.codegen.emitStoreStack(.w64, stack_offset, result_low);
+                try self.codegen.emitStoreStack(.w64, stack_offset + 8, result_high);
+
+                self.codegen.freeGeneral(result_low);
+                self.codegen.freeGeneral(result_high);
+
+                return .{ .stack_i128 = stack_offset };
+            }
+
+            // Get low and high parts of the RHS for non-shift operations.
+            const rhs_parts = try self.getI128Parts(rhs_loc, signedness);
 
             switch (op) {
                 .num_plus => {
@@ -5294,9 +5345,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate a checked integer conversion returning Ok(value) | Err(OutOfRange).
-        fn generateIntTryConversion(self: *Self, ll: anytype, args: []const LirExprId) Allocator.Error!ValueLocation {
+        fn generateIntTryConversion(self: *Self, ll: anytype, args: []const LocalId) Allocator.Error!ValueLocation {
             if (args.len != 1) unreachable;
-            const src_loc = try self.generateExpr(args[0]);
+            const src_loc = try self.emitValueLocal(args[0]);
 
             const ls = self.layout_store;
             const ret_layout_val = ls.getLayout(ll.ret_layout);
@@ -5414,12 +5465,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .stack = .{ .offset = result_offset } };
         }
 
-        /// Generate code for num_from_str: Str -> Result(Num, [InvalidNumStr])
-        /// Dispatches to the appropriate C wrapper based on the target numeric type.
-        fn generateNumFromStr(self: *Self, ll: anytype, args: []const LirExprId) Allocator.Error!ValueLocation {
+        /// Generate code for typed `*_from_str` low-levels:
+        /// Str -> Result(Num, [InvalidNumStr])
+        fn generateNumFromStr(self: *Self, ll: anytype, args: []const LocalId) Allocator.Error!ValueLocation {
             if (args.len != 1) unreachable;
-            const str_loc = try self.generateExpr(args[0]);
+            const str_loc = try self.emitValueLocal(args[0]);
             const str_off = try self.ensureOnStack(str_loc, roc_str_size);
+            const parse_spec = ll.op.numericParseSpec() orelse
+                std.debug.panic("generateNumFromStr: expected typed from_str op, got {s}", .{@tagName(ll.op)});
 
             const ls = self.layout_store;
             const ret_layout_val = ls.getLayout(ll.ret_layout);
@@ -5431,97 +5484,45 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.zeroStackArea(result_offset, tu_data.size);
             const disc_offset: u32 = tu_data.discriminant_offset;
 
-            // Find the Ok variant's numeric payload layout. The Err payload can now be a
-            // real single-tag union rather than ZST, so we cannot guess by "first non-zst".
-            const variants = ls.getTagUnionVariants(tu_data);
-            var payload_idx: ?layout.Idx = null;
-            for (0..variants.len) |i| {
-                const v_payload = variants.get(@intCast(i)).payload_layout;
-                const candidate_payload = self.unwrapSingleFieldPayloadLayout(v_payload) orelse v_payload;
-                const payload_layout = ls.getLayout(candidate_payload);
-                switch (payload_layout.tag) {
-                    .scalar => {
-                        payload_idx = candidate_payload;
-                        break;
-                    },
-                    else => {},
-                }
-                if (candidate_payload == .dec) {
-                    payload_idx = candidate_payload;
-                    break;
-                }
-            }
-            const ok_payload_idx = payload_idx orelse
-                std.debug.panic("generateNumFromStr: missing numeric payload in return layout {}", .{@intFromEnum(ll.ret_layout)});
-
             const base_reg = frame_ptr;
 
-            if (ok_payload_idx == .dec) {
-                const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_dec_from_str);
-                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.addLeaArg(base_reg, result_offset);
-                try builder.addMemArg(base_reg, str_off);
-                try builder.addMemArg(base_reg, str_off + 8);
-                try builder.addMemArg(base_reg, str_off + 16);
-                try builder.addImmArg(@intCast(disc_offset));
-                try self.callBuiltin(&builder, fn_addr, .dec_from_str);
-            } else if (ok_payload_idx == .f32 or ok_payload_idx == .f64) {
-                const float_width: u8 = if (ok_payload_idx == .f32) 4 else 8;
-                const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_float_from_str);
-                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.addLeaArg(base_reg, result_offset);
-                try builder.addMemArg(base_reg, str_off);
-                try builder.addMemArg(base_reg, str_off + 8);
-                try builder.addMemArg(base_reg, str_off + 16);
-                try builder.addImmArg(@intCast(float_width));
-                try builder.addImmArg(@intCast(disc_offset));
-                try self.callBuiltin(&builder, fn_addr, .float_from_str);
-            } else {
-                const int_width: u8 = switch (ok_payload_idx) {
-                    .u8, .i8 => 1,
-                    .u16, .i16 => 2,
-                    .u32, .i32 => 4,
-                    .u64, .i64 => 8,
-                    .u128, .i128 => 16,
-                    else => unreachable,
-                };
-                const is_signed: bool = switch (ok_payload_idx) {
-                    .i8, .i16, .i32, .i64, .i128 => true,
-                    .u8, .u16, .u32, .u64, .u128 => false,
-                    else => unreachable,
-                };
-                const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_int_from_str);
-                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.addLeaArg(base_reg, result_offset);
-                try builder.addMemArg(base_reg, str_off);
-                try builder.addMemArg(base_reg, str_off + 8);
-                try builder.addMemArg(base_reg, str_off + 16);
-                try builder.addImmArg(@intCast(int_width));
-                try builder.addImmArg(if (is_signed) @as(i64, 1) else @as(i64, 0));
-                try builder.addImmArg(@intCast(disc_offset));
-                try self.callBuiltin(&builder, fn_addr, .int_from_str);
+            switch (parse_spec) {
+                .dec => {
+                    const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_dec_from_str);
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addLeaArg(base_reg, result_offset);
+                    try builder.addMemArg(base_reg, str_off);
+                    try builder.addMemArg(base_reg, str_off + 8);
+                    try builder.addMemArg(base_reg, str_off + 16);
+                    try builder.addImmArg(@intCast(disc_offset));
+                    try self.callBuiltin(&builder, fn_addr, .dec_from_str);
+                },
+                .float => |float| {
+                    const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_float_from_str);
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addLeaArg(base_reg, result_offset);
+                    try builder.addMemArg(base_reg, str_off);
+                    try builder.addMemArg(base_reg, str_off + 8);
+                    try builder.addMemArg(base_reg, str_off + 16);
+                    try builder.addImmArg(@intCast(float.width_bytes));
+                    try builder.addImmArg(@intCast(disc_offset));
+                    try self.callBuiltin(&builder, fn_addr, .float_from_str);
+                },
+                .int => |int| {
+                    const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_int_from_str);
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addLeaArg(base_reg, result_offset);
+                    try builder.addMemArg(base_reg, str_off);
+                    try builder.addMemArg(base_reg, str_off + 8);
+                    try builder.addMemArg(base_reg, str_off + 16);
+                    try builder.addImmArg(@intCast(int.width_bytes));
+                    try builder.addImmArg(if (int.signed) @as(i64, 1) else @as(i64, 0));
+                    try builder.addImmArg(@intCast(disc_offset));
+                    try self.callBuiltin(&builder, fn_addr, .int_from_str);
+                },
             }
 
             return .{ .stack = .{ .offset = result_offset } };
-        }
-
-        fn unwrapSingleFieldPayloadLayout(self: *Self, layout_idx: layout.Idx) ?layout.Idx {
-            const layout_val = self.layout_store.getLayout(layout_idx);
-            if (layout_val.tag != .struct_) return null;
-
-            const struct_data = self.layout_store.getStructData(layout_val.data.struct_.idx);
-            const fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
-            if (fields.len != 1) return null;
-
-            const field = fields.get(0);
-            if (field.index != 0) return null;
-
-            if (builtin.mode == .Debug) {
-                const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(layout_val.data.struct_.idx, 0);
-                std.debug.assert(field_offset == 0);
-            }
-
-            return field.layout;
         }
 
         // ── Float/Dec try_unsafe conversion info ──
@@ -5574,9 +5575,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate a float/dec try_unsafe conversion returning a record.
-        fn generateFloatDecTryUnsafeConversion(self: *Self, ll: anytype, args: []const LirExprId) Allocator.Error!ValueLocation {
+        fn generateFloatDecTryUnsafeConversion(self: *Self, ll: anytype, args: []const LocalId) Allocator.Error!ValueLocation {
             if (args.len != 1) unreachable;
-            const src_loc = try self.generateExpr(args[0]);
+            const src_loc = try self.emitValueLocal(args[0]);
 
             const ls = self.layout_store;
             const ret_layout_val = ls.getLayout(ll.ret_layout);
@@ -5798,6 +5799,62 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.codegen.emitLoadStack(.w64, result_high, result_slot + 8);
         }
 
+        /// Call i128/u128 shift builtin via decomposed wrapper.
+        /// Wrapper signature: (out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, shift_amount: u8) -> void
+        fn callI128Shift(
+            self: *Self,
+            lhs_parts: I128Parts,
+            shift_loc: ValueLocation,
+            result_low: GeneralReg,
+            result_high: GeneralReg,
+            operand_layout: layout.Idx,
+            op: lir.LowLevel,
+        ) Allocator.Error!void {
+            if (builtin.mode == .Debug and operand_layout == .dec) {
+                std.debug.panic(
+                    "LirCodeGen invariant violated: decimal layout reached i128 shift lowering",
+                    .{},
+                );
+            }
+
+            const fn_info: struct { addr: usize, builtin_fn: BuiltinFn } = switch (op) {
+                .num_shift_left_by => .{
+                    .addr = @intFromPtr(&dev_wrappers.roc_builtins_num_shl_u128),
+                    .builtin_fn = .num_shl_u128,
+                },
+                .num_shift_right_by => if (operand_layout == .u128)
+                    .{
+                        .addr = @intFromPtr(&dev_wrappers.roc_builtins_num_shr_u128),
+                        .builtin_fn = .num_shr_u128,
+                    }
+                else
+                    .{
+                        .addr = @intFromPtr(&dev_wrappers.roc_builtins_num_shr_i128),
+                        .builtin_fn = .num_shr_i128,
+                    },
+                .num_shift_right_zf_by => .{
+                    .addr = @intFromPtr(&dev_wrappers.roc_builtins_num_shr_u128),
+                    .builtin_fn = .num_shr_u128,
+                },
+                else => unreachable,
+            };
+
+            const shift_reg = try self.ensureInGeneralReg(shift_loc);
+            defer self.codegen.freeGeneral(shift_reg);
+
+            const result_slot = self.codegen.allocStackSlot(16);
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, result_slot);
+            try builder.addLeaArg(frame_ptr, result_slot + 8);
+            try builder.addRegArg(lhs_parts.low);
+            try builder.addRegArg(lhs_parts.high);
+            try builder.addRegArg(shift_reg);
+            try self.callBuiltin(&builder, fn_info.addr, fn_info.builtin_fn);
+
+            try self.codegen.emitLoadStack(.w64, result_low, result_slot);
+            try self.codegen.emitLoadStack(.w64, result_high, result_slot + 8);
+        }
+
         /// Get low and high 64-bit parts of a 128-bit value
         const I128Parts = struct {
             low: GeneralReg,
@@ -5922,7 +5979,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             lhs_parts: I128Parts,
             rhs_parts: I128Parts,
             result_reg: GeneralReg,
-            op: LirExpr.LowLevel,
+            op: lir.LowLevel,
             is_unsigned: bool,
         ) Allocator.Error!void {
             // Strategy: compare high parts (signed for signed, unsigned for unsigned)
@@ -6044,6 +6101,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
             const stored_layout = ls.getLayout(tu_layout_idx);
+            if (stored_layout.tag == .box) {
+                const inner_layout_idx = stored_layout.data.box;
+                const lhs_norm = try self.normalizeValueLocationToLayout(lhs_loc, tu_layout_idx, inner_layout_idx);
+                const rhs_norm = try self.normalizeValueLocationToLayout(rhs_loc, tu_layout_idx, inner_layout_idx);
+                return self.generateTagUnionComparisonByLayout(lhs_norm, rhs_norm, inner_layout_idx, op);
+            }
             if (stored_layout.tag != .tag_union) unreachable;
 
             const tu_idx = stored_layout.data.tag_union.idx;
@@ -6057,14 +6120,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const lhs_base = try self.ensureRecordOnStack(lhs_loc, total_size);
             const rhs_base = try self.ensureRecordOnStack(rhs_loc, total_size);
 
-            // Check if any variant contains refcounted data (strings, lists, etc.)
-            const tu_info = ls.getTagUnionInfo(stored_layout);
-            if (!tu_info.contains_refcounted) {
-                // Fast path: no heap types, raw byte comparison is correct
-                return self.generateTagUnionBytewiseComparison(lhs_base, rhs_base, total_size, op);
-            }
-
-            // Slow path: compare discriminants first, then dispatch payload comparison
+            // Compare discriminants first, then dispatch payload comparison.
+            // Raw bytewise equality is not sound here because padding/unused bytes
+            // inside non-refcounted tag unions are not guaranteed to be canonicalized.
             const result_reg = try self.allocTempGeneral();
             const disc_offset: i32 = @intCast(tu_data.discriminant_offset);
             const disc_size = tu_data.discriminant_size;
@@ -6178,62 +6236,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .general_reg = result_reg };
         }
 
-        /// Fast bytewise tag union comparison when no variants contain heap types.
-        fn generateTagUnionBytewiseComparison(
-            self: *Self,
-            lhs_base: i32,
-            rhs_base: i32,
-            total_size: u32,
-            op: anytype,
-        ) Allocator.Error!ValueLocation {
-            const result_reg = try self.allocTempGeneral();
-            try self.codegen.emitLoadImm(result_reg, 1);
-
-            const tmp_a = try self.allocTempGeneral();
-            const tmp_b = try self.allocTempGeneral();
-
-            var cmp_off: u32 = 0;
-            while (cmp_off < total_size) {
-                const lhs_off = lhs_base + @as(i32, @intCast(cmp_off));
-                const rhs_off = rhs_base + @as(i32, @intCast(cmp_off));
-
-                try self.codegen.emitLoadStack(.w64, tmp_a, lhs_off);
-                try self.codegen.emitLoadStack(.w64, tmp_b, rhs_off);
-
-                const remaining = total_size - cmp_off;
-                if (remaining < 8) {
-                    const mask: u64 = (@as(u64, 1) << @intCast(remaining * 8)) - 1;
-                    const mask_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(mask_reg, @bitCast(mask));
-                    try self.emitAndRegs(.w64, tmp_a, tmp_a, mask_reg);
-                    try self.emitAndRegs(.w64, tmp_b, tmp_b, mask_reg);
-                    self.codegen.freeGeneral(mask_reg);
-                }
-
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.cmp(.w64, tmp_a, tmp_b);
-                    try self.codegen.emit.csel(.w64, result_reg, result_reg, .ZRSP, .eq);
-                } else {
-                    try self.codegen.emit.cmpRegReg(.w64, tmp_a, tmp_b);
-                    const zero_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(zero_reg, 0);
-                    try self.codegen.emit.cmovcc(.not_equal, .w64, result_reg, zero_reg);
-                    self.codegen.freeGeneral(zero_reg);
-                }
-
-                cmp_off += 8;
-            }
-
-            self.codegen.freeGeneral(tmp_a);
-            self.codegen.freeGeneral(tmp_b);
-
-            if (op != .num_is_eq) {
-                try self.emitXorImm(.w64, result_reg, result_reg, 1);
-            }
-
-            return .{ .general_reg = result_reg };
-        }
-
         /// for each field type (i128 for Dec fields, i64 for smaller fields, etc.)
         /// Compare a single field/element by its layout type, writing 1 (equal) or 0 (not equal)
         /// into result_reg. Dispatches on layout type rather than byte size to correctly
@@ -6251,7 +6253,40 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Check layout tag first for compound types that need recursive comparison,
             // before falling into scalar size-based paths.
             const field_layout = ls.getLayout(field_layout_idx);
-            if (field_layout.tag == .struct_) {
+            if (field_layout.tag == .box) {
+                const inner_layout_idx = field_layout.data.box;
+                const inner_layout = ls.getLayout(inner_layout_idx);
+                const lhs_norm = try self.normalizeValueLocationToLayout(.{ .stack = .{ .offset = lhs_off } }, field_layout_idx, inner_layout_idx);
+                const rhs_norm = try self.normalizeValueLocationToLayout(.{ .stack = .{ .offset = rhs_off } }, field_layout_idx, inner_layout_idx);
+                const sub_loc = switch (inner_layout.tag) {
+                    .struct_ => try self.generateStructComparisonByLayout(lhs_norm, rhs_norm, inner_layout_idx, .num_is_eq),
+                    .tag_union => try self.generateTagUnionComparisonByLayout(lhs_norm, rhs_norm, inner_layout_idx, .num_is_eq),
+                    .list, .list_of_zst => try self.generateListComparisonByLayout(lhs_norm, rhs_norm, inner_layout_idx, .num_is_eq),
+                    else => blk: {
+                        const inner_size = ls.layoutSizeAlign(inner_layout).size;
+                        const lhs_stack = switch (lhs_norm) {
+                            .stack => |s| s.offset,
+                            .stack_str => |s| s,
+                            .stack_i128 => |s| s,
+                            .list_stack => |s| s.struct_offset,
+                            else => try self.ensureOnStack(lhs_norm, inner_size),
+                        };
+                        const rhs_stack = switch (rhs_norm) {
+                            .stack => |s| s.offset,
+                            .stack_str => |s| s,
+                            .stack_i128 => |s| s,
+                            .list_stack => |s| s.struct_offset,
+                            else => try self.ensureOnStack(rhs_norm, inner_size),
+                        };
+                        const sub_reg = try self.allocTempGeneral();
+                        try self.compareFieldByLayout(lhs_stack, rhs_stack, inner_layout_idx, inner_size, sub_reg);
+                        break :blk ValueLocation{ .general_reg = sub_reg };
+                    },
+                };
+                const sub_reg = try self.ensureInGeneralReg(sub_loc);
+                try self.emitMovRegReg(result_reg, sub_reg);
+                self.codegen.freeGeneral(sub_reg);
+            } else if (field_layout.tag == .struct_) {
                 const sub_loc = try self.generateStructComparisonByLayout(
                     .{ .stack = .{ .offset = lhs_off } },
                     .{ .stack = .{ .offset = rhs_off } },
@@ -6276,7 +6311,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.freeGeneral(lhs_parts.high);
                 self.codegen.freeGeneral(rhs_parts.low);
                 self.codegen.freeGeneral(rhs_parts.high);
-            } else if (field_layout.tag == .list) {
+            } else if (field_layout.tag == .list or field_layout.tag == .list_of_zst) {
                 const sub_loc = try self.generateListComparisonByLayout(
                     .{ .stack = .{ .offset = lhs_off } },
                     .{ .stack = .{ .offset = rhs_off } },
@@ -6290,16 +6325,33 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Small field: compare as single register value
                 const lhs_reg = try self.allocTempGeneral();
                 const rhs_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadStack(.w64, lhs_reg, lhs_off);
-                try self.codegen.emitLoadStack(.w64, rhs_reg, rhs_off);
-
-                if (field_size < 8) {
-                    const mask: u64 = (@as(u64, 1) << @intCast(field_size * 8)) - 1;
-                    const mask_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(mask_reg, @bitCast(mask));
-                    try self.emitAndRegs(.w64, lhs_reg, lhs_reg, mask_reg);
-                    try self.emitAndRegs(.w64, rhs_reg, rhs_reg, mask_reg);
-                    self.codegen.freeGeneral(mask_reg);
+                switch (field_size) {
+                    1 => {
+                        try self.emitLoadStackW8(lhs_reg, lhs_off);
+                        try self.emitLoadStackW8(rhs_reg, rhs_off);
+                    },
+                    2 => {
+                        try self.emitLoadStackW16(lhs_reg, lhs_off);
+                        try self.emitLoadStackW16(rhs_reg, rhs_off);
+                    },
+                    4 => {
+                        try self.codegen.emitLoadStack(.w32, lhs_reg, lhs_off);
+                        try self.codegen.emitLoadStack(.w32, rhs_reg, rhs_off);
+                    },
+                    8 => {
+                        try self.codegen.emitLoadStack(.w64, lhs_reg, lhs_off);
+                        try self.codegen.emitLoadStack(.w64, rhs_reg, rhs_off);
+                    },
+                    else => {
+                        const mask: u64 = (@as(u64, 1) << @intCast(field_size * 8)) - 1;
+                        const mask_reg = try self.allocTempGeneral();
+                        try self.codegen.emitLoadStack(.w64, lhs_reg, lhs_off);
+                        try self.codegen.emitLoadStack(.w64, rhs_reg, rhs_off);
+                        try self.codegen.emitLoadImm(mask_reg, @bitCast(mask));
+                        try self.emitAndRegs(.w64, lhs_reg, lhs_reg, mask_reg);
+                        try self.emitAndRegs(.w64, rhs_reg, rhs_reg, mask_reg);
+                        self.codegen.freeGeneral(mask_reg);
+                    },
                 }
 
                 try self.emitCmpReg(lhs_reg, rhs_reg);
@@ -6363,6 +6415,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
             const stored_layout = ls.getLayout(struct_layout_idx);
+            if (stored_layout.tag == .box) {
+                const inner_layout_idx = stored_layout.data.box;
+                const lhs_norm = try self.normalizeValueLocationToLayout(lhs_loc, struct_layout_idx, inner_layout_idx);
+                const rhs_norm = try self.normalizeValueLocationToLayout(rhs_loc, struct_layout_idx, inner_layout_idx);
+                return self.generateStructComparisonByLayout(lhs_norm, rhs_norm, inner_layout_idx, op);
+            }
             // Empty structs (ZST) have scalar layout, not struct_ — they're always equal
             if (stored_layout.tag != .struct_) {
                 return .{ .immediate_i64 = if (op == .num_is_eq) 1 else 0 };
@@ -6463,7 +6521,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
             const list_layout = ls.getLayout(list_layout_idx);
-            const elem_layout_idx: layout.Idx = list_layout.data.list;
+            if (list_layout.tag == .box) {
+                const inner_layout_idx = list_layout.data.box;
+                const lhs_norm = try self.normalizeValueLocationToLayout(lhs_loc, list_layout_idx, inner_layout_idx);
+                const rhs_norm = try self.normalizeValueLocationToLayout(rhs_loc, list_layout_idx, inner_layout_idx);
+                return self.generateListComparisonByLayout(lhs_norm, rhs_norm, inner_layout_idx, op);
+            }
+            const elem_layout_idx: layout.Idx = switch (list_layout.tag) {
+                .list => list_layout.data.list,
+                .list_of_zst => .zst,
+                else => unreachable,
+            };
             const elem_layout = ls.getLayout(elem_layout_idx);
             const elem_sa = ls.layoutSizeAlign(elem_layout);
             const elem_size: u32 = elem_sa.size;
@@ -6508,6 +6576,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitCmpImm(lhs_len, 0);
             self.codegen.freeGeneral(lhs_len);
             const empty_patch = try self.codegen.emitCondJump(condEqual());
+
+            // Zero-sized element layouts are fully determined by list length.
+            // Once lengths match, every element compares equal.
+            if (elem_size == 0) {
+                const done_offset = self.codegen.currentOffset();
+                self.codegen.patchJump(len_ne_patch, done_offset);
+                self.codegen.patchJump(empty_patch, done_offset);
+                if (op != .num_is_eq) {
+                    try self.emitXorImm(.w64, result_reg, result_reg, 1);
+                }
+                return .{ .general_reg = result_reg };
+            }
 
             const lhs_ptr_slot = self.codegen.allocStackSlot(8);
             const rhs_ptr_slot = self.codegen.allocStackSlot(8);
@@ -6633,7 +6713,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate floating-point binary operation
         fn generateFloatBinop(
             self: *Self,
-            op: LirExpr.LowLevel,
+            op: lir.LowLevel,
             lhs_loc: ValueLocation,
             rhs_loc: ValueLocation,
         ) Allocator.Error!ValueLocation {
@@ -6722,7 +6802,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Returns null for non-comparison ops (arithmetic).
         /// AArch64 FCMP and x86_64 UCOMISD set flags differently from integer CMP,
         /// so float comparisons use unsigned/specific conditions rather than signed ones.
-        fn floatCondition(op: LirExpr.LowLevel) ?Condition {
+        fn floatCondition(op: lir.LowLevel) ?Condition {
             return switch (op) {
                 .num_is_eq => condEqual(),
                 .num_is_lt => if (comptime target.toCpuArch() == .aarch64)
@@ -6746,8 +6826,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate absolute value for a numeric type
-        fn generateNumAbs(self: *Self, val_loc: ValueLocation, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
-            const is_signed = switch (ret_layout) {
+        fn generateNumAbs(self: *Self, val_loc: ValueLocation, operand_layout: layout.Idx) Allocator.Error!ValueLocation {
+            const is_signed = switch (operand_layout) {
                 .i8, .i16, .i32, .i64 => true,
                 .u8, .u16, .u32, .u64 => false,
                 .i128, .dec => true,
@@ -6756,8 +6836,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 else => {
                     if (builtin.mode == .Debug) {
                         std.debug.panic(
-                            "LIR/codegen invariant violated: num_abs unsupported layout {s}",
-                            .{@tagName(ret_layout)},
+                            "LIR/codegen invariant violated: num_abs unsupported operand layout {s}",
+                            .{@tagName(operand_layout)},
                         );
                     }
                     unreachable;
@@ -6769,7 +6849,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return val_loc;
             }
 
-            if (ret_layout == .i128 or ret_layout == .dec) {
+            if (operand_layout == .i128 or operand_layout == .dec) {
                 // 128-bit: negate, then select original or negated based on sign
                 const parts = try self.getI128Parts(val_loc, .signed);
                 const neg_low = try self.allocTempGeneral();
@@ -7023,195 +7103,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .stack_i128 = stack_offset };
         }
 
-        /// Generate code for if-then-else
-        fn generateIfThenElse(self: *Self, ite: anytype) Allocator.Error!ValueLocation {
-            const branches = self.store.getIfBranches(ite.branches);
-            // Collect jump targets for patching
-            var end_patches = std.ArrayList(usize).empty;
-            defer end_patches.deinit(self.allocator);
-
-            // Determine result size from layout
-            var is_str_result = false;
-            var is_list_result = false;
-            const result_size: u32 = switch (ite.result_layout) {
-                // Scalar types - size based on type
-                .i8, .u8 => 1,
-                .i16, .u16 => 2,
-                .i32, .u32, .f32 => 4,
-                .i64, .u64, .f64 => 8,
-                .i128, .u128, .dec => 16,
-                .str => blk: {
-                    is_str_result = true;
-                    break :blk roc_str_size;
-                },
-                else => blk: {
-                    const ls = self.layout_store;
-                    const result_layout = ls.getLayout(ite.result_layout);
-                    break :blk switch (result_layout.tag) {
-                        .list, .list_of_zst => inner: {
-                            is_list_result = true;
-                            break :inner roc_list_size;
-                        },
-                        .struct_ => ls.getStructData(result_layout.data.struct_.idx).size,
-                        .tag_union => ls.getTagUnionData(result_layout.data.tag_union.idx).size,
-                        .zst => 0,
-                        .scalar => ls.layoutSizeAlign(result_layout).size,
-                        else => unreachable,
-                    };
-                },
-            };
-
-            // Determine storage strategy based on result size
-            var result_slot: ?i32 = null;
-            var result_reg: ?GeneralReg = null;
-
-            // Generate each branch
-            var first_branch = true;
-            for (branches) |branch| {
-                // Generate condition
-                const cond_loc = try self.generateExpr(branch.cond);
-                const cond_reg = try self.ensureInGeneralReg(cond_loc);
-                // Compare with zero and branch if equal (condition is false)
-                const else_patch = try self.emitCmpZeroAndJump(cond_reg);
-
-                self.codegen.freeGeneral(cond_reg);
-
-                // Generate body (true case)
-                const body_loc = try self.generateExpr(branch.body);
-
-                // On first branch, determine result storage strategy
-                if (first_branch) {
-                    first_branch = false;
-                    if (builtin.mode == .Debug and !is_list_result and body_loc == .list_stack) {
-                        std.debug.panic(
-                            "LIR/codegen invariant violated: if branch produced list_stack but result_layout is not a list",
-                            .{},
-                        );
-                    }
-                    // Use stack for types > 8 bytes (e.g., i128, Dec) or stack-based values
-                    if (result_size > 8) {
-                        result_slot = self.codegen.allocStackSlot(result_size);
-                    } else {
-                        switch (body_loc) {
-                            .stack, .stack_str, .list_stack => {
-                                result_slot = self.codegen.allocStackSlot(result_size);
-                            },
-                            else => {
-                                result_reg = try self.allocTempGeneral();
-                            },
-                        }
-                    }
-                }
-
-                // Copy result to the appropriate location
-                if (result_slot) |slot| {
-                    // Copy from body_loc to result slot using the layout-determined size
-                    try self.copyBytesToStackOffset(slot, body_loc, result_size);
-                } else if (result_reg) |reg| {
-                    const body_reg = try self.ensureInGeneralReg(body_loc);
-                    try self.emitMovRegReg(reg, body_reg);
-                    self.codegen.freeGeneral(body_reg);
-                }
-
-                // Jump to end (skip the else branch)
-                const end_patch = try self.codegen.emitJump();
-                try end_patches.append(self.allocator, end_patch);
-
-                // Patch the else jump to here (start of else/next branch)
-                const current_offset = self.codegen.currentOffset();
-                self.codegen.patchJump(else_patch, current_offset);
-            }
-
-            // Generate final else
-            const else_loc = try self.generateExpr(ite.final_else);
-
-            // Handle case where all branches were composite but else is the first evaluation
-            if (result_slot == null and result_reg == null) {
-                if (builtin.mode == .Debug and !is_list_result and else_loc == .list_stack) {
-                    std.debug.panic(
-                        "LIR/codegen invariant violated: if else branch produced list_stack but result_layout is not a list",
-                        .{},
-                    );
-                }
-                // Use stack for types > 8 bytes (e.g., i128, Dec) or stack-based values
-                if (result_size > 8) {
-                    result_slot = self.codegen.allocStackSlot(result_size);
-                } else {
-                    switch (else_loc) {
-                        .stack, .stack_str, .list_stack => {
-                            result_slot = self.codegen.allocStackSlot(result_size);
-                        },
-                        else => {
-                            result_reg = try self.allocTempGeneral();
-                        },
-                    }
-                }
-            }
-
-            if (result_slot) |slot| {
-                // Copy from else_loc to result slot using the layout-determined size
-                try self.copyBytesToStackOffset(slot, else_loc, result_size);
-            } else if (result_reg) |reg| {
-                const else_reg = try self.ensureInGeneralReg(else_loc);
-                try self.emitMovRegReg(reg, else_reg);
-                self.codegen.freeGeneral(else_reg);
-            }
-
-            // Patch all end jumps to here
-            const end_offset = self.codegen.currentOffset();
-            for (end_patches.items) |patch| {
-                self.codegen.patchJump(patch, end_offset);
-            }
-
-            // Return the result location - use appropriate types for multi-word values
-            if (result_slot) |slot| {
-                if (is_str_result) {
-                    return .{ .stack_str = slot };
-                }
-                if (is_list_result) {
-                    return .{
-                        .list_stack = .{
-                            .struct_offset = slot,
-                            .data_offset = 0, // Data location is stored in the list struct itself
-                            .num_elements = 0, // Unknown at compile time
-                        },
-                    };
-                }
-                // Return stack_i128 only for actual 128-bit scalar types (i128, u128, Dec)
-                // NOT for tag unions that happen to be 16 bytes
-                if (ite.result_layout == .i128 or ite.result_layout == .u128 or ite.result_layout == .dec) {
-                    return .{ .stack_i128 = slot };
-                }
-                return .{ .stack = .{ .offset = slot } };
-            } else if (result_reg) |reg| {
-                return .{ .general_reg = reg };
-            } else {
-                // Edge case: no branches at all (shouldn't happen)
-                return .{ .immediate_i64 = 0 };
-            }
-        }
-
-        /// Compare register with zero and jump if equal (condition is false)
-        /// Returns the patch location for the jump
-        fn emitCmpZeroAndJump(self: *Self, reg: GeneralReg) !usize {
-            if (comptime target.toCpuArch() == .aarch64) {
-                // cbz reg, 0 (branch if zero, offset will be patched)
-                const patch_loc = self.codegen.currentOffset();
-                try self.codegen.emit.cbz(.w64, reg, 0);
-                return patch_loc;
-            } else {
-                // cmp reg, 0; je (will be patched)
-                try self.codegen.emit.cmpRegImm32(.w64, reg, 0);
-                return try self.codegen.emitCondJump(.equal);
-            }
-        }
-
         /// Move register to register (architecture-specific)
         fn emitMovRegReg(self: *Self, dst: GeneralReg, src: GeneralReg) !void {
             try self.codegen.emit.movRegReg(.w64, dst, src);
         }
-
-        // ── Shared helpers for generateMatch / generateMatchStmt ──
 
         /// Load the discriminant from a tag union value and mask to actual size.
         /// Returns the register holding the discriminant. Caller must free it.
@@ -7284,3455 +7179,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return disc_reg;
         }
 
-        /// After the outer tag discriminant has matched, emit discriminant checks for any
-        /// nested .tag arg patterns. For example, for the branch `Err(Exit(code))`, after
-        /// confirming the outer discriminant is Err, this function checks that the payload's
-        /// discriminant is also Exit. If any inner check fails, a conditional jump is emitted
-        /// and its patch location is appended to `fail_patches` so the caller can direct all
-        /// failures to the same "start of next branch" target.
-        ///
-        /// Handles both the single-arg case (payload is itself a tag_union) and the multi-arg
-        /// case (payload is a struct whose fields may be tag unions). Recurses for deeper nesting.
-        fn emitInnerTagArgDiscriminantChecks(
-            self: *Self,
-            tag_pattern: anytype,
-            value_loc: ValueLocation,
-            value_layout_idx: layout.Idx,
-            value_layout_val: anytype,
-            fail_patches: *std.ArrayList(usize),
-        ) Allocator.Error!void {
-            const ls = self.layout_store;
-            const args = self.store.getPatternSpan(tag_pattern.args);
-            if (args.len == 0) return;
-
-            if (value_layout_val.tag != .tag_union) return;
-
-            const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
-            const variants = ls.getTagUnionVariants(tu_data);
-            if (tag_pattern.discriminant >= variants.len) return;
-
-            const payload_layout_idx = variants.get(tag_pattern.discriminant).payload_layout;
-            const payload_layout_val = ls.getLayout(payload_layout_idx);
-
-            // Materialize the outer value to the stack so we can address the payload.
-            const stable_value_loc = try self.materializeValueToStackForLayout(value_loc, value_layout_idx);
-            const base_offset: i32 = switch (stable_value_loc) {
-                .stack => |s| s.offset,
-                .stack_i128 => |off| off,
-                .stack_str => |off| off,
-                .list_stack => |ls_info| ls_info.struct_offset,
-                else => return,
-            };
-            const payload_loc = self.stackLocationForLayout(payload_layout_idx, base_offset);
-
-            if (payload_layout_val.tag == .tag_union) {
-                // Single-arg payload that is itself a tag union — check its discriminant.
-                if (args.len >= 1) {
-                    // Unwrap as_pattern wrappers (e.g., Err(e as Exit(code))).
-                    var effective_pat = self.store.getPattern(args[0]);
-                    while (effective_pat == .as_pattern) {
-                        effective_pat = self.store.getPattern(effective_pat.as_pattern.inner);
-                    }
-                    if (effective_pat == .tag) {
-                        const inner_tag_pat = effective_pat.tag;
-                        const inner_tu = ls.getTagUnionData(payload_layout_val.data.tag_union.idx);
-                        const inner_disc_offset: i32 = @intCast(inner_tu.discriminant_offset);
-                        const inner_disc_size: u8 = inner_tu.discriminant_size;
-                        const inner_total_size: u32 = inner_tu.size;
-                        const inner_disc_use_w32 = (inner_disc_offset + 8 > @as(i32, @intCast(inner_total_size)));
-
-                        const inner_disc_reg = try self.loadAndMaskDiscriminant(
-                            payload_loc,
-                            inner_disc_use_w32,
-                            inner_disc_offset,
-                            inner_disc_size,
-                        );
-                        try self.emitCmpImm(inner_disc_reg, @intCast(inner_tag_pat.discriminant));
-                        self.codegen.freeGeneral(inner_disc_reg);
-                        const fail_patch = try self.emitJumpIfNotEqual();
-                        try fail_patches.append(self.allocator, fail_patch);
-
-                        // Recurse for deeper nesting (e.g., A(B(C(x)))).
-                        try self.emitInnerTagArgDiscriminantChecks(
-                            inner_tag_pat,
-                            payload_loc,
-                            payload_layout_idx,
-                            payload_layout_val,
-                            fail_patches,
-                        );
-                    }
-                }
-            } else if (payload_layout_val.tag == .struct_) {
-                // Multi-arg tag payload stored as a struct; check any fields that are .tag patterns.
-                for (args, 0..) |arg_pattern_id, arg_idx| {
-                    // Unwrap as_pattern wrappers (e.g., Foo(x, e as Bar(y))).
-                    var effective_pat = self.store.getPattern(arg_pattern_id);
-                    while (effective_pat == .as_pattern) {
-                        effective_pat = self.store.getPattern(effective_pat.as_pattern.inner);
-                    }
-                    if (effective_pat != .tag) continue;
-
-                    const inner_tag_pat = effective_pat.tag;
-                    const field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(
-                        payload_layout_val.data.struct_.idx,
-                        @intCast(arg_idx),
-                    );
-                    const field_layout_val = ls.getLayout(field_layout_idx);
-                    if (field_layout_val.tag != .tag_union) continue;
-
-                    const field_offset = ls.getStructFieldOffsetByOriginalIndex(
-                        payload_layout_val.data.struct_.idx,
-                        @intCast(arg_idx),
-                    );
-                    const field_loc = self.stackLocationForLayout(
-                        field_layout_idx,
-                        base_offset + @as(i32, @intCast(field_offset)),
-                    );
-
-                    const inner_tu = ls.getTagUnionData(field_layout_val.data.tag_union.idx);
-                    const inner_disc_offset: i32 = @intCast(inner_tu.discriminant_offset);
-                    const inner_disc_size: u8 = inner_tu.discriminant_size;
-                    const inner_total_size: u32 = inner_tu.size;
-                    const inner_disc_use_w32 = (inner_disc_offset + 8 > @as(i32, @intCast(inner_total_size)));
-
-                    const inner_disc_reg = try self.loadAndMaskDiscriminant(
-                        field_loc,
-                        inner_disc_use_w32,
-                        inner_disc_offset,
-                        inner_disc_size,
-                    );
-                    try self.emitCmpImm(inner_disc_reg, @intCast(inner_tag_pat.discriminant));
-                    self.codegen.freeGeneral(inner_disc_reg);
-                    const fail_patch = try self.emitJumpIfNotEqual();
-                    try fail_patches.append(self.allocator, fail_patch);
-
-                    // Recurse for deeper nesting.
-                    try self.emitInnerTagArgDiscriminantChecks(
-                        inner_tag_pat,
-                        field_loc,
-                        field_layout_idx,
-                        field_layout_val,
-                        fail_patches,
-                    );
-                }
-            }
-        }
-
-        /// Emit runtime checks for a pattern used in a match arm. Literal patterns
-        /// (int/str) produce compare-and-jump sequences whose fail-jump patch location
-        /// is appended to `fail_patches`. Struct and as-patterns recurse into their
-        /// contents. Bind and wildcard patterns emit nothing because they always match.
-        ///
-        /// The top-level match switch in generateMatch / generateMatchStmt handles
-        /// literal / tag / list / wildcard / bind patterns directly at the scrutinee
-        /// root. This helper is used when a pattern is nested inside a struct_ (e.g.,
-        /// a tuple pattern like `(1, 2)` whose fields are int_literal patterns) and
-        /// the scrutinee value must be compared field-by-field. Callers must pass a
-        /// `value_loc` that is stable across the emitted comparisons (for example,
-        /// a stack-backed location obtained via `ensureOnStack`).
-        fn emitPatternChecks(
-            self: *Self,
-            pattern_id: LirPatternId,
-            value_loc: ValueLocation,
-            value_layout_idx: layout.Idx,
-            fail_patches: *std.ArrayList(usize),
-        ) Allocator.Error!void {
-            const ls = self.layout_store;
-            const pattern = self.store.getPattern(pattern_id);
-
-            switch (pattern) {
-                .bind, .wildcard => {},
-
-                .int_literal => |int_lit| {
-                    try self.emitIntPatternCheck(int_lit.value, value_loc);
-                    const patch = try self.emitJumpIfNotEqual();
-                    try fail_patches.append(self.allocator, patch);
-                },
-
-                .str_literal => |str_lit_idx| {
-                    try self.emitStringPatternCheck(str_lit_idx, value_loc);
-                    const patch = try self.emitJumpIfEqual();
-                    try fail_patches.append(self.allocator, patch);
-                },
-
-                .struct_ => |struct_pat| {
-                    const struct_layout_val = ls.getLayout(struct_pat.struct_layout);
-                    if (struct_layout_val.tag != .struct_) return;
-
-                    const field_patterns = self.store.getPatternSpan(struct_pat.fields);
-                    if (field_patterns.len == 0) return;
-
-                    const base_offset: i32 = switch (value_loc) {
-                        .stack => |s| s.offset,
-                        .stack_i128, .stack_str => |off| off,
-                        .list_stack => |info| info.struct_offset,
-                        else => {
-                            if (builtin.mode == .Debug) {
-                                std.debug.panic(
-                                    "LIR/codegen invariant violated: emitPatternChecks struct expected stack value location, got {s}",
-                                    .{@tagName(value_loc)},
-                                );
-                            }
-                            unreachable;
-                        },
-                    };
-
-                    for (field_patterns, 0..) |field_pattern_id, field_idx| {
-                        const field_offset = ls.getStructFieldOffset(
-                            struct_layout_val.data.struct_.idx,
-                            @intCast(field_idx),
-                        );
-                        const field_layout_idx = ls.getStructFieldLayout(
-                            struct_layout_val.data.struct_.idx,
-                            @intCast(field_idx),
-                        );
-                        const field_loc = self.stackLocationForLayout(
-                            field_layout_idx,
-                            base_offset + @as(i32, @intCast(field_offset)),
-                        );
-
-                        try self.emitPatternChecks(
-                            field_pattern_id,
-                            field_loc,
-                            field_layout_idx,
-                            fail_patches,
-                        );
-                    }
-                },
-
-                .tag => |tag_pat| {
-                    const value_layout_val = ls.getLayout(value_layout_idx);
-                    if (value_layout_val.tag != .tag_union) return;
-
-                    const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
-                    const tu_disc_offset: i32 = @intCast(tu_data.discriminant_offset);
-                    const tu_disc_size: u8 = tu_data.discriminant_size;
-                    const tu_total_size: u32 = tu_data.size;
-                    const disc_use_w32 = (tu_disc_offset + 8 > @as(i32, @intCast(tu_total_size)));
-
-                    const disc_reg = try self.loadAndMaskDiscriminant(
-                        value_loc,
-                        disc_use_w32,
-                        tu_disc_offset,
-                        tu_disc_size,
-                    );
-                    try self.emitCmpImm(disc_reg, @intCast(tag_pat.discriminant));
-                    self.codegen.freeGeneral(disc_reg);
-                    const patch = try self.emitJumpIfNotEqual();
-                    try fail_patches.append(self.allocator, patch);
-
-                    try self.emitInnerTagArgDiscriminantChecks(
-                        tag_pat,
-                        value_loc,
-                        value_layout_idx,
-                        value_layout_val,
-                        fail_patches,
-                    );
-                },
-
-                .list => |list_pat| {
-                    try self.emitListLengthCheck(list_pat, value_loc);
-                    const is_exact_match = list_pat.rest.isNone();
-                    const patch = if (is_exact_match)
-                        try self.emitJumpIfNotEqual()
-                    else
-                        try self.emitJumpIfLessThan();
-                    try fail_patches.append(self.allocator, patch);
-
-                    try self.emitListLiteralChecks(list_pat, value_loc, fail_patches);
-                },
-
-                .as_pattern => |as_pat| {
-                    try self.emitPatternChecks(
-                        as_pat.inner,
-                        value_loc,
-                        value_layout_idx,
-                        fail_patches,
-                    );
-                },
-
-                .float_literal => {
-                    // Float literal comparisons inside struct fields are not yet
-                    // emitted by the dev backend. Leave as always-match to preserve
-                    // existing behaviour until a float compare helper exists.
-                },
-            }
-        }
-
         /// Bind tag payload fields to symbols after a tag pattern match.
         /// Computes the payload location for each arg and delegates to bindPattern,
         /// which handles all pattern types (bind, wildcard, tag, struct, list, as_pattern, etc.).
-        fn bindTagPayloadFields(
-            self: *Self,
-            tag_pattern: anytype,
-            value_loc: ValueLocation,
-            value_layout_idx: layout.Idx,
-            value_layout_val: anytype,
-        ) Allocator.Error!void {
-            const ls = self.layout_store;
-            const args = self.store.getPatternSpan(tag_pattern.args);
-            if (args.len == 0) return;
-
-            const variant_payload_layout, const stable_payload_loc = blk: {
-                if (value_layout_val.tag == .tag_union) {
-                    const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
-                    const variants = ls.getTagUnionVariants(tu_data);
-                    if (tag_pattern.discriminant >= variants.len) return;
-
-                    const payload_layout_idx = variants.get(tag_pattern.discriminant).payload_layout;
-                    const stable_value_loc = try self.materializeValueToStackForLayout(value_loc, value_layout_idx);
-                    const base_offset: i32 = switch (stable_value_loc) {
-                        .stack => |s| s.offset,
-                        .stack_i128 => |off| off,
-                        .stack_str => |off| off,
-                        .list_stack => |ls_info| ls_info.struct_offset,
-                        else => unreachable,
-                    };
-
-                    // Match-pattern payload bindings borrow from the scrutinee. RC insertion
-                    // models branch pattern binds that way, so do not detach or retain here.
-                    break :blk .{
-                        payload_layout_idx,
-                        self.stackLocationForLayout(payload_layout_idx, base_offset),
-                    };
-                }
-
-                if (value_layout_val.tag == .box) {
-                    const inner_layout = ls.getLayout(value_layout_val.data.box);
-                    if (inner_layout.tag != .tag_union) return;
-
-                    const tu_data = ls.getTagUnionData(inner_layout.data.tag_union.idx);
-                    const variants = ls.getTagUnionVariants(tu_data);
-                    if (tag_pattern.discriminant >= variants.len) return;
-
-                    const payload_layout_idx = variants.get(tag_pattern.discriminant).payload_layout;
-                    const payload_layout_val = ls.getLayout(payload_layout_idx);
-                    const payload_size = ls.layoutSizeAlign(payload_layout_val).size;
-                    if (payload_size == 0) {
-                        break :blk .{ payload_layout_idx, self.stackLocationForLayout(payload_layout_idx, 0) };
-                    }
-
-                    const box_ptr_reg = try self.ensureInGeneralReg(value_loc);
-                    defer self.codegen.freeGeneral(box_ptr_reg);
-
-                    // Boxed tag-pattern payloads are also borrowed from the scrutinee, but the
-                    // current value-location model cannot point into heap storage directly. Copy
-                    // the payload bytes to stack without retaining the underlying RC payloads.
-                    const detached_slot = self.codegen.allocStackSlot(payload_size);
-                    var copied: u32 = 0;
-                    while (copied < payload_size) {
-                        const temp_reg = try self.allocTempGeneral();
-                        try self.emitLoad(.w64, temp_reg, box_ptr_reg, @intCast(copied));
-                        try self.emitStore(.w64, frame_ptr, detached_slot + @as(i32, @intCast(copied)), temp_reg);
-                        self.codegen.freeGeneral(temp_reg);
-                        copied += 8;
-                    }
-
-                    break :blk .{
-                        payload_layout_idx,
-                        self.stackLocationForLayout(payload_layout_idx, detached_slot),
-                    };
-                }
-
-                if (value_layout_val.tag == .scalar or value_layout_val.tag == .zst) {
-                    if (builtin.mode == .Debug and args.len != 1) {
-                        std.debug.panic(
-                            "LIR/codegen invariant violated: scalar/zst tag payload binding expects exactly 1 arg, found {d}",
-                            .{args.len},
-                        );
-                    }
-                    break :blk .{ layout.Idx.zst, ValueLocation{ .immediate_i64 = 0 } };
-                }
-
-                return;
-            };
-
-            const stable_payload_layout_val = ls.getLayout(variant_payload_layout);
-
-            for (args, 0..) |arg_pattern_id, arg_idx| {
-                const arg_loc: ValueLocation = if (stable_payload_layout_val.tag == .struct_) blk: {
-                    const payload_base: i32 = switch (stable_payload_loc) {
-                        .stack => |s| s.offset,
-                        .stack_i128 => |off| off,
-                        .stack_str => |off| off,
-                        else => unreachable,
-                    };
-                    const elem_offset = ls.getStructFieldOffsetByOriginalIndex(stable_payload_layout_val.data.struct_.idx, @intCast(arg_idx));
-                    const elem_layout = ls.getStructFieldLayoutByOriginalIndex(stable_payload_layout_val.data.struct_.idx, @intCast(arg_idx));
-                    if (builtin.mode == .Debug) {
-                        try self.assertPatternMatchesRuntimeLayout(arg_pattern_id, elem_layout, "match tag payload field");
-                    }
-                    break :blk self.stackLocationForLayout(elem_layout, payload_base + @as(i32, @intCast(elem_offset)));
-                } else blk: {
-                    if (builtin.mode == .Debug) {
-                        if (args.len != 1) {
-                            std.debug.panic(
-                                "LIR/codegen invariant violated: non-struct match tag payload can only bind one arg, got {d}",
-                                .{args.len},
-                            );
-                        }
-                        try self.assertPatternMatchesRuntimeLayout(arg_pattern_id, variant_payload_layout, "match tag payload");
-                    }
-                    break :blk stable_payload_loc;
-                };
-
-                try self.bindPattern(arg_pattern_id, arg_loc);
-            }
-        }
-
-        fn assertPatternMatchesRuntimeLayout(
-            self: *Self,
-            pattern_id: LirPatternId,
-            runtime_layout_idx: layout.Idx,
-            comptime context: []const u8,
-        ) Allocator.Error!void {
-            if (builtin.mode != .Debug) return;
-
-            const ls = self.layout_store;
-            const pattern = self.store.getPattern(pattern_id);
-
-            switch (pattern) {
-                .bind => |bind| {
-                    if (!try self.layoutsStructurallyCompatible(bind.layout_idx, runtime_layout_idx)) {
-                        std.debug.panic(
-                            "LIR/codegen invariant violated: {s} bind layout mismatch: pattern={d} runtime={d}",
-                            .{ context, @intFromEnum(bind.layout_idx), @intFromEnum(runtime_layout_idx) },
-                        );
-                    }
-                },
-                .wildcard => |wc| {
-                    if (!try self.layoutsStructurallyCompatible(wc.layout_idx, runtime_layout_idx)) {
-                        std.debug.panic(
-                            "LIR/codegen invariant violated: {s} wildcard layout mismatch: pattern={d} runtime={d}",
-                            .{ context, @intFromEnum(wc.layout_idx), @intFromEnum(runtime_layout_idx) },
-                        );
-                    }
-                },
-                .as_pattern => |as_pat| {
-                    if (!try self.layoutsStructurallyCompatible(as_pat.layout_idx, runtime_layout_idx)) {
-                        std.debug.panic(
-                            "LIR/codegen invariant violated: {s} as-pattern layout mismatch: pattern={d} runtime={d}",
-                            .{ context, @intFromEnum(as_pat.layout_idx), @intFromEnum(runtime_layout_idx) },
-                        );
-                    }
-                    try self.assertPatternMatchesRuntimeLayout(as_pat.inner, runtime_layout_idx, context);
-                },
-                .struct_ => |s| {
-                    if (!try self.layoutsStructurallyCompatible(s.struct_layout, runtime_layout_idx)) {
-                        std.debug.panic(
-                            "LIR/codegen invariant violated: {s} struct layout mismatch: pattern={d} runtime={d}",
-                            .{ context, @intFromEnum(s.struct_layout), @intFromEnum(runtime_layout_idx) },
-                        );
-                    }
-
-                    const runtime_layout = ls.getLayout(runtime_layout_idx);
-                    if (runtime_layout.tag != .struct_) {
-                        std.debug.panic(
-                            "LIR/codegen invariant violated: {s} expected runtime struct layout, got {s}",
-                            .{ context, @tagName(runtime_layout.tag) },
-                        );
-                    }
-
-                    const fields = self.store.getPatternSpan(s.fields);
-                    for (fields, 0..) |field_pattern_id, i| {
-                        const field_layout = ls.getStructFieldLayout(runtime_layout.data.struct_.idx, @intCast(i));
-                        try self.assertPatternMatchesRuntimeLayout(field_pattern_id, field_layout, context);
-                    }
-                },
-                .tag => |tag_pat| {
-                    if (tag_pat.union_layout != runtime_layout_idx) {
-                        std.debug.panic(
-                            "LIR/codegen invariant violated: {s} tag layout mismatch: pattern={d} runtime={d}",
-                            .{ context, @intFromEnum(tag_pat.union_layout), @intFromEnum(runtime_layout_idx) },
-                        );
-                    }
-                },
-                .list => |list_pat| {
-                    if (list_pat.list_layout != runtime_layout_idx) {
-                        std.debug.panic(
-                            "LIR/codegen invariant violated: {s} list layout mismatch: pattern={d} runtime={d}",
-                            .{ context, @intFromEnum(list_pat.list_layout), @intFromEnum(runtime_layout_idx) },
-                        );
-                    }
-                },
-                .int_literal, .float_literal, .str_literal => {},
-            }
-        }
-
-        fn patternLayoutCompatible(
-            self: *Self,
-            pattern_id: LirPatternId,
-            runtime_layout_idx: layout.Idx,
-        ) Allocator.Error!bool {
-            const ls = self.layout_store;
-            const pattern = self.store.getPattern(pattern_id);
-
-            return switch (pattern) {
-                .bind => |bind| try self.layoutsStructurallyCompatible(bind.layout_idx, runtime_layout_idx),
-                .wildcard => |wc| try self.layoutsStructurallyCompatible(wc.layout_idx, runtime_layout_idx),
-                .as_pattern => |as_pat| try self.layoutsStructurallyCompatible(as_pat.layout_idx, runtime_layout_idx) and try self.patternLayoutCompatible(as_pat.inner, runtime_layout_idx),
-                .struct_ => |s| blk: {
-                    if (!try self.layoutsStructurallyCompatible(s.struct_layout, runtime_layout_idx)) break :blk false;
-
-                    const runtime_layout = ls.getLayout(runtime_layout_idx);
-                    if (runtime_layout.tag != .struct_) break :blk false;
-
-                    const fields = self.store.getPatternSpan(s.fields);
-                    for (fields, 0..) |field_pattern_id, i| {
-                        const field_layout = ls.getStructFieldLayout(runtime_layout.data.struct_.idx, @intCast(i));
-                        if (!try self.patternLayoutCompatible(field_pattern_id, field_layout)) {
-                            break :blk false;
-                        }
-                    }
-
-                    break :blk true;
-                },
-                .tag => |tag_pat| tag_pat.union_layout == runtime_layout_idx,
-                .list => |list_pat| list_pat.list_layout == runtime_layout_idx,
-                .int_literal, .float_literal, .str_literal => true,
-            };
-        }
-
-        fn layoutsStructurallyCompatible(
-            self: *Self,
-            expected_layout_idx: layout.Idx,
-            runtime_layout_idx: layout.Idx,
-        ) Allocator.Error!bool {
-            if (expected_layout_idx == runtime_layout_idx) return true;
-
-            const ls = self.layout_store;
-            const expected_layout = ls.getLayout(expected_layout_idx);
-            const runtime_layout = ls.getLayout(runtime_layout_idx);
-
-            if (expected_layout.tag != runtime_layout.tag) return false;
-
-            return switch (expected_layout.tag) {
-                .box => try self.layoutsStructurallyCompatible(expected_layout.data.box, runtime_layout.data.box),
-                .list => try self.layoutsStructurallyCompatible(expected_layout.data.list, runtime_layout.data.list),
-                .struct_ => blk: {
-                    if (expected_layout.data.struct_.alignment != runtime_layout.data.struct_.alignment) break :blk false;
-
-                    const expected_data = ls.getStructData(expected_layout.data.struct_.idx);
-                    const runtime_data = ls.getStructData(runtime_layout.data.struct_.idx);
-                    const expected_fields = ls.struct_fields.sliceRange(expected_data.getFields());
-                    const runtime_fields = ls.struct_fields.sliceRange(runtime_data.getFields());
-
-                    if (expected_fields.len != runtime_fields.len) break :blk false;
-
-                    for (0..expected_fields.len) |i| {
-                        const expected_field = expected_fields.get(i);
-                        const runtime_field = runtime_fields.get(i);
-                        if (expected_field.index != runtime_field.index) break :blk false;
-                        if (!try self.layoutsStructurallyCompatible(expected_field.layout, runtime_field.layout)) {
-                            break :blk false;
-                        }
-                    }
-
-                    break :blk true;
-                },
-                .closure => try self.layoutsStructurallyCompatible(
-                    expected_layout.data.closure.captures_layout_idx,
-                    runtime_layout.data.closure.captures_layout_idx,
-                ),
-                .tag_union => blk: {
-                    if (expected_layout.data.tag_union.alignment != runtime_layout.data.tag_union.alignment) break :blk false;
-
-                    const expected_data = ls.getTagUnionData(expected_layout.data.tag_union.idx);
-                    const runtime_data = ls.getTagUnionData(runtime_layout.data.tag_union.idx);
-                    const expected_variants = ls.getTagUnionVariants(expected_data);
-                    const runtime_variants = ls.getTagUnionVariants(runtime_data);
-
-                    if (expected_variants.len != runtime_variants.len) break :blk false;
-
-                    for (0..expected_variants.len) |i| {
-                        if (!try self.layoutsStructurallyCompatible(
-                            expected_variants.get(i).payload_layout,
-                            runtime_variants.get(i).payload_layout,
-                        )) {
-                            break :blk false;
-                        }
-                    }
-
-                    break :blk true;
-                },
-                else => expected_layout.eql(runtime_layout),
-            };
-        }
-
-        /// Emit a string pattern comparison: generates literal, calls strEqual,
-        /// compares result with 0. After this call, CPU flags are set so that
-        /// emitJumpIfEqual() will jump when the strings are NOT equal.
-        fn emitStringPatternCheck(self: *Self, str_lit_idx: anytype, value_loc: ValueLocation) Allocator.Error!void {
-            const lit_loc = try self.generateStrLiteral(str_lit_idx);
-            const lit_off = try self.ensureOnStack(lit_loc, roc_str_size);
-            const val_off = try self.ensureOnStack(value_loc, roc_str_size);
-            const eq_loc = try self.callStr2ToScalar(val_off, lit_off, @intFromPtr(&wrapStrEqual), .str_equal);
-            const eq_reg = try self.ensureInGeneralReg(eq_loc);
-            try self.emitCmpImm(eq_reg, 0);
-            self.codegen.freeGeneral(eq_reg);
-        }
-
-        /// Emit an int pattern comparison: loads literal, compares with value.
-        /// After this call, CPU flags are set so that emitJumpIfNotEqual() will
-        /// jump when the values don't match.
-        fn emitIntPatternCheck(self: *Self, int_value: i128, value_loc: ValueLocation) Allocator.Error!void {
-            const value_reg = try self.ensureInGeneralReg(value_loc);
-            if (int_value >= std.math.minInt(i32) and int_value <= std.math.maxInt(i32)) {
-                try self.emitCmpImm(value_reg, @intCast(int_value));
-            } else {
-                const tmp_reg = try self.allocTempGeneral();
-                try self.loadImm64(tmp_reg, @intCast(int_value));
-                try self.emitCmpRegReg(value_reg, tmp_reg);
-                self.codegen.freeGeneral(tmp_reg);
-            }
-            // Free the register if ensureInGeneralReg allocated a new one.
-            // When value_loc is already .general_reg, ensureInGeneralReg returns
-            // the existing register which the caller still owns.
-            if (value_loc != .general_reg) {
-                self.codegen.freeGeneral(value_reg);
-            }
-        }
-
-        /// Emit list pattern bindings: length check and prefix/suffix element binding.
-        /// Returns the conditional jump patch for length
-        /// mismatch (null if last branch). Caller must free list_ptr_reg via freeGeneral.
-        fn emitListPatternBindings(
-            self: *Self,
-            list_pattern: anytype,
-            value_loc: ValueLocation,
-        ) Allocator.Error!void {
-            const ls = self.layout_store;
-            const prefix_patterns = self.store.getPatternSpan(list_pattern.prefix);
-            const suffix_patterns = self.store.getPatternSpan(list_pattern.suffix);
-
-            // Get base offset of the list struct
-            const base_offset: i32 = switch (value_loc) {
-                .stack => |s| s.offset,
-                .stack_str => |off| off,
-                .list_stack => |list_info| list_info.struct_offset,
-                else => unreachable,
-            };
-
-            const elem_layout = ls.getLayout(list_pattern.elem_layout);
-            const elem_size_align = ls.layoutSizeAlign(elem_layout);
-            const elem_size = elem_size_align.size;
-
-            // Load the data pointer from the list struct (at base_offset)
-            const list_ptr_reg = try self.allocTempGeneral();
-            try self.emitLoad(.w64, list_ptr_reg, frame_ptr, base_offset);
-
-            // Bind each prefix element by copying from heap to stack
-            for (prefix_patterns, 0..) |elem_pattern_id, elem_idx| {
-                const elem_offset_in_list = @as(i32, @intCast(elem_idx * elem_size));
-                const elem_slot = self.codegen.allocStackSlot(@intCast(elem_size));
-                const temp_reg = try self.allocTempGeneral();
-
-                if (elem_size <= 8) {
-                    try self.emitLoad(.w64, temp_reg, list_ptr_reg, elem_offset_in_list);
-                    try self.emitStore(.w64, frame_ptr, elem_slot, temp_reg);
-                } else {
-                    try self.copyChunked(temp_reg, list_ptr_reg, elem_offset_in_list, frame_ptr, elem_slot, elem_size);
-                }
-
-                self.codegen.freeGeneral(temp_reg);
-                try self.bindPattern(elem_pattern_id, self.stackLocationForLayout(list_pattern.elem_layout, elem_slot));
-            }
-
-            // Bind suffix elements (from the end of the list)
-            if (suffix_patterns.len > 0) {
-                const suf_len_reg = try self.allocTempGeneral();
-                try self.emitLoad(.w64, suf_len_reg, frame_ptr, base_offset + 8);
-
-                const suffix_count = @as(u32, @intCast(suffix_patterns.len));
-                const suf_ptr_reg = try self.allocTempGeneral();
-
-                // suf_ptr = list_ptr + (len - suffix_len) * elem_size
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.subRegRegImm12(.w64, suf_len_reg, suf_len_reg, @intCast(suffix_count));
-                    if (elem_size == 1) {
-                        try self.codegen.emit.addRegRegReg(.w64, suf_ptr_reg, list_ptr_reg, suf_len_reg);
-                    } else {
-                        const imm_reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(imm_reg, @intCast(elem_size));
-                        try self.codegen.emit.mulRegRegReg(.w64, suf_len_reg, suf_len_reg, imm_reg);
-                        try self.codegen.emit.addRegRegReg(.w64, suf_ptr_reg, list_ptr_reg, suf_len_reg);
-                        self.codegen.freeGeneral(imm_reg);
-                    }
-                } else {
-                    try self.codegen.emit.subRegImm32(.w64, suf_len_reg, @intCast(suffix_count));
-                    if (elem_size > 1) {
-                        const imm_reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(imm_reg, @intCast(elem_size));
-                        try self.codegen.emit.imulRegReg(.w64, suf_len_reg, imm_reg);
-                        self.codegen.freeGeneral(imm_reg);
-                    }
-                    try self.codegen.emit.movRegReg(.w64, suf_ptr_reg, list_ptr_reg);
-                    try self.codegen.emit.addRegReg(.w64, suf_ptr_reg, suf_len_reg);
-                }
-                self.codegen.freeGeneral(suf_len_reg);
-
-                // Bind each suffix element
-                for (suffix_patterns, 0..) |suf_pattern_id, suf_idx| {
-                    const suf_offset = @as(i32, @intCast(suf_idx * elem_size));
-                    const suf_slot = self.codegen.allocStackSlot(@intCast(elem_size));
-                    const temp_reg = try self.allocTempGeneral();
-
-                    if (elem_size <= 8) {
-                        try self.emitLoad(.w64, temp_reg, suf_ptr_reg, suf_offset);
-                        try self.emitStore(.w64, frame_ptr, suf_slot, temp_reg);
-                    } else {
-                        try self.copyChunked(temp_reg, suf_ptr_reg, suf_offset, frame_ptr, suf_slot, elem_size);
-                    }
-
-                    self.codegen.freeGeneral(temp_reg);
-                    try self.bindPattern(suf_pattern_id, self.stackLocationForLayout(list_pattern.elem_layout, suf_slot));
-                }
-
-                self.codegen.freeGeneral(suf_ptr_reg);
-            }
-
-            self.codegen.freeGeneral(list_ptr_reg);
-        }
-
-        /// Emit literal value checks for list pattern prefix/suffix elements.
-        /// For each literal pattern in the prefix/suffix, loads the element from
-        /// the list and compares it with the expected value. Appends fail patches
-        /// (jumps to next branch) for each failed comparison.
-        fn emitListLiteralChecks(
-            self: *Self,
-            list_pattern: anytype,
-            value_loc: ValueLocation,
-            fail_patches: *std.ArrayList(usize),
-        ) Allocator.Error!void {
-            const ls = self.layout_store;
-            const prefix_patterns = self.store.getPatternSpan(list_pattern.prefix);
-            const suffix_patterns = self.store.getPatternSpan(list_pattern.suffix);
-
-            const elem_layout = ls.getLayout(list_pattern.elem_layout);
-            const elem_size = ls.layoutSizeAlign(elem_layout).size;
-
-            const base_offset: i32 = switch (value_loc) {
-                .stack => |s| s.offset,
-                .stack_str => |off| off,
-                .list_stack => |list_info| list_info.struct_offset,
-                else => unreachable,
-            };
-
-            // Check prefix literal elements
-            var has_prefix_literals = false;
-            for (prefix_patterns) |elem_pattern_id| {
-                const elem_pattern = self.store.getPattern(elem_pattern_id);
-                if (elem_pattern == .int_literal) {
-                    has_prefix_literals = true;
-                    break;
-                }
-            }
-
-            if (has_prefix_literals) {
-                const list_ptr_reg = try self.allocTempGeneral();
-                try self.emitLoad(.w64, list_ptr_reg, frame_ptr, base_offset);
-
-                for (prefix_patterns, 0..) |elem_pattern_id, elem_idx| {
-                    const elem_pattern = self.store.getPattern(elem_pattern_id);
-                    switch (elem_pattern) {
-                        .int_literal => |int_lit| {
-                            const elem_offset = @as(i32, @intCast(elem_idx * elem_size));
-                            const elem_slot = self.codegen.allocStackSlot(@intCast(elem_size));
-                            const temp_reg = try self.allocTempGeneral();
-
-                            if (elem_size <= 8) {
-                                try self.emitLoad(.w64, temp_reg, list_ptr_reg, elem_offset);
-                                try self.emitStore(.w64, frame_ptr, elem_slot, temp_reg);
-                            } else {
-                                try self.copyChunked(temp_reg, list_ptr_reg, elem_offset, frame_ptr, elem_slot, elem_size);
-                            }
-
-                            self.codegen.freeGeneral(temp_reg);
-                            const elem_loc = self.stackLocationForLayout(list_pattern.elem_layout, elem_slot);
-                            try self.emitIntPatternCheck(int_lit.value, elem_loc);
-                            const patch = try self.emitJumpIfNotEqual();
-                            try fail_patches.append(self.allocator, patch);
-                        },
-                        else => {},
-                    }
-                }
-
-                self.codegen.freeGeneral(list_ptr_reg);
-            }
-
-            // Check suffix literal elements
-            if (suffix_patterns.len > 0) {
-                var has_suffix_literals = false;
-                for (suffix_patterns) |elem_pattern_id| {
-                    const elem_pattern = self.store.getPattern(elem_pattern_id);
-                    if (elem_pattern == .int_literal) {
-                        has_suffix_literals = true;
-                        break;
-                    }
-                }
-
-                if (has_suffix_literals) {
-                    const list_ptr_reg = try self.allocTempGeneral();
-                    try self.emitLoad(.w64, list_ptr_reg, frame_ptr, base_offset);
-                    const suf_len_reg = try self.allocTempGeneral();
-                    try self.emitLoad(.w64, suf_len_reg, frame_ptr, base_offset + 8);
-
-                    const suffix_count = @as(u32, @intCast(suffix_patterns.len));
-                    const suf_ptr_reg = try self.allocTempGeneral();
-
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.subRegRegImm12(.w64, suf_len_reg, suf_len_reg, @intCast(suffix_count));
-                        if (elem_size == 1) {
-                            try self.codegen.emit.addRegRegReg(.w64, suf_ptr_reg, list_ptr_reg, suf_len_reg);
-                        } else {
-                            const imm_reg = try self.allocTempGeneral();
-                            try self.codegen.emitLoadImm(imm_reg, @intCast(elem_size));
-                            try self.codegen.emit.mulRegRegReg(.w64, suf_len_reg, suf_len_reg, imm_reg);
-                            try self.codegen.emit.addRegRegReg(.w64, suf_ptr_reg, list_ptr_reg, suf_len_reg);
-                            self.codegen.freeGeneral(imm_reg);
-                        }
-                    } else {
-                        try self.codegen.emit.subRegImm32(.w64, suf_len_reg, @intCast(suffix_count));
-                        if (elem_size > 1) {
-                            const imm_reg = try self.allocTempGeneral();
-                            try self.codegen.emitLoadImm(imm_reg, @intCast(elem_size));
-                            try self.codegen.emit.imulRegReg(.w64, suf_len_reg, imm_reg);
-                            self.codegen.freeGeneral(imm_reg);
-                        }
-                        try self.codegen.emit.movRegReg(.w64, suf_ptr_reg, list_ptr_reg);
-                        try self.codegen.emit.addRegReg(.w64, suf_ptr_reg, suf_len_reg);
-                    }
-                    self.codegen.freeGeneral(suf_len_reg);
-
-                    for (suffix_patterns, 0..) |suf_pattern_id, suf_idx| {
-                        const suf_pattern = self.store.getPattern(suf_pattern_id);
-                        switch (suf_pattern) {
-                            .int_literal => |int_lit| {
-                                const suf_offset = @as(i32, @intCast(suf_idx * elem_size));
-                                const suf_slot = self.codegen.allocStackSlot(@intCast(elem_size));
-                                const temp_reg = try self.allocTempGeneral();
-
-                                if (elem_size <= 8) {
-                                    try self.emitLoad(.w64, temp_reg, suf_ptr_reg, suf_offset);
-                                    try self.emitStore(.w64, frame_ptr, suf_slot, temp_reg);
-                                } else {
-                                    try self.copyChunked(temp_reg, suf_ptr_reg, suf_offset, frame_ptr, suf_slot, elem_size);
-                                }
-
-                                self.codegen.freeGeneral(temp_reg);
-                                const elem_loc = self.stackLocationForLayout(list_pattern.elem_layout, suf_slot);
-                                try self.emitIntPatternCheck(int_lit.value, elem_loc);
-                                const patch = try self.emitJumpIfNotEqual();
-                                try fail_patches.append(self.allocator, patch);
-                            },
-                            else => {},
-                        }
-                    }
-
-                    self.codegen.freeGeneral(suf_ptr_reg);
-                    self.codegen.freeGeneral(list_ptr_reg);
-                }
-            }
-        }
-
-        /// Emit a length check for a list pattern. Sets CPU flags for comparison.
-        /// For exact matches (no rest/suffix), emitJumpIfNotEqual() skips on mismatch.
-        /// For rest/suffix patterns, emitJumpIfLessThan() skips if too short.
-        fn emitListLengthCheck(
-            self: *Self,
-            list_pattern: anytype,
-            value_loc: ValueLocation,
-        ) Allocator.Error!void {
-            const prefix_patterns = self.store.getPatternSpan(list_pattern.prefix);
-            const suffix_patterns = self.store.getPatternSpan(list_pattern.suffix);
-
-            const base_offset: i32 = switch (value_loc) {
-                .stack => |s| s.offset,
-                .stack_str => |off| off,
-                .list_stack => |list_info| list_info.struct_offset,
-                else => unreachable,
-            };
-
-            // Load list length from stack (offset 8 from struct base)
-            const len_reg = try self.allocTempGeneral();
-            try self.emitLoad(.w64, len_reg, frame_ptr, base_offset + 8);
-
-            // Compare length with expected (prefix + suffix)
-            const expected_len = @as(i32, @intCast(prefix_patterns.len + suffix_patterns.len));
-            try self.emitCmpImm(len_reg, expected_len);
-            self.codegen.freeGeneral(len_reg);
-        }
-
-        /// Generate code for match expression
-        fn generateMatch(self: *Self, when_expr: anytype) Allocator.Error!ValueLocation {
-            // Evaluate the scrutinee (the value being matched)
-            const value_loc = try self.generateExpr(when_expr.value);
-            // Get the branches
-            const branches = self.store.getMatchBranches(when_expr.branches);
-            if (branches.len == 0) {
-                unreachable;
-            }
-
-            // Determine result size to decide between register and stack result
-            const ls = self.layout_store;
-            const result_layout_val = ls.getLayout(when_expr.result_layout);
-            var result_size: u32 = ls.layoutSizeAlign(result_layout_val).size;
-            var use_stack_result = result_size > 8;
-            const value_layout_val = ls.getLayout(when_expr.value_layout);
-            const tu_disc_offset: i32 = if (value_layout_val.tag == .tag_union) blk: {
-                const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
-                break :blk @intCast(tu_data.discriminant_offset);
-            } else 0;
-            const tu_total_size: u32 = if (value_layout_val.tag == .tag_union) blk: {
-                const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
-                break :blk tu_data.size;
-            } else ls.layoutSizeAlign(value_layout_val).size;
-            const tu_disc_size: u8 = if (value_layout_val.tag == .tag_union) blk: {
-                const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
-                break :blk tu_data.discriminant_size;
-            } else @intCast(@max(ls.layoutSizeAlign(value_layout_val).size, 1));
-            // Use .w32 for discriminant loads when .w64 would read past the tag union.
-            // Discriminants are at most 4 bytes, so .w32 is always sufficient.
-            const disc_use_w32 = (tu_disc_offset + 8 > @as(i32, @intCast(tu_total_size)));
-
-            // Allocate result storage (may be upgraded dynamically below)
-            var result_slot: i32 = if (use_stack_result) self.codegen.allocStackSlot(result_size) else 0;
-            var result_reg: ?GeneralReg = if (!use_stack_result) try self.allocTempGeneral() else null;
-
-            // Collect jump targets for patching to end
-            var end_patches = std.ArrayList(usize).empty;
-            defer end_patches.deinit(self.allocator);
-
-            // Generate each branch
-            for (branches, 0..) |branch, i| {
-                const pattern = self.store.getPattern(branch.pattern);
-
-                // Try to match the pattern
-                switch (pattern) {
-                    .wildcard => {
-                        // Wildcard always matches
-                        const guard_patch = try self.emitGuardCheck(branch.guard);
-                        if (guard_patch) |gp| {
-                            const body_loc = try self.generateExpr(branch.body);
-                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
-                            if (i < branches.len - 1) {
-                                const end_patch = try self.codegen.emitJump();
-                                try end_patches.append(self.allocator, end_patch);
-                            }
-                            self.codegen.patchJump(gp, self.codegen.currentOffset());
-                        } else {
-                            const body_loc = try self.generateExpr(branch.body);
-                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
-                            break;
-                        }
-                    },
-                    .bind => |bind| {
-                        // Bind always matches - bind the value first
-                        const symbol_key: u64 = @bitCast(bind.symbol);
-                        try self.symbol_locations.put(symbol_key, value_loc);
-
-                        // Guard must be checked after binding (guard may reference bound var)
-                        const guard_patch = try self.emitGuardCheck(branch.guard);
-                        if (guard_patch) |gp| {
-                            const body_loc = try self.generateExpr(branch.body);
-                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
-                            if (i < branches.len - 1) {
-                                const end_patch = try self.codegen.emitJump();
-                                try end_patches.append(self.allocator, end_patch);
-                            }
-                            self.codegen.patchJump(gp, self.codegen.currentOffset());
-                        } else {
-                            const body_loc = try self.generateExpr(branch.body);
-                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
-                            break;
-                        }
-                    },
-                    .int_literal => |int_lit| {
-                        try self.emitIntPatternCheck(int_lit.value, value_loc);
-
-                        // Jump to next branch if not equal
-                        const is_last_branch = (i == branches.len - 1);
-                        var next_patch: ?usize = null;
-                        if (!is_last_branch) {
-                            next_patch = try self.emitJumpIfNotEqual();
-                        }
-
-                        // Guard check
-                        const guard_patch = try self.emitGuardCheck(branch.guard);
-
-                        // Pattern matched - generate body
-                        const body_loc = try self.generateExpr(branch.body);
-                        try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
-
-                        // Jump to end (unless this is the last branch)
-                        if (!is_last_branch) {
-                            const end_patch = try self.codegen.emitJump();
-                            try end_patches.append(self.allocator, end_patch);
-
-                            // Patch the next branch jump to here
-                            if (next_patch) |patch| {
-                                const current_offset = self.codegen.currentOffset();
-                                self.codegen.patchJump(patch, current_offset);
-                            }
-                        }
-                        if (guard_patch) |patch| {
-                            self.codegen.patchJump(patch, self.codegen.currentOffset());
-                        }
-                    },
-                    .str_literal => |str_lit_idx| {
-                        try self.emitStringPatternCheck(str_lit_idx, value_loc);
-
-                        // Jump to next branch if equal to 0 (strings not equal)
-                        const is_last_branch = (i == branches.len - 1);
-                        var next_patch: ?usize = null;
-                        if (!is_last_branch) {
-                            next_patch = try self.emitJumpIfEqual();
-                        }
-
-                        // Guard check
-                        const guard_patch = try self.emitGuardCheck(branch.guard);
-
-                        // Pattern matched - generate body
-                        const body_loc = try self.generateExpr(branch.body);
-                        try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
-
-                        // Jump to end (unless this is the last branch)
-                        if (!is_last_branch) {
-                            const end_patch = try self.codegen.emitJump();
-                            try end_patches.append(self.allocator, end_patch);
-
-                            // Patch the next branch jump to here
-                            if (next_patch) |patch| {
-                                const current_offset = self.codegen.currentOffset();
-                                self.codegen.patchJump(patch, current_offset);
-                            }
-                        }
-                        if (guard_patch) |patch| {
-                            self.codegen.patchJump(patch, self.codegen.currentOffset());
-                        }
-                    },
-                    .tag => |tag_pattern| {
-                        // Match on tag discriminant
-                        const disc_reg = try self.loadAndMaskDiscriminant(value_loc, disc_use_w32, tu_disc_offset, tu_disc_size);
-                        try self.emitCmpImm(disc_reg, @intCast(tag_pattern.discriminant));
-                        self.codegen.freeGeneral(disc_reg);
-
-                        // Jump to next branch if not equal
-                        const is_last_branch = (i == branches.len - 1);
-                        var next_patch: ?usize = null;
-                        if (!is_last_branch) {
-                            next_patch = try self.emitJumpIfNotEqual();
-                        }
-
-                        // For patterns like Err(Exit(code)), check inner discriminants
-                        // before binding any payload variables. If any inner discriminant
-                        // does not match, we must fall through to the next branch.
-                        // Patches are collected alongside next_patch and all target the
-                        // same "start of next branch" offset.
-                        var inner_fail_patches = std.ArrayList(usize).empty;
-                        defer inner_fail_patches.deinit(self.allocator);
-                        if (!is_last_branch) {
-                            try self.emitInnerTagArgDiscriminantChecks(
-                                tag_pattern,
-                                value_loc,
-                                when_expr.value_layout,
-                                value_layout_val,
-                                &inner_fail_patches,
-                            );
-                        }
-
-                        // Bind tag payload fields
-                        try self.bindTagPayloadFields(tag_pattern, value_loc, when_expr.value_layout, value_layout_val);
-
-                        // Guard check (after bindings, since guard may reference bound vars)
-                        const guard_patch = try self.emitGuardCheck(branch.guard);
-
-                        // Generate body
-                        const body_loc = try self.generateExpr(branch.body);
-                        try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
-
-                        // Jump to end (unless this is the last branch)
-                        if (!is_last_branch) {
-                            const end_patch = try self.codegen.emitJump();
-                            try end_patches.append(self.allocator, end_patch);
-
-                            // Patch the outer and all inner "not-equal" jumps to the
-                            // start of the next branch (current position after the end jump).
-                            const next_branch_offset = self.codegen.currentOffset();
-                            if (next_patch) |patch| {
-                                self.codegen.patchJump(patch, next_branch_offset);
-                            }
-                            for (inner_fail_patches.items) |patch| {
-                                self.codegen.patchJump(patch, next_branch_offset);
-                            }
-                        }
-                        if (guard_patch) |patch| {
-                            self.codegen.patchJump(patch, self.codegen.currentOffset());
-                        }
-                    },
-                    .list => |list_pattern| {
-                        const is_exact_match = list_pattern.rest.isNone();
-
-                        // Check list length
-                        try self.emitListLengthCheck(list_pattern, value_loc);
-
-                        // Jump to next branch if length doesn't match
-                        const is_last_branch = (i == branches.len - 1);
-                        var next_patch: ?usize = null;
-                        if (!is_last_branch) {
-                            if (is_exact_match) {
-                                next_patch = try self.emitJumpIfNotEqual();
-                            } else {
-                                next_patch = try self.emitJumpIfLessThan();
-                            }
-                        }
-
-                        // Check literal values in prefix/suffix elements.
-                        // For patterns like [1, 2, ..], we must verify that the
-                        // actual list elements match the literal values, not just
-                        // the list length.
-                        var literal_fail_patches = std.ArrayList(usize).empty;
-                        defer literal_fail_patches.deinit(self.allocator);
-                        if (!is_last_branch) {
-                            try self.emitListLiteralChecks(list_pattern, value_loc, &literal_fail_patches);
-                        }
-
-                        // Bind prefix, suffix, and rest elements
-                        try self.emitListPatternBindings(list_pattern, value_loc);
-
-                        // Guard check (after bindings, since guard may reference bound vars)
-                        const guard_patch = try self.emitGuardCheck(branch.guard);
-
-                        // Generate body
-                        const body_loc = try self.generateExpr(branch.body);
-                        try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
-
-                        // Jump to end (unless this is the last branch)
-                        if (!is_last_branch) {
-                            const end_patch = try self.codegen.emitJump();
-                            try end_patches.append(self.allocator, end_patch);
-
-                            // Patch the length check and all literal check jumps
-                            // to the start of the next branch.
-                            const next_branch_offset = self.codegen.currentOffset();
-                            if (next_patch) |patch| {
-                                self.codegen.patchJump(patch, next_branch_offset);
-                            }
-                            for (literal_fail_patches.items) |patch| {
-                                self.codegen.patchJump(patch, next_branch_offset);
-                            }
-                        }
-                        if (guard_patch) |patch| {
-                            self.codegen.patchJump(patch, self.codegen.currentOffset());
-                        }
-                    },
-                    .struct_ => {
-                        // Ensure the value is on the stack so both the field-level
-                        // checks and the field bindings address the same memory.
-                        const value_size = ls.layoutSizeAlign(value_layout_val).size;
-                        const stack_off = try self.ensureOnStack(value_loc, value_size);
-                        const stable_loc: ValueLocation = .{ .stack = .{ .offset = stack_off } };
-
-                        const is_last_branch = (i == branches.len - 1);
-
-                        // A struct_ pattern only "always matches" when every field is a
-                        // bind/wildcard. Tuple patterns like `(1, 2)` lower to a struct_
-                        // whose fields are int_literal patterns, and those require
-                        // runtime comparisons. Collect any fail-jump patches here so
-                        // they all target the start of the next branch.
-                        var field_fail_patches = std.ArrayList(usize).empty;
-                        defer field_fail_patches.deinit(self.allocator);
-                        if (!is_last_branch) {
-                            try self.emitPatternChecks(
-                                branch.pattern,
-                                stable_loc,
-                                when_expr.value_layout,
-                                &field_fail_patches,
-                            );
-                        }
-
-                        try self.bindPattern(branch.pattern, stable_loc);
-
-                        const guard_patch = try self.emitGuardCheck(branch.guard);
-
-                        const body_loc = try self.generateExpr(branch.body);
-                        try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
-
-                        const unconditional = field_fail_patches.items.len == 0 and guard_patch == null;
-
-                        if (!is_last_branch and !unconditional) {
-                            const end_patch = try self.codegen.emitJump();
-                            try end_patches.append(self.allocator, end_patch);
-
-                            const next_branch_offset = self.codegen.currentOffset();
-                            for (field_fail_patches.items) |patch| {
-                                self.codegen.patchJump(patch, next_branch_offset);
-                            }
-                        }
-                        if (guard_patch) |patch| {
-                            self.codegen.patchJump(patch, self.codegen.currentOffset());
-                        }
-
-                        if (unconditional) break;
-                    },
-                    .as_pattern => |as_pat| {
-                        // As-pattern: bind the whole value to the symbol, then match the inner pattern
-                        const symbol_key: u64 = @bitCast(as_pat.symbol);
-                        try self.symbol_locations.put(symbol_key, value_loc);
-
-                        // Also bind the inner pattern
-                        const value_size = ls.layoutSizeAlign(value_layout_val).size;
-                        const stack_off = try self.ensureOnStack(value_loc, value_size);
-                        try self.bindPattern(as_pat.inner, .{ .stack = .{ .offset = stack_off } });
-
-                        const guard_patch = try self.emitGuardCheck(branch.guard);
-                        if (guard_patch) |gp| {
-                            const body_loc = try self.generateExpr(branch.body);
-                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
-                            if (i < branches.len - 1) {
-                                const end_patch = try self.codegen.emitJump();
-                                try end_patches.append(self.allocator, end_patch);
-                            }
-                            self.codegen.patchJump(gp, self.codegen.currentOffset());
-                        } else {
-                            const body_loc = try self.generateExpr(branch.body);
-                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
-                            break;
-                        }
-                    },
-                    else => {
-                        unreachable;
-                    },
-                }
-            }
-
-            // Patch all end jumps to here
-            const end_offset = self.codegen.currentOffset();
-            for (end_patches.items) |patch| {
-                self.codegen.patchJump(patch, end_offset);
-            }
-
-            if (use_stack_result) {
-                // Use the declared result layout if it's known (not ZST)
-                if (result_layout_val.tag != .zst) {
-                    if (when_expr.result_layout == .i128 or when_expr.result_layout == .u128 or when_expr.result_layout == .dec) {
-                        return .{ .stack_i128 = result_slot };
-                    } else if (when_expr.result_layout == .str) {
-                        return .{ .stack_str = result_slot };
-                    } else if (result_layout_val.tag == .list or result_layout_val.tag == .list_of_zst) {
-                        return .{ .list_stack = .{
-                            .struct_offset = result_slot,
-                            .data_offset = 0,
-                            .num_elements = 0,
-                        } };
-                    } else if (result_layout_val.tag == .tag_union or result_layout_val.tag == .struct_ or result_layout_val.tag == .closure) {
-                        // Non-scalar composite types stay as generic stack values
-                        // so downstream code uses the layout for proper sizing.
-                        const declared_size = ls.layoutSizeAlign(result_layout_val).size;
-                        if (builtin.mode == .Debug and result_size > declared_size) {
-                            std.debug.panic(
-                                "LIR/codegen invariant violated: match result slot size {d} exceeds declared layout size {d}",
-                                .{ result_size, declared_size },
-                            );
-                        }
-                        return .{ .stack = .{ .offset = result_slot } };
-                    }
-                }
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "LIR/codegen invariant violated: unhandled stack match result layout {s}",
-                        .{@tagName(result_layout_val.tag)},
-                    );
-                }
-                return .{ .stack = .{ .offset = result_slot } };
-            }
-            if (result_reg) |reg| {
-                return .{ .general_reg = reg };
-            } else {
-                return .{ .immediate_i64 = 0 };
-            }
-        }
-
-        /// Store a match-branch result.
-        fn storeMatchResult(
-            self: *Self,
-            body_loc: ValueLocation,
-            use_stack_result: *bool,
-            result_slot: *i32,
-            result_reg: *?GeneralReg,
-            result_size: *u32,
-        ) Allocator.Error!void {
-            if (body_loc == .noreturn) return;
-
-            if (!use_stack_result.*) {
-                if (builtin.mode == .Debug) {
-                    switch (body_loc) {
-                        .stack_str, .list_stack, .stack_i128, .immediate_i128 => {
-                            std.debug.panic(
-                                "LIR/codegen invariant violated: match branch produced multi-word value in register-result mode",
-                                .{},
-                            );
-                        },
-                        else => {},
-                    }
-                }
-            }
-
-            // Store the result
-            if (use_stack_result.*) {
-                try self.storeResultToSlot(result_slot.*, body_loc, result_size.*);
-            } else {
-                const body_reg = try self.ensureInGeneralReg(body_loc);
-                try self.emitMovRegReg(result_reg.*.?, body_reg);
-                self.codegen.freeGeneral(body_reg);
-            }
-        }
-
-        /// Emit guard check. If the guard expression is present and evaluates to false,
-        /// emit a conditional jump. Returns the patch location or null if no guard.
-        fn emitGuardCheck(self: *Self, guard: anytype) Allocator.Error!?usize {
-            if (guard.isNone()) return null;
-            const guard_loc = try self.generateExpr(guard);
-            const guard_reg = try self.ensureInGeneralReg(guard_loc);
-            try self.emitCmpImm(guard_reg, 0);
-            self.codegen.freeGeneral(guard_reg);
-            return try self.emitJumpIfEqual();
-        }
-
-        /// Compare two registers
-        fn emitCmpRegReg(self: *Self, lhs: GeneralReg, rhs: GeneralReg) !void {
-            try self.codegen.emit.cmpRegReg(.w64, lhs, rhs);
-        }
-
-        /// Load 64-bit immediate into register
-        fn loadImm64(self: *Self, dst: GeneralReg, value: i64) !void {
-            try self.codegen.emit.movRegImm64(dst, @bitCast(value));
-        }
-
-        /// Generate code for an empty list
-        fn generateEmptyList(self: *Self) Allocator.Error!ValueLocation {
-            // Empty list: ptr = null, len = 0, capacity = 0
-            // Materialize as a proper 24-byte list struct on the stack so that
-            // when passed as a function argument, all 3 registers are set correctly.
-            const list_struct_offset: i32 = self.codegen.allocStackSlot(roc_list_size);
-            const zero_reg = try self.allocTempGeneral();
-            try self.codegen.emitLoadImm(zero_reg, 0);
-
-            try self.emitStore(.w64, frame_ptr, list_struct_offset, zero_reg);
-            try self.emitStore(.w64, frame_ptr, list_struct_offset + 8, zero_reg);
-            try self.emitStore(.w64, frame_ptr, list_struct_offset + 16, zero_reg);
-            self.codegen.freeGeneral(zero_reg);
-
-            return .{ .list_stack = .{
-                .struct_offset = list_struct_offset,
-                .data_offset = 0,
-                .num_elements = 0,
-            } };
-        }
-
-        /// Generate code for a list with elements
-        fn generateList(self: *Self, list: anytype) Allocator.Error!ValueLocation {
-            const elems = self.store.getExprSpan(list.elems);
-            if (elems.len == 0) {
-                // Empty list: ptr = null, len = 0, capacity = 0
-                const list_struct_offset: i32 = self.codegen.allocStackSlot(roc_list_size);
-                const zero_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(zero_reg, 0);
-
-                try self.emitStore(.w64, frame_ptr, list_struct_offset, zero_reg);
-                try self.emitStore(.w64, frame_ptr, list_struct_offset + 8, zero_reg);
-                try self.emitStore(.w64, frame_ptr, list_struct_offset + 16, zero_reg);
-                self.codegen.freeGeneral(zero_reg);
-
-                return .{ .list_stack = .{
-                    .struct_offset = list_struct_offset,
-                    .data_offset = 0,
-                    .num_elements = 0,
-                } };
-            }
-
-            // Get element layout from the layout store - required, no fallbacks
-            const ls = self.layout_store;
-            const elem_layout_data = ls.getLayout(list.elem_layout);
-            const elem_size_align = ls.layoutSizeAlign(elem_layout_data);
-            const elem_size: u32 = elem_size_align.size;
-            const elem_alignment: u32 = @intCast(elem_size_align.alignment.toByteUnits());
-            const num_elems: u32 = @intCast(elems.len);
-            const total_data_bytes: usize = @as(usize, elem_size) * @as(usize, num_elems);
-
-            // Determine if elements contain refcounted data
-            const elements_refcounted: bool = ls.layoutContainsRefcounted(elem_layout_data);
-
-            // Get the saved RocOps register
-            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-
-            // Call allocateWithRefcountC(data_bytes, element_alignment, elements_refcounted, roc_ops)
-            // Returns pointer to allocated memory (refcount is already initialized to 1)
-
-            // Allocate stack slot to save the heap pointer (will be clobbered during element generation)
-            const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
-
-            // Allocate list using CallBuilder with automatic R12 handling
-            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            try builder.addImmArg(@intCast(total_data_bytes));
-            try builder.addImmArg(@intCast(elem_alignment));
-            try builder.addImmArg(if (elements_refcounted) 1 else 0);
-            try builder.addRegArg(roc_ops_reg);
-            try self.callBuiltin(&builder, @intFromPtr(&allocateWithRefcountC), .allocate_with_refcount);
-
-            // Save heap pointer from return register to stack slot
-            try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
-
-            // Now store each element to heap memory
-            for (elems, 0..) |elem_id, i| {
-                const elem_loc = try self.generateExpr(elem_id);
-                const elem_heap_offset: i32 = @intCast(@as(usize, i) * @as(usize, elem_size));
-
-                if (elem_size == 0) {
-                    continue;
-                }
-
-                // Materialize element to stack for a uniform copy path.
-                const elem_stack_offset = try self.ensureOnStack(elem_loc, elem_size);
-
-                // Load heap pointer from stack slot
-                const heap_ptr = try self.allocTempGeneral();
-                try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
-
-                // Copy elem_size bytes from stack to heap in 8-byte chunks
-                const temp_reg = try self.allocTempGeneral();
-                try self.copyChunked(temp_reg, frame_ptr, elem_stack_offset, heap_ptr, elem_heap_offset, elem_size);
-                self.codegen.freeGeneral(temp_reg);
-
-                self.codegen.freeGeneral(heap_ptr);
-            }
-
-            // Create the list struct: (ptr, len, capacity)
-            // ptr points to heap memory, len = capacity = num_elems
-            const list_struct_offset: i32 = self.codegen.allocStackSlot(roc_list_size);
-
-            // Load heap pointer and length
-            const ptr_reg = try self.allocTempGeneral();
-            const len_reg = try self.allocTempGeneral();
-
-            try self.emitLoad(.w64, ptr_reg, frame_ptr, heap_ptr_slot);
-            try self.codegen.emitLoadImm(len_reg, @intCast(num_elems));
-
-            // Store list struct
-            try self.emitStore(.w64, frame_ptr, list_struct_offset, ptr_reg);
-            try self.emitStore(.w64, frame_ptr, list_struct_offset + 8, len_reg);
-            try self.emitStore(.w64, frame_ptr, list_struct_offset + 16, len_reg);
-
-            self.codegen.freeGeneral(ptr_reg);
-            self.codegen.freeGeneral(len_reg);
-
-            // Return the list location
-            // Note: data_offset is no longer meaningful for heap-allocated lists,
-            // but we keep it for compatibility with existing code
-            return .{
-                .list_stack = .{
-                    .struct_offset = list_struct_offset,
-                    .data_offset = heap_ptr_slot, // Now points to heap ptr storage on stack
-                    .num_elements = num_elems,
-                },
-            };
-        }
-
-        /// Generate code for a struct literal (records, tuples, empty records).
-        /// Fields are in layout order (sorted by alignment).
-        fn generateStruct(self: *Self, s: anytype) Allocator.Error!ValueLocation {
-            const ls = self.layout_store;
-
-            // Validate layout index before use
-            if (@intFromEnum(s.struct_layout) >= ls.layouts.len()) {
-                unreachable;
-            }
-
-            // Get the struct layout
-            const struct_layout = ls.getLayout(s.struct_layout);
-            // Empty structs (ZST) have scalar layout, not struct_ layout
-            if (struct_layout.tag != .struct_) {
-                return .{ .immediate_i64 = 0 };
-            }
-
-            const struct_data = ls.getStructData(struct_layout.data.struct_.idx);
-            const stack_size = struct_data.size;
-
-            // Zero-sized structs don't need storage
-            if (stack_size == 0) {
-                return .{ .immediate_i64 = 0 };
-            }
-
-            // Allocate stack space for the struct
-            const base_offset = self.codegen.allocStackSlot(stack_size);
-
-            // Get field expressions
-            const field_exprs = self.store.getExprSpan(s.fields);
-
-            // Copy each field to its offset within the struct.
-            // Fields are already in layout order, so iterate positionally.
-            for (field_exprs, 0..) |field_expr_id, i| {
-                const field_offset = ls.getStructFieldOffset(struct_layout.data.struct_.idx, @intCast(i));
-                const field_size = ls.getStructFieldSize(struct_layout.data.struct_.idx, @intCast(i));
-                const field_loc = try self.generateExpr(field_expr_id);
-                const field_base = base_offset + @as(i32, @intCast(field_offset));
-                try self.copyBytesToStackOffset(field_base, field_loc, field_size);
-            }
-
-            return .{ .stack = .{ .offset = base_offset, .size = ValueSize.fromByteCount(@min(stack_size, 8)) } };
-        }
-
-        /// Determine the size of a value from its ValueLocation alone.
-        fn valueSizeFromLoc(_: *Self, loc: ValueLocation) u32 {
-            return switch (loc) {
-                .stack_str => roc_str_size,
-                .list_stack => roc_list_size,
-                .stack_i128, .immediate_i128 => 16,
-                .immediate_i64, .general_reg, .stack, .float_reg, .immediate_f64 => 8,
-                else => {
-                    if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: valueSizeFromLoc unsupported location {s}", .{@tagName(loc)});
-                    unreachable;
-                },
-            };
-        }
-
-        /// Given a field's stack base offset, size, and layout index, return the appropriate ValueLocation.
-        fn fieldLocationFromLayout(self: *Self, field_base: i32, field_size: u32, field_layout_idx: layout.Idx) ValueLocation {
-            // Check well-known layout indices first
-            if (field_layout_idx == .str) {
-                return .{ .stack_str = field_base };
-            }
-            if (field_layout_idx == .i128 or field_layout_idx == .u128 or field_layout_idx == .dec) {
-                return .{ .stack_i128 = field_base };
-            }
-            // Check layout tag for lists
-            {
-                const ls = self.layout_store;
-                if (@intFromEnum(field_layout_idx) < ls.layouts.len()) {
-                    const field_layout = ls.getLayout(field_layout_idx);
-                    if (field_layout.tag == .list or field_layout.tag == .list_of_zst) {
-                        return .{ .list_stack = .{
-                            .struct_offset = field_base,
-                            .data_offset = 0,
-                            .num_elements = 0,
-                        } };
-                    }
-                }
-            }
-            return .{ .stack = .{ .offset = field_base, .size = ValueSize.fromByteCount(field_size) } };
-        }
-
-        const LambdaProcOptions = struct {
-            use_cache: bool = true,
-            extra_hidden_args: u8 = 0,
-            /// When true, all parameters are received as pointers regardless of
-            /// register pressure. Used by the sort comparator trampoline which
-            /// always passes element pointers to avoid ABI mismatches between
-            /// the Zig callconv(.c) and the Roc internal calling convention.
-            force_pass_by_ptr: bool = false,
-        };
-
-        /// Generate code for struct field access (records and tuples).
-        /// field_idx is the sorted position in layout.
-        fn generateStructAccess(self: *Self, access: anytype) Allocator.Error!ValueLocation {
-            const ls = self.layout_store;
-
-            // Generate code for the struct expression
-            const struct_loc = try self.generateExpr(access.struct_expr);
-
-            // Get the struct layout to find field offset and size
-            const struct_layout = ls.getLayout(access.struct_layout);
-            if (struct_layout.tag != .struct_) {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "LIR/codegen invariant violated: struct_access expected struct_ layout, got {s} (field_idx={d})",
-                        .{ @tagName(struct_layout.tag), access.field_idx },
-                    );
-                }
-                unreachable;
-            }
-
-            const field_offset = ls.getStructFieldOffset(struct_layout.data.struct_.idx, access.field_idx);
-            const field_size = ls.getStructFieldSize(struct_layout.data.struct_.idx, access.field_idx);
-            const field_layout_idx = ls.getStructFieldLayout(struct_layout.data.struct_.idx, access.field_idx);
-
-            return switch (struct_loc) {
-                .stack_str => |sv| blk: {
-                    const field_base = sv + @as(i32, @intCast(field_offset));
-                    break :blk self.fieldLocationFromLayout(field_base, field_size, field_layout_idx);
-                },
-                .stack => |sv| blk: {
-                    const field_base = sv.offset + @as(i32, @intCast(field_offset));
-                    break :blk self.fieldLocationFromLayout(field_base, field_size, field_layout_idx);
-                },
-                .stack_i128 => |sv| blk: {
-                    // Struct itself is i128-sized, field access within it
-                    const field_base = sv + @as(i32, @intCast(field_offset));
-                    break :blk self.fieldLocationFromLayout(field_base, field_size, field_layout_idx);
-                },
-                .general_reg => |reg| blk: {
-                    // Struct in register - only valid for small structs (<=8 bytes)
-                    if (field_size > 8) {
-                        unreachable;
-                    }
-                    if (field_offset == 0) {
-                        break :blk .{ .general_reg = reg };
-                    } else {
-                        const result_reg = try self.allocTempGeneral();
-                        try self.emitLsrImm(.w64, result_reg, reg, @intCast(field_offset * 8));
-                        self.codegen.freeGeneral(reg);
-                        break :blk .{ .general_reg = result_reg };
-                    }
-                },
-                .immediate_i64 => |val| blk: {
-                    if (field_size > 8) {
-                        unreachable;
-                    }
-                    const shifted = val >> @intCast(field_offset * 8);
-                    break :blk .{ .immediate_i64 = shifted };
-                },
-                else => unreachable,
-            };
-        }
-
-        /// Generate code for a zero-argument tag (just discriminant)
-        fn generateZeroArgTag(self: *Self, tag: anytype) Allocator.Error!ValueLocation {
-            const ls = self.layout_store;
-
-            // Get the union layout
-            const union_layout = ls.getLayout(tag.union_layout);
-
-            // For simple tags that fit in a register, just return the discriminant
-            if (union_layout.tag == .scalar or union_layout.tag == .zst) {
-                return .{ .immediate_i64 = tag.discriminant };
-            }
-
-            if (union_layout.tag != .tag_union) {
-                // Might be a simple enum represented as a scalar
-                return .{ .immediate_i64 = tag.discriminant };
-            }
-
-            const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
-            const stack_size = tu_data.size;
-
-            // For small unions (single discriminant byte), just return the value
-            if (stack_size <= 8) {
-                return .{ .immediate_i64 = tag.discriminant };
-            }
-
-            // For larger unions, allocate space and store discriminant
-            const base_offset = self.codegen.allocStackSlot(stack_size);
-
-            // Zero out the union space first
-            try self.zeroStackArea(base_offset, stack_size);
-
-            // Store discriminant at its offset
-            const disc_offset = tu_data.discriminant_offset;
-            const disc_size = tu_data.discriminant_size;
-            try self.storeDiscriminant(base_offset + @as(i32, @intCast(disc_offset)), tag.discriminant, disc_size);
-
-            return .{ .stack = .{ .offset = base_offset } };
-        }
-
-        /// Generate code for a tag with payload arguments
-        fn generateTag(self: *Self, tag: anytype) Allocator.Error!ValueLocation {
-            const ls = self.layout_store;
-
-            // Get the union layout
-            const union_layout = ls.getLayout(tag.union_layout);
-            if (union_layout.tag == .scalar or union_layout.tag == .zst) {
-                const arg_exprs = self.store.getExprSpan(tag.args);
-                for (arg_exprs) |arg_expr_id| {
-                    _ = try self.generateExpr(arg_expr_id);
-                }
-                return .{ .immediate_i64 = tag.discriminant };
-            }
-            if (union_layout.tag != .tag_union) {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "LIR/codegen invariant violated: generateTag expected tag_union/scalar/zst layout, got {s}",
-                        .{@tagName(union_layout.tag)},
-                    );
-                }
-                unreachable;
-            }
-
-            const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
-            const stack_size = tu_data.size;
-
-            // Allocate stack space for the tag union
-            const base_offset = self.codegen.allocStackSlot(stack_size);
-
-            // Zero out the union space first
-            try self.zeroStackArea(base_offset, stack_size);
-
-            // Get the variant's payload layout to determine correct sizes
-            const variants = ls.getTagUnionVariants(tu_data);
-            const variant_payload_layout: ?layout.Idx = if (tag.discriminant < variants.len) blk: {
-                break :blk variants.get(tag.discriminant).payload_layout;
-            } else null;
-            // Get argument expressions and store them as payload
-            const arg_exprs = self.store.getExprSpan(tag.args);
-            if (arg_exprs.len == 1) {
-                // Single argument: the payload layout directly tells us the size
-                const arg_loc = try self.generateExpr(arg_exprs[0]);
-                const payload_size: u32 = if (variant_payload_layout) |pl| blk: {
-                    const pl_val = ls.getLayout(pl);
-                    break :blk ls.layoutSizeAlign(pl_val).size;
-                } else self.valueSizeFromLoc(arg_loc);
-                try self.copyBytesToStackOffset(base_offset, arg_loc, payload_size);
-            } else {
-                // Multiple arguments: use the variant's payload tuple layout to get
-                // field offsets and sizes. This correctly handles boxed/recursive types
-                // and types larger than 8 bytes (e.g. List=24, Str=24, i128=16).
-                const payload_tuple = if (variant_payload_layout) |pl| blk: {
-                    const pl_val = ls.getLayout(pl);
-                    break :blk if (pl_val.tag == .struct_) pl_val.data.struct_.idx else null;
-                } else null;
-
-                for (arg_exprs, 0..) |arg_expr_id, arg_i| {
-                    const arg_loc = try self.generateExpr(arg_expr_id);
-                    const elem_offset: i32 = if (payload_tuple) |tuple_idx|
-                        @intCast(ls.getStructFieldOffsetByOriginalIndex(tuple_idx, @intCast(arg_i)))
-                    else
-                        @as(i32, @intCast(arg_i)) * 8;
-                    const elem_size: u32 = if (payload_tuple) |tuple_idx| blk: {
-                        const elem_layout = ls.getStructFieldLayoutByOriginalIndex(tuple_idx, @intCast(arg_i));
-                        const elem_layout_val = ls.getLayout(elem_layout);
-                        break :blk ls.layoutSizeAlign(elem_layout_val).size;
-                    } else self.valueSizeFromLoc(arg_loc);
-                    try self.copyBytesToStackOffset(base_offset + elem_offset, arg_loc, elem_size);
-                }
-            }
-
-            // Store discriminant at its offset
-            const disc_offset = tu_data.discriminant_offset;
-            const disc_size = tu_data.discriminant_size;
-            try self.storeDiscriminant(base_offset + @as(i32, @intCast(disc_offset)), tag.discriminant, disc_size);
-
-            return .{ .stack = .{ .offset = base_offset } };
-        }
-
-        /// Copy a value to a stack offset
-        fn copyValueToStackOffset(self: *Self, offset: i32, loc: ValueLocation) Allocator.Error!void {
-            switch (loc) {
-                .immediate_i64 => |val| {
-                    const reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(reg, val);
-                    try self.codegen.emitStoreStack(.w64, offset, reg);
-                    self.codegen.freeGeneral(reg);
-                },
-                .general_reg => |reg| {
-                    try self.codegen.emitStoreStack(.w64, offset, reg);
-                },
-                .stack => |s| {
-                    const src_offset = s.offset;
-                    const reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadStack(.w64, reg, src_offset);
-                    try self.codegen.emitStoreStack(.w64, offset, reg);
-                    self.codegen.freeGeneral(reg);
-                },
-                .stack_i128 => |src_offset| {
-                    // Copy 16 bytes
-                    const reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadStack(.w64, reg, src_offset);
-                    try self.codegen.emitStoreStack(.w64, offset, reg);
-                    try self.codegen.emitLoadStack(.w64, reg, src_offset + 8);
-                    try self.codegen.emitStoreStack(.w64, offset + 8, reg);
-                    self.codegen.freeGeneral(reg);
-                },
-                .immediate_i128 => |val| {
-                    const low: u64 = @truncate(@as(u128, @bitCast(val)));
-                    const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                    const reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(reg, @bitCast(low));
-                    try self.codegen.emitStoreStack(.w64, offset, reg);
-                    try self.codegen.emitLoadImm(reg, @bitCast(high));
-                    try self.codegen.emitStoreStack(.w64, offset + 8, reg);
-                    self.codegen.freeGeneral(reg);
-                },
-                .float_reg => |reg| {
-                    try self.codegen.emitStoreStackF64(offset, reg);
-                },
-                .immediate_f64 => |val| {
-                    const bits: u64 = @bitCast(val);
-                    const reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(reg, @bitCast(bits));
-                    try self.codegen.emitStoreStack(.w64, offset, reg);
-                    self.codegen.freeGeneral(reg);
-                },
-                .stack_str => |src_offset| {
-                    // Copy 24-byte RocStr struct
-                    const reg = try self.allocTempGeneral();
-                    // Copy ptr/data (first 8 bytes)
-                    try self.codegen.emitLoadStack(.w64, reg, src_offset);
-                    try self.codegen.emitStoreStack(.w64, offset, reg);
-                    // Copy len (second 8 bytes)
-                    try self.codegen.emitLoadStack(.w64, reg, src_offset + 8);
-                    try self.codegen.emitStoreStack(.w64, offset + 8, reg);
-                    // Copy capacity/flags (third 8 bytes)
-                    try self.codegen.emitLoadStack(.w64, reg, src_offset + 16);
-                    try self.codegen.emitStoreStack(.w64, offset + 16, reg);
-                    self.codegen.freeGeneral(reg);
-                },
-                .list_stack => |list_info| {
-                    // Copy 24-byte list struct
-                    const reg = try self.allocTempGeneral();
-                    // Copy ptr (first 8 bytes)
-                    try self.codegen.emitLoadStack(.w64, reg, list_info.struct_offset);
-                    try self.codegen.emitStoreStack(.w64, offset, reg);
-                    // Copy len (second 8 bytes)
-                    try self.codegen.emitLoadStack(.w64, reg, list_info.struct_offset + 8);
-                    try self.codegen.emitStoreStack(.w64, offset + 8, reg);
-                    // Copy capacity (third 8 bytes)
-                    try self.codegen.emitLoadStack(.w64, reg, list_info.struct_offset + 16);
-                    try self.codegen.emitStoreStack(.w64, offset + 16, reg);
-                    self.codegen.freeGeneral(reg);
-                },
-                .noreturn => unreachable,
-            }
-        }
-        /// Copy a specific number of bytes from a value location to a stack offset
-        /// This uses the layout-determined size rather than inferring from ValueLocation type
-        fn copyBytesToStackOffset(self: *Self, dest_offset: i32, loc: ValueLocation, size: u32) Allocator.Error!void {
-            // Handle ZST (zero-sized types) - nothing to copy
-            if (size == 0) {
-                return;
-            }
-
-            switch (loc) {
-                .immediate_i64 => |val| {
-                    const reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(reg, val);
-                    switch (size) {
-                        1 => try self.emitStoreStackW8(dest_offset, reg),
-                        2 => try self.emitStoreStackW16(dest_offset, reg),
-                        4 => try self.codegen.emitStoreStack(.w32, dest_offset, reg),
-                        8 => try self.codegen.emitStoreStack(.w64, dest_offset, reg),
-                        16 => {
-                            // i64 being stored as Dec (i128) - sign extend
-                            try self.codegen.emitStoreStack(.w64, dest_offset, reg);
-                            // Store sign extension in high part
-                            const high: i64 = if (val < 0) -1 else 0;
-                            try self.codegen.emitLoadImm(reg, high);
-                            try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
-                        },
-                        roc_list_size => {
-                            // Empty list (immediate 0) being stored as a roc_list_size-byte list struct
-                            // An empty list has ptr=0, len=0, capacity=0 (all zeros)
-                            std.debug.assert(val == 0);
-                            try self.codegen.emitStoreStack(.w64, dest_offset, reg);
-                            try self.codegen.emitStoreStack(.w64, dest_offset + target_ptr_size, reg);
-                            try self.codegen.emitStoreStack(.w64, dest_offset + 2 * target_ptr_size, reg);
-                        },
-                        else => unreachable,
-                    }
-                    self.codegen.freeGeneral(reg);
-                    return;
-                },
-                .immediate_i128 => |val| {
-                    const low: u64 = @truncate(@as(u128, @bitCast(val)));
-                    const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                    const reg = try self.allocTempGeneral();
-
-                    if (size == 16) {
-                        // Full i128 copy
-                        try self.codegen.emitLoadImm(reg, @bitCast(low));
-                        try self.codegen.emitStoreStack(.w64, dest_offset, reg);
-                        try self.codegen.emitLoadImm(reg, @bitCast(high));
-                        try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
-                    } else if (size == 8) {
-                        // Truncate to i64 - just store the low 64 bits
-                        try self.codegen.emitLoadImm(reg, @bitCast(low));
-                        try self.codegen.emitStoreStack(.w64, dest_offset, reg);
-                    } else if (size == 4) {
-                        // Truncate to i32
-                        const low32: u32 = @truncate(low);
-                        try self.codegen.emitLoadImm(reg, @as(i64, @bitCast(@as(u64, low32))));
-                        try self.codegen.emitStoreStack(.w32, dest_offset, reg);
-                    } else {
-                        unreachable; // Unsupported size for i128 truncation
-                    }
-
-                    self.codegen.freeGeneral(reg);
-                    return;
-                },
-                .immediate_f64 => |val| {
-                    const reg = try self.allocTempGeneral();
-                    if (size == 4) {
-                        const f32_val: f32 = @floatCast(val);
-                        const bits: u32 = @bitCast(f32_val);
-                        try self.codegen.emitLoadImm(reg, @as(i64, bits));
-                        try self.codegen.emitStoreStack(.w32, dest_offset, reg);
-                    } else if (size == 8) {
-                        try self.codegen.emitLoadImm(reg, @bitCast(@as(u64, @bitCast(val))));
-                        try self.codegen.emitStoreStack(.w64, dest_offset, reg);
-                    } else {
-                        unreachable;
-                    }
-                    self.codegen.freeGeneral(reg);
-                    return;
-                },
-                .float_reg => |freg| {
-                    if (size == 4) {
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.fcvtFloatFloat(.single, freg, .double, freg);
-                            const bits_reg = try self.allocTempGeneral();
-                            try self.codegen.emit.fmovGenFromFloat(.single, bits_reg, freg);
-                            try self.codegen.emitStoreStack(.w32, dest_offset, bits_reg);
-                            self.codegen.freeGeneral(bits_reg);
-                        } else {
-                            try self.codegen.emit.cvtsd2ssRegReg(freg, freg);
-                            try self.codegen.emit.movssMemReg(.RBP, dest_offset, freg);
-                        }
-                    } else if (size == 8) {
-                        try self.codegen.emitStoreStackF64(dest_offset, freg);
-                    } else {
-                        unreachable;
-                    }
-                    return;
-                },
-                .general_reg => |reg| {
-                    if (size <= 8) {
-                        switch (size) {
-                            1 => try self.emitStoreStackW8(dest_offset, reg),
-                            2 => try self.emitStoreStackW16(dest_offset, reg),
-                            4 => try self.codegen.emitStoreStack(.w32, dest_offset, reg),
-                            else => try self.codegen.emitStoreStack(.w64, dest_offset, reg),
-                        }
-                    } else {
-                        // Large values (> 8 bytes) shouldn't normally be in a general_reg.
-                        // Just store the first 8 bytes.
-                        try self.codegen.emitStoreStack(.w64, dest_offset, reg);
-                    }
-                    return;
-                },
-                .stack, .stack_str, .stack_i128, .list_stack => {
-                    // Handle stack locations below
-                },
-                else => {
-                    // For other locations, fall through to copyValueToStackOffset
-                    try self.copyValueToStackOffset(dest_offset, loc);
-                    return;
-                },
-            }
-
-            // Get the source offset for stack locations
-            const src_offset: i32 = switch (loc) {
-                .stack => |s| s.offset,
-                .stack_str => |off| off,
-                .stack_i128 => |off| off,
-                .list_stack => |info| info.struct_offset,
-                else => unreachable,
-            };
-
-            // Copy in 8-byte chunks
-            const reg = try self.allocTempGeneral();
-            var copied: u32 = 0;
-            while (copied + 8 <= size) {
-                try self.codegen.emitLoadStack(.w64, reg, src_offset + @as(i32, @intCast(copied)));
-                try self.codegen.emitStoreStack(.w64, dest_offset + @as(i32, @intCast(copied)), reg);
-                copied += 8;
-            }
-            // Handle remaining bytes with appropriately-sized loads/stores
-            if (size - copied >= 4) {
-                try self.codegen.emitLoadStack(.w32, reg, src_offset + @as(i32, @intCast(copied)));
-                try self.codegen.emitStoreStack(.w32, dest_offset + @as(i32, @intCast(copied)), reg);
-                copied += 4;
-            }
-            if (size - copied >= 2) {
-                try self.emitLoadStackW16(reg, src_offset + @as(i32, @intCast(copied)));
-
-                try self.emitStoreStackW16(dest_offset + @as(i32, @intCast(copied)), reg);
-                copied += 2;
-            }
-            if (size - copied >= 1) {
-                try self.emitLoadStackW8(reg, src_offset + @as(i32, @intCast(copied)));
-
-                try self.emitStoreStackW8(dest_offset + @as(i32, @intCast(copied)), reg);
-            }
-            self.codegen.freeGeneral(reg);
-        }
-
-        /// Load from base+offset into register (wraps ldrRegMemSoff / movRegMem)
-        fn emitLoad(self: *Self, comptime width: anytype, dst: GeneralReg, base_reg: GeneralReg, offset: i32) !void {
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                try self.codegen.emit.ldrRegMemSoff(width, dst, base_reg, offset);
-            } else {
-                try self.codegen.emit.movRegMem(width, dst, base_reg, offset);
-            }
-        }
-
-        /// Store register to base+offset (wraps strRegMemSoff / movMemReg)
-        fn emitStore(self: *Self, comptime width: anytype, base_reg: GeneralReg, offset: i32, src: GeneralReg) !void {
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                try self.codegen.emit.strRegMemSoff(width, src, base_reg, offset);
-            } else {
-                try self.codegen.emit.movMemReg(width, base_reg, offset, src);
-            }
-        }
-
-        /// Load byte (8-bit, zero-extended) from base+offset into register
-        fn emitLoadW8(self: *Self, dst: GeneralReg, base_reg: GeneralReg, offset: i32) !void {
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                if (offset >= -256 and offset <= 255) {
-                    try self.codegen.emit.ldurbRegMem(dst, base_reg, @intCast(offset));
-                } else {
-                    const addr_reg: GeneralReg = if (base_reg == .IP0 or dst == .IP0) .IP1 else .IP0;
-                    try self.codegen.emit.movRegImm64(addr_reg, @bitCast(@as(i64, offset)));
-                    try self.codegen.emit.addRegRegReg(.w64, addr_reg, base_reg, addr_reg);
-                    try self.codegen.emit.ldrbRegMem(dst, addr_reg, 0);
-                }
-            } else {
-                try self.codegen.emit.movzxBRegMem(dst, base_reg, offset);
-            }
-        }
-
-        /// Load halfword (16-bit, zero-extended) from base+offset into register
-        fn emitLoadW16(self: *Self, dst: GeneralReg, base_reg: GeneralReg, offset: i32) !void {
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                if (offset >= -256 and offset <= 255) {
-                    try self.codegen.emit.ldurhRegMem(dst, base_reg, @intCast(offset));
-                } else {
-                    const addr_reg: GeneralReg = if (base_reg == .IP0 or dst == .IP0) .IP1 else .IP0;
-                    try self.codegen.emit.movRegImm64(addr_reg, @bitCast(@as(i64, offset)));
-                    try self.codegen.emit.addRegRegReg(.w64, addr_reg, base_reg, addr_reg);
-                    try self.codegen.emit.ldrhRegMem(dst, addr_reg, 0);
-                }
-            } else {
-                try self.codegen.emit.movzxWRegMem(dst, base_reg, offset);
-            }
-        }
-
-        /// Store byte (8-bit) from register to base+offset
-        fn emitStoreW8(self: *Self, base_reg: GeneralReg, offset: i32, src: GeneralReg) !void {
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                if (offset >= -256 and offset <= 255) {
-                    try self.codegen.emit.sturbRegMem(src, base_reg, @intCast(offset));
-                } else {
-                    const addr_reg: GeneralReg = if (base_reg == .IP0 or src == .IP0) .IP1 else .IP0;
-                    try self.codegen.emit.movRegImm64(addr_reg, @bitCast(@as(i64, offset)));
-                    try self.codegen.emit.addRegRegReg(.w64, addr_reg, base_reg, addr_reg);
-                    try self.codegen.emit.strbRegMem(src, addr_reg, 0);
-                }
-            } else {
-                try self.codegen.emit.movMemReg(.w8, base_reg, offset, src);
-            }
-        }
-
-        /// Store halfword (16-bit) from register to base+offset
-        fn emitStoreW16(self: *Self, base_reg: GeneralReg, offset: i32, src: GeneralReg) !void {
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                if (offset >= -256 and offset <= 255) {
-                    try self.codegen.emit.sturhRegMem(src, base_reg, @intCast(offset));
-                } else {
-                    const addr_reg: GeneralReg = if (base_reg == .IP0 or src == .IP0) .IP1 else .IP0;
-                    try self.codegen.emit.movRegImm64(addr_reg, @bitCast(@as(i64, offset)));
-                    try self.codegen.emit.addRegRegReg(.w64, addr_reg, base_reg, addr_reg);
-                    try self.codegen.emit.strhRegMem(src, addr_reg, 0);
-                }
-            } else {
-                try self.codegen.emit.movMemReg(.w16, base_reg, offset, src);
-            }
-        }
-
-        /// dst = src1 + src2 (wraps addRegRegReg / addRegReg)
-        /// On x86_64, dst must equal src1 (2-operand form).
-        fn emitAddRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
-            std.debug.assert(arch == .aarch64 or arch == .aarch64_be or dst == src1);
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                try self.codegen.emit.addRegRegReg(width, dst, src1, src2);
-            } else {
-                try self.codegen.emit.addRegReg(width, dst, src2);
-            }
-        }
-
-        /// dst = src1 * src2 (wraps mulRegRegReg / imulRegReg)
-        /// On x86_64, dst must equal src1 (2-operand form).
-        fn emitMulRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
-            std.debug.assert(arch == .aarch64 or arch == .aarch64_be or dst == src1);
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                try self.codegen.emit.mulRegRegReg(width, dst, src1, src2);
-            } else {
-                try self.codegen.emit.imulRegReg(width, dst, src2);
-            }
-        }
-
-        /// dst = src1 - src2 (wraps subRegRegReg / subRegReg)
-        /// On x86_64, dst must equal src1 (2-operand form).
-        fn emitSubRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
-            std.debug.assert(arch == .aarch64 or arch == .aarch64_be or dst == src1);
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                try self.codegen.emit.subRegRegReg(width, dst, src1, src2);
-            } else {
-                try self.codegen.emit.subRegReg(width, dst, src2);
-            }
-        }
-
-        /// dst = src1 & src2 (wraps andRegRegReg / andRegReg)
-        /// On x86_64, dst must equal src1 (2-operand form).
-        fn emitAndRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
-            std.debug.assert(arch == .aarch64 or arch == .aarch64_be or dst == src1);
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                try self.codegen.emit.andRegRegReg(width, dst, src1, src2);
-            } else {
-                try self.codegen.emit.andRegReg(width, dst, src2);
-            }
-        }
-
-        /// Shift left by immediate (wraps lslRegRegImm / shlRegImm8)
-        fn emitShlImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: u8) !void {
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                try self.codegen.emit.lslRegRegImm(width, dst, src, @intCast(amount));
-            } else {
-                if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
-                try self.codegen.emit.shlRegImm8(width, dst, amount);
-            }
-        }
-
-        /// Logical shift right by immediate (wraps lsrRegRegImm / shrRegImm8)
-        fn emitLsrImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: u8) !void {
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                try self.codegen.emit.lsrRegRegImm(width, dst, src, @intCast(amount));
-            } else {
-                if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
-                try self.codegen.emit.shrRegImm8(width, dst, amount);
-            }
-        }
-
-        /// Arithmetic shift right by immediate (wraps asrRegRegImm / sarRegImm8)
-        fn emitAsrImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: u8) !void {
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                try self.codegen.emit.asrRegRegImm(width, dst, src, @intCast(amount));
-            } else {
-                if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
-                try self.codegen.emit.sarRegImm8(width, dst, amount);
-            }
-        }
-
-        /// Shift left by register (wraps lslRegReg / shlRegCl)
-        fn emitShlReg(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) !void {
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                try self.codegen.emit.lslRegReg(width, dst, src, amount);
-            } else {
-                try self.emitShiftRegX86(width, dst, src, amount, .shl);
-            }
-        }
-
-        /// Logical shift right by register (wraps lsrRegReg / shrRegCl)
-        fn emitLsrReg(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) !void {
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                try self.codegen.emit.lsrRegReg(width, dst, src, amount);
-            } else {
-                try self.emitShiftRegX86(width, dst, src, amount, .shr);
-            }
-        }
-
-        /// Arithmetic shift right by register (wraps asrRegReg / sarRegCl)
-        fn emitAsrReg(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) !void {
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                try self.codegen.emit.asrRegReg(width, dst, src, amount);
-            } else {
-                try self.emitShiftRegX86(width, dst, src, amount, .sar);
-            }
-        }
-
-        const ShiftOp = enum { shl, shr, sar };
-
-        /// x86_64 shift by register, handling the RCX constraint correctly.
-        /// x86_64 shifts require the amount in CL (part of RCX). When dst==RCX,
-        /// we must shift into R11 (scratch) and move the result back.
-        fn emitShiftRegX86(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: GeneralReg, comptime op: ShiftOp) !void {
-            if (dst == .RCX) {
-                // RCX is both destination and shift-amount register.
-                // Shift into R11 (scratch), then move result to RCX.
-                if (src == .RCX and amount == .R11) {
-                    // Circular: need RCX→R11 (src) and R11→RCX (amount). Swap.
-                    try self.codegen.emit.xchgRegReg(.w64, .RCX, .R11);
-                } else if (amount == .R11) {
-                    // amount is in R11 — must move to RCX before we use R11 for src
-                    try self.codegen.emit.movRegReg(.w64, .RCX, amount);
-                    if (src != .R11) try self.codegen.emit.movRegReg(width, .R11, src);
-                } else {
-                    // Safe: amount is not R11, so moving src to R11 won't clobber amount
-                    if (src != .R11) try self.codegen.emit.movRegReg(width, .R11, src);
-                    if (amount != .RCX) try self.codegen.emit.movRegReg(.w64, .RCX, amount);
-                }
-                // R11 has value to shift, CL has shift amount
-                switch (op) {
-                    .shl => try self.codegen.emit.shlRegCl(width, .R11),
-                    .shr => try self.codegen.emit.shrRegCl(width, .R11),
-                    .sar => try self.codegen.emit.sarRegCl(width, .R11),
-                }
-                try self.codegen.emit.movRegReg(width, .RCX, .R11);
-            } else {
-                // dst is not RCX — safe to shift in-place.
-                // Note: if src==RCX, the mov dst←src happens before RCX is overwritten with amount.
-                if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
-                if (amount != .RCX) try self.codegen.emit.movRegReg(.w64, .RCX, amount);
-                switch (op) {
-                    .shl => try self.codegen.emit.shlRegCl(width, dst),
-                    .shr => try self.codegen.emit.shrRegCl(width, dst),
-                    .sar => try self.codegen.emit.sarRegCl(width, dst),
-                }
-            }
-        }
-
-        /// Unsigned saturating subtraction: dst = max(a - b, 0)
-        fn emitSaturatingSub(self: *Self, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                // cmp a, b; sub dst, a, b; csel dst, dst, xzr, cs
-                // cs (carry set) = no borrow = a >= b
-                try self.codegen.emit.cmpRegReg(.w64, a, b);
-                try self.codegen.emit.subRegRegReg(.w64, dst, a, b);
-                try self.codegen.emit.csel(.w64, dst, dst, .ZRSP, .cs);
-            } else {
-                // mov dst, a; sub dst, b; jae skip; xor dst, dst; skip:
-                // Uses a conditional jump instead of cmov to avoid allocating a zero register.
-                if (dst != a) try self.codegen.emit.movRegReg(.w64, dst, a);
-                try self.codegen.emit.subRegReg(.w64, dst, b);
-                const patch_loc = try self.codegen.emitCondJump(.above_or_equal);
-                try self.codegen.emit.xorRegReg(.w64, dst, dst);
-                self.codegen.patchJump(patch_loc, self.codegen.currentOffset());
-            }
-        }
-
-        /// Add immediate to register (wraps addRegRegImm12 / addImm). Always 64-bit.
-        fn emitAddImm(self: *Self, dst: GeneralReg, src: GeneralReg, imm: i32) !void {
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                try self.codegen.emit.addRegRegImm12(.w64, dst, src, @intCast(imm));
-            } else {
-                if (dst != src) try self.codegen.emit.movRegReg(.w64, dst, src);
-                try self.codegen.emit.addImm(dst, imm);
-            }
-        }
-
-        /// Add an arbitrary signed immediate to a pointer register.
-        /// Falls back to loading the immediate into a scratch register when the
-        /// architecture-specific compact immediate encoding cannot represent it.
-        fn emitAddPtrImmAny(self: *Self, dst: GeneralReg, src: GeneralReg, imm: i32) !void {
-            if (imm == 0) {
-                if (dst != src) try self.codegen.emit.movRegReg(.w64, dst, src);
-                return;
-            }
-
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                if (imm > 0 and imm <= 4095) {
-                    try self.codegen.emit.addRegRegImm12(.w64, dst, src, @intCast(imm));
-                    return;
-                }
-
-                const scratch = try self.allocTempGeneral();
-                defer self.codegen.freeGeneral(scratch);
-                try self.codegen.emit.movRegImm64(scratch, @bitCast(@as(i64, imm)));
-                try self.codegen.emit.addRegRegReg(.w64, dst, src, scratch);
-                return;
-            }
-
-            try self.emitAddImm(dst, src, imm);
-        }
-
-        /// Subtract immediate from register (wraps subRegRegImm12 / subRegImm32)
-        fn emitSubImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, imm: i32) !void {
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                try self.codegen.emit.subRegRegImm12(width, dst, src, @intCast(imm));
-            } else {
-                if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
-                try self.codegen.emit.subRegImm32(width, dst, imm);
-            }
-        }
-
-        /// XOR immediate (wraps eorRegRegImm / xorRegImm8)
-        fn emitXorImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, imm: u8) !void {
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                try self.codegen.emit.eorRegRegImm(width, dst, src, @as(u64, imm));
-            } else {
-                if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
-                try self.codegen.emit.xorRegImm8(width, dst, @intCast(imm));
-            }
-        }
-
-        /// Store register to ptr_reg+byte_offset using unsigned offset addressing.
-        /// On aarch64, scales the byte offset to element-sized units for strRegMemUoff.
-        /// On x86_64, uses movMemReg with the byte offset directly.
-        fn emitStoreToPtr(self: *Self, comptime width: anytype, src: GeneralReg, ptr_reg: GeneralReg, byte_offset: i32) !void {
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                const shift = comptime switch (width) {
-                    .w64 => @as(u5, 3),
-                    .w32 => @as(u5, 2),
-                    else => @compileError("Use strhRegMem/strbRegMem for .w16/.w8"),
-                };
-                const unsigned_offset: u32 = @intCast(byte_offset);
-                std.debug.assert(@rem(unsigned_offset, @as(u32, 1) << shift) == 0);
-                try self.codegen.emit.strRegMemUoff(width, src, ptr_reg, @intCast(unsigned_offset >> shift));
-            } else {
-                try self.codegen.emit.movMemReg(width, ptr_reg, byte_offset, src);
-            }
-        }
-
-        /// Store byte (8-bit) to stack slot (wraps emitStoreStackByte / emitStoreStack(.w8))
-        fn emitStoreStackW8(self: *Self, offset: i32, src: GeneralReg) !void {
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                try self.codegen.emitStoreStackByte(offset, src);
-            } else {
-                try self.codegen.emitStoreStack(.w8, offset, src);
-            }
-        }
-
-        /// Store halfword (16-bit) to stack slot (wraps emitStoreStackHalfword / emitStoreStack(.w16))
-        fn emitStoreStackW16(self: *Self, offset: i32, src: GeneralReg) !void {
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                try self.codegen.emitStoreStackHalfword(offset, src);
-            } else {
-                try self.codegen.emitStoreStack(.w16, offset, src);
-            }
-        }
-
-        /// Load byte (zero-extended to 64-bit) from stack slot
-        /// (wraps emitLoadStackByte / movzxBRegMem)
-        fn emitLoadStackW8(self: *Self, dst: GeneralReg, offset: i32) !void {
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                try self.codegen.emitLoadStackByte(dst, offset);
-            } else {
-                try self.codegen.emit.movzxBRegMem(dst, frame_ptr, offset);
-            }
-        }
-
-        /// Load halfword (zero-extended to 64-bit) from stack slot
-        /// (wraps emitLoadStackHalfword / movzxWRegMem)
-        fn emitLoadStackW16(self: *Self, dst: GeneralReg, offset: i32) !void {
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                try self.codegen.emitLoadStackHalfword(dst, offset);
-            } else {
-                try self.codegen.emit.movzxWRegMem(dst, frame_ptr, offset);
-            }
-        }
-
-        /// Set register to 1 if condition is true, 0 otherwise (wraps cset / setcc+mask)
-        fn emitSetCond(self: *Self, dst: GeneralReg, cond: Condition) !void {
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                try self.codegen.emit.cset(.w64, dst, cond);
-            } else {
-                try self.codegen.emit.setcc(cond, dst);
-                try self.codegen.emit.andRegImm32(dst, 0xFF);
-            }
-        }
-
-        /// Load effective address of frame_ptr + offset into dst register
-        /// (wraps addRegRegImm12 with range check / leaRegMem)
-        fn emitLeaStack(self: *Self, dst: GeneralReg, offset: i32) !void {
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                if (offset >= 0 and offset <= 4095) {
-                    try self.codegen.emit.addRegRegImm12(.w64, dst, frame_ptr, @intCast(offset));
-                } else {
-                    try self.codegen.emitLoadImm(dst, @intCast(offset));
-                    try self.codegen.emit.addRegRegReg(.w64, dst, frame_ptr, dst);
-                }
-            } else {
-                try self.codegen.emit.leaRegMem(dst, frame_ptr, offset);
-            }
-        }
-
-        /// Adjust stack pointer by adding immediate (for cleaning up spilled args after calls)
-        fn emitAddStackPtr(self: *Self, imm: i32) !void {
-            if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                try self.codegen.emit.addRegRegImm12(.w64, stack_ptr, stack_ptr, @intCast(imm));
-            } else {
-                try self.codegen.emit.addRegImm32(.w64, stack_ptr, imm);
-            }
-        }
-
-        /// Copy `size` bytes from src_base+src_offset to dst_base+dst_offset using 8-byte chunks.
-        /// For sizes <= 8, does a single 8-byte load/store.
-        /// For sizes > 8 that are not multiples of 8, re-copies the final 8 bytes at an
-        /// overlapping offset to avoid over-reading the source.
-        fn copyChunked(self: *Self, temp_reg: GeneralReg, src_base: GeneralReg, src_offset: i32, dst_base: GeneralReg, dst_offset: i32, size: u32) Allocator.Error!void {
-            std.debug.assert(size > 0);
-            if (size == 8) {
-                try self.emitLoad(.w64, temp_reg, src_base, src_offset);
-                try self.emitStore(.w64, dst_base, dst_offset, temp_reg);
-                return;
-            }
-            if (size < 8) {
-                // Use exact-sized operations to avoid writing past the destination.
-                // At most 3 load/store pairs for sizes 1-7.
-                var remaining = size;
-                var off: i32 = 0;
-                if (remaining >= 4) {
-                    try self.emitLoad(.w32, temp_reg, src_base, src_offset + off);
-                    try self.emitStore(.w32, dst_base, dst_offset + off, temp_reg);
-                    remaining -= 4;
-                    off += 4;
-                }
-                if (remaining >= 2) {
-                    try self.emitLoadW16(temp_reg, src_base, src_offset + off);
-                    try self.emitStoreW16(dst_base, dst_offset + off, temp_reg);
-                    remaining -= 2;
-                    off += 2;
-                }
-                if (remaining >= 1) {
-                    try self.emitLoadW8(temp_reg, src_base, src_offset + off);
-                    try self.emitStoreW8(dst_base, dst_offset + off, temp_reg);
-                }
-                return;
-            }
-            var copied: u32 = 0;
-            while (copied + 8 <= size) : (copied += 8) {
-                const s = src_offset + @as(i32, @intCast(copied));
-                const d = dst_offset + @as(i32, @intCast(copied));
-                try self.emitLoad(.w64, temp_reg, src_base, s);
-                try self.emitStore(.w64, dst_base, d, temp_reg);
-            }
-            // Handle tail: if size is not a multiple of 8, re-copy the last 8 bytes
-            // at an overlapping offset. This is safe because size > 8.
-            if (copied < size) {
-                const tail = @as(i32, @intCast(size - 8));
-                const s = src_offset + tail;
-                const d = dst_offset + tail;
-                try self.emitLoad(.w64, temp_reg, src_base, s);
-                try self.emitStore(.w64, dst_base, d, temp_reg);
-            }
-        }
-
-        /// Zero out a stack area
-        fn zeroStackArea(self: *Self, offset: i32, size: u32) Allocator.Error!void {
-            const reg = try self.allocTempGeneral();
-            try self.codegen.emitLoadImm(reg, 0);
-
-            var remaining = size;
-            var current_offset = offset;
-            while (remaining >= 8) {
-                try self.codegen.emitStoreStack(.w64, current_offset, reg);
-                current_offset += 8;
-                remaining -= 8;
-            }
-            // Handle remaining bytes with appropriately-sized stores
-            if (remaining >= 4) {
-                try self.codegen.emitStoreStack(.w32, current_offset, reg);
-                current_offset += 4;
-                remaining -= 4;
-            }
-            if (remaining >= 2) {
-                try self.emitStoreStackW16(current_offset, reg);
-                current_offset += 2;
-                remaining -= 2;
-            }
-            if (remaining >= 1) {
-                try self.emitStoreStackW8(current_offset, reg);
-            }
-
-            self.codegen.freeGeneral(reg);
-        }
-
-        /// Generate code for a string literal
-        fn generateStrLiteral(self: *Self, str_idx: base.StringLiteral.Idx) Allocator.Error!ValueLocation {
-            const str_bytes = self.store.getString(str_idx);
-
-            // Allocate space on stack for Roc string representation
-            const base_offset = self.codegen.allocStackSlot(roc_str_size);
-
-            if (str_bytes.len < roc_str_size) {
-                // Small string optimization: store inline with length in high bit of last byte
-                // Format: [data..., length | 0x80] where 0x80 marks it as small string
-                var bytes: [roc_str_size]u8 = .{0} ** roc_str_size;
-                @memcpy(bytes[0..str_bytes.len], str_bytes);
-                bytes[small_str_max_len] = @intCast(str_bytes.len | 0x80); // Set high bit to indicate small string
-
-                // Store as 3 x pointer-sized chunks
-                const reg = try self.allocTempGeneral();
-
-                const chunk0: u64 = @bitCast(bytes[0..target_ptr_size].*);
-                try self.codegen.emitLoadImm(reg, @bitCast(chunk0));
-                try self.codegen.emitStoreStack(.w64, base_offset, reg);
-
-                const chunk1: u64 = @bitCast(bytes[target_ptr_size .. 2 * target_ptr_size].*);
-                try self.codegen.emitLoadImm(reg, @bitCast(chunk1));
-                try self.codegen.emitStoreStack(.w64, base_offset + target_ptr_size, reg);
-
-                const chunk2: u64 = @bitCast(bytes[2 * target_ptr_size .. 3 * target_ptr_size].*);
-                try self.codegen.emitLoadImm(reg, @bitCast(chunk2));
-                try self.codegen.emitStoreStack(.w64, base_offset + 2 * target_ptr_size, reg);
-
-                self.codegen.freeGeneral(reg);
-            } else {
-                if (self.generation_mode == .native_execution and self.static_interner != null) {
-                    const interner = self.static_interner.?;
-                    const interned = try interner.internString(str_bytes);
-                    const ptr_reg = try self.allocTempGeneral();
-
-                    try self.codegen.emitLoadImm(ptr_reg, @intCast(@intFromPtr(interned.ptr)));
-                    try self.codegen.emitStoreStack(.w64, base_offset, ptr_reg);
-
-                    try self.codegen.emitLoadImm(ptr_reg, @intCast(interned.len));
-                    try self.codegen.emitStoreStack(.w64, base_offset + 8, ptr_reg);
-                    try self.codegen.emitStoreStack(.w64, base_offset + 16, ptr_reg);
-
-                    self.codegen.freeGeneral(ptr_reg);
-                } else {
-                    // Object-file mode cannot use the in-process static interner directly.
-                    // The final executable does not share the compiler's arena memory, so
-                    // large literals still need the runtime-allocation path here until
-                    // dev object files gain real rodata emission for RocStr payloads.
-                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-                    const fn_addr: usize = @intFromPtr(&allocateWithRefcountC);
-
-                    // Allocate stack slot to save the heap pointer
-                    const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
-
-                    // Allocate string using CallBuilder with automatic R12 handling
-                    // Align up to 8 bytes: tail write below stores a full 8-byte word
-                    const alloc_size = std.mem.alignForward(usize, str_bytes.len, 8);
-                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                    try builder.addImmArg(@intCast(alloc_size));
-                    try builder.addImmArg(1); // byte alignment
-                    try builder.addImmArg(0); // elements_refcounted = false
-                    try builder.addRegArg(roc_ops_reg);
-                    try self.callBuiltin(&builder, fn_addr, .allocate_with_refcount);
-
-                    // Save heap pointer from return register to stack slot
-                    try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
-
-                    // Copy string bytes to heap memory
-                    // Load heap pointer, then copy bytes
-                    const heap_ptr = try self.allocTempGeneral();
-                    try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
-
-                    // Copy string data in 8-byte chunks, then remaining bytes
-                    var remaining: usize = str_bytes.len;
-                    var str_offset: usize = 0;
-                    const temp_reg = try self.allocTempGeneral();
-
-                    while (remaining >= 8) {
-                        const chunk: u64 = @bitCast(str_bytes[str_offset..][0..8].*);
-                        try self.codegen.emitLoadImm(temp_reg, @bitCast(chunk));
-                        try self.emitStore(.w64, heap_ptr, @intCast(str_offset), temp_reg);
-                        str_offset += 8;
-                        remaining -= 8;
-                    }
-
-                    // Handle remaining bytes (1-7 bytes)
-                    if (remaining > 0) {
-                        var last_chunk: u64 = 0;
-                        for (0..remaining) |j| {
-                            last_chunk |= @as(u64, str_bytes[str_offset + j]) << @intCast(j * 8);
-                        }
-                        try self.codegen.emitLoadImm(temp_reg, @bitCast(last_chunk));
-                        // Store partial - for simplicity, store as full 8 bytes (heap has space)
-                        try self.emitStore(.w64, heap_ptr, @intCast(str_offset), temp_reg);
-                    }
-
-                    self.codegen.freeGeneral(temp_reg);
-                    self.codegen.freeGeneral(heap_ptr);
-
-                    // Construct RocStr struct on stack: {pointer, length, capacity}
-                    // Reload heap pointer for struct construction
-                    const ptr_reg = try self.allocTempGeneral();
-                    try self.emitLoad(.w64, ptr_reg, frame_ptr, heap_ptr_slot);
-
-                    // Store pointer (first 8 bytes)
-                    try self.codegen.emitStoreStack(.w64, base_offset, ptr_reg);
-
-                    // Store length (second 8 bytes)
-                    try self.codegen.emitLoadImm(ptr_reg, @intCast(str_bytes.len));
-                    try self.codegen.emitStoreStack(.w64, base_offset + 8, ptr_reg);
-
-                    // Store capacity (third 8 bytes) - same as length for immutable strings
-                    // No need to reload, length is still in ptr_reg
-                    try self.codegen.emitStoreStack(.w64, base_offset + 16, ptr_reg);
-
-                    self.codegen.freeGeneral(ptr_reg);
-                }
-            }
-
-            return .{ .stack_str = base_offset };
-        }
-
-        /// Generate code for a for loop over a list
-        /// Iterates over each element, binding it to the pattern and executing the body
-        fn generateForLoop(self: *Self, for_loop: anytype) Allocator.Error!ValueLocation {
-            // Get the list location
-            const list_loc = try self.generateExpr(for_loop.list_expr);
-
-            // Handle empty list represented as immediate 0
-            // Empty lists have null pointer and 0 length, so the loop body never executes
-            if (list_loc == .immediate_i64 and list_loc.immediate_i64 == 0) {
-                // Empty list - loop executes 0 times, just return unit
-                return .{ .immediate_i64 = 0 };
-            }
-
-            // Get list pointer and length
-            const list_base: i32 = switch (list_loc) {
-                .stack => |s| s.offset,
-                .stack_str => |off| off,
-                .list_stack => |list_info| list_info.struct_offset,
-                else => unreachable,
-            };
-
-            // Get element layout and size from LIR.
-            const ls = self.layout_store;
-            if (builtin.mode == .Debug) {
-                if (@intFromEnum(for_loop.elem_layout) >= ls.layouts.len()) {
-                    std.debug.panic(
-                        "LIR/codegen invariant violated: for_loop.elem_layout out of bounds ({d} >= {d})",
-                        .{ @intFromEnum(for_loop.elem_layout), ls.layouts.len() },
-                    );
-                }
-
-                const list_layout_idx = self.exprLayout(for_loop.list_expr);
-                const list_layout = ls.getLayout(list_layout_idx);
-                switch (list_layout.tag) {
-                    .list => {
-                        if (list_layout.data.list != for_loop.elem_layout) {
-                            std.debug.panic(
-                                "LIR/codegen invariant violated: for_loop elem layout mismatch (loop={d}, list={d})",
-                                .{ @intFromEnum(for_loop.elem_layout), @intFromEnum(list_layout.data.list) },
-                            );
-                        }
-                    },
-                    .list_of_zst => {
-                        const elem_size = ls.layoutSizeAlign(ls.getLayout(for_loop.elem_layout)).size;
-                        if (elem_size != 0) {
-                            std.debug.panic(
-                                "LIR/codegen invariant violated: list_of_zst used with non-ZST for_loop elem layout {d}",
-                                .{@intFromEnum(for_loop.elem_layout)},
-                            );
-                        }
-                    },
-                    else => {
-                        std.debug.panic(
-                            "LIR/codegen invariant violated: for_loop list_expr must be list/list_of_zst, got {s}",
-                            .{@tagName(list_layout.tag)},
-                        );
-                    },
-                }
-            }
-
-            const elem_layout = ls.getLayout(for_loop.elem_layout);
-            const elem_size: u32 = ls.layoutSizeAlign(elem_layout).size;
-            // ZST elements (size 0) are valid - they have no data but we still iterate
-            std.debug.assert(elem_size <= 1024 * 1024); // Sanity check: < 1MB
-
-            const is_zst = elem_size == 0;
-
-            // CRITICAL: Store loop state on stack, not in registers!
-            // The loop body may call C functions which clobber caller-saved registers.
-            // We allocate stack slots for: ptr, len, idx (and elem_slot only for non-ZST)
-            const ptr_slot = self.codegen.allocStackSlot(8);
-            const len_slot = self.codegen.allocStackSlot(8);
-            const idx_slot = self.codegen.allocStackSlot(8);
-            // Only allocate element slot for non-ZST elements
-            const elem_slot: i32 = if (is_zst) 0 else self.codegen.allocStackSlot(@intCast(elem_size));
-
-            // Initialize loop state on stack
-            {
-                const temp = try self.allocTempGeneral();
-                // Copy ptr from list struct to ptr_slot
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, temp, .FP, list_base);
-                    try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, ptr_slot);
-                    // Copy len from list struct to len_slot
-                    try self.codegen.emit.ldrRegMemSoff(.w64, temp, .FP, list_base + 8);
-                    try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, len_slot);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, temp, .RBP, list_base);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, ptr_slot, temp);
-                    try self.codegen.emit.movRegMem(.w64, temp, .RBP, list_base + 8);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, len_slot, temp);
-                }
-                // Initialize idx to 0
-                try self.codegen.emitLoadImm(temp, 0);
-                try self.emitStore(.w64, frame_ptr, idx_slot, temp);
-                self.codegen.freeGeneral(temp);
-            }
-
-            // Record loop start position for the backward jump
-            const loop_start = self.codegen.currentOffset();
-
-            // Load idx and len from stack, compare
-            {
-                const idx_reg = try self.allocTempGeneral();
-                const len_reg = try self.allocTempGeneral();
-                try self.emitLoad(.w64, idx_reg, frame_ptr, idx_slot);
-                try self.emitLoad(.w64, len_reg, frame_ptr, len_slot);
-                try self.emitCmpReg(idx_reg, len_reg);
-                self.codegen.freeGeneral(idx_reg);
-                self.codegen.freeGeneral(len_reg);
-            }
-
-            // Jump to end if index >= length (we'll patch this later)
-            const exit_patch = try self.emitJumpIfGreaterOrEqual();
-
-            // Load current element from list[idx] to elem_slot (skip for ZST)
-            // Calculate element address: ptr + idx * elem_size
-            if (!is_zst) {
-                const ptr_reg = try self.allocTempGeneral();
-                const idx_reg = try self.allocTempGeneral();
-                const addr_reg = try self.allocTempGeneral();
-
-                try self.emitLoad(.w64, ptr_reg, frame_ptr, ptr_slot);
-                try self.emitLoad(.w64, idx_reg, frame_ptr, idx_slot);
-
-                try self.codegen.emit.movRegReg(.w64, addr_reg, idx_reg);
-
-                // Multiply by element size
-                if (elem_size != 1) {
-                    const size_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(size_reg, elem_size);
-                    try self.emitMulRegs(.w64, addr_reg, addr_reg, size_reg);
-                    self.codegen.freeGeneral(size_reg);
-                }
-
-                // Add base pointer
-                try self.emitAddRegs(.w64, addr_reg, addr_reg, ptr_reg);
-
-                // Load element to stack slot
-                const temp_reg = try self.allocTempGeneral();
-                if (elem_size <= 8) {
-                    try self.emitLoad(.w64, temp_reg, addr_reg, 0);
-                    try self.emitStore(.w64, frame_ptr, elem_slot, temp_reg);
-                } else {
-                    // For larger elements, copy in 8-byte chunks
-                    try self.copyChunked(temp_reg, addr_reg, 0, frame_ptr, elem_slot, elem_size);
-                }
-                self.codegen.freeGeneral(temp_reg);
-                self.codegen.freeGeneral(addr_reg);
-                self.codegen.freeGeneral(idx_reg);
-                self.codegen.freeGeneral(ptr_reg);
-            }
-
-            // For ZST elements, bind to immediate 0 (no actual data)
-            const elem_loc: ValueLocation = if (is_zst) .{ .immediate_i64 = 0 } else self.stackLocationForLayout(for_loop.elem_layout, elem_slot);
-            try self.bindPattern(for_loop.elem_pattern, elem_loc);
-
-            // Save break patches length before body generation
-            const saved_break_patches_len = self.loop_break_patches.items.len;
-
-            // Execute the body (result is discarded)
-            // NOTE: This may call C functions which clobber all caller-saved registers
-            {
-                _ = try self.generateExpr(for_loop.body);
-            }
-
-            // Increment index (load from stack, increment, store back)
-            {
-                const idx_reg = try self.allocTempGeneral();
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, idx_reg, .FP, idx_slot);
-                    const one_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(one_reg, 1);
-                    try self.codegen.emit.addRegRegReg(.w64, idx_reg, idx_reg, one_reg);
-                    self.codegen.freeGeneral(one_reg);
-                    try self.codegen.emit.strRegMemSoff(.w64, idx_reg, .FP, idx_slot);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, idx_reg, .RBP, idx_slot);
-                    try self.codegen.emit.addRegImm(.w64, idx_reg, 1);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, idx_slot, idx_reg);
-                }
-                self.codegen.freeGeneral(idx_reg);
-            }
-
-            // Jump back to loop start
-            try self.emitJumpBackward(loop_start);
-
-            // Patch the exit jump to point here
-            const loop_exit_offset = self.codegen.currentOffset();
-            self.codegen.patchJump(exit_patch, loop_exit_offset);
-
-            // Patch break jumps to loop exit
-            for (self.loop_break_patches.items[saved_break_patches_len..]) |patch| {
-                self.codegen.patchJump(patch, loop_exit_offset);
-            }
-            self.loop_break_patches.shrinkRetainingCapacity(saved_break_patches_len);
-
-            // For loops return unit (empty record)
-            return .{ .immediate_i64 = 0 };
-        }
-
-        /// Generate code for a while loop
-        /// Executes body while condition is true
-        fn generateWhileLoop(self: *Self, while_loop: anytype) Allocator.Error!ValueLocation {
-            // Record loop start position for the backward jump
-            const loop_start = self.codegen.currentOffset();
-
-            // Evaluate condition
-            const cond_loc = try self.generateExpr(while_loop.cond);
-
-            // Get condition value into a register for comparison
-            const cond_reg = switch (cond_loc) {
-                .immediate_i64 => |val| blk: {
-                    const reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(reg, @intCast(val));
-                    break :blk reg;
-                },
-                .stack => |s| blk: {
-                    const off = s.offset;
-                    const reg = try self.allocTempGeneral();
-                    try self.emitLoad(.w64, reg, frame_ptr, off);
-                    break :blk reg;
-                },
-                .general_reg => |r| blk: {
-                    const reg = try self.allocTempGeneral();
-                    try self.codegen.emit.movRegReg(.w64, reg, r);
-                    break :blk reg;
-                },
-                else => unreachable,
-            };
-
-            // While loop condition is Bool (1 byte). When loaded from a mutable
-            // variable's stack slot, upper bytes may contain uninitialized data.
-            // Mask to the low byte to ensure correct zero-comparison.
-            if (comptime target.toCpuArch() == .aarch64) {
-                const mask_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(mask_reg, 0xFF);
-                try self.codegen.emit.andRegRegReg(.w64, cond_reg, cond_reg, mask_reg);
-                self.codegen.freeGeneral(mask_reg);
-            } else {
-                try self.codegen.emit.andRegImm32(cond_reg, 0xFF);
-            }
-
-            // Compare condition with 0 (false)
-            const zero_reg = try self.allocTempGeneral();
-            try self.codegen.emitLoadImm(zero_reg, 0);
-            try self.emitCmpReg(cond_reg, zero_reg);
-            self.codegen.freeGeneral(zero_reg);
-            self.codegen.freeGeneral(cond_reg);
-
-            // Jump to end if condition is false (equal to 0)
-            const exit_patch = try self.emitJumpIfEqual();
-
-            // Save break patches length before body generation
-            const saved_break_patches_len = self.loop_break_patches.items.len;
-
-            // Execute the body (result is discarded)
-            _ = try self.generateExpr(while_loop.body);
-
-            // Jump back to loop start (to re-evaluate condition)
-            try self.emitJumpBackward(loop_start);
-
-            // Patch the exit jump to point here
-            const loop_exit_offset = self.codegen.currentOffset();
-            self.codegen.patchJump(exit_patch, loop_exit_offset);
-
-            // Patch break jumps to loop exit
-            for (self.loop_break_patches.items[saved_break_patches_len..]) |patch| {
-                self.codegen.patchJump(patch, loop_exit_offset);
-            }
-            self.loop_break_patches.shrinkRetainingCapacity(saved_break_patches_len);
-
-            // While loops return unit (empty record)
-            return .{ .immediate_i64 = 0 };
-        }
-
-        /// Generate code for early return
-        fn generateEarlyReturn(self: *Self, er: anytype) Allocator.Error!ValueLocation {
-            // Generate the return value
-            const value_loc = try self.generateExpr(er.expr);
-
-            // We must be inside deferred-prologue proc compilation: early returns
-            // require the jump-to-epilogue infrastructure that path sets up.
-            const ret_layout = self.early_return_ret_layout orelse unreachable;
-
-            // Zero-sized return: nothing to move, just jump to epilogue
-            if (self.getLayoutSize(ret_layout) == 0) {
-                const patch = try self.codegen.emitJump();
-                try self.early_return_patches.append(self.allocator, patch);
-                return .{ .immediate_i64 = 0 };
-            }
-
-            const return_loc = self.normalizeResultLocForLayout(value_loc, ret_layout);
-            const preserved_return_loc = return_loc;
-
-            // Move the preserved value to the return register (or copy to return pointer)
-            if (self.ret_ptr_slot) |ret_slot| {
-                try self.copyResultToReturnPointer(preserved_return_loc, ret_layout, ret_slot);
-            } else {
-                try self.moveToReturnRegisterWithLayout(preserved_return_loc, ret_layout);
-            }
-            // Emit a jump (will be patched to the epilogue location)
-            const patch = try self.codegen.emitJump();
-            try self.early_return_patches.append(self.allocator, patch);
-            // Return a dummy value — this code is unreachable at runtime
-            return .{ .immediate_i64 = 0 };
-        }
-
-        /// Generate code for break expression (exits enclosing loop)
-        fn generateBreak(self: *Self) Allocator.Error!ValueLocation {
-            // Emit a forward jump (will be patched to loop exit)
-            const patch = try self.codegen.emitJump();
-            try self.loop_break_patches.append(self.allocator, patch);
-            // Return a dummy value — code after break is unreachable
-            return .{ .immediate_i64 = 0 };
-        }
-
-        /// Generate code for dbg expression (prints formatted value via roc_dbg, returns inner value)
-        fn generateDbg(self: *Self, dbg_expr: anytype) Allocator.Error!ValueLocation {
-            // Evaluate the formatted string expression
-            const formatted_loc = try self.generateExpr(dbg_expr.formatted);
-            const str_off = try self.ensureOnStack(formatted_loc, roc_str_size);
-
-            // Call wrapRocDbg(str_bytes, str_len, str_cap, roc_ops)
-            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            try builder.addMemArg(frame_ptr, str_off);
-            try builder.addMemArg(frame_ptr, str_off + 8);
-            try builder.addMemArg(frame_ptr, str_off + 16);
-            try builder.addRegArg(roc_ops_reg);
-            try self.callBuiltin(&builder, @intFromPtr(&wrapRocDbg), .roc_dbg);
-
-            // When the dbg expression's result type is zero-sized (e.g., when dbg
-            // is the last expression in a unit-returning function), the inner value
-            // is not needed as a return value.
-            if (self.getLayoutSize(dbg_expr.result_layout) == 0) {
-                return .{ .immediate_i64 = 0 };
-            }
-
-            // Evaluate and return the original value expression
-            return try self.generateExpr(dbg_expr.expr);
-        }
-
-        /// Generate code for expect expression (assertion)
-        fn generateExpect(self: *Self, expect_expr: anytype) Allocator.Error!ValueLocation {
-            // Evaluate the condition
-            const cond_loc = try self.generateExpr(expect_expr.cond);
-            const cond_reg = try self.ensureInGeneralReg(cond_loc);
-
-            // Check if condition is true (non-zero); if false, abort
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.cmpRegImm12(.w64, cond_reg, 0);
-            } else {
-                try self.codegen.emit.testRegReg(.w8, cond_reg, cond_reg);
-            }
-            self.codegen.freeGeneral(cond_reg);
-
-            // Jump over abort call if condition is true (non-zero)
-            const skip_patch = try self.codegen.emitCondJump(condNotEqual());
-
-            // Condition was false: call roc_crashed via RocOps, then trap.
-            // This path must be terminal even if roc_crashed were to return.
-            try self.emitRocCrash("expect failed");
-            try self.emitTrap();
-
-            // Patch the skip jump to land here
-            self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
-
-            // Evaluate and return the body
-            return try self.generateExpr(expect_expr.body);
-        }
-
-        /// Emit a roc_crashed call via RocOps with a static message.
-        /// Used for runtime_error expressions (dead code paths that should
-        /// never execute, e.g. the Err branch of `?` at the top level).
-        ///
-        /// The message bytes are stored on the stack so that this works in both
-        /// native execution and object file modes (compile-time pointers are
-        /// invalid in the final executable).
-        fn emitRocCrash(self: *Self, msg: []const u8) Allocator.Error!void {
-            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-
-            // Allocate stack space for the message bytes
-            const msg_aligned_size: u32 = std.mem.alignForward(u32, @intCast(msg.len), 8);
-            const msg_slot = self.codegen.allocStackSlot(if (msg_aligned_size == 0) 8 else msg_aligned_size);
-
-            // Allocate a 16-byte stack slot for the RocCrashed struct { utf8_bytes, len }
-            const crashed_slot = self.codegen.allocStackSlot(16);
-
-            {
-                const base_reg = frame_ptr;
-                const tmp = try self.allocTempGeneral();
-
-                // Store message bytes on the stack in 8-byte chunks
-                var offset: u32 = 0;
-                while (offset < msg.len) {
-                    const remaining = msg.len - offset;
-                    if (remaining >= 8) {
-                        const chunk: u64 = @bitCast(msg[offset..][0..8].*);
-                        try self.codegen.emitLoadImm(tmp, @bitCast(chunk));
-                        try self.emitStore(.w64, base_reg, msg_slot + @as(i32, @intCast(offset)), tmp);
-                    } else {
-                        // Handle the last partial chunk byte-by-byte
-                        // Build a zero-padded 8-byte value
-                        var padded: [8]u8 = .{0} ** 8;
-                        @memcpy(padded[0..remaining], msg[offset..][0..remaining]);
-                        const chunk: u64 = @bitCast(padded);
-                        try self.codegen.emitLoadImm(tmp, @bitCast(chunk));
-                        try self.emitStore(.w64, base_reg, msg_slot + @as(i32, @intCast(offset)), tmp);
-                    }
-                    offset += 8;
-                }
-
-                // Store pointer to stack-resident message bytes at RocCrashed offset 0
-                try self.emitLeaStack(tmp, msg_slot);
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.strRegMemSoff(.w64, tmp, base_reg, crashed_slot);
-                } else {
-                    try self.codegen.emit.movMemReg(.w64, base_reg, crashed_slot, tmp);
-                }
-
-                // Store len at offset 8
-                const msg_len_val: i64 = @bitCast(@as(u64, msg.len));
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emitLoadImm(tmp, msg_len_val);
-                    try self.codegen.emit.strRegMemSoff(.w64, tmp, base_reg, crashed_slot + 8);
-                } else {
-                    try self.codegen.emit.movRegImm64(tmp, @bitCast(@as(u64, msg.len)));
-                    try self.codegen.emit.movMemReg(.w64, base_reg, crashed_slot + 8, tmp);
-                }
-
-                // Load roc_crashed fn pointer from RocOps offset 48
-                // Use a register that won't conflict with CallBuilder's SCRATCH_REG
-                const fn_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
-                try self.emitLoad(.w64, fn_ptr_reg, roc_ops_reg, 48);
-
-                // Use CallBuilder for args and call
-                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.addLeaArg(base_reg, crashed_slot);
-                try builder.addMemArg(roc_ops_reg, 0); // env from RocOps offset 0
-                try builder.callReg(fn_ptr_reg);
-
-                self.codegen.freeGeneral(tmp);
-            }
-        }
-
-        /// Emit a hardware trap instruction (ud2 on x86_64, brk on aarch64).
-        /// Used after crash/runtime_error to guarantee the program never continues.
-        fn emitTrap(self: *Self) Allocator.Error!void {
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.brk();
-            } else {
-                try self.codegen.emit.ud2();
-            }
-        }
-
-        /// Generate code for string concatenation
-        fn generateStrConcat(self: *Self, exprs: anytype) Allocator.Error!ValueLocation {
-            const expr_ids = self.store.getExprSpan(exprs);
-            if (expr_ids.len == 0) {
-                // Empty concat returns empty string
-                return try self.generateEmptyString();
-            }
-            if (expr_ids.len == 1) {
-                // Single element, just return it
-                return try self.generateExpr(expr_ids[0]);
-            }
-
-            // Multi-element: fold-left concatenation
-            // result = concat(concat(...concat(a, b), c), ...)
-            var acc_loc = try self.generateExpr(expr_ids[0]);
-            var acc_off = try self.ensureOnStack(acc_loc, roc_str_size);
-
-            for (expr_ids[1..]) |next_expr| {
-                const next_loc = try self.generateExpr(next_expr);
-                const next_off = try self.ensureOnStack(next_loc, roc_str_size);
-                acc_loc = try self.callStr2RocOpsToStr(acc_off, next_off, @intFromPtr(&wrapStrConcat), .str_concat);
-                acc_off = try self.ensureOnStack(acc_loc, roc_str_size);
-            }
-
-            return acc_loc;
-        }
-
-        /// Generate an empty string
-        fn generateEmptyString(self: *Self) Allocator.Error!ValueLocation {
-            // Empty small string in Roc format: all zeros except byte 23 = 0x80
-            // (small string flag set, length 0)
-            const str_slot = self.codegen.allocStackSlot(roc_str_size);
-            const zero_reg = try self.allocTempGeneral();
-            try self.codegen.emitLoadImm(zero_reg, 0);
-
-            try self.emitStore(.w64, frame_ptr, str_slot, zero_reg);
-            try self.emitStore(.w64, frame_ptr, str_slot + 8, zero_reg);
-
-            // Byte 23 = 0x80 (small string flag, length 0)
-            // In little-endian, bytes 16-23 as u64: 0x80 << 56 = 0x8000000000000000
-            const small_str_flag: i64 = @bitCast(@as(u64, 0x80) << 56);
-            try self.codegen.emitLoadImm(zero_reg, small_str_flag);
-            try self.emitStore(.w64, frame_ptr, str_slot + 16, zero_reg);
-
-            self.codegen.freeGeneral(zero_reg);
-            return .{ .stack_str = str_slot };
-        }
-
-        /// Generate code for int_to_str by calling the unified wrapper
-        fn generateIntToStr(self: *Self, its: anytype) Allocator.Error!ValueLocation {
-            const val_loc = try self.generateExpr(its.value);
-            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-            const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_int_to_str);
-            const result_offset = self.codegen.allocStackSlot(roc_str_size);
-            const base_reg = frame_ptr;
-
-            const int_width: u8 = @intCast(its.int_precision.size());
-            const is_signed: bool = switch (its.int_precision) {
-                .i8, .i16, .i32, .i64, .i128 => true,
-                .u8, .u16, .u32, .u64, .u128 => false,
-            };
-
-            // Get low and high u64 parts of the value
-            var val_low: GeneralReg = undefined;
-            var val_high: GeneralReg = undefined;
-            if (int_width <= 8) {
-                val_low = try self.ensureInGeneralReg(val_loc);
-                val_high = try self.allocTempGeneral();
-                if (is_signed) {
-                    // Sign-extend: arithmetic shift right by 63
-                    try self.emitMovRegReg(val_high, val_low);
-                    try self.emitAsrImm(.w64, val_high, val_high, 63);
-                } else {
-                    try self.codegen.emitLoadImm(val_high, 0);
-                }
-            } else {
-                // 128-bit value
-                const parts = try self.getI128Parts(val_loc, if (is_signed) .signed else .unsigned);
-                val_low = parts.low;
-                val_high = parts.high;
-            }
-
-            // roc_builtins_int_to_str(out, val_low, val_high, int_width, is_signed, roc_ops)
-            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            try builder.addLeaArg(base_reg, result_offset);
-            try builder.addRegArg(val_low);
-            try builder.addRegArg(val_high);
-            try builder.addImmArg(int_width);
-            try builder.addImmArg(@intFromBool(is_signed));
-            try builder.addRegArg(roc_ops_reg);
-            try self.callBuiltin(&builder, fn_addr, .int_to_str);
-
-            self.codegen.freeGeneral(val_low);
-            self.codegen.freeGeneral(val_high);
-
-            return .{ .stack_str = result_offset };
-        }
-
-        /// Generate code for float_to_str by calling the unified wrapper
-        fn generateFloatToStr(self: *Self, fts: anytype) Allocator.Error!ValueLocation {
-            const val_loc = try self.generateExpr(fts.value);
-            // Dec uses a dedicated helper with explicit u64 decomposition to avoid
-            // platform-specific i128 calling convention issues
-            if (fts.float_precision == .dec) {
-                return try self.callDecToStrWrapped(val_loc);
-            }
-            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-            const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_float_to_str);
-            const result_offset = self.codegen.allocStackSlot(roc_str_size);
-            const base_reg = frame_ptr;
-
-            // Get float value as u64 bits.
-            // F32 values are carried through codegen as widened F64s, so convert them
-            // back to real F32 payload bits before calling the wrapper.
-            const val_bits_reg = if (fts.float_precision == .f32)
-                try self.materializeF32BitsInGeneralReg(val_loc)
-            else
-                try self.ensureInGeneralReg(val_loc);
-            const is_f32: bool = (fts.float_precision == .f32);
-            if (val_loc == .float_reg) {
-                self.codegen.freeFloat(val_loc.float_reg);
-            }
-
-            // roc_builtins_float_to_str(out, val_bits, is_f32, roc_ops)
-            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            try builder.addLeaArg(base_reg, result_offset);
-            try builder.addRegArg(val_bits_reg);
-            self.codegen.freeGeneral(val_bits_reg);
-            try builder.addImmArg(@intFromBool(is_f32));
-            try builder.addRegArg(roc_ops_reg);
-            try self.callBuiltin(&builder, fn_addr, .float_to_str);
-
-            return .{ .stack_str = result_offset };
-        }
-
-        /// Generate code for dec_to_str by calling the wrapper with decomposed i128
-        fn generateDecToStr(self: *Self, expr_id: anytype) Allocator.Error!ValueLocation {
-            const val_loc = try self.generateExpr(expr_id);
-            return try self.callDecToStrWrapped(val_loc);
-        }
-
-        /// Decomposed i128 value for passing to wrapDecToStr.
-        /// Uses explicit low/high u64 values to avoid platform-specific i128 ABI issues.
-        const DecomposedI128 = union(enum) {
-            /// Both halves are on stack at consecutive offsets
-            on_stack: i32, // low at offset, high at offset+8
-            /// Both halves are compile-time immediates
-            immediate: struct { low: u64, high: u64 },
-        };
-
-        /// Extract low and high u64 halves from a Dec/i128 ValueLocation.
-        /// Returns a DecomposedI128 that can be used to pass to wrapDecToStr.
-        fn decomposeI128Value(self: *Self, val_loc: ValueLocation) Allocator.Error!DecomposedI128 {
-            return switch (val_loc) {
-                // 128-bit value already on stack - most common case for Dec
-                .stack_i128 => |offset| .{ .on_stack = offset },
-
-                // Generic stack location with 16 bytes
-                .stack => |s| .{ .on_stack = s.offset },
-
-                // Compile-time known i128 value
-                .immediate_i128 => |val| .{
-                    .immediate = .{
-                        .low = @truncate(@as(u128, @bitCast(val))),
-                        .high = @truncate(@as(u128, @bitCast(val)) >> 64),
-                    },
-                },
-
-                // 64-bit immediate - sign-extend to i128
-                .immediate_i64 => |val| .{
-                    .immediate = .{
-                        .low = @bitCast(val),
-                        .high = if (val < 0) @as(u64, @bitCast(@as(i64, -1))) else 0,
-                    },
-                },
-
-                // Value in a general register - store to stack first, high is 0
-                .general_reg => |reg| {
-                    const val_slot = self.codegen.allocStackSlot(16);
-                    try self.emitStore(.w64, frame_ptr, val_slot, reg);
-                    // Zero out high half
-                    try self.codegen.emitLoadImm(scratch_reg, 0);
-                    try self.emitStore(.w64, frame_ptr, val_slot + 8, scratch_reg);
-                    self.codegen.freeGeneral(reg);
-                    return .{ .on_stack = val_slot };
-                },
-
-                // These types should never appear for Dec values
-                .float_reg => unreachable, // Dec is not a float register type
-                .stack_str => unreachable, // Dec is not a string
-                .list_stack => unreachable, // Dec is not a list
-                .immediate_f64 => unreachable, // Dec is not a float
-                .noreturn => unreachable,
-            };
-        }
-
-        /// Call wrapDecToStr with explicitly decomposed i128 arguments.
-        /// This avoids platform-specific i128 calling conventions by passing
-        /// (out: *RocStr, low: u64, high: u64, roc_ops: *RocOps) uniformly.
-        /// Uses CallBuilder for cross-platform argument setup and callBuiltin
-        /// to support both native execution and object file generation modes.
-        fn callDecToStrWrapped(self: *Self, val_loc: ValueLocation) Allocator.Error!ValueLocation {
-            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-            const result_offset = self.codegen.allocStackSlot(roc_str_size);
-            const decomposed = try self.decomposeI128Value(val_loc);
-            const base_reg = frame_ptr;
-
-            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            try builder.addLeaArg(base_reg, result_offset);
-
-            switch (decomposed) {
-                .on_stack => |offset| {
-                    try builder.addMemArg(base_reg, offset);
-                    try builder.addMemArg(base_reg, offset + 8);
-                },
-                .immediate => |imm| {
-                    try builder.addImmArg(@bitCast(imm.low));
-                    try builder.addImmArg(@bitCast(imm.high));
-                },
-            }
-
-            try builder.addRegArg(roc_ops_reg);
-            try self.callBuiltin(&builder, @intFromPtr(&wrapDecToStr), .dec_to_str);
-
-            return .{ .stack_str = result_offset };
-        }
-
-        /// Generate code for str_escape_and_quote
-        fn generateStrEscapeAndQuote(self: *Self, expr_id: anytype) Allocator.Error!ValueLocation {
-            const str_loc = try self.generateExpr(expr_id);
-            const str_off = try self.ensureOnStack(str_loc, roc_str_size);
-            return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrEscapeAndQuote), .str_escape_and_quote, .str);
-        }
-
-        /// Generate code for discriminant switch.
-        /// Switches on the discriminant of a tag union value and generates the
-        /// corresponding branch expression for the matching variant.
-        fn generateDiscriminantSwitch(self: *Self, ds: anytype) Allocator.Error!ValueLocation {
-            const ls = self.layout_store;
-            const branches = self.store.getExprSpan(ds.branches);
-            if (branches.len == 0) {
-                unreachable;
-            }
-
-            // Single branch — generate it directly, no dispatch needed
-            if (branches.len == 1) {
-                return try self.generateExpr(branches[0]);
-            }
-
-            // Generate the tag union value
-            const value_loc = try self.generateExpr(ds.value);
-            const union_layout = ls.getLayout(ds.union_layout);
-
-            // Load the discriminant into a register
-            const tag_reg = try self.allocTempGeneral();
-
-            if (union_layout.tag == .tag_union) {
-                // Tag union in memory — load discriminant from its offset
-                const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
-                const disc_offset: i32 = @intCast(tu_data.discriminant_offset);
-                if (tu_data.discriminant_size == 0) {
-                    try self.codegen.emitLoadImm(tag_reg, 0);
-                } else {
-                    const disc_size = ValueSize.fromByteCount(tu_data.discriminant_size);
-
-                    const base_offset: i32 = switch (value_loc) {
-                        .stack => |s| s.offset,
-                        .stack_str => |off| off,
-                        else => unreachable,
-                    };
-
-                    try self.emitSizedLoadStack(tag_reg, base_offset + disc_offset, disc_size);
-                }
-            } else if (union_layout.tag == .scalar or union_layout.tag == .zst) {
-                // Scalar/ZST — the value itself IS the discriminant
-                switch (value_loc) {
-                    .general_reg => |reg| {
-                        if (reg != tag_reg) {
-                            try self.codegen.emit.movRegReg(.w64, tag_reg, reg);
-                        }
-                    },
-                    .immediate_i64 => |val| {
-                        try self.codegen.emitLoadImm(tag_reg, @bitCast(val));
-                    },
-                    .stack => |s| {
-                        try self.emitSizedLoadStack(tag_reg, s.offset, s.size);
-                    },
-                    else => unreachable,
-                }
-            } else {
-                unreachable;
-            }
-
-            // Allocate result slot sized to the result layout
-            const result_size = self.getLayoutSize(ds.result_layout);
-            const result_slot = self.codegen.allocStackSlot(result_size);
-
-            // Track end jumps for patching
-            var end_jumps = std.ArrayList(usize).empty;
-            defer end_jumps.deinit(self.allocator);
-
-            for (branches, 0..) |branch_expr, i| {
-                const is_last = (i == branches.len - 1);
-
-                if (!is_last) {
-                    // Compare discriminant with this branch index
-                    try self.emitCmpImm(tag_reg, @intCast(i));
-                    const skip_jump = try self.emitJumpIfNotEqual();
-
-                    // Generate code for this branch
-                    const result = try self.generateExpr(branch_expr);
-                    try self.copyToStackSlot(result_slot, result, result_size);
-
-                    // Jump to end
-                    try end_jumps.append(self.allocator, try self.codegen.emitJump());
-
-                    // Patch skip_jump to here
-                    self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
-                } else {
-                    // Last case — no comparison needed (fallthrough)
-                    const result = try self.generateExpr(branch_expr);
-                    try self.copyToStackSlot(result_slot, result, result_size);
-                }
-            }
-
-            // Patch all end jumps to current location
-            for (end_jumps.items) |jump| {
-                self.codegen.patchJump(jump, self.codegen.currentOffset());
-            }
-
-            self.codegen.freeGeneral(tag_reg);
-            return self.fieldLocationFromLayout(result_slot, result_size, ds.result_layout);
-        }
-
-        /// Extract the payload from a tag union value.
-        /// The payload is always at offset 0 in the tag union memory.
-        fn generateTagPayloadAccess(self: *Self, tpa: anytype) Allocator.Error!ValueLocation {
-            const ls = self.layout_store;
-
-            // Generate the tag union value
-            const raw_value_loc = try self.generateExpr(tpa.value);
-
-            const union_layout = ls.getLayout(tpa.union_layout);
-            const payload_layout = ls.getLayout(tpa.payload_layout);
-            const payload_size = ls.layoutSizeAlign(payload_layout).size;
-
-            if (union_layout.tag == .tag_union) {
-                const value_loc = try self.materializeValueToStackForLayout(raw_value_loc, tpa.union_layout);
-                // Payload is at offset 0 within the stack-allocated tag union
-                const base_offset: i32 = switch (value_loc) {
-                    .stack => |s| s.offset,
-                    .stack_i128 => |off| off,
-                    .stack_str => |off| off,
-                    .list_stack => |ls_info| ls_info.struct_offset,
-                    else => unreachable,
-                };
-                const payload_loc = self.fieldLocationFromLayout(base_offset, payload_size, tpa.payload_layout);
-                return payload_loc;
-            } else if (union_layout.tag == .box) {
-                // Boxed tag union: dereference the pointer, then copy payload from heap
-                const inner_layout = ls.getLayout(union_layout.data.box);
-                if (inner_layout.tag == .tag_union) {
-                    const box_ptr_reg = try self.ensureInGeneralReg(raw_value_loc);
-
-                    // Copy payload from heap to stack
-                    const dest_offset = self.codegen.allocStackSlot(payload_size);
-                    var copied: u32 = 0;
-                    while (copied < payload_size) {
-                        const temp_reg = try self.allocTempGeneral();
-                        try self.emitLoad(.w64, temp_reg, box_ptr_reg, @intCast(copied));
-                        try self.emitStore(.w64, frame_ptr, dest_offset + @as(i32, @intCast(copied)), temp_reg);
-                        self.codegen.freeGeneral(temp_reg);
-                        copied += 8;
-                    }
-                    self.codegen.freeGeneral(box_ptr_reg);
-                    return self.fieldLocationFromLayout(dest_offset, payload_size, tpa.payload_layout);
-                } else {
-                    // Box of scalar/ZST — the value is the payload directly
-                    return raw_value_loc;
-                }
-            } else if (union_layout.tag == .scalar or union_layout.tag == .zst) {
-                // Scalar/ZST unions: the value itself is the payload (no indirection)
-                return raw_value_loc;
-            } else {
-                unreachable;
-            }
-        }
-
-        /// Helper to store a result to a stack slot
-        fn storeResultToSlot(self: *Self, slot: i32, loc: ValueLocation, slot_size: u32) Allocator.Error!void {
-            switch (loc) {
-                .noreturn => return,
-                else => try self.copyBytesToStackOffset(slot, loc, slot_size),
-            }
-        }
-
         /// Emit a compare of two registers
         fn emitCmpReg(self: *Self, reg1: GeneralReg, reg2: GeneralReg) Allocator.Error!void {
             try self.codegen.emit.cmpRegReg(.w64, reg1, reg2);
-        }
-
-        /// Emit a jump if greater or equal (for unsigned comparison)
-        fn emitJumpIfGreaterOrEqual(self: *Self) Allocator.Error!usize {
-            if (comptime target.toCpuArch() == .aarch64) {
-                // B.CS (branch if carry set = unsigned higher or same) with placeholder offset
-                const patch_loc = self.codegen.currentOffset();
-                try self.codegen.emit.bcond(.cs, 0);
-                return patch_loc;
-            } else {
-                // JAE (jump if unsigned above or equal) with placeholder offset
-                const patch_loc = self.codegen.currentOffset() + 2;
-                try self.codegen.emit.jae(@bitCast(@as(i32, 0)));
-                return patch_loc;
-            }
-        }
-
-        /// Emit a backward jump to a known location
-        fn emitJumpBackward(self: *Self, jump_target: usize) Allocator.Error!void {
-            const current = self.codegen.currentOffset();
-            // Calculate offset - need to account for instruction encoding
-            if (comptime target.toCpuArch() == .aarch64) {
-                // aarch64 b instruction: offset is in words (4 bytes), relative to PC
-                const byte_offset = @as(i32, @intCast(jump_target)) - @as(i32, @intCast(current));
-                try self.codegen.emit.b(byte_offset);
-            } else {
-                // x86_64: jmp rel32 - offset is relative to end of instruction
-                const inst_size: i32 = 5; // JMP rel32 is 5 bytes
-                const byte_offset = @as(i32, @intCast(jump_target)) - @as(i32, @intCast(current)) - inst_size;
-                try self.codegen.emit.jmpRel32(byte_offset);
-            }
         }
 
         /// Store a discriminant value at the given offset
@@ -10748,7 +7200,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // The offset >= 0 checks below are not defensive guards — they select the
                 // unsigned-immediate instruction encoding (STRB/STRH), which only accepts
                 // non-negative offsets. Negative offsets (valid because the stack grows down
-                // from FP) take the fallback path that computes the address in a register.
+                // from FP) use the register-addressed path instead.
                 switch (disc_size) {
                     1 => {
                         // Use strb for 1-byte store
@@ -10790,497 +7242,170 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(reg);
         }
 
-        /// Generate code for a block
-        fn generateBlock(self: *Self, block: anytype) Allocator.Error!ValueLocation {
-            const stmts = self.store.getStmts(block.stmts);
-            // Process each statement
-            for (stmts) |stmt| {
-                switch (stmt) {
-                    .decl, .mutate => |b| {
-                        const expr_loc = try self.generateExpr(b.expr);
-                        try self.bindPattern(b.pattern, expr_loc);
-                    },
-                    .cell_init => |cell| {
-                        const expr_loc = try self.generateExpr(cell.expr);
-                        try self.initializeCell(cell.cell, cell.layout_idx, expr_loc);
-                    },
-                    .cell_store => |cell| {
-                        const expr_loc = try self.generateExpr(cell.expr);
-                        try self.storeCell(cell.cell, cell.layout_idx, expr_loc);
-                    },
-                    .cell_drop => |cell| try self.dropCell(cell.cell, cell.layout_idx),
-                }
-            }
+        fn storeDiscriminantToPtr(self: *Self, ptr_reg: GeneralReg, offset: u32, value: u16, disc_size: u8) Allocator.Error!void {
+            if (disc_size == 0) return;
 
-            // Generate the final expression
-            const final_loc = try self.generateExpr(block.final_expr);
+            const reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(reg);
+            try self.codegen.emitLoadImm(reg, value);
 
-            return final_loc;
-        }
-
-        fn mutableSlotSize(self: *Self, layout_idx: layout.Idx) u32 {
-            const ls = self.layout_store;
-            const layout_val = ls.getLayout(layout_idx);
-            const raw_size = ls.layoutSizeAlign(layout_val).size;
-            return if (raw_size != 0 and raw_size < 8) 8 else raw_size;
-        }
-
-        const CellStorage = struct {
-            slot: i32,
-            size: u32,
-            tracked_mutable_slot: bool,
-        };
-
-        fn resolveCellStorage(self: *Self, cell: Symbol, layout_idx: layout.Idx) ?CellStorage {
-            const cell_key: u64 = @bitCast(cell);
-            if (self.mutable_var_slots.get(cell_key)) |info| {
-                return .{
-                    .slot = info.slot,
-                    .size = info.size,
-                    .tracked_mutable_slot = true,
-                };
-            }
-
-            const loc = self.symbol_locations.get(cell_key) orelse return null;
-            return switch (loc) {
-                .stack => |s| .{
-                    .slot = s.offset,
-                    .size = self.mutableSlotSize(layout_idx),
-                    .tracked_mutable_slot = false,
-                },
-                .stack_i128 => |offset| .{
-                    .slot = offset,
-                    .size = 16,
-                    .tracked_mutable_slot = false,
-                },
-                .stack_str => |offset| .{
-                    .slot = offset,
-                    .size = roc_str_size,
-                    .tracked_mutable_slot = false,
-                },
-                .list_stack => |ls_info| .{
-                    .slot = ls_info.struct_offset,
-                    .size = roc_str_size,
-                    .tracked_mutable_slot = false,
-                },
-                else => null,
-            };
-        }
-
-        fn initializeCell(self: *Self, cell: Symbol, layout_idx: layout.Idx, value_loc: ValueLocation) Allocator.Error!void {
-            const cell_key: u64 = @bitCast(cell);
-            const normalized_value_loc = self.coerceImmediateToLayout(value_loc, layout_idx);
-            const size = self.mutableSlotSize(layout_idx);
-            const fixed_slot = self.codegen.allocStackSlot(size);
-            try self.copyBytesToStackOffset(fixed_slot, normalized_value_loc, size);
-            try self.mutable_var_slots.put(cell_key, .{ .slot = fixed_slot, .size = size });
-        }
-
-        fn storeCell(self: *Self, cell: Symbol, layout_idx: layout.Idx, value_loc: ValueLocation) Allocator.Error!void {
-            const storage = self.resolveCellStorage(cell, layout_idx) orelse {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic("LIR/codegen invariant violated: store to unknown cell {d}", .{@as(u64, @bitCast(cell))});
-                }
-                unreachable;
-            };
-            const normalized_value_loc = self.coerceImmediateToLayout(value_loc, layout_idx);
-            try self.copyBytesToStackOffset(storage.slot, normalized_value_loc, storage.size);
-        }
-
-        fn dropCell(self: *Self, cell: Symbol, layout_idx: layout.Idx) Allocator.Error!void {
-            const cell_key: u64 = @bitCast(cell);
-            const storage = self.resolveCellStorage(cell, layout_idx) orelse return;
-            if (storage.tracked_mutable_slot) {
-                _ = self.mutable_var_slots.remove(cell_key);
-            }
-        }
-
-        fn generateCellLoad(self: *Self, cell: Symbol, layout_idx: layout.Idx) Allocator.Error!ValueLocation {
-            const storage = self.resolveCellStorage(cell, layout_idx) orelse {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic("LIR/codegen invariant violated: load from unknown cell {d}", .{@as(u64, @bitCast(cell))});
-                }
-                unreachable;
-            };
-
-            const slot = self.codegen.allocStackSlot(storage.size);
-            try self.copyBytesToStackOffset(slot, self.stackLocationForLayout(layout_idx, storage.slot), storage.size);
-            return self.stackLocationForLayout(layout_idx, slot);
-        }
-
-        /// Bind a value to a pattern.
-        fn bindPattern(self: *Self, pattern_id: LirPatternId, value_loc: ValueLocation) Allocator.Error!void {
-            const pattern = self.store.getPattern(pattern_id);
-
-            switch (pattern) {
-                .bind => |bind| {
-                    const symbol_key: u64 = @bitCast(bind.symbol);
-                    const normalized_value_loc = self.coerceImmediateToLayout(value_loc, bind.layout_idx);
-                    if (normalized_value_loc == .list_stack) {} else if (normalized_value_loc == .stack) {}
-
-                    try self.symbol_locations.put(symbol_key, normalized_value_loc);
-                    try self.trackMutableSlotFromSymbolLocation(bind, symbol_key);
-                },
-                .wildcard => {
-                    // Ignore the value
-                },
-                .struct_ => |s| {
-                    // Struct destructuring: bind each field pattern.
-                    // Fields are in layout order, so iterate positionally.
-                    const ls = self.layout_store;
-                    const struct_layout = ls.getLayout(s.struct_layout);
-                    if (struct_layout.tag != .struct_) {
-                        if (builtin.mode == .Debug) {
-                            std.debug.panic(
-                                "LIR/codegen invariant violated: bindPattern struct expected struct_ layout, got {s}",
-                                .{@tagName(struct_layout.tag)},
-                            );
-                        }
-                        unreachable;
-                    }
-
-                    const field_patterns = self.store.getPatternSpan(s.fields);
-
-                    // Get the base offset of the struct
-                    const base_offset: i32 = switch (value_loc) {
-                        .stack => |sv| sv.offset,
-                        .stack_str => |off| off,
-                        else => {
-                            if (builtin.mode == .Debug) {
-                                std.debug.panic(
-                                    "LIR/codegen invariant violated: bindPattern struct requires stack value location, got {s}",
-                                    .{@tagName(value_loc)},
-                                );
-                            }
-                            unreachable;
-                        },
-                    };
-
-                    // Bind each field
-                    for (field_patterns, 0..) |field_pattern_id, i| {
-                        const field_offset = ls.getStructFieldOffset(struct_layout.data.struct_.idx, @intCast(i));
-
-                        // Create a location for the field using the correct layout type
-                        const field_layout_idx = ls.getStructFieldLayout(struct_layout.data.struct_.idx, @intCast(i));
-                        const field_loc: ValueLocation = self.stackLocationForLayout(field_layout_idx, base_offset + @as(i32, @intCast(field_offset)));
-
-                        try self.bindPattern(field_pattern_id, field_loc);
-                    }
-                },
-                .as_pattern => |as_pat| {
-                    // As-pattern: bind the symbol AND recursively bind the inner pattern
-                    const symbol_key: u64 = @bitCast(as_pat.symbol);
-                    try self.symbol_locations.put(symbol_key, value_loc);
-
-                    // Also bind the inner pattern
-                    if (!as_pat.inner.isNone()) {
-                        try self.bindPattern(as_pat.inner, value_loc);
-                    }
-                },
-                .list => |lst| {
-                    // List destructuring: bind prefix elements and optional rest
-                    // Get the base offset of the list struct (ptr, len, capacity)
-                    const base_offset: i32 = switch (value_loc) {
-                        .stack => |s| s.offset,
-                        .stack_str => |off| off,
-                        .list_stack => |list_info| list_info.struct_offset,
-                        else => {
-                            if (builtin.mode == .Debug) {
-                                std.debug.panic(
-                                    "LIR/codegen invariant violated: bindPattern list requires stack value location, got {s}",
-                                    .{@tagName(value_loc)},
-                                );
-                            }
-                            unreachable;
-                        },
-                    };
-
-                    const prefix_patterns = self.store.getPatternSpan(lst.prefix);
-
-                    // For each prefix element, we need to load from the list data
-                    // List layout: ptr at offset 0, len at offset 8, capacity at offset 16
-                    // Elements are at ptr[0], ptr[1], etc.
-
-                    // Get element size from the pattern layout.
-                    const ls = self.layout_store;
-                    const elem_layout_idx: layout.Idx = lst.elem_layout;
-                    const elem_layout = ls.getLayout(elem_layout_idx);
-                    const elem_size_align = ls.layoutSizeAlign(elem_layout);
-                    const elem_size = elem_size_align.size;
-
-                    // Load list pointer to a register
-                    const list_ptr_reg = try self.allocTempGeneral();
-                    try self.emitLoad(.w64, list_ptr_reg, frame_ptr, base_offset);
-
-                    // Bind each prefix element
-                    for (prefix_patterns, 0..) |elem_pattern_id, i| {
-                        // Allocate stack space for this element
-                        const elem_slot = self.codegen.allocStackSlot(@intCast(elem_size));
-
-                        // Copy element from list to stack
-                        const elem_offset_in_list = @as(i32, @intCast(i * elem_size));
-                        const temp_reg = try self.allocTempGeneral();
-
-                        if (elem_size <= 8) {
-                            // Load element from list[i] to temp
-                            try self.emitLoad(.w64, temp_reg, list_ptr_reg, elem_offset_in_list);
-                            try self.emitStore(.w64, frame_ptr, elem_slot, temp_reg);
-                        } else {
-                            // For larger elements, copy 8 bytes at a time
-                            try self.copyChunked(temp_reg, list_ptr_reg, elem_offset_in_list, frame_ptr, elem_slot, elem_size);
-                        }
-
-                        self.codegen.freeGeneral(temp_reg);
-
-                        // Bind the element pattern to the stack slot
-                        const elem_loc: ValueLocation = self.stackLocationForLayout(elem_layout_idx, elem_slot);
-                        try self.bindPattern(elem_pattern_id, elem_loc);
-                    }
-
-                    // Bind suffix elements (from the end of the list)
-                    const suffix_patterns = self.store.getPatternSpan(lst.suffix);
-                    if (suffix_patterns.len > 0) {
-                        // We need the list length to compute suffix offsets
-                        const suf_len_reg = try self.allocTempGeneral();
-                        try self.emitLoad(.w64, suf_len_reg, frame_ptr, base_offset + 8);
-
-                        const suffix_count = @as(u32, @intCast(suffix_patterns.len));
-                        const suf_ptr_reg = try self.allocTempGeneral();
-
-                        // suf_ptr = list_ptr + (len - suffix_count) * elem_size
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.subRegRegImm12(.w64, suf_len_reg, suf_len_reg, @intCast(suffix_count));
-                            if (elem_size == 1) {
-                                try self.codegen.emit.addRegRegReg(.w64, suf_ptr_reg, list_ptr_reg, suf_len_reg);
-                            } else {
-                                const imm_reg = try self.allocTempGeneral();
-                                try self.codegen.emitLoadImm(imm_reg, @intCast(elem_size));
-                                try self.codegen.emit.mulRegRegReg(.w64, suf_len_reg, suf_len_reg, imm_reg);
-                                try self.codegen.emit.addRegRegReg(.w64, suf_ptr_reg, list_ptr_reg, suf_len_reg);
-                                self.codegen.freeGeneral(imm_reg);
-                            }
-                        } else {
-                            try self.codegen.emit.subRegImm32(.w64, suf_len_reg, @intCast(suffix_count));
-                            if (elem_size > 1) {
-                                const imm_reg = try self.allocTempGeneral();
-                                try self.codegen.emitLoadImm(imm_reg, @intCast(elem_size));
-                                try self.codegen.emit.imulRegReg(.w64, suf_len_reg, imm_reg);
-                                self.codegen.freeGeneral(imm_reg);
-                            }
-                            try self.codegen.emit.movRegReg(.w64, suf_ptr_reg, list_ptr_reg);
-                            try self.codegen.emit.addRegReg(.w64, suf_ptr_reg, suf_len_reg);
-                        }
-                        self.codegen.freeGeneral(suf_len_reg);
-
-                        for (suffix_patterns, 0..) |suf_pattern_id, suf_idx| {
-                            const suf_offset = @as(i32, @intCast(suf_idx * elem_size));
-                            const suf_slot = self.codegen.allocStackSlot(@intCast(elem_size));
-                            const temp_reg = try self.allocTempGeneral();
-
-                            if (elem_size <= 8) {
-                                try self.emitLoad(.w64, temp_reg, suf_ptr_reg, suf_offset);
-                                try self.emitStore(.w64, frame_ptr, suf_slot, temp_reg);
-                            } else {
-                                try self.copyChunked(temp_reg, suf_ptr_reg, suf_offset, frame_ptr, suf_slot, elem_size);
-                            }
-
-                            self.codegen.freeGeneral(temp_reg);
-                            try self.bindPattern(suf_pattern_id, self.stackLocationForLayout(elem_layout_idx, suf_slot));
-                        }
-
-                        self.codegen.freeGeneral(suf_ptr_reg);
-                    }
-
-                    self.codegen.freeGeneral(list_ptr_reg);
-                },
-                .tag => |tag_pat| {
-                    // Tag destructuring: bind payload patterns
-                    // For lambda parameters, the tag match is already known, just bind the payload
-                    const arg_patterns = self.store.getPatternSpan(tag_pat.args);
-                    if (arg_patterns.len == 0) return;
-
-                    const ls = self.layout_store;
-                    const union_layout = ls.getLayout(tag_pat.union_layout);
-                    const variant_payload_layout, const payload_loc = blk: {
-                        switch (union_layout.tag) {
-                            .tag_union => {
-                                const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
-                                const variants = ls.getTagUnionVariants(tu_data);
-                                const variant = variants.get(tag_pat.discriminant);
-                                const stable_value_loc = try self.materializeValueToStackForLayout(value_loc, tag_pat.union_layout);
-                                const base_offset: i32 = switch (stable_value_loc) {
-                                    .stack => |s| s.offset,
-                                    .stack_i128 => |off| off,
-                                    .stack_str => |off| off,
-                                    .list_stack => |ls_info| ls_info.struct_offset,
-                                    else => {
-                                        if (builtin.mode == .Debug) {
-                                            std.debug.panic(
-                                                "LIR/codegen invariant violated: bindPattern tag requires stack value location, got {s}",
-                                                .{@tagName(stable_value_loc)},
-                                            );
-                                        }
-                                        unreachable;
-                                    },
-                                };
-                                break :blk .{
-                                    variant.payload_layout,
-                                    self.stackLocationForLayout(variant.payload_layout, base_offset),
-                                };
-                            },
-                            .box => {
-                                const inner_layout = ls.getLayout(union_layout.data.box);
-                                if (builtin.mode == .Debug and inner_layout.tag != .tag_union) {
-                                    std.debug.panic(
-                                        "LIR/codegen invariant violated: bindPattern boxed tag expected inner tag_union layout, got {s}",
-                                        .{@tagName(inner_layout.tag)},
-                                    );
-                                }
-
-                                const tu_data = ls.getTagUnionData(inner_layout.data.tag_union.idx);
-                                const variants = ls.getTagUnionVariants(tu_data);
-                                const variant = variants.get(tag_pat.discriminant);
-                                const payload_layout_idx = variant.payload_layout;
-                                const payload_layout_val = ls.getLayout(payload_layout_idx);
-                                const payload_size = ls.layoutSizeAlign(payload_layout_val).size;
-                                if (payload_size == 0) {
-                                    break :blk .{ payload_layout_idx, ValueLocation{ .immediate_i64 = 0 } };
-                                }
-
-                                const box_ptr_reg = try self.ensureInGeneralReg(value_loc);
-                                defer self.codegen.freeGeneral(box_ptr_reg);
-
-                                const detached_slot = self.codegen.allocStackSlot(payload_size);
-                                var copied: u32 = 0;
-                                while (copied < payload_size) : (copied += 8) {
-                                    const temp_reg = try self.allocTempGeneral();
-                                    try self.emitLoad(.w64, temp_reg, box_ptr_reg, @intCast(copied));
-                                    try self.emitStore(.w64, frame_ptr, detached_slot + @as(i32, @intCast(copied)), temp_reg);
-                                    self.codegen.freeGeneral(temp_reg);
-                                }
-
-                                break :blk .{
-                                    payload_layout_idx,
-                                    self.stackLocationForLayout(payload_layout_idx, detached_slot),
-                                };
-                            },
-                            .scalar, .zst => {
-                                if (builtin.mode == .Debug and arg_patterns.len != 1) {
-                                    std.debug.panic(
-                                        "LIR/codegen invariant violated: scalar/zst tag payload binding expects exactly 1 arg, found {d}",
-                                        .{arg_patterns.len},
-                                    );
-                                }
-                                break :blk .{ layout.Idx.zst, ValueLocation{ .immediate_i64 = 0 } };
-                            },
-                            else => {
-                                if (builtin.mode == .Debug) {
-                                    std.debug.panic(
-                                        "LIR/codegen invariant violated: bindPattern tag expected tag_union/box/scalar/zst layout, got {s}",
-                                        .{@tagName(union_layout.tag)},
-                                    );
-                                }
-                                unreachable;
-                            },
-                        }
-                    };
-
-                    const payload_layout = ls.getLayout(variant_payload_layout);
-
-                    if (payload_layout.tag == .struct_) {
-                        const payload_base: i32 = switch (payload_loc) {
-                            .stack => |s| s.offset,
-                            .stack_i128 => |off| off,
-                            .stack_str => |off| off,
-                            else => unreachable,
-                        };
-                        for (arg_patterns, 0..) |arg_pattern_id, i| {
-                            const tuple_elem_offset = ls.getStructFieldOffsetByOriginalIndex(payload_layout.data.struct_.idx, @intCast(i));
-                            const arg_offset = payload_base + @as(i32, @intCast(tuple_elem_offset));
-                            const tuple_elem_layout_idx = ls.getStructFieldLayoutByOriginalIndex(payload_layout.data.struct_.idx, @intCast(i));
-                            if (builtin.mode == .Debug) {
-                                try self.assertPatternMatchesRuntimeLayout(arg_pattern_id, tuple_elem_layout_idx, "tag pattern payload field");
-                            }
-                            try self.bindPattern(arg_pattern_id, self.stackLocationForLayout(tuple_elem_layout_idx, arg_offset));
-                        }
+            switch (disc_size) {
+                1 => {
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.strbRegMem(reg, ptr_reg, @intCast(offset));
                     } else {
-                        if (builtin.mode == .Debug) {
-                            if (arg_patterns.len != 1) {
-                                std.debug.panic(
-                                    "LIR/codegen invariant violated: non-struct tag payload can only bind one arg, got {d}",
-                                    .{arg_patterns.len},
-                                );
-                            }
-                            try self.assertPatternMatchesRuntimeLayout(arg_patterns[0], variant_payload_layout, "tag pattern payload");
-                        }
-                        try self.bindPattern(arg_patterns[0], payload_loc);
+                        try self.codegen.emit.movMemReg(.w8, ptr_reg, @intCast(offset), reg);
                     }
                 },
-                else => {
-                    // Literal patterns (int_literal, float_literal, str_literal) don't bind anything
-                    // They are used for matching in match expressions, not for binding
+                2 => {
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.strhRegMem(reg, ptr_reg, @intCast(offset >> 1));
+                    } else {
+                        try self.codegen.emit.movMemReg(.w16, ptr_reg, @intCast(offset), reg);
+                    }
                 },
+                4 => try self.emitStoreToPtr(.w32, reg, ptr_reg, @intCast(offset)),
+                else => try self.emitStoreToPtr(.w64, reg, ptr_reg, @intCast(offset)),
             }
-        }
-
-        /// Ensure a reassignable symbol has a tracked mutable slot from its current location.
-        fn trackMutableSlotFromSymbolLocation(self: *Self, bind: anytype, symbol_key: u64) Allocator.Error!void {
-            if (!bind.reassignable) return;
-            const loc = self.symbol_locations.get(symbol_key) orelse return;
-
-            const slot: i32 = switch (loc) {
-                .stack => |s| s.offset,
-                .stack_i128 => |off| off,
-                .stack_str => |off| off,
-                .list_stack => |ls_info| ls_info.struct_offset,
-                else => {
-                    if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: trackMutableSlotFromSymbolLocation unsupported location {s}", .{@tagName(loc)});
-                    unreachable;
-                },
-            };
-
-            const size: u32 = switch (loc) {
-                .stack_i128 => 16,
-                .stack_str, .list_stack => roc_str_size,
-                .stack => blk: {
-                    const ls = self.layout_store;
-                    if (builtin.mode == .Debug and @intFromEnum(bind.layout_idx) >= ls.layouts.len()) {
-                        std.debug.panic(
-                            "LIR/codegen invariant violated: mutable bind layout out of bounds ({d} >= {d})",
-                            .{ @intFromEnum(bind.layout_idx), ls.layouts.len() },
-                        );
-                    }
-                    const raw = ls.layoutSizeAlign(ls.getLayout(bind.layout_idx)).size;
-                    break :blk if (raw != 0 and raw < 8) 8 else raw;
-                },
-                else => {
-                    if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: trackMutableSlotFromSymbolLocation unsupported location for size {s}", .{@tagName(loc)});
-                    unreachable;
-                },
-            };
-
-            try self.mutable_var_slots.put(symbol_key, .{ .slot = slot, .size = size });
         }
 
         /// Map a layout index to the correct ValueLocation for a value on the stack.
         /// Multi-word types (strings, i128/Dec, lists) need specific location variants
         /// so downstream code loads the correct number of bytes.
         fn stackLocationForLayout(self: *Self, layout_idx: layout.Idx, stack_offset: i32) ValueLocation {
-            if (layout_idx == .i128 or layout_idx == .u128 or layout_idx == .dec)
+            const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(layout_idx);
+            if (runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec)
                 return .{ .stack_i128 = stack_offset };
-            if (layout_idx == .str)
+            if (runtime_layout_idx == .str)
                 return .{ .stack_str = stack_offset };
             const ls = self.layout_store;
-            const resolved = ls.getLayout(layout_idx);
+            const resolved = ls.getLayout(runtime_layout_idx);
             if (resolved.tag == .list or resolved.tag == .list_of_zst)
                 return .{ .list_stack = .{ .struct_offset = stack_offset, .data_offset = 0, .num_elements = 0 } };
             const size = ls.layoutSizeAlign(resolved).size;
-            return .{ .stack = .{ .offset = stack_offset, .size = ValueSize.fromByteCount(size) } };
+            return .{ .stack = .{
+                .offset = stack_offset,
+                .size = ValueSize.fromByteCount(size),
+                .layout_idx = runtime_layout_idx,
+            } };
         }
 
-        /// Emit a correctly-sized load from the stack, zero-extending sub-word
-        /// values to 64 bits. This prevents reading garbage upper bytes when
-        /// a Bool/U8/U16/U32 was stored with a narrow write.
+        fn normalizeValueLocationToLayout(
+            self: *Self,
+            loc: ValueLocation,
+            actual_layout: layout.Idx,
+            expected_layout: layout.Idx,
+        ) Allocator.Error!ValueLocation {
+            if (actual_layout == expected_layout) return loc;
+
+            const ls = self.layout_store;
+            const actual_layout_val = ls.getLayout(actual_layout);
+            switch (actual_layout_val.tag) {
+                .box => {
+                    if (actual_layout_val.data.box != expected_layout) return loc;
+
+                    const expected_size = self.getLayoutSize(expected_layout);
+                    if (expected_size == 0) return .{ .immediate_i64 = 0 };
+
+                    const box_reg = try self.ensureInGeneralReg(loc);
+                    defer self.codegen.freeGeneral(box_reg);
+
+                    const result_offset = self.codegen.allocStackSlot(expected_size);
+                    const temp_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(temp_reg);
+                    try self.copyChunked(temp_reg, box_reg, 0, frame_ptr, result_offset, expected_size);
+
+                    return self.stackLocationForLayout(expected_layout, result_offset);
+                },
+                .box_of_zst => {
+                    if (expected_layout == .zst) return .{ .immediate_i64 = 0 };
+                },
+                else => {},
+            }
+
+            return loc;
+        }
+
+        fn requireExactValueLocationToLayout(
+            self: *Self,
+            loc: ValueLocation,
+            actual_layout: layout.Idx,
+            expected_layout: layout.Idx,
+            comptime site: []const u8,
+        ) ValueLocation {
+            if (builtin.mode == .Debug and actual_layout != expected_layout) {
+                const actual_layout_val = self.layout_store.getLayout(actual_layout);
+                const expected_layout_val = self.layout_store.getLayout(expected_layout);
+                std.debug.panic(
+                    "LIR/codegen invariant violated at {s}: actual layout {} ({s}) did not match expected layout {} ({s})",
+                    .{
+                        site,
+                        @intFromEnum(actual_layout),
+                        @tagName(actual_layout_val.tag),
+                        @intFromEnum(expected_layout),
+                        @tagName(expected_layout_val.tag),
+                    },
+                );
+            }
+
+            return self.coerceImmediateToLayout(loc, expected_layout);
+        }
+
+        fn requireExplicitNominalValueLocationToLayout(
+            self: *Self,
+            loc: ValueLocation,
+            actual_layout: layout.Idx,
+            expected_layout: layout.Idx,
+            comptime site: []const u8,
+        ) ValueLocation {
+            if (builtin.mode == .Debug) {
+                const actual_layout_val = self.layout_store.getLayout(actual_layout);
+                const expected_layout_val = self.layout_store.getLayout(expected_layout);
+                const actual_is_box = actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst;
+                const expected_is_box = expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst;
+                const actual_is_list = actual_layout_val.tag == .list or actual_layout_val.tag == .list_of_zst;
+                const expected_is_list = expected_layout_val.tag == .list or expected_layout_val.tag == .list_of_zst;
+                if (actual_is_box != expected_is_box or actual_is_list or expected_is_list) {
+                    std.debug.panic(
+                        "LIR/codegen invariant violated at {s}: explicit nominal bridge expected non-list layouts on the same side of physical boxing, got actual={} ({s}) expected={} ({s})",
+                        .{
+                            site,
+                            @intFromEnum(actual_layout),
+                            @tagName(actual_layout_val.tag),
+                            @intFromEnum(expected_layout),
+                            @tagName(expected_layout_val.tag),
+                        },
+                    );
+                }
+            }
+            return self.coerceImmediateToLayout(loc, expected_layout);
+        }
+
+        fn requireExplicitListValueLocationToLayout(
+            self: *Self,
+            loc: ValueLocation,
+            actual_layout: layout.Idx,
+            expected_layout: layout.Idx,
+            comptime site: []const u8,
+        ) ValueLocation {
+            if (builtin.mode == .Debug) {
+                const actual_layout_val = self.layout_store.getLayout(actual_layout);
+                const expected_layout_val = self.layout_store.getLayout(expected_layout);
+                const actual_is_list = actual_layout_val.tag == .list or actual_layout_val.tag == .list_of_zst;
+                const expected_is_list = expected_layout_val.tag == .list or expected_layout_val.tag == .list_of_zst;
+                if (!actual_is_list or !expected_is_list) {
+                    std.debug.panic(
+                        "LIR/codegen invariant violated at {s}: explicit list bridge expected list layouts, got actual={} expected={}",
+                        .{ site, @intFromEnum(actual_layout), @intFromEnum(expected_layout) },
+                    );
+                }
+            }
+
+            return self.coerceImmediateToLayout(loc, expected_layout);
+        }
+
+        /// Emit a correctly-sized raw load from the stack, zero-extending sub-word
+        /// values to 64 bits. This is appropriate for structural byte copies.
         fn emitSizedLoadStack(self: *Self, reg: GeneralReg, offset: i32, size: ValueSize) Allocator.Error!void {
             switch (size) {
                 .byte => try self.emitLoadStackW8(reg, offset),
@@ -11288,6 +7413,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .dword => try self.codegen.emitLoadStack(.w32, reg, offset),
                 .qword => try self.codegen.emitLoadStack(.w64, reg, offset),
             }
+        }
+
+        /// Emit a semantic load for a stack-backed value, restoring signed narrow
+        /// integers to their proper 64-bit register representation.
+        fn emitValueLoadStack(self: *Self, reg: GeneralReg, offset: i32, size: ValueSize, layout_idx: layout.Idx) Allocator.Error!void {
+            try self.emitSizedLoadStack(reg, offset, size);
+
+            const shift_amount: u8 = switch (layout_idx) {
+                .i8 => 56,
+                .i16 => 48,
+                .i32 => 32,
+                else => return,
+            };
+
+            try self.emitShlImm(.w64, reg, reg, shift_amount);
+            try self.emitAsrImm(.w64, reg, reg, shift_amount);
         }
 
         /// Emit a correctly-sized load from memory (arbitrary base register + offset),
@@ -11419,6 +7560,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        fn emitCallToReg(self: *Self, reg: GeneralReg) !void {
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emit.blrReg(reg);
+            } else {
+                try self.codegen.emit.callReg(reg);
+            }
+        }
+
         /// After deferred-prologue proc compilation shifts its body by prepending a prologue,
         /// re-patch any internal BL/CALL instructions within the shifted range
         /// that target code outside the shifted range.
@@ -11482,7 +7631,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             prologue_size: usize,
             current_entry_start: usize,
         ) void {
-            const buf = self.codegen.emit.buf.items;
             for (self.internal_addr_patches.items) |*patch| {
                 if (patch.instr_offset >= body_start and patch.instr_offset < body_end) {
                     // Update the patch's recorded position (it shifted)
@@ -11498,32 +7646,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     // Targets outside the shifted body, or the current body's entry point,
                     // need re-patching because only the instruction moved.
-                    {
-                        const new_rel: i64 = @as(i64, @intCast(patch.target_offset)) - @as(i64, @intCast(patch.instr_offset));
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            // ADR instruction: rd | immhi(19) << 5 | 10000 << 24 | immlo(2) << 29 | 0 << 31
-                            // We need to preserve rd and just update the immediate
-                            const existing: u32 = @bitCast(buf[patch.instr_offset..][0..4].*);
-                            const rd_bits: u32 = existing & 0x1F; // bottom 5 bits = Rd
-                            const imm: u21 = @bitCast(@as(i21, @intCast(new_rel)));
-                            const immlo: u2 = @truncate(imm);
-                            const immhi: u19 = @truncate(imm >> 2);
-                            const inst: u32 = (0 << 31) |
-                                (@as(u32, immlo) << 29) |
-                                (0b10000 << 24) |
-                                (@as(u32, immhi) << 5) |
-                                rd_bits;
-                            const bytes: [4]u8 = @bitCast(inst);
-                            @memcpy(buf[patch.instr_offset..][0..4], &bytes);
-                        } else {
-                            // LEA reg, [RIP + disp32] — 7 bytes: REX + 0x8D + ModRM + disp32
-                            // disp32 is at bytes [3..7], relative to end of instruction (instr_offset + 7)
-                            const lea_size: i64 = 7;
-                            const disp: i32 = @intCast(new_rel - lea_size);
-                            const bytes: [4]u8 = @bitCast(disp);
-                            @memcpy(buf[patch.instr_offset + 3 ..][0..4], &bytes);
-                        }
-                    }
+                    self.patchInternalCodeAddress(patch.instr_offset, patch.target_offset);
                 }
             }
         }
@@ -11539,6 +7662,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (self.pending_calls.items) |*pending| {
                 if (pending.call_site >= body_start and pending.call_site < body_end) {
                     pending.call_site += prologue_size;
+                }
+            }
+        }
+
+        fn shiftPendingProcAddrs(
+            self: *Self,
+            body_start: usize,
+            body_end: usize,
+            prologue_size: usize,
+        ) void {
+            for (self.pending_proc_addrs.items) |*pending| {
+                if (pending.instr_offset >= body_start and pending.instr_offset < body_end) {
+                    pending.instr_offset += prologue_size;
                 }
             }
         }
@@ -11580,6 +7716,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             });
         }
 
+        fn emitPendingProcAddress(self: *Self, target_proc: lir.LIR.LirProcSpecId, dst_reg: GeneralReg) !void {
+            const current = self.codegen.currentOffset();
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emit.adr(dst_reg, 0);
+            } else {
+                try self.codegen.emit.leaRegRipRel(dst_reg, 0);
+            }
+            try self.pending_proc_addrs.append(self.allocator, .{
+                .instr_offset = current,
+                .target_proc = target_proc,
+            });
+        }
+
         fn emitCallRcHelperFromStackSlots(
             self: *Self,
             helper_key: RcHelperKey,
@@ -11587,7 +7736,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             count_slot: ?i32,
             roc_ops_slot: i32,
         ) Allocator.Error!void {
-            const code_offset = try self.compileRcHelper(helper_key);
+            const code_offset = try self.compileBuiltinInternalRcHelper(helper_key);
 
             const arg0 = self.getArgumentRegister(0);
             try self.emitLoad(.w64, arg0, frame_ptr, ptr_slot);
@@ -11608,7 +7757,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitCallToOffset(code_offset);
         }
 
-        fn emitRcHelperCallAtStackOffset(
+        fn emitRawRcHelperCallAtStackOffset(
             self: *Self,
             op: RcOp,
             base_offset: i32,
@@ -11616,8 +7765,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             count: u16,
         ) Allocator.Error!void {
             const helper_key = RcHelperKey{ .op = op, .layout_idx = layout_idx };
-            const resolver = RcHelperResolver.init(self.layout_store);
-            if (resolver.plan(helper_key) == .noop) return;
+            if (self.layout_store.rcHelperPlan(helper_key) == .noop) return;
 
             const ptr_slot = self.codegen.allocStackSlot(8);
             const roc_ops_slot = self.codegen.allocStackSlot(8);
@@ -11647,7 +7795,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitRcHelperCallForValue(
+        fn emitRawRcHelperCallForValue(
             self: *Self,
             op: RcOp,
             value_loc: ValueLocation,
@@ -11655,16 +7803,38 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             count: u16,
         ) Allocator.Error!void {
             const l = self.layout_store.getLayout(layout_idx);
-            if (!self.layout_store.layoutContainsRefcounted(l)) return;
+            if (!explicitRcLayoutValContainsRefcounted(self.layout_store, "dev.emitRcHelperCallForValue.layout_rc", l)) return;
 
             const value_size = self.layout_store.layoutSizeAlign(l).size;
             if (value_size == 0) return;
 
             const base_offset = try self.ensureValueOnStackForRc(value_loc, value_size);
-            try self.emitRcHelperCallAtStackOffset(op, base_offset, layout_idx, count);
+            try self.emitRawRcHelperCallAtStackOffset(op, base_offset, layout_idx, count);
         }
 
-        fn emitRcHelperCallFromPtrReg(
+        fn emitExplicitRcHelperCallForValue(
+            self: *Self,
+            op: RcOp,
+            value_loc: ValueLocation,
+            layout_idx: layout.Idx,
+            count: u16,
+        ) Allocator.Error!void {
+            ownership_boundary.explicitLirRcExecution("dev.emitExplicitRcHelperCallForValue");
+            try self.emitRawRcHelperCallForValue(op, value_loc, layout_idx, count);
+        }
+
+        fn emitExplicitRcHelperCallAtStackOffset(
+            self: *Self,
+            op: RcOp,
+            base_offset: i32,
+            layout_idx: layout.Idx,
+            count: u16,
+        ) Allocator.Error!void {
+            ownership_boundary.explicitLirRcExecution("dev.emitExplicitRcHelperCallAtStackOffset");
+            try self.emitRawRcHelperCallAtStackOffset(op, base_offset, layout_idx, count);
+        }
+
+        fn emitRawRcHelperCallFromPtrReg(
             self: *Self,
             helper_key: RcHelperKey,
             ptr_reg: GeneralReg,
@@ -11676,34 +7846,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitCallRcHelperFromStackSlots(helper_key, ptr_slot, count_slot, roc_ops_slot);
         }
 
-        fn loadListDataPtrForRcFromValuePtr(
+        fn emitBuiltinInternalOptionalRcHelperAddress(
             self: *Self,
-            value_ptr_reg: GeneralReg,
-            out_reg: GeneralReg,
-        ) Allocator.Error!void {
-            try self.emitLoad(.w64, out_reg, value_ptr_reg, 0);
+            op: RcOp,
+            layout_idx: layout.Idx,
+        ) Allocator.Error!?GeneralReg {
+            ownership_boundary.builtinRuntimeInternal("dev.emitBuiltinInternalOptionalRcHelperAddress");
+            const helper_key = RcHelperKey{ .op = op, .layout_idx = layout_idx };
+            if (self.layout_store.rcHelperPlan(helper_key) == .noop) return null;
 
-            const cap_reg = try self.allocTempGeneral();
-            defer self.codegen.freeGeneral(cap_reg);
-            try self.emitLoad(.w64, cap_reg, value_ptr_reg, 16);
-
-            const slice_patch = blk: {
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.cmpRegImm12(.w64, cap_reg, 0);
-                    const patch_loc = self.codegen.currentOffset();
-                    try self.codegen.emit.bcond(.mi, 0);
-                    break :blk patch_loc;
-                } else {
-                    try self.codegen.emit.testRegReg(.w64, cap_reg, cap_reg);
-                    break :blk try self.codegen.emitCondJump(.sign);
-                }
-            };
-
-            const done_patch = try self.codegen.emitJump();
-            self.codegen.patchJump(slice_patch, self.codegen.currentOffset());
-            try self.emitMovRegReg(out_reg, cap_reg);
-            try self.emitShlImm(.w64, out_reg, out_reg, 1);
-            self.codegen.patchJump(done_patch, self.codegen.currentOffset());
+            const callback_reg = try self.allocTempGeneral();
+            const code_offset = try self.compileBuiltinInternalRcHelper(helper_key);
+            try self.emitInternalCodeAddress(code_offset, callback_reg);
+            return callback_reg;
         }
 
         fn loadStrDataPtrForRcFromValuePtr(
@@ -11736,7 +7891,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.patchJump(done_patch, self.codegen.currentOffset());
         }
 
-        fn emitRcHelperStrIncref(
+        fn emitBuiltinInternalRcHelperStrIncref(
             self: *Self,
             ptr_slot: i32,
             count_slot: i32,
@@ -11775,7 +7930,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
         }
 
-        fn emitRcHelperStrDrop(
+        fn emitBuiltinInternalRcHelperStrDrop(
             self: *Self,
             builtin_fn: BuiltinFn,
             fn_addr: usize,
@@ -11816,8 +7971,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
         }
 
-        fn emitRcHelperListIncref(
+        fn emitBuiltinInternalRcHelperListIncref(
             self: *Self,
+            list_plan: layout.RcListPlan,
             ptr_slot: i32,
             count_slot: i32,
             roc_ops_slot: i32,
@@ -11826,18 +7982,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.codegen.freeGeneral(value_ptr_reg);
             try self.emitLoad(.w64, value_ptr_reg, frame_ptr, ptr_slot);
 
-            const data_ptr_reg = try self.allocTempGeneral();
-            defer self.codegen.freeGeneral(data_ptr_reg);
-            try self.loadListDataPtrForRcFromValuePtr(value_ptr_reg, data_ptr_reg);
-
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            try builder.addRegArg(data_ptr_reg);
+            try builder.addMemArg(value_ptr_reg, 0);
+            try builder.addMemArg(value_ptr_reg, 8);
+            try builder.addMemArg(value_ptr_reg, 16);
             try builder.addMemArg(frame_ptr, count_slot);
+            try builder.addImmArg(@intFromBool(list_plan.child != null));
             try builder.addMemArg(frame_ptr, roc_ops_slot);
-            try self.callBuiltin(&builder, @intFromPtr(&increfDataPtrC), .incref_data_ptr);
+            try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_list_incref), .list_incref);
         }
 
-        fn emitRcHelperListDrop(
+        fn emitBuiltinInternalRcHelperListDrop(
             self: *Self,
             builtin_fn: BuiltinFn,
             fn_addr: usize,
@@ -11862,7 +8017,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitLoad(.w64, cap_reg, value_ptr_reg, 16);
 
             if (list_plan.child) |child_key| {
-                const child_offset = try self.compileRcHelper(child_key);
+                const child_offset = try self.compileBuiltinInternalRcHelper(child_key);
                 try self.emitInternalCodeAddress(child_offset, callback_reg);
             } else {
                 try self.codegen.emitLoadImm(callback_reg, 0);
@@ -11879,7 +8034,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.callBuiltin(&builder, fn_addr, builtin_fn);
         }
 
-        fn emitRcHelperBoxIncref(
+        fn emitBuiltinInternalRcHelperBoxIncref(
             self: *Self,
             ptr_slot: i32,
             count_slot: i32,
@@ -11900,7 +8055,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.callBuiltin(&builder, @intFromPtr(&increfDataPtrC), .incref_data_ptr);
         }
 
-        fn emitRcHelperBoxDrop(
+        fn emitBuiltinInternalRcHelperBoxDrop(
             self: *Self,
             builtin_fn: BuiltinFn,
             fn_addr: usize,
@@ -11919,7 +8074,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitLoad(.w64, payload_reg, value_ptr_reg, 0);
 
             if (box_plan.child) |child_key| {
-                const child_offset = try self.compileRcHelper(child_key);
+                const child_offset = try self.compileBuiltinInternalRcHelper(child_key);
                 try self.emitInternalCodeAddress(child_offset, callback_reg);
             } else {
                 try self.codegen.emitLoadImm(callback_reg, 0);
@@ -11933,43 +8088,42 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.callBuiltin(&builder, fn_addr, builtin_fn);
         }
 
-        fn generateRcHelperBody(
+        fn generateBuiltinInternalRcHelperBody(
             self: *Self,
             helper_key: RcHelperKey,
             ptr_slot: i32,
             count_slot: ?i32,
             roc_ops_slot: i32,
         ) Allocator.Error!void {
-            const resolver = RcHelperResolver.init(self.layout_store);
-            switch (resolver.plan(helper_key)) {
+            switch (self.layout_store.rcHelperPlan(helper_key)) {
                 .noop => {},
-                .str_incref => try self.emitRcHelperStrIncref(ptr_slot, count_slot.?, roc_ops_slot),
-                .str_decref => try self.emitRcHelperStrDrop(.decref_data_ptr, @intFromPtr(&decrefDataPtrC), ptr_slot, roc_ops_slot),
-                .str_free => try self.emitRcHelperStrDrop(.free_data_ptr, @intFromPtr(&freeDataPtrC), ptr_slot, roc_ops_slot),
-                .list_incref => try self.emitRcHelperListIncref(ptr_slot, count_slot.?, roc_ops_slot),
-                .list_decref => |list_plan| try self.emitRcHelperListDrop(
+                .str_incref => try self.emitBuiltinInternalRcHelperStrIncref(ptr_slot, count_slot.?, roc_ops_slot),
+                .str_decref => try self.emitBuiltinInternalRcHelperStrDrop(.decref_data_ptr, @intFromPtr(&decrefDataPtrC), ptr_slot, roc_ops_slot),
+                .str_free => try self.emitBuiltinInternalRcHelperStrDrop(.free_data_ptr, @intFromPtr(&freeDataPtrC), ptr_slot, roc_ops_slot),
+                .list_incref => |list_plan| try self.emitBuiltinInternalRcHelperListIncref(list_plan, ptr_slot, count_slot.?, roc_ops_slot),
+                .list_decref => |list_plan| try self.emitBuiltinInternalRcHelperListDrop(
                     .list_decref_with,
                     @intFromPtr(&dev_wrappers.roc_builtins_list_decref_with),
                     list_plan,
                     ptr_slot,
                     roc_ops_slot,
                 ),
-                .list_free => |list_plan| try self.emitRcHelperListDrop(
+                .list_free => |list_plan| try self.emitBuiltinInternalRcHelperListDrop(
                     .list_free_with,
                     @intFromPtr(&dev_wrappers.roc_builtins_list_free_with),
                     list_plan,
                     ptr_slot,
                     roc_ops_slot,
                 ),
-                .box_incref => try self.emitRcHelperBoxIncref(ptr_slot, count_slot.?, roc_ops_slot),
-                .box_decref => |box_plan| try self.emitRcHelperBoxDrop(
+                .box_incref => try self.emitBuiltinInternalRcHelperBoxIncref(ptr_slot, count_slot.?, roc_ops_slot),
+                .box_decref => |box_plan| try self.emitBuiltinInternalRcHelperBoxDrop(
                     .box_decref_with,
                     @intFromPtr(&dev_wrappers.roc_builtins_box_decref_with),
                     box_plan,
                     ptr_slot,
                     roc_ops_slot,
                 ),
-                .box_free => |box_plan| try self.emitRcHelperBoxDrop(
+                .box_free => |box_plan| try self.emitBuiltinInternalRcHelperBoxDrop(
                     .box_free_with,
                     @intFromPtr(&dev_wrappers.roc_builtins_box_free_with),
                     box_plan,
@@ -11977,35 +8131,35 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     roc_ops_slot,
                 ),
                 .struct_ => |struct_plan| {
-                    const field_count = resolver.structFieldCount(struct_plan);
+                    const field_count = self.layout_store.rcHelperStructFieldCount(struct_plan);
                     var i: u32 = 0;
                     while (i < field_count) : (i += 1) {
-                        const field_plan = resolver.structFieldPlan(struct_plan, i) orelse continue;
+                        const field_plan = self.layout_store.rcHelperStructFieldPlan(struct_plan, i) orelse continue;
                         const field_ptr_reg = try self.allocTempGeneral();
                         defer self.codegen.freeGeneral(field_ptr_reg);
 
                         try self.emitLoad(.w64, field_ptr_reg, frame_ptr, ptr_slot);
                         try self.emitAddPtrImmAny(field_ptr_reg, field_ptr_reg, @intCast(field_plan.offset));
-                        try self.emitRcHelperCallFromPtrReg(field_plan.child, field_ptr_reg, count_slot, roc_ops_slot);
+                        try self.emitRawRcHelperCallFromPtrReg(field_plan.child, field_ptr_reg, count_slot, roc_ops_slot);
                     }
                 },
                 .tag_union => |tag_plan| {
-                    const variant_count = resolver.tagUnionVariantCount(tag_plan);
+                    const variant_count = self.layout_store.rcHelperTagUnionVariantCount(tag_plan);
                     if (variant_count == 0) return;
 
                     if (variant_count == 1) {
-                        if (resolver.tagUnionVariantPlan(tag_plan, 0)) |child_key| {
+                        if (self.layout_store.rcHelperTagUnionVariantPlan(tag_plan, 0)) |child_key| {
                             const payload_reg = try self.allocTempGeneral();
                             defer self.codegen.freeGeneral(payload_reg);
                             try self.emitLoad(.w64, payload_reg, frame_ptr, ptr_slot);
-                            try self.emitRcHelperCallFromPtrReg(child_key, payload_reg, count_slot, roc_ops_slot);
+                            try self.emitRawRcHelperCallFromPtrReg(child_key, payload_reg, count_slot, roc_ops_slot);
                         }
                         return;
                     }
 
-                    const disc_offset: i32 = @intCast(resolver.tagUnionDiscriminantOffset(tag_plan));
-                    const disc_size = resolver.tagUnionDiscriminantSize(tag_plan);
-                    const total_size = resolver.tagUnionTotalSize(tag_plan);
+                    const disc_offset: i32 = @intCast(self.layout_store.rcHelperTagUnionDiscriminantOffset(tag_plan));
+                    const disc_size = self.layout_store.rcHelperTagUnionDiscriminantSize(tag_plan);
+                    const total_size = self.layout_store.rcHelperTagUnionTotalSize(tag_plan);
                     const disc_use_w32 = (disc_offset + 8 > @as(i32, @intCast(total_size)));
 
                     var done_patches: std.ArrayList(usize) = .empty;
@@ -12013,7 +8167,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     var variant_i: u32 = 0;
                     while (variant_i < variant_count) : (variant_i += 1) {
-                        const child_key = resolver.tagUnionVariantPlan(tag_plan, variant_i) orelse continue;
+                        const child_key = self.layout_store.rcHelperTagUnionVariantPlan(tag_plan, variant_i) orelse continue;
 
                         const value_ptr_reg = try self.allocTempGeneral();
                         const disc_reg = try self.allocTempGeneral();
@@ -12040,7 +8194,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const payload_reg = try self.allocTempGeneral();
                         defer self.codegen.freeGeneral(payload_reg);
                         try self.emitLoad(.w64, payload_reg, frame_ptr, ptr_slot);
-                        try self.emitRcHelperCallFromPtrReg(child_key, payload_reg, count_slot, roc_ops_slot);
+                        try self.emitRawRcHelperCallFromPtrReg(child_key, payload_reg, count_slot, roc_ops_slot);
                         try done_patches.append(self.allocator, try self.codegen.emitJump());
                         self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
                     }
@@ -12054,19 +8208,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const captures_reg = try self.allocTempGeneral();
                     defer self.codegen.freeGeneral(captures_reg);
                     try self.emitLoad(.w64, captures_reg, frame_ptr, ptr_slot);
-                    try self.emitRcHelperCallFromPtrReg(child_key, captures_reg, count_slot, roc_ops_slot);
+                    try self.emitRawRcHelperCallFromPtrReg(child_key, captures_reg, count_slot, roc_ops_slot);
                 },
             }
         }
 
-        fn compileRcHelper(self: *Self, helper_key: RcHelperKey) Allocator.Error!usize {
+        fn compileBuiltinInternalRcHelper(self: *Self, helper_key: RcHelperKey) Allocator.Error!usize {
             const cache_key = helper_key.encode();
             if (self.compiled_rc_helpers.get(cache_key)) |code_offset| {
                 return code_offset;
             }
 
-            const resolver = RcHelperResolver.init(self.layout_store);
-            const helper_plan = resolver.plan(helper_key);
+            const helper_plan = self.layout_store.rcHelperPlan(helper_key);
             if (helper_plan == .noop) {
                 if (builtin.mode == .Debug) {
                     std.debug.panic("attempted to compile noop RC helper for layout {d}", .{@intFromEnum(helper_key.layout_idx)});
@@ -12085,8 +8238,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_float_owners = self.codegen.float_owners;
             const saved_roc_ops_reg = self.roc_ops_reg;
             const saved_ret_ptr_slot = self.ret_ptr_slot;
-            const saved_binding_symbol = self.current_binding_symbol;
-
             // Reset register state for new function scope — each RC helper is a
             // separate callable with its own prologue/epilogue, so it starts with
             // a full set of registers regardless of what the parent is using.
@@ -12096,7 +8247,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.general_owners = [_]?u32{null} ** CodeGen.NUM_GENERAL_REGS;
             self.codegen.free_float = CodeGen.INITIAL_FREE_FLOAT;
             self.codegen.float_owners = [_]?u32{null} ** CodeGen.NUM_FLOAT_REGS;
-            self.current_binding_symbol = null;
             self.roc_ops_reg = null;
 
             if (comptime target.toCpuArch() == .x86_64) {
@@ -12120,7 +8270,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.float_owners = saved_float_owners;
                 self.roc_ops_reg = saved_roc_ops_reg;
                 self.ret_ptr_slot = saved_ret_ptr_slot;
-                self.current_binding_symbol = saved_binding_symbol;
                 self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
             }
 
@@ -12150,7 +8299,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(ptr_reg);
             const early_return_patch = try self.emitJumpIfEqual();
 
-            try self.generateRcHelperBody(helper_key, ptr_slot, count_slot, roc_ops_slot);
+            try self.generateBuiltinInternalRcHelperBody(helper_key, ptr_slot, count_slot, roc_ops_slot);
 
             const body_epilogue_offset = self.codegen.currentOffset();
             {
@@ -12226,16 +8375,623 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.free_float = saved_free_float;
             self.codegen.float_owners = saved_float_owners;
             self.roc_ops_reg = saved_roc_ops_reg;
-            self.current_binding_symbol = saved_binding_symbol;
 
             self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
             return final_offset;
         }
 
-        fn procCodeOffsetWithOptions(
+        /// Given a field's stack base offset and semantic layout index, return the appropriate ValueLocation.
+        fn fieldLocationFromLayout(self: *Self, field_base: i32, _: u32, field_layout_idx: layout.Idx) ValueLocation {
+            return switch (field_layout_idx) {
+                .zst => .{ .immediate_i64 = 0 },
+                else => self.stackLocationForLayout(field_layout_idx, field_base),
+            };
+        }
+
+        /// Generate code for struct field access (records and tuples).
+        fn generateStructAccess(self: *Self, access: anytype) Allocator.Error!ValueLocation {
+            const ls = self.layout_store;
+            const raw_struct_loc = try self.emitValueLocal(access.source);
+            const source_layout_idx = self.localLayout(access.source);
+            const source_layout = ls.getLayout(source_layout_idx);
+            const base_layout_idx = switch (source_layout.tag) {
+                .box => source_layout.data.box,
+                else => source_layout_idx,
+            };
+            const struct_loc = try self.normalizeValueLocationToLayout(raw_struct_loc, source_layout_idx, base_layout_idx);
+            const struct_layout = ls.getLayout(base_layout_idx);
+            if (struct_layout.tag != .struct_) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "LIR/codegen invariant violated: struct_access expected struct_ layout, got {s} (field_idx={d})",
+                        .{ @tagName(struct_layout.tag), access.field_idx },
+                    );
+                }
+                unreachable;
+            }
+
+            const field_offset = ls.getStructFieldOffsetByOriginalIndex(struct_layout.data.struct_.idx, access.field_idx);
+            const field_size = ls.getStructFieldSizeByOriginalIndex(struct_layout.data.struct_.idx, access.field_idx);
+            const actual_field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(struct_layout.data.struct_.idx, access.field_idx);
+            const raw_field_loc = switch (struct_loc) {
+                .stack_str => |sv| blk: {
+                    const field_base = sv + @as(i32, @intCast(field_offset));
+                    break :blk self.fieldLocationFromLayout(field_base, field_size, actual_field_layout_idx);
+                },
+                .stack => |sv| blk: {
+                    const field_base = sv.offset + @as(i32, @intCast(field_offset));
+                    break :blk self.fieldLocationFromLayout(field_base, field_size, actual_field_layout_idx);
+                },
+                .stack_i128 => |sv| blk: {
+                    const field_base = sv + @as(i32, @intCast(field_offset));
+                    break :blk self.fieldLocationFromLayout(field_base, field_size, actual_field_layout_idx);
+                },
+                .general_reg => |reg| blk: {
+                    if (field_size > 8) unreachable;
+                    if (field_offset == 0) {
+                        break :blk ValueLocation{ .general_reg = reg };
+                    } else {
+                        const result_reg = try self.allocTempGeneral();
+                        try self.emitLsrImm(.w64, result_reg, reg, @intCast(field_offset * 8));
+                        self.codegen.freeGeneral(reg);
+                        break :blk ValueLocation{ .general_reg = result_reg };
+                    }
+                },
+                .immediate_i64 => |val| blk: {
+                    if (field_size > 8) unreachable;
+                    if (field_offset == 0) {
+                        break :blk ValueLocation{ .immediate_i64 = val };
+                    }
+                    const shifted = val >> @intCast(field_offset * 8);
+                    break :blk ValueLocation{ .immediate_i64 = shifted };
+                },
+                else => unreachable,
+            };
+            return self.requireExactValueLocationToLayout(raw_field_loc, actual_field_layout_idx, access.target_layout, "struct_field_access");
+        }
+
+        /// Generate code for tag payload access.
+        fn generateTagPayloadAccess(self: *Self, tpa: anytype) Allocator.Error!ValueLocation {
+            const ls = self.layout_store;
+            const raw_value_loc = try self.emitValueLocal(tpa.source);
+            const source_layout_idx = self.localLayout(tpa.source);
+            const union_layout = ls.getLayout(source_layout_idx);
+            const payload_layout_idx = switch (union_layout.tag) {
+                .tag_union => blk: {
+                    const variants = ls.getTagUnionVariants(ls.getTagUnionData(union_layout.data.tag_union.idx));
+                    break :blk variants.get(tpa.tag_discriminant).payload_layout;
+                },
+                .box => blk: {
+                    const inner_layout = ls.getLayout(union_layout.data.box);
+                    if (inner_layout.tag != .tag_union) {
+                        return raw_value_loc;
+                    }
+                    const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner_layout.data.tag_union.idx));
+                    break :blk variants.get(tpa.tag_discriminant).payload_layout;
+                },
+                else => tpa.target_layout,
+            };
+            const payload_layout = ls.getLayout(payload_layout_idx);
+            const payload_offset: u32 = switch (payload_layout.tag) {
+                .struct_ => ls.getStructFieldOffsetByOriginalIndex(payload_layout.data.struct_.idx, tpa.payload_idx),
+                else => blk: {
+                    if (builtin.mode == .Debug and tpa.payload_idx != 0) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: scalar tag payload access requested payload_idx {d}",
+                            .{tpa.payload_idx},
+                        );
+                    }
+                    break :blk 0;
+                },
+            };
+            const payload_size = ls.layoutSizeAlign(payload_layout).size;
+
+            if (union_layout.tag == .tag_union) {
+                const value_loc = try self.materializeValueToStackForLayout(raw_value_loc, source_layout_idx);
+                const base_offset: i32 = switch (value_loc) {
+                    .stack => |s| s.offset,
+                    .stack_i128 => |off| off,
+                    .stack_str => |off| off,
+                    .list_stack => |ls_info| ls_info.struct_offset,
+                    else => unreachable,
+                };
+                const raw_payload_loc = self.fieldLocationFromLayout(base_offset + @as(i32, @intCast(payload_offset)), payload_size, payload_layout_idx);
+                return self.requireExactValueLocationToLayout(raw_payload_loc, payload_layout_idx, tpa.target_layout, "tag_payload_access.inline");
+            } else if (union_layout.tag == .box) {
+                const inner_layout = ls.getLayout(union_layout.data.box);
+                if (inner_layout.tag == .tag_union) {
+                    const box_ptr_reg = try self.ensureInGeneralReg(raw_value_loc);
+                    const dest_offset = self.codegen.allocStackSlot(payload_size);
+                    var copied: u32 = 0;
+                    while (copied < payload_size) : (copied += 8) {
+                        const temp_reg = try self.allocTempGeneral();
+                        try self.emitLoad(.w64, temp_reg, box_ptr_reg, @intCast(payload_offset + copied));
+                        try self.emitStore(.w64, frame_ptr, dest_offset + @as(i32, @intCast(copied)), temp_reg);
+                        self.codegen.freeGeneral(temp_reg);
+                    }
+                    self.codegen.freeGeneral(box_ptr_reg);
+                    const raw_payload_loc = self.fieldLocationFromLayout(dest_offset, payload_size, payload_layout_idx);
+                    return self.requireExactValueLocationToLayout(raw_payload_loc, payload_layout_idx, tpa.target_layout, "tag_payload_access.boxed");
+                } else {
+                    return raw_value_loc;
+                }
+            } else if (union_layout.tag == .scalar or union_layout.tag == .zst) {
+                return raw_value_loc;
+            } else {
+                unreachable;
+            }
+        }
+
+        fn generateTagPayloadStructAccess(self: *Self, tps: anytype) Allocator.Error!ValueLocation {
+            const ls = self.layout_store;
+            const raw_value_loc = try self.emitValueLocal(tps.source);
+            const source_layout_idx = self.localLayout(tps.source);
+            const union_layout = ls.getLayout(source_layout_idx);
+            const payload_layout_idx = switch (union_layout.tag) {
+                .tag_union => blk: {
+                    const variants = ls.getTagUnionVariants(ls.getTagUnionData(union_layout.data.tag_union.idx));
+                    break :blk variants.get(tps.tag_discriminant).payload_layout;
+                },
+                .box => blk: {
+                    const inner_layout = ls.getLayout(union_layout.data.box);
+                    if (inner_layout.tag != .tag_union) {
+                        return raw_value_loc;
+                    }
+                    const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner_layout.data.tag_union.idx));
+                    break :blk variants.get(tps.tag_discriminant).payload_layout;
+                },
+                else => tps.target_layout,
+            };
+            const payload_size = ls.layoutSizeAlign(ls.getLayout(payload_layout_idx)).size;
+            if (union_layout.tag == .tag_union) {
+                const value_loc = try self.materializeValueToStackForLayout(raw_value_loc, source_layout_idx);
+                const base_offset: i32 = switch (value_loc) {
+                    .stack => |s| s.offset,
+                    .stack_i128 => |off| off,
+                    .stack_str => |off| off,
+                    .list_stack => |ls_info| ls_info.struct_offset,
+                    else => unreachable,
+                };
+                const raw_payload_loc = self.fieldLocationFromLayout(base_offset, payload_size, payload_layout_idx);
+                return self.requireExactValueLocationToLayout(raw_payload_loc, payload_layout_idx, tps.target_layout, "tag_payload_struct_access.inline");
+            } else if (union_layout.tag == .box) {
+                const inner_layout = ls.getLayout(union_layout.data.box);
+                if (inner_layout.tag == .tag_union) {
+                    const box_ptr_reg = try self.ensureInGeneralReg(raw_value_loc);
+                    const dest_offset = self.codegen.allocStackSlot(payload_size);
+                    var copied: u32 = 0;
+                    while (copied < payload_size) : (copied += 8) {
+                        const temp_reg = try self.allocTempGeneral();
+                        try self.emitLoad(.w64, temp_reg, box_ptr_reg, @intCast(copied));
+                        try self.emitStore(.w64, frame_ptr, dest_offset + @as(i32, @intCast(copied)), temp_reg);
+                        self.codegen.freeGeneral(temp_reg);
+                    }
+                    self.codegen.freeGeneral(box_ptr_reg);
+                    const raw_payload_loc = self.fieldLocationFromLayout(dest_offset, payload_size, payload_layout_idx);
+                    return self.requireExactValueLocationToLayout(raw_payload_loc, payload_layout_idx, tps.target_layout, "tag_payload_struct_access.boxed");
+                } else {
+                    return raw_value_loc;
+                }
+            } else if (union_layout.tag == .scalar or union_layout.tag == .zst) {
+                return raw_value_loc;
+            } else {
+                unreachable;
+            }
+        }
+
+        /// Generate code for explicit tag-discriminant access.
+        fn generateDiscriminantAccess(self: *Self, disc: anytype) Allocator.Error!ValueLocation {
+            const ls = self.layout_store;
+            const raw_value_loc = try self.emitValueLocal(disc.source);
+            const source_layout_idx = self.localLayout(disc.source);
+            const source_layout = ls.getLayout(source_layout_idx);
+
+            if (source_layout.tag == .tag_union) {
+                const stable_value_loc = try self.materializeValueToStackForLayout(raw_value_loc, source_layout_idx);
+                const tu_data = ls.getTagUnionData(source_layout.data.tag_union.idx);
+                const disc_reg = try self.loadAndMaskDiscriminant(
+                    stable_value_loc,
+                    disc.target_layout != .u64,
+                    @intCast(tu_data.discriminant_offset),
+                    tu_data.discriminant_size,
+                );
+                return .{ .general_reg = disc_reg };
+            }
+
+            if (source_layout.tag == .box) {
+                const inner_layout = ls.getLayout(source_layout.data.box);
+                if (inner_layout.tag == .tag_union) {
+                    const tu_data = ls.getTagUnionData(inner_layout.data.tag_union.idx);
+                    const box_ptr_reg = try self.ensureInGeneralReg(raw_value_loc);
+                    const disc_reg = try self.allocTempGeneral();
+                    if (disc.target_layout != .u64) {
+                        try self.emitLoad(.w32, disc_reg, box_ptr_reg, @intCast(tu_data.discriminant_offset));
+                    } else {
+                        try self.emitLoad(.w64, disc_reg, box_ptr_reg, @intCast(tu_data.discriminant_offset));
+                    }
+                    self.codegen.freeGeneral(box_ptr_reg);
+
+                    if (tu_data.discriminant_size != 0 and tu_data.discriminant_size < 4) {
+                        const mask: i32 = (@as(i32, 1) << @as(u5, @intCast(tu_data.discriminant_size * 8))) - 1;
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            const mask_reg = try self.allocTempGeneral();
+                            try self.codegen.emitLoadImm(mask_reg, mask);
+                            try self.codegen.emit.andRegRegReg(.w32, disc_reg, disc_reg, mask_reg);
+                            self.codegen.freeGeneral(mask_reg);
+                        } else {
+                            try self.codegen.emit.andRegImm32(disc_reg, mask);
+                        }
+                    }
+
+                    return .{ .general_reg = disc_reg };
+                }
+            }
+
+            return raw_value_loc;
+        }
+
+        fn generateList(self: *Self, list: anytype) Allocator.Error!ValueLocation {
+            const elems = self.store.getLocalSpan(list.elems);
+            if (elems.len == 0) {
+                const list_struct_offset: i32 = self.codegen.allocStackSlot(roc_list_size);
+                const zero_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadImm(zero_reg, 0);
+
+                try self.emitStore(.w64, frame_ptr, list_struct_offset, zero_reg);
+                try self.emitStore(.w64, frame_ptr, list_struct_offset + 8, zero_reg);
+                try self.emitStore(.w64, frame_ptr, list_struct_offset + 16, zero_reg);
+                self.codegen.freeGeneral(zero_reg);
+
+                return .{ .list_stack = .{
+                    .struct_offset = list_struct_offset,
+                    .data_offset = 0,
+                    .num_elements = 0,
+                } };
+            }
+
+            const ls = self.layout_store;
+            const list_abi = builtinInternalListAbi(ls, "dev.generateList.builtin_list_abi", list.target_layout);
+            const elem_layout_idx: layout.Idx = list_abi.elem_layout_idx orelse .zst;
+            const elem_size: u32 = list_abi.elem_size_align.size;
+            const num_elems: u32 = @intCast(elems.len);
+            const total_data_bytes: usize = @as(usize, elem_size) * @as(usize, num_elems);
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addImmArg(@intCast(total_data_bytes));
+            try builder.addImmArg(@intCast(list_abi.alignment_bytes));
+            try builder.addImmArg(if (list_abi.elements_refcounted) 1 else 0);
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, @intFromPtr(&allocateWithRefcountC), .allocate_with_refcount);
+
+            try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
+
+            for (elems, 0..) |elem_id, i| {
+                const elem_loc = self.requireExactValueLocationToLayout(
+                    try self.emitValueLocal(elem_id),
+                    self.valueLayout(elem_id),
+                    elem_layout_idx,
+                    "assign_list.elem",
+                );
+                const elem_heap_offset: i32 = @intCast(@as(usize, i) * @as(usize, elem_size));
+
+                if (elem_size == 0) continue;
+
+                const elem_stack_offset = try self.ensureOnStack(elem_loc, elem_size);
+                const heap_ptr = try self.allocTempGeneral();
+                try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
+
+                const temp_reg = try self.allocTempGeneral();
+                try self.copyChunked(temp_reg, frame_ptr, elem_stack_offset, heap_ptr, elem_heap_offset, elem_size);
+                self.codegen.freeGeneral(temp_reg);
+                self.codegen.freeGeneral(heap_ptr);
+            }
+
+            const list_struct_offset: i32 = self.codegen.allocStackSlot(roc_list_size);
+            const ptr_reg = try self.allocTempGeneral();
+            const len_reg = try self.allocTempGeneral();
+
+            try self.emitLoad(.w64, ptr_reg, frame_ptr, heap_ptr_slot);
+            try self.codegen.emitLoadImm(len_reg, @intCast(num_elems));
+
+            try self.emitStore(.w64, frame_ptr, list_struct_offset, ptr_reg);
+            try self.emitStore(.w64, frame_ptr, list_struct_offset + 8, len_reg);
+            try self.emitStore(.w64, frame_ptr, list_struct_offset + 16, len_reg);
+
+            self.codegen.freeGeneral(ptr_reg);
+            self.codegen.freeGeneral(len_reg);
+
+            return .{
+                .list_stack = .{
+                    .struct_offset = list_struct_offset,
+                    .data_offset = heap_ptr_slot,
+                    .num_elements = num_elems,
+                },
+            };
+        }
+
+        fn generateStruct(self: *Self, s: anytype) Allocator.Error!ValueLocation {
+            const ls = self.layout_store;
+            const target_layout = ls.getLayout(s.target_layout);
+            switch (target_layout.tag) {
+                .zst => return .{ .immediate_i64 = 0 },
+                .box_of_zst => return .{ .immediate_i64 = 0 },
+                .box => {
+                    const box_abi = ls.builtinBoxAbi(s.target_layout);
+                    const inner_layout = box_abi.elem_layout;
+                    if (inner_layout.tag != .struct_) {
+                        if (builtin.mode == .Debug) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: assign_struct target box layout {} did not box a struct",
+                                .{@intFromEnum(s.target_layout)},
+                            );
+                        }
+                        unreachable;
+                    }
+
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+                    const heap_ptr_slot = self.codegen.allocStackSlot(8);
+                    {
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        try builder.addImmArg(@intCast(box_abi.elem_size));
+                        try builder.addImmArg(@intCast(box_abi.elem_alignment));
+                        try builder.addImmArg(if (box_abi.contains_refcounted) 1 else 0);
+                        try builder.addRegArg(roc_ops_reg);
+                        try self.callBuiltin(&builder, @intFromPtr(&allocateWithRefcountC), .allocate_with_refcount);
+                    }
+                    try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
+
+                    const field_exprs = self.store.getLocalSpan(s.fields);
+                    for (field_exprs, 0..) |field_expr_id, i| {
+                        const field_offset = ls.getStructFieldOffsetByOriginalIndex(inner_layout.data.struct_.idx, @intCast(i));
+                        const field_size = ls.getStructFieldSizeByOriginalIndex(inner_layout.data.struct_.idx, @intCast(i));
+                        const field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(inner_layout.data.struct_.idx, @intCast(i));
+                        const field_loc = self.requireExactValueLocationToLayout(
+                            try self.emitValueLocal(field_expr_id),
+                            self.valueLayout(field_expr_id),
+                            field_layout_idx,
+                            "assign_struct.boxed_field",
+                        );
+                        if (field_size == 0) continue;
+
+                        const field_stack_offset = try self.ensureOnStack(field_loc, field_size);
+                        const heap_ptr = try self.allocTempGeneral();
+                        try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
+
+                        const temp_reg = try self.allocTempGeneral();
+                        try self.copyChunked(temp_reg, frame_ptr, field_stack_offset, heap_ptr, @intCast(field_offset), field_size);
+                        self.codegen.freeGeneral(temp_reg);
+                        self.codegen.freeGeneral(heap_ptr);
+                    }
+
+                    const result_reg = try self.allocTempGeneral();
+                    try self.emitLoad(.w64, result_reg, frame_ptr, heap_ptr_slot);
+                    return .{ .general_reg = result_reg };
+                },
+                .struct_ => {
+                    const struct_layout = target_layout;
+                    const struct_data = ls.getStructData(struct_layout.data.struct_.idx);
+                    const stack_size = struct_data.size;
+                    if (stack_size == 0) {
+                        return .{ .immediate_i64 = 0 };
+                    }
+
+                    const base_offset = self.codegen.allocStackSlot(stack_size);
+                    const field_exprs = self.store.getLocalSpan(s.fields);
+
+                    for (field_exprs, 0..) |field_expr_id, i| {
+                        const field_offset = ls.getStructFieldOffsetByOriginalIndex(struct_layout.data.struct_.idx, @intCast(i));
+                        const field_size = ls.getStructFieldSizeByOriginalIndex(struct_layout.data.struct_.idx, @intCast(i));
+                        const field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(struct_layout.data.struct_.idx, @intCast(i));
+                        const field_loc = self.requireExactValueLocationToLayout(
+                            try self.emitValueLocal(field_expr_id),
+                            self.valueLayout(field_expr_id),
+                            field_layout_idx,
+                            "assign_struct.field",
+                        );
+                        const field_base = base_offset + @as(i32, @intCast(field_offset));
+                        try self.copyBytesToStackOffset(field_base, field_loc, field_size);
+                    }
+
+                    return self.stackLocationForLayout(s.target_layout, base_offset);
+                },
+                else => {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: assign_struct target layout {s} is not runtime struct or zst layout",
+                            .{@tagName(target_layout.tag)},
+                        );
+                    }
+                    unreachable;
+                },
+            }
+        }
+
+        fn valueSizeFromLoc(_: *Self, loc: ValueLocation) u32 {
+            return switch (loc) {
+                .stack_str => roc_str_size,
+                .list_stack => roc_list_size,
+                .stack_i128, .immediate_i128 => 16,
+                .immediate_i64, .general_reg, .stack, .float_reg, .immediate_f64 => 8,
+                else => {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: valueSizeFromLoc unsupported location {s}",
+                            .{@tagName(loc)},
+                        );
+                    }
+                    unreachable;
+                },
+            };
+        }
+
+        fn generateZeroArgTag(self: *Self, tag: anytype) Allocator.Error!ValueLocation {
+            const ls = self.layout_store;
+            const union_layout = ls.getLayout(tag.target_layout);
+
+            if (union_layout.tag == .scalar or union_layout.tag == .zst) {
+                return .{ .immediate_i64 = tag.discriminant };
+            }
+            if (union_layout.tag == .box_of_zst) {
+                return .{ .immediate_i64 = 0 };
+            }
+            if (union_layout.tag == .box) {
+                return try self.generateTag(.{
+                    .target_layout = tag.target_layout,
+                    .discriminant = tag.discriminant,
+                    .payload = null,
+                });
+            }
+
+            if (union_layout.tag != .tag_union) {
+                return .{ .immediate_i64 = tag.discriminant };
+            }
+
+            const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
+            const stack_size = tu_data.size;
+            if (stack_size <= 8) {
+                return .{ .immediate_i64 = tag.discriminant };
+            }
+
+            const base_offset = self.codegen.allocStackSlot(stack_size);
+            try self.zeroStackArea(base_offset, stack_size);
+
+            const disc_offset = tu_data.discriminant_offset;
+            const disc_size = tu_data.discriminant_size;
+            try self.storeDiscriminant(base_offset + @as(i32, @intCast(disc_offset)), tag.discriminant, disc_size);
+
+            return self.stackLocationForLayout(tag.target_layout, base_offset);
+        }
+
+        fn generateTag(self: *Self, tag: anytype) Allocator.Error!ValueLocation {
+            const ls = self.layout_store;
+            const union_layout = ls.getLayout(tag.target_layout);
+            if (union_layout.tag == .scalar or union_layout.tag == .zst) {
+                if (tag.payload) |payload| _ = try self.emitValueLocal(payload);
+                return .{ .immediate_i64 = tag.discriminant };
+            }
+            if (union_layout.tag == .box_of_zst) {
+                if (tag.payload) |payload| _ = try self.emitValueLocal(payload);
+                return .{ .immediate_i64 = 0 };
+            }
+            if (union_layout.tag == .box) {
+                const box_abi = ls.builtinBoxAbi(tag.target_layout);
+                const inner_layout = box_abi.elem_layout;
+                if (inner_layout.tag != .tag_union) {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: generateTag expected boxed tag union layout, got boxed {s}",
+                            .{@tagName(inner_layout.tag)},
+                        );
+                    }
+                    unreachable;
+                }
+
+                const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+                const heap_ptr_slot = self.codegen.allocStackSlot(8);
+                {
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addImmArg(@intCast(box_abi.elem_size));
+                    try builder.addImmArg(@intCast(box_abi.elem_alignment));
+                    try builder.addImmArg(if (box_abi.contains_refcounted) 1 else 0);
+                    try builder.addRegArg(roc_ops_reg);
+                    try self.callBuiltin(&builder, @intFromPtr(&allocateWithRefcountC), .allocate_with_refcount);
+                }
+                try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
+
+                const inner_tu_data = ls.getTagUnionData(inner_layout.data.tag_union.idx);
+                const variants = ls.getTagUnionVariants(inner_tu_data);
+                const variant_payload_layout: ?layout.Idx = if (tag.discriminant < variants.len)
+                    variants.get(tag.discriminant).payload_layout
+                else
+                    null;
+
+                if (tag.payload) |payload_local| {
+                    const arg_layout_idx = variant_payload_layout orelse self.valueLayout(payload_local);
+                    const arg_loc = self.requireExactValueLocationToLayout(
+                        try self.emitValueLocal(payload_local),
+                        self.valueLayout(payload_local),
+                        arg_layout_idx,
+                        "assign_tag.boxed_payload",
+                    );
+                    const payload_size: u32 = if (variant_payload_layout) |pl| blk: {
+                        const pl_val = ls.getLayout(pl);
+                        break :blk ls.layoutSizeAlign(pl_val).size;
+                    } else valueSizeFromLoc(self, arg_loc);
+                    if (payload_size > 0) {
+                        const arg_stack_offset = try self.ensureOnStack(arg_loc, payload_size);
+                        const heap_ptr = try self.allocTempGeneral();
+                        try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
+                        const temp_reg = try self.allocTempGeneral();
+                        try self.copyChunked(temp_reg, frame_ptr, arg_stack_offset, heap_ptr, 0, payload_size);
+                        self.codegen.freeGeneral(temp_reg);
+                        self.codegen.freeGeneral(heap_ptr);
+                    }
+                }
+
+                {
+                    const heap_ptr = try self.allocTempGeneral();
+                    try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
+                    try self.storeDiscriminantToPtr(heap_ptr, inner_tu_data.discriminant_offset, tag.discriminant, inner_tu_data.discriminant_size);
+                    self.codegen.freeGeneral(heap_ptr);
+                }
+
+                const result_reg = try self.allocTempGeneral();
+                try self.emitLoad(.w64, result_reg, frame_ptr, heap_ptr_slot);
+                return .{ .general_reg = result_reg };
+            }
+            if (union_layout.tag != .tag_union) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "LIR/codegen invariant violated: generateTag expected tag_union/scalar/zst layout, got {s}",
+                        .{@tagName(union_layout.tag)},
+                    );
+                }
+                unreachable;
+            }
+
+            const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
+            const stack_size = tu_data.size;
+            const base_offset = self.codegen.allocStackSlot(stack_size);
+            try self.zeroStackArea(base_offset, stack_size);
+
+            const variants = ls.getTagUnionVariants(tu_data);
+            const variant_payload_layout: ?layout.Idx = if (tag.discriminant < variants.len)
+                variants.get(tag.discriminant).payload_layout
+            else
+                null;
+
+            if (tag.payload == null) {
+                return try self.generateZeroArgTag(.{
+                    .target_layout = tag.target_layout,
+                    .discriminant = tag.discriminant,
+                });
+            } else if (tag.payload) |payload_local| {
+                const arg_layout_idx = variant_payload_layout orelse self.valueLayout(payload_local);
+                const arg_loc = self.requireExactValueLocationToLayout(
+                    try self.emitValueLocal(payload_local),
+                    self.valueLayout(payload_local),
+                    arg_layout_idx,
+                    "assign_tag.payload",
+                );
+                const payload_size: u32 = if (variant_payload_layout) |pl| blk: {
+                    const pl_val = ls.getLayout(pl);
+                    break :blk ls.layoutSizeAlign(pl_val).size;
+                } else valueSizeFromLoc(self, arg_loc);
+                try self.copyBytesToStackOffset(base_offset, arg_loc, payload_size);
+            }
+
+            const disc_offset = tu_data.discriminant_offset;
+            const disc_size = tu_data.discriminant_size;
+            try self.storeDiscriminant(base_offset + @as(i32, @intCast(disc_offset)), tag.discriminant, disc_size);
+
+            return self.stackLocationForLayout(tag.target_layout, base_offset);
+        }
+
+        fn compiledProcForId(
             self: *Self,
             proc_id: lir.LIR.LirProcSpecId,
-            _: LambdaProcOptions,
         ) Allocator.Error!CompiledProc {
             const proc = self.store.getProcSpec(proc_id);
             if (self.proc_registry.get(@intFromEnum(proc_id))) |compiled| return compiled;
@@ -12247,33 +9003,232 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             unreachable;
         }
 
-        /// Resolve the pre-lowered comparator proc for list_sort_with to a compiled code offset.
-        fn resolveComparatorOffset(self: *Self, proc_id: lir.LIR.LirProcSpecId) Allocator.Error!usize {
-            const compiled = try self.procCodeOffsetWithOptions(proc_id, .{});
-            if (compiled.code_start == unresolved_proc_code_start) {
-                if (std.debug.runtime_safety) {
-                    std.debug.panic(
-                        "list_sort_with comparator proc {d} was not compiled before codegen",
-                        .{@intFromEnum(proc_id)},
-                    );
-                }
-                unreachable;
-            }
-            return compiled.code_start;
-        }
-
         /// Generate code for a direct proc call.
         fn generateCall(self: *Self, call: anytype) Allocator.Error!ValueLocation {
-            const proc = try self.procCodeOffsetWithOptions(call.proc, .{});
-            return try self.generateCallToCompiledProc(proc, call.args, call.ret_layout);
+            const proc_spec = self.store.getProcSpec(call.proc);
+            const arg_refs = self.store.getLocalSpan(call.args);
+            const param_refs = self.store.getLocalSpan(proc_spec.args);
+            var arg_locs = try self.allocator.alloc(ValueLocation, arg_refs.len);
+            defer self.allocator.free(arg_locs);
+            var arg_layouts = try self.allocator.alloc(layout.Idx, arg_refs.len);
+            defer self.allocator.free(arg_layouts);
+
+            if (builtin.mode == .Debug and param_refs.len != arg_refs.len) {
+                std.debug.panic(
+                    "Dev/codegen invariant violated: call to proc {d} passed {d} args but callee expects {d}",
+                    .{ @intFromEnum(call.proc), arg_refs.len, param_refs.len },
+                );
+            }
+
+            for (arg_refs, param_refs, 0..) |arg_ref, param_ref, i| {
+                const actual_layout = self.localLayout(arg_ref);
+                const expected_layout = self.localLayout(param_ref);
+                const raw_arg_loc = try self.emitValueLocal(arg_ref);
+                arg_locs[i] = self.requireExactValueLocationToLayout(raw_arg_loc, actual_layout, expected_layout, "direct_call.arg");
+                arg_layouts[i] = expected_layout;
+            }
+
+            if (builtin.mode == .Debug and proc_spec.ret_layout != call.ret_layout) {
+                std.debug.panic(
+                    "Dev/codegen invariant violated: direct call target layout {} did not match callee ret layout {} for proc {d}",
+                    .{ @intFromEnum(call.ret_layout), @intFromEnum(proc_spec.ret_layout), @intFromEnum(call.proc) },
+                );
+            }
+
+            if (proc_spec.hosted) |hosted| {
+                return try self.generateHostedCall(hosted, arg_locs, arg_layouts, call.ret_layout);
+            }
+
+            const proc = try self.compiledProcForId(call.proc);
+            return try self.generateCallToCompiledProc(proc, arg_locs, arg_layouts, call.ret_layout);
+        }
+
+        fn generateErasedCall(
+            self: *Self,
+            closure_local: LocalId,
+            call_args: LocalSpan,
+            ret_layout: layout.Idx,
+            capture_layout: ?layout.Idx,
+        ) Allocator.Error!ValueLocation {
+            const closure_layout = self.localLayout(closure_local);
+            const runtime_closure_layout = self.runtimeRepresentationLayoutIdx(closure_layout);
+            const closure_layout_val = self.layout_store.getLayout(runtime_closure_layout);
+            if (builtin.mode == .Debug and closure_layout_val.tag != .struct_) {
+                std.debug.panic(
+                    "Dev/codegen invariant violated: erased call closure local {d} must have struct layout, got {s}",
+                    .{ @intFromEnum(closure_local), @tagName(closure_layout_val.tag) },
+                );
+            }
+
+            const closure_size = self.layout_store.layoutSizeAlign(closure_layout_val).size;
+            const closure_loc = try self.emitValueLocal(closure_local);
+            const closure_offset = try self.ensureOnStack(closure_loc, closure_size);
+            const closure_idx = closure_layout_val.data.struct_.idx;
+
+            const fn_offset: i32 = @intCast(self.layout_store.getStructFieldOffsetByOriginalIndex(closure_idx, 0));
+            const fn_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(closure_idx, 0);
+            if (builtin.mode == .Debug and fn_layout != .opaque_ptr) {
+                std.debug.panic(
+                    "Dev/codegen invariant violated: erased call closure field 0 must be opaque_ptr, got {d}",
+                    .{@intFromEnum(fn_layout)},
+                );
+            }
+
+            const capture_offset: i32 = @intCast(self.layout_store.getStructFieldOffsetByOriginalIndex(closure_idx, 1));
+            const has_capture_arg = capture_layout != null;
+
+            const arg_refs = self.store.getLocalSpan(call_args);
+            const extra_args: usize = if (has_capture_arg) 1 else 0;
+            var arg_infos = try self.allocator.alloc(ArgInfo, arg_refs.len + extra_args);
+            defer self.allocator.free(arg_infos);
+
+            for (arg_refs, 0..) |arg_ref, i| {
+                const arg_layout = self.localLayout(arg_ref);
+                const raw_arg_loc = try self.emitValueLocal(arg_ref);
+                const arg_loc = self.requireExactValueLocationToLayout(raw_arg_loc, arg_layout, arg_layout, "erased_call.arg");
+                arg_infos[i] = .{
+                    .loc = arg_loc,
+                    .layout_idx = arg_layout,
+                    .num_regs = self.calcArgRegCount(arg_loc, arg_layout),
+                };
+            }
+
+            if (has_capture_arg) {
+                const capture_layout_idx = capture_layout.?;
+                const capture_size = self.getLayoutSize(capture_layout_idx);
+                if (capture_size == 0) {
+                    const capture_loc = self.fieldLocationFromLayout(closure_offset + capture_offset, 0, capture_layout_idx);
+                    const capture_arg = self.requireExactValueLocationToLayout(capture_loc, capture_layout_idx, capture_layout_idx, "erased_call.capture");
+                    arg_infos[arg_refs.len] = .{
+                        .loc = capture_arg,
+                        .layout_idx = capture_layout_idx,
+                        .num_regs = self.calcArgRegCount(capture_arg, capture_layout_idx),
+                    };
+                } else {
+                    const capture_ptr_reg = try self.allocTempGeneral();
+                    try self.emitLoad(.w64, capture_ptr_reg, frame_ptr, closure_offset + capture_offset);
+
+                    const capture_stack_offset = self.codegen.allocStackSlot(capture_size);
+                    const temp_reg = try self.allocTempGeneral();
+                    try self.copyChunked(temp_reg, capture_ptr_reg, 0, frame_ptr, capture_stack_offset, capture_size);
+                    self.codegen.freeGeneral(temp_reg);
+                    self.codegen.freeGeneral(capture_ptr_reg);
+
+                    const capture_loc = self.fieldLocationFromLayout(capture_stack_offset, capture_size, capture_layout_idx);
+                    const capture_arg = self.requireExactValueLocationToLayout(capture_loc, capture_layout_idx, capture_layout_idx, "erased_call.capture");
+                    arg_infos[arg_refs.len] = .{
+                        .loc = capture_arg,
+                        .layout_idx = capture_layout_idx,
+                        .num_regs = self.calcArgRegCount(capture_arg, capture_layout_idx),
+                    };
+                }
+            }
+
+            const needs_ret_ptr = self.needsInternalReturnByPointer(ret_layout);
+            const ret_buffer_offset = if (needs_ret_ptr) blk: {
+                const runtime_ret_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
+                const size = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_ret_layout)).size;
+                break :blk self.codegen.allocStackSlot(size);
+            } else 0;
+
+            const pbp_plan = try self.computePassByPtrPlan(arg_infos, if (needs_ret_ptr) 1 else 0, true);
+            defer self.scratch_pass_by_ptr.clearFrom(pbp_plan.start);
+            const stack_spill_size = try self.placeCallArguments(arg_infos, .{
+                .needs_ret_ptr = needs_ret_ptr,
+                .ret_buffer_offset = ret_buffer_offset,
+                .pass_by_ptr = pbp_plan.slice,
+                .emit_roc_ops = true,
+            });
+
+            try self.emitLoad(.w64, scratch_reg, frame_ptr, closure_offset + fn_offset);
+            try self.emitCallToReg(scratch_reg);
+
+            if (stack_spill_size > 0) {
+                try self.emitAddStackPtr(stack_spill_size);
+            }
+
+            return self.saveCallReturnValue(ret_layout, needs_ret_ptr, ret_buffer_offset);
+        }
+
+        fn generateHostedCall(
+            self: *Self,
+            hosted: lir.LIR.HostedProc,
+            args: []const ValueLocation,
+            arg_layouts: []const layout.Idx,
+            ret_layout: layout.Idx,
+        ) Allocator.Error!ValueLocation {
+            std.debug.assert(args.len == arg_layouts.len);
+
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const ret_size = self.getLayoutSize(ret_layout);
+            const ret_slot = self.codegen.allocStackSlot(if (ret_size == 0) 8 else ret_size);
+
+            var total_args_size: u32 = 0;
+            for (arg_layouts) |arg_layout| {
+                const runtime_layout = self.runtimeRepresentationLayoutIdx(arg_layout);
+                const size_align = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_layout));
+                total_args_size = std.mem.alignForward(u32, total_args_size, @intCast(size_align.alignment.toByteUnits()));
+                total_args_size += size_align.size;
+            }
+
+            const args_slot = self.codegen.allocStackSlot(if (total_args_size == 0) 8 else total_args_size);
+
+            const hosted_target_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
+            const hosted_table_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X11 else .R11;
+
+            var offset: u32 = 0;
+            for (args, arg_layouts) |arg_loc_raw, arg_layout| {
+                const runtime_layout = self.runtimeRepresentationLayoutIdx(arg_layout);
+                const size_align = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_layout));
+                const arg_size = size_align.size;
+                const arg_align: u32 = @intCast(size_align.alignment.toByteUnits());
+
+                offset = std.mem.alignForward(u32, offset, arg_align);
+                if (arg_size > 0) {
+                    try self.copyBytesToStackOffset(args_slot + @as(i32, @intCast(offset)), arg_loc_raw, arg_size);
+                }
+                offset += arg_size;
+            }
+
+            const hosted_fns_offset: i32 = @intCast(@offsetOf(RocOps, "hosted_fns"));
+            const hosted_fns_count_offset: i32 = hosted_fns_offset + @as(i32, @intCast(@offsetOf(HostedFunctions, "count")));
+            const hosted_fns_ptr_offset: i32 = hosted_fns_offset + @as(i32, @intCast(@offsetOf(HostedFunctions, "fns")));
+            const hosted_entry_offset: i32 = @intCast(@as(usize, hosted.index) * @sizeOf(builtins.host_abi.HostedFn));
+
+            if (builtin.mode == .Debug) {
+                const hosted_count_reg = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(hosted_count_reg);
+                try self.emitLoad(.w32, hosted_count_reg, roc_ops_reg, hosted_fns_count_offset);
+                try self.emitCmpImm(hosted_count_reg, @intCast(hosted.index));
+                const count_ok_patch = try self.codegen.emitCondJump(condAbove());
+                const msg = try std.fmt.allocPrint(
+                    self.allocator,
+                    "Dev/codegen invariant violated: hosted call index {d} out of bounds for proc {d}",
+                    .{ hosted.index, if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64) },
+                );
+                defer self.allocator.free(msg);
+                try self.emitRocCrash(msg);
+                try self.emitTrap();
+                self.codegen.patchJump(count_ok_patch, self.codegen.currentOffset());
+            }
+
+            try self.emitLoad(.w64, hosted_table_reg, roc_ops_reg, hosted_fns_ptr_offset);
+            try self.emitLoad(.w64, hosted_target_reg, hosted_table_reg, hosted_entry_offset);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addRegArg(roc_ops_reg);
+            try builder.addLeaArg(frame_ptr, ret_slot);
+            try builder.addLeaArg(frame_ptr, args_slot);
+            try builder.callReg(hosted_target_reg);
+
+            if (ret_size == 0) {
+                return .{ .immediate_i64 = 0 };
+            }
+
+            return self.stackLocationForLayout(ret_layout, ret_slot);
         }
 
         /// Copy a value location to a stack slot.
-        fn copyToStackSlot(self: *Self, slot: i32, loc: ValueLocation, size: u32) Allocator.Error!void {
-            try self.copyBytesToStackOffset(slot, loc, size);
-        }
-
-        /// Emit compare immediate instruction
         fn emitCmpImm(self: *Self, reg: GeneralReg, value: i64) !void {
             if (comptime target.toCpuArch() == .aarch64) {
                 // CMP reg, #imm12
@@ -12323,21 +9278,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Emit a conditional jump for unsigned less than (for list length comparisons)
-        fn emitJumpIfLessThan(self: *Self) !usize {
-            if (comptime target.toCpuArch() == .aarch64) {
-                // B.CC (branch if carry clear = unsigned less than) with placeholder offset
-                const patch_loc = self.codegen.currentOffset();
-                try self.codegen.emit.bcond(.cc, 0);
-                return patch_loc;
-            } else {
-                // JB (jump if below = unsigned less than) with placeholder offset
-                const patch_loc = self.codegen.currentOffset() + 2;
-                try self.codegen.emit.jccRel32(.below, @bitCast(@as(i32, 0)));
-                return patch_loc;
-            }
-        }
-
-        /// Emit a conditional jump if equal (for while loop false condition check)
         fn emitJumpIfEqual(self: *Self) !usize {
             if (comptime target.toCpuArch() == .aarch64) {
                 // B.EQ (branch if equal) with placeholder offset
@@ -12429,12 +9369,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .start = pbp_start, .slice = pass_by_ptr };
         }
 
-        fn generateCallToCompiledProc(self: *Self, proc: CompiledProc, args_span: anytype, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
-            const args = self.store.getExprSpan(args_span);
-            const proc_arg_layouts = self.store.getLayoutIdxSpan(proc.arg_layouts);
+        fn generateCallToCompiledProc(self: *Self, proc: CompiledProc, args: []const ValueLocation, arg_layouts: []const layout.Idx, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
+            std.debug.assert(args.len == arg_layouts.len);
             const needs_ret_ptr = self.needsInternalReturnByPointer(ret_layout);
             const ret_buffer_offset = if (needs_ret_ptr) blk: {
-                const size = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(ret_layout)).size;
+                const runtime_ret_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
+                const size = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_ret_layout)).size;
                 break :blk self.codegen.allocStackSlot(size);
             } else 0;
 
@@ -12442,16 +9382,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const arg_infos_start = self.scratch_arg_infos.top();
             defer self.scratch_arg_infos.clearFrom(arg_infos_start);
 
-            for (args, 0..) |arg_id, arg_index| {
-                const arg_layout: ?layout.Idx = if (arg_index < proc_arg_layouts.len)
-                    proc_arg_layouts[arg_index]
-                else
-                    self.exprLayout(arg_id);
-                const raw_arg_loc = try self.generateExpr(arg_id);
-                const arg_loc = if (arg_layout) |layout_idx|
-                    self.coerceImmediateToLayout(raw_arg_loc, layout_idx)
-                else
-                    raw_arg_loc;
+            for (args, arg_layouts) |arg_loc_raw, arg_layout| {
+                const arg_loc = self.coerceImmediateToLayout(arg_loc_raw, arg_layout);
                 const num_regs: u8 = self.calcArgRegCount(arg_loc, arg_layout);
                 try self.scratch_arg_infos.append(.{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs });
             }
@@ -12547,7 +9479,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const normalized_value_loc = self.coerceImmediateToLayout(value_loc, layout_idx);
 
             return switch (normalized_value_loc) {
-                .stack, .stack_i128, .stack_str, .list_stack, .noreturn => normalized_value_loc,
+                .stack => |stack_loc| blk: {
+                    break :blk self.stackLocationForLayout(layout_idx, stack_loc.offset);
+                },
+                .stack_i128 => |offset| blk: {
+                    break :blk self.stackLocationForLayout(layout_idx, offset);
+                },
+                .stack_str => |offset| blk: {
+                    break :blk self.stackLocationForLayout(layout_idx, offset);
+                },
+                .list_stack => |info| blk: {
+                    break :blk self.stackLocationForLayout(layout_idx, info.struct_offset);
+                },
+                .noreturn => normalized_value_loc,
                 else => blk: {
                     const size = self.getLayoutSize(layout_idx);
                     if (size == 0) {
@@ -12590,14 +9534,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Check for list/string types - need 3 registers (24 bytes: ptr, len, capacity)
             if (arg_loc == .list_stack or arg_loc == .stack_str) return 3;
             if (arg_layout) |al| {
-                if (al == .str) return 3; // Strings are 24 bytes
+                const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(al);
+                if (runtime_layout_idx == .str) return 3; // Strings are 24 bytes
                 {
                     const ls = self.layout_store;
-                    const layout_val = ls.getLayout(al);
+                    const layout_val = ls.getLayout(runtime_layout_idx);
                     if (layout_val.tag == .zst or ls.layoutSizeAlign(layout_val).size == 0) return 0;
                     if (layout_val.tag == .list or layout_val.tag == .list_of_zst) return 3;
                     // Check for aggregate values > 8 bytes
-                    if (layout_val.tag == .struct_ or layout_val.tag == .tag_union or layout_val.tag == .closure) {
+                    if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
                         const size = ls.layoutSizeAlign(layout_val).size;
                         if (size > 8) return @intCast((size + 7) / 8);
                     }
@@ -12680,6 +9625,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Get the size in bytes for a layout index.
+        fn runtimeRepresentationLayoutIdx(self: *Self, layout_idx: layout.Idx) layout.Idx {
+            const ls = self.layout_store;
+            if (@intFromEnum(layout_idx) >= ls.layouts.len()) return layout_idx;
+
+            const layout_val = ls.getLayout(layout_idx);
+            return switch (layout_val.tag) {
+                .closure => self.runtimeRepresentationLayoutIdx(layout_val.data.closure.captures_layout_idx),
+                else => layout_idx,
+            };
+        }
+
+        fn getLayoutSize(self: *Self, layout_idx: layout.Idx) u32 {
+            const ls = self.layout_store;
+            const layout_val = ls.getLayout(self.runtimeRepresentationLayoutIdx(layout_idx));
+            return ls.layoutSizeAlign(layout_val).size;
+        }
+
         /// Allocate a general register with a unique temporary local ID.
         /// Use this for temporary registers that don't correspond to real local variables.
         /// This prevents register ownership conflicts that can corrupt spill tracking.
@@ -12724,6 +9686,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     break :blk slot;
                 },
                 .immediate_i64 => |val| blk: {
+                    if (builtin.mode == .Debug and size > 8) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: ensureOnStack cannot materialize immediate_i64 into {d}-byte value",
+                            .{size},
+                        );
+                    }
                     const slot = self.codegen.allocStackSlot(@max(8, @as(u32, @intCast(size))));
                     const temp = try self.allocTempGeneral();
                     try self.codegen.emitLoadImm(temp, val);
@@ -12768,7 +9736,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .stack => |s| {
                     const reg = try self.allocTempGeneral();
-                    try self.emitSizedLoadStack(reg, s.offset, s.size);
+                    try self.emitValueLoadStack(reg, s.offset, s.size, s.layout_idx);
                     return reg;
                 },
                 .stack_i128 => |offset| {
@@ -12865,17 +9833,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// Convert callable values stored on stack to a concrete stack ValueLocation
-        /// based on the expected return layout.
-        fn normalizeResultLocForLayout(_: *Self, loc: ValueLocation, _: layout.Idx) ValueLocation {
-            return loc;
-        }
-
         /// Normalize immediate literal representation to match the target layout.
         /// This prevents wide/default literal carriers (e.g. immediate_i128) from
         /// leaking into narrower typed bindings/calls.
         fn coerceImmediateToLayout(_: *Self, loc: ValueLocation, target_layout: layout.Idx) ValueLocation {
             return switch (target_layout) {
+                .str => switch (loc) {
+                    .immediate_i64, .immediate_i128 => if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: scalar immediate cannot stand in for RocStr layout",
+                            .{},
+                        );
+                    } else unreachable,
+                    else => loc,
+                },
                 .f32, .f64 => switch (loc) {
                     .immediate_i64 => |v| .{ .immediate_f64 = @floatFromInt(v) },
                     .immediate_i128 => |v| .{ .immediate_f64 = @floatFromInt(v) },
@@ -12890,6 +9861,34 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     else => loc,
                 },
                 else => loc,
+            };
+        }
+
+        fn unwrapSingleFieldPayloadLayout(self: *Self, layout_idx: layout.Idx) ?layout.Idx {
+            const layout_val = self.layout_store.getLayout(layout_idx);
+            if (layout_val.tag != .struct_) return null;
+
+            const struct_data = self.layout_store.getStructData(layout_val.data.struct_.idx);
+            const fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
+            if (fields.len != 1) return null;
+
+            const field = fields.get(0);
+            if (field.index != 0) return null;
+            return field.layout;
+        }
+
+        fn coerceImmediateForStackCopy(self: *Self, loc: ValueLocation) Allocator.Error!ValueLocation {
+            return switch (loc) {
+                .general_reg, .float_reg => loc,
+                .immediate_f64 => .{ .float_reg = try self.ensureInFloatReg(loc) },
+                .immediate_i64,
+                .immediate_i128,
+                .stack,
+                .stack_i128,
+                .stack_str,
+                .list_stack,
+                => .{ .general_reg = try self.ensureInGeneralReg(loc) },
+                .noreturn => unreachable,
             };
         }
 
@@ -13148,7 +10147,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 else => {
                     // Check if this is a composite type (record/tuple/list) via layout store
                     const ls = self.layout_store;
-                    const layout_val = ls.getLayout(result_layout);
+                    const layout_val = ls.getLayout(self.runtimeRepresentationLayoutIdx(result_layout));
                     switch (layout_val.tag) {
                         .struct_ => {
                             const struct_data = ls.getStructData(layout_val.data.struct_.idx);
@@ -13184,11 +10183,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             // Zero-sized type — nothing to store.
                             return;
                         },
-                        .closure => {
-                            const sa = ls.layoutSizeAlign(layout_val);
-                            try self.copyStackToPtr(loc, saved_ptr_reg, sa.size);
-                            return;
-                        },
                         .box => {
                             // Box is a heap pointer (machine word)
                             const reg = try self.ensureInGeneralReg(loc);
@@ -13198,6 +10192,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .box_of_zst => {
                             // Box of zero-sized type — nothing to store.
                             return;
+                        },
+                        .closure => {
+                            if (builtin.mode == .Debug) {
+                                std.debug.panic(
+                                    "LIR/codegen invariant violated: runtimeRepresentationLayoutIdx returned closure for result layout {}",
+                                    .{@intFromEnum(result_layout)},
+                                );
+                            }
+                            unreachable;
                         },
                     }
                 },
@@ -13371,6 +10374,533 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        /// Copy a specific number of bytes from a value location to a stack offset.
+        fn copyBytesToStackOffset(self: *Self, dest_offset: i32, loc: ValueLocation, size: u32) Allocator.Error!void {
+            if (size == 0) return;
+
+            switch (loc) {
+                .immediate_i64 => |val| {
+                    const reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(reg, val);
+                    switch (size) {
+                        1 => try self.emitStoreStackW8(dest_offset, reg),
+                        2 => try self.emitStoreStackW16(dest_offset, reg),
+                        4 => try self.codegen.emitStoreStack(.w32, dest_offset, reg),
+                        8 => try self.codegen.emitStoreStack(.w64, dest_offset, reg),
+                        16 => {
+                            try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                            const high: i64 = if (val < 0) -1 else 0;
+                            try self.codegen.emitLoadImm(reg, high);
+                            try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
+                        },
+                        roc_list_size => {
+                            std.debug.assert(val == 0);
+                            try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                            try self.codegen.emitStoreStack(.w64, dest_offset + target_ptr_size, reg);
+                            try self.codegen.emitStoreStack(.w64, dest_offset + 2 * target_ptr_size, reg);
+                        },
+                        else => unreachable,
+                    }
+                    self.codegen.freeGeneral(reg);
+                    return;
+                },
+                .immediate_i128 => |val| {
+                    const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                    const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                    const reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(reg);
+
+                    switch (size) {
+                        16 => {
+                            try self.codegen.emitLoadImm(reg, @bitCast(low));
+                            try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                            try self.codegen.emitLoadImm(reg, @bitCast(high));
+                            try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
+                        },
+                        8 => {
+                            try self.codegen.emitLoadImm(reg, @bitCast(low));
+                            try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                        },
+                        4 => {
+                            try self.codegen.emitLoadImm(reg, @intCast(@as(u32, @truncate(low))));
+                            try self.codegen.emitStoreStack(.w32, dest_offset, reg);
+                        },
+                        else => unreachable,
+                    }
+                    return;
+                },
+                .stack_i128 => |src_offset| {
+                    const temp_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(temp_reg);
+                    try self.copyChunked(temp_reg, frame_ptr, src_offset, frame_ptr, dest_offset, size);
+                    return;
+                },
+                .stack_str => |src_offset| {
+                    const temp_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(temp_reg);
+                    try self.copyChunked(temp_reg, frame_ptr, src_offset, frame_ptr, dest_offset, size);
+                    return;
+                },
+                .stack => |stack_loc| {
+                    const temp_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(temp_reg);
+                    try self.copyChunked(temp_reg, frame_ptr, stack_loc.offset, frame_ptr, dest_offset, size);
+                    return;
+                },
+                .list_stack => |info| {
+                    const temp_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(temp_reg);
+                    try self.copyChunked(temp_reg, frame_ptr, info.struct_offset, frame_ptr, dest_offset, size);
+                    return;
+                },
+                else => {},
+            }
+
+            const normalized_value_loc = try self.coerceImmediateForStackCopy(loc);
+            switch (normalized_value_loc) {
+                .general_reg => |reg| {
+                    switch (size) {
+                        1 => try self.emitStoreStackW8(dest_offset, reg),
+                        2 => try self.emitStoreStackW16(dest_offset, reg),
+                        4 => try self.codegen.emitStoreStack(.w32, dest_offset, reg),
+                        8 => try self.codegen.emitStoreStack(.w64, dest_offset, reg),
+                        else => unreachable,
+                    }
+                    self.codegen.freeGeneral(reg);
+                },
+                .float_reg => |freg| {
+                    switch (size) {
+                        4 => {
+                            if (comptime target.toCpuArch() == .aarch64) {
+                                try self.codegen.emit.fcvtFloatFloat(.single, freg, .double, freg);
+                                try self.codegen.emitStoreStackF32(dest_offset, freg);
+                            } else {
+                                try self.codegen.emit.cvtsd2ssRegReg(freg, freg);
+                                try self.codegen.emit.movssMemReg(frame_ptr, dest_offset, freg);
+                            }
+                            self.codegen.freeFloat(freg);
+                        },
+                        8 => {
+                            if (comptime target.toCpuArch() == .aarch64) {
+                                try self.codegen.emitStoreStackF64(dest_offset, freg);
+                            } else {
+                                try self.codegen.emit.movsdMemReg(frame_ptr, dest_offset, freg);
+                            }
+                            self.codegen.freeFloat(freg);
+                        },
+                        else => unreachable,
+                    }
+                },
+                else => unreachable,
+            }
+        }
+
+        fn emitLoad(self: *Self, comptime width: anytype, dst: GeneralReg, base_reg: GeneralReg, offset: i32) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.ldrRegMemSoff(width, dst, base_reg, offset);
+            } else {
+                try self.codegen.emit.movRegMem(width, dst, base_reg, offset);
+            }
+        }
+
+        fn emitStore(self: *Self, comptime width: anytype, base_reg: GeneralReg, offset: i32, src: GeneralReg) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.strRegMemSoff(width, src, base_reg, offset);
+            } else {
+                try self.codegen.emit.movMemReg(width, base_reg, offset, src);
+            }
+        }
+
+        fn emitLoadW8(self: *Self, dst: GeneralReg, base_reg: GeneralReg, offset: i32) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                if (offset >= -256 and offset <= 255) {
+                    try self.codegen.emit.ldurbRegMem(dst, base_reg, @intCast(offset));
+                } else {
+                    const addr_reg: GeneralReg = if (base_reg == .IP0 or dst == .IP0) .IP1 else .IP0;
+                    try self.codegen.emit.movRegImm64(addr_reg, @bitCast(@as(i64, offset)));
+                    try self.codegen.emit.addRegRegReg(.w64, addr_reg, base_reg, addr_reg);
+                    try self.codegen.emit.ldrbRegMem(dst, addr_reg, 0);
+                }
+            } else {
+                try self.codegen.emit.movzxBRegMem(dst, base_reg, offset);
+            }
+        }
+
+        fn emitLoadW16(self: *Self, dst: GeneralReg, base_reg: GeneralReg, offset: i32) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                if (offset >= -256 and offset <= 255) {
+                    try self.codegen.emit.ldurhRegMem(dst, base_reg, @intCast(offset));
+                } else {
+                    const addr_reg: GeneralReg = if (base_reg == .IP0 or dst == .IP0) .IP1 else .IP0;
+                    try self.codegen.emit.movRegImm64(addr_reg, @bitCast(@as(i64, offset)));
+                    try self.codegen.emit.addRegRegReg(.w64, addr_reg, base_reg, addr_reg);
+                    try self.codegen.emit.ldrhRegMem(dst, addr_reg, 0);
+                }
+            } else {
+                try self.codegen.emit.movzxWRegMem(dst, base_reg, offset);
+            }
+        }
+
+        fn emitStoreW8(self: *Self, base_reg: GeneralReg, offset: i32, src: GeneralReg) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                if (offset >= -256 and offset <= 255) {
+                    try self.codegen.emit.sturbRegMem(src, base_reg, @intCast(offset));
+                } else {
+                    const addr_reg: GeneralReg = if (base_reg == .IP0 or src == .IP0) .IP1 else .IP0;
+                    try self.codegen.emit.movRegImm64(addr_reg, @bitCast(@as(i64, offset)));
+                    try self.codegen.emit.addRegRegReg(.w64, addr_reg, base_reg, addr_reg);
+                    try self.codegen.emit.strbRegMem(src, addr_reg, 0);
+                }
+            } else {
+                try self.codegen.emit.movMemReg(.w8, base_reg, offset, src);
+            }
+        }
+
+        fn emitStoreW16(self: *Self, base_reg: GeneralReg, offset: i32, src: GeneralReg) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                if (offset >= -256 and offset <= 255) {
+                    try self.codegen.emit.sturhRegMem(src, base_reg, @intCast(offset));
+                } else {
+                    const addr_reg: GeneralReg = if (base_reg == .IP0 or src == .IP0) .IP1 else .IP0;
+                    try self.codegen.emit.movRegImm64(addr_reg, @bitCast(@as(i64, offset)));
+                    try self.codegen.emit.addRegRegReg(.w64, addr_reg, base_reg, addr_reg);
+                    try self.codegen.emit.strhRegMem(src, addr_reg, 0);
+                }
+            } else {
+                try self.codegen.emit.movMemReg(.w16, base_reg, offset, src);
+            }
+        }
+
+        fn emitAddRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+            std.debug.assert(arch == .aarch64 or arch == .aarch64_be or dst == src1);
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.addRegRegReg(width, dst, src1, src2);
+            } else {
+                try self.codegen.emit.addRegReg(width, dst, src2);
+            }
+        }
+
+        fn emitMulRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+            std.debug.assert(arch == .aarch64 or arch == .aarch64_be or dst == src1);
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.mulRegRegReg(width, dst, src1, src2);
+            } else {
+                try self.codegen.emit.imulRegReg(width, dst, src2);
+            }
+        }
+
+        fn emitSubRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+            std.debug.assert(arch == .aarch64 or arch == .aarch64_be or dst == src1);
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.subRegRegReg(width, dst, src1, src2);
+            } else {
+                try self.codegen.emit.subRegReg(width, dst, src2);
+            }
+        }
+
+        fn emitAndRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+            std.debug.assert(arch == .aarch64 or arch == .aarch64_be or dst == src1);
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.andRegRegReg(width, dst, src1, src2);
+            } else {
+                try self.codegen.emit.andRegReg(width, dst, src2);
+            }
+        }
+
+        fn emitLoadStackW8(self: *Self, dst: GeneralReg, offset: i32) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emitLoadStackByte(dst, offset);
+            } else {
+                try self.codegen.emit.movzxBRegMem(dst, frame_ptr, offset);
+            }
+        }
+
+        fn emitLoadStackW16(self: *Self, dst: GeneralReg, offset: i32) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emitLoadStackHalfword(dst, offset);
+            } else {
+                try self.codegen.emit.movzxWRegMem(dst, frame_ptr, offset);
+            }
+        }
+
+        fn emitShlImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: u8) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.lslRegRegImm(width, dst, src, @intCast(amount));
+            } else {
+                if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
+                try self.codegen.emit.shlRegImm8(width, dst, amount);
+            }
+        }
+
+        fn emitLsrImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: u8) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.lsrRegRegImm(width, dst, src, @intCast(amount));
+            } else {
+                if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
+                try self.codegen.emit.shrRegImm8(width, dst, amount);
+            }
+        }
+
+        fn emitAsrImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: u8) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.asrRegRegImm(width, dst, src, @intCast(amount));
+            } else {
+                if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
+                try self.codegen.emit.sarRegImm8(width, dst, amount);
+            }
+        }
+
+        fn emitShlReg(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.lslRegReg(width, dst, src, amount);
+            } else {
+                try self.emitShiftRegX86(width, dst, src, amount, .shl);
+            }
+        }
+
+        fn emitLsrReg(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.lsrRegReg(width, dst, src, amount);
+            } else {
+                try self.emitShiftRegX86(width, dst, src, amount, .shr);
+            }
+        }
+
+        fn emitAsrReg(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.asrRegReg(width, dst, src, amount);
+            } else {
+                try self.emitShiftRegX86(width, dst, src, amount, .sar);
+            }
+        }
+
+        const ShiftOp = enum { shl, shr, sar };
+
+        fn emitShiftRegX86(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: GeneralReg, comptime op: ShiftOp) !void {
+            if (dst == .RCX) {
+                if (src == .RCX and amount == .R11) {
+                    try self.codegen.emit.xchgRegReg(.w64, .RCX, .R11);
+                } else if (amount == .R11) {
+                    try self.codegen.emit.movRegReg(.w64, .RCX, amount);
+                    if (src != .R11) try self.codegen.emit.movRegReg(width, .R11, src);
+                } else {
+                    if (src != .R11) try self.codegen.emit.movRegReg(width, .R11, src);
+                    if (amount != .RCX) try self.codegen.emit.movRegReg(.w64, .RCX, amount);
+                }
+                switch (op) {
+                    .shl => try self.codegen.emit.shlRegCl(width, .R11),
+                    .shr => try self.codegen.emit.shrRegCl(width, .R11),
+                    .sar => try self.codegen.emit.sarRegCl(width, .R11),
+                }
+                try self.codegen.emit.movRegReg(width, .RCX, .R11);
+            } else {
+                if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
+                if (amount != .RCX) try self.codegen.emit.movRegReg(.w64, .RCX, amount);
+                switch (op) {
+                    .shl => try self.codegen.emit.shlRegCl(width, dst),
+                    .shr => try self.codegen.emit.shrRegCl(width, dst),
+                    .sar => try self.codegen.emit.sarRegCl(width, dst),
+                }
+            }
+        }
+
+        fn emitSaturatingSub(self: *Self, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.cmpRegReg(.w64, a, b);
+                try self.codegen.emit.subRegRegReg(.w64, dst, a, b);
+                try self.codegen.emit.csel(.w64, dst, dst, .ZRSP, .cs);
+            } else {
+                if (dst != a) try self.codegen.emit.movRegReg(.w64, dst, a);
+                try self.codegen.emit.subRegReg(.w64, dst, b);
+                const patch_loc = try self.codegen.emitCondJump(.above_or_equal);
+                try self.codegen.emit.xorRegReg(.w64, dst, dst);
+                self.codegen.patchJump(patch_loc, self.codegen.currentOffset());
+            }
+        }
+
+        fn emitAddImm(self: *Self, dst: GeneralReg, src: GeneralReg, imm: i32) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.addRegRegImm12(.w64, dst, src, @intCast(imm));
+            } else {
+                if (dst != src) try self.codegen.emit.movRegReg(.w64, dst, src);
+                try self.codegen.emit.addImm(dst, imm);
+            }
+        }
+
+        fn emitAddPtrImmAny(self: *Self, dst: GeneralReg, src: GeneralReg, imm: i32) !void {
+            if (imm == 0) {
+                if (dst != src) try self.codegen.emit.movRegReg(.w64, dst, src);
+                return;
+            }
+
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                if (imm > 0 and imm <= 4095) {
+                    try self.codegen.emit.addRegRegImm12(.w64, dst, src, @intCast(imm));
+                    return;
+                }
+
+                const scratch = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(scratch);
+                try self.codegen.emit.movRegImm64(scratch, @bitCast(@as(i64, imm)));
+                try self.codegen.emit.addRegRegReg(.w64, dst, src, scratch);
+                return;
+            }
+
+            try self.emitAddImm(dst, src, imm);
+        }
+
+        fn emitSubImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, imm: i32) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.subRegRegImm12(width, dst, src, @intCast(imm));
+            } else {
+                if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
+                try self.codegen.emit.subRegImm32(width, dst, imm);
+            }
+        }
+
+        fn emitXorImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, imm: u8) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.eorRegRegImm(width, dst, src, @as(u64, imm));
+            } else {
+                if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
+                try self.codegen.emit.xorRegImm8(width, dst, @intCast(imm));
+            }
+        }
+
+        fn emitSetCond(self: *Self, dst: GeneralReg, cond: Condition) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.cset(.w64, dst, cond);
+            } else {
+                try self.codegen.emit.setcc(cond, dst);
+                try self.codegen.emit.andRegImm32(dst, 0xFF);
+            }
+        }
+
+        fn emitLeaStack(self: *Self, dst: GeneralReg, offset: i32) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                if (offset >= 0 and offset <= 4095) {
+                    try self.codegen.emit.addRegRegImm12(.w64, dst, frame_ptr, @intCast(offset));
+                } else {
+                    try self.codegen.emitLoadImm(dst, @intCast(offset));
+                    try self.codegen.emit.addRegRegReg(.w64, dst, frame_ptr, dst);
+                }
+            } else {
+                try self.codegen.emit.leaRegMem(dst, frame_ptr, offset);
+            }
+        }
+
+        fn emitAddStackPtr(self: *Self, imm: i32) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.addRegRegImm12(.w64, stack_ptr, stack_ptr, @intCast(imm));
+            } else {
+                try self.codegen.emit.addRegImm32(.w64, stack_ptr, imm);
+            }
+        }
+
+        fn copyChunked(self: *Self, temp_reg: GeneralReg, src_base: GeneralReg, src_offset: i32, dst_base: GeneralReg, dst_offset: i32, size: u32) Allocator.Error!void {
+            std.debug.assert(size > 0);
+            if (size == 8) {
+                try self.emitLoad(.w64, temp_reg, src_base, src_offset);
+                try self.emitStore(.w64, dst_base, dst_offset, temp_reg);
+                return;
+            }
+            if (size < 8) {
+                var remaining = size;
+                var off: i32 = 0;
+                if (remaining >= 4) {
+                    try self.emitLoad(.w32, temp_reg, src_base, src_offset + off);
+                    try self.emitStore(.w32, dst_base, dst_offset + off, temp_reg);
+                    remaining -= 4;
+                    off += 4;
+                }
+                if (remaining >= 2) {
+                    try self.emitLoadW16(temp_reg, src_base, src_offset + off);
+                    try self.emitStoreW16(dst_base, dst_offset + off, temp_reg);
+                    remaining -= 2;
+                    off += 2;
+                }
+                if (remaining >= 1) {
+                    try self.emitLoadW8(temp_reg, src_base, src_offset + off);
+                    try self.emitStoreW8(dst_base, dst_offset + off, temp_reg);
+                }
+                return;
+            }
+
+            var copied: u32 = 0;
+            while (copied + 8 <= size) : (copied += 8) {
+                const s = src_offset + @as(i32, @intCast(copied));
+                const d = dst_offset + @as(i32, @intCast(copied));
+                try self.emitLoad(.w64, temp_reg, src_base, s);
+                try self.emitStore(.w64, dst_base, d, temp_reg);
+            }
+
+            if (copied < size) {
+                const tail = @as(i32, @intCast(size - 8));
+                const s = src_offset + tail;
+                const d = dst_offset + tail;
+                try self.emitLoad(.w64, temp_reg, src_base, s);
+                try self.emitStore(.w64, dst_base, d, temp_reg);
+            }
+        }
+
+        fn zeroStackArea(self: *Self, offset: i32, size: u32) Allocator.Error!void {
+            const reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(reg);
+            try self.codegen.emitLoadImm(reg, 0);
+
+            var remaining = size;
+            var current_offset = offset;
+            while (remaining >= 8) {
+                try self.codegen.emitStoreStack(.w64, current_offset, reg);
+                current_offset += 8;
+                remaining -= 8;
+            }
+            if (remaining >= 4) {
+                try self.codegen.emitStoreStack(.w32, current_offset, reg);
+                current_offset += 4;
+                remaining -= 4;
+            }
+            if (remaining >= 2) {
+                try self.emitStoreStackW16(current_offset, reg);
+                current_offset += 2;
+                remaining -= 2;
+            }
+            if (remaining >= 1) {
+                try self.emitStoreStackW8(current_offset, reg);
+            }
+        }
+
+        fn emitStoreToPtr(self: *Self, comptime width: anytype, src: GeneralReg, ptr_reg: GeneralReg, byte_offset: i32) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                const shift = comptime switch (width) {
+                    .w64 => @as(u5, 3),
+                    .w32 => @as(u5, 2),
+                    else => @compileError("Use strhRegMem/strbRegMem for .w16/.w8"),
+                };
+                const unsigned_offset: u32 = @intCast(byte_offset);
+                std.debug.assert(@rem(unsigned_offset, @as(u32, 1) << shift) == 0);
+                try self.codegen.emit.strRegMemUoff(width, src, ptr_reg, @intCast(unsigned_offset >> shift));
+            } else {
+                try self.codegen.emit.movMemReg(width, ptr_reg, byte_offset, src);
+            }
+        }
+
+        fn emitStoreStackW8(self: *Self, offset: i32, src: GeneralReg) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emitStoreStackByte(offset, src);
+            } else {
+                try self.codegen.emitStoreStack(.w8, offset, src);
+            }
+        }
+
+        fn emitStoreStackW16(self: *Self, offset: i32, src: GeneralReg) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emitStoreStackHalfword(offset, src);
+            } else {
+                try self.codegen.emitStoreStack(.w16, offset, src);
+            }
+        }
+
         /// Store general register to memory at [ptr_reg] (architecture-specific)
         fn emitStoreToMem(self: *Self, ptr_reg: anytype, src_reg: GeneralReg) !void {
             try self.emitStoreToPtr(.w64, src_reg, ptr_reg, 0);
@@ -13385,6 +10915,167 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        fn generateRcOperandValue(self: *Self, local: LocalId, _: layout.Idx) Allocator.Error!ValueLocation {
+            return self.emitValueLocal(local);
+        }
+
+        /// Generate code for incref operation.
+        fn generateIncref(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
+            const value_loc = try self.generateRcOperandValue(rc_op.value, rc_op.layout_idx);
+            const ls = self.layout_store;
+            const layout_val = ls.getLayout(rc_op.layout_idx);
+            if (!explicitRcLayoutValContainsRefcounted(ls, "dev.generateIncref.layout_rc", layout_val)) return value_loc;
+
+            switch (layout_val.tag) {
+                .closure => {
+                    try self.emitExplicitRcHelperCallForValue(.incref, value_loc, layout_val.data.closure.captures_layout_idx, rc_op.count);
+                },
+                else => {
+                    try self.emitExplicitRcHelperCallForValue(.incref, value_loc, rc_op.layout_idx, rc_op.count);
+                },
+            }
+
+            return value_loc;
+        }
+
+        /// Generate code for decref operation.
+        fn generateDecref(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
+            const value_loc = try self.generateRcOperandValue(rc_op.value, rc_op.layout_idx);
+            const ls = self.layout_store;
+            const layout_val = ls.getLayout(rc_op.layout_idx);
+            if (!explicitRcLayoutValContainsRefcounted(ls, "dev.generateDecref.layout_rc", layout_val)) return value_loc;
+
+            if (layout_val.tag == .closure) {
+                try self.emitExplicitRcHelperCallForValue(.decref, value_loc, layout_val.data.closure.captures_layout_idx, 1);
+            } else {
+                try self.emitExplicitRcHelperCallForValue(.decref, value_loc, rc_op.layout_idx, 1);
+            }
+
+            return value_loc;
+        }
+
+        fn ensureValueOnStackForRc(self: *Self, value_loc: ValueLocation, value_size: u32) Allocator.Error!i32 {
+            return switch (value_loc) {
+                .stack => |s| s.offset,
+                .stack_i128 => |off| off,
+                .stack_str => |off| off,
+                .list_stack => |info| info.struct_offset,
+                .general_reg => |reg| blk: {
+                    std.debug.assert(value_size <= 8);
+                    const slot = self.codegen.allocStackSlot(@intCast(@max(value_size, @as(u32, 8))));
+                    try self.emitStore(.w64, frame_ptr, slot, reg);
+                    break :blk slot;
+                },
+                .immediate_i64 => |imm| blk: {
+                    std.debug.assert(value_size <= 8);
+                    const slot = self.codegen.allocStackSlot(@intCast(@max(value_size, @as(u32, 8))));
+                    const tmp = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(tmp, imm);
+                    try self.emitStore(.w64, frame_ptr, slot, tmp);
+                    self.codegen.freeGeneral(tmp);
+                    break :blk slot;
+                },
+                else => unreachable,
+            };
+        }
+
+        fn emitIncrefAtStackOffset(self: *Self, base_offset: i32, layout_idx: layout.Idx) Allocator.Error!void {
+            const ls = self.layout_store;
+            const layout_val = ls.getLayout(layout_idx);
+            if (!explicitRcLayoutValContainsRefcounted(ls, "dev.emitIncrefAtStackOffset.layout_rc", layout_val)) return;
+
+            switch (layout_val.tag) {
+                .closure => {
+                    try self.emitIncrefAtStackOffset(base_offset, layout_val.data.closure.captures_layout_idx);
+                },
+                else => {
+                    try self.emitExplicitRcHelperCallAtStackOffset(.incref, base_offset, layout_idx, 1);
+                },
+            }
+        }
+
+        fn emitDecrefAtStackOffset(self: *Self, base_offset: i32, layout_idx: layout.Idx) Allocator.Error!void {
+            const ls = self.layout_store;
+            const layout_val = ls.getLayout(layout_idx);
+            if (!explicitRcLayoutValContainsRefcounted(ls, "dev.emitDecrefAtStackOffset.layout_rc", layout_val)) return;
+
+            switch (layout_val.tag) {
+                .closure => {
+                    try self.emitDecrefAtStackOffset(base_offset, layout_val.data.closure.captures_layout_idx);
+                },
+                else => {
+                    try self.emitExplicitRcHelperCallAtStackOffset(.decref, base_offset, layout_idx, 1);
+                },
+            }
+        }
+
+        /// Generate code for free operation.
+        fn generateFree(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
+            const value_loc = try self.generateRcOperandValue(rc_op.value, rc_op.layout_idx);
+            const ls = self.layout_store;
+            const layout_val = ls.getLayout(rc_op.layout_idx);
+            if (!explicitRcLayoutValContainsRefcounted(ls, "dev.generateFree.layout_rc", layout_val)) return value_loc;
+
+            switch (layout_val.tag) {
+                .closure => try self.emitExplicitRcHelperCallForValue(.decref, value_loc, layout_val.data.closure.captures_layout_idx, 1),
+                else => try self.emitExplicitRcHelperCallForValue(.free, value_loc, rc_op.layout_idx, 1),
+            }
+
+            return value_loc;
+        }
+
+        pub fn patchPendingCalls(self: *Self) Allocator.Error!void {
+            for (self.pending_calls.items) |pending| {
+                const proc = self.proc_registry.get(@intFromEnum(pending.target_proc)) orelse unreachable;
+                self.patchCallTarget(pending.call_site, proc.code_start);
+            }
+            self.pending_calls.clearRetainingCapacity();
+        }
+
+        pub fn patchPendingProcAddrs(self: *Self) Allocator.Error!void {
+            for (self.pending_proc_addrs.items) |pending| {
+                const proc = self.proc_registry.get(@intFromEnum(pending.target_proc)) orelse unreachable;
+                self.patchInternalCodeAddress(pending.instr_offset, proc.code_start);
+            }
+            self.pending_proc_addrs.clearRetainingCapacity();
+        }
+
+        fn patchCallTarget(self: *Self, call_site: usize, target_offset: usize) void {
+            const rel_offset: i32 = @intCast(@as(i64, @intCast(target_offset)) - @as(i64, @intCast(call_site)));
+
+            if (comptime target.toCpuArch() == .aarch64) {
+                const instr_offset = @divTrunc(rel_offset, 4);
+                self.codegen.patchBL(call_site, instr_offset);
+            } else {
+                const call_rel = rel_offset - 5;
+                self.codegen.patchCall(call_site, call_rel);
+            }
+        }
+
+        fn patchInternalCodeAddress(self: *Self, instr_offset: usize, target_offset: usize) void {
+            const buf = self.codegen.emit.buf.items;
+            const new_rel: i64 = @as(i64, @intCast(target_offset)) - @as(i64, @intCast(instr_offset));
+            if (comptime target.toCpuArch() == .aarch64) {
+                const existing: u32 = @bitCast(buf[instr_offset..][0..4].*);
+                const rd_bits: u32 = existing & 0x1F;
+                const imm: u21 = @bitCast(@as(i21, @intCast(new_rel)));
+                const immlo: u2 = @truncate(imm);
+                const immhi: u19 = @truncate(imm >> 2);
+                const inst: u32 = (0 << 31) |
+                    (@as(u32, immlo) << 29) |
+                    (0b10000 << 24) |
+                    (@as(u32, immhi) << 5) |
+                    rd_bits;
+                const bytes: [4]u8 = @bitCast(inst);
+                @memcpy(buf[instr_offset..][0..4], &bytes);
+            } else {
+                const lea_size: i64 = 7;
+                const disp: i32 = @intCast(new_rel - lea_size);
+                const bytes: [4]u8 = @bitCast(disp);
+                @memcpy(buf[instr_offset + 3 ..][0..4], &bytes);
+            }
+        }
+
         /// Compile all procedures first, before generating any calls.
         /// This ensures all call targets are known before we need to patch calls.
         pub fn compileAllProcSpecs(self: *Self, proc_specs: []const LirProcSpec) Allocator.Error!void {
@@ -13395,7 +11086,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .code_start = unresolved_proc_code_start,
                     .code_end = 0,
                     .name = proc.name,
-                    .arg_layouts = proc.arg_layouts,
+                    .args = proc.args,
                 });
             }
 
@@ -13404,6 +11095,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             try self.patchPendingCalls();
+            try self.patchPendingProcAddrs();
         }
 
         /// Compile a single procedure as a complete unit.
@@ -13421,26 +11113,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_float_owners = self.codegen.float_owners;
             const saved_roc_ops_reg = self.roc_ops_reg;
             const saved_ret_ptr_slot = self.ret_ptr_slot;
-            const saved_binding_symbol = self.current_binding_symbol;
             const saved_current_proc_name = self.current_proc_name;
-            var saved_symbol_locations = self.symbol_locations.clone() catch return error.OutOfMemory;
-            defer saved_symbol_locations.deinit();
-            var saved_mutable_var_slots = self.mutable_var_slots.clone() catch return error.OutOfMemory;
-            defer saved_mutable_var_slots.deinit();
+            const saved_current_proc_args = self.current_proc_args;
+            const saved_current_stmt_id = self.current_stmt_id;
+            var saved_local_locations = self.local_locations.clone() catch return error.OutOfMemory;
+            defer saved_local_locations.deinit();
             var saved_join_points = self.join_points.clone() catch return error.OutOfMemory;
             defer saved_join_points.deinit();
+            var saved_stmt_locations = self.stmt_locations.clone() catch return error.OutOfMemory;
+            defer saved_stmt_locations.deinit();
             var saved_join_point_jumps = try self.cloneJoinPointJumpsMap(&self.join_point_jumps);
             defer self.deinitJoinPointJumpsMap(&saved_join_point_jumps);
-            var saved_join_point_param_layouts = self.join_point_param_layouts.clone() catch return error.OutOfMemory;
-            defer saved_join_point_param_layouts.deinit();
-            var saved_join_point_param_patterns = self.join_point_param_patterns.clone() catch return error.OutOfMemory;
-            defer saved_join_point_param_patterns.deinit();
-            var saved_loop_break_patches = try self.loop_break_patches.clone(self.allocator);
-            defer saved_loop_break_patches.deinit(self.allocator);
+            var saved_join_point_params = self.join_point_params.clone() catch return error.OutOfMemory;
+            defer saved_join_point_params.deinit();
+            var saved_loop_continue_targets = try self.loop_continue_targets.clone(self.allocator);
+            defer saved_loop_continue_targets.deinit(self.allocator);
 
             // Clear state for procedure's scope
-            self.symbol_locations.clearRetainingCapacity();
-            self.mutable_var_slots.clearRetainingCapacity();
+            self.local_locations.clearRetainingCapacity();
             self.clearFunctionControlFlowState();
             self.codegen.callee_saved_used = 0;
             self.codegen.callee_saved_available = CodeGen.CALLEE_SAVED_GENERAL_MASK;
@@ -13449,8 +11139,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.free_float = CodeGen.INITIAL_FREE_FLOAT;
             self.codegen.float_owners = [_]?u32{null} ** CodeGen.NUM_FLOAT_REGS;
             self.roc_ops_reg = null;
-            self.current_binding_symbol = null;
             self.current_proc_name = proc.name;
+            self.current_proc_args = proc.args;
+            self.current_stmt_id = null;
 
             // Reserve R12/X20 for roc_ops exactly like standalone lambda compilation.
             if (comptime target.toCpuArch() == .x86_64) {
@@ -13487,7 +11178,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .code_start = unresolved_proc_code_start,
                     .code_end = 0,
                     .name = proc.name,
-                    .arg_layouts = proc.arg_layouts,
+                    .args = proc.args,
                 };
             } else {
                 try self.proc_registry.put(key, .{
@@ -13495,20 +11186,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .code_start = unresolved_proc_code_start,
                     .code_end = 0,
                     .name = proc.name,
-                    .arg_layouts = proc.arg_layouts,
+                    .args = proc.args,
                 });
-            }
-
-            // Set up recursive context
-            const old_recursive_symbol = self.current_recursive_symbol;
-            const old_recursive_join_point = self.current_recursive_join_point;
-
-            switch (proc.is_self_recursive) {
-                .self_recursive => |join_point_id| {
-                    self.current_recursive_symbol = proc.name;
-                    self.current_recursive_join_point = join_point_id;
-                },
-                .not_self_recursive => {},
             }
 
             // Save early return state (return_stmt uses jump-to-epilogue mechanism)
@@ -13526,22 +11205,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.free_float = saved_free_float;
                 self.codegen.float_owners = saved_float_owners;
                 self.roc_ops_reg = saved_roc_ops_reg;
-                self.current_binding_symbol = saved_binding_symbol;
                 self.current_proc_name = saved_current_proc_name;
-                self.symbol_locations.deinit();
-                self.symbol_locations = saved_symbol_locations.clone() catch unreachable;
-                self.mutable_var_slots.deinit();
-                self.mutable_var_slots = saved_mutable_var_slots.clone() catch unreachable;
+                self.current_proc_args = saved_current_proc_args;
+                self.current_stmt_id = saved_current_stmt_id;
+                self.local_locations.deinit();
+                self.local_locations = saved_local_locations.clone() catch unreachable;
                 self.join_points.deinit();
                 self.join_points = saved_join_points.clone() catch unreachable;
+                self.stmt_locations.deinit();
+                self.stmt_locations = saved_stmt_locations.clone() catch unreachable;
                 self.deinitJoinPointJumpsMap(&self.join_point_jumps);
                 self.join_point_jumps = self.cloneJoinPointJumpsMap(&saved_join_point_jumps) catch unreachable;
-                self.join_point_param_layouts.deinit();
-                self.join_point_param_layouts = saved_join_point_param_layouts.clone() catch unreachable;
-                self.join_point_param_patterns.deinit();
-                self.join_point_param_patterns = saved_join_point_param_patterns.clone() catch unreachable;
-                self.loop_break_patches.deinit(self.allocator);
-                self.loop_break_patches = saved_loop_break_patches.clone(self.allocator) catch unreachable;
+                self.join_point_params.deinit();
+                self.join_point_params = saved_join_point_params.clone() catch unreachable;
+                self.loop_continue_targets.deinit(self.allocator);
+                self.loop_continue_targets = saved_loop_continue_targets.clone(self.allocator) catch unreachable;
                 self.early_return_ret_layout = saved_early_return_ret_layout;
                 self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
             }
@@ -13558,15 +11236,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Bind parameters to argument registers. Large returns use a hidden
             // first argument register for the return buffer.
             const initial_param_reg_idx: u8 = if (needs_ret_ptr) 1 else 0;
-            try self.bindLambdaParams(proc.args, initial_param_reg_idx, proc.force_pass_by_ptr);
+            try self.bindProcParams(proc.args, initial_param_reg_idx);
 
-            // Generate the body (control flow statements)
-            // Note: .return_stmt emits jumps that are patched to the shared epilogue below
-            try self.generateStmt(proc.body);
+            if (proc.hosted) |hosted| {
+                try self.generateHostedProcWrapper(hosted, proc);
+            } else {
+                const body = requireProcBody(proc);
+                try self.ensureStableLocationsForStmtLocals(body);
 
-            // Restore recursive context
-            self.current_recursive_symbol = old_recursive_symbol;
-            self.current_recursive_join_point = old_recursive_join_point;
+                // Generate the body (control flow statements)
+                // Note: .return_stmt emits jumps that are patched to the shared epilogue below
+                try self.generateStmt(body);
+            }
 
             // Emit shared epilogue using DeferredFrameBuilder with actual stack usage
             const body_epilogue_offset = self.codegen.currentOffset();
@@ -13611,6 +11292,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Keep the lambda caches in final coordinates so later call sites resolve correctly.
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, std.math.maxInt(u64));
                 self.shiftPendingCalls(body_start, body_end, prologue_size);
+                self.shiftPendingProcAddrs(body_start, body_end, prologue_size);
 
                 // Re-patch internal calls/addr whose targets are outside the shifted body
                 self.repatchInternalCalls(body_start, body_end, prologue_size, body_start);
@@ -13662,6 +11344,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Keep the lambda caches in final coordinates so later call sites resolve correctly.
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, std.math.maxInt(u64));
                 self.shiftPendingCalls(body_start, body_end, prologue_size);
+                self.shiftPendingProcAddrs(body_start, body_end, prologue_size);
 
                 // Re-patch internal calls/addr whose targets are outside the shifted body
                 self.repatchInternalCalls(body_start, body_end, prologue_size, body_start);
@@ -13695,72 +11378,104 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.float_owners = saved_float_owners;
             self.roc_ops_reg = saved_roc_ops_reg;
             self.ret_ptr_slot = saved_ret_ptr_slot;
-            self.current_binding_symbol = saved_binding_symbol;
             self.current_proc_name = saved_current_proc_name;
-            self.symbol_locations.deinit();
-            self.symbol_locations = saved_symbol_locations.clone() catch return error.OutOfMemory;
-            self.mutable_var_slots.deinit();
-            self.mutable_var_slots = saved_mutable_var_slots.clone() catch return error.OutOfMemory;
+            self.current_proc_args = saved_current_proc_args;
+            self.current_stmt_id = saved_current_stmt_id;
+            self.local_locations.deinit();
+            self.local_locations = saved_local_locations.clone() catch return error.OutOfMemory;
             self.join_points.deinit();
             self.join_points = saved_join_points.clone() catch return error.OutOfMemory;
+            self.stmt_locations.deinit();
+            self.stmt_locations = saved_stmt_locations.clone() catch return error.OutOfMemory;
             self.deinitJoinPointJumpsMap(&self.join_point_jumps);
             self.join_point_jumps = try self.cloneJoinPointJumpsMap(&saved_join_point_jumps);
-            self.join_point_param_layouts.deinit();
-            self.join_point_param_layouts = saved_join_point_param_layouts.clone() catch return error.OutOfMemory;
-            self.join_point_param_patterns.deinit();
-            self.join_point_param_patterns = saved_join_point_param_patterns.clone() catch return error.OutOfMemory;
-            self.loop_break_patches.deinit(self.allocator);
-            self.loop_break_patches = try saved_loop_break_patches.clone(self.allocator);
+            self.join_point_params.deinit();
+            self.join_point_params = try saved_join_point_params.clone();
+            self.loop_continue_targets.deinit(self.allocator);
+            self.loop_continue_targets = try saved_loop_continue_targets.clone(self.allocator);
         }
 
-        /// Maximum number of registers used for multi-register returns in internal Roc calls.
-        /// x86_64: RAX, RDX, RCX, R8, R9, R10, R11, RDI, RSI = 9 registers = 72 bytes
-        /// aarch64: X0-X7, XR, X9-X15 = 16 registers = 128 bytes
-        const max_return_regs: u32 = if (target.toCpuArch() == .aarch64) 16 else 9;
-        const max_return_size: u32 = max_return_regs * 8;
+        fn requireProcBody(proc: LirProcSpec) lir.LIR.CFStmtId {
+            return proc.body orelse std.debug.panic(
+                "Dev/codegen invariant violated: non-hosted proc {d} missing statement body",
+                .{proc.name.raw()},
+            );
+        }
+
+        fn generateHostedProcWrapper(
+            self: *Self,
+            hosted: lir.LIR.HostedProc,
+            proc: LirProcSpec,
+        ) Allocator.Error!void {
+            if (builtin.mode == .Debug and proc.body != null) {
+                std.debug.panic(
+                    "Dev/codegen invariant violated: hosted proc {d} unexpectedly carried a statement body",
+                    .{proc.name.raw()},
+                );
+            }
+
+            const params = self.store.getLocalSpan(proc.args);
+            const arg_locs = try self.allocator.alloc(ValueLocation, params.len);
+            defer self.allocator.free(arg_locs);
+            const arg_layouts = try self.allocator.alloc(layout.Idx, params.len);
+            defer self.allocator.free(arg_layouts);
+
+            for (params, 0..) |param, i| {
+                const arg_layout = self.localLayout(param);
+                const raw_arg_loc = try self.emitValueLocal(param);
+                arg_locs[i] = self.requireExactValueLocationToLayout(raw_arg_loc, arg_layout, arg_layout, "hosted_wrapper.arg");
+                arg_layouts[i] = arg_layout;
+            }
+
+            const raw_result_loc = try self.generateHostedCall(hosted, arg_locs, arg_layouts, proc.ret_layout);
+            const result_loc = self.requireExactValueLocationToLayout(raw_result_loc, proc.ret_layout, proc.ret_layout, "hosted_wrapper.ret");
+
+            if (self.ret_ptr_slot) |ret_slot| {
+                try self.copyResultToReturnPointer(result_loc, proc.ret_layout, ret_slot);
+            } else {
+                try self.moveToReturnRegisterWithLayout(result_loc, proc.ret_layout);
+            }
+        }
+
+        /// Internal Roc proc calls use at most two general-purpose return registers.
+        /// Larger runtime values use a hidden return pointer instead.
+        const max_internal_return_words: u32 = 2;
+        const max_internal_return_size: u32 = max_internal_return_words * 8;
 
         /// Check if a return type exceeds the register limit and needs return-by-pointer.
         /// When true, the caller passes a hidden first argument (pointer to a pre-allocated
         /// buffer) and the callee writes the result there instead of using return registers.
         fn needsInternalReturnByPointer(self: *Self, ret_layout: layout.Idx) bool {
             const ls = self.layout_store;
-            if (@intFromEnum(ret_layout) < ls.layouts.len()) {
-                const layout_val = ls.getLayout(ret_layout);
-                if (layout_val.tag == .struct_ or layout_val.tag == .tag_union or layout_val.tag == .closure) {
-                    return ls.layoutSizeAlign(layout_val).size > max_return_size;
-                }
-            }
-            return false;
+            const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(ret_layout);
+            const runtime_layout = ls.getLayout(runtime_layout_idx);
+            return ls.layoutSizeAlign(runtime_layout).size > max_internal_return_size;
         }
 
         /// Save the return value from a call into a stack-based ValueLocation.
         /// Save the return value from a compiled proc call into a stack-based ValueLocation.
         /// Handles i128/str/list/multi-reg struct/scalar returns.
         fn saveCallReturnValue(self: *Self, ret_layout: layout.Idx, needs_ret_ptr: bool, ret_buffer_offset: i32) Allocator.Error!ValueLocation {
+            const runtime_ret_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
             // If we used return-by-pointer, the callee has written the result
             // to our pre-allocated buffer. No register saving needed.
             if (needs_ret_ptr) {
-                return .{ .stack = .{ .offset = ret_buffer_offset } };
+                return self.stackLocationForLayout(runtime_ret_layout, ret_buffer_offset);
             }
 
             // Float returns come back in the float return register (V0/XMM0),
             // not in the integer return register (X0/RAX).
-            if (ret_layout == .f32) {
+            if (runtime_ret_layout == .f32) {
                 const stack_offset = self.codegen.allocStackSlot(4);
                 if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.fcvtFloatFloat(.single, .V0, .double, .V0);
-                    const bits_reg = try self.allocTempGeneral();
-                    try self.codegen.emit.fmovGenFromFloat(.single, bits_reg, .V0);
-                    try self.codegen.emitStoreStack(.w32, stack_offset, bits_reg);
-                    self.codegen.freeGeneral(bits_reg);
+                    try self.codegen.emitStoreStackF32(stack_offset, .V0);
                 } else {
-                    try self.codegen.emit.cvtsd2ssRegReg(.XMM0, .XMM0);
                     try self.codegen.emit.movssMemReg(.RBP, stack_offset, .XMM0);
                 }
                 return .{ .stack = .{ .offset = stack_offset, .size = .dword } };
             }
 
-            if (ret_layout == .f64) {
+            if (runtime_ret_layout == .f64) {
                 const stack_offset = self.codegen.allocStackSlot(8);
                 if (comptime target.toCpuArch() == .aarch64) {
                     try self.codegen.emitStoreStackF64(stack_offset, .V0);
@@ -13771,7 +11486,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             // Handle i128/Dec return values (returned in two registers)
-            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
+            if (runtime_ret_layout == .i128 or runtime_ret_layout == .u128 or runtime_ret_layout == .dec) {
                 const stack_offset = self.codegen.allocStackSlot(16);
                 try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg_0);
                 try self.codegen.emitStoreStack(.w64, stack_offset + 8, ret_reg_1);
@@ -13779,7 +11494,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             // Check if return type is a string (24 bytes)
-            if (ret_layout == .str) {
+            if (runtime_ret_layout == .str) {
                 const stack_offset = self.codegen.allocStackSlot(roc_str_size);
                 try self.emitStore(.w64, frame_ptr, stack_offset, ret_reg_0);
                 try self.emitStore(.w64, frame_ptr, stack_offset + 8, ret_reg_1);
@@ -13790,7 +11505,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Check if return type is a list (24 bytes)
             const is_list_return = blk: {
                 const ls = self.layout_store;
-                const layout_val = ls.getLayout(ret_layout);
+                const layout_val = ls.getLayout(runtime_ret_layout);
                 break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
             };
 
@@ -13809,8 +11524,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Check if return type is a multi-register value (record, tag_union, closure, tuple > 8 bytes)
             {
                 const ls = self.layout_store;
-                const layout_val = ls.getLayout(ret_layout);
-                if (layout_val.tag == .struct_ or layout_val.tag == .tag_union or layout_val.tag == .closure) {
+                const layout_val = ls.getLayout(runtime_ret_layout);
+                if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
                     const size_align = ls.layoutSizeAlign(layout_val);
                     if (size_align.size > 8) {
                         const stack_offset = self.codegen.allocStackSlot(size_align.size);
@@ -13848,6 +11563,208 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             /// If true, append roc_ops as the final argument.
             emit_roc_ops: bool = false,
         };
+
+        const FrozenCallArg = struct {
+            stack_offset: i32,
+            num_regs: u8,
+            value_size: ValueSize = .qword,
+            pass_by_ptr: bool,
+        };
+
+        fn freezeCallArg(self: *Self, info: ArgInfo, pass_by_ptr: bool) Allocator.Error!FrozenCallArg {
+            std.debug.assert(info.num_regs > 0);
+
+            if (pass_by_ptr or info.num_regs > 1) {
+                const size: u32 = @as(u32, info.num_regs) * 8;
+                const offset = switch (info.loc) {
+                    .stack_i128, .stack_str => |off| off,
+                    .stack => |s| s.offset,
+                    .list_stack => |li| li.struct_offset,
+                    .immediate_i128 => |val| blk: {
+                        const slot = self.codegen.allocStackSlot(@intCast(size));
+                        const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                        const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                        try self.codegen.emitLoadImm(scratch_reg, @bitCast(low));
+                        try self.emitStore(.w64, frame_ptr, slot, scratch_reg);
+                        try self.codegen.emitLoadImm(scratch_reg, @bitCast(high));
+                        try self.emitStore(.w64, frame_ptr, slot + 8, scratch_reg);
+                        break :blk slot;
+                    },
+                    else => if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "freezeCallArg expected stack-backed multi-reg arg, got {s} for layout {any}",
+                            .{ @tagName(info.loc), info.layout_idx },
+                        );
+                    } else unreachable,
+                };
+                return .{
+                    .stack_offset = offset,
+                    .num_regs = info.num_regs,
+                    .pass_by_ptr = pass_by_ptr,
+                };
+            }
+
+            const arg_layout = info.layout_idx orelse .u64;
+            if (arg_layout == .f32) {
+                switch (info.loc) {
+                    .stack => |s| {
+                        if (s.size == .dword) {
+                            return .{
+                                .stack_offset = s.offset,
+                                .num_regs = 1,
+                                .value_size = .dword,
+                                .pass_by_ptr = false,
+                            };
+                        }
+                    },
+                    .float_reg => |freg| {
+                        const slot = self.codegen.allocStackSlot(4);
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            const tmp = self.codegen.allocFloat() orelse unreachable;
+                            try self.codegen.emit.fcvtFloatFloat(.single, tmp, .double, freg);
+                            try self.codegen.emitStoreStackF32(slot, tmp);
+                            self.codegen.freeFloat(tmp);
+                        } else {
+                            const tmp = self.codegen.allocFloat() orelse unreachable;
+                            try self.codegen.emit.cvtsd2ssRegReg(tmp, freg);
+                            try self.codegen.emitStoreStackF32(slot, tmp);
+                            self.codegen.freeFloat(tmp);
+                        }
+                        return .{
+                            .stack_offset = slot,
+                            .num_regs = 1,
+                            .value_size = .dword,
+                            .pass_by_ptr = false,
+                        };
+                    },
+                    else => {},
+                }
+
+                const slot = self.codegen.allocStackSlot(4);
+                switch (info.loc) {
+                    .general_reg => |reg| {
+                        try self.emitStore(.w32, frame_ptr, slot, reg);
+                    },
+                    .immediate_i64 => |val| {
+                        const f32_val: f32 = @floatFromInt(val);
+                        const bits: u32 = @bitCast(f32_val);
+                        try self.codegen.emitLoadImm(scratch_reg, @as(i64, bits));
+                        try self.emitStore(.w32, frame_ptr, slot, scratch_reg);
+                    },
+                    .immediate_f64 => |val| {
+                        const f32_val: f32 = @floatCast(val);
+                        const bits: u32 = @bitCast(f32_val);
+                        try self.codegen.emitLoadImm(scratch_reg, @as(i64, bits));
+                        try self.emitStore(.w32, frame_ptr, slot, scratch_reg);
+                    },
+                    .stack => |s| {
+                        const tmp = self.codegen.allocFloat() orelse unreachable;
+                        try self.codegen.emitLoadStackF64(tmp, s.offset);
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            try self.codegen.emit.fcvtFloatFloat(.single, tmp, .double, tmp);
+                            try self.codegen.emitStoreStackF32(slot, tmp);
+                        } else {
+                            try self.codegen.emit.cvtsd2ssRegReg(tmp, tmp);
+                            try self.codegen.emitStoreStackF32(slot, tmp);
+                        }
+                        self.codegen.freeFloat(tmp);
+                    },
+                    else => if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "freezeCallArg unsupported F32 source {s} for layout {any}",
+                            .{ @tagName(info.loc), info.layout_idx },
+                        );
+                    } else unreachable,
+                }
+                return .{
+                    .stack_offset = slot,
+                    .num_regs = 1,
+                    .value_size = .dword,
+                    .pass_by_ptr = false,
+                };
+            }
+
+            switch (info.loc) {
+                .stack => |s| {
+                    if (s.size == .qword) {
+                        return .{
+                            .stack_offset = s.offset,
+                            .num_regs = 1,
+                            .value_size = .qword,
+                            .pass_by_ptr = false,
+                        };
+                    }
+                },
+                .stack_i128 => |offset| {
+                    return .{
+                        .stack_offset = offset,
+                        .num_regs = 1,
+                        .value_size = .qword,
+                        .pass_by_ptr = false,
+                    };
+                },
+                .stack_str => |offset| {
+                    return .{
+                        .stack_offset = offset,
+                        .num_regs = 1,
+                        .value_size = .qword,
+                        .pass_by_ptr = false,
+                    };
+                },
+                .list_stack => |li| {
+                    return .{
+                        .stack_offset = li.struct_offset,
+                        .num_regs = 1,
+                        .value_size = .qword,
+                        .pass_by_ptr = false,
+                    };
+                },
+                .float_reg => |freg| {
+                    const slot = self.codegen.allocStackSlot(8);
+                    try self.codegen.emitStoreStackF64(slot, freg);
+                    return .{
+                        .stack_offset = slot,
+                        .num_regs = 1,
+                        .value_size = .qword,
+                        .pass_by_ptr = false,
+                    };
+                },
+                else => {},
+            }
+
+            const slot = self.codegen.allocStackSlot(8);
+            switch (info.loc) {
+                .general_reg => |reg| {
+                    try self.emitStore(.w64, frame_ptr, slot, reg);
+                },
+                .immediate_i64 => |val| {
+                    try self.codegen.emitLoadImm(scratch_reg, val);
+                    try self.emitStore(.w64, frame_ptr, slot, scratch_reg);
+                },
+                .immediate_f64 => |val| {
+                    const bits: u64 = @bitCast(val);
+                    try self.codegen.emitLoadImm(scratch_reg, @bitCast(bits));
+                    try self.emitStore(.w64, frame_ptr, slot, scratch_reg);
+                },
+                .stack => |s| {
+                    try self.emitValueLoadStack(scratch_reg, s.offset, s.size, s.layout_idx);
+                    try self.emitStore(.w64, frame_ptr, slot, scratch_reg);
+                },
+                .noreturn => unreachable,
+                else => if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "freezeCallArg unsupported scalar source {s} for layout {any}",
+                        .{ @tagName(info.loc), info.layout_idx },
+                    );
+                } else unreachable,
+            }
+            return .{
+                .stack_offset = slot,
+                .num_regs = 1,
+                .value_size = .qword,
+                .pass_by_ptr = false,
+            };
+        }
 
         /// Place arguments in registers and/or stack slots per the calling convention.
         /// Handles i128 even-alignment on aarch64, 3-reg list/str, multi-reg structs,
@@ -13899,6 +11816,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitSubImm(.w64, stack_ptr, stack_ptr, stack_spill_size);
             }
 
+            const frozen_args = try self.allocator.alloc(FrozenCallArg, arg_infos.len);
+            defer self.allocator.free(frozen_args);
+            for (arg_infos, 0..) |info, i| {
+                if (info.num_regs == 0) {
+                    frozen_args[i] = .{
+                        .stack_offset = 0,
+                        .num_regs = 0,
+                        .pass_by_ptr = false,
+                    };
+                    continue;
+                }
+
+                const pbp = if (config.pass_by_ptr) |p| p[i] else false;
+                frozen_args[i] = try self.freezeCallArg(info, pbp);
+            }
+
             // Place arguments in registers or on stack
             var reg_idx: u8 = 0;
             var stack_arg_offset: i32 = 0;
@@ -13914,34 +11847,29 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (info.num_regs == 0) {
                     continue;
                 }
-                const arg_loc = info.loc;
+                const frozen = frozen_args[i];
                 const arg_layout = info.layout_idx;
 
                 // Check if this argument is passed by pointer
-                if (config.pass_by_ptr) |pbp| {
-                    if (pbp[i]) {
-                        const arg_size: u32 = @as(u32, info.num_regs) * 8;
-                        const arg_offset = try self.ensureOnStack(arg_loc, arg_size);
-                        if (reg_idx < max_arg_regs) {
-                            const arg_reg = self.getArgumentRegister(reg_idx);
-                            try self.emitLeaStack(arg_reg, arg_offset);
-                            reg_idx += 1;
-                        } else {
-                            const temp = try self.allocTempGeneral();
-                            try self.emitLeaStack(temp, arg_offset);
-                            try self.spillArgToStack(.{ .general_reg = temp }, null, stack_arg_offset, 1);
-                            self.codegen.freeGeneral(temp);
-                            stack_arg_offset += 8;
-                            reg_idx = max_arg_regs;
-                        }
-                        continue;
+                if (frozen.pass_by_ptr) {
+                    if (reg_idx < max_arg_regs) {
+                        const arg_reg = self.getArgumentRegister(reg_idx);
+                        try self.emitLeaStack(arg_reg, frozen.stack_offset);
+                        reg_idx += 1;
+                    } else {
+                        try self.codegen.emitLoadImm(scratch_reg, 0);
+                        try self.emitLeaStack(scratch_reg, frozen.stack_offset);
+                        try self.spillArgToStack(.{ .general_reg = scratch_reg }, null, stack_arg_offset, 1);
+                        stack_arg_offset += 8;
+                        reg_idx = max_arg_regs;
                     }
+                    continue;
                 }
 
                 // Check if this argument fits in registers
                 if (reg_idx + info.num_regs <= max_arg_regs) {
                     // Handle i128/Dec arguments (need two registers, even-aligned on aarch64)
-                    const is_i128_arg = self.argNeedsI128Abi(arg_loc, arg_layout);
+                    const is_i128_arg = self.argNeedsI128Abi(info.loc, arg_layout);
                     if (is_i128_arg) {
                         if (comptime target.toCpuArch() == .aarch64) {
                             if (reg_idx % 2 != 0) {
@@ -13950,103 +11878,42 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                         const low_reg = self.getArgumentRegister(reg_idx);
                         const high_reg = self.getArgumentRegister(reg_idx + 1);
-                        switch (arg_loc) {
-                            .stack_i128 => |offset| {
-                                try self.codegen.emitLoadStack(.w64, low_reg, offset);
-                                try self.codegen.emitLoadStack(.w64, high_reg, offset + 8);
-                            },
-                            .stack => |s| {
-                                try self.codegen.emitLoadStack(.w64, low_reg, s.offset);
-                                try self.codegen.emitLoadStack(.w64, high_reg, s.offset + 8);
-                            },
-                            .immediate_i128 => |val| {
-                                const low: u64 = @truncate(@as(u128, @bitCast(val)));
-                                const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                                try self.codegen.emitLoadImm(low_reg, @bitCast(low));
-                                try self.codegen.emitLoadImm(high_reg, @bitCast(high));
-                            },
-                            else => if (builtin.mode == .Debug) {
-                                std.debug.panic(
-                                    "placeCallArguments i128 ABI mismatch: arg_loc={s} arg_layout={?} proc={d}",
-                                    .{
-                                        @tagName(arg_loc),
-                                        arg_layout,
-                                        if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64),
-                                    },
-                                );
-                            } else unreachable,
-                        }
+                        try self.codegen.emitLoadStack(.w64, low_reg, frozen.stack_offset);
+                        try self.codegen.emitLoadStack(.w64, high_reg, frozen.stack_offset + 8);
                         reg_idx += 2;
                         continue;
                     }
 
                     if (info.num_regs == 3) {
-                        // List or string (24 bytes)
-                        const offset: i32 = switch (arg_loc) {
-                            .stack => |s| s.offset,
-                            .list_stack => |li| li.struct_offset,
-                            .stack_str => |off| off,
-                            else => if (builtin.mode == .Debug) {
-                                std.debug.panic(
-                                    "placeCallArguments expected 3-register arg on stack, got {s} for layout {any}",
-                                    .{ @tagName(arg_loc), arg_layout },
-                                );
-                            } else unreachable,
-                        };
                         const reg0 = self.getArgumentRegister(reg_idx);
                         const reg1 = self.getArgumentRegister(reg_idx + 1);
                         const reg2 = self.getArgumentRegister(reg_idx + 2);
-                        try self.emitLoad(.w64, reg0, frame_ptr, offset);
-                        try self.emitLoad(.w64, reg1, frame_ptr, offset + 8);
-                        try self.emitLoad(.w64, reg2, frame_ptr, offset + 16);
+                        try self.emitLoad(.w64, reg0, frame_ptr, frozen.stack_offset);
+                        try self.emitLoad(.w64, reg1, frame_ptr, frozen.stack_offset + 8);
+                        try self.emitLoad(.w64, reg2, frame_ptr, frozen.stack_offset + 16);
                         reg_idx += 3;
                     } else if (info.num_regs > 1) {
                         // Multi-register struct (record > 8 bytes)
-                        const offset: i32 = switch (arg_loc) {
-                            .stack => |s| s.offset,
-                            else => {
-                                const arg_reg = self.getArgumentRegister(reg_idx);
-                                try self.moveToReg(arg_loc, arg_reg);
-                                reg_idx += 1;
-                                continue;
-                            },
-                        };
                         var ri: u8 = 0;
                         while (ri < info.num_regs) : (ri += 1) {
                             const r = self.getArgumentRegister(reg_idx + ri);
-                            try self.codegen.emitLoadStack(.w64, r, offset + @as(i32, ri) * 8);
+                            try self.codegen.emitLoadStack(.w64, r, frozen.stack_offset + @as(i32, ri) * 8);
                         }
                         reg_idx += info.num_regs;
                     } else {
                         // Single register argument
                         const arg_reg = self.getArgumentRegister(reg_idx);
-                        if (arg_layout == .f32) {
-                            const bits_reg = try self.materializeF32BitsInGeneralReg(arg_loc);
-                            if (bits_reg != arg_reg) {
-                                try self.codegen.emit.movRegReg(.w64, arg_reg, bits_reg);
-                                self.codegen.freeGeneral(bits_reg);
-                            }
-                        } else switch (arg_loc) {
-                            .general_reg => |reg| {
-                                if (reg != arg_reg) {
-                                    try self.codegen.emit.movRegReg(.w64, arg_reg, reg);
-                                }
-                            },
-                            .stack => |s| {
-                                try self.emitSizedLoadStack(arg_reg, s.offset, s.size);
-                            },
-                            .immediate_i64 => |val| {
-                                try self.codegen.emitLoadImm(arg_reg, @bitCast(val));
-                            },
-                            else => {
-                                try self.moveToReg(arg_loc, arg_reg);
-                            },
-                        }
+                        try self.emitSizedLoadStack(arg_reg, frozen.stack_offset, frozen.value_size);
                         reg_idx += 1;
                     }
                 } else {
                     // Spill to stack — registers exhausted
-                    try self.spillArgToStack(arg_loc, arg_layout, stack_arg_offset, info.num_regs);
+                    try self.spillArgToStack(
+                        .{ .stack = .{ .offset = frozen.stack_offset, .size = frozen.value_size, .layout_idx = arg_layout orelse .u64 } },
+                        arg_layout,
+                        stack_arg_offset,
+                        info.num_regs,
+                    );
                     stack_arg_offset += @as(i32, info.num_regs) * 8;
                     reg_idx = max_arg_regs;
                 }
@@ -14074,20 +11941,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Calculate the number of registers a parameter needs based on its layout.
         fn calcParamRegCount(self: *Self, layout_idx: layout.Idx) u8 {
+            const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(layout_idx);
             // String parameters need 3 registers (24 bytes)
-            if (layout_idx == .str) return 3;
+            if (runtime_layout_idx == .str) return 3;
             // i128/u128/Dec parameters need 2 registers (16 bytes)
-            if (layout_idx == .i128 or layout_idx == .u128 or layout_idx == .dec) return 2;
+            if (runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec) return 2;
 
             {
                 const ls = self.layout_store;
-                if (@intFromEnum(layout_idx) < ls.layouts.len()) {
-                    const layout_val = ls.getLayout(layout_idx);
+                if (@intFromEnum(runtime_layout_idx) < ls.layouts.len()) {
+                    const layout_val = ls.getLayout(runtime_layout_idx);
                     if (layout_val.tag == .zst or ls.layoutSizeAlign(layout_val).size == 0) return 0;
                     // List parameters need 3 registers (24 bytes)
                     if (layout_val.tag == .list or layout_val.tag == .list_of_zst) return 3;
                     // Aggregate parameters may need multiple registers
-                    if (layout_val.tag == .struct_ or layout_val.tag == .tag_union or layout_val.tag == .closure) {
+                    if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
                         const size = ls.layoutSizeAlign(layout_val).size;
                         if (size > 8) return @intCast((size + 7) / 8);
                     }
@@ -14111,435 +11979,153 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn bindLambdaParams(self: *Self, params: lir.LirPatternSpan, initial_reg_idx: u8, force_pass_by_ptr: bool) Allocator.Error!void {
-            const pattern_ids = self.store.getPatternSpan(params);
+        fn bindProcParams(self: *Self, params: LocalSpan, initial_reg_idx: u8) Allocator.Error!void {
+            const locals = self.store.getLocalSpan(params);
 
-            // Pre-scan: determine which params are passed by pointer.
-            // This must match the logic in generateCallToCompiledProc.
             const pbp_start = self.scratch_pass_by_ptr.top();
             defer self.scratch_pass_by_ptr.clearFrom(pbp_start);
-            for (0..pattern_ids.len) |_| try self.scratch_pass_by_ptr.append(false);
+            for (0..locals.len) |_| try self.scratch_pass_by_ptr.append(false);
             const param_pass_by_ptr = self.scratch_pass_by_ptr.sliceFromStart(pbp_start);
 
-            {
-                const pnr_start = self.scratch_param_num_regs.top();
-                defer self.scratch_param_num_regs.clearFrom(pnr_start);
-                for (0..pattern_ids.len) |_| try self.scratch_param_num_regs.append(1);
-                const param_num_regs = self.scratch_param_num_regs.sliceFromStart(pnr_start);
+            const pnr_start = self.scratch_param_num_regs.top();
+            defer self.scratch_param_num_regs.clearFrom(pnr_start);
+            for (locals) |local| try self.scratch_param_num_regs.append(self.calcParamRegCount(self.localLayout(local)));
+            const param_num_regs = self.scratch_param_num_regs.sliceFromStart(pnr_start);
 
-                var pre_reg_count: u8 = initial_reg_idx;
-                for (pattern_ids, 0..) |pid, pi| {
-                    const pat = self.store.getPattern(pid);
-                    const nr: u8 = switch (pat) {
-                        .bind => |b| self.calcParamRegCount(b.layout_idx),
-                        .wildcard => |w| self.calcParamRegCount(w.layout_idx),
-                        .struct_ => |s| blk: {
-                            const ls = self.layout_store;
-                            const sl = ls.getLayout(s.struct_layout);
-                            const sz = ls.layoutSizeAlign(sl).size;
-                            break :blk @max(1, @as(u8, @intCast((sz + 7) / 8)));
-                        },
-                        .list => 3,
-                        else => 1,
-                    };
-                    param_num_regs[pi] = nr;
-                    if (force_pass_by_ptr and nr > 0) {
-                        // Force all non-zero-sized params to be received as pointers.
-                        // Used by the sort comparator trampoline which always passes
-                        // element pointers to avoid C ABI vs internal ABI mismatches.
-                        // Zero-sized params (nr == 0) are skipped here because they
-                        // are handled as immediates before the pass-by-ptr check and
-                        // don't consume an argument register.
-                        param_pass_by_ptr[pi] = true;
-                        pre_reg_count += 1; // pointer = 1 register
-                        continue;
+            var pre_reg_count: u8 = initial_reg_idx;
+            for (locals, 0..) |local, pi| {
+                const nr = param_num_regs[pi];
+                if (nr == 0) continue;
+
+                const local_layout = self.localLayout(local);
+                const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(local_layout);
+                const is_i128_param = runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec;
+                if (comptime target.toCpuArch() == .aarch64) {
+                    if (is_i128_param and pre_reg_count < max_arg_regs and pre_reg_count % 2 != 0) {
+                        pre_reg_count += 1;
                     }
-                    const is_i128_param = switch (pat) {
-                        .bind => |b| b.layout_idx == .i128 or b.layout_idx == .u128 or b.layout_idx == .dec,
-                        .wildcard => |w| w.layout_idx == .i128 or w.layout_idx == .u128 or w.layout_idx == .dec,
-                        else => false,
-                    };
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        if (is_i128_param and pre_reg_count < max_arg_regs and pre_reg_count % 2 != 0) {
-                            pre_reg_count += 1;
-                        }
-                    }
-                    if (pre_reg_count + nr <= max_arg_regs) {
-                        pre_reg_count += nr;
-                    } else if (nr > 1) {
-                        param_pass_by_ptr[pi] = true;
-                        if (pre_reg_count + 1 <= max_arg_regs) {
-                            pre_reg_count += 1;
-                        } else {
-                            pre_reg_count = max_arg_regs;
-                        }
+                }
+
+                if (pre_reg_count + nr <= max_arg_regs) {
+                    pre_reg_count += nr;
+                } else if (nr > 1) {
+                    param_pass_by_ptr[pi] = true;
+                    if (pre_reg_count + 1 <= max_arg_regs) {
+                        pre_reg_count += 1;
                     } else {
                         pre_reg_count = max_arg_regs;
                     }
+                } else {
+                    pre_reg_count = max_arg_regs;
                 }
-                // If roc_ops doesn't fit, convert more inline multi-reg args
-                while (pre_reg_count + 1 > max_arg_regs) {
-                    var found = false;
-                    var best_idx: usize = 0;
-                    var best_regs: u8 = 0;
-                    for (param_num_regs, 0..) |pnr, pi| {
-                        if (!param_pass_by_ptr[pi] and pnr > 1 and pnr > best_regs) {
-                            best_idx = pi;
-                            best_regs = pnr;
-                            found = true;
+            }
+
+            while (pre_reg_count + 1 > max_arg_regs) {
+                var found = false;
+                var best_idx: usize = 0;
+                var best_regs: u8 = 0;
+                for (param_num_regs, 0..) |pnr, pi| {
+                    if (!param_pass_by_ptr[pi] and pnr > 1 and pnr > best_regs) {
+                        best_idx = pi;
+                        best_regs = pnr;
+                        found = true;
+                    }
+                }
+                if (!found) break;
+                param_pass_by_ptr[best_idx] = true;
+
+                pre_reg_count = initial_reg_idx;
+                for (locals, 0..) |local, pi| {
+                    const pnr = param_num_regs[pi];
+                    const pbp = param_pass_by_ptr[pi];
+                    const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(self.localLayout(local));
+                    const is_i128_param = runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec;
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        if (!pbp and is_i128_param and pre_reg_count < max_arg_regs and pre_reg_count % 2 != 0) {
+                            pre_reg_count += 1;
                         }
                     }
-                    if (!found) break;
-                    param_pass_by_ptr[best_idx] = true;
-                    // Recompute register pressure after changing pass-by-pointer flags,
-                    // including aarch64 i128 alignment behavior.
-                    pre_reg_count = initial_reg_idx;
-                    for (pattern_ids, 0..) |pid2, pi2| {
-                        const pat2 = self.store.getPattern(pid2);
-                        const pnr = param_num_regs[pi2];
-                        const pbp = param_pass_by_ptr[pi2];
-                        const is_i128_param = switch (pat2) {
-                            .bind => |b| b.layout_idx == .i128 or b.layout_idx == .u128 or b.layout_idx == .dec,
-                            .wildcard => |w| w.layout_idx == .i128 or w.layout_idx == .u128 or w.layout_idx == .dec,
-                            else => false,
-                        };
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            if (!pbp and is_i128_param and pre_reg_count < max_arg_regs and pre_reg_count % 2 != 0) {
-                                pre_reg_count += 1;
-                            }
-                        }
-                        const eff_regs: u8 = if (pbp) 1 else pnr;
-                        if (pre_reg_count + eff_regs <= max_arg_regs) {
-                            pre_reg_count += eff_regs;
-                        } else {
-                            pre_reg_count = max_arg_regs;
-                        }
+
+                    const eff_regs: u8 = if (pbp) 1 else pnr;
+                    if (pre_reg_count + eff_regs <= max_arg_regs) {
+                        pre_reg_count += eff_regs;
+                    } else {
+                        pre_reg_count = max_arg_regs;
                     }
                 }
             }
 
             var reg_idx: u8 = initial_reg_idx;
-            // Track offset for stack arguments (first stack arg at RBP+16/FP+16)
             var stack_arg_offset: i32 = 16;
 
-            for (pattern_ids, 0..) |pattern_id, param_idx| {
-                const pattern = self.store.getPattern(pattern_id);
-                switch (pattern) {
-                    .bind => |bind| {
-                        const symbol_key: u64 = @bitCast(bind.symbol);
-                        const num_regs = self.calcParamRegCount(bind.layout_idx);
+            for (locals, 0..) |local, param_idx| {
+                const num_regs = param_num_regs[param_idx];
 
-                        if (num_regs == 0) {
-                            try self.symbol_locations.put(symbol_key, .{ .immediate_i64 = 0 });
-                            try self.trackMutableSlotFromSymbolLocation(bind, symbol_key);
-                            continue;
-                        }
-
-                        // Check if this param is passed by pointer (pre-computed)
-                        if (param_pass_by_ptr[param_idx]) {
-                            // Multi-register arg: caller passed a pointer (1 register).
-                            // Use a hardcoded temp register to avoid allocTempGeneral returning
-                            // the same register as the argument register (e.g. X0).
-                            const temp_reg: GeneralReg = scratch_reg;
-                            const size: u32 = @as(u32, num_regs) * 8;
-                            const local_stack_offset = self.codegen.allocStackSlot(@intCast(size));
-                            const ptr_reg = self.getArgumentRegister(reg_idx);
-                            var ri: u8 = 0;
-                            while (ri < num_regs) : (ri += 1) {
-                                const off: i32 = @as(i32, ri) * 8;
-                                try self.emitLoad(.w64, temp_reg, ptr_reg, off);
-                                try self.emitStore(.w64, frame_ptr, local_stack_offset + off, temp_reg);
-                            }
-
-                            // Set up symbol location based on type
-                            if (bind.layout_idx == .str) {
-                                try self.symbol_locations.put(symbol_key, .{ .stack_str = local_stack_offset });
-                            } else if (@intFromEnum(bind.layout_idx) < self.layout_store.layouts.len()) {
-                                const layout_val = self.layout_store.getLayout(bind.layout_idx);
-                                if (layout_val.tag == .list or layout_val.tag == .list_of_zst) {
-                                    try self.symbol_locations.put(symbol_key, .{ .list_stack = .{
-                                        .struct_offset = local_stack_offset,
-                                        .data_offset = 0,
-                                        .num_elements = 0,
-                                    } });
-                                } else {
-                                    try self.symbol_locations.put(symbol_key, self.stackLocationForLayout(bind.layout_idx, local_stack_offset));
-                                }
-                            } else {
-                                try self.symbol_locations.put(symbol_key, self.stackLocationForLayout(bind.layout_idx, local_stack_offset));
-                            }
-                            reg_idx += 1;
-                        } else if (reg_idx + num_regs <= max_arg_regs) {
-                            // Fits in registers - use register-based loading
-                            if (bind.layout_idx == .str) {
-                                const arg_reg0 = self.getArgumentRegister(reg_idx);
-                                const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
-                                const arg_reg2 = self.getArgumentRegister(reg_idx + 2);
-
-                                const stack_offset = self.codegen.allocStackSlot(roc_str_size);
-                                try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg0);
-                                try self.codegen.emitStoreStack(.w64, stack_offset + 8, arg_reg1);
-                                try self.codegen.emitStoreStack(.w64, stack_offset + 16, arg_reg2);
-
-                                try self.symbol_locations.put(symbol_key, .{ .stack_str = stack_offset });
-                                reg_idx += 3;
-                            } else if (bind.layout_idx == .i128 or bind.layout_idx == .u128 or bind.layout_idx == .dec) {
-                                // aarch64: i128/Dec must be even-aligned in register pairs,
-                                // matching the alignment in placeCallArguments.
-                                if (comptime target.toCpuArch() == .aarch64) {
-                                    if (reg_idx % 2 != 0) {
-                                        reg_idx += 1;
-                                    }
-                                }
-                                const arg_reg0 = self.getArgumentRegister(reg_idx);
-                                const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
-
-                                const stack_offset = self.codegen.allocStackSlot(16);
-                                try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg0);
-                                try self.codegen.emitStoreStack(.w64, stack_offset + 8, arg_reg1);
-
-                                try self.symbol_locations.put(symbol_key, .{ .stack_i128 = stack_offset });
-                                reg_idx += 2;
-                            } else if (@intFromEnum(bind.layout_idx) < self.layout_store.layouts.len()) {
-                                const layout_val = self.layout_store.getLayout(bind.layout_idx);
-                                if (layout_val.tag == .list or layout_val.tag == .list_of_zst) {
-                                    const arg_reg0 = self.getArgumentRegister(reg_idx);
-                                    const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
-                                    const arg_reg2 = self.getArgumentRegister(reg_idx + 2);
-
-                                    const stack_offset = self.codegen.allocStackSlot(roc_str_size);
-                                    try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg0);
-                                    try self.codegen.emitStoreStack(.w64, stack_offset + 8, arg_reg1);
-                                    try self.codegen.emitStoreStack(.w64, stack_offset + 16, arg_reg2);
-
-                                    try self.symbol_locations.put(symbol_key, .{ .list_stack = .{
-                                        .struct_offset = stack_offset,
-                                        .data_offset = 0,
-                                        .num_elements = 0,
-                                    } });
-                                    reg_idx += 3;
-                                    continue;
-                                }
-                                if (layout_val.tag == .struct_ or layout_val.tag == .tag_union or layout_val.tag == .closure) {
-                                    const size = self.layout_store.layoutSizeAlign(layout_val).size;
-                                    if (size > 8) {
-                                        // Multi-register aggregates are transferred as whole
-                                        // register words, so give them an ABI-sized stack home.
-                                        const abi_size: u32 = @as(u32, num_regs) * 8;
-                                        const local_stack_offset = self.codegen.allocStackSlot(@intCast(abi_size));
-                                        var ri: u8 = 0;
-                                        while (ri < num_regs) : (ri += 1) {
-                                            const arg_r = self.getArgumentRegister(reg_idx + ri);
-                                            try self.codegen.emitStoreStack(.w64, local_stack_offset + @as(i32, ri) * 8, arg_r);
-                                        }
-                                        try self.symbol_locations.put(symbol_key, self.stackLocationForLayout(bind.layout_idx, local_stack_offset));
-                                        reg_idx += num_regs;
-                                        continue;
-                                    }
-                                }
-                                // Default: single 8-byte value
-                                const arg_reg = self.getArgumentRegister(reg_idx);
-                                const stack_offset = self.codegen.allocStackSlot(8);
-                                try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg);
-                                try self.symbol_locations.put(symbol_key, self.stackLocationForLayout(bind.layout_idx, stack_offset));
-                                reg_idx += 1;
-                            } else {
-                                // Default: single 8-byte value
-                                const arg_reg = self.getArgumentRegister(reg_idx);
-                                const stack_offset = self.codegen.allocStackSlot(8);
-                                try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg);
-                                try self.symbol_locations.put(symbol_key, self.stackLocationForLayout(bind.layout_idx, stack_offset));
-                                reg_idx += 1;
-                            }
-                        } else {
-                            // Doesn't fit in registers - read from caller's stack frame
-                            const size: u32 = @as(u32, num_regs) * 8;
-                            const local_stack_offset = self.codegen.allocStackSlot(@intCast(size));
-                            try self.copyFromCallerStack(stack_arg_offset, local_stack_offset, num_regs);
-                            try self.symbol_locations.put(symbol_key, self.stackLocationForLayout(bind.layout_idx, local_stack_offset));
-                            stack_arg_offset += @as(i32, num_regs) * 8;
-                            reg_idx = max_arg_regs; // Mark all registers as consumed
-                        }
-
-                        try self.trackMutableSlotFromSymbolLocation(bind, symbol_key);
-
-                        // In the new pipeline, closure dispatch is handled by MIR→LIR as
-                        // generic LIR constructs. No closure_param_metadata upgrade needed.
-                    },
-                    .wildcard => |wc| {
-                        // Skip this argument - use the layout to determine how many
-                        // registers it occupies (important for correct roc_ops placement)
-                        const num_regs = self.calcParamRegCount(wc.layout_idx);
-                        if (num_regs == 0) {
-                            continue;
-                        }
-                        // aarch64: i128/Dec must be even-aligned in register pairs
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            if (num_regs == 2 and (wc.layout_idx == .i128 or wc.layout_idx == .u128 or wc.layout_idx == .dec)) {
-                                if (reg_idx % 2 != 0) reg_idx += 1;
-                            }
-                        }
-                        if (param_pass_by_ptr[param_idx]) {
-                            reg_idx += 1; // passed by pointer, skip 1 register
-                        } else if (reg_idx + num_regs <= max_arg_regs) {
-                            reg_idx += num_regs;
-                        } else {
-                            stack_arg_offset += @as(i32, num_regs) * 8;
-                            reg_idx = max_arg_regs;
-                        }
-                    },
-                    .as_pattern => |as_pat| {
-                        const num_regs = self.calcParamRegCount(as_pat.layout_idx);
-                        if (num_regs == 0) {
-                            continue;
-                        }
-
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            if (num_regs == 2 and (as_pat.layout_idx == .i128 or as_pat.layout_idx == .u128 or as_pat.layout_idx == .dec)) {
-                                if (reg_idx % 2 != 0) reg_idx += 1;
-                            }
-                        }
-
-                        const abi_size: u32 = @as(u32, num_regs) * 8;
-                        const stack_offset = self.codegen.allocStackSlot(@intCast(abi_size));
-
-                        if (param_pass_by_ptr[param_idx]) {
-                            const temp_r: GeneralReg = scratch_reg;
-                            const ptr_reg = self.getArgumentRegister(reg_idx);
-                            var ri: u8 = 0;
-                            while (ri < num_regs) : (ri += 1) {
-                                const off: i32 = @as(i32, ri) * 8;
-                                try self.emitLoad(.w64, temp_r, ptr_reg, off);
-                                try self.emitStore(.w64, frame_ptr, stack_offset + off, temp_r);
-                            }
-                            reg_idx += 1;
-                        } else if (reg_idx + num_regs <= max_arg_regs) {
-                            var ri: u8 = 0;
-                            while (ri < num_regs) : (ri += 1) {
-                                const arg_r = self.getArgumentRegister(reg_idx + ri);
-                                try self.codegen.emitStoreStack(.w64, stack_offset + @as(i32, ri) * 8, arg_r);
-                            }
-                            reg_idx += num_regs;
-                        } else {
-                            try self.copyFromCallerStack(stack_arg_offset, stack_offset, num_regs);
-                            stack_arg_offset += @as(i32, num_regs) * 8;
-                            reg_idx = max_arg_regs;
-                        }
-
-                        try self.bindPattern(pattern_id, self.stackLocationForLayout(as_pat.layout_idx, stack_offset));
-                    },
-                    .struct_ => |s| {
-                        // Struct destructuring: store registers to stack, then delegate to bindPattern
-                        const ls = self.layout_store;
-                        const struct_layout = ls.getLayout(s.struct_layout);
-                        const size = ls.layoutSizeAlign(struct_layout).size;
-                        const num_regs: u8 = if (size == 0) 0 else @as(u8, @intCast((size + 7) / 8));
-                        if (num_regs == 0) {
-                            continue;
-                        }
-                        const abi_size: u32 = @as(u32, num_regs) * 8;
-
-                        if (param_pass_by_ptr[param_idx]) {
-                            // Passed by pointer: copy from pointer to local stack.
-                            // Use hardcoded temp to avoid clobbering the arg register.
-                            const temp_r: GeneralReg = scratch_reg;
-                            const stack_offset = self.codegen.allocStackSlot(@intCast(abi_size));
-                            const ptr_reg = self.getArgumentRegister(reg_idx);
-                            var ri: u8 = 0;
-                            while (ri < num_regs) : (ri += 1) {
-                                const off: i32 = @as(i32, ri) * 8;
-                                try self.emitLoad(.w64, temp_r, ptr_reg, off);
-                                try self.emitStore(.w64, frame_ptr, stack_offset + off, temp_r);
-                            }
-                            reg_idx += 1;
-                            try self.bindPattern(pattern_id, .{ .stack = .{ .offset = stack_offset } });
-                        } else if (reg_idx + num_regs <= max_arg_regs) {
-                            const stack_offset = self.codegen.allocStackSlot(@intCast(abi_size));
-                            var ri: u8 = 0;
-                            while (ri < num_regs) : (ri += 1) {
-                                const arg_r = self.getArgumentRegister(reg_idx + ri);
-                                try self.codegen.emitStoreStack(.w64, stack_offset + @as(i32, ri) * 8, arg_r);
-                            }
-                            reg_idx += num_regs;
-                            try self.bindPattern(pattern_id, .{ .stack = .{ .offset = stack_offset } });
-                        } else {
-                            // Read from caller's stack
-                            const stack_offset = self.codegen.allocStackSlot(@intCast(abi_size));
-                            try self.copyFromCallerStack(stack_arg_offset, stack_offset, num_regs);
-                            stack_arg_offset += @as(i32, num_regs) * 8;
-                            reg_idx = max_arg_regs;
-                            try self.bindPattern(pattern_id, .{ .stack = .{ .offset = stack_offset } });
-                        }
-                    },
-                    .list => {
-                        // List destructuring: lists are 24 bytes (ptr, len, capacity) = 3 registers
-                        if (param_pass_by_ptr[param_idx]) {
-                            // Passed by pointer. Use hardcoded temp to avoid clobbering arg register.
-                            const temp_r: GeneralReg = scratch_reg;
-                            const stack_offset = self.codegen.allocStackSlot(roc_list_size);
-                            const ptr_reg = self.getArgumentRegister(reg_idx);
-                            var ri: u8 = 0;
-                            while (ri < 3) : (ri += 1) {
-                                const off: i32 = @as(i32, ri) * 8;
-                                try self.emitLoad(.w64, temp_r, ptr_reg, off);
-                                try self.emitStore(.w64, frame_ptr, stack_offset + off, temp_r);
-                            }
-                            reg_idx += 1;
-                            try self.bindPattern(pattern_id, .{ .stack = .{ .offset = stack_offset } });
-                        } else if (reg_idx + 3 <= max_arg_regs) {
-                            const stack_offset = self.codegen.allocStackSlot(roc_str_size);
-                            const arg_reg0 = self.getArgumentRegister(reg_idx);
-                            const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
-                            const arg_reg2 = self.getArgumentRegister(reg_idx + 2);
-                            try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg0);
-                            try self.codegen.emitStoreStack(.w64, stack_offset + 8, arg_reg1);
-                            try self.codegen.emitStoreStack(.w64, stack_offset + 16, arg_reg2);
-                            reg_idx += 3;
-                            try self.bindPattern(pattern_id, .{ .stack = .{ .offset = stack_offset } });
-                        } else {
-                            // Fallback: read from caller's stack
-                            const stack_offset = self.codegen.allocStackSlot(roc_list_size);
-                            try self.copyFromCallerStack(stack_arg_offset, stack_offset, 3);
-                            stack_arg_offset += roc_list_size;
-                            reg_idx = max_arg_regs;
-                            try self.bindPattern(pattern_id, .{ .stack = .{ .offset = stack_offset } });
-                        }
-                    },
-                    else => {
-                        if (builtin.mode == .Debug) {
-                            std.debug.panic(
-                                "LIR/codegen invariant violated: unsupported complex parameter pattern in bindLambdaParams (compileProcSpec path), got {s}",
-                                .{@tagName(pattern)},
-                            );
-                        }
-                        unreachable;
-                    },
+                if (num_regs == 0) {
+                    try self.local_locations.put(localKey(local), .{ .immediate_i64 = 0 });
+                    continue;
                 }
 
-                if (pattern == .bind) {
-                    try self.trackMutableSlotFromSymbolLocation(pattern.bind, @bitCast(pattern.bind.symbol));
+                if (param_pass_by_ptr[param_idx]) {
+                    const temp_reg: GeneralReg = scratch_reg;
+                    const size: u32 = @as(u32, num_regs) * 8;
+                    const stack_offset = self.codegen.allocStackSlot(@intCast(size));
+                    const ptr_reg = self.getArgumentRegister(reg_idx);
+                    var ri: u8 = 0;
+                    while (ri < num_regs) : (ri += 1) {
+                        const off: i32 = @as(i32, ri) * 8;
+                        try self.emitLoad(.w64, temp_reg, ptr_reg, off);
+                        try self.emitStore(.w64, frame_ptr, stack_offset + off, temp_reg);
+                    }
+                    const stable_loc = self.stackLocationForLayout(self.localLayout(local), stack_offset);
+                    try self.local_locations.put(localKey(local), stable_loc);
+                    reg_idx += 1;
+                    continue;
+                }
+
+                if (comptime target.toCpuArch() == .aarch64) {
+                    const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(self.localLayout(local));
+                    if (num_regs == 2 and (runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec) and reg_idx % 2 != 0) {
+                        reg_idx += 1;
+                    }
+                }
+
+                if (reg_idx + num_regs <= max_arg_regs) {
+                    const size: u32 = @as(u32, num_regs) * 8;
+                    const stack_offset = self.codegen.allocStackSlot(@intCast(size));
+                    var ri: u8 = 0;
+                    while (ri < num_regs) : (ri += 1) {
+                        const arg_reg = self.getArgumentRegister(reg_idx + ri);
+                        try self.codegen.emitStoreStack(.w64, stack_offset + @as(i32, ri) * 8, arg_reg);
+                    }
+                    const stable_loc = self.stackLocationForLayout(self.localLayout(local), stack_offset);
+                    try self.local_locations.put(localKey(local), stable_loc);
+                    reg_idx += num_regs;
+                } else {
+                    const size: u32 = @as(u32, num_regs) * 8;
+                    const stack_offset = self.codegen.allocStackSlot(@intCast(size));
+                    try self.copyFromCallerStack(stack_arg_offset, stack_offset, num_regs);
+                    const stable_loc = self.stackLocationForLayout(self.localLayout(local), stack_offset);
+                    try self.local_locations.put(localKey(local), stable_loc);
+                    stack_arg_offset += @as(i32, num_regs) * 8;
+                    reg_idx = max_arg_regs;
                 }
             }
 
-            // Receive roc_ops as the final argument (passed by the caller)
-            // Store it in R12 (x86_64) or X20 (aarch64) for use by the lambda body
             const roc_ops_save_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64)
                 .X20
             else
                 .R12;
 
             if (reg_idx < max_arg_regs) {
-                // roc_ops was passed in a register
                 const arg_reg = self.getArgumentRegister(reg_idx);
                 if (arg_reg != roc_ops_save_reg) {
                     try self.codegen.emit.movRegReg(.w64, roc_ops_save_reg, arg_reg);
                 }
             } else {
-                // roc_ops was passed on stack - load it
                 try self.emitLoad(.w64, roc_ops_save_reg, frame_ptr, stack_arg_offset);
             }
 
-            // Set roc_ops_reg for use by the lambda body when calling builtins
             self.roc_ops_reg = roc_ops_save_reg;
         }
 
@@ -14548,7 +12134,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (loc == .noreturn) return;
 
             const ls = self.layout_store;
-            const layout_val = ls.getLayout(ret_layout);
+            const runtime_ret_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
+            const layout_val = ls.getLayout(runtime_ret_layout);
 
             if (builtin.mode == .Debug and loc == .stack_str and !(layout_val.tag == .scalar and layout_val.data.scalar.tag == .str) and layout_val.tag != .list and layout_val.tag != .list_of_zst) {
                 std.debug.panic(
@@ -14682,10 +12269,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 try self.moveOneRegToReturn(loc);
                             }
                         },
+                        .opaque_ptr => try self.moveOneRegToReturn(loc),
                     }
                 },
                 // Structs and tag unions: size determines register count
-                .struct_, .tag_union, .closure => {
+                .struct_, .tag_union => {
                     const size_align = ls.layoutSizeAlign(layout_val);
                     if (size_align.size == 0) {
                         // Zero-sized — nothing to move
@@ -14718,6 +12306,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .zst => {},
                 // Box: single pointer (1 register)
                 .box, .box_of_zst => try self.moveOneRegToReturn(loc),
+                .closure => {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: runtimeRepresentationLayoutIdx returned closure for return layout {}",
+                            .{@intFromEnum(ret_layout)},
+                        );
+                    }
+                    unreachable;
+                },
             }
         }
 
@@ -14753,7 +12350,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// has passed a pointer to a pre-allocated buffer as a hidden first argument.
         fn copyResultToReturnPointer(self: *Self, result_loc: ValueLocation, ret_layout: layout.Idx, ret_ptr_stack_slot: i32) Allocator.Error!void {
             const ls = self.layout_store;
-            const layout_val = ls.getLayout(ret_layout);
+            const runtime_ret_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
+            const layout_val = ls.getLayout(runtime_ret_layout);
             const ret_size = ls.layoutSizeAlign(layout_val).size;
 
             // Ensure result is on stack
@@ -14781,42 +12379,164 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for a control flow statement
         fn generateStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
-            const stmt = self.store.getCFStmt(stmt_id);
+            const stmt_key = @intFromEnum(stmt_id);
+            if (self.stmt_locations.get(stmt_key)) |stmt_location| {
+                const patch = try self.codegen.emitJump();
+                self.codegen.patchJump(patch, stmt_location);
+                return;
+            }
+            try self.stmt_locations.put(stmt_key, self.codegen.currentOffset());
 
+            const saved_stmt_id = self.current_stmt_id;
+            self.current_stmt_id = stmt_id;
+            defer self.current_stmt_id = saved_stmt_id;
+
+            const stmt = self.store.getCFStmt(stmt_id);
             switch (stmt) {
-                .let_stmt => |let_s| {
-                    // Evaluate the value
-                    const value_loc = try self.generateExpr(let_s.value);
-                    if (value_loc == .noreturn) return;
-                    // Bind to pattern
-                    try self.bindPattern(let_s.pattern, value_loc);
-                    // Continue with next statement
-                    try self.generateStmt(let_s.next);
+                .assign_symbol => |assign| {
+                    std.debug.panic(
+                        "Dev/codegen invariant violated: assign_symbol for symbol {d} is not implemented in statement-only dev codegen yet",
+                        .{assign.symbol.raw()},
+                    );
+                },
+                .assign_ref => |assign| {
+                    const value_loc = try self.generateRefOp(assign.op, self.localLayout(assign.target));
+                    try self.bindAssignedLocal(assign.target, value_loc);
+                    try self.generateStmt(assign.next);
+                },
+
+                .assign_literal => |assign| {
+                    const value_loc: ValueLocation = switch (assign.value) {
+                        .i64_literal => |lit| .{ .immediate_i64 = lit.value },
+                        .i128_literal => |lit| try self.generateI128Literal(lit.value),
+                        .f64_literal => |lit| .{ .immediate_f64 = lit },
+                        .f32_literal => |lit| .{ .immediate_f64 = @floatCast(lit) },
+                        .dec_literal => |lit| try self.generateI128Literal(lit),
+                        .bool_literal => |lit| .{ .immediate_i64 = if (lit) 1 else 0 },
+                        .str_literal => |str_idx| try self.generateStrLiteral(str_idx),
+                        .null_ptr => .{ .immediate_i64 = 0 },
+                        .proc_ref => |proc_id| blk: {
+                            const proc = self.proc_registry.get(@intFromEnum(proc_id)) orelse unreachable;
+                            const reg = try self.allocTempGeneral();
+                            if (proc.code_start == unresolved_proc_code_start)
+                                try self.emitPendingProcAddress(proc_id, reg)
+                            else
+                                try self.emitInternalCodeAddress(proc.code_start, reg);
+                            break :blk .{ .general_reg = reg };
+                        },
+                    };
+                    try self.bindAssignedLocal(assign.target, value_loc);
+                    try self.generateStmt(assign.next);
+                },
+
+                .assign_call => |assign| {
+                    const value_loc = try self.generateCall(.{
+                        .proc = assign.proc,
+                        .args = assign.args,
+                        .ret_layout = self.localLayout(assign.target),
+                    });
+                    try self.bindAssignedLocal(assign.target, value_loc);
+                    try self.generateStmt(assign.next);
+                },
+
+                .assign_call_erased => |assign| {
+                    const value_loc = try self.generateErasedCall(
+                        assign.closure,
+                        assign.args,
+                        self.localLayout(assign.target),
+                        assign.capture_layout,
+                    );
+                    try self.bindAssignedLocal(assign.target, value_loc);
+                    try self.generateStmt(assign.next);
+                },
+
+                .assign_low_level => |assign| {
+                    const value_loc = try self.generateLowLevel(.{
+                        .op = assign.op,
+                        .args = assign.args,
+                        .ret_layout = self.localLayout(assign.target),
+                    });
+                    try self.bindAssignedLocal(assign.target, value_loc);
+                    try self.generateStmt(assign.next);
+                },
+
+                .assign_list => |assign| {
+                    const value_loc = try self.generateList(.{
+                        .elems = assign.elems,
+                        .target_layout = self.localLayout(assign.target),
+                    });
+                    try self.bindAssignedLocal(assign.target, value_loc);
+                    try self.generateStmt(assign.next);
+                },
+
+                .assign_struct => |assign| {
+                    const value_loc = try self.generateStruct(.{
+                        .fields = assign.fields,
+                        .target_layout = self.localLayout(assign.target),
+                    });
+                    try self.bindAssignedLocal(assign.target, value_loc);
+                    try self.generateStmt(assign.next);
+                },
+
+                .assign_tag => |assign| {
+                    const value_loc = try self.generateTag(.{
+                        .target_layout = self.localLayout(assign.target),
+                        .discriminant = assign.discriminant,
+                        .payload = assign.payload,
+                    });
+                    try self.bindAssignedLocal(assign.target, value_loc);
+                    try self.generateStmt(assign.next);
+                },
+
+                .set_local => |assign| {
+                    const value_loc = try self.emitValueLocal(assign.value);
+                    try self.bindAssignedLocal(assign.target, value_loc);
+                    try self.generateStmt(assign.next);
+                },
+
+                .debug => |debug_stmt| {
+                    const msg_loc = try self.emitValueLocal(debug_stmt.message);
+                    const msg_offset = switch (msg_loc) {
+                        .stack_str => |offset| offset,
+                        else => std.debug.panic(
+                            "Dev/codegen invariant violated: debug message local {d} did not lower to a RocStr stack value",
+                            .{@intFromEnum(debug_stmt.message)},
+                        ),
+                    };
+                    try self.emitRocDbgFromStackStr(msg_offset);
+                    try self.generateStmt(debug_stmt.next);
+                },
+
+                .expect => |expect_stmt| {
+                    const cond_loc = try self.emitValueLocal(expect_stmt.condition);
+                    const cond_reg = try self.ensureInGeneralReg(cond_loc);
+                    try self.emitCmpImm(cond_reg, 0);
+                    const skip_patch = try self.emitJumpIfNotEqual();
+                    try self.emitRocExpectFailed();
+                    self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
+                    try self.generateStmt(expect_stmt.next);
+                },
+
+                .runtime_error => {
+                    try self.emitRocCrash("hit a runtime error");
+                    try self.emitTrap();
                 },
 
                 .join => |j| {
-                    // Store param layouts and patterns for this join point (needed by rebindJoinPointParams)
                     const jp_key = @intFromEnum(j.id);
-                    try self.join_point_param_layouts.put(jp_key, j.param_layouts);
-                    try self.join_point_param_patterns.put(jp_key, j.params);
-
-                    // Set up storage for join point parameters (they'll be rebound on each jump)
-                    try self.setupJoinPointParams(j.id, j.params, j.param_layouts);
+                    try self.setupJoinPointParams(j.id, j.params);
                     if (!self.join_point_jumps.contains(jp_key)) {
                         try self.join_point_jumps.put(jp_key, std.ArrayList(JumpRecord).empty);
                     }
-
-                    // Generate REMAINDER first (code that eventually jumps TO the join point)
+                    try self.ensureStableLocationsForStmtReads(j.body);
                     try self.generateStmt(j.remainder);
-
-                    // Record where join point body starts (this is where jumps will target)
+                    const skip_join_body_patch = try self.codegen.emitJump();
                     const join_location = self.codegen.currentOffset();
                     try self.join_points.put(jp_key, join_location);
 
-                    // Generate BODY (what happens when jumped to)
                     try self.generateStmt(j.body);
+                    self.codegen.patchJump(skip_join_body_patch, self.codegen.currentOffset());
 
-                    // Patch all jumps to this join point
                     if (self.join_point_jumps.get(jp_key)) |jumps| {
                         for (jumps.items) |jump_record| {
                             self.codegen.patchJump(jump_record.location, join_location);
@@ -14825,23 +12545,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
 
                 .jump => |jmp| {
-                    // Evaluate all arguments first (before rebinding, in case args reference params)
-                    const args = self.store.getExprSpan(jmp.args);
+                    const args = self.store.getLocalSpan(jmp.args);
                     var arg_locs: std.ArrayListUnmanaged(ValueLocation) = .empty;
                     defer arg_locs.deinit(self.allocator);
 
-                    for (args) |arg_id| {
-                        const loc = try self.generateExpr(arg_id);
+                    for (args) |arg| {
+                        const loc = try self.emitValueLocal(arg);
                         try arg_locs.append(self.allocator, loc);
                     }
 
-                    // Rebind join point parameters to new argument values
-                    try self.rebindJoinPointParams(jmp.target, arg_locs.items);
+                    try self.rebindJoinPointParams(jmp.target, args, arg_locs.items);
 
-                    // Emit jump instruction with placeholder offset
                     const jump_location = try self.emitJumpPlaceholder();
 
-                    // Record for patching
                     const jp_key = @intFromEnum(jmp.target);
                     if (self.join_point_jumps.getPtr(jp_key)) |jumps| {
                         try jumps.append(self.allocator, .{ .location = jump_location });
@@ -14849,276 +12565,260 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
 
                 .ret => |r| {
-                    // Evaluate the return value
-                    const value_loc = try self.generateExpr(r.value);
+                    const value_loc = try self.emitValueLocal(r.value);
                     if (value_loc == .noreturn) return;
-                    const ret_layout = self.exprLayout(r.value);
-                    const preserved_return_loc = self.normalizeResultLocForLayout(value_loc, ret_layout);
+                    const value_layout = self.valueLayout(r.value);
+                    const ret_layout = self.early_return_ret_layout orelse value_layout;
+                    if (builtin.mode == .Debug and ret_layout != value_layout) {
+                        std.debug.panic(
+                            "Dev/codegen invariant violated: proc return local layout {} did not match proc ret_layout {} at stmt {d}",
+                            .{
+                                @intFromEnum(value_layout),
+                                @intFromEnum(ret_layout),
+                                if (self.current_stmt_id) |current_stmt_id| @intFromEnum(current_stmt_id) else std.math.maxInt(u32),
+                            },
+                        );
+                    }
+                    const preserved_return_loc = self.requireExactValueLocationToLayout(value_loc, value_layout, ret_layout, "ret");
 
                     if (self.ret_ptr_slot) |ret_slot| {
                         try self.copyResultToReturnPointer(preserved_return_loc, ret_layout, ret_slot);
                     } else {
                         try self.moveToReturnRegisterWithLayout(preserved_return_loc, ret_layout);
                     }
-                    // Emit jump to shared epilogue (patched after body gen knows actual frame size)
                     const patch = try self.codegen.emitJump();
                     try self.early_return_patches.append(self.allocator, patch);
-                },
-
-                .expr_stmt => |e| {
-                    // Evaluate expression for side effects
-                    const value_loc = try self.generateExpr(e.value);
-                    if (value_loc == .noreturn) return;
-                    // Continue with next
-                    try self.generateStmt(e.next);
                 },
 
                 .switch_stmt => |sw| {
                     try self.generateSwitchStmt(sw);
                 },
 
-                .match_stmt => |ms| {
-                    try self.generateMatchStmt(ms);
+                .for_list => |for_stmt| {
+                    try self.generateForListStmt(for_stmt);
+                },
+
+                .borrow_scope => |scope| {
+                    try self.ensureStableLocationsForStmtReads(scope.remainder);
+                    var remainder_env = try self.captureStmtEnv();
+                    defer remainder_env.deinit();
+                    try self.generateStmt(scope.body);
+                    try self.restoreStmtEnv(&remainder_env);
+                    try self.generateStmt(scope.remainder);
+                },
+
+                .scope_exit => {},
+
+                .incref => |inc| {
+                    _ = try self.generateIncref(.{
+                        .value = inc.value,
+                        .layout_idx = self.localLayout(inc.value),
+                        .count = inc.count,
+                    });
+                    try self.generateStmt(inc.next);
+                },
+
+                .decref => |dec| {
+                    _ = try self.generateDecref(.{
+                        .value = dec.value,
+                        .layout_idx = self.localLayout(dec.value),
+                    });
+                    try self.generateStmt(dec.next);
+                },
+
+                .free => |free_stmt| {
+                    _ = try self.generateFree(.{
+                        .value = free_stmt.value,
+                        .layout_idx = self.localLayout(free_stmt.value),
+                    });
+                    try self.generateStmt(free_stmt.next);
+                },
+
+                .crash => |crash| {
+                    try self.emitRocCrash(self.store.getString(crash.msg));
+                    try self.emitTrap();
+                },
+
+                .loop_continue => {
+                    if (builtin.mode == .Debug and self.loop_continue_targets.items.len == 0) {
+                        std.debug.panic(
+                            "Dev/codegen invariant violated: loop_continue encountered outside for_list",
+                            .{},
+                        );
+                    }
+                    const loop_target = self.loop_continue_targets.items[self.loop_continue_targets.items.len - 1];
+                    const patch = try self.codegen.emitJump();
+                    self.codegen.patchJump(patch, loop_target);
                 },
             }
         }
 
-        /// Set up storage locations for join point parameters
-        fn setupJoinPointParams(self: *Self, _: JoinPointId, params: lir.LirPatternSpan, param_layouts: LayoutIdxSpan) Allocator.Error!void {
-            const pattern_ids = self.store.getPatternSpan(params);
-            const layouts = self.store.getLayoutIdxSpan(param_layouts);
+        fn generateForListStmt(self: *Self, for_stmt: anytype) Allocator.Error!void {
+            const raw_iterable_loc = try self.emitValueLocal(for_stmt.iterable);
+            const iterable_layout = self.valueLayout(for_stmt.iterable);
+            const resolved_iterable_layout = switch (self.layout_store.getLayout(iterable_layout).tag) {
+                .box => self.layout_store.getLayout(iterable_layout).data.box,
+                else => iterable_layout,
+            };
+            const iterable_loc = try self.normalizeValueLocationToLayout(raw_iterable_loc, iterable_layout, resolved_iterable_layout);
+            const iterable_snapshot_offset = self.codegen.allocStackSlot(roc_list_size);
+            try self.copyBytesToStackOffset(iterable_snapshot_offset, iterable_loc, roc_list_size);
 
-            var reg_idx: u8 = 0;
+            const actual_elem_layout = for_stmt.iterable_elem_layout;
 
-            // For each parameter, allocate a register or stack slot
-            for (pattern_ids, 0..) |pattern_id, param_idx| {
-                const pattern = self.store.getPattern(pattern_id);
-                switch (pattern) {
-                    .bind => |bind| {
-                        const symbol_key: u64 = @bitCast(bind.symbol);
+            const index_slot = self.codegen.allocStackSlot(8);
+            const zero_reg = try self.allocTempGeneral();
+            try self.codegen.emitLoadImm(zero_reg, 0);
+            try self.codegen.emitStoreStack(.w64, index_slot, zero_reg);
+            self.codegen.freeGeneral(zero_reg);
 
-                        // Check if this parameter is a 128-bit type
-                        const is_128bit = if (param_idx < layouts.len) blk: {
-                            const param_layout = layouts[param_idx];
-                            break :blk param_layout == .i128 or param_layout == .u128 or param_layout == .dec;
-                        } else false;
+            const loop_header = self.codegen.currentOffset();
 
-                        if (is_128bit) {
-                            // 128-bit types need two consecutive registers
-                            const low_reg = self.getArgumentRegister(reg_idx);
-                            const high_reg = self.getArgumentRegister(reg_idx + 1);
+            const index_reg = try self.allocTempGeneral();
+            try self.codegen.emitLoadStack(.w64, index_reg, index_slot);
 
-                            // Allocate 16-byte stack slot
-                            const stack_offset = self.codegen.allocStack(16);
+            const len_reg = try self.allocTempGeneral();
+            try self.codegen.emitLoadStack(.w64, len_reg, iterable_snapshot_offset + @as(i32, @intCast(target_ptr_size)));
+            try self.emitCmpReg(index_reg, len_reg);
+            self.codegen.freeGeneral(len_reg);
+            const exit_patch = try self.emitJumpIfEqual();
 
-                            // Store both registers to stack
-                            try self.codegen.emitStoreStack(.w64, stack_offset, low_reg);
-                            try self.codegen.emitStoreStack(.w64, stack_offset + 8, high_reg);
+            try self.bindForListElement(for_stmt.elem, actual_elem_layout, iterable_snapshot_offset, index_reg);
 
-                            // Track as stack_i128
-                            try self.symbol_locations.put(symbol_key, .{ .stack_i128 = stack_offset });
-                            reg_idx += 2;
-                        } else {
-                            // Check if this is a string type (24 bytes)
-                            const is_str = if (param_idx < layouts.len)
-                                layouts[param_idx] == .str
-                            else
-                                false;
+            try self.emitAddImm(index_reg, index_reg, 1);
+            try self.codegen.emitStoreStack(.w64, index_slot, index_reg);
+            self.codegen.freeGeneral(index_reg);
 
-                            // Check if this is a list type (24 bytes)
-                            const is_list = if (param_idx < layouts.len) blk: {
-                                const param_layout = layouts[param_idx];
-                                const ls = self.layout_store;
-                                if (builtin.mode == .Debug and @intFromEnum(param_layout) >= ls.layouts.len()) {
-                                    std.debug.panic(
-                                        "LIR/codegen invariant violated: join point param layout out of bounds ({d} >= {d})",
-                                        .{ @intFromEnum(param_layout), ls.layouts.len() },
-                                    );
-                                }
-                                const layout_val = ls.getLayout(param_layout);
-                                break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
-                            } else false;
+            const saved_loop_continue_depth = self.loop_continue_targets.items.len;
+            try self.loop_continue_targets.append(self.allocator, loop_header);
+            defer self.loop_continue_targets.shrinkRetainingCapacity(saved_loop_continue_depth);
 
-                            if (is_str) {
-                                // String types need 3 consecutive registers (24 bytes)
-                                const stack_offset = self.codegen.allocStackSlot(roc_str_size);
+            try self.generateStmt(for_stmt.body);
 
-                                const reg0 = self.getArgumentRegister(reg_idx);
-                                const reg1 = self.getArgumentRegister(reg_idx + 1);
-                                const reg2 = self.getArgumentRegister(reg_idx + 2);
-
-                                try self.emitStore(.w64, frame_ptr, stack_offset, reg0);
-                                try self.emitStore(.w64, frame_ptr, stack_offset + 8, reg1);
-                                try self.emitStore(.w64, frame_ptr, stack_offset + 16, reg2);
-
-                                try self.symbol_locations.put(symbol_key, .{ .stack_str = stack_offset });
-                                reg_idx += 3;
-                            } else if (is_list) {
-                                // List types need 3 consecutive registers
-                                const stack_offset = self.codegen.allocStackSlot(roc_str_size);
-
-                                const reg0 = self.getArgumentRegister(reg_idx);
-                                const reg1 = self.getArgumentRegister(reg_idx + 1);
-                                const reg2 = self.getArgumentRegister(reg_idx + 2);
-
-                                try self.emitStore(.w64, frame_ptr, stack_offset, reg0);
-                                try self.emitStore(.w64, frame_ptr, stack_offset + 8, reg1);
-                                try self.emitStore(.w64, frame_ptr, stack_offset + 16, reg2);
-
-                                // Store as .list_stack so that when this parameter is used as an argument
-                                // or returned, it's properly detected as a list
-                                try self.symbol_locations.put(symbol_key, .{
-                                    .list_stack = .{
-                                        .struct_offset = stack_offset,
-                                        .data_offset = 0, // Data location is stored in the list struct itself
-                                        .num_elements = 0, // Unknown at compile time
-                                    },
-                                });
-                                reg_idx += 3;
-                            } else {
-                                // Normal 64-bit or smaller parameter — spill to stack
-                                const arg_reg = self.getArgumentRegister(reg_idx);
-                                const stack_offset = self.codegen.allocStackSlot(8);
-                                try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg);
-                                try self.symbol_locations.put(symbol_key, .{ .stack = .{ .offset = stack_offset } });
-                                reg_idx += 1;
-                            }
-                        }
-                    },
-                    .wildcard => {
-                        if (builtin.mode == .Debug) {
-                            std.debug.panic(
-                                "LIR/codegen invariant violated: wildcard join params are not allowed in canonical tail-recursive form",
-                                .{},
-                            );
-                        }
-                        unreachable;
-                    },
-                    .int_literal, .float_literal, .str_literal, .tag, .struct_, .list, .as_pattern => unreachable, // Join point params must be simple bindings or wildcards
-                }
-            }
+            self.codegen.patchJump(exit_patch, self.codegen.currentOffset());
+            try self.generateStmt(for_stmt.next);
         }
 
-        /// Rebind join point parameters to new argument values (for jump)
-        /// This writes the new values directly to the stack slots used by symbol_locations,
-        /// so that the join point body can read the updated values.
-        fn rebindJoinPointParams(self: *Self, join_point: JoinPointId, arg_locs: []const ValueLocation) Allocator.Error!void {
+        fn bindForListElement(
+            self: *Self,
+            elem_local: LocalId,
+            actual_elem_layout: layout.Idx,
+            iterable_snapshot_offset: i32,
+            index_reg: GeneralReg,
+        ) Allocator.Error!void {
+            const target_layout = self.localLayout(elem_local);
+            const elem_size = self.getLayoutSize(actual_elem_layout);
+            if (elem_size == 0) {
+                const elem_loc = self.requireExactValueLocationToLayout(.{ .immediate_i64 = 0 }, actual_elem_layout, target_layout, "for_list.zst_elem");
+                try self.bindAssignedLocal(elem_local, elem_loc);
+                return;
+            }
+
+            const ptr_reg = try self.allocTempGeneral();
+            try self.codegen.emitLoadStack(.w64, ptr_reg, iterable_snapshot_offset);
+
+            const addr_reg = try self.allocTempGeneral();
+            try self.emitMovRegReg(addr_reg, index_reg);
+
+            if (elem_size != 1) {
+                const size_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadImm(size_reg, elem_size);
+                try self.emitMulRegs(.w64, addr_reg, addr_reg, size_reg);
+                self.codegen.freeGeneral(size_reg);
+            }
+
+            try self.emitAddRegs(.w64, addr_reg, addr_reg, ptr_reg);
+            self.codegen.freeGeneral(ptr_reg);
+
+            const elem_slot = self.codegen.allocStackSlot(@max(elem_size, @as(u32, 1)));
+            const temp_reg = try self.allocTempGeneral();
+            if (elem_size <= 8) {
+                const value_size = ValueSize.fromByteCount(@intCast(elem_size));
+                try self.emitSizedLoadMem(temp_reg, addr_reg, 0, value_size);
+                try self.emitSizedStoreMem(frame_ptr, elem_slot, temp_reg, value_size);
+            } else {
+                try self.copyChunked(temp_reg, addr_reg, 0, frame_ptr, elem_slot, elem_size);
+            }
+            self.codegen.freeGeneral(temp_reg);
+            self.codegen.freeGeneral(addr_reg);
+
+            const raw_elem_loc = self.stackLocationForLayout(actual_elem_layout, elem_slot);
+            const elem_loc = self.requireExactValueLocationToLayout(raw_elem_loc, actual_elem_layout, target_layout, "for_list.elem");
+            try self.bindAssignedLocal(elem_local, elem_loc);
+        }
+
+        /// Set up storage locations for join point parameters
+        fn setupJoinPointParams(self: *Self, join_point: JoinPointId, params: LocalSpan) Allocator.Error!void {
             const jp_key = @intFromEnum(join_point);
-            const param_layouts_span = self.join_point_param_layouts.get(jp_key) orelse unreachable;
-            const param_patterns_span = self.join_point_param_patterns.get(jp_key) orelse unreachable;
-            const layouts = self.store.getLayoutIdxSpan(param_layouts_span);
-            const pattern_ids = self.store.getPatternSpan(param_patterns_span);
+            if (builtin.mode == .Debug and self.join_point_params.contains(jp_key)) {
+                std.debug.panic(
+                    "LIR/codegen invariant violated: duplicate join-point registration for id {d}",
+                    .{jp_key},
+                );
+            }
 
-            if (arg_locs.len != pattern_ids.len) {
+            const locals = self.store.getLocalSpan(params);
+            for (locals) |local| {
+                try self.ensureStableLocationForLocal(local);
+            }
+
+            try self.join_point_params.put(jp_key, params);
+        }
+
+        /// Rebind join point parameters to new argument values (for jump).
+        ///
+        /// This backend only moves bytes into the destination slots. Any
+        /// ownership changes required on loop/control-flow edges must already be
+        /// represented by explicit LIR `incref`/`decref` statements; codegen
+        /// must not invent RC behavior while rebinding join params.
+        fn rebindJoinPointParams(self: *Self, join_point: JoinPointId, arg_locals: []const LocalId, arg_locs: []const ValueLocation) Allocator.Error!void {
+            const jp_key = @intFromEnum(join_point);
+            const params = self.join_point_params.get(jp_key) orelse unreachable;
+            const locals = self.store.getLocalSpan(params);
+
+            if (arg_locs.len != locals.len or arg_locals.len != locals.len) {
                 if (builtin.mode == .Debug) {
                     std.debug.panic(
-                        "LIR/codegen invariant violated: jump arg arity ({d}) does not match join param arity ({d})",
-                        .{ arg_locs.len, pattern_ids.len },
+                        "LIR/codegen invariant violated: jump arg arity ({d}/{d}) does not match join param arity ({d})",
+                        .{ arg_locals.len, arg_locs.len, locals.len },
                     );
                 }
                 unreachable;
             }
-            if (pattern_ids.len != layouts.len) {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "LIR/codegen invariant violated: join param pattern/layout arity mismatch ({d} != {d})",
-                        .{ pattern_ids.len, layouts.len },
-                    );
-                }
-                unreachable;
-            }
 
-            // Two-phase copy to avoid clobbering when params reference each other
-            // (e.g., `jump jp(b, a)` swaps params)
-
-            // Phase 1: Copy all sources to temp stack slots
-            const TempInfo = struct { offset: i32, size: u8 };
+            const TempInfo = struct {
+                offset: i32,
+                size: u8,
+                layout_idx: layout.Idx,
+            };
             var temp_infos: std.ArrayListUnmanaged(TempInfo) = .empty;
             defer temp_infos.deinit(self.allocator);
 
-            for (arg_locs, 0..) |loc, param_idx| {
-                const pattern = self.store.getPattern(pattern_ids[param_idx]);
-                switch (pattern) {
-                    .bind => {},
-                    .wildcard => {
-                        if (builtin.mode == .Debug) {
-                            std.debug.panic(
-                                "LIR/codegen invariant violated: wildcard join params are not allowed in canonical tail-recursive form",
-                                .{},
-                            );
-                        }
-                        unreachable;
-                    },
-                    .int_literal, .float_literal, .str_literal, .tag, .struct_, .list, .as_pattern => unreachable,
-                }
-
-                const dst_loc = self.symbol_locations.get(switch (pattern) {
-                    .bind => |bind| @bitCast(bind.symbol),
-                    else => unreachable,
-                }) orelse {
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic(
-                            "LIR/codegen invariant violated: missing destination location for join param during rebind",
-                            .{},
-                        );
-                    }
-                    unreachable;
-                };
-
-                // Determine param size
-                const is_str = if (param_idx < layouts.len)
-                    layouts[param_idx] == .str
-                else
-                    (dst_loc == .stack_str);
-
-                const is_list = if (param_idx < layouts.len) blk: {
-                    const param_layout = layouts[param_idx];
-                    const ls = self.layout_store;
-                    if (@intFromEnum(param_layout) >= ls.layouts.len()) {
-                        break :blk (loc == .list_stack or dst_loc == .list_stack);
-                    }
-                    const layout_val = ls.getLayout(param_layout);
-                    break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
-                } else (loc == .list_stack or dst_loc == .list_stack);
-
-                const is_i128 = dst_loc == .stack_i128;
-
-                const size: u8 = if (is_list or is_str) 24 else if (is_i128) 16 else 8;
+            for (arg_locals, arg_locs, locals) |arg_local, loc, local| {
+                const local_layout = self.localLayout(local);
+                const temp_loc = self.requireExactValueLocationToLayout(
+                    loc,
+                    self.localLayout(arg_local),
+                    local_layout,
+                    "jump.param",
+                );
+                const size: u8 = @intCast(@max(self.getLayoutSize(local_layout), @as(u32, 8)));
                 const temp_offset = self.codegen.allocStackSlot(size);
+                try self.copyBytesToStackOffset(temp_offset, temp_loc, size);
 
-                // Copy source to temp
-                try self.copyParamValueToStack(loc, temp_offset, size, is_i128);
-                if (param_idx < layouts.len and self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(layouts[param_idx]))) {
-                    try self.emitIncrefAtStackOffset(temp_offset, layouts[param_idx]);
-                }
-
-                try temp_infos.append(self.allocator, .{ .offset = temp_offset, .size = size });
+                try temp_infos.append(self.allocator, .{
+                    .offset = temp_offset,
+                    .size = size,
+                    .layout_idx = local_layout,
+                });
             }
 
-            // Phase 2: Copy from temp slots to destination slots
-            for (temp_infos.items, 0..) |temp_info, param_idx| {
-                if (temp_info.size == 0) unreachable;
-
-                const pattern = self.store.getPattern(pattern_ids[param_idx]);
-                const symbol_key: u64 = switch (pattern) {
-                    .bind => |bind| @bitCast(bind.symbol),
-                    .wildcard => {
-                        if (builtin.mode == .Debug) {
-                            std.debug.panic(
-                                "LIR/codegen invariant violated: wildcard join params are not allowed in canonical tail-recursive form",
-                                .{},
-                            );
-                        }
-                        unreachable;
-                    },
-                    else => unreachable,
-                };
-
-                const dst_loc = self.symbol_locations.get(symbol_key) orelse {
+            for (temp_infos.items, locals) |temp_info, local| {
+                const dst_loc = self.local_locations.get(localKey(local)) orelse {
                     if (builtin.mode == .Debug) {
                         std.debug.panic(
-                            "LIR/codegen invariant violated: missing destination symbol location in join param rebind phase 2",
-                            .{},
+                            "LIR/codegen invariant violated: missing destination local location in join param rebind for local {d}",
+                            .{@intFromEnum(local)},
                         );
                     }
                     unreachable;
@@ -15131,11 +12831,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .general_reg, .float_reg, .immediate_i64, .immediate_i128, .immediate_f64, .noreturn => unreachable,
                 };
 
-                if (param_idx < layouts.len and self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(layouts[param_idx]))) {
-                    try self.emitDecrefAtStackOffset(dst_offset, layouts[param_idx]);
-                }
-
-                // Copy from temp to dst
                 const temp_reg = try self.allocTempGeneral();
                 var bytes_copied: u8 = 0;
                 while (bytes_copied < temp_info.size) : (bytes_copied += 8) {
@@ -15146,651 +12841,202 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// Copy a value to a stack slot (helper for rebindJoinPointParams)
-        fn copyParamValueToStack(self: *Self, loc: ValueLocation, dst_offset: i32, size: u8, is_i128: bool) Allocator.Error!void {
-            if (size == 24 or (size == 16 and !is_i128)) {
-                // 24-byte (list/str) or generic stack copy
-                const src_offset: i32 = switch (loc) {
-                    .stack => |s| s.offset,
-                    .list_stack => |ls_info| ls_info.struct_offset,
-                    .stack_str => |off| off,
-                    else => unreachable,
-                };
+        /// Generate code for a string literal.
+        fn generateStrLiteral(self: *Self, str_idx: base.StringLiteral.Idx) Allocator.Error!ValueLocation {
+            const str_bytes = self.store.getString(str_idx);
+            const base_offset = self.codegen.allocStackSlot(roc_str_size);
+
+            if (str_bytes.len < roc_str_size) {
+                var bytes: [roc_str_size]u8 = .{0} ** roc_str_size;
+                @memcpy(bytes[0..str_bytes.len], str_bytes);
+                bytes[small_str_max_len] = @intCast(str_bytes.len | 0x80);
+
+                const reg = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(reg);
+
+                const chunk0: u64 = @bitCast(bytes[0..target_ptr_size].*);
+                try self.codegen.emitLoadImm(reg, @bitCast(chunk0));
+                try self.codegen.emitStoreStack(.w64, base_offset, reg);
+
+                const chunk1: u64 = @bitCast(bytes[target_ptr_size .. 2 * target_ptr_size].*);
+                try self.codegen.emitLoadImm(reg, @bitCast(chunk1));
+                try self.codegen.emitStoreStack(.w64, base_offset + target_ptr_size, reg);
+
+                const chunk2: u64 = @bitCast(bytes[2 * target_ptr_size .. 3 * target_ptr_size].*);
+                try self.codegen.emitLoadImm(reg, @bitCast(chunk2));
+                try self.codegen.emitStoreStack(.w64, base_offset + 2 * target_ptr_size, reg);
+            } else {
+                const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+                const fn_addr: usize = @intFromPtr(&allocateWithRefcountC);
+                const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
+
+                const alloc_size = std.mem.alignForward(usize, str_bytes.len, 8);
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addImmArg(@intCast(alloc_size));
+                try builder.addImmArg(1);
+                try builder.addImmArg(0);
+                try builder.addRegArg(roc_ops_reg);
+                try self.callBuiltin(&builder, fn_addr, .allocate_with_refcount);
+
+                try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
+
+                const heap_ptr = try self.allocTempGeneral();
+                try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
+
+                var remaining: usize = str_bytes.len;
+                var str_offset: usize = 0;
                 const temp_reg = try self.allocTempGeneral();
-                var off: i32 = 0;
-                while (off < size) : (off += 8) {
-                    try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset + off);
-                    try self.emitStore(.w64, frame_ptr, dst_offset + off, temp_reg);
-                }
-                self.codegen.freeGeneral(temp_reg);
-            } else if (is_i128) {
-                switch (loc) {
-                    .stack_i128 => |src_offset| {
-                        const temp_reg = try self.allocTempGeneral();
-                        try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset);
-                        try self.emitStore(.w64, frame_ptr, dst_offset, temp_reg);
-                        try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset + 8);
-                        try self.emitStore(.w64, frame_ptr, dst_offset + 8, temp_reg);
-                        self.codegen.freeGeneral(temp_reg);
-                    },
-                    .immediate_i128 => |val| {
-                        const low: u64 = @truncate(@as(u128, @bitCast(val)));
-                        const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                        const temp_reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(temp_reg, @bitCast(low));
-                        try self.codegen.emitStoreStack(.w64, dst_offset, temp_reg);
-                        try self.codegen.emitLoadImm(temp_reg, @bitCast(high));
-                        try self.codegen.emitStoreStack(.w64, dst_offset + 8, temp_reg);
-                        self.codegen.freeGeneral(temp_reg);
-                    },
-                    else => unreachable,
-                }
-            } else {
-                // 8-byte normal value
-                const src_reg = try self.ensureInGeneralReg(loc);
-                try self.emitStore(.w64, frame_ptr, dst_offset, src_reg);
-                self.codegen.freeGeneral(src_reg);
-            }
-        }
 
-        /// Emit a jump placeholder (will be patched later).
-        /// Returns the patch location for use with patchJump.
-        fn emitJumpPlaceholder(self: *Self) Allocator.Error!usize {
-            if (comptime target.toCpuArch() == .aarch64) {
-                const patch_loc = self.codegen.currentOffset();
-                try self.codegen.emit.b(0);
-                return patch_loc;
-            } else {
-                const patch_loc = self.codegen.currentOffset() + 1; // after E9 opcode
-                try self.codegen.emit.jmp(0);
-                return patch_loc;
-            }
-        }
-
-        /// Generate code for a switch statement
-        fn generateSwitchStmt(self: *Self, sw: anytype) Allocator.Error!void {
-            // Evaluate condition
-            const cond_loc = try self.generateExpr(sw.cond);
-            const cond_reg = try self.ensureInGeneralReg(cond_loc);
-
-            const branches = self.store.getCFSwitchBranches(sw.branches);
-
-            // For single branch (bool switch): compare and branch
-            if (branches.len == 1) {
-                const branch = branches[0];
-
-                // Compare with branch value and jump if NOT equal (to default)
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.cmpRegImm12(.w64, cond_reg, @intCast(branch.value));
-                } else {
-                    try self.codegen.emit.cmpRegImm32(.w64, cond_reg, @intCast(branch.value));
+                while (remaining >= 8) {
+                    const chunk: u64 = @bitCast(str_bytes[str_offset..][0..8].*);
+                    try self.codegen.emitLoadImm(temp_reg, @bitCast(chunk));
+                    try self.emitStore(.w64, heap_ptr, @intCast(str_offset), temp_reg);
+                    str_offset += 8;
+                    remaining -= 8;
                 }
 
-                // Jump to default if not equal
-                const else_patch = try self.emitJumpIfNotEqual();
-
-                self.codegen.freeGeneral(cond_reg);
-
-                // Generate branch body (recursively generates statements)
-                try self.generateStmt(branch.body);
-
-                // Patch else jump to here
-                const else_offset = self.codegen.currentOffset();
-                self.codegen.patchJump(else_patch, else_offset);
-
-                // Generate default branch
-                try self.generateStmt(sw.default_branch);
-            } else {
-                // Multiple branches - generate cascading comparisons
-                var end_patches = std.ArrayList(usize).empty;
-                defer end_patches.deinit(self.allocator);
-
-                for (branches, 0..) |branch, i| {
-                    if (i < branches.len - 1) {
-                        // Compare and skip if not match
-                        try self.emitCmpImm(cond_reg, @intCast(branch.value));
-                        const skip_patch = try self.emitJumpIfNotEqual();
-
-                        // Generate branch body
-                        try self.generateStmt(branch.body);
-
-                        // Jump to end
-                        const end_patch = try self.codegen.emitJump();
-                        try end_patches.append(self.allocator, end_patch);
-
-                        // Patch skip
-                        const skip_offset = self.codegen.currentOffset();
-                        self.codegen.patchJump(skip_patch, skip_offset);
-                    } else {
-                        // Last branch before default
-                        try self.emitCmpImm(cond_reg, @intCast(branch.value));
-                        const skip_patch = try self.emitJumpIfNotEqual();
-
-                        try self.generateStmt(branch.body);
-
-                        const end_patch = try self.codegen.emitJump();
-                        try end_patches.append(self.allocator, end_patch);
-
-                        self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
+                if (remaining > 0) {
+                    var last_chunk: u64 = 0;
+                    for (0..remaining) |j| {
+                        last_chunk |= @as(u64, str_bytes[str_offset + j]) << @intCast(j * 8);
                     }
+                    try self.codegen.emitLoadImm(temp_reg, @bitCast(last_chunk));
+                    try self.emitStore(.w64, heap_ptr, @intCast(str_offset), temp_reg);
                 }
 
-                self.codegen.freeGeneral(cond_reg);
+                self.codegen.freeGeneral(temp_reg);
+                self.codegen.freeGeneral(heap_ptr);
 
-                // Generate default branch
-                try self.generateStmt(sw.default_branch);
+                const ptr_reg = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(ptr_reg);
+                try self.emitLoad(.w64, ptr_reg, frame_ptr, heap_ptr_slot);
 
-                // Patch all end jumps
-                const end_offset = self.codegen.currentOffset();
-                for (end_patches.items) |patch| {
-                    self.codegen.patchJump(patch, end_offset);
-                }
+                try self.codegen.emitStoreStack(.w64, base_offset, ptr_reg);
+                try self.codegen.emitLoadImm(ptr_reg, @intCast(str_bytes.len));
+                try self.codegen.emitStoreStack(.w64, base_offset + 8, ptr_reg);
+                try self.codegen.emitStoreStack(.w64, base_offset + 16, ptr_reg);
             }
+
+            return .{ .stack_str = base_offset };
         }
 
-        /// Generate code for a match statement (pattern matching in tail position).
-        /// Like generateMatch but each branch body is a CFStmt (handles its own ret/jump).
-        fn generateMatchStmt(self: *Self, ms: anytype) Allocator.Error!void {
-            // Evaluate the scrutinee
-            const value_loc = try self.generateExpr(ms.value);
+        fn emitRocStaticMessageCall(self: *Self, field_offset: i32, msg: []const u8) Allocator.Error!void {
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
-            const branches = self.store.getCFMatchBranches(ms.branches);
-            if (branches.len == 0) {
-                unreachable;
-            }
+            const msg_aligned_size: u32 = std.mem.alignForward(u32, @intCast(msg.len), 8);
+            const msg_slot = self.codegen.allocStackSlot(if (msg_aligned_size == 0) 8 else msg_aligned_size);
+            const args_slot = self.codegen.allocStackSlot(16);
 
-            // Get layout info for tag unions
-            const ls = self.layout_store;
-            const value_layout_val = ls.getLayout(ms.value_layout);
-            const tu_disc_offset: i32 = if (value_layout_val.tag == .tag_union) blk: {
-                const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
-                break :blk @intCast(tu_data.discriminant_offset);
-            } else 0;
-            const tu_total_size: u32 = if (value_layout_val.tag == .tag_union) blk: {
-                const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
-                break :blk tu_data.size;
-            } else ls.layoutSizeAlign(value_layout_val).size;
-            const tu_disc_size: u8 = if (value_layout_val.tag == .tag_union) blk: {
-                const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
-                break :blk tu_data.discriminant_size;
-            } else @intCast(@max(ls.layoutSizeAlign(value_layout_val).size, 1));
-            const disc_use_w32 = (tu_disc_offset + 8 > @as(i32, @intCast(tu_total_size)));
+            const base_reg = frame_ptr;
+            const tmp = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(tmp);
 
-            // Collect jump targets for patching to end
-            var end_patches = std.ArrayList(usize).empty;
-            defer end_patches.deinit(self.allocator);
-
-            for (branches, 0..) |branch, i| {
-                const pattern = self.store.getPattern(branch.pattern);
-                const is_last_branch = (i == branches.len - 1);
-
-                switch (pattern) {
-                    .wildcard => {
-                        const guard_patch = try self.emitGuardCheck(branch.guard);
-                        if (guard_patch) |gp| {
-                            try self.generateStmt(branch.body);
-                            if (!is_last_branch) {
-                                const end_patch = try self.codegen.emitJump();
-                                try end_patches.append(self.allocator, end_patch);
-                            }
-                            self.codegen.patchJump(gp, self.codegen.currentOffset());
-                        } else {
-                            try self.generateStmt(branch.body);
-                            break;
-                        }
-                    },
-                    .bind => |bind| {
-                        const symbol_key: u64 = @bitCast(bind.symbol);
-                        try self.symbol_locations.put(symbol_key, value_loc);
-
-                        const guard_patch = try self.emitGuardCheck(branch.guard);
-                        if (guard_patch) |gp| {
-                            try self.generateStmt(branch.body);
-                            if (!is_last_branch) {
-                                const end_patch = try self.codegen.emitJump();
-                                try end_patches.append(self.allocator, end_patch);
-                            }
-                            self.codegen.patchJump(gp, self.codegen.currentOffset());
-                        } else {
-                            try self.generateStmt(branch.body);
-                            break;
-                        }
-                    },
-                    .int_literal => |int_lit| {
-                        try self.emitIntPatternCheck(int_lit.value, value_loc);
-
-                        var next_patch: ?usize = null;
-                        if (!is_last_branch) {
-                            next_patch = try self.emitJumpIfNotEqual();
-                        }
-
-                        const guard_patch = try self.emitGuardCheck(branch.guard);
-
-                        try self.generateStmt(branch.body);
-
-                        if (!is_last_branch) {
-                            const end_patch = try self.codegen.emitJump();
-                            try end_patches.append(self.allocator, end_patch);
-
-                            if (next_patch) |patch| {
-                                self.codegen.patchJump(patch, self.codegen.currentOffset());
-                            }
-                        }
-                        if (guard_patch) |patch| {
-                            self.codegen.patchJump(patch, self.codegen.currentOffset());
-                        }
-                    },
-                    .str_literal => |str_lit_idx| {
-                        try self.emitStringPatternCheck(str_lit_idx, value_loc);
-
-                        var next_patch: ?usize = null;
-                        if (!is_last_branch) {
-                            next_patch = try self.emitJumpIfEqual();
-                        }
-
-                        const guard_patch = try self.emitGuardCheck(branch.guard);
-
-                        try self.generateStmt(branch.body);
-
-                        if (!is_last_branch) {
-                            const end_patch = try self.codegen.emitJump();
-                            try end_patches.append(self.allocator, end_patch);
-
-                            if (next_patch) |patch| {
-                                self.codegen.patchJump(patch, self.codegen.currentOffset());
-                            }
-                        }
-                        if (guard_patch) |patch| {
-                            self.codegen.patchJump(patch, self.codegen.currentOffset());
-                        }
-                    },
-                    .tag => |tag_pattern| {
-                        const disc_reg = try self.loadAndMaskDiscriminant(value_loc, disc_use_w32, tu_disc_offset, tu_disc_size);
-                        try self.emitCmpImm(disc_reg, @intCast(tag_pattern.discriminant));
-                        self.codegen.freeGeneral(disc_reg);
-
-                        var next_patch: ?usize = null;
-                        if (!is_last_branch) {
-                            next_patch = try self.emitJumpIfNotEqual();
-                        }
-
-                        // For patterns like Err(Exit(code)), check inner discriminants
-                        // before binding any payload variables. If any inner discriminant
-                        // does not match, we must fall through to the next branch.
-                        var inner_fail_patches = std.ArrayList(usize).empty;
-                        defer inner_fail_patches.deinit(self.allocator);
-                        if (!is_last_branch) {
-                            try self.emitInnerTagArgDiscriminantChecks(
-                                tag_pattern,
-                                value_loc,
-                                ms.value_layout,
-                                value_layout_val,
-                                &inner_fail_patches,
-                            );
-                        }
-
-                        // Bind tag payload fields
-                        try self.bindTagPayloadFields(tag_pattern, value_loc, ms.value_layout, value_layout_val);
-
-                        // Guard check (after bindings, since guard may reference bound vars)
-                        const guard_patch = try self.emitGuardCheck(branch.guard);
-
-                        try self.generateStmt(branch.body);
-
-                        if (!is_last_branch) {
-                            const end_patch = try self.codegen.emitJump();
-                            try end_patches.append(self.allocator, end_patch);
-
-                            const next_branch_offset = self.codegen.currentOffset();
-                            if (next_patch) |patch| {
-                                self.codegen.patchJump(patch, next_branch_offset);
-                            }
-                            for (inner_fail_patches.items) |patch| {
-                                self.codegen.patchJump(patch, next_branch_offset);
-                            }
-                        }
-                        if (guard_patch) |patch| {
-                            self.codegen.patchJump(patch, self.codegen.currentOffset());
-                        }
-                    },
-                    .list => |list_pattern| {
-                        const is_exact_match = list_pattern.rest.isNone();
-
-                        // Check list length
-                        try self.emitListLengthCheck(list_pattern, value_loc);
-
-                        var next_patch: ?usize = null;
-                        if (!is_last_branch) {
-                            if (is_exact_match) {
-                                next_patch = try self.emitJumpIfNotEqual();
-                            } else {
-                                next_patch = try self.emitJumpIfLessThan();
-                            }
-                        }
-
-                        // Bind prefix, suffix, and rest elements
-                        try self.emitListPatternBindings(list_pattern, value_loc);
-
-                        // Guard check (after bindings, since guard may reference bound vars)
-                        const guard_patch = try self.emitGuardCheck(branch.guard);
-
-                        try self.generateStmt(branch.body);
-
-                        if (!is_last_branch) {
-                            const end_patch = try self.codegen.emitJump();
-                            try end_patches.append(self.allocator, end_patch);
-
-                            if (next_patch) |patch| {
-                                self.codegen.patchJump(patch, self.codegen.currentOffset());
-                            }
-                        }
-                        if (guard_patch) |patch| {
-                            self.codegen.patchJump(patch, self.codegen.currentOffset());
-                        }
-                    },
-                    .struct_ => {
-                        // Ensure the value is on the stack so both the field-level
-                        // checks and the field bindings address the same memory.
-                        const value_size = ls.layoutSizeAlign(value_layout_val).size;
-                        const stack_off = try self.ensureOnStack(value_loc, value_size);
-                        const stable_loc: ValueLocation = .{ .stack = .{ .offset = stack_off } };
-
-                        var field_fail_patches = std.ArrayList(usize).empty;
-                        defer field_fail_patches.deinit(self.allocator);
-                        if (!is_last_branch) {
-                            try self.emitPatternChecks(
-                                branch.pattern,
-                                stable_loc,
-                                ms.value_layout,
-                                &field_fail_patches,
-                            );
-                        }
-
-                        try self.bindPattern(branch.pattern, stable_loc);
-
-                        const guard_patch = try self.emitGuardCheck(branch.guard);
-
-                        try self.generateStmt(branch.body);
-
-                        const unconditional = field_fail_patches.items.len == 0 and guard_patch == null;
-
-                        if (!is_last_branch and !unconditional) {
-                            const end_patch = try self.codegen.emitJump();
-                            try end_patches.append(self.allocator, end_patch);
-
-                            const next_branch_offset = self.codegen.currentOffset();
-                            for (field_fail_patches.items) |patch| {
-                                self.codegen.patchJump(patch, next_branch_offset);
-                            }
-                        }
-                        if (guard_patch) |patch| {
-                            self.codegen.patchJump(patch, self.codegen.currentOffset());
-                        }
-
-                        if (unconditional) break;
-                    },
-                    .as_pattern => |as_pat| {
-                        const symbol_key: u64 = @bitCast(as_pat.symbol);
-                        try self.symbol_locations.put(symbol_key, value_loc);
-                        const value_size = ls.layoutSizeAlign(value_layout_val).size;
-                        const stack_off = try self.ensureOnStack(value_loc, value_size);
-                        try self.bindPattern(as_pat.inner, .{ .stack = .{ .offset = stack_off } });
-
-                        const guard_patch = try self.emitGuardCheck(branch.guard);
-                        if (guard_patch) |gp| {
-                            try self.generateStmt(branch.body);
-                            if (!is_last_branch) {
-                                const end_patch = try self.codegen.emitJump();
-                                try end_patches.append(self.allocator, end_patch);
-                            }
-                            self.codegen.patchJump(gp, self.codegen.currentOffset());
-                        } else {
-                            try self.generateStmt(branch.body);
-                            break;
-                        }
-                    },
-                    else => {
-                        unreachable;
-                    },
+            var offset: u32 = 0;
+            while (offset < msg.len) : (offset += 8) {
+                const remaining = msg.len - offset;
+                if (remaining >= 8) {
+                    const chunk: u64 = @bitCast(msg[offset..][0..8].*);
+                    try self.codegen.emitLoadImm(tmp, @bitCast(chunk));
+                    try self.emitStore(.w64, base_reg, msg_slot + @as(i32, @intCast(offset)), tmp);
+                } else {
+                    var padded: [8]u8 = .{0} ** 8;
+                    @memcpy(padded[0..remaining], msg[offset..][0..remaining]);
+                    const chunk: u64 = @bitCast(padded);
+                    try self.codegen.emitLoadImm(tmp, @bitCast(chunk));
+                    try self.emitStore(.w64, base_reg, msg_slot + @as(i32, @intCast(offset)), tmp);
                 }
             }
 
-            // Patch all end jumps to here
-            const end_offset = self.codegen.currentOffset();
-            for (end_patches.items) |patch| {
-                self.codegen.patchJump(patch, end_offset);
-            }
-        }
-
-        /// Patch all pending calls after all procedures are compiled
-        fn generateRcOperandValue(self: *Self, expr_id: LirExprId, layout_idx: layout.Idx) Allocator.Error!ValueLocation {
-            switch (self.store.getExpr(expr_id)) {
-                .cell_load => |load| {
-                    const storage = self.resolveCellStorage(load.cell, load.layout_idx) orelse {
-                        if (builtin.mode == .Debug) {
-                            std.debug.panic(
-                                "LIR/codegen invariant violated: RC op on unknown cell {d}",
-                                .{@as(u64, @bitCast(load.cell))},
-                            );
-                        }
-                        unreachable;
-                    };
-
-                    return self.stackLocationForLayout(layout_idx, storage.slot);
-                },
-                else => return self.generateExpr(expr_id),
-            }
-        }
-
-        /// Generate code for incref operation
-        /// Increments the reference count of a heap-allocated value
-        fn generateIncref(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
-            const value_loc = try self.generateRcOperandValue(rc_op.value, rc_op.layout_idx);
-            const ls = self.layout_store;
-            const layout_val = ls.getLayout(rc_op.layout_idx);
-            if (!ls.layoutContainsRefcounted(layout_val)) return value_loc;
-
-            switch (layout_val.tag) {
-                .closure => {
-                    // In the dev backend, the value location for a closure is its
-                    // captures payload, not a Closure header. Route RC through the
-                    // captures layout explicitly and leave generic ordinary-data
-                    // RC to the canonical helper path.
-                    try self.emitRcHelperCallForValue(.incref, value_loc, layout_val.data.closure.captures_layout_idx, rc_op.count);
-                },
-                else => {
-                    try self.emitRcHelperCallForValue(.incref, value_loc, rc_op.layout_idx, rc_op.count);
-                },
-            }
-
-            return value_loc;
-        }
-
-        /// Generate code for decref operation
-        /// Decrements the reference count and frees if it reaches zero
-        fn generateDecref(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
-            const value_loc = try self.generateRcOperandValue(rc_op.value, rc_op.layout_idx);
-            const ls = self.layout_store;
-            const layout_val = ls.getLayout(rc_op.layout_idx);
-            if (!ls.layoutContainsRefcounted(layout_val)) return value_loc;
-
-            if (layout_val.tag == .closure) {
-                try self.emitRcHelperCallForValue(.decref, value_loc, layout_val.data.closure.captures_layout_idx, 1);
-            } else {
-                try self.emitRcHelperCallForValue(.decref, value_loc, rc_op.layout_idx, 1);
-            }
-
-            return value_loc;
-        }
-
-        fn ensureValueOnStackForRc(self: *Self, value_loc: ValueLocation, value_size: u32) Allocator.Error!i32 {
-            return switch (value_loc) {
-                .stack => |s| s.offset,
-                .stack_i128 => |off| off,
-                .stack_str => |off| off,
-                .list_stack => |info| info.struct_offset,
-                .general_reg => |reg| blk: {
-                    std.debug.assert(value_size <= 8);
-                    const slot = self.codegen.allocStackSlot(@intCast(@max(value_size, @as(u32, 8))));
-                    try self.emitStore(.w64, frame_ptr, slot, reg);
-                    break :blk slot;
-                },
-                .immediate_i64 => |imm| blk: {
-                    std.debug.assert(value_size <= 8);
-                    const slot = self.codegen.allocStackSlot(@intCast(@max(value_size, @as(u32, 8))));
-                    const tmp = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(tmp, imm);
-                    try self.emitStore(.w64, frame_ptr, slot, tmp);
-                    self.codegen.freeGeneral(tmp);
-                    break :blk slot;
-                },
-                else => unreachable,
-            };
-        }
-
-        fn emitIncrefAtStackOffset(self: *Self, base_offset: i32, layout_idx: layout.Idx) Allocator.Error!void {
-            const ls = self.layout_store;
-            const layout_val = ls.getLayout(layout_idx);
-            if (!ls.layoutContainsRefcounted(layout_val)) return;
-
-            switch (layout_val.tag) {
-                .closure => {
-                    try self.emitIncrefAtStackOffset(base_offset, layout_val.data.closure.captures_layout_idx);
-                },
-                else => {
-                    try self.emitRcHelperCallAtStackOffset(.incref, base_offset, layout_idx, 1);
-                },
-            }
-        }
-
-        fn emitDecrefAtStackOffset(self: *Self, base_offset: i32, layout_idx: layout.Idx) Allocator.Error!void {
-            const ls = self.layout_store;
-            const layout_val = ls.getLayout(layout_idx);
-            if (!ls.layoutContainsRefcounted(layout_val)) return;
-
-            switch (layout_val.tag) {
-                .closure => {
-                    try self.emitDecrefAtStackOffset(base_offset, layout_val.data.closure.captures_layout_idx);
-                },
-                else => {
-                    try self.emitRcHelperCallAtStackOffset(.decref, base_offset, layout_idx, 1);
-                },
-            }
-        }
-
-        /// Generate code for free operation
-        /// Directly frees memory without checking refcount
-        fn generateFree(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
-            const value_loc = try self.generateRcOperandValue(rc_op.value, rc_op.layout_idx);
-            const ls = self.layout_store;
-            const layout_val = ls.getLayout(rc_op.layout_idx);
-            if (!ls.layoutContainsRefcounted(layout_val)) return value_loc;
-
-            switch (layout_val.tag) {
-                // Dev closures expose captures directly, so dropping a closure value
-                // means releasing the captures' owned children rather than treating
-                // the value as a heap-owning outer allocation.
-                .closure => try self.emitRcHelperCallForValue(.decref, value_loc, layout_val.data.closure.captures_layout_idx, 1),
-                else => try self.emitRcHelperCallForValue(.free, value_loc, rc_op.layout_idx, 1),
-            }
-
-            return value_loc;
-        }
-
-        pub fn patchPendingCalls(self: *Self) Allocator.Error!void {
-            for (self.pending_calls.items) |pending| {
-                const proc = self.proc_registry.get(@intFromEnum(pending.target_proc)) orelse {
-                    unreachable;
-                };
-                self.patchCallTarget(pending.call_site, proc.code_start);
-            }
-            self.pending_calls.clearRetainingCapacity();
-        }
-
-        /// Patch a call instruction to target a specific offset
-        fn patchCallTarget(self: *Self, call_site: usize, target_offset: usize) void {
-            const rel_offset: i32 = @intCast(@as(i64, @intCast(target_offset)) - @as(i64, @intCast(call_site)));
-
+            try self.emitLeaStack(tmp, msg_slot);
             if (comptime target.toCpuArch() == .aarch64) {
-                // BL instruction: patch the immediate offset
-                // BL uses 26-bit signed offset in instructions (multiply by 4)
-                const instr_offset = @divTrunc(rel_offset, 4);
-                self.codegen.patchBL(call_site, instr_offset);
+                try self.codegen.emit.strRegMemSoff(.w64, tmp, base_reg, args_slot);
             } else {
-                // CALL rel32: patch the 32-bit relative offset
-                // Offset is relative to instruction after CALL (call_site + 5)
-                const call_rel = rel_offset - 5;
-                self.codegen.patchCall(call_site, call_rel);
+                try self.codegen.emit.movMemReg(.w64, base_reg, args_slot, tmp);
+            }
+
+            const msg_len_val: i64 = @bitCast(@as(u64, msg.len));
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emitLoadImm(tmp, msg_len_val);
+                try self.codegen.emit.strRegMemSoff(.w64, tmp, base_reg, args_slot + 8);
+            } else {
+                try self.codegen.emit.movRegImm64(tmp, @bitCast(@as(u64, msg.len)));
+                try self.codegen.emit.movMemReg(.w64, base_reg, args_slot + 8, tmp);
+            }
+
+            const fn_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
+            try self.emitLoad(.w64, fn_ptr_reg, roc_ops_reg, field_offset);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(base_reg, args_slot);
+            try builder.addMemArg(roc_ops_reg, 0);
+            try builder.callReg(fn_ptr_reg);
+        }
+
+        fn emitRocDbgFromStackStr(self: *Self, str_offset: i32) Allocator.Error!void {
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addMemArg(frame_ptr, str_offset);
+            try builder.addMemArg(frame_ptr, str_offset + @as(i32, @intCast(target_ptr_size)));
+            try builder.addMemArg(frame_ptr, str_offset + 2 * @as(i32, @intCast(target_ptr_size)));
+            try builder.addRegArg(self.roc_ops_reg orelse unreachable);
+            try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_dbg_str), .dbg_str);
+        }
+
+        fn emitRocExpectFailed(self: *Self) Allocator.Error!void {
+            try self.emitRocStaticMessageCall(@offsetOf(RocOps, "roc_expect_failed"), "expect failed");
+        }
+
+        /// Emit a roc_crashed call via RocOps with a static message.
+        fn emitRocCrash(self: *Self, msg: []const u8) Allocator.Error!void {
+            try self.emitRocStaticMessageCall(@offsetOf(RocOps, "roc_crashed"), msg);
+        }
+
+        fn emitTrap(self: *Self) Allocator.Error!void {
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emit.brk();
+            } else {
+                try self.codegen.emit.ud2();
             }
         }
 
-        /// Generate a RocCall-compatible entrypoint wrapper function.
+        /// Generate an ABI-compliant entrypoint wrapper for calling a compiled Roc proc.
         ///
-        /// The RocCall ABI is:
-        ///   fn(*RocOps, *anyopaque ret_ptr, *anyopaque args_ptr) callconv(.c) void
-        ///
-        /// This generates a function that:
-        /// 1. Receives (roc_ops, ret_ptr, args_ptr) per C calling convention
-        /// 2. Saves RocOps pointer for use by Roc code
-        /// 3. Unpacks arguments from the args tuple at args_ptr
-        /// 4. Calls the compiled Roc function body
-        /// 5. Stores the result to ret_ptr
-        /// 6. Returns void
-        ///
-        /// Returns the code offset where the wrapper function starts.
+        /// The wrapper:
+        /// 1. Receives `(roc_ops, ret_ptr, args_ptr)` in the platform C ABI
+        /// 2. Saves the incoming pointers in callee-saved registers
+        /// 3. Unpacks argument bytes from `args_ptr` according to Roc layout alignment
+        /// 4. Calls the already-compiled Roc proc body
+        /// 5. Stores the result into `ret_ptr`
+        /// 6. Returns `void`
         pub fn generateEntrypointWrapper(
             self: *Self,
-            name: []const u8,
+            _: []const u8,
             entry_proc: lir.LIR.LirProcSpecId,
             arg_layouts: []const layout.Idx,
             ret_layout: layout.Idx,
         ) Allocator.Error!ExportedSymbol {
-            _ = name; // Used for the symbol name, passed through to result
-
-            // Record start position
             const func_start = self.codegen.currentOffset();
-
-            // Track prologue info for unwind tables (Windows x64)
             var prologue_size: u8 = 0;
             var stack_alloc: u32 = 0;
 
-            // Clear state for this entrypoint
-            self.symbol_locations.clearRetainingCapacity();
-            self.mutable_var_slots.clearRetainingCapacity();
+            self.local_locations.clearRetainingCapacity();
             self.codegen.callee_saved_used = 0;
 
-            // On entry, arguments are in:
-            // x86_64 System V: RDI=roc_ops, RSI=ret_ptr, RDX=args_ptr
-            // aarch64 AAPCS64: X0=roc_ops, X1=ret_ptr, X2=args_ptr
-
             if (arch == .aarch64 or arch == .aarch64_be) {
-                // Use DeferredFrameBuilder pattern: generate body first, then prepend prologue.
-                // This ensures the stack frame is correctly sized for the actual body code,
-                // which may include lambda bodies that allocate many stack slots.
-
-                // Save state that the body generation will modify
                 const saved_callee_saved_used = self.codegen.callee_saved_used;
                 const saved_callee_saved_available = self.codegen.callee_saved_available;
                 const saved_roc_ops_reg = self.roc_ops_reg;
                 const saved_early_return_patches_len = self.early_return_patches.items.len;
 
-                // Mark X19/X20/X21 as used callee-saved registers (roc_ops, ret_ptr, args_ptr)
                 const x19_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X19);
                 const x20_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X20);
                 const x21_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X21);
                 self.codegen.callee_saved_used = x19_bit | x20_bit | x21_bit;
-                // Remove from available pool so body code can't use them as temps
                 self.codegen.callee_saved_available &= ~(x19_bit | x20_bit | x21_bit);
-
-                // PHASE 1: Generate body first (to determine actual stack usage)
-                // Initialize stack_offset for procedure-style frame (positive, grows upward from FP)
-                // Layout: [FP/LR (16)] [callee-saved area (80)] [locals...]
                 self.codegen.stack_offset = 16 + CodeGen.CALLEE_SAVED_AREA_SIZE;
 
                 const body_start = self.codegen.currentOffset();
                 const relocs_before = self.codegen.relocations.items.len;
 
-                // Save args to callee-saved registers (safe because prologue will save them)
                 try self.codegen.emit.movRegReg(.w64, .X19, .X0);
                 try self.codegen.emit.movRegReg(.w64, .X20, .X1);
                 try self.codegen.emit.movRegReg(.w64, .X21, .X2);
@@ -15799,7 +13045,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 try self.generateEntrypointProcCall(entry_proc, arg_layouts, ret_layout, .X20, .X21);
 
-                // Emit epilogue using DeferredFrameBuilder with actual stack usage
                 const body_epilogue_offset = self.codegen.currentOffset();
                 const actual_locals: u32 = @intCast(self.codegen.stack_offset - 16 - CodeGen.CALLEE_SAVED_AREA_SIZE);
                 {
@@ -15810,15 +13055,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
 
                 const body_end = self.codegen.currentOffset();
-
-                // PHASE 2: Extract body and prepend prologue
                 const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
                 defer self.allocator.free(body_bytes);
 
-                // Truncate buffer back to body_start
                 self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
 
-                // Emit prologue with actual stack usage
                 const prologue_start = self.codegen.currentOffset();
                 {
                     var frame_builder = CodeGen.DeferredFrameBuilder.init();
@@ -15828,21 +13069,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
                 const prologue_size_val = self.codegen.currentOffset() - prologue_start;
 
-                // Re-append body
                 self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
 
-                // Adjust relocation offsets
                 for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
                     reloc.adjustOffset(prologue_size_val);
                 }
 
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size_val, std.math.maxInt(u64));
                 self.shiftPendingCalls(body_start, body_end, prologue_size_val);
-                // Re-patch internal calls/addr whose targets are outside the shifted body
+                self.shiftPendingProcAddrs(body_start, body_end, prologue_size_val);
                 self.repatchInternalCalls(body_start, body_end, prologue_size_val, body_start);
                 self.repatchInternalAddrPatches(body_start, body_end, prologue_size_val, body_start);
 
-                // Patch early return jumps to the epilogue (shifted by prologue_size)
                 for (self.early_return_patches.items[saved_early_return_patches_len..]) |*patch| {
                     patch.* += prologue_size_val;
                 }
@@ -15852,46 +13090,39 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
                 self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
 
-                // Restore state
                 self.codegen.callee_saved_used = saved_callee_saved_used;
                 self.codegen.callee_saved_available = saved_callee_saved_available;
                 self.roc_ops_reg = saved_roc_ops_reg;
             } else {
-                // x86_64: use DeferredFrameBuilder pattern (same as aarch64)
                 const saved_callee_saved_used = self.codegen.callee_saved_used;
                 const saved_callee_saved_available = self.codegen.callee_saved_available;
                 const saved_roc_ops_reg = self.roc_ops_reg;
                 const saved_early_return_patches_len = self.early_return_patches.items.len;
 
-                // Mark RBX, R12, R13 as used callee-saved (ret_ptr, roc_ops, args_ptr)
                 const rbx_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RBX);
                 const r12_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R12);
                 const r13_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R13);
                 self.codegen.callee_saved_used = rbx_bit | r12_bit | r13_bit;
                 self.codegen.callee_saved_available &= ~(rbx_bit | r12_bit | r13_bit);
-
-                // Initialize stack_offset for procedure-style frame (negative, grows downward)
                 self.codegen.stack_offset = -CodeGen.CALLEE_SAVED_AREA_SIZE;
 
                 const body_start = self.codegen.currentOffset();
                 const relocs_before = self.codegen.relocations.items.len;
 
-                // Save args to callee-saved registers
                 if (target.isWindows()) {
-                    try self.codegen.emit.movRegReg(.w64, .R12, .RCX); // roc_ops
-                    try self.codegen.emit.movRegReg(.w64, .RBX, .RDX); // ret_ptr
-                    try self.codegen.emit.movRegReg(.w64, .R13, .R8); // args_ptr
+                    try self.codegen.emit.movRegReg(.w64, .R12, .RCX);
+                    try self.codegen.emit.movRegReg(.w64, .RBX, .RDX);
+                    try self.codegen.emit.movRegReg(.w64, .R13, .R8);
                 } else {
-                    try self.codegen.emit.movRegReg(.w64, .R12, .RDI); // roc_ops
-                    try self.codegen.emit.movRegReg(.w64, .RBX, .RSI); // ret_ptr
-                    try self.codegen.emit.movRegReg(.w64, .R13, .RDX); // args_ptr
+                    try self.codegen.emit.movRegReg(.w64, .R12, .RDI);
+                    try self.codegen.emit.movRegReg(.w64, .RBX, .RSI);
+                    try self.codegen.emit.movRegReg(.w64, .R13, .RDX);
                 }
 
                 self.roc_ops_reg = .R12;
 
                 try self.generateEntrypointProcCall(entry_proc, arg_layouts, ret_layout, .RBX, .R13);
 
-                // Emit epilogue with actual stack usage
                 const body_epilogue_offset = self.codegen.currentOffset();
                 const actual_locals_x86: u32 = @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE);
                 {
@@ -15902,8 +13133,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
 
                 const body_end = self.codegen.currentOffset();
-
-                // Prepend prologue
                 const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
                 defer self.allocator.free(body_bytes);
 
@@ -15916,21 +13145,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 prologue_size = @intCast(prologue_size_x86);
                 stack_alloc = actual_locals_x86;
 
-                // Re-append body + epilogue
                 self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
 
-                // Adjust relocation offsets
                 for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
                     reloc.adjustOffset(prologue_size_x86);
                 }
 
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size_x86, std.math.maxInt(u64));
                 self.shiftPendingCalls(body_start, body_end, prologue_size_x86);
-                // Re-patch internal calls/addr whose targets are outside the shifted body
+                self.shiftPendingProcAddrs(body_start, body_end, prologue_size_x86);
                 self.repatchInternalCalls(body_start, body_end, prologue_size_x86, body_start);
                 self.repatchInternalAddrPatches(body_start, body_end, prologue_size_x86, body_start);
 
-                // Patch early return jumps
                 for (self.early_return_patches.items[saved_early_return_patches_len..]) |*patch| {
                     patch.* += prologue_size_x86;
                 }
@@ -15940,7 +13166,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
                 self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
 
-                // Restore state
                 self.codegen.callee_saved_used = saved_callee_saved_used;
                 self.codegen.callee_saved_available = saved_callee_saved_available;
                 self.roc_ops_reg = saved_roc_ops_reg;
@@ -15949,7 +13174,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const func_end = self.codegen.currentOffset();
 
             return ExportedSymbol{
-                .name = "", // Caller should set this
+                .name = "",
                 .offset = func_start,
                 .size = func_end - func_start,
                 .prologue_size = prologue_size,
@@ -15981,9 +13206,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const SortCtx = struct {
                 fn lessThan(_: void, lhs: EntrypointArgOrder, rhs: EntrypointArgOrder) bool {
-                    if (lhs.alignment != rhs.alignment) {
-                        return lhs.alignment > rhs.alignment;
-                    }
+                    if (lhs.alignment != rhs.alignment) return lhs.alignment > rhs.alignment;
                     return lhs.index < rhs.index;
                 }
             };
@@ -16076,10 +13299,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             arg_infos: []const ArgInfo,
             ret_layout: layout.Idx,
         ) Allocator.Error!ValueLocation {
-            const pbp_plan = try self.computePassByPtrPlan(arg_infos, 0, true);
+            const needs_ret_ptr = self.needsInternalReturnByPointer(ret_layout);
+            const ret_buffer_offset = if (needs_ret_ptr) blk: {
+                const runtime_ret_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
+                const size = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_ret_layout)).size;
+                break :blk self.codegen.allocStackSlot(size);
+            } else 0;
+
+            const pbp_plan = try self.computePassByPtrPlan(arg_infos, if (needs_ret_ptr) 1 else 0, true);
             defer self.scratch_pass_by_ptr.clearFrom(pbp_plan.start);
 
             const stack_spill_size = try self.placeCallArguments(arg_infos, .{
+                .needs_ret_ptr = needs_ret_ptr,
+                .ret_buffer_offset = ret_buffer_offset,
                 .pass_by_ptr = pbp_plan.slice,
                 .emit_roc_ops = true,
             });
@@ -16089,7 +13321,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitAddStackPtr(stack_spill_size);
             }
 
-            return self.saveCallReturnValue(ret_layout, false, 0);
+            return self.saveCallReturnValue(ret_layout, needs_ret_ptr, ret_buffer_offset);
         }
 
         fn generateEntrypointProcCall(
@@ -16100,7 +13332,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             ret_ptr_reg: GeneralReg,
             args_ptr_reg: GeneralReg,
         ) Allocator.Error!void {
-            const compiled = try self.procCodeOffsetWithOptions(entry_proc, .{});
+            const compiled = try self.compiledProcForId(entry_proc);
             if (compiled.code_start == unresolved_proc_code_start) {
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
@@ -16118,49 +13350,125 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// Get the size of a layout in bytes for argument unpacking
-        fn getLayoutSize(self: *Self, layout_idx: layout.Idx) u32 {
-            const ls = self.layout_store;
-            const layout_val = ls.getLayout(layout_idx);
-            return ls.layoutSizeAlign(layout_val).size;
+        /// Emit a jump placeholder (will be patched later).
+        /// Returns the patch location for use with patchJump.
+        fn emitJumpPlaceholder(self: *Self) Allocator.Error!usize {
+            if (comptime target.toCpuArch() == .aarch64) {
+                const patch_loc = self.codegen.currentOffset();
+                try self.codegen.emit.b(0);
+                return patch_loc;
+            } else {
+                const patch_loc = self.codegen.currentOffset() + 1; // after E9 opcode
+                try self.codegen.emit.jmp(0);
+                return patch_loc;
+            }
         }
 
-        /// Get the generated code buffer (for object file generation)
+        /// Generate code for a switch statement
+        fn generateSwitchStmt(self: *Self, sw: anytype) Allocator.Error!void {
+            // Evaluate condition
+            const cond_loc = try self.emitValueLocal(sw.cond);
+            const cond_reg = try self.ensureInGeneralReg(cond_loc);
+
+            const branches = self.store.getCFSwitchBranches(sw.branches);
+            var switch_env = try self.captureStmtEnv();
+            defer switch_env.deinit();
+
+            // For single branch (bool switch): compare and branch
+            if (branches.len == 1) {
+                const branch = branches[0];
+
+                // Compare with branch value and jump if NOT equal (to default)
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.cmpRegImm12(.w64, cond_reg, @intCast(branch.value));
+                } else {
+                    try self.codegen.emit.cmpRegImm32(.w64, cond_reg, @intCast(branch.value));
+                }
+
+                // Jump to default if not equal
+                const else_patch = try self.emitJumpIfNotEqual();
+
+                self.codegen.freeGeneral(cond_reg);
+
+                // Generate branch body (recursively generates statements)
+                try self.restoreStmtEnv(&switch_env);
+                try self.generateStmt(branch.body);
+
+                // Matching a branch must skip the default arm.
+                const end_patch = try self.codegen.emitJump();
+
+                // Patch else jump to the start of the default arm.
+                self.codegen.patchJump(else_patch, self.codegen.currentOffset());
+                try self.restoreStmtEnv(&switch_env);
+                try self.generateStmt(sw.default_branch);
+
+                // Patch the taken-branch jump to the end of the switch.
+                self.codegen.patchJump(end_patch, self.codegen.currentOffset());
+                try self.restoreStmtEnv(&switch_env);
+            } else {
+                // Multiple branches - generate cascading comparisons
+                var end_patches = std.ArrayList(usize).empty;
+                defer end_patches.deinit(self.allocator);
+
+                for (branches, 0..) |branch, i| {
+                    if (i < branches.len - 1) {
+                        // Compare and skip if not match
+                        try self.emitCmpImm(cond_reg, @intCast(branch.value));
+                        const skip_patch = try self.emitJumpIfNotEqual();
+
+                        // Generate branch body
+                        try self.restoreStmtEnv(&switch_env);
+                        try self.generateStmt(branch.body);
+
+                        // Jump to end
+                        const end_patch = try self.codegen.emitJump();
+                        try end_patches.append(self.allocator, end_patch);
+
+                        // Patch skip
+                        const skip_offset = self.codegen.currentOffset();
+                        self.codegen.patchJump(skip_patch, skip_offset);
+                    } else {
+                        // Last branch before default
+                        try self.emitCmpImm(cond_reg, @intCast(branch.value));
+                        const skip_patch = try self.emitJumpIfNotEqual();
+
+                        try self.restoreStmtEnv(&switch_env);
+                        try self.generateStmt(branch.body);
+
+                        const end_patch = try self.codegen.emitJump();
+                        try end_patches.append(self.allocator, end_patch);
+
+                        self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
+                    }
+                }
+
+                self.codegen.freeGeneral(cond_reg);
+
+                // Generate default branch
+                try self.restoreStmtEnv(&switch_env);
+                try self.generateStmt(sw.default_branch);
+
+                // Patch all end jumps
+                const end_offset = self.codegen.currentOffset();
+                for (end_patches.items) |patch| {
+                    self.codegen.patchJump(patch, end_offset);
+                }
+                try self.restoreStmtEnv(&switch_env);
+            }
+        }
+
+        /// Get the generated code buffer for object-file emission.
         pub fn getGeneratedCode(self: *Self) []const u8 {
             return self.codegen.getCode();
         }
 
-        /// Get the relocations for the generated code
+        /// Get relocations for the generated code buffer.
         pub fn getRelocations(self: *Self) []const Relocation {
             return self.codegen.relocations.items;
         }
     };
 }
 
-// Pre-instantiated LirCodeGen types for each supported target
-
-/// x86_64 Linux (glibc)
-pub const X64GlibcLirCodeGen = LirCodeGen(.x64glibc);
-/// x86_64 Linux (musl)
-pub const X64MuslLirCodeGen = LirCodeGen(.x64musl);
-/// x86_64 Windows
-pub const X64WinLirCodeGen = LirCodeGen(.x64win);
-/// x86_64 macOS
-pub const X64MacLirCodeGen = LirCodeGen(.x64mac);
-
-/// ARM64 Linux (glibc)
-pub const Arm64GlibcLirCodeGen = LirCodeGen(.arm64glibc);
-/// ARM64 Linux (musl)
-pub const Arm64MuslLirCodeGen = LirCodeGen(.arm64musl);
-/// ARM64 Windows
-pub const Arm64WinLirCodeGen = LirCodeGen(.arm64win);
-/// ARM64 macOS
-pub const Arm64MacLirCodeGen = LirCodeGen(.arm64mac);
-/// ARM64 Linux (generic)
-pub const Arm64LinuxLirCodeGen = LirCodeGen(.arm64linux);
-
-/// x86_64 FreeBSD
-pub const X64FreebsdLirCodeGen = LirCodeGen(.x64freebsd);
 /// x86_64 OpenBSD
 pub const X64OpenbsdLirCodeGen = LirCodeGen(.x64openbsd);
 /// x86_64 NetBSD
@@ -16183,8 +13491,6 @@ pub const HostLirCodeGen = blk: {
 };
 
 // Tests
-
-const ExecutableMemory = @import("ExecutableMemory.zig").ExecutableMemory;
 
 const TestLayoutState = struct {
     layout_store: layout.Store,
@@ -16217,428 +13523,13 @@ test "code generator initialization" {
     }
 
     const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
+    var store = LirStore.init(allocator);
     defer store.deinit();
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
     var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
     defer codegen.deinit();
-}
-
-test "proc params and mutable list cells use distinct stack slots" {
-    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
-        return error.SkipZigTest;
-    }
-
-    const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
-    defer store.deinit();
-    var test_state = try TestLayoutState.init(allocator);
-    defer test_state.deinit();
-
-    const u32_layout: layout.Idx = .u32;
-    const list_layout = try test_state.layout_store.insertLayout(layout.Layout.list(u32_layout));
-
-    const sym_start = Symbol.fromRaw(1);
-    const sym_end = Symbol.fromRaw(2);
-    const sym_answer = Symbol.fromRaw(3);
-
-    const pat_start = try store.addPattern(.{ .bind = .{
-        .symbol = sym_start,
-        .layout_idx = u32_layout,
-        .reassignable = false,
-    } }, base.Region.zero());
-    const pat_end = try store.addPattern(.{ .bind = .{
-        .symbol = sym_end,
-        .layout_idx = u32_layout,
-        .reassignable = false,
-    } }, base.Region.zero());
-    const params = try store.addPatternSpan(&.{ pat_start, pat_end });
-
-    const answer_load = try store.addExpr(.{ .cell_load = .{
-        .cell = sym_answer,
-        .layout_idx = list_layout,
-    } }, base.Region.zero());
-    const one = try store.addExpr(.{ .i64_literal = .{
-        .value = 1,
-        .layout_idx = u32_layout,
-    } }, base.Region.zero());
-    const append_args = try store.addExprSpan(&.{ answer_load, one });
-    const append_expr = try store.addExpr(.{ .low_level = .{
-        .op = .list_append_unsafe,
-        .args = append_args,
-        .ret_layout = list_layout,
-    } }, base.Region.zero());
-
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
-    defer codegen.deinit();
-
-    const HostCodeGen = @TypeOf(codegen.codegen);
-    if (comptime builtin.cpu.arch == .aarch64) {
-        codegen.codegen.stack_offset = 16 + HostCodeGen.CALLEE_SAVED_AREA_SIZE;
-    } else {
-        codegen.codegen.stack_offset = -HostCodeGen.CALLEE_SAVED_AREA_SIZE;
-    }
-
-    try codegen.bindLambdaParams(params, 0, false);
-
-    const end_loc = codegen.symbol_locations.get(sym_end.raw()) orelse unreachable;
-    const end_slot: i32 = switch (end_loc) {
-        .stack => |s| s.offset,
-        else => unreachable,
-    };
-
-    try codegen.initializeCell(sym_answer, list_layout, .{ .immediate_i64 = 0 });
-    const answer_info = codegen.mutable_var_slots.get(sym_answer.raw()) orelse unreachable;
-    try std.testing.expect(answer_info.slot != end_slot);
-
-    const append_loc = try codegen.generateExpr(append_expr);
-    const append_slot: i32 = switch (append_loc) {
-        .list_stack => |info| info.struct_offset,
-        else => unreachable,
-    };
-    try std.testing.expect(append_slot != end_slot);
-    try std.testing.expect(append_slot != answer_info.slot);
-}
-
-test "two-arg proc list loop returns full length" {
-    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
-        return error.SkipZigTest;
-    }
-
-    const RcInsertPass = lir.RcInsert.RcInsertPass;
-    const RocAlloc = builtins.host_abi.RocAlloc;
-    const RocDealloc = builtins.host_abi.RocDealloc;
-    const RocRealloc = builtins.host_abi.RocRealloc;
-    const RocDbg = builtins.host_abi.RocDbg;
-    const RocExpectFailed = builtins.host_abi.RocExpectFailed;
-    const RocCrashed = builtins.host_abi.RocCrashed;
-
-    const SimpleTestEnv = struct {
-        const Self = @This();
-
-        allocator: Allocator,
-        roc_ops: builtins.host_abi.RocOps,
-
-        fn init(allocator: Allocator) Self {
-            return .{
-                .allocator = allocator,
-                .roc_ops = .{
-                    .env = undefined,
-                    .roc_alloc = rocAlloc,
-                    .roc_dealloc = rocDealloc,
-                    .roc_realloc = rocRealloc,
-                    .roc_dbg = rocDbg,
-                    .roc_expect_failed = rocExpectFailed,
-                    .roc_crashed = rocCrashed,
-                    .hosted_fns = .{ .count = 0, .fns = undefined },
-                },
-            };
-        }
-
-        fn getOps(self: *Self) *builtins.host_abi.RocOps {
-            self.roc_ops.env = @ptrCast(self);
-            return &self.roc_ops;
-        }
-
-        fn metaBytes(alignment: usize) usize {
-            return @max(alignment, @alignOf(usize));
-        }
-
-        fn rocAlloc(args: *RocAlloc, env: *anyopaque) callconv(.c) void {
-            const self: *Self = @ptrCast(@alignCast(env));
-            const align_enum = std.mem.Alignment.fromByteUnits(args.alignment);
-            const meta = metaBytes(args.alignment);
-            const total = args.length + meta;
-            const alloc_base = self.allocator.rawAlloc(total, align_enum, @returnAddress()) orelse
-                @panic("SimpleTestEnv alloc failed");
-            const size_ptr: *usize = @ptrFromInt(@intFromPtr(alloc_base) + meta - @sizeOf(usize));
-            size_ptr.* = total;
-            args.answer = @ptrFromInt(@intFromPtr(alloc_base) + meta);
-        }
-
-        fn rocDealloc(args: *RocDealloc, env: *anyopaque) callconv(.c) void {
-            const self: *Self = @ptrCast(@alignCast(env));
-            const meta = metaBytes(args.alignment);
-            const total_ptr: *const usize = @ptrFromInt(@intFromPtr(args.ptr) - @sizeOf(usize));
-            const total = total_ptr.*;
-            const alloc_base: [*]u8 = @ptrFromInt(@intFromPtr(args.ptr) - meta);
-            const align_enum = std.mem.Alignment.fromByteUnits(args.alignment);
-            self.allocator.rawFree(alloc_base[0..total], align_enum, @returnAddress());
-        }
-
-        fn rocRealloc(args: *RocRealloc, env: *anyopaque) callconv(.c) void {
-            const self: *Self = @ptrCast(@alignCast(env));
-            const old_ptr = args.answer;
-            const meta = metaBytes(args.alignment);
-            const old_total_ptr: *const usize = @ptrFromInt(@intFromPtr(old_ptr) - @sizeOf(usize));
-            const old_total = old_total_ptr.*;
-            const old_base: [*]u8 = @ptrFromInt(@intFromPtr(old_ptr) - meta);
-            const new_total = args.new_length + meta;
-            const align_enum = std.mem.Alignment.fromByteUnits(args.alignment);
-            const new_base = self.allocator.rawAlloc(new_total, align_enum, @returnAddress()) orelse
-                @panic("SimpleTestEnv realloc failed");
-            @memcpy(new_base[0..@min(old_total, new_total)], old_base[0..@min(old_total, new_total)]);
-            self.allocator.rawFree(old_base[0..old_total], align_enum, @returnAddress());
-            const new_total_ptr: *usize = @ptrFromInt(@intFromPtr(new_base) + meta - @sizeOf(usize));
-            new_total_ptr.* = new_total;
-            args.answer = @ptrFromInt(@intFromPtr(new_base) + meta);
-        }
-
-        fn rocDbg(_: *const RocDbg, _: *anyopaque) callconv(.c) void {
-            @panic("unexpected dbg in SimpleTestEnv");
-        }
-
-        fn rocExpectFailed(_: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {
-            @panic("unexpected expect failure in SimpleTestEnv");
-        }
-
-        fn rocCrashed(args: *const RocCrashed, _: *anyopaque) callconv(.c) void {
-            std.debug.panic("roc crashed: {s}", .{args.utf8_bytes[0..args.len]});
-        }
-    };
-
-    const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
-    defer store.deinit();
-    var test_state = try TestLayoutState.init(allocator);
-    defer test_state.deinit();
-
-    const u32_layout: layout.Idx = .u32;
-    const i64_layout: layout.Idx = .i64;
-    const list_layout = try test_state.layout_store.insertLayout(layout.Layout.list(u32_layout));
-
-    const sym_start = Symbol.fromRaw(101);
-    const sym_end = Symbol.fromRaw(102);
-    const sym_current = Symbol.fromRaw(103);
-    const sym_answer = Symbol.fromRaw(104);
-    const proc_symbol = Symbol.fromRaw(105);
-
-    const pat_start = try store.addPattern(.{ .bind = .{
-        .symbol = sym_start,
-        .layout_idx = u32_layout,
-        .reassignable = false,
-    } }, base.Region.zero());
-    const pat_end = try store.addPattern(.{ .bind = .{
-        .symbol = sym_end,
-        .layout_idx = u32_layout,
-        .reassignable = false,
-    } }, base.Region.zero());
-    const proc_params = try store.addPatternSpan(&.{ pat_start, pat_end });
-
-    const wildcard_zst = try store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, base.Region.zero());
-
-    const start_lookup = try store.addExpr(.{ .lookup = .{
-        .symbol = sym_start,
-        .layout_idx = u32_layout,
-    } }, base.Region.zero());
-    const end_lookup = try store.addExpr(.{ .lookup = .{
-        .symbol = sym_end,
-        .layout_idx = u32_layout,
-    } }, base.Region.zero());
-    const current_load_cond = try store.addExpr(.{ .cell_load = .{
-        .cell = sym_current,
-        .layout_idx = u32_layout,
-    } }, base.Region.zero());
-    const cond_args = try store.addExprSpan(&.{ current_load_cond, end_lookup });
-    const cond_expr = try store.addExpr(.{ .low_level = .{
-        .op = .num_is_lte,
-        .args = cond_args,
-        .ret_layout = .bool,
-    } }, base.Region.zero());
-
-    const answer_load_append = try store.addExpr(.{ .cell_load = .{
-        .cell = sym_answer,
-        .layout_idx = list_layout,
-    } }, base.Region.zero());
-    const current_load_append = try store.addExpr(.{ .cell_load = .{
-        .cell = sym_current,
-        .layout_idx = u32_layout,
-    } }, base.Region.zero());
-    const append_args = try store.addExprSpan(&.{ answer_load_append, current_load_append });
-    const append_expr = try store.addExpr(.{ .low_level = .{
-        .op = .list_append_unsafe,
-        .args = append_args,
-        .ret_layout = list_layout,
-    } }, base.Region.zero());
-
-    const current_load_inc = try store.addExpr(.{ .cell_load = .{
-        .cell = sym_current,
-        .layout_idx = u32_layout,
-    } }, base.Region.zero());
-    const one = try store.addExpr(.{ .i64_literal = .{
-        .value = 1,
-        .layout_idx = u32_layout,
-    } }, base.Region.zero());
-    const add_args = try store.addExprSpan(&.{ current_load_inc, one });
-    const next_current = try store.addExpr(.{ .low_level = .{
-        .op = .num_plus,
-        .args = add_args,
-        .ret_layout = u32_layout,
-    } }, base.Region.zero());
-
-    const unit = try store.addExpr(.{ .struct_ = .{
-        .struct_layout = .zst,
-        .fields = try store.addExprSpan(&.{}),
-    } }, base.Region.zero());
-
-    const loop_body_stmts = try store.addStmts(&.{
-        .{ .cell_store = .{
-            .cell = sym_answer,
-            .layout_idx = list_layout,
-            .expr = append_expr,
-        } },
-        .{ .cell_store = .{
-            .cell = sym_current,
-            .layout_idx = u32_layout,
-            .expr = next_current,
-        } },
-    });
-    const loop_body = try store.addExpr(.{ .block = .{
-        .stmts = loop_body_stmts,
-        .final_expr = unit,
-        .result_layout = .zst,
-    } }, base.Region.zero());
-    const while_expr = try store.addExpr(.{ .while_loop = .{
-        .cond = cond_expr,
-        .body = loop_body,
-    } }, base.Region.zero());
-
-    const empty_list = try store.addExpr(.{ .empty_list = .{
-        .elem_layout = u32_layout,
-        .list_layout = list_layout,
-    } }, base.Region.zero());
-    const final_answer = try store.addExpr(.{ .cell_load = .{
-        .cell = sym_answer,
-        .layout_idx = list_layout,
-    } }, base.Region.zero());
-
-    const raw_body_stmts = try store.addStmts(&.{
-        .{ .cell_init = .{
-            .cell = sym_current,
-            .layout_idx = u32_layout,
-            .expr = start_lookup,
-        } },
-        .{ .cell_init = .{
-            .cell = sym_answer,
-            .layout_idx = list_layout,
-            .expr = empty_list,
-        } },
-        .{ .decl = .{
-            .pattern = wildcard_zst,
-            .expr = while_expr,
-        } },
-    });
-    const raw_body = try store.addExpr(.{ .block = .{
-        .stmts = raw_body_stmts,
-        .final_expr = final_answer,
-        .result_layout = list_layout,
-    } }, base.Region.zero());
-
-    var proc_rc = try RcInsertPass.init(allocator, &store, &test_state.layout_store);
-    defer proc_rc.deinit();
-    const proc_body = try proc_rc.insertRcOpsForProcBody(raw_body, proc_params, list_layout);
-    const proc_body_stmt = try store.addCFStmt(.{ .ret = .{ .value = proc_body } });
-    const arg_layouts = try store.addLayoutIdxSpan(&.{ u32_layout, u32_layout });
-    const proc_id = try store.addProcSpec(.{
-        .name = proc_symbol,
-        .args = proc_params,
-        .arg_layouts = arg_layouts,
-        .body = proc_body_stmt,
-        .ret_layout = list_layout,
-        .closure_data_layout = null,
-        .force_pass_by_ptr = false,
-        .is_self_recursive = .not_self_recursive,
-    });
-
-    const start_arg = try store.addExpr(.{ .i64_literal = .{
-        .value = 1,
-        .layout_idx = u32_layout,
-    } }, base.Region.zero());
-    const end_arg = try store.addExpr(.{ .i64_literal = .{
-        .value = 5,
-        .layout_idx = u32_layout,
-    } }, base.Region.zero());
-    const call_args = try store.addExprSpan(&.{ start_arg, end_arg });
-    const call_expr = try store.addExpr(.{ .proc_call = .{
-        .proc = proc_id,
-        .args = call_args,
-        .ret_layout = list_layout,
-        .called_via = .apply,
-    } }, base.Region.zero());
-    const len_args = try store.addExprSpan(&.{call_expr});
-    const raw_root = try store.addExpr(.{ .low_level = .{
-        .op = .list_len,
-        .args = len_args,
-        .ret_layout = i64_layout,
-    } }, base.Region.zero());
-
-    var root_rc = try RcInsertPass.init(allocator, &store, &test_state.layout_store);
-    defer root_rc.deinit();
-    const root_expr = try root_rc.insertRcOps(raw_root);
-
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
-    defer codegen.deinit();
-    try codegen.compileAllProcSpecs(store.getProcSpecs());
-
-    const result = try codegen.generateCode(root_expr, i64_layout, 1);
-    defer allocator.free(result.code);
-
-    var executable = try ExecutableMemory.initWithEntryOffset(result.code, result.entry_offset);
-    defer executable.deinit();
-
-    var test_env = SimpleTestEnv.init(allocator);
-
-    var out: i64 = -1;
-    executable.callWithResultPtrAndRocOps(@ptrCast(&out), @ptrCast(test_env.getOps()));
-    try std.testing.expectEqual(@as(i64, 5), out);
-}
-
-test "generate i64 literal" {
-    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
-        return error.SkipZigTest;
-    }
-
-    const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
-    defer store.deinit();
-
-    // Add an i64 literal
-    const expr_id = try store.addExpr(.{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, base.Region.zero());
-
-    var test_state = try TestLayoutState.init(allocator);
-    defer test_state.deinit();
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
-    defer codegen.deinit();
-
-    const result = try codegen.generateCode(expr_id, .i64, 1);
-    defer allocator.free(result.code);
-
-    // Should have generated some code
-    try std.testing.expect(result.code.len > 0);
-}
-
-test "generate bool literal" {
-    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
-        return error.SkipZigTest;
-    }
-
-    const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
-    defer store.deinit();
-
-    const expr_id = try store.addExpr(.{ .bool_literal = true }, base.Region.zero());
-
-    var test_state = try TestLayoutState.init(allocator);
-    defer test_state.deinit();
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
-    defer codegen.deinit();
-
-    const result = try codegen.generateCode(expr_id, .bool, 1);
-    defer allocator.free(result.code);
-
-    try std.testing.expect(result.code.len > 0);
 }
 
 test "entrypoint arg offsets preserve Roc alignment order" {
@@ -16647,7 +13538,7 @@ test "entrypoint arg offsets preserve Roc alignment order" {
     }
 
     const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
+    var store = LirStore.init(allocator);
     defer store.deinit();
 
     var test_state = try TestLayoutState.init(allocator);
@@ -16668,7 +13559,7 @@ test "entrypoint param slots round aggregates to ABI word width" {
     }
 
     const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
+    var store = LirStore.init(allocator);
     defer store.deinit();
 
     var test_state = try TestLayoutState.init(allocator);
@@ -16686,272 +13577,4 @@ test "entrypoint param slots round aggregates to ABI word width" {
     try std.testing.expectEqual(@as(u32, 16), codegen.entrypointParamSlotSize(aggregate_layout));
     try std.testing.expectEqual(@as(u32, 24), codegen.entrypointParamSlotSize(.str));
     try std.testing.expectEqual(@as(u32, 8), codegen.entrypointParamSlotSize(.bool));
-}
-
-test "tag payload bind invariant rejects mismatched pattern layout" {
-    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
-        return error.SkipZigTest;
-    }
-
-    const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
-    defer store.deinit();
-
-    const pattern_id = try store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, base.Region.zero());
-
-    var test_state = try TestLayoutState.init(allocator);
-    defer test_state.deinit();
-
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
-    defer codegen.deinit();
-
-    try std.testing.expect(!(try codegen.patternLayoutCompatible(pattern_id, .u8)));
-}
-
-test "generate addition" {
-    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
-        return error.SkipZigTest;
-    }
-
-    const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
-    defer store.deinit();
-
-    // Create: 1 + 2
-    const lhs_id = try store.addExpr(.{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } }, base.Region.zero());
-    const rhs_id = try store.addExpr(.{ .i64_literal = .{ .value = 2, .layout_idx = .i64 } }, base.Region.zero());
-    const ll_args = try store.addExprSpan(&.{ lhs_id, rhs_id });
-    const add_id = try store.addExpr(.{ .low_level = .{
-        .op = .num_plus,
-        .args = ll_args,
-        .ret_layout = .i64,
-    } }, base.Region.zero());
-
-    var test_state = try TestLayoutState.init(allocator);
-    defer test_state.deinit();
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
-    defer codegen.deinit();
-
-    const result = try codegen.generateCode(add_id, .i64, 1);
-    defer allocator.free(result.code);
-
-    try std.testing.expect(result.code.len > 0);
-}
-
-test "record equality uses layout-aware comparison" {
-    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
-        return error.SkipZigTest;
-    }
-
-    const can = @import("can");
-    const ModuleEnv = can.ModuleEnv;
-    const Layout = layout.Layout;
-    const allocator = std.testing.allocator;
-
-    // Set up ModuleEnv for ident storage
-    var module_env = try ModuleEnv.init(allocator, "");
-    defer module_env.deinit();
-
-    // Create layout store with a record layout { a: Str, b: Str }
-    var module_env_ptrs = [1]*const ModuleEnv{&module_env};
-    var layout_store = try layout.Store.init(
-        &module_env_ptrs,
-        null,
-        allocator,
-        base.target.TargetUsize.native,
-    );
-    defer layout_store.deinit();
-
-    const record_layout_idx = try layout_store.putRecord(&[_]Layout{ Layout.str(), Layout.str() });
-
-    // Create LIR expressions: two record literals and an eq binop
-    var store = LirExprStore.init(allocator);
-    defer store.deinit();
-
-    // Field values (string literals represented as i64 placeholders — the codegen
-    // only inspects the layout, not the actual field values for comparison dispatch)
-    const str1 = try store.addExpr(.{ .i64_literal = .{ .value = 0, .layout_idx = .i64 } }, base.Region.zero());
-    const str2 = try store.addExpr(.{ .i64_literal = .{ .value = 0, .layout_idx = .i64 } }, base.Region.zero());
-    const str3 = try store.addExpr(.{ .i64_literal = .{ .value = 0, .layout_idx = .i64 } }, base.Region.zero());
-    const str4 = try store.addExpr(.{ .i64_literal = .{ .value = 0, .layout_idx = .i64 } }, base.Region.zero());
-
-    const fields1 = try store.addExprSpan(&[_]LirExprId{ str1, str2 });
-
-    const fields2 = try store.addExprSpan(&[_]LirExprId{ str3, str4 });
-
-    const lhs_record = try store.addExpr(.{ .struct_ = .{
-        .struct_layout = record_layout_idx,
-        .fields = fields1,
-    } }, base.Region.zero());
-
-    const rhs_record = try store.addExpr(.{ .struct_ = .{
-        .struct_layout = record_layout_idx,
-        .fields = fields2,
-    } }, base.Region.zero());
-
-    // LHS record == RHS record
-    const eq_args = try store.addExprSpan(&.{ lhs_record, rhs_record });
-    const eq_expr = try store.addExpr(.{ .low_level = .{
-        .op = .num_is_eq,
-        .args = eq_args,
-        .ret_layout = .bool,
-    } }, base.Region.zero());
-
-    // With layout_store: should use generateStructComparisonByLayout (no crash)
-    var codegen = try HostLirCodeGen.init(allocator, &store, &layout_store, null);
-    defer codegen.deinit();
-
-    const result = try codegen.generateCode(eq_expr, .bool, 1);
-    defer allocator.free(result.code);
-
-    try std.testing.expect(result.code.len > 0);
-}
-
-test "generate modulo" {
-    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
-        return error.SkipZigTest;
-    }
-
-    const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
-    defer store.deinit();
-
-    // Create: 10 % 3
-    const lhs = try store.addExpr(.{ .i64_literal = .{ .value = 10, .layout_idx = .i64 } }, base.Region.zero());
-    const rhs = try store.addExpr(.{ .i64_literal = .{ .value = 3, .layout_idx = .i64 } }, base.Region.zero());
-    const ll_args = try store.addExprSpan(&.{ lhs, rhs });
-    const expr_id = try store.addExpr(.{ .low_level = .{
-        .op = .num_mod_by,
-        .args = ll_args,
-        .ret_layout = .i64,
-    } }, base.Region.zero());
-
-    var test_state = try TestLayoutState.init(allocator);
-    defer test_state.deinit();
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
-    defer codegen.deinit();
-
-    const result = try codegen.generateCode(expr_id, .i64, 1);
-    defer allocator.free(result.code);
-
-    try std.testing.expect(result.code.len > 0);
-}
-
-test "generate shift left" {
-    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
-        return error.SkipZigTest;
-    }
-
-    const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
-    defer store.deinit();
-
-    // Create: 1 << 4
-    const lhs = try store.addExpr(.{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } }, base.Region.zero());
-    const rhs = try store.addExpr(.{ .i64_literal = .{ .value = 4, .layout_idx = .i64 } }, base.Region.zero());
-    const ll_args = try store.addExprSpan(&.{ lhs, rhs });
-    const expr_id = try store.addExpr(.{ .low_level = .{
-        .op = .num_shift_left_by,
-        .args = ll_args,
-        .ret_layout = .i64,
-    } }, base.Region.zero());
-
-    var test_state = try TestLayoutState.init(allocator);
-    defer test_state.deinit();
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
-    defer codegen.deinit();
-
-    const result = try codegen.generateCode(expr_id, .i64, 1);
-    defer allocator.free(result.code);
-
-    try std.testing.expect(result.code.len > 0);
-}
-
-test "generate shift right" {
-    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
-        return error.SkipZigTest;
-    }
-
-    const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
-    defer store.deinit();
-
-    // Create: 64 >> 2 (arithmetic shift right, sign-extending)
-    const lhs = try store.addExpr(.{ .i64_literal = .{ .value = 64, .layout_idx = .i64 } }, base.Region.zero());
-    const rhs = try store.addExpr(.{ .i64_literal = .{ .value = 2, .layout_idx = .i64 } }, base.Region.zero());
-    const ll_args = try store.addExprSpan(&.{ lhs, rhs });
-    const expr_id = try store.addExpr(.{ .low_level = .{
-        .op = .num_shift_right_by,
-        .args = ll_args,
-        .ret_layout = .i64,
-    } }, base.Region.zero());
-
-    var test_state = try TestLayoutState.init(allocator);
-    defer test_state.deinit();
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
-    defer codegen.deinit();
-
-    const result = try codegen.generateCode(expr_id, .i64, 1);
-    defer allocator.free(result.code);
-
-    try std.testing.expect(result.code.len > 0);
-}
-
-test "generate shift right zero-fill" {
-    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
-        return error.SkipZigTest;
-    }
-
-    const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
-    defer store.deinit();
-
-    // Create: 64 >>> 2 (logical shift right, zero-filling)
-    const lhs = try store.addExpr(.{ .i64_literal = .{ .value = 64, .layout_idx = .i64 } }, base.Region.zero());
-    const rhs = try store.addExpr(.{ .i64_literal = .{ .value = 2, .layout_idx = .i64 } }, base.Region.zero());
-    const ll_args = try store.addExprSpan(&.{ lhs, rhs });
-    const expr_id = try store.addExpr(.{ .low_level = .{
-        .op = .num_shift_right_zf_by,
-        .args = ll_args,
-        .ret_layout = .i64,
-    } }, base.Region.zero());
-
-    var test_state = try TestLayoutState.init(allocator);
-    defer test_state.deinit();
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
-    defer codegen.deinit();
-
-    const result = try codegen.generateCode(expr_id, .i64, 1);
-    defer allocator.free(result.code);
-
-    try std.testing.expect(result.code.len > 0);
-}
-
-test "generate unary minus" {
-    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
-        return error.SkipZigTest;
-    }
-
-    const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
-    defer store.deinit();
-
-    // Create: -42
-    const inner = try store.addExpr(.{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, base.Region.zero());
-    const neg_args = try store.addExprSpan(&.{inner});
-    const neg = try store.addExpr(.{ .low_level = .{
-        .op = .num_negate,
-        .args = neg_args,
-        .ret_layout = .i64,
-    } }, base.Region.zero());
-
-    var test_state = try TestLayoutState.init(allocator);
-    defer test_state.deinit();
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
-    defer codegen.deinit();
-
-    const result = try codegen.generateCode(neg, .i64, 1);
-    defer allocator.free(result.code);
-
-    try std.testing.expect(result.code.len > 0);
 }

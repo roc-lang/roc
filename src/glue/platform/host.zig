@@ -205,7 +205,7 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
     }) catch {};
     host.alloc_count += 1;
 
-    if (trace_refcount) {
+    if (trace_refcount or (builtin.mode == .Debug and builtin.os.tag != .freestanding)) {
         std.debug.print("[ALLOC] ptr=0x{x} size={d} align={d}\n", .{ @intFromPtr(roc_alloc.answer), roc_alloc.length, roc_alloc.alignment });
     }
 }
@@ -226,7 +226,7 @@ fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) cal
     const size_ptr: *const usize = @ptrFromInt(@intFromPtr(roc_dealloc.ptr) - @sizeOf(usize));
     const total_size = size_ptr.*;
 
-    if (trace_refcount) {
+    if (trace_refcount or (builtin.mode == .Debug and builtin.os.tag != .freestanding)) {
         std.debug.print("[DEALLOC] ptr=0x{x} align={d} total_size={d} size_storage={d}\n", .{
             @intFromPtr(roc_dealloc.ptr),
             roc_dealloc.alignment,
@@ -302,7 +302,7 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
 
     roc_realloc.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
 
-    if (trace_refcount) {
+    if (trace_refcount or (builtin.mode == .Debug and builtin.os.tag != .freestanding)) {
         std.debug.print("[REALLOC] old=0x{x} new=0x{x} new_size={d}\n", .{ @intFromPtr(old_base_ptr) + size_storage_bytes, @intFromPtr(roc_realloc.answer), roc_realloc.new_length });
     }
 }
@@ -657,6 +657,9 @@ fn platform_main(args: [][*:0]u8) !c_int {
 
     // Install signal handlers
     _ = builtins.handlers.install(handleRocStackOverflow, handleRocAccessViolation, handleRocArithmeticError);
+    if (builtin.mode == .Debug and builtin.os.tag != .freestanding) {
+        builtins.utils.DebugRefcountTracker.enable();
+    }
 
     var host_env = HostEnv{
         .gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){},
@@ -667,6 +670,9 @@ fn platform_main(args: [][*:0]u8) !c_int {
         const remaining_count = host_env.roc_allocations.items.len;
 
         if (remaining_count > 0) {
+            if (builtin.mode == .Debug and builtin.os.tag != .freestanding) {
+                _ = builtins.utils.DebugRefcountTracker.reportLeaks();
+            }
             const stderr_file: std.fs.File = .stderr();
             var buf: [512]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf,

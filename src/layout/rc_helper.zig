@@ -5,7 +5,6 @@ const builtins = @import("builtins");
 const layout_mod = @import("./layout.zig");
 const Store = @import("./store.zig").Store;
 
-const Layout = layout_mod.Layout;
 const Idx = layout_mod.Idx;
 const StructIdx = layout_mod.StructIdx;
 const TagUnionIdx = layout_mod.TagUnionIdx;
@@ -76,7 +75,7 @@ pub const Plan = union(enum) {
     str_incref,
     str_decref,
     str_free,
-    list_incref,
+    list_incref: ListPlan,
     list_decref: ListPlan,
     list_free: ListPlan,
     box_incref,
@@ -117,14 +116,14 @@ pub const Resolver = struct {
             else
                 .noop,
             .list, .list_of_zst => switch (helper_key.op) {
-                .incref => .list_incref,
-                .decref => .{ .list_decref = self.listPlan(l) },
-                .free => .{ .list_free = self.listPlan(l) },
+                .incref => .{ .list_incref = self.listPlan(helper_key.layout_idx) },
+                .decref => .{ .list_decref = self.listPlan(helper_key.layout_idx) },
+                .free => .{ .list_free = self.listPlan(helper_key.layout_idx) },
             },
             .box, .box_of_zst => switch (helper_key.op) {
                 .incref => .box_incref,
-                .decref => .{ .box_decref = self.boxPlan(l) },
-                .free => .{ .box_free = self.boxPlan(l) },
+                .decref => .{ .box_decref = self.boxPlan(helper_key.layout_idx) },
+                .free => .{ .box_free = self.boxPlan(helper_key.layout_idx) },
             },
             .struct_ => .{ .struct_ = .{
                 .struct_idx = l.data.struct_.idx,
@@ -198,29 +197,29 @@ pub const Resolver = struct {
         };
     }
 
-    fn listPlan(self: *const Resolver, l: Layout) ListPlan {
-        const info = self.store.getListInfo(l);
+    fn listPlan(self: *const Resolver, list_layout_idx: Idx) ListPlan {
+        const abi = self.store.builtinListAbi(list_layout_idx);
         return .{
-            .elem_alignment = info.elem_alignment,
-            .elem_width = info.elem_size,
-            .child = if (info.contains_refcounted)
+            .elem_alignment = abi.elem_alignment,
+            .elem_width = abi.elem_size,
+            .child = if (abi.contains_refcounted and abi.elem_layout_idx != null)
                 .{
                     .op = .decref,
-                    .layout_idx = info.elem_layout_idx,
+                    .layout_idx = abi.elem_layout_idx.?,
                 }
             else
                 null,
         };
     }
 
-    fn boxPlan(self: *const Resolver, l: Layout) BoxPlan {
-        const info = self.store.getBoxInfo(l);
+    fn boxPlan(self: *const Resolver, box_layout_idx: Idx) BoxPlan {
+        const abi = self.store.builtinBoxAbi(box_layout_idx);
         return .{
-            .elem_alignment = info.elem_alignment,
-            .child = if (info.contains_refcounted)
+            .elem_alignment = abi.elem_alignment,
+            .child = if (abi.contains_refcounted and abi.elem_layout_idx != null)
                 .{
                     .op = .decref,
-                    .layout_idx = info.elem_layout_idx,
+                    .layout_idx = abi.elem_layout_idx.?,
                 }
             else
                 null,

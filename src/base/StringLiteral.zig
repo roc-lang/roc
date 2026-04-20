@@ -1,6 +1,7 @@
 //! Strings written inline in Roc code, e.g. `x = "abc"`.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const collections = @import("collections");
 const testing = std.testing;
 
@@ -55,6 +56,13 @@ pub const Store = struct {
         self.buffer.deinit(gpa);
     }
 
+    /// Clone this store into fresh owned memory.
+    pub fn clone(self: *const Store, gpa: std.mem.Allocator) std.mem.Allocator.Error!Store {
+        return .{
+            .buffer = try self.buffer.clone(gpa),
+        };
+    }
+
     /// Insert a new string into a `Store`.
     ///
     /// Deduplicates: if an identical string already exists, returns its index.
@@ -69,11 +77,19 @@ pub const Store = struct {
         const str_len: u32 = @truncate(string.len);
 
         const str_len_bytes = std.mem.asBytes(&str_len);
-        _ = try self.buffer.appendSlice(gpa, str_len_bytes);
+        {
+            const expected_start = self.buffer.items.items.len;
+            const range = try self.buffer.appendSlice(gpa, str_len_bytes);
+            assertAppendRange(expected_start, @intCast(str_len_bytes.len), range);
+        }
 
         const string_content_start = self.buffer.len();
 
-        _ = try self.buffer.appendSlice(gpa, string);
+        {
+            const expected_start = self.buffer.items.items.len;
+            const range = try self.buffer.appendSlice(gpa, string);
+            assertAppendRange(expected_start, @intCast(string.len), range);
+        }
 
         return @enumFromInt(@as(u32, @intCast(string_content_start)));
     }
@@ -162,6 +178,15 @@ pub const Store = struct {
     };
 };
 
+fn assertAppendRange(expected_start: usize, expected_len: u32, range: collections.SafeList(u8).Range) void {
+    if (comptime builtin.mode == .Debug) {
+        std.debug.assert(@intFromEnum(range.start) == expected_start);
+        std.debug.assert(range.count == expected_len);
+    } else if (@intFromEnum(range.start) != expected_start or range.count != expected_len) {
+        unreachable;
+    }
+}
+
 test "insert" {
     const gpa = std.testing.allocator;
 
@@ -199,7 +224,8 @@ test "Store empty CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    _ = try original.serialize(arena_allocator, &writer);
+    const serialized = try original.serialize(arena_allocator, &writer);
+    try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -210,7 +236,8 @@ test "Store empty CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    const bytes_read = try file.readAll(buffer);
+    try std.testing.expectEqual(buffer.len, bytes_read);
 
     // Cast and relocate
     const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr)));
@@ -251,7 +278,8 @@ test "Store basic CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    _ = try original.serialize(arena_allocator, &writer);
+    const serialized = try original.serialize(arena_allocator, &writer);
+    try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -262,7 +290,8 @@ test "Store basic CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    const bytes_read = try file.readAll(buffer);
+    try std.testing.expectEqual(buffer.len, bytes_read);
 
     // Cast and relocate
     const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr)));
@@ -317,7 +346,8 @@ test "Store comprehensive CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    _ = try original.serialize(arena_allocator, &writer);
+    const serialized = try original.serialize(arena_allocator, &writer);
+    try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -328,7 +358,8 @@ test "Store comprehensive CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    const bytes_read = try file.readAll(buffer);
+    try std.testing.expectEqual(buffer.len, bytes_read);
 
     // Cast and relocate
     const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr)));
@@ -349,8 +380,9 @@ test "Store CompactWriter roundtrip" {
     var original = Store{};
     defer original.deinit(gpa);
 
-    _ = try original.insert(gpa, "test1");
-    _ = try original.insert(gpa, "test2");
+    const idx1 = try original.insert(gpa, "test1");
+    const idx2 = try original.insert(gpa, "test2");
+    try std.testing.expect(@intFromEnum(idx1) < @intFromEnum(idx2));
 
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -367,7 +399,8 @@ test "Store CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    _ = try original.serialize(arena_allocator, &writer);
+    const serialized = try original.serialize(arena_allocator, &writer);
+    try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -378,7 +411,8 @@ test "Store CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    const bytes_read = try file.readAll(buffer);
+    try std.testing.expectEqual(buffer.len, bytes_read);
 
     // Cast and relocate
     const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr)));
@@ -420,7 +454,8 @@ test "Store.Serialized roundtrip" {
     const file_size = try tmp_file.getEndPos();
     const buffer = try gpa.alloc(u8, @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
-    _ = try tmp_file.pread(buffer, 0);
+    const read_len = try tmp_file.pread(buffer, 0);
+    try std.testing.expectEqual(buffer.len, read_len);
 
     // Deserialize
     const deserialized_ptr = @as(*Store.Serialized, @ptrCast(@alignCast(buffer.ptr)));
@@ -474,7 +509,8 @@ test "Store edge case indices CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    _ = try original.serialize(arena_allocator, &writer);
+    const serialized = try original.serialize(arena_allocator, &writer);
+    try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -485,7 +521,8 @@ test "Store edge case indices CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    const bytes_read = try file.readAll(buffer);
+    try std.testing.expectEqual(buffer.len, bytes_read);
 
     // Cast and relocate
     const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr)));

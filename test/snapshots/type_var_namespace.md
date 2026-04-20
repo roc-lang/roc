@@ -136,7 +136,7 @@ main! = |_| {}
 					(e-num (value "42")))
 				(s-let
 					(p-assign (ident "result"))
-					(e-dot-access (field "ok_or")
+					(e-field-access (field "ok_or")
 						(receiver
 							(e-call
 								(e-lookup-external

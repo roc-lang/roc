@@ -99,8 +99,7 @@ handleTry = |result| {
 				(e-match
 					(match
 						(cond
-							(e-lookup-local
-								(p-assign (ident "result"))))
+							(e-runtime-error (tag "erroneous_value_use")))
 						(branches
 							(branch
 								(patterns

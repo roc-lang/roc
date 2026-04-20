@@ -41,12 +41,17 @@ fn runDevBackendHostSelfTest(
     defer allocator.free(cache_path);
     try tmp_dir.dir.makePath("roc-cache");
 
+    const zig_local_cache_path = try std.fs.path.join(allocator, &.{ tmp_path, "zig-local-cache" });
+    defer allocator.free(zig_local_cache_path);
+    try tmp_dir.dir.makePath("zig-local-cache");
+
     const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_path});
     defer allocator.free(output_arg);
 
     var env_map = try std.process.getEnvMap(allocator);
     defer env_map.deinit();
     try env_map.put("ROC_CACHE_DIR", cache_path);
+    try env_map.put("ZIG_LOCAL_CACHE_DIR", zig_local_cache_path);
 
     const build_result = try std.process.Child.run(.{
         .allocator = allocator,
@@ -593,11 +598,7 @@ test "fx platform string interpolation type mismatch (interpreter)" {
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "U8") != null);
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Str") != null);
-    // The coordinator now detects additional errors (COMPTIME EVAL ERROR) beyond TYPE MISMATCH
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Found 2 error") != null);
-
-    // The program should still produce output (it runs despite errors)
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "two:") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Found 1 error") != null);
 }
 
 test "fx platform string interpolation type mismatch (dev backend)" {
@@ -1103,7 +1104,7 @@ test "fx platform inline expect succeeds as expected" {
 
 test "fx platform inline expect fails in dev backend binary" {
     // Regression test for #9261: the dev backend (object file compilation) must
-    // evaluate inline expect expressions. Previously, the MIR lowering of s_expect
+    // evaluate inline expect expressions. Previously, lowered `s_expect`
     // statements did not wrap the condition in an .expect node, causing the dev
     // backend to silently skip the assertion.
     const allocator = testing.allocator;

@@ -703,7 +703,7 @@ combineTrys = |jsonTry, httpStatus|
 					(p-assign (ident "result"))
 					(e-call
 						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-dot-access (field "body")
+						(e-field-access (field "body")
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "req")))))))
@@ -787,7 +787,7 @@ combineTrys = |jsonTry, httpStatus|
 			(e-match
 				(match
 					(cond
-						(e-dot-access (field "status")
+						(e-field-access (field "status")
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "response"))))))

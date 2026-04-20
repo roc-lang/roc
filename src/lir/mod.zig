@@ -1,92 +1,85 @@
-//! Low-level Intermediate Representation (LIR)
-//!
-//! This module provides the IR layer between MIR and code generation.
-//! It solves cross-module index collisions by using globally unique symbols.
-//!
-//! Key components:
-//! - `LIR`: Core types (LirExpr, LirPattern, Symbol)
-//! - `LirExprStore`: Flat storage for all lowered expressions
-//! - `MirToLir`: MIR → LIR translation pass
-//!
-//! Usage:
-//! ```zig
-//! const lir = @import("lir");
-//!
-//! // Create a store for lowered expressions
-//! var store = lir.LirExprStore.init(allocator);
-//! defer store.deinit();
-//!
-//! // Access the lowered expression
-//! const lir_expr = store.getExpr(expr_id);
-//! ```
+//! Statement-only LIR module.
 
 const std = @import("std");
 
-/// Core IR types: LirExpr, LirPattern, Symbol, etc.
+/// Core statement-only LIR type definitions.
 pub const LIR = @import("LIR.zig");
-
-/// Flat storage for expressions and patterns
-pub const LirExprStore = @import("LirExprStore.zig");
-
-/// Tail recursion detection and transformation
+/// Flat storage for statement-only LIR nodes and spans.
+pub const LirStore = @import("LirStore.zig");
+/// Tail-recursion rewriting for statement-only LIR procs.
 pub const TailRecursion = @import("TailRecursion.zig");
+/// Ownership fact inference for statement-only LIR.
+pub const Ownership = @import("Ownership.zig");
+/// Explicit RC statement insertion for statement-only LIR.
+pub const RcInsert = @import("RcInsert.zig");
+/// Explicitize shared switch tails into join/jump form.
+pub const SharedSwitchTail = @import("SharedSwitchTail.zig");
+/// Ownership-boundary markers and invariant traps for non-builtin RC sites.
+pub const OwnershipBoundary = @import("OwnershipBoundary.zig");
+/// Lower cor-style IR into statement-only LIR.
+pub const FromIr = @import("FromIr.zig");
 
-/// MIR → LIR translation pass
-pub const MirToLir = @import("MirToLir.zig");
-
-/// Ownership normalization for binding-based RC analysis
-pub const OwnershipNormalize = @import("OwnershipNormalize.zig");
-
-/// LIR-level reference counting insertion pass
-pub const RcInsert = @import("rc_insert.zig");
-
-/// Re-export commonly used types from LIR
-pub const LirExpr = LIR.LirExpr;
-/// Re-export pattern type
-pub const LirPattern = LIR.LirPattern;
-/// Re-export symbol type
+/// Symbol identifiers used throughout statement-only LIR.
 pub const Symbol = LIR.Symbol;
-/// Re-export expression ID type
-pub const LirExprId = LIR.LirExprId;
-/// Re-export pattern ID type
-pub const LirPatternId = LIR.LirPatternId;
-/// Re-export expression span type
-pub const LirExprSpan = LIR.LirExprSpan;
-/// Re-export pattern span type
-pub const LirPatternSpan = LIR.LirPatternSpan;
-/// Re-export capture type
-pub const LirCapture = LIR.LirCapture;
-/// Re-export recursive flag type
-pub const Recursive = LIR.Recursive;
-/// Re-export self-recursive flag type
-pub const SelfRecursive = LIR.SelfRecursive;
-/// Re-export join point ID type
+/// Explicit local metadata used throughout statement-only LIR.
+pub const Local = LIR.Local;
+/// Identifier of one LIR local.
+pub const LocalId = LIR.LocalId;
+/// Span into flat local-id storage.
+pub const LocalSpan = LIR.LocalSpan;
+/// Identifier for LIR join points.
 pub const JoinPointId = LIR.JoinPointId;
-/// Control flow statement type for tail recursion
+/// Identifier for lexical borrow scopes.
+pub const BorrowScopeId = LIR.BorrowScopeId;
+/// Literal RHS values assignable in statement-only LIR.
+pub const LiteralValue = LIR.LiteralValue;
+/// Platform-hosted proc metadata.
+pub const HostedProc = LIR.HostedProc;
+/// Alias provenance rooted in another local.
+pub const AliasedRef = LIR.AliasedRef;
+/// Lifetime region for borrowed values.
+pub const BorrowRegion = LIR.BorrowRegion;
+/// Borrow provenance rooted in another local.
+pub const BorrowedRef = LIR.BorrowedRef;
+/// Ownership/provenance summary for a statement result.
+pub const ResultSemantics = LIR.ResultSemantics;
+/// Physical result materialization kind attached to value-producing statements.
+pub const ResultMaterialization = LIR.ResultMaterialization;
+/// Extra ownership data attached to value-producing statements.
+pub const OwnershipSemantics = LIR.OwnershipSemantics;
+/// Ref-producing operations lowerable by `assign_ref`.
+pub const RefOp = LIR.RefOp;
+/// Projection step applied when tracking aliases and borrows.
+pub const RefProjection = LIR.RefProjection;
+/// Span into flat ref-projection storage.
+pub const RefProjectionSpan = LIR.RefProjectionSpan;
+/// Param-relative provenance contract.
+pub const ParamRefContract = LIR.ParamRefContract;
+/// Proc-level return provenance contract.
+pub const ProcResultContract = LIR.ProcResultContract;
+/// Canonical statement/control-flow node.
 pub const CFStmt = LIR.CFStmt;
-/// Control flow statement ID type
+/// Identifier of a stored `CFStmt`.
 pub const CFStmtId = LIR.CFStmtId;
-/// Control flow switch branch type
+/// One explicit switch branch.
 pub const CFSwitchBranch = LIR.CFSwitchBranch;
-/// Control flow switch branch span type
+/// Span into flat switch-branch storage.
 pub const CFSwitchBranchSpan = LIR.CFSwitchBranchSpan;
-/// Control flow match branch type
-pub const CFMatchBranch = LIR.CFMatchBranch;
-/// Control flow match branch span type
-pub const CFMatchBranchSpan = LIR.CFMatchBranchSpan;
-/// Layout index span type
-pub const LayoutIdxSpan = LIR.LayoutIdxSpan;
-/// LIR proc-spec ID type
-pub const LirProcSpecId = LIR.LirProcSpecId;
-/// LIR proc-spec type
+/// Stored proc specification rooted at a statement body.
 pub const LirProcSpec = LIR.LirProcSpec;
+/// Identifier of a stored proc specification.
+pub const LirProcSpecId = LIR.LirProcSpecId;
+/// Builtin low-level operation identifier reused from `base`.
+pub const LowLevel = LIR.LowLevel;
 
 test "lir tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(LIR);
-    std.testing.refAllDecls(LirExprStore);
-    std.testing.refAllDecls(MirToLir);
-    std.testing.refAllDecls(OwnershipNormalize);
+    std.testing.refAllDecls(LirStore);
     std.testing.refAllDecls(TailRecursion);
+    std.testing.refAllDecls(Ownership);
     std.testing.refAllDecls(RcInsert);
+    std.testing.refAllDecls(SharedSwitchTail);
+    std.testing.refAllDecls(OwnershipBoundary);
+    std.testing.refAllDecls(FromIr);
 }

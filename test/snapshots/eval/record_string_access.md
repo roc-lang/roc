@@ -31,7 +31,7 @@ EndOfFile,
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dot-access (field "foo")
+(e-field-access (field "foo")
 	(receiver
 		(e-record
 			(fields

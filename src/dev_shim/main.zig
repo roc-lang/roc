@@ -2,7 +2,7 @@
 //! Roc code using the dev backend (CIR → MIR → LIR → native machine code).
 //!
 //! Adapted from the interpreter shim. Instead of interpreting CIR directly,
-//! this shim compiles to native code via DevEvaluator and executes via
+//! this shim compiles to native code via the dev backend codegen and executes via
 //! ExecutableMemory (mmap/mprotect).
 //!
 //! No wasm32 support — the dev backend targets x86_64/aarch64 only.
@@ -13,12 +13,22 @@ const build_options = @import("build_options");
 const builtins = @import("builtins");
 const base = @import("base");
 const can = @import("can");
+const check = @import("check");
 const types = @import("types");
 const collections = @import("collections");
 const eval = @import("eval");
+const compile = @import("compile");
 const layout = @import("layout");
 const tracy = @import("tracy");
 const backend = @import("backend");
+const ir = @import("ir");
+const lir = @import("lir");
+const lambdamono = @import("lambdamono");
+const lambdasolved = @import("lambdasolved");
+const monotype = @import("monotype");
+const monotype_lifted = @import("monotype_lifted");
+const symbol = @import("symbol");
+const ExecutableMemoryInitError = @typeInfo(@typeInfo(@TypeOf(backend.ExecutableMemory.initWithEntryOffset)).@"fn".return_type.?).error_union.error_set;
 
 // Module tracing flag - enabled via `zig build -Dtrace-modules`
 const trace_modules = if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
@@ -102,7 +112,11 @@ var global_builtin_modules: ?eval.BuiltinModules = null;
 var global_imported_envs: ?[]*const ModuleEnv = null;
 var global_full_imported_envs: ?[]*const ModuleEnv = null; // Full slice with builtin prepended (for import resolution)
 var global_full_mutable_envs: ?[]*ModuleEnv = null; // All module envs used for MIR lowering/codegen
-var global_dev_evaluator: ?eval.DevEvaluator = null; // Dev evaluator instance
+var global_full_mutable_envs_const: ?[]*const ModuleEnv = null; // Borrowed const view of global_full_mutable_envs
+var global_builtin_module_idx: ?u32 = null;
+var global_primary_module_idx: ?u32 = null;
+var global_app_module_idx: ?u32 = null;
+var global_builtin_str: ?base.Ident.Idx = null;
 var shm_mutex = PlatformMutex.init();
 
 // Cached header info (set during initialization, used for evaluation)
@@ -140,12 +154,44 @@ fn appendModuleEnvIfMissing(
     try module_envs.append(allocator, module_env);
 }
 
+fn rebuildLegacyRuntimeState(
+    roc_ops: *RocOps,
+    module_env: *ModuleEnv,
+    allocator: std.mem.Allocator,
+) ShimError!void {
+    module_env.gpa = allocator;
+    module_env.evaluation_order = null;
+    module_env.rigid_vars = .{};
+    module_env.import_mapping = types.import_mapping.ImportMapping.init(allocator);
+
+    var graph = can.DependencyGraph.buildDependencyGraph(
+        module_env,
+        module_env.all_defs,
+        allocator,
+    ) catch {
+        roc_ops.crash("Dev shim: failed to rebuild dependency graph for legacy module");
+        return error.ModuleEnvSetupFailed;
+    };
+    defer graph.deinit();
+
+    var eval_order = can.DependencyGraph.computeSCCs(&graph, allocator) catch {
+        roc_ops.crash("Dev shim: failed to rebuild evaluation order for legacy module");
+        return error.ModuleEnvSetupFailed;
+    };
+    const eval_order_ptr = allocator.create(can.DependencyGraph.EvaluationOrder) catch {
+        eval_order.deinit();
+        roc_ops.crash("Dev shim: failed to allocate evaluation order for legacy module");
+        return error.OutOfMemory;
+    };
+    eval_order_ptr.* = eval_order;
+    module_env.evaluation_order = eval_order_ptr;
+}
+
 const SERIALIZED_FORMAT_MAGIC = collections.SERIALIZED_FORMAT_MAGIC;
 
 /// Comprehensive error handling for the shim
 const ShimError = error{
     SharedMemoryError,
-    DevEvaluatorSetupFailed,
     EvaluationFailed,
     MemoryLayoutInvalid,
     ModuleEnvSetupFailed,
@@ -161,8 +207,11 @@ const ShimError = error{
     InvalidEntryIndex,
     CodeGenFailed,
     ExecutionFailed,
+    EmptyCode,
+    MmapFailed,
+    MprotectFailed,
     Crash,
-} || safe_memory.MemoryError;
+} || safe_memory.MemoryError || ExecutableMemoryInitError;
 
 /// Exported symbol that reads ModuleEnv from shared memory, compiles to native code, and executes.
 export fn roc_entrypoint(entry_idx: u32, ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void {
@@ -296,6 +345,29 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
     };
     global_full_mutable_envs = mutable_envs;
 
+    const mutable_envs_const = allocator.alloc(*const ModuleEnv, mutable_envs.len) catch {
+        roc_ops.crash("Failed to allocate const lowering envs");
+        return error.OutOfMemory;
+    };
+    for (mutable_envs, 0..) |module_env, i| {
+        mutable_envs_const[i] = module_env;
+    }
+    global_full_mutable_envs_const = mutable_envs_const;
+
+    global_builtin_module_idx = compile.runner.findModuleEnvIdx(mutable_envs, builtin_module_env) orelse {
+        roc_ops.crash("DEV SHIM: builtin module missing from lowering envs");
+        return error.ModuleEnvSetupFailed;
+    };
+    global_primary_module_idx = compile.runner.findModuleEnvIdx(mutable_envs, setup_result.primary_env) orelse {
+        roc_ops.crash("DEV SHIM: primary module missing from lowering envs");
+        return error.ModuleEnvSetupFailed;
+    };
+    global_app_module_idx = compile.runner.findModuleEnvIdx(mutable_envs, setup_result.app_env) orelse {
+        roc_ops.crash("DEV SHIM: app module missing from lowering envs");
+        return error.ModuleEnvSetupFailed;
+    };
+    global_builtin_str = builtin_module_env.idents.builtin_str;
+
     // Resolve imports for all modules
     const env_ptr = setup_result.primary_env;
     const app_env = setup_result.app_env;
@@ -317,196 +389,158 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
     // Enable runtime inserts on all deserialized module environments
     env_ptr.common.idents.interner.enableRuntimeInserts(allocator) catch {
         roc_ops.crash("DEV SHIM: Failed to enable runtime inserts on platform env");
-        return error.DevEvaluatorSetupFailed;
+        return error.ModuleEnvSetupFailed;
     };
     if (app_env != env_ptr) {
         @constCast(app_env).common.idents.interner.enableRuntimeInserts(allocator) catch {
             roc_ops.crash("DEV SHIM: Failed to enable runtime inserts on app env");
-            return error.DevEvaluatorSetupFailed;
+            return error.ModuleEnvSetupFailed;
         };
     }
-    for (full_imported_envs) |imp_env| {
-        @constCast(imp_env).common.idents.interner.enableRuntimeInserts(allocator) catch {
-            roc_ops.crash("DEV SHIM: Failed to enable runtime inserts on imported env");
-            return error.DevEvaluatorSetupFailed;
-        };
-    }
-
-    // Fix up display_module_name_idx for deserialized modules
-    if (env_ptr.display_module_name_idx.isNone() and env_ptr.module_name.len > 0) {
-        env_ptr.display_module_name_idx = env_ptr.insertIdent(base.Ident.for_text(env_ptr.module_name)) catch {
-            roc_ops.crash("DEV SHIM: Failed to insert module name for platform env");
-            return error.DevEvaluatorSetupFailed;
-        };
-    }
-    if (env_ptr.qualified_module_ident.isNone() and !env_ptr.display_module_name_idx.isNone()) {
-        env_ptr.qualified_module_ident = env_ptr.display_module_name_idx;
-    }
-    if (app_env != env_ptr) {
-        if (app_env.display_module_name_idx.isNone() and app_env.module_name.len > 0) {
-            @constCast(app_env).display_module_name_idx = @constCast(app_env).insertIdent(base.Ident.for_text(app_env.module_name)) catch {
-                roc_ops.crash("DEV SHIM: Failed to insert module name for app env");
-                return error.DevEvaluatorSetupFailed;
+    if (global_imported_envs) |imported_envs| {
+        for (imported_envs) |imp_env| {
+            @constCast(imp_env).common.idents.interner.enableRuntimeInserts(allocator) catch {
+                roc_ops.crash("DEV SHIM: Failed to enable runtime inserts on imported env");
+                return error.ModuleEnvSetupFailed;
             };
         }
-        if (app_env.qualified_module_ident.isNone() and !app_env.display_module_name_idx.isNone()) {
-            @constCast(app_env).qualified_module_ident = app_env.display_module_name_idx;
-        }
-    }
-    for (full_imported_envs) |imp_env| {
-        if (imp_env.display_module_name_idx.isNone() and imp_env.module_name.len > 0) {
-            @constCast(imp_env).display_module_name_idx = @constCast(imp_env).insertIdent(base.Ident.for_text(imp_env.module_name)) catch {
-                roc_ops.crash("DEV SHIM: Failed to insert module name for imported env");
-                return error.DevEvaluatorSetupFailed;
-            };
-        }
-        if (imp_env.qualified_module_ident.isNone() and !imp_env.display_module_name_idx.isNone()) {
-            @constCast(imp_env).qualified_module_ident = imp_env.display_module_name_idx;
-        }
     }
 
-    // Initialize the DevEvaluator once per process
-    global_dev_evaluator = eval.DevEvaluator.init(allocator, null) catch |err| {
-        const msg2 = std.fmt.bufPrint(&buf, "Failed to initialize DevEvaluator: {s}", .{@errorName(err)}) catch "Failed to initialize DevEvaluator";
-        roc_ops.crash(msg2);
-        return error.DevEvaluatorSetupFailed;
-    };
-
-    // Mark as initialized (release semantics ensure all writes above are visible)
+    // Mark initialization done
     shared_memory_initialized.set();
 }
 
-/// Compile CIR to native code and execute it
+/// Evaluate an entrypoint by reading ModuleEnv from shared memory and JIT-compiling it
 fn evaluateFromSharedMemory(entry_idx: u32, host_roc_ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) ShimError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // Initialize shared memory once per process
+    // Initialize shared memory + module env (only once)
     try initializeOnce(host_roc_ops);
 
-    const env_ptr = global_env_ptr.?;
-    const allocator = wrapped_allocator;
-
-    // Get expression info using entry_idx
-    const base_ptr = roc__serialized_base_ptr.?;
-    var buf: [256]u8 = undefined;
+    const env_ptr = global_env_ptr orelse return error.ModuleEnvSetupFailed;
+    _ = global_app_env_ptr orelse return error.ModuleEnvSetupFailed;
+    _ = global_builtin_modules orelse return error.ModuleEnvSetupFailed;
+    const lowering_module_envs = global_full_mutable_envs orelse return error.ModuleEnvSetupFailed;
+    const lowering_module_envs_const = global_full_mutable_envs_const orelse return error.ModuleEnvSetupFailed;
+    const builtin_module_idx = global_builtin_module_idx orelse return error.ModuleEnvSetupFailed;
+    const primary_module_idx = global_primary_module_idx orelse return error.ModuleEnvSetupFailed;
+    const app_module_idx = global_app_module_idx orelse return error.ModuleEnvSetupFailed;
+    const builtin_str = global_builtin_str;
 
     if (entry_idx >= global_entry_count) {
-        const err_msg = std.fmt.bufPrint(&buf, "Invalid entry_idx {} >= entry_count {}", .{ entry_idx, global_entry_count }) catch "Invalid entry_idx";
-        host_roc_ops.crash(err_msg);
+        host_roc_ops.crash("Invalid entry index");
         return error.InvalidEntryIndex;
     }
 
-    const def_offset = global_def_indices_offset + entry_idx * @sizeOf(u32);
-    const def_idx_raw: u32 = if (global_is_serialized_format) blk: {
-        const byte_offset: usize = @intCast(def_offset);
-        if (byte_offset + 4 > roc__serialized_size) {
-            const err_msg = std.fmt.bufPrint(&buf, "def_idx out of bounds: offset={}, size={}", .{ byte_offset, roc__serialized_size }) catch "def_idx out of bounds";
-            host_roc_ops.crash(err_msg);
-            return error.MemoryLayoutInvalid;
+    // Look up entrypoint index from shared memory
+    const base_ptr = roc__serialized_base_ptr.?;
+    const def_indices_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(global_def_indices_offset));
+    const def_indices: [*]const u32 = @ptrFromInt(def_indices_addr);
+    const def_idx = def_indices[entry_idx];
+
+    // Find the expression in the primary env (platform or app)
+    const entry_def_id: CIR.Def.Idx = @enumFromInt(def_idx);
+    const entrypoint_expr = env_ptr.store.getDef(entry_def_id).expr;
+    // Find the CIR def index for the entrypoint expression.
+    const def_ids = env_ptr.store.sliceDefs(env_ptr.all_defs);
+    var entry_def_idx: ?CIR.Def.Idx = null;
+    for (def_ids) |def_idx_candidate| {
+        const def = env_ptr.store.getDef(def_idx_candidate);
+        if (def.expr == entrypoint_expr) {
+            entry_def_idx = def_idx_candidate;
+            break;
         }
-        const ptr: *const [4]u8 = @ptrCast(base_ptr + byte_offset);
-        const val = std.mem.readInt(u32, ptr, .little);
-        break :blk val;
-    } else blk: {
-        break :blk safe_memory.safeRead(u32, base_ptr, @intCast(def_offset), roc__serialized_size) catch |err| {
-            const read_err = std.fmt.bufPrint(&buf, "Failed to read def_idx: {}", .{err}) catch "Failed to read def_idx";
-            host_roc_ops.crash(read_err);
-            return error.MemoryLayoutInvalid;
-        };
-    };
-    const def_idx: CIR.Def.Idx = @enumFromInt(def_idx_raw);
-
-    // Get the definition and extract its expression
-    const def = env_ptr.store.getDef(def_idx);
-    const expr_idx = def.expr;
-
-    traceDbg("Evaluating entry_idx={d}, def_idx={d}, expr_idx={d}", .{ entry_idx, def_idx_raw, @intFromEnum(expr_idx) });
-
-    // Get all module envs for code generation (needs mutable pointers)
-    const all_module_envs = global_full_mutable_envs.?;
-    const app_env = global_app_env_ptr.?;
-
-    // Get the global DevEvaluator
-    var dev_eval = &global_dev_evaluator.?;
-
-    // Resolve arg/ret layouts from the CIR function type
-    const layouts = resolveEntrypointLayouts(env_ptr, expr_idx, dev_eval, all_module_envs, allocator) catch |err| {
-        const err_msg = std.fmt.bufPrint(&buf, "Layout resolution failed: {s}", .{@errorName(err)}) catch "Layout resolution failed";
-        host_roc_ops.crash(err_msg);
-        return error.CodeGenFailed;
-    };
-
-    // Compile CIR → native code using entrypoint wrapper (RocCall ABI)
-    var code_result = dev_eval.generateEntrypointCode(env_ptr, expr_idx, all_module_envs, app_env, layouts.arg_layouts, layouts.ret_layout) catch |err| {
-        const err_msg = std.fmt.bufPrint(&buf, "Code generation failed: {s}", .{@errorName(err)}) catch "Code generation failed";
-        host_roc_ops.crash(err_msg);
-        return error.CodeGenFailed;
-    };
-    defer code_result.deinit();
-
-    // Check for crash during code generation
-    if (code_result.crash_message) |crash_msg| {
-        host_roc_ops.crash(crash_msg);
-        return error.Crash;
+    }
+    if (entry_def_idx == null) {
+        host_roc_ops.crash("Dev shim: failed to resolve entrypoint def");
+        return error.EvaluationFailed;
     }
 
-    if (code_result.code.len == 0) {
-        host_roc_ops.crash("Dev shim: code generation produced empty code");
-        return error.CodeGenFailed;
+    var source_modules = try wrapped_allocator.alloc(check.TypedCIR.Modules.SourceModule, lowering_module_envs.len);
+    defer wrapped_allocator.free(source_modules);
+    for (lowering_module_envs, 0..) |module_env, i| {
+        source_modules[i] = .{ .precompiled = module_env };
     }
 
-    // Create executable memory from generated code
-    var executable = backend.ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch {
-        host_roc_ops.crash("Dev shim: failed to create executable memory");
-        return error.ExecutionFailed;
+    var typed_modules = try check.TypedCIR.Modules.init(wrapped_allocator, source_modules);
+    defer typed_modules.deinit();
+    try compile.platform_requirements.populateRequiredLookupTargets(&typed_modules, app_module_idx);
+
+    var mono_lowerer = try monotype.Lower.Lowerer.init(
+        wrapped_allocator,
+        &typed_modules,
+        builtin_module_idx,
+        app_module_idx,
+    );
+    defer mono_lowerer.deinit();
+    const entry_symbol = try mono_lowerer.specializeTopLevelDef(primary_module_idx, entry_def_idx.?);
+    var mono = try mono_lowerer.run(primary_module_idx);
+    defer mono.deinit();
+    var lifted = try monotype_lifted.Lower.run(wrapped_allocator, &mono);
+    defer lifted.deinit();
+    var solved = try lambdasolved.Lower.run(wrapped_allocator, &lifted);
+    defer solved.deinit();
+    const entrypoints = [_]symbol.Symbol{entry_symbol};
+    var mono_executable = try lambdamono.Lower.runWithEntrypoints(wrapped_allocator, &solved, &entrypoints);
+    const entrypoint_wrappers = mono_executable.entrypoint_wrappers;
+    mono_executable.entrypoint_wrappers = &.{};
+    defer if (entrypoint_wrappers.len > 0) wrapped_allocator.free(entrypoint_wrappers);
+    defer mono_executable.deinit();
+    const entry_symbol_for_lir = if (entrypoint_wrappers.len == 0)
+        entry_symbol
+    else
+        entrypoint_wrappers[0];
+
+    var lowered_ir = try ir.Lower.run(wrapped_allocator, &mono_executable);
+
+    var lowered_lir = try lir.FromIr.run(
+        wrapped_allocator,
+        lowering_module_envs_const,
+        builtin_str,
+        base.target.TargetUsize.native,
+        &lowered_ir,
+    );
+    defer lowered_lir.deinit();
+    try lir.Ownership.inferProcResultContracts(wrapped_allocator, &lowered_lir.store, &lowered_lir.layouts);
+    try lir.RcInsert.run(wrapped_allocator, &lowered_lir.store, &lowered_lir.layouts);
+
+    const proc_id = lowered_lir.proc_ids_by_symbol.get(entry_symbol_for_lir.raw()) orelse {
+        host_roc_ops.crash("Dev shim: entry proc not found");
+        return error.CodeGenFailed;
     };
+
+    var codegen = try backend.HostLirCodeGen.init(
+        wrapped_allocator,
+        &lowered_lir.store,
+        &lowered_lir.layouts,
+        null,
+    );
+    defer codegen.deinit();
+    try codegen.compileAllProcSpecs(lowered_lir.store.getProcSpecs());
+
+    const proc_spec = lowered_lir.store.getProcSpec(proc_id);
+    const arg_locals = lowered_lir.store.getLocalSpan(proc_spec.args);
+    var arg_layouts = try wrapped_allocator.alloc(layout.Idx, arg_locals.len);
+    defer wrapped_allocator.free(arg_layouts);
+    for (arg_locals, 0..) |local_id, i| {
+        arg_layouts[i] = lowered_lir.store.getLocal(local_id).layout_idx;
+    }
+
+    const entrypoint = try codegen.generateEntrypointWrapper(
+        "roc_dev_shim_entrypoint",
+        proc_id,
+        arg_layouts,
+        proc_spec.ret_layout,
+    );
+    var executable = try backend.ExecutableMemory.initWithEntryOffset(
+        codegen.getGeneratedCode(),
+        entrypoint.offset,
+    );
     defer executable.deinit();
 
-    // Execute using RocCall ABI — pass host's RocOps directly so generated code
-    // uses the host's allocator, hosted functions, and crash handlers.
     executable.callRocABI(@ptrCast(host_roc_ops), ret_ptr, arg_ptr);
 }
-
-/// Resolve arg_layouts and ret_layout from the CIR function type of an entrypoint expression.
-fn resolveEntrypointLayouts(
-    env_ptr: *ModuleEnv,
-    expr_idx: CIR.Expr.Idx,
-    dev_eval: *eval.DevEvaluator,
-    all_module_envs: []const *ModuleEnv,
-    allocator: std.mem.Allocator,
-) !struct { arg_layouts: []const layout.Idx, ret_layout: layout.Idx } {
-    const layout_store_ptr = try dev_eval.ensureGlobalLayoutStore(all_module_envs);
-
-    // Find the module index for this module
-    const module_idx: u32 = for (all_module_envs, 0..) |env, i| {
-        if (env == env_ptr) break @intCast(i);
-    } else return error.ModuleEnvNotFound;
-
-    // Get the expression's type variable and resolve it
-    const expr_type_var = can.ModuleEnv.varFrom(expr_idx);
-    const resolved = env_ptr.types.resolveVar(expr_type_var);
-    const maybe_func = resolved.desc.content.unwrapFunc();
-
-    if (maybe_func) |func| {
-        const arg_vars = env_ptr.types.sliceVars(func.args);
-        var arg_layouts = try allocator.alloc(layout.Idx, arg_vars.len);
-        var type_scope = types.TypeScope.init(allocator);
-        defer type_scope.deinit();
-        for (arg_vars, 0..) |arg_var, i| {
-            arg_layouts[i] = try layout_store_ptr.fromTypeVar(module_idx, arg_var, &type_scope, null);
-        }
-        const ret_layout = try layout_store_ptr.fromTypeVar(module_idx, func.ret, &type_scope, null);
-        return .{ .arg_layouts = arg_layouts, .ret_layout = ret_layout };
-    }
-
-    // Non-function entrypoint (zero args) — the expression's type is the return type
-    var type_scope = types.TypeScope.init(allocator);
-    defer type_scope.deinit();
-    const ret_layout = try layout_store_ptr.fromTypeVar(module_idx, expr_type_var, &type_scope, null);
-    return .{ .arg_layouts = &.{}, .ret_layout = ret_layout };
-}
-
 /// Result of setting up module environments
 const SetupResult = struct {
     primary_env: *ModuleEnv,
@@ -583,6 +617,8 @@ fn setupModuleEnv(roc_ops: *RocOps) ShimError!SetupResult {
         roc_ops.crash("Failed to allocate imported envs array");
         return error.OutOfMemory;
     };
+    var unique_module_envs = std.ArrayList(*ModuleEnv).empty;
+    defer unique_module_envs.deinit(allocator);
 
     for (0..module_count - 1) |i| {
         const module_env_offset = module_env_offsets[i];
@@ -602,7 +638,7 @@ fn setupModuleEnv(roc_ops: *RocOps) ShimError!SetupResult {
 
         const module_env_ptr: *ModuleEnv = @ptrFromInt(module_env_addr);
         module_env_ptr.relocate(@intCast(offset));
-        module_env_ptr.gpa = allocator;
+        try appendModuleEnvIfMissing(allocator, &unique_module_envs, module_env_ptr);
         imported_envs[i] = module_env_ptr;
     }
 
@@ -623,7 +659,7 @@ fn setupModuleEnv(roc_ops: *RocOps) ShimError!SetupResult {
 
     const app_env_ptr: *ModuleEnv = @ptrFromInt(app_env_addr);
     app_env_ptr.relocate(@intCast(offset));
-    app_env_ptr.gpa = allocator;
+    try appendModuleEnvIfMissing(allocator, &unique_module_envs, app_env_ptr);
 
     const primary_env: *ModuleEnv = if (header_ptr.platform_main_env_offset != 0) blk: {
         const platform_env_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(header_ptr.platform_main_env_offset));
@@ -641,9 +677,13 @@ fn setupModuleEnv(roc_ops: *RocOps) ShimError!SetupResult {
 
         const platform_env_ptr: *ModuleEnv = @ptrFromInt(platform_env_addr);
         platform_env_ptr.relocate(@intCast(offset));
-        platform_env_ptr.gpa = allocator;
+        try appendModuleEnvIfMissing(allocator, &unique_module_envs, platform_env_ptr);
         break :blk platform_env_ptr;
     } else app_env_ptr;
+
+    for (unique_module_envs.items) |module_env| {
+        try rebuildLegacyRuntimeState(roc_ops, module_env, allocator);
+    }
 
     return SetupResult{
         .primary_env = primary_env,

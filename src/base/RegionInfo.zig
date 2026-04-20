@@ -5,6 +5,7 @@
 //! as this is more compact, and then when we need to we can calculate the line and column information
 //! using line_starts and the offsets.
 const std = @import("std");
+const builtin = @import("builtin");
 const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 
@@ -65,14 +66,28 @@ pub fn findLineStarts(gpa: Allocator, source: []const u8) !collections.SafeList(
     }
 
     // the first line starts at offset 0
-    _ = try line_starts.append(gpa, 0);
+    {
+        const expected_idx = line_starts.items.items.len;
+        const idx = try line_starts.append(gpa, 0);
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(@intFromEnum(idx) == expected_idx);
+        } else if (@intFromEnum(idx) != expected_idx) {
+            unreachable;
+        }
+    }
 
     // find all newlines in the source, save their offset
     var pos: u32 = 0;
     for (source) |c| {
         if (c == '\n') {
             // next line starts after the newline in the current position
-            _ = try line_starts.append(gpa, pos + 1);
+            const expected_idx = line_starts.items.items.len;
+            const idx = try line_starts.append(gpa, pos + 1);
+            if (comptime builtin.mode == .Debug) {
+                std.debug.assert(@intFromEnum(idx) == expected_idx);
+            } else if (@intFromEnum(idx) != expected_idx) {
+                unreachable;
+            }
         }
         pos += 1;
     }
@@ -119,10 +134,42 @@ test "lineIdx" {
     defer line_starts.deinit(gpa);
 
     // Simple test case with lines at positions 0, 10, 20
-    _ = try line_starts.append(gpa, 0);
-    _ = try line_starts.append(gpa, 10);
-    _ = try line_starts.append(gpa, 20);
-    _ = try line_starts.append(gpa, 30);
+    {
+        const expected_idx = line_starts.items.items.len;
+        const idx = try line_starts.append(gpa, 0);
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(@intFromEnum(idx) == expected_idx);
+        } else if (@intFromEnum(idx) != expected_idx) {
+            unreachable;
+        }
+    }
+    {
+        const expected_idx = line_starts.items.items.len;
+        const idx = try line_starts.append(gpa, 10);
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(@intFromEnum(idx) == expected_idx);
+        } else if (@intFromEnum(idx) != expected_idx) {
+            unreachable;
+        }
+    }
+    {
+        const expected_idx = line_starts.items.items.len;
+        const idx = try line_starts.append(gpa, 20);
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(@intFromEnum(idx) == expected_idx);
+        } else if (@intFromEnum(idx) != expected_idx) {
+            unreachable;
+        }
+    }
+    {
+        const expected_idx = line_starts.items.items.len;
+        const idx = try line_starts.append(gpa, 30);
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(@intFromEnum(idx) == expected_idx);
+        } else if (@intFromEnum(idx) != expected_idx) {
+            unreachable;
+        }
+    }
 
     try std.testing.expectEqual(0, RegionInfo.lineIdx(line_starts.items.items, 0));
     try std.testing.expectEqual(0, RegionInfo.lineIdx(line_starts.items.items, 5));
@@ -142,9 +189,33 @@ test "columnIdx" {
     var line_starts = try SafeList(u32).initCapacity(gpa, 256);
     defer line_starts.deinit(gpa);
 
-    _ = try line_starts.append(gpa, 0);
-    _ = try line_starts.append(gpa, 10);
-    _ = try line_starts.append(gpa, 20);
+    {
+        const expected_idx = line_starts.items.items.len;
+        const idx = try line_starts.append(gpa, 0);
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(@intFromEnum(idx) == expected_idx);
+        } else if (@intFromEnum(idx) != expected_idx) {
+            unreachable;
+        }
+    }
+    {
+        const expected_idx = line_starts.items.items.len;
+        const idx = try line_starts.append(gpa, 10);
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(@intFromEnum(idx) == expected_idx);
+        } else if (@intFromEnum(idx) != expected_idx) {
+            unreachable;
+        }
+    }
+    {
+        const expected_idx = line_starts.items.items.len;
+        const idx = try line_starts.append(gpa, 20);
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(@intFromEnum(idx) == expected_idx);
+        } else if (@intFromEnum(idx) != expected_idx) {
+            unreachable;
+        }
+    }
 
     try std.testing.expectEqual(0, RegionInfo.columnIdx(line_starts.items.items, 0, 0));
     try std.testing.expectEqual(5, RegionInfo.columnIdx(line_starts.items.items, 0, 5));
@@ -161,9 +232,33 @@ test "getLineText" {
 
     const source = "line0\nline1\nline2";
 
-    _ = try line_starts.append(gpa, 0);
-    _ = try line_starts.append(gpa, 6);
-    _ = try line_starts.append(gpa, 12);
+    {
+        const expected_idx = line_starts.items.items.len;
+        const idx = try line_starts.append(gpa, 0);
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(@intFromEnum(idx) == expected_idx);
+        } else if (@intFromEnum(idx) != expected_idx) {
+            unreachable;
+        }
+    }
+    {
+        const expected_idx = line_starts.items.items.len;
+        const idx = try line_starts.append(gpa, 6);
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(@intFromEnum(idx) == expected_idx);
+        } else if (@intFromEnum(idx) != expected_idx) {
+            unreachable;
+        }
+    }
+    {
+        const expected_idx = line_starts.items.items.len;
+        const idx = try line_starts.append(gpa, 12);
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(@intFromEnum(idx) == expected_idx);
+        } else if (@intFromEnum(idx) != expected_idx) {
+            unreachable;
+        }
+    }
 
     try std.testing.expectEqualStrings("line0", RegionInfo.getLineText(source, line_starts.items.items, 0, 0));
     try std.testing.expectEqualStrings("line1", RegionInfo.getLineText(source, line_starts.items.items, 1, 1));
@@ -178,9 +273,33 @@ test "get" {
 
     const source = "line0\nline1\nline2";
 
-    _ = try line_starts.append(gpa, 0);
-    _ = try line_starts.append(gpa, 6);
-    _ = try line_starts.append(gpa, 12);
+    {
+        const expected_idx = line_starts.items.items.len;
+        const idx = try line_starts.append(gpa, 0);
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(@intFromEnum(idx) == expected_idx);
+        } else if (@intFromEnum(idx) != expected_idx) {
+            unreachable;
+        }
+    }
+    {
+        const expected_idx = line_starts.items.items.len;
+        const idx = try line_starts.append(gpa, 6);
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(@intFromEnum(idx) == expected_idx);
+        } else if (@intFromEnum(idx) != expected_idx) {
+            unreachable;
+        }
+    }
+    {
+        const expected_idx = line_starts.items.items.len;
+        const idx = try line_starts.append(gpa, 12);
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(@intFromEnum(idx) == expected_idx);
+        } else if (@intFromEnum(idx) != expected_idx) {
+            unreachable;
+        }
+    }
 
     const info1 = try RegionInfo.position(source, line_starts.items.items, 2, 4);
     try std.testing.expectEqual(0, info1.start_line_idx);

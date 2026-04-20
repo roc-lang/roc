@@ -120,7 +120,7 @@ NO CHANGE
 			(e-call
 				(e-lookup-local
 					(p-assign (ident "processDict")))
-				(e-dot-access (field "insert")
+				(e-field-access (field "insert")
 					(receiver
 						(e-call
 							(e-runtime-error (tag "nested_value_not_found"))))

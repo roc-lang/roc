@@ -133,6 +133,7 @@ pub const SharedMemoryError = error{
     OpenFileMappingFailed,
     MapViewOfFileFailed,
     ShmOpenFailed,
+    ShmUnlinkFailed,
     MemfdCreateFailed,
     FtruncateFailed,
     MmapFailed,
@@ -156,7 +157,10 @@ pub fn getSystemPageSize() !usize {
         .macos, .ios, .tvos, .watchos => blk: {
             var page_size_c: usize = undefined;
             var size: usize = @sizeOf(usize);
-            _ = std.c.sysctlbyname("hw.pagesize", &page_size_c, &size, null, 0);
+            const rc = std.c.sysctlbyname("hw.pagesize", &page_size_c, &size, null, 0);
+            if (rc != 0) {
+                return error.SysctlFailed;
+            }
             break :blk page_size_c;
         },
         .freebsd, .netbsd, .openbsd, .dragonfly => blk: {
@@ -215,7 +219,7 @@ pub fn createMapping(size: usize) SharedMemoryError!Handle {
 
             // Set the size of the shared memory
             std.posix.ftruncate(fd, size) catch {
-                _ = std.posix.close(fd);
+                std.posix.close(fd);
                 return error.FtruncateFailed;
             };
 
@@ -244,11 +248,14 @@ pub fn createMapping(size: usize) SharedMemoryError!Handle {
             }
 
             // Immediately unlink so it gets cleaned up when all references are closed
-            _ = posix.shm_unlink(shm_name_null_terminated);
+            if (posix.shm_unlink(shm_name_null_terminated) != 0) {
+                std.posix.close(fd);
+                return error.ShmUnlinkFailed;
+            }
 
             // Set the size of the shared memory
             std.posix.ftruncate(fd, size) catch {
-                _ = std.posix.close(fd);
+                std.posix.close(fd);
                 return error.FtruncateFailed;
             };
 
@@ -374,7 +381,13 @@ fn unmapWindowsMemory(ptr: *anyopaque) void {
 
 fn unmapPosixMemory(ptr: *anyopaque, size: usize) void {
     if (comptime !is_windows) {
-        _ = posix.munmap(ptr, size);
+        const rc = posix.munmap(ptr, size);
+        if (rc != 0) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("munmap failed with errno {d}", .{std.c._errno().*});
+            }
+            unreachable;
+        }
     }
 }
 
@@ -403,6 +416,12 @@ fn closeWindowsHandle(handle: Handle, is_owner: bool) void {
 fn closePosixHandle(handle: Handle) void {
     if (comptime !is_windows) {
         // POSIX always closes the fd
-        _ = posix.close(handle);
+        const rc = posix.close(handle);
+        if (rc != 0) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("close failed with errno {d}", .{std.c._errno().*});
+            }
+            unreachable;
+        }
     }
 }

@@ -78,7 +78,7 @@ main_for_host = main
     (entry
       (name "Geometry")
       (kind nominal)
-      (type "Geometry := " (record (field "width" (type-ref (name "U64"))) (field "height" (type-ref (name "U64")))))
+      (type "Geometry := " (record (field "width" (type-ref (module "Builtin") (name "U64"))) (field "height" (type-ref (module "Builtin") (name "U64")))))
       (doc "A rectangle with width and height.")
       (entry
         (name "unit")

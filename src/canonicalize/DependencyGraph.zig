@@ -80,6 +80,29 @@ pub const EvaluationOrder = struct {
 
     allocator: std.mem.Allocator,
 
+    pub fn clone(self: *const EvaluationOrder, allocator: std.mem.Allocator) std.mem.Allocator.Error!EvaluationOrder {
+        const sccs = try allocator.alloc(SCC, self.sccs.len);
+        errdefer allocator.free(sccs);
+
+        var built: usize = 0;
+        errdefer {
+            for (sccs[0..built]) |scc| allocator.free(scc.defs);
+        }
+
+        for (self.sccs, 0..) |scc, i| {
+            sccs[i] = .{
+                .defs = try allocator.dupe(CIR.Def.Idx, scc.defs),
+                .is_recursive = scc.is_recursive,
+            };
+            built += 1;
+        }
+
+        return .{
+            .sccs = sccs,
+            .allocator = allocator,
+        };
+    }
+
     pub fn deinit(self: *EvaluationOrder) void {
         for (self.sccs) |scc| {
             self.allocator.free(scc.defs);
@@ -164,12 +187,40 @@ fn collectExprDependencies(
             }
         },
 
-        .e_dot_access => |access| {
+        .e_field_access => |access| {
             try collectExprDependencies(cir, access.receiver, dependencies, allocator);
-            if (access.args) |args_span| {
-                for (cir.store.sliceExpr(args_span)) |arg_idx| {
-                    try collectExprDependencies(cir, arg_idx, dependencies, allocator);
-                }
+        },
+
+        .e_method_call => |call| {
+            try collectExprDependencies(cir, call.receiver, dependencies, allocator);
+            for (cir.store.sliceExpr(call.args)) |arg_idx| {
+                try collectExprDependencies(cir, arg_idx, dependencies, allocator);
+            }
+        },
+        .e_dispatch_call => |call| {
+            try collectExprDependencies(cir, call.receiver, dependencies, allocator);
+            for (cir.store.sliceExpr(call.args)) |arg_idx| {
+                try collectExprDependencies(cir, arg_idx, dependencies, allocator);
+            }
+        },
+
+        .e_structural_eq => |eq| {
+            try collectExprDependencies(cir, eq.lhs, dependencies, allocator);
+            try collectExprDependencies(cir, eq.rhs, dependencies, allocator);
+        },
+        .e_method_eq => |eq| {
+            try collectExprDependencies(cir, eq.lhs, dependencies, allocator);
+            try collectExprDependencies(cir, eq.rhs, dependencies, allocator);
+        },
+
+        .e_type_method_call => |call| {
+            for (cir.store.sliceExpr(call.args)) |arg_idx| {
+                try collectExprDependencies(cir, arg_idx, dependencies, allocator);
+            }
+        },
+        .e_type_dispatch_call => |call| {
+            for (cir.store.sliceExpr(call.args)) |arg_idx| {
+                try collectExprDependencies(cir, arg_idx, dependencies, allocator);
             }
         },
 
@@ -288,13 +339,6 @@ fn collectExprDependencies(
             try collectExprDependencies(cir, for_expr.body, dependencies, allocator);
         },
 
-        .e_type_var_dispatch => |tvd| {
-            // Collect dependencies from the arguments
-            for (cir.store.exprSlice(tvd.args)) |arg_idx| {
-                try collectExprDependencies(cir, arg_idx, dependencies, allocator);
-            }
-        },
-
         .e_runtime_error => {},
     }
 }
@@ -376,8 +420,7 @@ pub fn computeSCCs(
     };
 }
 
-/// Returns indices of all top-level constants (definitions without function parameters).
-/// A constant is a definition whose expression is not a lambda, or is a zero-arg lambda.
+/// Returns indices of all top-level constants (definitions that are not functions).
 ///
 /// This is used to identify definitions that should be evaluated at compile time,
 /// as opposed to functions which are only evaluated when called.
@@ -396,9 +439,8 @@ pub fn getTopLevelConstants(
         const expr = cir.store.getExpr(def.expr);
 
         const is_constant = switch (expr) {
-            .e_lambda => |lambda| lambda.args.span.len == 0, // Zero-arg lambda is a constant
-            .e_closure => false, // Closures with captures are not constants
-            else => true, // Everything else (literals, records, etc.) is a constant
+            .e_lambda, .e_closure, .e_anno_only, .e_hosted_lambda => false,
+            else => true,
         };
 
         if (is_constant) {
@@ -565,7 +607,7 @@ const TarjanState = struct {
 
             while (true) {
                 const w = self.stack.pop() orelse unreachable; // Stack should not be empty
-                _ = self.on_stack.remove(w);
+                std.debug.assert(self.on_stack.remove(w));
                 try scc_defs.append(self.allocator, w);
 
                 if (@intFromEnum(w) == @intFromEnum(v)) break;

@@ -9,7 +9,7 @@ const can = @import("can");
 const types = @import("types");
 const import_mapping_mod = types.import_mapping;
 const reporting = @import("reporting");
-const Interpreter = @import("interpreter.zig").Interpreter;
+const Interpreter = @import("comptime_interpreter.zig").Interpreter;
 const roc_target = @import("roc_target");
 const eval_mod = @import("mod.zig");
 

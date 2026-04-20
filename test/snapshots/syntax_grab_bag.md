@@ -1536,7 +1536,7 @@ EndOfFile,
 								(field (name "bar") (rest false)
 									(p-int (raw "2")))
 								(field (name "rest") (rest true)))
-							(e-local-dispatch
+							(e-arrow-call
 								(e-int (raw "12"))
 								(e-apply
 									(e-ident (raw "add"))
@@ -2467,17 +2467,17 @@ expect {
 					(e-match
 						(match
 							(cond
-								(e-dot-access (field "record_field")
+								(e-field-access (field "record_field")
 									(receiver
 										(e-match
 											(match
 												(cond
-													(e-dot-access (field "next_static_dispatch_method")
+													(e-field-access (field "next_static_dispatch_method")
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dot-access (field "static_dispatch_method")
+																		(e-field-access (field "static_dispatch_method")
 																			(receiver
 																				(e-match
 																					(match
@@ -2761,7 +2761,7 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Bool -> Dec"))
+		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "Error -> U64"))
 		(patt (type "[Blue, Green, Red, ..], _arg -> Error"))
 		(patt (type "List(Error) -> Try({}, _d)"))
@@ -2807,7 +2807,7 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Bool -> Dec"))
+		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "Error -> U64"))
 		(expr (type "[Blue, Green, Red, ..], _arg -> Error"))
 		(expr (type "List(Error) -> Try({}, _d)"))

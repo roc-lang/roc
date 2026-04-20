@@ -18,12 +18,19 @@ const CrashState = eval_mod.CrashState;
 pub const TestEnv = struct {
     allocator: std.mem.Allocator,
     crash: CrashContext,
+    allocations: std.AutoHashMap(usize, AllocationInfo),
     roc_ops: RocOps,
+
+    const AllocationInfo = struct {
+        size: usize,
+        alignment: usize,
+    };
 
     pub fn init(allocator: std.mem.Allocator) TestEnv {
         return TestEnv{
             .allocator = allocator,
             .crash = CrashContext.init(allocator),
+            .allocations = std.AutoHashMap(usize, AllocationInfo).init(allocator),
             .roc_ops = RocOps{
                 .env = undefined, // set below
                 .roc_alloc = testRocAlloc,
@@ -32,12 +39,18 @@ pub const TestEnv = struct {
                 .roc_dbg = testRocDbg,
                 .roc_expect_failed = testRocExpectFailed,
                 .roc_crashed = testRocCrashed,
-                .hosted_fns = .{ .count = 0, .fns = undefined }, // Not used in tests
+                .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
             },
         };
     }
 
     pub fn deinit(self: *TestEnv) void {
+        var it = self.allocations.iterator();
+        while (it.next()) |entry| {
+            const ptr = @as(*anyopaque, @ptrFromInt(entry.key_ptr.*));
+            freeTrackedBytes(self.allocator, ptr, entry.value_ptr.*);
+        }
+        self.allocations.deinit();
         self.crash.deinit();
     }
 
@@ -58,84 +71,44 @@ pub const TestEnv = struct {
 
 fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const test_env: *TestEnv = @ptrCast(@alignCast(env));
-
-    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
-
-    // Calculate additional bytes needed to store the size
-    const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
-    const total_size = alloc_args.length + size_storage_bytes;
-
-    // Allocate memory including space for size metadata
-    const result = test_env.allocator.rawAlloc(total_size, align_enum, @returnAddress());
-
-    const base_ptr = result orelse {
-        std.debug.panic("Out of memory during testRocAlloc", .{});
+    const alloc_ptr = allocateTrackedBytes(test_env.allocator, alloc_args.length, alloc_args.alignment);
+    alloc_args.answer = @ptrCast(alloc_ptr);
+    test_env.allocations.put(@intFromPtr(alloc_ptr), .{
+        .size = alloc_args.length,
+        .alignment = alloc_args.alignment,
+    }) catch {
+        std.debug.panic("Failed to track allocation in repl test env", .{});
     };
-
-    // Store the total size (including metadata) right before the user data
-    const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
-    size_ptr.* = total_size;
-
-    // Return pointer to the user data (after the size metadata)
-    alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
 }
 
 fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void {
     const test_env: *TestEnv = @ptrCast(@alignCast(env));
-
-    // Calculate where the size metadata is stored
-    const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
-    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
-
-    // Read the total size from metadata
-    const total_size = size_ptr.*;
-
-    // Calculate the base pointer (start of actual allocation)
-    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
-
-    // Calculate alignment
-    const log2_align = std.math.log2_int(u32, @intCast(dealloc_args.alignment));
-    const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
-
-    // Free the memory (including the size metadata)
-    const slice = @as([*]u8, @ptrCast(base_ptr))[0..total_size];
-    test_env.allocator.rawFree(slice, align_enum, @returnAddress());
+    const alloc_ptr = @intFromPtr(dealloc_args.ptr);
+    const alloc_info = test_env.allocations.fetchRemove(alloc_ptr) orelse {
+        std.debug.panic("Attempted to free untracked allocation in repl test env: 0x{x}", .{alloc_ptr});
+    };
+    freeTrackedBytes(test_env.allocator, dealloc_args.ptr, alloc_info.value);
 }
 
 fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
     const test_env: *TestEnv = @ptrCast(@alignCast(env));
-
-    // Calculate where the size metadata is stored for the old allocation
-    const size_storage_bytes = @max(realloc_args.alignment, @alignOf(usize));
-    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
-
-    // Read the old total size from metadata
-    const old_total_size = old_size_ptr.*;
-
-    // Calculate the old base pointer (start of actual allocation)
-    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(realloc_args.answer) - size_storage_bytes);
-
-    // Calculate new total size needed
-    const new_total_size = realloc_args.new_length + size_storage_bytes;
-
-    // Reallocate with explicit alignment to avoid allocator alignment mismatches.
-    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(realloc_args.alignment)));
-    const new_result = test_env.allocator.rawAlloc(new_total_size, align_enum, @returnAddress());
-    const new_base_ptr = new_result orelse {
-        std.debug.panic("Out of memory during testRocRealloc", .{});
+    const old_alloc_ptr = @intFromPtr(realloc_args.answer);
+    const old_info = test_env.allocations.fetchRemove(old_alloc_ptr) orelse {
+        std.debug.panic("Attempted to realloc untracked allocation in repl test env: 0x{x}", .{old_alloc_ptr});
     };
-    const copy_size = @min(old_total_size, new_total_size);
-    @memcpy(new_base_ptr[0..copy_size], old_base_ptr[0..copy_size]);
 
-    const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
-    test_env.allocator.rawFree(old_slice, align_enum, @returnAddress());
-
-    // Store the new total size in the metadata
-    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_base_ptr) + size_storage_bytes - @sizeOf(usize));
-    new_size_ptr.* = new_total_size;
-
-    // Return pointer to the user data (after the size metadata)
-    realloc_args.answer = @ptrFromInt(@intFromPtr(new_base_ptr) + size_storage_bytes);
+    const new_alloc_ptr = allocateTrackedBytes(test_env.allocator, realloc_args.new_length, realloc_args.alignment);
+    const old_bytes: [*]u8 = @ptrCast(@alignCast(realloc_args.answer));
+    const copy_size = @min(old_info.value.size, realloc_args.new_length);
+    @memcpy(new_alloc_ptr[0..copy_size], old_bytes[0..copy_size]);
+    freeTrackedBytes(test_env.allocator, realloc_args.answer, old_info.value);
+    realloc_args.answer = @ptrCast(new_alloc_ptr);
+    test_env.allocations.put(@intFromPtr(new_alloc_ptr), .{
+        .size = realloc_args.new_length,
+        .alignment = realloc_args.alignment,
+    }) catch {
+        std.debug.panic("Failed to track reallocation in repl test env", .{});
+    };
 }
 
 fn testRocDbg(_: *const RocDbg, _: *anyopaque) callconv(.c) void {
@@ -161,4 +134,31 @@ fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c)
     test_env.crash.recordCrash(crashed_args.utf8_bytes[0..crashed_args.len]) catch |err| {
         std.debug.panic("failed to store REPL crash message: {}", .{err});
     };
+}
+
+fn allocateTrackedBytes(allocator: std.mem.Allocator, len: usize, alignment: usize) [*]u8 {
+    return switch (alignment) {
+        1 => (allocator.alignedAlloc(u8, .@"1", len) catch oom("testRocAlloc")).ptr,
+        2 => (allocator.alignedAlloc(u8, .@"2", len) catch oom("testRocAlloc")).ptr,
+        4 => (allocator.alignedAlloc(u8, .@"4", len) catch oom("testRocAlloc")).ptr,
+        8 => (allocator.alignedAlloc(u8, .@"8", len) catch oom("testRocAlloc")).ptr,
+        16 => (allocator.alignedAlloc(u8, .@"16", len) catch oom("testRocAlloc")).ptr,
+        else => std.debug.panic("Unsupported alignment in repl test env: {d}", .{alignment}),
+    };
+}
+
+fn freeTrackedBytes(allocator: std.mem.Allocator, ptr: *anyopaque, alloc_info: TestEnv.AllocationInfo) void {
+    const bytes: [*]u8 = @ptrCast(@alignCast(ptr));
+    switch (alloc_info.alignment) {
+        1 => allocator.free(bytes[0..alloc_info.size]),
+        2 => allocator.free((@as([*]align(2) u8, @alignCast(bytes)))[0..alloc_info.size]),
+        4 => allocator.free((@as([*]align(4) u8, @alignCast(bytes)))[0..alloc_info.size]),
+        8 => allocator.free((@as([*]align(8) u8, @alignCast(bytes)))[0..alloc_info.size]),
+        16 => allocator.free((@as([*]align(16) u8, @alignCast(bytes)))[0..alloc_info.size]),
+        else => std.debug.panic("Unsupported free alignment in repl test env: {d}", .{alloc_info.alignment}),
+    }
+}
+
+fn oom(comptime context: []const u8) noreturn {
+    std.debug.panic("Out of memory during {s}", .{context});
 }

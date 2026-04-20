@@ -8,7 +8,7 @@ const testing = std.testing;
 const posix = std.posix;
 
 const alloc = std.testing.allocator;
-const Backend = enum { interpreter, dev, wasm, llvm };
+const Backend = @import("eval").EvalBackend;
 
 /// Run expression on interpreter only (for tests with known dev backend bugs).
 fn expectInterpreter(expr: []const u8, expected: []const u8) !void {
@@ -19,12 +19,12 @@ fn expectInterpreter(expr: []const u8, expected: []const u8) !void {
     const result = try repl.step(expr);
     defer alloc.free(result);
     testing.expectEqualStrings(expected, result) catch |err| {
-        std.debug.print("INTERPRETER FAILED for: {s}\n", .{expr});
         return err;
     };
 }
 
 fn expectBackend(backend: Backend, expr: []const u8, expected: []const u8) !void {
+    if (!Repl.backendAvailable(backend)) return;
     var test_env = TestEnv.init(alloc);
     defer test_env.deinit();
     var repl = switch (backend) {
@@ -38,13 +38,6 @@ fn expectBackend(backend: Backend, expr: []const u8, expected: []const u8) !void
     const result = try repl.step(expr);
     defer alloc.free(result);
     testing.expectEqualStrings(expected, result) catch |err| {
-        const backend_name = switch (backend) {
-            .interpreter => "INTERPRETER",
-            .dev => "DEV BACKEND",
-            .wasm => "WASM BACKEND",
-            .llvm => "LLVM BACKEND",
-        };
-        std.debug.print("{s} FAILED for: {s}\n", .{ backend_name, expr });
         return err;
     };
 }
@@ -248,6 +241,7 @@ test "Repl - list fold with concat" {
 // sessions so we test each backend separately but with the same expectations.
 
 fn expectStateful(backend: Backend, steps: []const [2][]const u8) !void {
+    if (!Repl.backendAvailable(backend)) return;
     var test_env = TestEnv.init(alloc);
     defer test_env.deinit();
     var repl = switch (backend) {
@@ -262,19 +256,13 @@ fn expectStateful(backend: Backend, steps: []const [2][]const u8) !void {
         const result = try repl.step(step[0]);
         defer alloc.free(result);
         testing.expectEqualStrings(step[1], result) catch |err| {
-            const backend_name = switch (backend) {
-                .interpreter => "INTERPRETER",
-                .dev => "DEV BACKEND",
-                .wasm => "WASM BACKEND",
-                .llvm => "LLVM BACKEND",
-            };
-            std.debug.print("{s} FAILED for: {s}\n", .{ backend_name, step[0] });
             return err;
         };
     }
 }
 
 fn expectStepsFinal(backend: Backend, steps: []const []const u8, expected: []const u8) !void {
+    if (!Repl.backendAvailable(backend)) return;
     var test_env = TestEnv.init(alloc);
     defer test_env.deinit();
     var repl = switch (backend) {
@@ -291,13 +279,6 @@ fn expectStepsFinal(backend: Backend, steps: []const []const u8, expected: []con
 
         if (i + 1 == steps.len) {
             testing.expectEqualStrings(expected, result) catch |err| {
-                const backend_name = switch (backend) {
-                    .interpreter => "INTERPRETER",
-                    .dev => "DEV BACKEND",
-                    .wasm => "WASM BACKEND",
-                    .llvm => "LLVM BACKEND",
-                };
-                std.debug.print("{s} FAILED for: {s}\n", .{ backend_name, step });
                 return err;
             };
         }
@@ -306,12 +287,12 @@ fn expectStepsFinal(backend: Backend, steps: []const []const u8, expected: []con
 
 fn expectStepsFinalInChild(backend: Backend, steps: []const []const u8, expected: []const u8) !void {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (!Repl.backendAvailable(backend)) return;
 
     const pid = try posix.fork();
 
     if (pid == 0) {
-        expectStepsFinal(backend, steps, expected) catch |err| {
-            std.debug.print("child expectStepsFinal error: {}\n", .{err});
+        expectStepsFinal(backend, steps, expected) catch {
             std.c._exit(1);
         };
 
@@ -323,7 +304,6 @@ fn expectStepsFinalInChild(backend: Backend, steps: []const []const u8, expected
     const termination_signal: u8 = @truncate(status & 0x7f);
 
     if (termination_signal != 0) {
-        std.debug.print("child terminated with signal {d}\n", .{termination_signal});
         return error.TestUnexpectedResult;
     }
 

@@ -145,20 +145,20 @@ main2 = p1 != p2
 				(p-assign (ident "b")))
 			(e-binop (op "and")
 				(e-binop (op "eq")
-					(e-dot-access (field "x")
+					(e-field-access (field "x")
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "a")))))
-					(e-dot-access (field "x")
+					(e-field-access (field "x")
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "b"))))))
 				(e-binop (op "eq")
-					(e-dot-access (field "y")
+					(e-field-access (field "y")
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "a")))))
-					(e-dot-access (field "y")
+					(e-field-access (field "y")
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "b"))))))))

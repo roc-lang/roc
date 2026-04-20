@@ -394,20 +394,69 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             try self.write("!");
             try self.emitExpr(unary.expr);
         },
-        .e_dot_access => |dot| {
-            try self.emitExpr(dot.receiver);
+        .e_field_access => |field_access| {
+            try self.emitExpr(field_access.receiver);
             try self.write(".");
-            const field_name = self.module_env.getIdent(dot.field_name);
+            const field_name = self.module_env.getIdent(field_access.field_name);
             try self.write(field_name);
-            if (dot.args) |args_span| {
-                try self.write("(");
-                const args = self.module_env.store.sliceExpr(args_span);
-                for (args, 0..) |arg_idx, i| {
-                    if (i > 0) try self.write(", ");
-                    try self.emitExpr(arg_idx);
-                }
-                try self.write(")");
+        },
+        .e_method_call => |method_call| {
+            try self.emitExpr(method_call.receiver);
+            try self.write(".");
+            try self.write(self.module_env.getIdent(method_call.method_name));
+            try self.write("(");
+            const args = self.module_env.store.sliceExpr(method_call.args);
+            for (args, 0..) |arg_idx, i| {
+                if (i != 0) try self.write(", ");
+                try self.emitExpr(arg_idx);
             }
+            try self.write(")");
+        },
+        .e_dispatch_call => |method_call| {
+            try self.emitExpr(method_call.receiver);
+            try self.write(".");
+            try self.write(self.module_env.getIdent(method_call.method_name));
+            try self.write("(");
+            const args = self.module_env.store.sliceExpr(method_call.args);
+            for (args, 0..) |arg_idx, i| {
+                if (i != 0) try self.write(", ");
+                try self.emitExpr(arg_idx);
+            }
+            try self.write(")");
+        },
+        .e_structural_eq => |eq| {
+            try self.emitExpr(eq.lhs);
+            try self.write(if (eq.negated) " != " else " == ");
+            try self.emitExpr(eq.rhs);
+        },
+        .e_method_eq => |eq| {
+            try self.emitExpr(eq.lhs);
+            try self.write(if (eq.negated) " != " else " == ");
+            try self.emitExpr(eq.rhs);
+        },
+        .e_type_method_call => |method_call| {
+            try self.writer().print("__type_var_alias_{d}__", .{@intFromEnum(method_call.type_var_alias_stmt)});
+            try self.write(".");
+            try self.write(self.module_env.getIdent(method_call.method_name));
+            try self.write("(");
+            const args = self.module_env.store.sliceExpr(method_call.args);
+            for (args, 0..) |arg_idx, i| {
+                if (i != 0) try self.write(", ");
+                try self.emitExpr(arg_idx);
+            }
+            try self.write(")");
+        },
+        .e_type_dispatch_call => |method_call| {
+            try self.writer().print("__type_var_alias_{d}__", .{@intFromEnum(method_call.type_var_alias_stmt)});
+            try self.write(".");
+            try self.write(self.module_env.getIdent(method_call.method_name));
+            try self.write("(");
+            const args = self.module_env.store.sliceExpr(method_call.args);
+            for (args, 0..) |arg_idx, i| {
+                if (i != 0) try self.write(", ");
+                try self.emitExpr(arg_idx);
+            }
+            try self.write(")");
         },
         .e_runtime_error => {
             try self.write("<runtime_error>");
@@ -472,9 +521,6 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
         },
         .e_lookup_required => {
             try self.write("<required>");
-        },
-        .e_type_var_dispatch => {
-            try self.write("<type_var_dispatch>");
         },
         .e_for => |for_expr| {
             try self.write("for ");

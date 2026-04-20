@@ -3450,10 +3450,7 @@ fn inspect_custom_type() {
             imports []
             provides [main] to "./platform"
 
-        HelloWorld := {} implements [Inspect { to_inspector: my_to_inspector }]
 
-        my_to_inspector : HelloWorld -> Inspector f where f implements InspectFormatter
-        my_to_inspector = \@HellowWorld {} ->
             Inspect.custom \fmt ->
                 Inspect.apply (Inspect.str "Hello, World!\n") fmt
 

@@ -64,6 +64,26 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             self.entries.deinit(allocator);
         }
 
+        /// Clone this builder into fresh owned memory.
+        pub fn clone(self: *const Self, allocator: Allocator) !Self {
+            var cloned = Self.init();
+            errdefer cloned.deinit(allocator);
+            try cloned.entries.ensureTotalCapacity(allocator, self.entries.items.len);
+            for (self.entries.items) |entry| {
+                const cloned_key = if (K == []const u8)
+                    try allocator.dupe(u8, entry.key)
+                else
+                    entry.key;
+                cloned.entries.appendAssumeCapacity(.{
+                    .key = cloned_key,
+                    .value = entry.value,
+                });
+            }
+            cloned.sorted = self.sorted;
+            cloned.deduplicated = self.deduplicated;
+            return cloned;
+        }
+
         /// Add a key-value pair
         pub fn put(self: *Self, allocator: Allocator, key: K, value: V) !void {
             const new_key = if (K == []const u8) try allocator.dupe(u8, key) else key;

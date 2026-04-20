@@ -240,10 +240,24 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) 
     // compute offsets of each line, looping over bytes of the input
     var line_offsets = try SafeList(u32).initCapacity(gpa, 256);
     defer line_offsets.deinit(gpa);
-    _ = try line_offsets.append(gpa, 0);
+    {
+        const expected_idx = line_offsets.items.items.len;
+        const idx = try line_offsets.append(gpa, 0);
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(@intFromEnum(idx) == expected_idx);
+        } else if (@intFromEnum(idx) != expected_idx) {
+            unreachable;
+        }
+    }
     for (source, 0..) |c, i| {
         if (c == '\n') {
-            _ = try line_offsets.append(gpa, @intCast(i));
+            const expected_idx = line_offsets.items.items.len;
+            const idx = try line_offsets.append(gpa, @intCast(i));
+            if (comptime builtin.mode == .Debug) {
+                std.debug.assert(@intFromEnum(idx) == expected_idx);
+            } else if (@intFromEnum(idx) != expected_idx) {
+                unreachable;
+            }
         }
     }
 
@@ -302,7 +316,7 @@ pub fn formatExpr(ast: AST, writer: *std.Io.Writer) !void {
 }
 
 fn formatExprNode(fmt: *Formatter) !void {
-    _ = try fmt.formatExpr(@enumFromInt(fmt.ast.root_node_idx));
+    try fmt.formatExprDiscard(@enumFromInt(fmt.ast.root_node_idx));
 }
 
 /// Formatter for the roc parse ast.
@@ -343,13 +357,13 @@ const Formatter = struct {
             else => true,
         };
         if (header_has_own_tokens) {
-            _ = try fmt.flushCommentsBefore(header_region.start);
+            try fmt.flushCommentsBeforeDiscard(header_region.start);
         }
-        _ = try fmt.formatHeader(file.header);
+        try fmt.formatHeader(file.header);
         const statement_slice = fmt.ast.store.statementSlice(file.statements);
         for (statement_slice) |s| {
             const region = fmt.nodeRegion(@intFromEnum(s));
-            _ = try fmt.flushCommentsBefore(region.start);
+            try fmt.flushCommentsBeforeDiscard(region.start);
             try fmt.ensureNewline();
             try fmt.formatStatement(s);
         }
@@ -366,7 +380,7 @@ const Formatter = struct {
         switch (statement) {
             .decl => |d| {
                 const pattern_region = fmt.nodeRegion(@intFromEnum(d.pattern));
-                _ = try fmt.formatPattern(d.pattern);
+                try fmt.formatPatternDiscard(d.pattern);
                 if (multiline and try fmt.flushCommentsBefore(pattern_region.end)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
@@ -379,7 +393,7 @@ const Formatter = struct {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 }
-                _ = try fmt.formatExpr(d.body);
+                try fmt.formatExprDiscard(d.body);
             },
             .@"var" => |v| {
                 try fmt.pushAll("var");
@@ -404,10 +418,10 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                _ = try fmt.formatExpr(v.body);
+                try fmt.formatExprDiscard(v.body);
             },
             .expr => |e| {
-                _ = try fmt.formatExpr(e.expr);
+                try fmt.formatExprDiscard(e.expr);
             },
             .import => |i| {
                 var flushed = false;
@@ -482,11 +496,11 @@ const Formatter = struct {
                         for (items, 0..) |item, x| {
                             const arg_region = fmt.nodeRegion(@intFromEnum(item));
                             if (items_multiline) {
-                                _ = try fmt.flushCommentsBefore(arg_region.start);
+                                try fmt.flushCommentsBeforeDiscard(arg_region.start);
                                 try fmt.ensureNewline();
                                 try fmt.pushIndent();
                             }
-                            _ = try fmt.formatExposedItem(item);
+                            Formatter.discardRegion(try fmt.formatExposedItem(item));
                             if (items_multiline) {
                                 try fmt.push(',');
                             } else if (x < (items.len - 1)) {
@@ -494,7 +508,7 @@ const Formatter = struct {
                             }
                         }
                         if (items_multiline) {
-                            _ = try fmt.flushCommentsBefore(i.region.end - 1);
+                            try fmt.flushCommentsBeforeDiscard(i.region.end - 1);
                             try fmt.ensureNewline();
                             fmt.curr_indent -= 1;
                             try fmt.pushIndent();
@@ -538,10 +552,10 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                _ = try fmt.formatTypeAnno(d.anno);
+                try fmt.formatTypeAnnoDiscard(d.anno);
                 if (d.where) |w| {
                     if (multiline) {
-                        _ = try fmt.flushCommentsBefore(anno_region.end);
+                        try fmt.flushCommentsBeforeDiscard(anno_region.end);
                         try fmt.ensureNewline();
                         fmt.curr_indent += 1;
                         try fmt.pushIndent();
@@ -556,13 +570,13 @@ const Formatter = struct {
                         const statements = fmt.ast.store.statementSlice(assoc.statements);
                         for (statements) |stmt_idx| {
                             const stmt_region = fmt.nodeRegion(@intFromEnum(stmt_idx));
-                            _ = try fmt.flushCommentsBefore(stmt_region.start);
+                            try fmt.flushCommentsBeforeDiscard(stmt_region.start);
                             try fmt.ensureNewline();
                             try fmt.pushIndent();
-                            _ = try fmt.formatStatement(stmt_idx);
+                            try fmt.formatStatement(stmt_idx);
                         }
                         // Flush any trailing comments before the closing brace
-                        _ = try fmt.flushCommentsBefore(assoc.region.end - 1);
+                        try fmt.flushCommentsBeforeDiscard(assoc.region.end - 1);
                         try fmt.ensureNewline();
                         fmt.curr_indent -= 1;
                         try fmt.pushIndent();
@@ -589,10 +603,10 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                _ = try fmt.formatTypeAnno(t.anno);
+                try fmt.formatTypeAnnoDiscard(t.anno);
                 if (t.where) |w| {
                     if (multiline) {
-                        _ = try fmt.flushCommentsBefore(anno_region.end);
+                        try fmt.flushCommentsBeforeDiscard(anno_region.end);
                         try fmt.ensureNewline();
                         fmt.curr_indent += 1;
                         try fmt.pushIndent();
@@ -609,7 +623,7 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                _ = try fmt.formatExpr(e.body);
+                try fmt.formatExprDiscard(e.body);
             },
             .@"for" => |f| {
                 try fmt.pushAll("for");
@@ -620,7 +634,7 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                _ = try fmt.formatPattern(f.patt);
+                try fmt.formatPatternDiscard(f.patt);
                 if (multiline and try fmt.flushCommentsBefore(patt_region.end)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
@@ -635,14 +649,14 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                _ = try fmt.formatExpr(f.expr);
+                try fmt.formatExprDiscard(f.expr);
                 if (multiline and try fmt.flushCommentsBefore(expr_region.end)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 } else {
                     try fmt.push(' ');
                 }
-                _ = try fmt.formatExpr(f.body);
+                try fmt.formatExprDiscard(f.body);
             },
             .@"while" => |w| {
                 try fmt.pushAll("while");
@@ -653,14 +667,14 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                _ = try fmt.formatExpr(w.cond);
+                try fmt.formatExprDiscard(w.cond);
                 if (multiline and try fmt.flushCommentsBefore(cond_region.end)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 } else {
                     try fmt.push(' ');
                 }
-                _ = try fmt.formatExpr(w.body);
+                try fmt.formatExprDiscard(w.body);
             },
             .crash => |c| {
                 try fmt.pushAll("crash");
@@ -671,7 +685,7 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                _ = try fmt.formatExpr(c.expr);
+                try fmt.formatExprDiscard(c.expr);
             },
             .dbg => |d| {
                 try fmt.pushAll("dbg");
@@ -682,7 +696,7 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                _ = try fmt.formatExpr(d.expr);
+                try fmt.formatExprDiscard(d.expr);
             },
             .@"return" => |r| {
                 try fmt.pushAll("return");
@@ -693,7 +707,7 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                _ = try fmt.formatExpr(r.expr);
+                try fmt.formatExprDiscard(r.expr);
             },
             .@"break" => |_| {
                 try fmt.pushAll("break");
@@ -728,7 +742,7 @@ const Formatter = struct {
         for (clause_slice, 0..) |clause, i| {
             if (clauses_are_multiline) {
                 const clause_region = fmt.nodeRegion(@intFromEnum(clause));
-                _ = try fmt.flushCommentsBefore(clause_region.start);
+                try fmt.flushCommentsBeforeDiscard(clause_region.start);
                 try fmt.ensureNewline();
                 try fmt.pushIndent();
             }
@@ -891,11 +905,12 @@ const Formatter = struct {
         for (items, 0..) |item_idx, i| {
             const item_region = fmt.nodeRegion(@intFromEnum(item_idx));
             if (multiline) {
-                _ = try fmt.flushCommentsBefore(item_region.start);
+                try fmt.flushCommentsBeforeDiscard(item_region.start);
                 try fmt.ensureNewline();
                 try fmt.pushIndent();
             }
-            _ = try formatter(fmt, item_idx);
+            const formatted_region = try formatter(fmt, item_idx);
+            Formatter.discardRegion(formatted_region);
             if (multiline) {
                 if (fmt.has_multiline_string) {
                     try fmt.ensureNewline();
@@ -907,7 +922,7 @@ const Formatter = struct {
             }
         }
         if (multiline) {
-            _ = try fmt.flushCommentsBefore(region.end - 1);
+            try fmt.flushCommentsBeforeDiscard(region.end - 1);
             fmt.curr_indent -= 1;
             try fmt.ensureNewline();
             try fmt.pushIndent();
@@ -938,11 +953,12 @@ const Formatter = struct {
             for (fields, 0..) |field_idx, i| {
                 const field_region = fmt.nodeRegion(@intFromEnum(field_idx));
                 if (record_multiline) {
-                    _ = try fmt.flushCommentsBefore(field_region.start);
+                    try fmt.flushCommentsBeforeDiscard(field_region.start);
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
                 }
-                _ = try @as(fn (*Formatter, AST.AnnoRecordField.Idx) anyerror!AST.TokenizedRegion, Formatter.formatAnnoRecordField)(fmt, field_idx);
+                const formatted_field_region = try @as(fn (*Formatter, AST.AnnoRecordField.Idx) anyerror!AST.TokenizedRegion, Formatter.formatAnnoRecordField)(fmt, field_idx);
+                Formatter.discardRegion(formatted_field_region);
                 if (record_multiline) {
                     try fmt.push(',');
                 } else if (i < (fields.len - 1)) {
@@ -957,16 +973,16 @@ const Formatter = struct {
         switch (ext) {
             .named => |named| {
                 if (record_multiline) {
-                    _ = try fmt.flushCommentsBefore(named.region.start);
+                    try fmt.flushCommentsBeforeDiscard(named.region.start);
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
                 }
                 try fmt.pushAll("..");
-                _ = try @as(fn (*Formatter, AST.TypeAnno.Idx) anyerror!AST.TokenizedRegion, Formatter.formatTypeAnno)(fmt, named.anno);
+                try fmt.formatTypeAnnoDiscard(named.anno);
             },
             .open => |tok| {
                 if (record_multiline) {
-                    _ = try fmt.flushCommentsBefore(tok);
+                    try fmt.flushCommentsBeforeDiscard(tok);
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
                 }
@@ -976,7 +992,7 @@ const Formatter = struct {
         }
         if (record_multiline) {
             try fmt.push(',');
-            _ = try fmt.flushCommentsBefore(record_region.end - 1);
+            try fmt.flushCommentsBeforeDiscard(record_region.end - 1);
             fmt.curr_indent -= 1;
             try fmt.ensureNewline();
             try fmt.pushIndent();
@@ -991,7 +1007,7 @@ const Formatter = struct {
         try fmt.pushTokenText(field.name);
         if (field.value) |v| {
             try fmt.pushAll(": ");
-            _ = try fmt.formatExpr(v);
+            try fmt.formatExprDiscard(v);
         }
 
         return field.region;
@@ -1014,14 +1030,14 @@ const Formatter = struct {
             fmt.nodeWillBeMultiline(AST.Expr.Idx, idx);
 
         if (part_is_multiline) {
-            _ = try fmt.flushCommentsBefore(part_region.start);
+            try fmt.flushCommentsBeforeDiscard(part_region.start);
             try fmt.ensureNewline();
             fmt.curr_indent += 1;
             try fmt.pushIndent();
         }
-        _ = try fmt.formatExpr(idx);
+        try fmt.formatExprDiscard(idx);
         if (part_is_multiline) {
-            _ = try fmt.flushCommentsBefore(part_region.end);
+            try fmt.flushCommentsBeforeDiscard(part_region.end);
             try fmt.ensureNewline();
             fmt.curr_indent -= 1;
             try fmt.pushIndent();
@@ -1031,6 +1047,48 @@ const Formatter = struct {
 
     fn formatExpr(fmt: *Formatter, ei: AST.Expr.Idx) anyerror!AST.TokenizedRegion {
         return formatExprInner(fmt, ei, .normal);
+    }
+
+    fn discardRegion(region: AST.TokenizedRegion) void {
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(region.start <= region.end);
+        } else if (region.start > region.end) {
+            unreachable;
+        }
+    }
+
+    fn formatExprDiscard(fmt: *Formatter, ei: AST.Expr.Idx) anyerror!void {
+        const region = try fmt.formatExpr(ei);
+        Formatter.discardRegion(region);
+    }
+
+    fn formatExprInnerDiscard(fmt: *Formatter, ei: AST.Expr.Idx, format_behavior: ExprFormatBehavior) anyerror!void {
+        const region = try fmt.formatExprInner(ei, format_behavior);
+        Formatter.discardRegion(region);
+    }
+
+    fn formatPatternDiscard(fmt: *Formatter, pi: AST.Pattern.Idx) anyerror!void {
+        const region = try fmt.formatPattern(pi);
+        Formatter.discardRegion(region);
+    }
+
+    fn formatTypeAnnoDiscard(fmt: *Formatter, anno: AST.TypeAnno.Idx) anyerror!void {
+        const region = try fmt.formatTypeAnno(anno);
+        Formatter.discardRegion(region);
+    }
+
+    fn flushCommentsBeforeDiscard(fmt: *Formatter, tokenIdx: Token.Idx) !void {
+        const flushed = try fmt.flushCommentsBefore(tokenIdx);
+        if (flushed) {
+            return;
+        }
+    }
+
+    fn flushCommentsAfterDiscard(fmt: *Formatter, tokenIdx: Token.Idx) !void {
+        const flushed = try fmt.flushCommentsAfter(tokenIdx);
+        if (flushed) {
+            return;
+        }
     }
 
     fn formatExprInner(fmt: *Formatter, ei: AST.Expr.Idx, format_behavior: ExprFormatBehavior) anyerror!AST.TokenizedRegion {
@@ -1044,7 +1102,7 @@ const Formatter = struct {
         }
         switch (expr) {
             .apply => |a| {
-                _ = try fmt.formatExpr(a.@"fn");
+                try fmt.formatExprDiscard(a.@"fn");
                 const fn_region = fmt.nodeRegion(@intFromEnum(a.@"fn"));
                 const args_region = AST.TokenizedRegion{ .start = fn_region.end, .end = region.end };
                 try fmt.formatCollection(args_region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(a.args), Formatter.formatExpr);
@@ -1077,7 +1135,7 @@ const Formatter = struct {
                         .string_part => |str| {
                             if (add_newline) {
                                 // Comments could be located before the MultilineStringStart token, not the StringPart token
-                                _ = try fmt.flushCommentsBefore(str.region.start - 1);
+                                try fmt.flushCommentsBeforeDiscard(str.region.start - 1);
                                 try fmt.ensureNewline();
                                 try fmt.pushIndent();
                                 try fmt.pushAll("\\\\");
@@ -1109,16 +1167,16 @@ const Formatter = struct {
                 try fmt.pushTokenText(i.token);
             },
             .field_access => |fa| {
-                // Check if left side is a local_dispatch with a plain ident or tag
+                // Check if left side is an arrow_call with a plain ident or tag
                 // e.g., `0->M .c` should format as multiline to avoid ambiguity with qualified ident
                 const left_expr = fmt.ast.store.getExpr(fa.left);
-                const needs_newline_before_dot = if (left_expr == .local_dispatch) blk: {
-                    const ld = left_expr.local_dispatch;
+                const needs_newline_before_dot = if (left_expr == .arrow_call) blk: {
+                    const ld = left_expr.arrow_call;
                     const ld_right = fmt.ast.store.getExpr(ld.right);
                     break :blk ld_right == .ident or ld_right == .tag;
                 } else false;
 
-                _ = try fmt.formatExpr(fa.left);
+                try fmt.formatExprDiscard(fa.left);
                 const right_region = fmt.nodeRegion(@intFromEnum(fa.right));
                 if (needs_newline_before_dot) {
                     // Force newline to disambiguate from qualified identifier
@@ -1131,10 +1189,34 @@ const Formatter = struct {
                     try fmt.pushIndent();
                 }
                 try fmt.push('.');
-                _ = try fmt.formatExprInner(fa.right, .no_indent_on_access);
+                try fmt.formatExprInnerDiscard(fa.right, .no_indent_on_access);
             },
-            .local_dispatch => |ld| {
-                _ = try fmt.formatExpr(ld.left);
+            .method_call => |mc| {
+                // Check if left side is an arrow_call with a plain ident or tag
+                // e.g., `0->M .c()` should format as multiline to avoid ambiguity with qualified ident
+                const left_expr = fmt.ast.store.getExpr(mc.receiver);
+                const needs_newline_before_dot = if (left_expr == .arrow_call) blk: {
+                    const ld = left_expr.arrow_call;
+                    const ld_right = fmt.ast.store.getExpr(ld.right);
+                    break :blk ld_right == .ident or ld_right == .tag;
+                } else false;
+
+                try fmt.formatExprDiscard(mc.receiver);
+                if (needs_newline_before_dot) {
+                    // Force newline to disambiguate from qualified identifier.
+                    fmt.curr_indent += 1;
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
+                } else if (multiline and try fmt.flushCommentsBefore(mc.method_token)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                }
+                try fmt.push('.');
+                try fmt.pushTokenText(mc.method_token);
+                try fmt.formatCollection(mc.region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(mc.args), Formatter.formatExpr);
+            },
+            .arrow_call => |ld| {
+                try fmt.formatExprDiscard(ld.left);
                 if (multiline and try fmt.flushCommentsBefore(ld.operator)) {
                     if (format_behavior == .normal) {
                         fmt.curr_indent += 1;
@@ -1152,15 +1234,15 @@ const Formatter = struct {
                 const right_expr = fmt.ast.store.getExpr(ld.right);
                 if (right_expr == .ident) {
                     // Plain identifier: add () after it
-                    _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
+                    try fmt.formatExprInnerDiscard(ld.right, .no_indent_on_access);
                     try fmt.pushAll("()");
                 } else if (right_expr == .apply or right_expr == .tag) {
                     // Already has parens (apply) or tag: format normally
-                    _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
+                    try fmt.formatExprInnerDiscard(ld.right, .no_indent_on_access);
                 } else {
                     // Lambda or other expression: wrap in parens for round-trip safety
                     try fmt.push('(');
-                    _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
+                    try fmt.formatExprInnerDiscard(ld.right, .no_indent_on_access);
                     try fmt.push(')');
                 }
             },
@@ -1188,7 +1270,7 @@ const Formatter = struct {
             },
             .tuple_access => |ta| {
                 // Format: expr.N (e.g., tuple.0, tuple.1)
-                _ = try fmt.formatExpr(ta.expr);
+                try fmt.formatExprDiscard(ta.expr);
                 // Get the element index from the token
                 const token_text = fmt.ast.resolve(ta.elem_token);
                 // Token includes leading dot (e.g., ".0")
@@ -1204,7 +1286,7 @@ const Formatter = struct {
                 if (r.ext) |ext| {
                     if (multiline) {
                         fmt.curr_indent += 1;
-                        _ = try fmt.flushCommentsAfter(r.region.start);
+                        try fmt.flushCommentsAfterDiscard(r.region.start);
                         try fmt.ensureNewline();
                         try fmt.pushIndent();
                     } else {
@@ -1216,7 +1298,7 @@ const Formatter = struct {
 
                     try fmt.push(',');
                     if (multiline and fields.len > 0) {
-                        _ = try fmt.flushCommentsAfter(ext_region.end);
+                        try fmt.flushCommentsAfterDiscard(ext_region.end);
                         try fmt.ensureNewline();
                         try fmt.pushIndent();
                     }
@@ -1225,7 +1307,7 @@ const Formatter = struct {
                 // Format fields
                 if (multiline and !has_extension and fields.len > 0) {
                     fmt.curr_indent += 1;
-                    _ = try fmt.flushCommentsAfter(r.region.start);
+                    try fmt.flushCommentsAfterDiscard(r.region.start);
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
                 }
@@ -1241,7 +1323,7 @@ const Formatter = struct {
                             try fmt.pushIndent();
                         }
                         try fmt.push(',');
-                        _ = try fmt.flushCommentsAfter(field_region.end);
+                        try fmt.flushCommentsAfterDiscard(field_region.end);
                         if (i == fields.len - 1) {
                             fmt.curr_indent -= 1;
                         }
@@ -1267,7 +1349,7 @@ const Formatter = struct {
                 try fmt.push('|');
                 if (args_are_multiline) {
                     fmt.curr_indent += 1;
-                    _ = try fmt.flushCommentsAfter(l.region.start);
+                    try fmt.flushCommentsAfterDiscard(l.region.start);
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
                 }
@@ -1275,7 +1357,7 @@ const Formatter = struct {
                     const arg_region = try fmt.formatPattern(arg);
                     if (args_are_multiline) {
                         try fmt.push(',');
-                        _ = try fmt.flushCommentsAfter(arg_region.end);
+                        try fmt.flushCommentsAfterDiscard(arg_region.end);
                         if (i == args.len - 1) {
                             fmt.curr_indent -= 1;
                         }
@@ -1292,11 +1374,11 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                _ = try fmt.formatExpr(l.body);
+                try fmt.formatExprDiscard(l.body);
             },
             .unary_op => |op| {
                 try fmt.pushTokenText(op.operator);
-                _ = try fmt.formatExpr(op.expr);
+                try fmt.formatExprDiscard(op.expr);
             },
             .bin_op => |op| {
                 if (fmt.flags == .debug_binop) {
@@ -1307,7 +1389,7 @@ const Formatter = struct {
                         try fmt.pushIndent();
                     }
                 }
-                _ = try fmt.formatExpr(op.left);
+                try fmt.formatExprDiscard(op.left);
                 var pushed = false;
                 if (multiline and try fmt.flushCommentsBefore(op.operator)) {
                     fmt.curr_indent += 1;
@@ -1324,7 +1406,7 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                _ = try fmt.formatExpr(op.right);
+                try fmt.formatExprDiscard(op.right);
                 if (fmt.flags == .debug_binop) {
                     if (multiline) {
                         fmt.curr_indent -= 1;
@@ -1334,7 +1416,7 @@ const Formatter = struct {
                 }
             },
             .suffix_single_question => |s| {
-                _ = try fmt.formatExpr(s.expr);
+                try fmt.formatExprDiscard(s.expr);
                 try fmt.push('?');
             },
             .tag => |t| {
@@ -1365,7 +1447,7 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                _ = try fmt.formatExpr(i.condition);
+                try fmt.formatExprDiscard(i.condition);
                 if (!has_blocks) fmt.curr_indent = base_indent;
                 const then_region = fmt.nodeRegion(@intFromEnum(i.then));
                 flushed = try fmt.flushCommentsBefore(then_region.start);
@@ -1375,7 +1457,7 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                _ = try fmt.formatExpr(i.then);
+                try fmt.formatExprDiscard(i.then);
                 if (!has_blocks) fmt.curr_indent = base_indent;
                 flushed = try fmt.flushCommentsBefore(then_region.end);
                 if (flushed) {
@@ -1394,7 +1476,7 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                _ = try fmt.formatExpr(i.@"else");
+                try fmt.formatExprDiscard(i.@"else");
             },
             .if_without_else => |i| {
                 // Check if then is a block - blocks use original behavior,
@@ -1411,7 +1493,7 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                _ = try fmt.formatExpr(i.condition);
+                try fmt.formatExprDiscard(i.condition);
                 if (!then_is_block) fmt.curr_indent = base_indent;
                 const then_region = fmt.nodeRegion(@intFromEnum(i.then));
                 flushed = try fmt.flushCommentsBefore(then_region.start);
@@ -1421,11 +1503,11 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                _ = try fmt.formatExpr(i.then);
+                try fmt.formatExprDiscard(i.then);
             },
             .match => |m| {
                 try fmt.pushAll("match ");
-                _ = try fmt.formatExpr(m.expr);
+                try fmt.formatExprDiscard(m.expr);
                 try fmt.pushAll(" {");
                 fmt.curr_indent += 1;
                 const branch_indent = fmt.curr_indent;
@@ -1439,13 +1521,13 @@ const Formatter = struct {
                     fmt.curr_indent = branch_indent;
                     branch_region = fmt.nodeRegion(@intFromEnum(b));
                     const branch = fmt.ast.store.getBranch(b);
-                    _ = try fmt.flushCommentsBefore(branch_region.start);
+                    try fmt.flushCommentsBeforeDiscard(branch_region.start);
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
                     const pattern_region = try fmt.formatPattern(branch.pattern);
                     if (branch.guard) |guard| {
                         try fmt.pushAll(" if ");
-                        _ = try fmt.formatExpr(guard);
+                        try fmt.formatExprDiscard(guard);
                     }
                     var flushed = try fmt.flushCommentsBefore(pattern_region.end);
                     if (flushed) {
@@ -1463,7 +1545,7 @@ const Formatter = struct {
                     } else {
                         try fmt.push(' ');
                     }
-                    _ = try fmt.formatExpr(branch.body);
+                    try fmt.formatExprDiscard(branch.body);
                 }
                 fmt.curr_indent -= 1;
                 try fmt.newline();
@@ -1479,16 +1561,16 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                _ = try fmt.formatExpr(d.expr);
+                try fmt.formatExprDiscard(d.expr);
             },
             .block => |b| {
                 try fmt.formatBlock(b);
             },
             .for_expr => |f| {
                 try fmt.pushAll("for ");
-                _ = try fmt.formatPattern(f.patt);
+                try fmt.formatPatternDiscard(f.patt);
                 try fmt.pushAll(" in ");
-                _ = try fmt.formatExpr(f.expr);
+                try fmt.formatExprDiscard(f.expr);
                 const body_region = fmt.nodeRegion(@intFromEnum(f.body));
                 const flushed = try fmt.flushCommentsBefore(body_region.start);
                 if (flushed) {
@@ -1497,7 +1579,7 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                _ = try fmt.formatExpr(f.body);
+                try fmt.formatExprDiscard(f.body);
             },
             .ellipsis => |_| {
                 try fmt.pushAll("...");
@@ -1511,7 +1593,7 @@ const Formatter = struct {
                 // Format fields like a regular record
                 if (multiline and fields.len > 0) {
                     fmt.curr_indent += 1;
-                    _ = try fmt.flushCommentsAfter(rb.region.start);
+                    try fmt.flushCommentsAfterDiscard(rb.region.start);
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
                 }
@@ -1525,13 +1607,13 @@ const Formatter = struct {
                     if (i < fields.len - 1) {
                         try fmt.push(',');
                         if (multiline) {
-                            _ = try fmt.flushCommentsAfter(field_region.end);
+                            try fmt.flushCommentsAfterDiscard(field_region.end);
                             try fmt.ensureNewline();
                             try fmt.pushIndent();
                         }
                     } else if (multiline) {
                         try fmt.push(',');
-                        _ = try fmt.flushCommentsAfter(field_region.end);
+                        try fmt.flushCommentsAfterDiscard(field_region.end);
                         fmt.curr_indent -= 1;
                         try fmt.ensureNewline();
                         try fmt.pushIndent();
@@ -1569,7 +1651,7 @@ const Formatter = struct {
                     else => {
                         // Fallback - shouldn't happen for valid record builders
                         try fmt.push('.');
-                        _ = try fmt.formatExpr(rb.mapper);
+                        try fmt.formatExprDiscard(rb.mapper);
                     },
                 }
             },
@@ -1614,7 +1696,7 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                _ = try fmt.formatPattern(v);
+                try fmt.formatPatternDiscard(v);
             }
         }
         return field.region;
@@ -1651,7 +1733,7 @@ const Formatter = struct {
             },
             .string => |s| {
                 region = s.region;
-                _ = try fmt.formatExpr(s.expr);
+                try fmt.formatExprDiscard(s.expr);
             },
             .single_quote => |sq| {
                 region = sq.region;
@@ -1714,11 +1796,11 @@ const Formatter = struct {
                 const patterns = fmt.ast.store.patternSlice(a.patterns);
                 for (patterns, 0..) |p, i| {
                     const pattern_region = fmt.nodeRegion(@intFromEnum(p));
-                    _ = try fmt.formatPattern(p);
+                    try fmt.formatPatternDiscard(p);
                     fmt.curr_indent = curr_indent;
                     if (i < a.patterns.span.len - 1) {
                         if (multiline) {
-                            _ = try fmt.flushCommentsBefore(pattern_region.end);
+                            try fmt.flushCommentsBeforeDiscard(pattern_region.end);
                             try fmt.ensureNewline();
                             try fmt.pushIndent();
                         } else {
@@ -1736,7 +1818,7 @@ const Formatter = struct {
                 }
             },
             .as => |a| {
-                _ = try fmt.formatPattern(a.pattern);
+                try fmt.formatPatternDiscard(a.pattern);
                 try fmt.pushAll(" as ");
                 try fmt.pushTokenText(a.name);
             },
@@ -1956,7 +2038,7 @@ const Formatter = struct {
                 if (platform_field) |field_idx| {
                     const field = fmt.ast.store.getRecordField(field_idx);
                     if (packages_multiline) {
-                        _ = try fmt.flushCommentsBefore(field.region.start);
+                        try fmt.flushCommentsBeforeDiscard(field.region.start);
                         try fmt.ensureNewline();
                         try fmt.pushIndent();
                     }
@@ -1966,7 +2048,7 @@ const Formatter = struct {
                         try fmt.push(' ');
                         try fmt.pushAll("platform");
                         try fmt.push(' ');
-                        _ = try fmt.formatExpr(v);
+                        try fmt.formatExprDiscard(v);
                     }
                     if (packages_multiline) {
                         try fmt.push(',');
@@ -1977,11 +2059,12 @@ const Formatter = struct {
                 for (package_fields, 0..) |field_idx, i| {
                     const item_region = fmt.nodeRegion(@intFromEnum(field_idx));
                     if (packages_multiline) {
-                        _ = try fmt.flushCommentsBefore(item_region.start);
+                        try fmt.flushCommentsBeforeDiscard(item_region.start);
                         try fmt.ensureNewline();
                         try fmt.pushIndent();
                     }
-                    _ = try fmt.formatRecordField(field_idx);
+                    const field_region = try fmt.formatRecordField(field_idx);
+                    Formatter.discardRegion(field_region);
                     if (packages_multiline) {
                         try fmt.push(',');
                     } else if (i < package_fields.len - 1) {
@@ -1989,7 +2072,7 @@ const Formatter = struct {
                     }
                 }
                 if (packages_multiline) {
-                    _ = try fmt.flushCommentsBefore(packages.region.end - 1);
+                    try fmt.flushCommentsBeforeDiscard(packages.region.end - 1);
                     fmt.curr_indent -= 1;
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
@@ -2036,7 +2119,7 @@ const Formatter = struct {
             .package => |p| {
                 try fmt.pushAll("package");
                 if (multiline) {
-                    _ = try fmt.flushCommentsAfter(p.region.start);
+                    try fmt.flushCommentsAfterDiscard(p.region.start);
                     try fmt.ensureNewline();
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
@@ -2081,7 +2164,7 @@ const Formatter = struct {
                 try fmt.pushTokenText(p.name);
                 try fmt.push('"');
 
-                _ = try fmt.flushCommentsAfter(p.name + 1);
+                try fmt.flushCommentsAfterDiscard(p.name + 1);
                 try fmt.ensureNewline();
                 fmt.curr_indent = start_indent + 1;
                 try fmt.pushIndent();
@@ -2118,7 +2201,7 @@ const Formatter = struct {
                         try fmt.pushAll(" : ");
 
                         // Format type annotation
-                        _ = try fmt.formatTypeAnno(entry.type_anno);
+                        try fmt.formatTypeAnnoDiscard(entry.type_anno);
 
                         if (entry_i < entries.len - 1) {
                             try fmt.push(',');
@@ -2149,7 +2232,7 @@ const Formatter = struct {
                     Formatter.formatExposedItem,
                 );
 
-                _ = try fmt.flushCommentsBefore(exposes.region.end);
+                try fmt.flushCommentsBeforeDiscard(exposes.region.end);
                 try fmt.ensureNewline();
                 fmt.curr_indent = start_indent + 1;
                 try fmt.pushIndent();
@@ -2170,7 +2253,7 @@ const Formatter = struct {
                     Formatter.formatRecordField,
                 );
 
-                _ = try fmt.flushCommentsBefore(packages.region.end);
+                try fmt.flushCommentsBeforeDiscard(packages.region.end);
                 try fmt.ensureNewline();
                 fmt.curr_indent = start_indent + 1;
                 try fmt.pushIndent();
@@ -2193,7 +2276,7 @@ const Formatter = struct {
 
                 // Format targets section if present
                 if (p.targets) |targets_idx| {
-                    _ = try fmt.flushCommentsBefore(provides.region.end);
+                    try fmt.flushCommentsBeforeDiscard(provides.region.end);
                     try fmt.ensureNewline();
                     fmt.curr_indent = start_indent + 1;
                     try fmt.pushIndent();
@@ -2216,13 +2299,13 @@ const Formatter = struct {
             try fmt.push('{');
             for (fmt.ast.store.statementSlice(block.statements), 0..) |s, i| {
                 const region = fmt.nodeRegion(@intFromEnum(s));
-                _ = try fmt.flushCommentsBefore(region.start);
+                try fmt.flushCommentsBeforeDiscard(region.start);
                 try fmt.ensureNewline();
                 try fmt.pushIndent();
                 try fmt.formatStatement(s);
 
                 if (i == block.statements.span.len - 1) {
-                    _ = try fmt.flushCommentsBefore(region.end);
+                    try fmt.flushCommentsBeforeDiscard(region.end);
                 }
             }
             try fmt.ensureNewline();
@@ -2275,7 +2358,7 @@ const Formatter = struct {
         } else {
             try fmt.push(' ');
         }
-        _ = try fmt.formatTypeAnno(field.ty);
+        try fmt.formatTypeAnnoDiscard(field.ty);
         return field.region;
     }
 
@@ -2312,11 +2395,11 @@ const Formatter = struct {
                     for (args, 0..) |arg_idx, i| {
                         const arg_region = fmt.nodeRegion(@intFromEnum(arg_idx));
                         if (multiline and i > 0) {
-                            _ = try fmt.flushCommentsBefore(arg_region.start);
+                            try fmt.flushCommentsBeforeDiscard(arg_region.start);
                             try fmt.ensureNewline();
                             try fmt.pushIndent();
                         }
-                        _ = try fmt.formatTypeAnno(arg_idx);
+                        try fmt.formatTypeAnnoDiscard(arg_idx);
                         if (i < args.len - 1) {
                             if (multiline) {
                                 try fmt.push(',');
@@ -2340,7 +2423,7 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                _ = try fmt.formatTypeAnno(c.ret_anno);
+                try fmt.formatTypeAnnoDiscard(c.ret_anno);
             },
             .mod_alias => |c| {
                 // Format as: a.TypeAlias
@@ -2366,7 +2449,7 @@ const Formatter = struct {
             .apply => |app| {
                 const slice = fmt.ast.store.typeAnnoSlice(app.args);
                 const first = slice[0];
-                _ = try fmt.formatTypeAnno(first);
+                try fmt.formatTypeAnnoDiscard(first);
                 const rest = slice[1..];
                 try fmt.formatCollection(app.region, .round, AST.TypeAnno.Idx, rest, Formatter.formatTypeAnno);
             },
@@ -2425,11 +2508,11 @@ const Formatter = struct {
                     for (tags, 0..) |tag_idx, i| {
                         const tag_region = fmt.nodeRegion(@intFromEnum(tag_idx));
                         if (tag_multiline) {
-                            _ = try fmt.flushCommentsBefore(tag_region.start);
+                            try fmt.flushCommentsBeforeDiscard(tag_region.start);
                             try fmt.ensureNewline();
                             try fmt.pushIndent();
                         }
-                        _ = try fmt.formatTypeAnno(tag_idx);
+                        try fmt.formatTypeAnnoDiscard(tag_idx);
                         if (tag_multiline) {
                             try fmt.push(',');
                         } else if (i < (tags.len - 1) or is_open) {
@@ -2445,7 +2528,7 @@ const Formatter = struct {
                             .closed => unreachable, // is_open is true
                         };
                         if (tag_multiline) {
-                            _ = try fmt.flushCommentsBefore(double_dot_token);
+                            try fmt.flushCommentsBeforeDiscard(double_dot_token);
                             try fmt.ensureNewline();
                             try fmt.pushIndent();
                         }
@@ -2455,7 +2538,7 @@ const Formatter = struct {
                         }
                     }
                     if (tag_multiline) {
-                        _ = try fmt.flushCommentsBefore(region.end - 1);
+                        try fmt.flushCommentsBeforeDiscard(region.end - 1);
                         fmt.curr_indent -= 1;
                         try fmt.ensureNewline();
                         try fmt.pushIndent();
@@ -2470,11 +2553,11 @@ const Formatter = struct {
                 for (args, 0..) |idx, i| {
                     const arg_region = fmt.nodeRegion(@intFromEnum(idx));
                     if (multiline and i > 0) {
-                        _ = try fmt.flushCommentsBefore(arg_region.start);
+                        try fmt.flushCommentsBeforeDiscard(arg_region.start);
                         try fmt.ensureNewline();
                         try fmt.pushIndent();
                     }
-                    _ = try fmt.formatTypeAnno(idx);
+                    try fmt.formatTypeAnnoDiscard(idx);
                     if (i < args.len - 1) {
                         if (multiline) {
                             try fmt.push(',');
@@ -2497,19 +2580,19 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
 
-                _ = try fmt.formatTypeAnno(f.ret);
+                try fmt.formatTypeAnnoDiscard(f.ret);
             },
             .parens => |p| {
                 region = p.region;
                 try fmt.push('(');
                 if (multiline) {
-                    _ = try fmt.flushCommentsAfter(region.start);
+                    try fmt.flushCommentsAfterDiscard(region.start);
                     fmt.curr_indent += 1;
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
                 }
                 const anno_region = try fmt.formatTypeAnno(p.anno);
-                _ = try fmt.flushCommentsBefore(anno_region.end);
+                try fmt.flushCommentsBeforeDiscard(anno_region.end);
                 try fmt.push(')');
             },
             .underscore => |u| {
@@ -2742,6 +2825,13 @@ const Formatter = struct {
 
                         return fmt.nodeWillBeMultiline(AST.Expr.Idx, f.right);
                     },
+                    .method_call => |m| {
+                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, m.receiver)) {
+                            return true;
+                        }
+
+                        return fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(m.args));
+                    },
                     .lambda => |l| {
                         if (fmt.nodeWillBeMultiline(AST.Expr.Idx, l.body)) {
                             return true;
@@ -2771,7 +2861,7 @@ const Formatter = struct {
 
                         return fmt.nodeWillBeMultiline(AST.Expr.Idx, i.then);
                     },
-                    .local_dispatch => |l| {
+                    .arrow_call => |l| {
                         if (fmt.nodeWillBeMultiline(AST.Expr.Idx, l.left)) {
                             return true;
                         }
@@ -2987,25 +3077,25 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
     return try result.toOwnedSlice();
 }
 
-// Issue #8851: Formatter idempotence tests for local dispatch with field access
+// Issue #8851: Formatter idempotence tests for arrow call with field access
 // These test cases verify that formatting is stable (idempotent) - formatting twice
 // produces the same output as formatting once.
 
-test "issue 8851: local dispatch with space before field access is idempotent" {
+test "issue 8851: arrow call with space before field access is idempotent" {
     // a=0->b .c() should format stably with newline to disambiguate
     const result = try moduleFmtsStable(std.testing.allocator, "a=0->b .c()", false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("a = 0->b()\n\t.c()\n", result);
 }
 
-test "issue 8851: local dispatch with chained zero-arg applies is idempotent" {
+test "issue 8851: arrow call with chained zero-arg applies is idempotent" {
     // a = 0->b()().c() should format stably - must preserve ALL levels of function application
     const result = try moduleFmtsStable(std.testing.allocator, "a = 0->b()().c()", false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("a = 0->b()().c()\n", result);
 }
 
-test "issue 8851: multiline local dispatch with field access is idempotent" {
+test "issue 8851: multiline arrow call with field access is idempotent" {
     // Multiline case from issue comment 1
     const result = try moduleFmtsStable(std.testing.allocator,
         \\a=0->b
@@ -3022,14 +3112,14 @@ test "issue 8851: tuple dispatch with chained zero-arg applies is idempotent" {
     try std.testing.expectEqualStrings("a = ()->b()()()\n", result);
 }
 
-test "issue 8851: chained field access after local dispatch is idempotent" {
+test "issue 8851: chained field access after arrow call is idempotent" {
     // 0->b .c .d() - multiple field accesses, newline to disambiguate
     const result = try moduleFmtsStable(std.testing.allocator, "a=0->b .c .d()", false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("a = 0->b()\n\t.c.d()\n", result);
 }
 
-test "issue 8851: local dispatch with uppercase tag (module-like) is idempotent" {
+test "issue 8851: arrow call with uppercase tag (module-like) is idempotent" {
     // 0->M .c - uppercase identifier parses as tag, not ident
     // Dispatching to a tag is invalid, newline disambiguates from qualified identifier
     const result = try moduleFmtsStable(std.testing.allocator, "a=0->M .c", false);

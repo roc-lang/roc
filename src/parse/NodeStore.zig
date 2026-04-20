@@ -58,7 +58,7 @@ pub const AST_PATTERN_NODE_COUNT = 15;
 /// Count of the type annotation nodes in the AST
 pub const AST_TYPE_ANNO_NODE_COUNT = 11;
 /// Count of the expression nodes in the AST
-pub const AST_EXPR_NODE_COUNT = 26;
+pub const AST_EXPR_NODE_COUNT = std.meta.fields(AST.Expr).len;
 
 /// Initialize the store with an assumed capacity to
 /// ensure resizing of underlying data structures happens
@@ -85,12 +85,18 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .scratch_requires_entries = try base.Scratch(AST.RequiresEntry.Idx).init(gpa),
     };
 
-    _ = try store.nodes.append(gpa, .{
+    const expected_idx = store.nodes.items.len;
+    const idx = try store.nodes.append(gpa, .{
         .tag = .root,
         .main_token = 0,
         .data = .{ .lhs = 0, .rhs = 0 },
         .region = .{ .start = 0, .end = 0 },
     });
+    if (comptime builtin.mode == .Debug) {
+        std.debug.assert(@intFromEnum(idx) == expected_idx);
+    } else if (@intFromEnum(idx) != expected_idx) {
+        unreachable;
+    }
     return store;
 }
 
@@ -713,7 +719,11 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             try store.extra_data.append(store.gpa, @intFromEnum(app.@"fn"));
             node.main_token = @as(u32, @intCast(fn_ed_idx));
         },
-        .record_updater => |_| {},
+        .record_updater => |updater| {
+            node.tag = .record_update;
+            node.region = updater.region;
+            node.main_token = updater.token;
+        },
         .field_access => |fa| {
             node.tag = .field_access;
             node.region = fa.region;
@@ -721,14 +731,24 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.data.lhs = @intFromEnum(fa.left);
             node.data.rhs = @intFromEnum(fa.right);
         },
+        .method_call => |mc| {
+            node.tag = .method_call;
+            node.region = mc.region;
+            node.main_token = mc.method_token;
+            node.data.lhs = @intFromEnum(mc.receiver);
+            const args_data_idx = store.extra_data.items.len;
+            try store.extra_data.append(store.gpa, mc.args.span.start);
+            try store.extra_data.append(store.gpa, mc.args.span.len);
+            node.data.rhs = @as(u32, @intCast(args_data_idx));
+        },
         .tuple_access => |ta| {
             node.tag = .tuple_access;
             node.region = ta.region;
             node.main_token = ta.elem_token;
             node.data.lhs = @intFromEnum(ta.expr);
         },
-        .local_dispatch => |ld| {
-            node.tag = .local_dispatch;
+        .arrow_call => |ld| {
+            node.tag = .arrow_call;
             node.region = ld.region;
             node.main_token = ld.operator;
             node.data.lhs = @intFromEnum(ld.left);
@@ -1742,11 +1762,29 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .region = node.region,
             } };
         },
+        .record_update => {
+            return .{ .record_updater = .{
+                .token = node.main_token,
+                .region = node.region,
+            } };
+        },
         .field_access => {
             return .{ .field_access = .{
                 .left = @enumFromInt(node.data.lhs),
                 .right = @enumFromInt(node.data.rhs),
                 .operator = node.main_token,
+                .region = node.region,
+            } };
+        },
+        .method_call => {
+            const args_data_idx = node.data.rhs;
+            return .{ .method_call = .{
+                .receiver = @enumFromInt(node.data.lhs),
+                .method_token = node.main_token,
+                .args = .{ .span = .{
+                    .start = store.extra_data.items[args_data_idx],
+                    .len = store.extra_data.items[args_data_idx + 1],
+                } },
                 .region = node.region,
             } };
         },
@@ -1757,8 +1795,8 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .region = node.region,
             } };
         },
-        .local_dispatch => {
-            return .{ .local_dispatch = .{
+        .arrow_call => {
+            return .{ .arrow_call = .{
                 .left = @enumFromInt(node.data.lhs),
                 .right = @enumFromInt(node.data.rhs),
                 .operator = node.main_token,

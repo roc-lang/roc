@@ -669,6 +669,7 @@ const RocStr = builtins.str.RocStr;
 /// Returns {} and takes Str as argument
 fn hostedStderrLine(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
     const message = args.str.asSlice();
+    defer args.str.decref(ops);
 
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
 
@@ -836,6 +837,7 @@ fn hostedStdinLine(ops: *builtins.host_abi.RocOps, result: *RocStr, _: *anyopaqu
 /// Returns {} and takes Str as argument
 fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
     const message = args.str.asSlice();
+    defer args.str.decref(ops);
 
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
 
@@ -929,19 +931,16 @@ fn hostedBuilderPrintValue(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: 
     // Create temporary RocStr instances for each line
     var empty_ret: u8 = 0;
     var line1 = RocStr.fromSlice("SUCCESS: Builder.print_value! called via static dispatch!", ops);
-    defer line1.decref(ops);
     hostedStdoutLine(ops, @ptrCast(&empty_ret), @ptrCast(&line1));
 
     var line2_buf: [256]u8 = undefined;
     const line2_str = std.fmt.bufPrint(&line2_buf, "  value: {s}", .{value_slice}) catch "  value: ?";
     var line2 = RocStr.fromSlice(line2_str, ops);
-    defer line2.decref(ops);
     hostedStdoutLine(ops, @ptrCast(&empty_ret), @ptrCast(&line2));
 
     var line3_buf: [256]u8 = undefined;
     const line3_str = std.fmt.bufPrint(&line3_buf, "  count: {s}", .{count_str}) catch "  count: ?";
     var line3 = RocStr.fromSlice(line3_str, ops);
-    defer line3.decref(ops);
     hostedStdoutLine(ops, @ptrCast(&empty_ret), @ptrCast(&line3));
 }
 
@@ -972,6 +971,11 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
     // Install signal handlers for stack overflow, access violations, and division by zero
     // This allows us to display helpful error messages instead of crashing
     installRuntimeSignalHandlers();
+
+    if (trace_refcount) {
+        builtins.utils.DebugRefcountTracker.enable();
+        defer builtins.utils.DebugRefcountTracker.disable();
+    }
 
     var host_env = HostEnv{
         .gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){},
@@ -1014,6 +1018,9 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
         // Only report remaining allocations if test passed (otherwise it's expected
         // that cleanup may be incomplete due to test failure)
         if (remaining_count > 0 and test_passed) {
+            if (trace_refcount) {
+                _ = builtins.utils.DebugRefcountTracker.reportLeaks();
+            }
             const stderr_file: std.fs.File = .stderr();
             var buf: [512]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf,
@@ -1060,10 +1067,11 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
         },
     };
 
-    // Call the app's main! entrypoint
-    // For zero-sized return/arg types, the generated code does not dereference
-    // these pointers, so null is safe.
-    roc__main(&roc_ops, null, null);
+    // Call the app's main! entrypoint with concrete storage even for ZST
+    // arg/ret positions so every backend sees valid ABI pointers.
+    var dummy_ret: u8 = 0;
+    var dummy_arg: u8 = 0;
+    roc__main(&roc_ops, @ptrCast(&dummy_ret), @ptrCast(&dummy_arg));
 
     // Check test results if in test mode
     if (host_env.test_state.enabled) {

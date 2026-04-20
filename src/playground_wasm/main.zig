@@ -15,6 +15,7 @@
 //! allowing the compiler to continue through all stages.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const builtins = @import("builtins");
 const build_options = @import("build_options");
@@ -47,10 +48,24 @@ const Repl = repl.Repl;
 const RocOps = builtins.host_abi.RocOps;
 const TestRunner = eval.TestRunner;
 
-// A fixed-size buffer to act as the heap inside the WASM linear memory.
-var wasm_heap_memory: [64 * 1024 * 1024]u8 = undefined; // 64MB heap
-var fba: std.heap.FixedBufferAllocator = undefined;
-var allocator: Allocator = undefined;
+var allocator: Allocator = std.heap.wasm_allocator;
+
+/// Playground-specific std options, including a freestanding-safe log sink.
+pub const std_options: std.Options = .{
+    .log_level = .warn,
+    .logFn = logFn,
+};
+
+const logFn = if (builtin.target.os.tag == .freestanding)
+    struct {
+        fn log(comptime _: std.log.Level, comptime _: @TypeOf(.enum_literal), comptime _: []const u8, _: anytype) void {}
+    }.log
+else
+    struct {
+        fn log(comptime level: std.log.Level, comptime scope: @TypeOf(.enum_literal), comptime format: []const u8, args: anytype) void {
+            std.log.defaultLog(level, scope, format, args);
+        }
+    }.log;
 
 const State = enum {
     START,
@@ -275,33 +290,24 @@ var host_message_buffer: ?[]u8 = null;
 var host_response_buffer: ?[]u8 = null;
 var last_error: ?[:0]const u8 = null;
 
-/// Flag to defer FBA reset until next processAndRespond call.
-/// This avoids resetting the allocator while there are in-flight allocations.
-var pending_fba_reset: bool = false;
-
 /// In-memory debug log buffer for WASM
 var debug_log_buffer: [4096]u8 = undefined;
 var debug_log_pos: usize = 0;
 var debug_log_oom: bool = false;
 
-/// Reset all global state and schedule allocator reset.
-/// The actual FBA reset is deferred to the start of the next processAndRespond call
-/// to avoid invalidating in-flight allocations.
 fn resetGlobalState() void {
-    // Make sure everything is null
-    compiler_data = null;
+    if (compiler_data) |*data| {
+        data.deinit();
+        compiler_data = null;
+    }
     cleanupReplState();
-    host_message_buffer = null;
-    host_response_buffer = null;
-
-    // Schedule allocator reset for next processAndRespond call
-    pending_fba_reset = true;
-}
-
-fn performPendingAllocatorReset() void {
-    if (pending_fba_reset) {
-        fba.reset();
-        pending_fba_reset = false;
+    if (host_message_buffer) |buf| {
+        allocator.free(buf);
+        host_message_buffer = null;
+    }
+    if (host_response_buffer) |buf| {
+        allocator.free(buf);
+        host_response_buffer = null;
     }
 }
 
@@ -417,16 +423,21 @@ fn createWasmRocOps(crash_ctx: *CrashContext) !*RocOps {
         .roc_dbg = wasmRocDbg,
         .roc_expect_failed = wasmRocExpectFailed,
         .roc_crashed = wasmRocCrashed,
-        .hosted_fns = .{ .count = 0, .fns = undefined }, // Not used in playground
+        .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
     };
     return roc_ops;
 }
 
 fn wasmRocAlloc(alloc_args: *builtins.host_abi.RocAlloc, _: *anyopaque) callconv(.c) void {
-    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
-    const result = allocator.rawAlloc(alloc_args.length, align_enum, @returnAddress());
+    const alignment: usize = @intCast(alloc_args.alignment);
+    const align_enum = std.mem.Alignment.fromByteUnits(alignment);
+    const header_size = @max(alignment, @sizeOf(usize));
+    const total_size = alloc_args.length + header_size;
+    const result = allocator.rawAlloc(total_size, align_enum, @returnAddress());
     if (result) |ptr| {
-        alloc_args.answer = ptr;
+        const size_ptr: *usize = @ptrCast(@alignCast(ptr));
+        size_ptr.* = alloc_args.length;
+        alloc_args.answer = @ptrCast(ptr + header_size);
     } else {
         // In WASM, we can't use null pointers, so we'll just crash
         // This is a limitation of the WASM target
@@ -435,20 +446,37 @@ fn wasmRocAlloc(alloc_args: *builtins.host_abi.RocAlloc, _: *anyopaque) callconv
 }
 
 fn wasmRocDealloc(dealloc_args: *builtins.host_abi.RocDealloc, _: *anyopaque) callconv(.c) void {
-    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(dealloc_args.alignment)));
-    // For WASM, we need to handle this carefully since we can't create slices from raw pointers
-    // We'll use a dummy slice for now - this is a limitation of the WASM target
-    const dummy_slice = @as([*]u8, @ptrCast(dealloc_args.ptr))[0..0];
-    allocator.rawFree(dummy_slice, align_enum, @returnAddress());
+    const alignment: usize = @intCast(dealloc_args.alignment);
+    const align_enum = std.mem.Alignment.fromByteUnits(alignment);
+    const header_size = @max(alignment, @sizeOf(usize));
+    const user_ptr: [*]u8 = @ptrCast(dealloc_args.ptr);
+    const base_ptr = user_ptr - header_size;
+    const size_ptr: *const usize = @ptrCast(@alignCast(base_ptr));
+    const total_size = size_ptr.* + header_size;
+    allocator.rawFree(base_ptr[0..total_size], align_enum, @returnAddress());
 }
 
 fn wasmRocRealloc(realloc_args: *builtins.host_abi.RocRealloc, _: *anyopaque) callconv(.c) void {
-    // For WASM, we'll just allocate new memory for now
-    // A proper implementation would need to handle reallocation carefully
-    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(realloc_args.alignment)));
-    const result = allocator.rawAlloc(realloc_args.new_length, align_enum, @returnAddress());
+    const alignment: usize = @intCast(realloc_args.alignment);
+    const align_enum = std.mem.Alignment.fromByteUnits(alignment);
+    const header_size = @max(alignment, @sizeOf(usize));
+    const old_user_ptr: [*]u8 = @ptrCast(realloc_args.answer);
+    const old_base_ptr = old_user_ptr - header_size;
+    const old_size_ptr: *const usize = @ptrCast(@alignCast(old_base_ptr));
+    const old_size = old_size_ptr.*;
+
+    const total_size = realloc_args.new_length + header_size;
+    const result = allocator.rawAlloc(total_size, align_enum, @returnAddress());
     if (result) |ptr| {
-        realloc_args.answer = ptr;
+        const size_ptr: *usize = @ptrCast(@alignCast(ptr));
+        size_ptr.* = realloc_args.new_length;
+
+        const new_user_ptr = ptr + header_size;
+        const copy_size = @min(old_size, realloc_args.new_length);
+        @memcpy(new_user_ptr[0..copy_size], old_user_ptr[0..copy_size]);
+        allocator.rawFree(old_base_ptr[0 .. old_size + header_size], align_enum, @returnAddress());
+
+        realloc_args.answer = @ptrCast(new_user_ptr);
     } else {
         // In WASM, we can't use null pointers, so we'll just crash
         // This is a limitation of the WASM target
@@ -466,27 +494,23 @@ fn wasmRocExpectFailed(expect_failed_args: *const builtins.host_abi.RocExpectFai
     const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
     // Format and record the message
     const formatted = std.fmt.allocPrint(allocator, "Expect failed: {s}", .{trimmed}) catch {
-        std.debug.panic("failed to allocate wasm expect failure message", .{});
+        @trap();
     };
-    ctx.recordCrash(formatted) catch |err| {
+    ctx.recordCrash(formatted) catch {
         allocator.free(formatted);
-        std.debug.panic("failed to record wasm expect failure: {}", .{err});
+        @trap();
     };
 }
 
 fn wasmRocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) void {
     const ctx: *CrashContext = @ptrCast(@alignCast(env));
-    ctx.recordCrash(crashed_args.utf8_bytes[0..crashed_args.len]) catch |err| {
-        std.debug.panic("failed to record crash in wasm playground: {}", .{err});
+    ctx.recordCrash(crashed_args.utf8_bytes[0..crashed_args.len]) catch {
+        @trap();
     };
 }
 
 /// Initialize the WASM module in START state
 export fn init() void {
-    // For the very first initialization, we can reset the allocator
-    fba = std.heap.FixedBufferAllocator.init(&wasm_heap_memory);
-    allocator = fba.allocator();
-
     if (compiler_data) |*data| {
         data.deinit();
         compiler_data = null;
@@ -504,7 +528,6 @@ export fn init() void {
 /// Allocate a buffer for incoming messages from the host.
 /// Returns null on allocation failure.
 export fn allocateMessageBuffer(size: usize) ?[*]u8 {
-    performPendingAllocatorReset();
     if (host_message_buffer) |buf| {
         allocator.free(buf);
         host_message_buffer = null;
@@ -516,7 +539,6 @@ export fn allocateMessageBuffer(size: usize) ?[*]u8 {
 /// Allocate a buffer for responses to the host.
 /// Returns null on allocation failure.
 export fn allocateResponseBuffer(size: usize) ?[*]u8 {
-    performPendingAllocatorReset();
     if (host_response_buffer) |buf| {
         allocator.free(buf);
         host_response_buffer = null;
@@ -770,7 +792,6 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
                 return;
             };
             const input = input_value.string;
-
             const structured_result = repl_ptr.stepStructured(input) catch |err| {
                 // Handle hard errors (like OOM) that aren't caught by the REPL
                 // Create a static error message to avoid allocation issues
@@ -784,7 +805,6 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
                 try writeReplStepResultJson(response_buffer, step_result);
                 return;
             };
-            defer structured_result.deinit(allocator);
 
             if (crash_ctx.state == .crashed) {
                 const crash_details = crash_ctx.crashMessage();
@@ -798,22 +818,17 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
                     .error_details = crash_details,
                 };
                 try writeReplStepResultJson(response_buffer, step_result);
+                structured_result.deinit(allocator);
                 return;
             }
 
             // Convert StepResult to ReplStepResult
             const step_result = convertStepResult(structured_result);
             try writeReplStepResultJson(response_buffer, step_result);
+            structured_result.deinit(allocator);
         },
         .CLEAR_REPL => {
-            // Clear REPL definitions but keep REPL active
-            // Clear all definitions from the hashmap
-            var iterator = repl_ptr.definitions.iterator();
-            while (iterator.next()) |kv| {
-                repl_ptr.allocator.free(kv.key_ptr.*);
-                repl_ptr.allocator.free(kv.value_ptr.*);
-            }
-            repl_ptr.definitions.clearRetainingCapacity();
+            repl_ptr.clearDefinitions();
             try writeReplClearResponse(response_buffer);
         },
         .RESET => {
@@ -1601,20 +1616,21 @@ fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) Re
     var local_arena = std.heap.ArenaAllocator.init(allocator);
     defer local_arena.deinit();
 
-    // Check if builtin_types is available
-    const builtin_types_for_tests = data.builtin_types orelse {
-        try writeErrorResponse(response_buffer, .ERROR, "Builtin types not available for test evaluation.");
-        return;
-    };
-
     // Create interpreter infrastructure for test evaluation
     const empty_modules: []const *const ModuleEnv = &.{};
     const builtin_module_env: ?*const ModuleEnv = if (data.builtin_module) |bm| bm.env else null;
-    const solver = data.solver orelse {
-        try writeErrorResponse(response_buffer, .ERROR, "Type checker not available for test evaluation.");
+    const builtin_types = data.builtin_types orelse {
+        try writeErrorResponse(response_buffer, .ERROR, "Missing builtin types for test runner.");
         return;
     };
-    var test_runner = TestRunner.init(local_arena.allocator(), env, builtin_types_for_tests, empty_modules, builtin_module_env, &solver.import_mapping) catch {
+    var test_runner = TestRunner.init(
+        local_arena.allocator(),
+        env,
+        builtin_types,
+        empty_modules,
+        builtin_module_env,
+        &env.import_mapping,
+    ) catch {
         try writeErrorResponse(response_buffer, .ERROR, "Failed to initialize test runner.");
         return;
     };
@@ -1775,13 +1791,17 @@ fn findHoverInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier
                     const ident_text = cir.getIdent(assign.ident);
                     if (std.mem.eql(u8, ident_text, identifier)) {
                         // 1. Get type string
-                        var type_writer = try data.module_env.initTypeWriter();
-                        defer type_writer.deinit();
+                        const owned_type_str = if (def.annotation) |annotation_idx| blk: {
+                            const annotation = cir.store.getAnnotation(annotation_idx);
+                            const anno_region = cir.store.getTypeAnnoRegion(annotation.anno);
+                            break :blk try local_allocator.dupe(u8, cir.getSource(anno_region));
+                        } else blk: {
+                            var type_writer = try data.module_env.initTypeWriter();
+                            defer type_writer.deinit();
 
-                        const def_var = @as(types.Var, @enumFromInt(@intFromEnum(def_idx)));
-                        try type_writer.write(def_var, .wrap);
-                        const type_str_from_writer = type_writer.get();
-                        const owned_type_str = try local_allocator.dupe(u8, type_str_from_writer);
+                            try type_writer.write(ModuleEnv.varFrom(def.pattern), .wrap);
+                            break :blk try local_allocator.dupe(u8, type_writer.get());
+                        };
 
                         // 2. Get definition region
                         const def_region_loc = cir.store.getPatternRegion(def.pattern);
@@ -1920,10 +1940,6 @@ fn writeJsonString(writer: *std.io.Writer, str: []const u8) !void {
 /// length prefix, so the host must use the custom `freeWasmString` function.
 /// Returns null on failure.
 export fn processAndRespond(message_ptr: [*]const u8, message_len: usize) ?[*:0]u8 {
-    // Perform deferred FBA reset if one was scheduled and not already handled
-    // by buffer allocation.
-    performPendingAllocatorReset();
-
     // Allocate a temporary buffer on the heap to avoid a stack overflow.
     var temp_response_buffer = allocator.alloc(u8, 131072) catch {
         return createSimpleErrorJson("Failed to allocate temporary response buffer");

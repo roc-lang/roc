@@ -259,8 +259,14 @@ pub const Store = struct {
     pub fn containsIdx(self: *const Store, idx: Idx) bool {
         if (enable_store_tracking) {
             if (self.debug_id == 0) {
-                // Store was never registered (e.g., deserialized store).
-                // Can't verify, assume true.
+                // A fresh empty store has never produced any Idx values.
+                // Treat it as containing nothing.
+                if (self.interner.entry_count == 0) {
+                    return false;
+                }
+
+                // Store was never registered but already has entries
+                // (e.g. a deserialized store). Can't verify provenance here.
                 return true;
             }
 
@@ -326,6 +332,15 @@ pub const Store = struct {
         self.unregisterFromTracking();
     }
 
+    /// Clone this store into fresh owned memory.
+    pub fn clone(self: *const Store, gpa: std.mem.Allocator) std.mem.Allocator.Error!Store {
+        return .{
+            .interner = try self.interner.clone(gpa),
+            .attributes = try self.attributes.clone(gpa),
+            .next_unique_name = self.next_unique_name,
+        };
+    }
+
     /// Insert a new identifier into the store.
     pub fn insert(self: *Store, gpa: std.mem.Allocator, ident: Ident) std.mem.Allocator.Error!Idx {
         const idx = try self.interner.insert(gpa, ident.raw_text);
@@ -338,6 +353,12 @@ pub const Store = struct {
         self.trackIdx(result, @src());
 
         return result;
+    }
+
+    /// Enable inserts on a deserialized store by copying its interner data into
+    /// growable allocations owned by the provided allocator.
+    pub fn enableRuntimeInserts(self: *Store, gpa: std.mem.Allocator) std.mem.Allocator.Error!void {
+        try self.interner.enableRuntimeInserts(gpa);
     }
 
     /// Look up an identifier in the store without inserting.
@@ -393,7 +414,13 @@ pub const Store = struct {
             .reassignable = false,
         };
 
-        _ = try self.attributes.append(gpa, attributes);
+        const expected_idx = self.attributes.items.items.len;
+        const attributes_idx = try self.attributes.append(gpa, attributes);
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(@intFromEnum(attributes_idx) == expected_idx);
+        } else if (@intFromEnum(attributes_idx) != expected_idx) {
+            unreachable;
+        }
 
         const result = Idx{
             .attributes = attributes,
@@ -555,7 +582,8 @@ test "Ident.Store empty CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    _ = try original.serialize(arena_allocator, &writer);
+    const serialized = try original.serialize(arena_allocator, &writer);
+    try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -624,7 +652,8 @@ test "Ident.Store basic CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    _ = try original.serialize(arena_allocator, &writer);
+    const serialized = try original.serialize(arena_allocator, &writer);
+    try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -708,7 +737,8 @@ test "Ident.Store with genUnique CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    _ = try original.serialize(arena_allocator, &writer);
+    const serialized = try original.serialize(arena_allocator, &writer);
+    try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -750,8 +780,10 @@ test "Ident.Store CompactWriter roundtrip" {
     var original = try Ident.Store.initCapacity(gpa, 5);
     defer original.deinit(gpa);
 
-    _ = try original.insert(gpa, Ident.for_text("test1"));
-    _ = try original.insert(gpa, Ident.for_text("test2"));
+    const idx1 = try original.insert(gpa, Ident.for_text("test1"));
+    const idx2 = try original.insert(gpa, Ident.for_text("test2"));
+    try std.testing.expect(@intFromEnum(@as(SmallStringInterner.Idx, @enumFromInt(@as(u32, idx1.idx)))) <
+        @intFromEnum(@as(SmallStringInterner.Idx, @enumFromInt(@as(u32, idx2.idx)))));
 
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -768,7 +800,8 @@ test "Ident.Store CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    _ = try original.serialize(arena_allocator, &writer);
+    const serialized = try original.serialize(arena_allocator, &writer);
+    try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -849,7 +882,8 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    _ = try original.serialize(arena_allocator, &writer);
+    const serialized = try original.serialize(arena_allocator, &writer);
+    try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);

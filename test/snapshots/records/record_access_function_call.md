@@ -8,19 +8,9 @@ type=expr
 (person.transform)(42)
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - record_access_function_call.md:1:2:1:8
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**record_access_function_call.md:1:2:1:8:**
-```roc
-(person.transform)(42)
-```
- ^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 OpenRound,LowerIdent,NoSpaceDotLowerIdent,CloseRound,NoSpaceOpenRound,Int,CloseRound,
@@ -42,7 +32,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-call
-	(e-dot-access (field "transform")
+	(e-field-access (field "transform")
 		(receiver
 			(e-runtime-error (tag "ident_not_in_scope"))))
 	(e-num (value "42")))

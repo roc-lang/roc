@@ -10,7 +10,7 @@ const Repl = repl_mod.Repl;
 
 const cli_context = @import("CliContext.zig");
 const CliContext = cli_context.CliContext;
-const Backend = @import("backend").EvalBackend;
+const Backend = @import("eval").EvalBackend;
 
 const ReplLine = @import("ReplLine.zig");
 
@@ -40,7 +40,7 @@ const ReplOps = struct {
                 .roc_dbg = replRocDbg,
                 .roc_expect_failed = replRocExpectFailed,
                 .roc_crashed = replRocCrashed,
-                .hosted_fns = .{ .count = 0, .fns = undefined },
+                .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
             },
         };
     }

@@ -3,6 +3,7 @@ extend-exclude = [
     ".git/",
     "src/snapshots/fuzz_crash",
     "crates/vendor/",
+    "vendor/",
     "authors",
     "crates",
     "examples/static-site-gen/input/",
@@ -35,6 +36,7 @@ rela = "rela" # Relative
 SEH = "SEH" # Structured Exception Handling
 ser = "ser" # Part of the word "serializing"
 sigfault = "sigfault"
+typ = "typ" # Common internal abbreviation for type
 
 [default.extend-identifiers]
 CMOVcc = "CMOVcc"

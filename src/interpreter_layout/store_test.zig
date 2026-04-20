@@ -291,7 +291,8 @@ test "nested ZST detection - List of record with ZST field" {
 
     // Setup identifiers BEFORE Store.init so list_ident and box_ident get set correctly
     const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
-    _ = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
+    const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
+    try testing.expectEqualStrings("Box", lt.module_env.getIdent(box_ident_idx));
     const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
     // Set the builtin_module_ident so the layout store can recognize Builtin types
     lt.module_env.idents.builtin_module = builtin_module_idx;
@@ -358,7 +359,8 @@ test "nested ZST detection - deeply nested" {
 
     // Setup identifiers BEFORE Store.init so list_ident and box_ident get set correctly
     const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
-    _ = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
+    const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
+    try testing.expectEqualStrings("Box", lt.module_env.getIdent(box_ident_idx));
     const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
     // Set the builtin_module_ident so the layout store can recognize Builtin types
     lt.module_env.idents.builtin_module = builtin_module_idx;
@@ -415,7 +417,8 @@ test "fromTypeVar - flex var with method constraint returning open tag union" {
     // Setup identifiers BEFORE Store.init
     const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
     const try_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Try"));
-    _ = try lt.module_env.insertIdent(Ident.for_text("Box"));
+    const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box"));
+    try testing.expectEqualStrings("Box", lt.module_env.getIdent(box_ident_idx));
     const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
     lt.module_env.idents.builtin_module = builtin_module_idx;
     const first_ident_idx = try lt.module_env.insertIdent(Ident.for_text("first"));
@@ -721,7 +724,8 @@ test "layoutSizeAlign - recursive nominal type with record containing List (issu
     // Setup identifiers
     const statement_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Statement"));
     const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
-    _ = try lt.module_env.insertIdent(Ident.for_text("Box"));
+    const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box"));
+    try testing.expectEqualStrings("Box", lt.module_env.getIdent(box_ident_idx));
     const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
     lt.module_env.idents.builtin_module = builtin_module_idx;
 
@@ -950,8 +954,8 @@ test "getRecordFieldOffsetByName - same alignment, alphabetical order" {
     const rid = record_layout.data.struct_.idx;
 
     // len < start alphabetically, so len is first
-    try testing.expectEqual(@as(u32, 0), lt.layout_store.getRecordFieldOffsetByName(rid, len_ident));
-    try testing.expectEqual(@as(u32, 8), lt.layout_store.getRecordFieldOffsetByName(rid, start_ident));
+    try testing.expectEqual(@as(u32, 0), lt.layout_store.getRecordFieldOffsetByName(rid, .{ .module_idx = 0, .ident = len_ident }));
+    try testing.expectEqual(@as(u32, 8), lt.layout_store.getRecordFieldOffsetByName(rid, .{ .module_idx = 0, .ident = start_ident }));
 }
 
 test "getRecordFieldOffsetByName - same alignment, opposite alphabetical pattern" {
@@ -975,8 +979,8 @@ test "getRecordFieldOffsetByName - same alignment, opposite alphabetical pattern
     const record_layout = lt.layout_store.getLayout(record_idx);
     const rid = record_layout.data.struct_.idx;
 
-    try testing.expectEqual(@as(u32, 0), lt.layout_store.getRecordFieldOffsetByName(rid, aaa_ident));
-    try testing.expectEqual(@as(u32, 8), lt.layout_store.getRecordFieldOffsetByName(rid, zzz_ident));
+    try testing.expectEqual(@as(u32, 0), lt.layout_store.getRecordFieldOffsetByName(rid, .{ .module_idx = 0, .ident = aaa_ident }));
+    try testing.expectEqual(@as(u32, 8), lt.layout_store.getRecordFieldOffsetByName(rid, .{ .module_idx = 0, .ident = zzz_ident }));
 }
 
 test "getRecordFieldOffsetByName - alignment overrides alphabetical order" {
@@ -1001,8 +1005,8 @@ test "getRecordFieldOffsetByName - alignment overrides alphabetical order" {
     const rid = record_layout.data.struct_.idx;
 
     // start (U64, align=8) comes before len (U8, align=1) due to alignment sort
-    try testing.expectEqual(@as(u32, 0), lt.layout_store.getRecordFieldOffsetByName(rid, start_ident));
-    try testing.expectEqual(@as(u32, 8), lt.layout_store.getRecordFieldOffsetByName(rid, len_ident));
+    try testing.expectEqual(@as(u32, 0), lt.layout_store.getRecordFieldOffsetByName(rid, .{ .module_idx = 0, .ident = start_ident }));
+    try testing.expectEqual(@as(u32, 8), lt.layout_store.getRecordFieldOffsetByName(rid, .{ .module_idx = 0, .ident = len_ident }));
 }
 
 test "record field names resolve correctly across module ident stores" {
@@ -1012,13 +1016,14 @@ test "record field names resolve correctly across module ident stores" {
     var builtin_env = try ModuleEnv.init(testing.allocator, "");
     defer builtin_env.deinit();
 
-    const user_start = try user_env.insertIdent(Ident.for_text("validStartByte"));
+    const user_start = try user_env.insertIdent(Ident.for_text("stark"));
     const user_len = try user_env.insertIdent(Ident.for_text("lem"));
     const builtin_start = try builtin_env.insertIdent(Ident.for_text("start"));
     const builtin_len = try builtin_env.insertIdent(Ident.for_text("len"));
 
     // Ensure both stores produce overlapping raw indices so this exercises the
-    // cross-module lookup path instead of succeeding accidentally.
+    // cross-module lookup path instead of succeeding accidentally. The interner
+    // indices are byte offsets, so match string lengths across envs.
     try testing.expectEqual(user_start.idx, builtin_start.idx);
     try testing.expectEqual(user_len.idx, builtin_len.idx);
 
@@ -1026,8 +1031,9 @@ test "record field names resolve correctly across module ident stores" {
     var layout_store = try Store.init(&module_envs, null, testing.allocator, base.target.TargetUsize.native);
     defer layout_store.deinit();
 
-    try testing.expectEqualStrings("start", layout_store.getFieldName(builtin_start));
-    try testing.expectEqualStrings("len", layout_store.getFieldName(builtin_len));
+    const builtin_module_idx: u32 = 1;
+    try testing.expectEqualStrings("start", layout_store.getFieldName(.{ .module_idx = builtin_module_idx, .ident = builtin_start }));
+    try testing.expectEqualStrings("len", layout_store.getFieldName(.{ .module_idx = builtin_module_idx, .ident = builtin_len }));
 
     const u64_layout = layout.Layout.int(.u64);
     const record_idx = try layout_store.putRecord(
@@ -1038,6 +1044,6 @@ test "record field names resolve correctly across module ident stores" {
     const record_layout = layout_store.getLayout(record_idx);
     const rid = record_layout.data.struct_.idx;
 
-    try testing.expectEqual(@as(u32, 0), layout_store.getRecordFieldOffsetByName(rid, builtin_len));
-    try testing.expectEqual(@as(u32, 8), layout_store.getRecordFieldOffsetByName(rid, builtin_start));
+    try testing.expectEqual(@as(u32, 0), layout_store.getRecordFieldOffsetByName(rid, .{ .module_idx = builtin_module_idx, .ident = builtin_len }));
+    try testing.expectEqual(@as(u32, 8), layout_store.getRecordFieldOffsetByName(rid, .{ .module_idx = builtin_module_idx, .ident = builtin_start }));
 }

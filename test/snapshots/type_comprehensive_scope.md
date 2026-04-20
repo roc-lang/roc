@@ -44,7 +44,6 @@ Complex : {
 ~~~
 # EXPECTED
 MUTUALLY RECURSIVE TYPE ALIASES - type_comprehensive_scope.md:16:1:16:48
-TYPE REDECLARED - type_comprehensive_scope.md:10:1:10:34
 UNDECLARED TYPE - type_comprehensive_scope.md:16:38:16:42
 TYPE REDECLARED - type_comprehensive_scope.md:22:1:22:13
 UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
@@ -68,24 +67,6 @@ And it references _Tree_ declared here:
 Tree(a) : [Branch(Node(a)), Leaf(a)]
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**TYPE REDECLARED**
-The type _Try_ is being redeclared.
-
-The redeclaration is here:
-**type_comprehensive_scope.md:10:1:10:34:**
-```roc
-Try(ok, err) : [Ok(ok), Err(err)]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-But _Try_ was already declared here:
-**type_comprehensive_scope.md:1:1:1:1:**
-```roc
-# Built-in types should work
-```
-^
 
 
 **UNDECLARED TYPE**
@@ -357,7 +338,7 @@ Complex : {
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(s-alias-decl
 		(ty-header (name "MyTry"))
-		(ty-apply (name "Try") (builtin)
+		(ty-apply (name "Try") (local)
 			(ty-lookup (name "Str") (builtin))
 			(ty-lookup (name "U64") (builtin))))
 	(s-alias-decl
@@ -381,7 +362,7 @@ Complex : {
 			(field (field "person")
 				(ty-lookup (name "Person") (local)))
 			(field (field "result")
-				(ty-apply (name "Try") (builtin)
+				(ty-apply (name "Try") (local)
 					(ty-lookup (name "Bool") (builtin))
 					(ty-lookup (name "Str") (builtin))))
 			(field (field "tree")

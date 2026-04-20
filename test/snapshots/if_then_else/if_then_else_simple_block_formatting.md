@@ -10,20 +10,8 @@ if bool {
 } else 2
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - if_then_else_simple_block_formatting.md:1:4:1:8
 MISSING METHOD - if_then_else_simple_block_formatting.md:3:8:3:9
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `bool` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**if_then_else_simple_block_formatting.md:1:4:1:8:**
-```roc
-if bool {
-```
-   ^^^^
-
-
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
 **if_then_else_simple_block_formatting.md:3:8:3:9:**

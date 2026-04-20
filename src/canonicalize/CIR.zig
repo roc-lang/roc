@@ -790,6 +790,23 @@ pub const Import = struct {
             self.resolved_modules.deinit(allocator);
         }
 
+        pub fn clone(self: *const Store, allocator: std.mem.Allocator) std.mem.Allocator.Error!Store {
+            var result = Store{
+                .map = .{},
+                .imports = try self.imports.clone(allocator),
+                .import_idents = try self.import_idents.clone(allocator),
+                .resolved_modules = try self.resolved_modules.clone(allocator),
+            };
+            errdefer result.deinit(allocator);
+
+            for (result.imports.items.items, 0..) |string_idx, i| {
+                const import_idx = @as(Import.Idx, @enumFromInt(i));
+                try result.map.put(allocator, string_idx, import_idx);
+            }
+
+            return result;
+        }
+
         /// Deinit only the hash map, not the SafeLists.
         /// Used for cached modules where the SafeLists point into the cache buffer
         /// but the map was heap-allocated during deserialization.
@@ -833,9 +850,12 @@ pub const Import = struct {
             const idx = @as(Import.Idx, @enumFromInt(self.imports.len()));
 
             // Add to both the list and the map, with unresolved module initially
-            _ = try self.imports.append(allocator, string_idx);
-            _ = try self.import_idents.append(allocator, ident_idx orelse base.Ident.Idx.NONE);
-            _ = try self.resolved_modules.append(allocator, ResolvedModuleIdx.none);
+            const imports_idx = try self.imports.append(allocator, string_idx);
+            std.debug.assert(@intFromEnum(imports_idx) == @intFromEnum(idx));
+            const ident_idx_added = try self.import_idents.append(allocator, ident_idx orelse base.Ident.Idx.NONE);
+            std.debug.assert(@intFromEnum(ident_idx_added) == @intFromEnum(idx));
+            const resolved_idx = try self.resolved_modules.append(allocator, ResolvedModuleIdx.none);
+            std.debug.assert(@intFromEnum(resolved_idx) == @intFromEnum(idx));
             try self.map.put(allocator, string_idx, idx);
 
             return idx;

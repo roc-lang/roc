@@ -1,12 +1,12 @@
-//! Tracks where Symbols live in wasm (local variables vs linear memory).
+//! Tracks where LIR locals live in wasm locals.
 //!
-//! Maps Symbol → wasm local index so that `block` (let bindings) and
-//! `lookup` can store / retrieve values.
+//! The active statement-only LIR path uses compact `LocalId`s everywhere.
+//! Wasm codegen therefore binds executable values by local id, not by symbol.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const lir = @import("lir");
-const Symbol = lir.LIR.Symbol;
+const LocalId = lir.LIR.LocalId;
 const WasmModule = @import("WasmModule.zig");
 const ValType = WasmModule.ValType;
 
@@ -18,7 +18,7 @@ pub const LocalInfo = struct {
     val_type: ValType,
 };
 
-/// Symbol → wasm local mapping. Key is the u64 bitcast of Symbol.
+/// LIR local → wasm local mapping. Key is the u32 enum payload of `LocalId`.
 locals: std.AutoHashMap(u64, LocalInfo),
 /// Next local index to allocate.
 next_local_idx: u32,
@@ -40,12 +40,12 @@ pub fn deinit(self: *Self) void {
     self.local_types.deinit(self.allocator);
 }
 
-/// Allocate a new wasm local for the given symbol.
-pub fn allocLocal(self: *Self, symbol: Symbol, val_type: ValType) !u32 {
+/// Allocate a new wasm local for the given LIR local id.
+pub fn allocLocal(self: *Self, local_id: LocalId, val_type: ValType) !u32 {
     const idx = self.next_local_idx;
     self.next_local_idx += 1;
     try self.local_types.append(self.allocator, val_type);
-    const key: u64 = @bitCast(symbol);
+    const key = localKey(local_id);
     try self.locals.put(key, .{ .idx = idx, .val_type = val_type });
     return idx;
 }
@@ -58,19 +58,18 @@ pub fn allocAnonymousLocal(self: *Self, val_type: ValType) !u32 {
     return idx;
 }
 
-/// Look up the local index for a previously-allocated symbol.
-pub fn getLocal(self: *const Self, symbol: Symbol) ?u32 {
-    const key: u64 = @bitCast(symbol);
+/// Look up the wasm local index for a previously-allocated LIR local.
+pub fn getLocal(self: *const Self, local_id: LocalId) ?u32 {
+    const key = localKey(local_id);
     if (self.locals.get(key)) |info| {
         return info.idx;
     }
     return null;
 }
 
-/// Look up the full local info for a previously-allocated symbol.
-pub fn getLocalInfo(self: *const Self, symbol: Symbol) ?LocalInfo {
-    const key: u64 = @bitCast(symbol);
-    return self.locals.get(key);
+/// Look up the full wasm-local info for a previously-allocated LIR local.
+pub fn getLocalInfo(self: *const Self, local_id: LocalId) ?LocalInfo {
+    return self.locals.get(localKey(local_id));
 }
 
 /// Reset for a new function scope (keeps allocated memory).
@@ -78,4 +77,8 @@ pub fn reset(self: *Self) void {
     self.locals.clearRetainingCapacity();
     self.next_local_idx = 0;
     self.local_types.clearRetainingCapacity();
+}
+
+fn localKey(local_id: LocalId) u64 {
+    return @as(u64, @intFromEnum(local_id));
 }

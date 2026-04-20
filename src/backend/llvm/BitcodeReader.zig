@@ -207,7 +207,7 @@ fn nextRecord(bc: *BitcodeReader) !?Record {
 
     var record_arena = bc.record_arena.promote(bc.allocator);
     defer bc.record_arena = record_arena.state;
-    _ = record_arena.reset(.retain_capacity);
+    record_arena.reset(.retain_capacity);
 
     var operands = try std.array_list.Managed(u64).initCapacity(record_arena.allocator(), abbrev.operands.len);
     var blob = std.array_list.Managed(u8).init(record_arena.allocator());
@@ -525,5 +525,5 @@ const Abbrev = struct {
 };
 
 test {
-    _ = &skipBlock;
+    std.testing.refAllDecls(@This());
 }

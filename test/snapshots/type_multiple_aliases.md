@@ -165,7 +165,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "user")))
-			(e-dot-access (field "name")
+			(e-field-access (field "name")
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "user"))))))

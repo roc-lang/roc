@@ -555,6 +555,13 @@ test "NodeStore round trip - Expr" {
         },
     });
     try expressions.append(gpa, AST.Expr{
+        .multiline_string = .{
+            .parts = AST.Expr.Span{ .span = rand_span() },
+            .region = rand_region(),
+            .token = rand_token_idx(),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
         .list = .{
             .items = AST.Expr.Span{ .span = rand_span() },
             .region = rand_region(),
@@ -594,6 +601,12 @@ test "NodeStore round trip - Expr" {
             .region = rand_region(),
         },
     });
+    try expressions.append(gpa, AST.Expr{
+        .record_updater = .{
+            .token = rand_token_idx(),
+            .region = rand_region(),
+        },
+    });
 
     try expressions.append(gpa, AST.Expr{
         .field_access = .{
@@ -604,7 +617,22 @@ test "NodeStore round trip - Expr" {
         },
     });
     try expressions.append(gpa, AST.Expr{
-        .local_dispatch = .{
+        .method_call = .{
+            .receiver = rand_idx(AST.Expr.Idx),
+            .method_token = rand_token_idx(),
+            .args = AST.Expr.Span{ .span = rand_span() },
+            .region = rand_region(),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
+        .tuple_access = .{
+            .expr = rand_idx(AST.Expr.Idx),
+            .elem_token = rand_token_idx(),
+            .region = rand_region(),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
+        .arrow_call = .{
             .left = rand_idx(AST.Expr.Idx),
             .right = rand_idx(AST.Expr.Idx),
             .operator = rand_token_idx(),
@@ -636,6 +664,13 @@ test "NodeStore round trip - Expr" {
     try expressions.append(gpa, AST.Expr{
         .if_then_else = .{
             .@"else" = rand_idx(AST.Expr.Idx),
+            .condition = rand_idx(AST.Expr.Idx),
+            .then = rand_idx(AST.Expr.Idx),
+            .region = rand_region(),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
+        .if_without_else = .{
             .condition = rand_idx(AST.Expr.Idx),
             .then = rand_idx(AST.Expr.Idx),
             .region = rand_region(),
@@ -675,6 +710,14 @@ test "NodeStore round trip - Expr" {
         .block = .{
             .region = rand_region(),
             .statements = AST.Statement.Span{ .span = rand_span() },
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
+        .for_expr = .{
+            .patt = rand_idx(AST.Pattern.Idx),
+            .expr = rand_idx(AST.Expr.Idx),
+            .body = rand_idx(AST.Expr.Idx),
+            .region = rand_region(),
         },
     });
 

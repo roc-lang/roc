@@ -4,7 +4,7 @@ const std = @import("std");
 const types = @import("types");
 const can = @import("can");
 const layout = @import("interpreter_layout");
-const interpreter_values = @import("interpreter_values");
+const interpreter_values = @import("interpreter_values.zig");
 const builtins = @import("builtins");
 const StackValue = @import("StackValue.zig");
 const TypeScope = types.TypeScope;
@@ -66,11 +66,6 @@ fn toVarRange(range: anytype) types.Var.SafeList.Range {
     return @as(RangeType, range);
 }
 
-/// Callback function type for checking and rendering nominal types with custom to_inspect methods.
-/// Returns the rendered string if the type has a to_inspect method, null otherwise.
-/// Ownership of the returned string is transferred to the caller.
-pub const ToInspectCallback = *const fn (ctx: *anyopaque, value: StackValue, rt_var: types.Var) ?[]u8;
-
 /// Shared rendering context that provides allocator, module environment, and runtime caches.
 pub const RenderCtx = struct {
     allocator: std.mem.Allocator,
@@ -78,11 +73,6 @@ pub const RenderCtx = struct {
     runtime_types: *types.store.Store,
     layout_store: *layout.Store,
     type_scope: *const TypeScope,
-    /// Optional callback for handling nominal types with custom to_inspect methods.
-    /// If set, this callback will be invoked when rendering nominal type values.
-    to_inspect_callback: ?ToInspectCallback = null,
-    /// Opaque context pointer passed to the to_inspect callback.
-    callback_ctx: ?*anyopaque = null,
 };
 
 fn shouldPreferIntegerLayoutRendering(ctx: *RenderCtx, rt_var: types.Var) bool {
@@ -138,7 +128,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
         }
     }
 
-    // unwrap aliases/nominals, but check for to_inspect callbacks on nominal types first
+    // unwrap aliases/nominals while preserving special Box rendering
     unwrap: while (true) {
         switch (resolved.desc.content) {
             .alias => |al| {
@@ -147,16 +137,6 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
             },
             .structure => |st| switch (st) {
                 .nominal_type => |nt| {
-                    // Check if there's a to_inspect callback for this nominal type
-                    if (ctx.to_inspect_callback) |callback| {
-                        if (ctx.callback_ctx) |cb_ctx| {
-                            // The callback returns the rendered string if the type has to_inspect,
-                            // null otherwise
-                            if (callback(cb_ctx, value, rt_var)) |rendered| {
-                                return rendered;
-                            }
-                        }
-                    }
                     // Special handling for Box before unwrapping
                     if (nt.ident.ident_idx.eql(ctx.env.idents.box)) {
                         // Use sliceNominalArgs which skips the backing var (first element)
@@ -293,7 +273,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                         try out.append(']');
                         return out.toOwnedSlice();
                     }
-                    // No custom to_inspect, unwrap to backing type
+                    // No custom rendering here; unwrap to the backing type.
                     const backing = ctx.runtime_types.getNominalBackingVar(nt);
                     resolved = ctx.runtime_types.resolveVar(backing);
                 },
@@ -338,7 +318,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
             } else if (value.layout.tag == .struct_) {
                 // Struct representing a tag union - check if record-style (named fields) or tuple-style (indices)
                 var rec_acc = try value.asRecord(ctx.layout_store);
-                if (rec_acc.findFieldIndex(ctx.env.getIdent(ctx.env.idents.tag))) |tag_field_idx| {
+                if (rec_acc.findFieldIndex(ctx.env.idents.tag)) |tag_field_idx| {
                     // Record-style: { tag, payload }
                     const field_rt = try ctx.runtime_types.fresh();
                     const tag_field = try rec_acc.getFieldByIndex(tag_field_idx, field_rt);
@@ -355,7 +335,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                             var out = std.array_list.AlignedManaged(u8, null).init(gpa);
                             errdefer out.deinit();
                             try out.appendSlice(tag_name);
-                            if (rec_acc.findFieldIndex(ctx.env.getIdent(ctx.env.idents.payload))) |pidx| {
+                            if (rec_acc.findFieldIndex(ctx.env.idents.payload)) |pidx| {
                                 const payload_field_rt = try ctx.runtime_types.fresh();
                                 const payload = try rec_acc.getFieldByIndex(pidx, payload_field_rt);
                                 const arg_vars = ctx.runtime_types.sliceVars(toVarRange(sorted_tag.args));
@@ -654,7 +634,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     const name_text = ctx.env.getIdent(f.name);
                     try out.appendSlice(name_text);
                     try out.appendSlice(": ");
-                    const idx = acc.findFieldIndex(name_text) orelse {
+                    const idx = acc.findFieldIndex(f.name) orelse {
                         std.debug.panic("Record field not found in layout: type says field '{s}' exists but layout doesn't have it", .{name_text});
                     };
                     const field_rt = try ctx.runtime_types.fresh();

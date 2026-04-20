@@ -16,14 +16,15 @@ pub const problem = @import("problem.zig");
 pub const report = @import("report.zig");
 /// **Exhaustiveness Checking**
 pub const exhaustive = @import("exhaustive.zig");
+pub const TypedCIR = @import("typed_cir.zig");
 
 pub const Check = @import("Check.zig");
+pub const TestEnv = @import("test/TestEnv.zig");
 
 pub const ReportBuilder = report.ReportBuilder;
 
 test "check tests" {
     std.testing.refAllDecls(@import("Check.zig"));
-    std.testing.refAllDecls(@import("copy_import.zig"));
     std.testing.refAllDecls(@import("exhaustive.zig"));
     std.testing.refAllDecls(@import("occurs.zig"));
     std.testing.refAllDecls(@import("problem.zig"));
@@ -31,6 +32,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("problem/store.zig"));
     std.testing.refAllDecls(@import("problem/types.zig"));
     std.testing.refAllDecls(@import("report.zig"));
+    std.testing.refAllDecls(@import("typed_cir.zig"));
     std.testing.refAllDecls(@import("snapshot.zig"));
     std.testing.refAllDecls(@import("unify.zig"));
     std.testing.refAllDecls(@import("snapshot/diff.zig"));
@@ -49,6 +51,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/generalize_redirect_test.zig"));
     std.testing.refAllDecls(@import("test/exhaustiveness_test.zig"));
     std.testing.refAllDecls(@import("test/repros_test.zig"));
+    std.testing.refAllDecls(@import("test/typed_cir_test.zig"));
 
     // Cross-module monomorphization tests
     std.testing.refAllDecls(@import("test/cross_module_mono_test.zig"));

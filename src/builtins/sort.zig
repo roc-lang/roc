@@ -5,6 +5,7 @@
 //! both direct sorting for small lists and indirect pointer-based sorting for
 //! larger lists to optimize memory usage and cache performance.
 const std = @import("std");
+const builtin = @import("builtin");
 
 const GT = Ordering.GT;
 const utils = @import("utils.zig");
@@ -2842,7 +2843,12 @@ pub inline fn swap_branchless(
     comptime indirect: bool,
 ) void {
     // While not guaranteed branchless, tested in godbolt for x86_64, aarch32, aarch64, riscv64, and wasm32.
-    _ = swap_branchless_return_gt(ptr, tmp, cmp, cmp_data, element_width, copy, indirect);
+    const swapped = swap_branchless_return_gt(ptr, tmp, cmp, cmp_data, element_width, copy, indirect);
+    if (comptime builtin.mode == .Debug) {
+        std.debug.assert(swapped <= 1);
+    } else if (swapped > 1) {
+        unreachable;
+    }
 }
 
 /// Requires that the refcount of cmp_data be incremented 1 time.

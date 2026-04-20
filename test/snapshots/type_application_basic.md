@@ -86,7 +86,7 @@ main! = |_| processList(["one", "two", "three"])
 		(e-lambda
 			(args
 				(p-assign (ident "list")))
-			(e-dot-access (field "len")
+			(e-field-access (field "len")
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "list"))))

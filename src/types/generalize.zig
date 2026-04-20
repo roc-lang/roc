@@ -270,7 +270,7 @@ pub const Generalizer = struct {
         // Calculate the new rank based on whether we're generalizing this var
         const new_rank = if (is_var_to_generalize) blk: {
             // Mark as seen before recursing to handle cycles
-            _ = try self.rank_adjusted_vars.put(resolved.var_, {});
+            try self.rank_adjusted_vars.put(resolved.var_, {});
 
             // For vars being generalized: rank INCREASES to max of nested vars
             // This allows us to detect when a variable "escapes" by referencing

@@ -8,6 +8,8 @@
 //! For unbundling functionality that works on all platforms (including WebAssembly),
 //! see the separate `unbundle` module.
 
+const std = @import("std");
+
 pub const bundle = @import("bundle.zig");
 pub const streaming_writer = @import("streaming_writer.zig");
 pub const streaming_reader = @import("streaming_reader.zig");
@@ -38,6 +40,8 @@ pub const freeForZstd = bundle.freeForZstd;
 // - Streaming compression
 // - Large file handling
 test {
-    _ = @import("test_bundle.zig");
-    _ = @import("test_streaming.zig");
+    const bundle_tests = @import("test_bundle.zig");
+    const streaming_tests = @import("test_streaming.zig");
+    std.testing.refAllDecls(bundle_tests);
+    std.testing.refAllDecls(streaming_tests);
 }

@@ -107,7 +107,9 @@ test "safeCast and safeRead" {
     const ptr = @as(*anyopaque, @ptrCast(&buffer));
 
     // Just verify this doesn't error - actual value is endianness dependent
-    _ = try safeRead(u16, ptr, 0, 4);
+    const value = try safeRead(u16, ptr, 0, 4);
+    const expected = std.mem.bytesAsValue(u16, buffer[0..2]).*;
+    try std.testing.expectEqual(expected, value);
 
     try std.testing.expectError(error.BufferOverflow, safeRead(u32, ptr, 1, 4));
 }

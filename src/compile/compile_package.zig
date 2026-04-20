@@ -280,6 +280,8 @@ pub const PackageEnv = struct {
     remaining_modules: usize = 0,
     /// ID of the root module (the module passed to buildRoot)
     root_module_id: ?ModuleId = null,
+    /// First error reported by worker threads during multi-threaded processing
+    worker_error: ?anyerror = null,
 
     // Track module discovery order and which modules have had their reports emitted
     discovered: std.ArrayList(ModuleId),
@@ -523,13 +525,17 @@ pub const PackageEnv = struct {
                 self.lock.lock();
                 defer self.lock.unlock();
                 if (self.remaining_modules == 0 and self.injector.items.len == 0) break;
-                _ = self.cond.timedWait(&self.lock, 1_000_000) catch {};
+                self.cond.timedWait(&self.lock, 1_000_000) catch |err| switch (err) {
+                    error.Timeout => {},
+                    else => return err,
+                };
                 continue;
             }
 
             index.store(0, .monotonic);
             var ctx = WorkerCtx{ .sched = self, .index = &index, .work_len = work_len };
             try parallel.process(WorkerCtx, &ctx, workerFn, self.gpa, work_len, options);
+            if (self.worker_error) |err| return err;
             try self.tryEmitReady();
         }
     }
@@ -541,7 +547,14 @@ pub const PackageEnv = struct {
             const i = ctx.index.fetchAdd(1, .monotonic);
             if (i >= ctx.work_len) break;
             const task = ctx.sched.injector.items[i];
-            _ = ctx.sched.process(task) catch {};
+            ctx.sched.process(task) catch |err| {
+                ctx.sched.lock.lock();
+                if (ctx.sched.worker_error == null) {
+                    ctx.sched.worker_error = err;
+                }
+                ctx.sched.lock.unlock();
+                return;
+            };
         }
         // Compact processed prefix once under lock
         ctx.sched.lock.lock();
@@ -721,7 +734,7 @@ pub const PackageEnv = struct {
             if (!threading.is_freestanding) {
                 self.lock.lock();
                 if (task.module_id < self.modules.items.len) {
-                    _ = self.modules.items[task.module_id].working.store(0, .seq_cst);
+                    self.modules.items[task.module_id].working.store(0, .seq_cst);
                 }
                 self.lock.unlock();
             } else {
@@ -1309,7 +1322,19 @@ pub const PackageEnv = struct {
 
         // After type checking, evaluate top-level declarations at compile time
         const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module_env, builtin_module_env, builtin_module_env);
-        var comptime_evaluator = try eval.ComptimeEvaluator.init(gpa, env, imported_envs, &checker.problems, builtin_types_for_eval, builtin_module_env, &checker.import_mapping, target, io);
+        var eval_env = try env.cloneForEval(gpa);
+        defer eval_env.deinit();
+        var comptime_evaluator = try eval.ComptimeEvaluator.init(
+            gpa,
+            &eval_env,
+            imported_envs,
+            &checker.problems,
+            builtin_types_for_eval,
+            builtin_module_env,
+            &checker.import_mapping,
+            target,
+            io,
+        );
         defer comptime_evaluator.deinit();
         _ = try comptime_evaluator.evalAll();
 

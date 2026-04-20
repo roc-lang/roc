@@ -1,4 +1,4 @@
-//! Shared canonical primitive-op vocabulary for CIR, MIR, and LIR.
+//! Shared canonical primitive-op vocabulary for canonicalization and LIR.
 //!
 //! This is the single source of truth for primitive names and their ownership
 //! contracts. Backends may still reject specific ops that should have been
@@ -53,7 +53,6 @@ pub const LowLevel = enum {
     list_append_unsafe,
     list_concat,
     list_with_capacity,
-    list_sort_with,
     list_drop_at,
     list_sublist,
     list_set,
@@ -64,7 +63,6 @@ pub const LowLevel = enum {
     list_drop_last,
     list_take_first,
     list_take_last,
-    list_contains,
     list_reverse,
     list_reserve,
     list_release_excess_capacity,
@@ -107,7 +105,19 @@ pub const LowLevel = enum {
 
     // Numeric parsing operations
     num_from_numeral,
-    num_from_str,
+    u8_from_str,
+    i8_from_str,
+    u16_from_str,
+    i16_from_str,
+    u32_from_str,
+    i32_from_str,
+    u64_from_str,
+    i64_from_str,
+    u128_from_str,
+    i128_from_str,
+    dec_from_str,
+    f32_from_str,
+    f64_from_str,
 
     // Numeric conversion operations (U8)
     u8_to_i8_wrap,
@@ -396,14 +406,77 @@ pub const LowLevel = enum {
         consume,
     };
 
+    pub const ProcResultSemantics = union(enum) {
+        fresh,
+        alias_arg: usize,
+        borrow_arg: usize,
+        no_return,
+    };
+
+    pub const ResultMaterialization = enum {
+        direct,
+        // The result is materialized by copying bytes from a borrowed source,
+        // so RC insertion must retain the produced value explicitly.
+        copy_from_borrowed_input,
+        // The result is a fresh aggregate/container that stores inputs as owned
+        // children, so RC insertion must retain those children explicitly.
+        fresh_aggregate,
+    };
+
+    pub const NumericParseSpec = union(enum) {
+        int: struct {
+            width_bytes: u8,
+            signed: bool,
+        },
+        float: struct {
+            width_bytes: u8,
+        },
+        dec,
+    };
+
     /// Some borrow-mode low-levels still need the source owner to remain live
     /// until the result has been fully materialized. This is separate from
     /// argument ownership: the source is still borrowed, but RC insertion must
     /// not drop the owner before the low-level finishes reading from it.
     pub fn borrowedArgNeededForResult(self: LowLevel, arg_index: usize) bool {
         return switch (self) {
-            .list_get_unsafe => arg_index == 0,
+            .list_get_unsafe,
+            .box_box,
+            .box_unbox,
+            => arg_index == 0,
             else => false,
+        };
+    }
+
+    /// Some low-levels retain a borrowed argument inside a freshly-produced
+    /// result value. RC insertion must incref those borrowed arguments before
+    /// the call so the result owns its stored reference explicitly.
+    pub fn borrowedArgRetainedByResult(self: LowLevel, arg_index: usize) bool {
+        return switch (self) {
+            .list_append_unsafe => arg_index == 1,
+            .list_prepend => arg_index == 1,
+            .list_set => arg_index == 2,
+            .list_split_first, .list_split_last => arg_index == 0,
+            else => false,
+        };
+    }
+
+    pub fn numericParseSpec(self: LowLevel) ?NumericParseSpec {
+        return switch (self) {
+            .u8_from_str => .{ .int = .{ .width_bytes = 1, .signed = false } },
+            .i8_from_str => .{ .int = .{ .width_bytes = 1, .signed = true } },
+            .u16_from_str => .{ .int = .{ .width_bytes = 2, .signed = false } },
+            .i16_from_str => .{ .int = .{ .width_bytes = 2, .signed = true } },
+            .u32_from_str => .{ .int = .{ .width_bytes = 4, .signed = false } },
+            .i32_from_str => .{ .int = .{ .width_bytes = 4, .signed = true } },
+            .u64_from_str => .{ .int = .{ .width_bytes = 8, .signed = false } },
+            .i64_from_str => .{ .int = .{ .width_bytes = 8, .signed = true } },
+            .u128_from_str => .{ .int = .{ .width_bytes = 16, .signed = false } },
+            .i128_from_str => .{ .int = .{ .width_bytes = 16, .signed = true } },
+            .f32_from_str => .{ .float = .{ .width_bytes = 4 } },
+            .f64_from_str => .{ .float = .{ .width_bytes = 8 } },
+            .dec_from_str => .dec,
+            else => null,
         };
     }
 
@@ -422,17 +495,16 @@ pub const LowLevel = enum {
             .str_split_on => &.{ .borrow, .borrow },
             .str_to_utf8 => &.{.borrow},
             .str_drop_prefix, .str_drop_suffix => &.{ .borrow, .borrow },
-            .str_from_utf8, .str_from_utf8_lossy => &.{.consume},
+            .str_from_utf8, .str_from_utf8_lossy => &.{.borrow},
             .str_inspect => &.{.borrow},
 
             .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str => &.{.borrow},
 
             .list_len, .list_first, .list_last, .list_split_first, .list_split_last => &.{.borrow},
-            .list_get_unsafe, .list_contains => &.{ .borrow, .borrow },
+            .list_get_unsafe => &.{ .borrow, .borrow },
             .list_concat => &.{ .consume, .consume },
             .list_with_capacity => &.{.borrow},
-            .list_sort_with => &.{ .consume, .borrow },
-            .list_append_unsafe => &.{ .consume, .consume },
+            .list_append_unsafe => &.{ .consume, .borrow },
             .list_drop_at, .list_sublist, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reserve => &.{ .consume, .borrow },
             .list_set => &.{ .consume, .borrow, .borrow },
             .list_prepend => &.{ .consume, .borrow },
@@ -443,7 +515,20 @@ pub const LowLevel = enum {
             .num_negate, .num_abs, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str => &.{.borrow},
             .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_abs_diff, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_pow => &.{ .borrow, .borrow },
             .num_from_numeral => &.{.borrow},
-            .num_from_str => &.{.borrow},
+            .u8_from_str,
+            .i8_from_str,
+            .u16_from_str,
+            .i16_from_str,
+            .u32_from_str,
+            .i32_from_str,
+            .u64_from_str,
+            .i64_from_str,
+            .u128_from_str,
+            .i128_from_str,
+            .dec_from_str,
+            .f32_from_str,
+            .f64_from_str,
+            => &.{.borrow},
 
             .u8_to_i8_wrap,
             .u8_to_i8_try,
@@ -693,8 +778,69 @@ pub const LowLevel = enum {
             .dec_to_f64,
             => &.{.borrow},
 
-            .box_box, .box_unbox, .crash => &.{.consume},
+            .box_box, .box_unbox => &.{.borrow},
+            .crash => &.{.consume},
             .compare => &.{ .borrow, .borrow },
+        };
+    }
+
+    pub fn procResultSemantics(self: LowLevel) ProcResultSemantics {
+        return switch (self) {
+            .crash => .no_return,
+            // These low-levels consume an owned container/string argument and
+            // return a fresh owned value whose ownership is transferred from
+            // that input. Even if the runtime reuses the same allocation, the
+            // source value has been consumed; later stages must not treat the
+            // result as an alias of the pre-call local.
+            .str_concat,
+            .str_trim,
+            .str_trim_start,
+            .str_trim_end,
+            .str_with_ascii_lowercased,
+            .str_with_ascii_uppercased,
+            .str_reserve,
+            .str_release_excess_capacity,
+            .list_concat,
+            .list_append_unsafe,
+            .list_drop_at,
+            .list_sublist,
+            .list_drop_first,
+            .list_drop_last,
+            .list_take_first,
+            .list_take_last,
+            .list_reserve,
+            .list_set,
+            .list_prepend,
+            .list_reverse,
+            .list_release_excess_capacity,
+            => .fresh,
+
+            .list_first,
+            .list_last,
+            .list_split_first,
+            .list_split_last,
+            => .fresh,
+
+            .list_get_unsafe => .fresh,
+
+            else => .fresh,
+        };
+    }
+
+    pub fn resultMaterialization(self: LowLevel) ResultMaterialization {
+        return switch (self) {
+            .list_get_unsafe,
+            .list_first,
+            .list_last,
+            .box_box,
+            .box_unbox,
+            => .copy_from_borrowed_input,
+
+            .list_split_first,
+            .list_split_last,
+            => .fresh_aggregate,
+
+            else => .direct,
         };
     }
 };

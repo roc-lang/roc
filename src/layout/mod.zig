@@ -5,17 +5,13 @@
 //!
 //! - Layout definitions for scalars, containers, structs (records/tuples), and closures
 //! - A layout store that manages layout instances and their dependencies
-//! - Work queue management for stack-safe layout computation
 //! - Canonical graph interning and RC-helper planning for ordinary data
 //!
 //! See the Layout Store for how these representations actually get created
 //! (using type and target information from previous steps in compilation).
 //!
 //! Ordinary data layout is fully determined here and shared across compiler
-//! phases. Function values are the one intentional exception: `.func` types
-//! encode call signatures, not hidden closure environments, so closure capture
-//! discovery still happens in lowering before those captures are expressed back
-//! as ordinary-data layouts.
+//! phases.
 
 const std = @import("std");
 
@@ -63,14 +59,14 @@ pub const ScalarInfo = @import("layout.zig").ScalarInfo;
 
 // Re-export store functionality
 pub const Store = @import("store.zig").Store;
-pub const ModuleVarKey = @import("store.zig").ModuleVarKey;
 pub const Graph = @import("graph.zig").Graph;
 pub const GraphNode = @import("graph.zig").Node;
 pub const GraphNodeId = @import("graph.zig").NodeId;
 pub const GraphRef = @import("graph.zig").Ref;
+pub const graphRefKey = @import("graph.zig").refKey;
 pub const GraphField = @import("graph.zig").Field;
-pub const TypeLayoutResolver = @import("type_layout_resolver.zig").Resolver;
-pub const MirMonotypeLayoutResolver = @import("mir_monotype_resolver.zig").Resolver;
+pub const GraphFieldSpan = @import("graph.zig").FieldSpan;
+pub const GraphRefSpan = @import("graph.zig").RefSpan;
 pub const RcOp = @import("rc_helper.zig").RcOp;
 pub const RcHelperKey = @import("rc_helper.zig").HelperKey;
 pub const RcHelperPlan = @import("rc_helper.zig").Plan;
@@ -79,23 +75,14 @@ pub const RcTagUnionPlan = @import("rc_helper.zig").TagUnionPlan;
 pub const RcListPlan = @import("rc_helper.zig").ListPlan;
 pub const RcBoxPlan = @import("rc_helper.zig").BoxPlan;
 pub const RcFieldPlan = @import("rc_helper.zig").FieldPlan;
-pub const RcHelperResolver = @import("rc_helper.zig").Resolver;
 pub const RcIncrefFn = @import("rc_helper.zig").RcIncrefFn;
 pub const RcDecrefFn = @import("rc_helper.zig").RcDecrefFn;
 pub const RcFreeFn = @import("rc_helper.zig").RcFreeFn;
-
-// Re-export work queue functionality
-pub const Work = @import("work.zig").Work;
-pub const work = @import("work.zig");
 
 test "layout tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(@import("layout.zig"));
     std.testing.refAllDecls(@import("graph.zig"));
-    std.testing.refAllDecls(@import("type_layout_resolver.zig"));
-    std.testing.refAllDecls(@import("mir_monotype_resolver.zig"));
     std.testing.refAllDecls(@import("rc_helper.zig"));
     std.testing.refAllDecls(@import("store.zig"));
-    std.testing.refAllDecls(@import("work.zig"));
-    std.testing.refAllDecls(@import("store_test.zig"));
 }

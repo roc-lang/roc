@@ -50,4 +50,4 @@ import TypeRepr exposing [TypeRepr]
 import ProvidesEntry exposing [ProvidesEntry]
 
 make_glue_for_host : List(Types) -> Try(List(File), Str)
-make_glue_for_host = make_glue
+make_glue_for_host = |types_list| make_glue(types_list)

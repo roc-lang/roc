@@ -16,6 +16,11 @@ const check = @import("check");
 const builtins = @import("builtins");
 const compile = @import("compile");
 const fmt = @import("fmt");
+const ir = @import("ir");
+const lambdamono = @import("lambdamono");
+const lambdasolved = @import("lambdasolved");
+const monotype = @import("monotype");
+const monotype_lifted = @import("monotype_lifted");
 const repl = @import("repl");
 const eval_mod = @import("eval");
 const docs_mod = @import("docs");
@@ -1201,7 +1206,7 @@ fn processSnapshotContent(
             &can_ir.store.regions,
             builtin_ctx,
         );
-        _ = try checker.checkExprRepl(expr_idx.idx);
+        try checker.checkExprRepl(expr_idx.idx);
         module_envs_for_repl_expr = module_envs; // Keep alive
         break :blk checker;
     } else switch (content.meta.node_type) {
@@ -2519,7 +2524,7 @@ fn computeTransformedExprType(
         const needed_len: usize = @intCast(@intFromEnum(expr_var) + 1);
         var i: usize = current_len;
         while (i < needed_len) : (i += 1) {
-            _ = try can_ir.types.fresh();
+            try can_ir.types.fresh();
         }
     }
 
@@ -2613,7 +2618,7 @@ fn computeTransformedExprType(
                 const needed_len: usize = @intCast(@intFromEnum(pattern_var) + 1);
                 var i: usize = current_len;
                 while (i < needed_len) : (i += 1) {
-                    _ = try can_ir.types.fresh();
+                    try can_ir.types.fresh();
                 }
             }
             return pattern_var;
@@ -4113,80 +4118,47 @@ fn processDevObjectSnapshot(
         }
     }
 
-    // 7. Create layout store
+    // 7. Publish typed CIR modules and lower with the cor-style pipeline.
     const layout_mod = @import("layout");
-    const builtin_str = if (all_module_envs.len > 0) all_module_envs[0].idents.builtin_str else null;
-
-    var layout_store = layout_mod.Store.init(all_module_envs, builtin_str, allocator, base.target.TargetUsize.native) catch {
-        std.log.err("Failed to create layout store", .{});
-        return false;
-    };
-    defer layout_store.deinit();
-
-    // 8. Find app module index and lower CIR → MIR → LIR
-    const mir_mod = @import("mir");
-    const MIR = mir_mod.MIR;
     const lir_mod = @import("lir");
+    const backend_mod = @import("backend");
 
-    var app_module_idx: ?u32 = null;
+    const typed_cir = check.TypedCIR;
+    const source_modules = try allocator.alloc(typed_cir.Modules.SourceModule, all_module_envs.len);
+    defer allocator.free(source_modules);
+    source_modules[0] = .{ .precompiled = builtin_env };
     for (modules, 0..) |mod, i| {
-        if (mod.is_app) {
-            app_module_idx = @intCast(i + 1);
-            break;
-        }
+        source_modules[i + 1] = .{ .precompiled = mod.env };
     }
 
-    const platform_module_idx: u32 = @intCast(platform_idx + 1);
-    const platform_types = &all_module_envs[platform_module_idx].types;
+    var typed_cir_modules = try typed_cir.Modules.init(allocator, source_modules);
+    defer typed_cir_modules.deinit();
 
-    var mir_store = MIR.Store.init(allocator) catch {
-        std.log.err("Failed to create MIR store", .{});
+    const platform_module_idx: u32 = @intCast(platform_idx + 1);
+    const app_idx = BuildEnv.findAppModuleIndex(modules) orelse {
+        std.log.err("No app module found in compiled modules", .{});
         return false;
     };
-    defer mir_store.deinit(allocator);
+    const app_module_idx: u32 = @intCast(app_idx + 1);
 
-    const findTypeAliasBodyVar = struct {
-        fn run(module_env: *const can.ModuleEnv, name: base.Ident.Idx) ?types.Var {
-            const stmts_slice = module_env.store.sliceStatements(module_env.all_statements);
-            for (stmts_slice) |stmt_idx| {
-                const stmt = module_env.store.getStatement(stmt_idx);
-                switch (stmt) {
-                    .s_alias_decl => |alias| {
-                        const header = module_env.store.getTypeHeader(alias.header);
-                        if (header.relative_name.eql(name)) {
-                            return can.ModuleEnv.varFrom(alias.anno);
-                        }
-                    },
-                    else => {},
-                }
-            }
-            return null;
+    try compile.platform_requirements.populateRequiredLookupTargets(&typed_cir_modules, app_module_idx);
+
+    var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, &typed_cir_modules, 0, app_module_idx);
+    defer mono_lowerer.deinit();
+    var mono = try mono_lowerer.run(platform_module_idx);
+    defer mono.deinit();
+
+    const EntrySymbol = struct {
+        ffi_symbol: []const u8,
+        symbol_raw: u32,
+    };
+
+    var entry_symbols = std.ArrayList(EntrySymbol).empty;
+    defer {
+        for (entry_symbols.items) |entry| {
+            allocator.free(entry.ffi_symbol);
         }
-    }.run;
-
-    var platform_type_scope = types.TypeScope.init(allocator);
-    defer platform_type_scope.deinit();
-
-    if (app_module_idx) |resolved_app_module_idx| {
-        try platform_type_scope.scopes.append(types.VarMap.init(allocator));
-        const rigid_scope = &platform_type_scope.scopes.items[0];
-        const app_env = all_module_envs[resolved_app_module_idx];
-        const platform_env = all_module_envs[platform_module_idx];
-        const all_aliases = platform_env.for_clause_aliases.items.items;
-
-        for (platform_env.requires_types.items.items) |required_type| {
-            const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
-            for (type_aliases_slice) |alias| {
-                const alias_stmt = platform_env.store.getStatement(alias.alias_stmt_idx);
-                std.debug.assert(alias_stmt == .s_alias_decl);
-                const alias_body_var = can.ModuleEnv.varFrom(alias_stmt.s_alias_decl.anno);
-                const alias_stmt_var = can.ModuleEnv.varFrom(alias.alias_stmt_idx);
-                const app_alias_name = app_env.common.findIdent(platform_env.getIdentText(alias.alias_name)) orelse continue;
-                const app_var = findTypeAliasBodyVar(app_env, app_alias_name) orelse continue;
-                try rigid_scope.put(alias_body_var, app_var);
-                try rigid_scope.put(alias_stmt_var, app_var);
-            }
-        }
+        entry_symbols.deinit(allocator);
     }
 
     const provides_entries = platform_module.provides_entries;
@@ -4195,26 +4167,19 @@ fn processDevObjectSnapshot(
         return false;
     }
 
-    const platform_defs = platform_module.env.store.sliceDefs(platform_module.env.all_defs);
-
-    const PendingEntrypointSource = struct {
-        ffi_symbol: []const u8,
-        roc_ident: []const u8,
-        expr_idx: can.CIR.Expr.Idx,
-    };
-    var pending_entrypoint_sources = std.ArrayList(PendingEntrypointSource).empty;
-    defer pending_entrypoint_sources.deinit(allocator);
+    const platform_env = platform_module.env;
+    const platform_defs = platform_env.store.sliceDefs(platform_env.all_defs);
 
     for (provides_entries) |entry| {
-        var found_expr: ?can.CIR.Expr.Idx = null;
+        var def_idx_opt: ?can.CIR.Def.Idx = null;
         for (platform_defs) |def_idx| {
-            const def = platform_module.env.store.getDef(def_idx);
-            const pattern = platform_module.env.store.getPattern(def.pattern);
+            const def = platform_env.store.getDef(def_idx);
+            const pattern = platform_env.store.getPattern(def.pattern);
             switch (pattern) {
                 .assign => |assign| {
-                    const ident_name = platform_module.env.getIdent(assign.ident);
+                    const ident_name = platform_env.getIdent(assign.ident);
                     if (std.mem.eql(u8, ident_name, entry.roc_ident)) {
-                        found_expr = def.expr;
+                        def_idx_opt = def_idx;
                         break;
                     }
                 },
@@ -4222,140 +4187,91 @@ fn processDevObjectSnapshot(
             }
         }
 
-        if (found_expr) |expr_idx| {
-            pending_entrypoint_sources.append(allocator, .{
-                .ffi_symbol = entry.ffi_symbol,
-                .roc_ident = entry.roc_ident,
-                .expr_idx = expr_idx,
-            }) catch return false;
-        }
-    }
-
-    if (pending_entrypoint_sources.items.len == 0) {
-        std.log.err("No entrypoint expressions found in platform module", .{});
-        return false;
-    }
-
-    const entrypoint_root_exprs = allocator.alloc(can.CIR.Expr.Idx, pending_entrypoint_sources.items.len) catch return false;
-    defer allocator.free(entrypoint_root_exprs);
-    for (pending_entrypoint_sources.items, 0..) |entrypoint_source, i| {
-        entrypoint_root_exprs[i] = entrypoint_source.expr_idx;
-    }
-
-    var monomorphization = blk: {
-        const mono = if (app_module_idx) |resolved_app_module_idx|
-            mir_mod.Monomorphize.runRootsWithTypeScope(
-                allocator,
-                all_module_envs,
-                platform_types,
-                platform_module_idx,
-                app_module_idx,
-                entrypoint_root_exprs,
-                platform_module_idx,
-                &platform_type_scope,
-                resolved_app_module_idx,
-            )
-        else
-            mir_mod.Monomorphize.runRoots(
-                allocator,
-                all_module_envs,
-                platform_types,
-                platform_module_idx,
-                app_module_idx,
-                entrypoint_root_exprs,
-            );
-        break :blk mono catch {
-            std.log.err("Failed to monomorphize platform module", .{});
-            return false;
+        const def_idx = def_idx_opt orelse {
+            std.log.err("Failed to find provides entry def for {s}", .{entry.roc_ident});
+            continue;
         };
-    };
-    defer monomorphization.deinit(allocator);
 
-    var mir_lower = mir_mod.Lower.init(allocator, &mir_store, &monomorphization, all_module_envs, platform_types, platform_module_idx, app_module_idx) catch {
-        std.log.err("Failed to create MIR lowerer", .{});
-        return false;
-    };
-    defer mir_lower.deinit();
-
-    if (app_module_idx) |resolved_app_module_idx| {
-        try mir_lower.setTypeScope(platform_module_idx, &platform_type_scope, resolved_app_module_idx);
-    }
-
-    // Use provides entries from build pipeline (centralized in CompiledModuleInfo)
-    const backend_mod = @import("backend");
-    var entrypoints = std.ArrayList(backend_mod.Entrypoint).empty;
-    defer {
-        for (entrypoints.items) |ep| {
-            allocator.free(ep.symbol_name);
+        const def_idx_raw: u32 = @intCast(@intFromEnum(def_idx));
+        var symbol_raw_opt: ?u32 = null;
+        for (mono.symbols.entries.items, 0..) |symbol_entry, i| {
+            switch (symbol_entry.origin) {
+                .top_level_def => |origin| {
+                    if (origin.module_idx == platform_module_idx and origin.def_idx == def_idx_raw) {
+                        symbol_raw_opt = @intCast(i);
+                        break;
+                    }
+                },
+                else => {},
+            }
         }
-        entrypoints.deinit(allocator);
+
+        const symbol_raw = symbol_raw_opt orelse {
+            std.log.err("Failed to find monotype symbol for provides entry {s}", .{entry.roc_ident});
+            continue;
+        };
+
+        const ffi_symbol = try allocator.dupe(u8, entry.ffi_symbol);
+        try entry_symbols.append(allocator, .{
+            .ffi_symbol = ffi_symbol,
+            .symbol_raw = symbol_raw,
+        });
     }
 
-    const PendingEntrypoint = struct {
-        ffi_symbol: []const u8,
-        mir_expr_id: MIR.ExprId,
-        ret_layout: layout_mod.Idx,
-    };
-    var pending_entrypoints = std.ArrayList(PendingEntrypoint).empty;
-    defer pending_entrypoints.deinit(allocator);
-
-    var type_layout_resolver = layout_mod.TypeLayoutResolver.init(&layout_store);
-    defer type_layout_resolver.deinit();
-
-    // Match provides entries to platform defs and lower them
-    for (pending_entrypoint_sources.items) |entry| {
-        const mir_expr_id = mir_lower.lowerExpr(entry.expr_idx) catch continue;
-
-        const type_var = can.ModuleEnv.varFrom(entry.expr_idx);
-        const ret_layout = type_layout_resolver.resolve(
-            platform_module_idx,
-            type_var,
-            &platform_type_scope,
-            app_module_idx,
-        ) catch continue;
-
-        pending_entrypoints.append(allocator, .{
-            .ffi_symbol = entry.ffi_symbol,
-            .mir_expr_id = mir_expr_id,
-            .ret_layout = ret_layout,
-        }) catch continue;
-    }
-
-    if (pending_entrypoints.items.len == 0) {
+    if (entry_symbols.items.len == 0) {
         std.log.err("No entrypoints found in platform module", .{});
         return false;
     }
 
-    // Run lambda set inference after MIR lowering so all symbol defs are visible.
-    const mir_module = @import("mir");
-    var lambda_set_store = mir_module.LambdaSet.infer(allocator, &mir_store, all_module_envs) catch {
-        std.log.err("Failed to run lambda set inference", .{});
-        return false;
-    };
-    defer lambda_set_store.deinit(allocator);
+    var lifted = try monotype_lifted.Lower.run(allocator, &mono);
+    defer lifted.deinit();
+    var solved = try lambdasolved.Lower.run(allocator, &lifted);
+    defer solved.deinit();
+    var executable = try lambdamono.Lower.run(allocator, &solved);
+    defer executable.deinit();
+    var lowered_ir = try ir.Lower.run(allocator, &executable);
+    defer lowered_ir.deinit();
 
-    var lir_store = lir_mod.LirExprStore.init(allocator);
-    defer lir_store.deinit();
-
-    var mir_to_lir = lir_mod.MirToLir.init(
+    var lowered_lir = try lir_mod.FromIr.run(
         allocator,
-        &mir_store,
-        &lir_store,
-        &layout_store,
-        &lambda_set_store,
-        all_module_envs[0].idents.true_tag,
+        all_module_envs,
+        builtin_env.idents.builtin_str,
+        base.target.TargetUsize.native,
+        &lowered_ir,
     );
-    defer mir_to_lir.deinit();
+    defer lowered_lir.deinit();
+    try lir_mod.Ownership.inferProcResultContracts(allocator, &lowered_lir.store, &lowered_lir.layouts);
+    try lir_mod.RcInsert.run(allocator, &lowered_lir.store, &lowered_lir.layouts);
 
-    for (pending_entrypoints.items) |pending| {
-        const entry_proc = mir_to_lir.lowerEntrypointProc(pending.mir_expr_id, &[_]layout_mod.Idx{}, pending.ret_layout) catch continue;
-        const symbol_name = std.fmt.allocPrint(allocator, "roc__{s}", .{pending.ffi_symbol}) catch continue;
-        entrypoints.append(allocator, .{
+    var entrypoints = std.ArrayList(backend_mod.Entrypoint).empty;
+    defer {
+        for (entrypoints.items) |ep| {
+            allocator.free(ep.symbol_name);
+            allocator.free(ep.arg_layouts);
+        }
+        entrypoints.deinit(allocator);
+    }
+
+    for (entry_symbols.items) |entry| {
+        const proc_id = lowered_lir.proc_ids_by_symbol.get(entry.symbol_raw) orelse {
+            std.log.err("Missing LIR proc for provides entry symbol {d}", .{entry.symbol_raw});
+            continue;
+        };
+
+        const proc_spec = lowered_lir.store.getProcSpec(proc_id);
+        const arg_locals = lowered_lir.store.getLocalSpan(proc_spec.args);
+        const arg_layouts = try allocator.alloc(layout_mod.Idx, arg_locals.len);
+        for (arg_locals, 0..) |local_id, i| {
+            arg_layouts[i] = lowered_lir.store.getLocal(local_id).layout_idx;
+        }
+
+        const symbol_name = try std.fmt.allocPrint(allocator, "roc__{s}", .{entry.ffi_symbol});
+        try entrypoints.append(allocator, .{
             .symbol_name = symbol_name,
-            .proc = entry_proc,
-            .arg_layouts = &[_]layout_mod.Idx{},
-            .ret_layout = pending.ret_layout,
-        }) catch continue;
+            .proc = proc_id,
+            .arg_layouts = arg_layouts,
+            .ret_layout = proc_spec.ret_layout,
+        });
     }
 
     if (entrypoints.items.len == 0) {
@@ -4363,9 +4279,7 @@ fn processDevObjectSnapshot(
         return false;
     }
 
-    lir_mod.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(allocator, &lir_store, &layout_store);
-
-    const procs = lir_store.getProcSpecs();
+    const procs = lowered_lir.store.getProcSpecs();
 
     // 10. Cross-compile for all targets and hash
     const RocTarget = roc_target.RocTarget;
@@ -4383,8 +4297,8 @@ fn processDevObjectSnapshot(
         const arch = target.toCpuArch();
         if (arch == .x86_64 or arch == .aarch64 or arch == .aarch64_be) {
             if (object_compiler.compileToObjectFile(
-                &lir_store,
-                &layout_store,
+                &lowered_lir.store,
+                &lowered_lir.layouts,
                 entrypoints.items,
                 procs,
                 target,
@@ -4651,7 +4565,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
         .{ .backend = repl.Backend.dev, .label = "dev" },
         .{ .backend = repl.Backend.llvm, .label = "llvm" },
     }) |cfg| {
-        if (!gpa_poisoned) {
+        if (!gpa_poisoned and comptime Repl.backendAvailable(cfg.backend)) {
             var backend_snapshot_ops = SnapshotOps.init(output.gpa);
             defer if (!gpa_poisoned) backend_snapshot_ops.deinit();
             const backend_repl_result = Repl.initWithBackend(output.gpa, backend_snapshot_ops.get_ops(), backend_snapshot_ops.crashContextPtr(), cfg.backend);
@@ -4733,7 +4647,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                 std.debug.print("{s} REPL init failed in {s}: {}\n", .{ cfg.label, snapshot_path, err });
                 success = false;
             }
-        } // if (!gpa_poisoned)
+        }
     }
 
     // The GPA allocator is permanently broken — any alloc/free will deadlock.
@@ -4976,9 +4890,15 @@ test "TODO: cross-module function calls - string_ordering_unsupported" {}
 
 /// An implementation of RocOps for snapshot testing.
 pub const SnapshotOps = struct {
+    const AllocationInfo = struct {
+        size: usize,
+        alignment: usize,
+    };
+
     allocator: std.mem.Allocator,
     crash: CrashContext,
     roc_ops: RocOps,
+    allocation_tracker: std.AutoHashMap(usize, AllocationInfo),
 
     pub fn init(allocator: std.mem.Allocator) SnapshotOps {
         return SnapshotOps{
@@ -4994,11 +4914,14 @@ pub const SnapshotOps = struct {
                 .roc_crashed = snapshotRocCrashed,
                 .hosted_fns = .{ .count = 0, .fns = undefined }, // Not used in snapshots
             },
+            .allocation_tracker = std.AutoHashMap(usize, AllocationInfo).init(allocator),
         };
     }
 
     pub fn deinit(self: *SnapshotOps) void {
         self.crash.deinit();
+        freeRemainingSnapshotAllocations(self);
+        self.allocation_tracker.deinit();
     }
 
     pub fn get_ops(self: *SnapshotOps) *RocOps {
@@ -5014,78 +4937,63 @@ pub const SnapshotOps = struct {
 
 fn snapshotRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
-
-    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
-
-    // Calculate additional bytes needed to store the size
-    const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
-    const total_size = alloc_args.length + size_storage_bytes;
-
-    // Allocate memory including space for size metadata
-    const result = snapshot_env.allocator.rawAlloc(total_size, align_enum, @returnAddress());
-
-    const base_ptr = result orelse {
-        std.debug.panic("Out of memory during snapshotRocAlloc", .{});
-    };
-
-    // Store the total size (including metadata) right before the user data
-    const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
-    size_ptr.* = total_size;
-
-    // Return pointer to the user data (after the size metadata)
-    alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
+    const alloc_ptr = snapshotAllocateTrackedBytes(snapshot_env, alloc_args.length, alloc_args.alignment);
+    alloc_args.answer = @ptrCast(alloc_ptr);
 }
 
 fn snapshotRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void {
     const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
-
-    // Calculate where the size metadata is stored
-    const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
-    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
-
-    // Read the total size from metadata
-    const total_size = size_ptr.*;
-
-    // Calculate the base pointer (start of actual allocation)
-    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
-
-    // Calculate alignment
-    const log2_align = std.math.log2_int(u32, @intCast(dealloc_args.alignment));
-    const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
-
-    // Free the memory (including the size metadata)
-    const slice = @as([*]u8, @ptrCast(base_ptr))[0..total_size];
-    snapshot_env.allocator.rawFree(slice, align_enum, @returnAddress());
+    const alloc_ptr = @intFromPtr(dealloc_args.ptr);
+    const alloc_info = snapshot_env.allocation_tracker.fetchRemove(alloc_ptr) orelse {
+        std.debug.panic("SnapshotOps: double-free or untracked free at ptr=0x{x}", .{alloc_ptr});
+    };
+    snapshotFreeTrackedBytes(snapshot_env, dealloc_args.ptr, alloc_info.value);
 }
 
 fn snapshotRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
     const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
-
-    // Calculate where the size metadata is stored for the old allocation
-    const size_storage_bytes = @max(realloc_args.alignment, @alignOf(usize));
-    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
-
-    // Read the old total size from metadata
-    const old_total_size = old_size_ptr.*;
-
-    // Calculate the old base pointer (start of actual allocation)
-    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(realloc_args.answer) - size_storage_bytes);
-
-    // Calculate new total size needed
-    const new_total_size = realloc_args.new_length + size_storage_bytes;
-
-    // Perform reallocation
-    const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
-    const new_slice = snapshot_env.allocator.realloc(old_slice, new_total_size) catch {
-        std.debug.panic("Out of memory during snapshotRocRealloc", .{});
+    const old_alloc_ptr = @intFromPtr(realloc_args.answer);
+    const old_info = snapshot_env.allocation_tracker.fetchRemove(old_alloc_ptr) orelse {
+        std.debug.panic("SnapshotOps: realloc of untracked memory at ptr=0x{x}", .{old_alloc_ptr});
     };
 
-    // Store the new total size in the metadata
-    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
-    new_size_ptr.* = new_total_size;
+    const new_base_ptr = snapshotAllocateTrackedBytes(snapshot_env, realloc_args.new_length, realloc_args.alignment);
+    const old_bytes: [*]u8 = @ptrCast(@alignCast(realloc_args.answer));
+    const copy_size = @min(old_info.value.size, @max(realloc_args.new_length, 1));
+    @memcpy(new_base_ptr[0..copy_size], old_bytes[0..copy_size]);
 
-    // Return pointer to the user data (after the size metadata)
-    realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
+    snapshotFreeTrackedBytes(snapshot_env, realloc_args.answer, old_info.value);
+    realloc_args.answer = @ptrCast(new_base_ptr);
+}
+
+fn snapshotAllocateTrackedBytes(snapshot_env: *SnapshotOps, len: usize, alignment: usize) [*]u8 {
+    const alloc_len = @max(len, 1);
+    const min_alignment: usize = @max(alignment, @alignOf(usize));
+    const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
+    const result = snapshot_env.allocator.rawAlloc(alloc_len, align_enum, @returnAddress()) orelse {
+        std.debug.panic("Out of memory during snapshotRocAlloc", .{});
+    };
+    snapshot_env.allocation_tracker.put(@intFromPtr(result), .{
+        .size = alloc_len,
+        .alignment = min_alignment,
+    }) catch {
+        std.debug.panic("SnapshotOps: failed to track allocation", .{});
+    };
+    return result;
+}
+
+fn snapshotFreeTrackedBytes(snapshot_env: *SnapshotOps, ptr: *anyopaque, alloc_info: SnapshotOps.AllocationInfo) void {
+    const bytes: [*]u8 = @ptrCast(@alignCast(ptr));
+    const align_enum = std.mem.Alignment.fromByteUnits(alloc_info.alignment);
+    snapshot_env.allocator.rawFree(bytes[0..alloc_info.size], align_enum, @returnAddress());
+}
+
+fn freeRemainingSnapshotAllocations(snapshot_env: *SnapshotOps) void {
+    var iterator = snapshot_env.allocation_tracker.iterator();
+    while (iterator.next()) |entry| {
+        const ptr: *anyopaque = @ptrFromInt(entry.key_ptr.*);
+        snapshotFreeTrackedBytes(snapshot_env, ptr, entry.value_ptr.*);
+    }
 }
 
 fn snapshotRocDbg(_: *const RocDbg, _: *anyopaque) callconv(.c) void {

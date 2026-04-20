@@ -30,15 +30,15 @@ EndOfFile,
 			(e-string-part (raw "User: "))
 			(e-ident (raw "name"))
 			(e-string-part (raw " ("))
-			(e-field-access
-				(e-ident (raw "age"))
-				(e-apply
-					(e-ident (raw "toStr"))))
+			(e-method-call (method ".toStr")
+				(receiver
+					(e-ident (raw "age")))
+				(args))
 			(e-string-part (raw " years old) - Contact: "))
-			(e-field-access
-				(e-ident (raw "email"))
-				(e-apply
-					(e-ident (raw "display"))))
+			(e-method-call (method ".display")
+				(receiver
+					(e-ident (raw "email")))
+				(args))
 			(e-string-part (raw "")))))
 ~~~
 # FORMATTED
@@ -68,13 +68,13 @@ NO CHANGE
 				(e-lookup-local
 					(p-assign (ident "name")))
 				(e-literal (string " ("))
-				(e-dot-access (field "toStr")
+				(e-method-call (method "toStr")
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "age"))))
 					(args))
 				(e-literal (string " years old) - Contact: "))
-				(e-dot-access (field "display")
+				(e-method-call (method "display")
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "email"))))

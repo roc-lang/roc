@@ -120,6 +120,12 @@ pub fn readList(self: RocValue) *const RocList {
     return @ptrCast(@alignCast(self.ptr.?));
 }
 
+/// Read the value as an opaque pointer payload.
+pub fn readOpaquePtr(self: RocValue) usize {
+    const raw_ptr = self.ptr orelse return 0;
+    return readAligned(usize, raw_ptr);
+}
+
 /// Lightweight context for formatting values — carries only layout metadata.
 pub const FormatContext = struct {
     layout_store: *const layout.Store,
@@ -178,6 +184,7 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
                     },
                 };
             },
+            .opaque_ptr => return try allocator.dupe(u8, "<opaque>"),
         }
     }
 
@@ -337,6 +344,7 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
                         .dec => self.readDec().num == other.readDec().num,
                     };
                 },
+                .opaque_ptr => return self.readOpaquePtr() == other.readOpaquePtr(),
             };
         },
         .zst => return true,

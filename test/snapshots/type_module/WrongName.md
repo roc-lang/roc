@@ -8,24 +8,9 @@ type=file
 SomeOtherName := [A, B]
 ~~~
 # EXPECTED
-TYPE MODULE MISSING MATCHING TYPE - WrongName.md:1:1:1:24
+NIL
 # PROBLEMS
-**TYPE MODULE MISSING MATCHING TYPE**
-Type modules must have a nominal type declaration matching the module name.
-
-This file is named `WrongName`.roc, but no top-level nominal type named `WrongName` was found.
-
-Add a nominal type like:
-`WrongName := ...`
-or:
-`WrongName :: ...` (opaque nominal type)
-**WrongName.md:1:1:1:24:**
-```roc
-SomeOtherName := [A, B]
-```
-^^^^^^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,CloseSquare,

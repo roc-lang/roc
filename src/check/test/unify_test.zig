@@ -82,7 +82,9 @@ const TestEnv = struct {
     /// Helper function to call unify with args from TestEnv
     fn unify(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!Result {
         return try unify_mod.unify(
-            self.module_env,
+            self.module_env.gpa,
+            self.module_env.getIdentStoreConst(),
+            self.module_env.qualified_module_ident,
             &self.module_env.types,
             &self.problems,
             &self.snapshots,
@@ -837,7 +839,15 @@ test "partitionFields - same record" {
 
     const range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ field_x, field_y });
 
-    const result = try unify_mod.partitionFields(env.module_env.getIdentStore(), &env.scratch, range, range);
+    const result = try unify_mod.partitionFields(
+        env.module_env.getIdentStoreConst(),
+        env.module_env.qualified_module_ident,
+        &env.module_env.types,
+        &env.scratch,
+        &env.occurs_scratch,
+        range,
+        range,
+    );
 
     try std.testing.expectEqual(0, result.only_in_a.len());
     try std.testing.expectEqual(0, result.only_in_b.len());
@@ -865,7 +875,15 @@ test "partitionFields - disjoint fields" {
     const a_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ a1, a2 });
     const b_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{b1});
 
-    const result = try unify_mod.partitionFields(env.module_env.getIdentStore(), &env.scratch, a_range, b_range);
+    const result = try unify_mod.partitionFields(
+        env.module_env.getIdentStoreConst(),
+        env.module_env.qualified_module_ident,
+        &env.module_env.types,
+        &env.scratch,
+        &env.occurs_scratch,
+        a_range,
+        b_range,
+    );
 
     try std.testing.expectEqual(2, result.only_in_a.len());
     try std.testing.expectEqual(1, result.only_in_b.len());
@@ -894,7 +912,15 @@ test "partitionFields - overlapping fields" {
     const a_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ a1, both });
     const b_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ b1, both });
 
-    const result = try unify_mod.partitionFields(env.module_env.getIdentStore(), &env.scratch, a_range, b_range);
+    const result = try unify_mod.partitionFields(
+        env.module_env.getIdentStoreConst(),
+        env.module_env.qualified_module_ident,
+        &env.module_env.types,
+        &env.scratch,
+        &env.occurs_scratch,
+        a_range,
+        b_range,
+    );
 
     try std.testing.expectEqual(1, result.only_in_a.len());
     try std.testing.expectEqual(1, result.only_in_b.len());
@@ -926,7 +952,15 @@ test "partitionFields - reordering is normalized" {
     const a_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ f3, f1, f2 });
     const b_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ f1, f2, f3 });
 
-    const result = try unify_mod.partitionFields(env.module_env.getIdentStore(), &env.scratch, a_range, b_range);
+    const result = try unify_mod.partitionFields(
+        env.module_env.getIdentStoreConst(),
+        env.module_env.qualified_module_ident,
+        &env.module_env.types,
+        &env.scratch,
+        &env.occurs_scratch,
+        a_range,
+        b_range,
+    );
 
     try std.testing.expectEqual(0, result.only_in_a.len());
     try std.testing.expectEqual(0, result.only_in_b.len());
@@ -1085,7 +1119,15 @@ test "partitionTags - same tags" {
 
     const range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ tag_x, tag_y });
 
-    const result = try unify_mod.partitionTags(env.module_env.getIdentStore(), &env.scratch, range, range);
+    const result = try unify_mod.partitionTags(
+        env.module_env.getIdentStoreConst(),
+        env.module_env.qualified_module_ident,
+        &env.module_env.types,
+        &env.scratch,
+        &env.occurs_scratch,
+        range,
+        range,
+    );
 
     try std.testing.expectEqual(0, result.only_in_a.len());
     try std.testing.expectEqual(0, result.only_in_b.len());
@@ -1113,7 +1155,15 @@ test "partitionTags - disjoint fields" {
     const a_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ a1, a2 });
     const b_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{b1});
 
-    const result = try unify_mod.partitionTags(env.module_env.getIdentStore(), &env.scratch, a_range, b_range);
+    const result = try unify_mod.partitionTags(
+        env.module_env.getIdentStoreConst(),
+        env.module_env.qualified_module_ident,
+        &env.module_env.types,
+        &env.scratch,
+        &env.occurs_scratch,
+        a_range,
+        b_range,
+    );
 
     try std.testing.expectEqual(2, result.only_in_a.len());
     try std.testing.expectEqual(1, result.only_in_b.len());
@@ -1142,7 +1192,15 @@ test "partitionTags - overlapping tags" {
     const a_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ a1, both });
     const b_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ b1, both });
 
-    const result = try unify_mod.partitionTags(env.module_env.getIdentStore(), &env.scratch, a_range, b_range);
+    const result = try unify_mod.partitionTags(
+        env.module_env.getIdentStoreConst(),
+        env.module_env.qualified_module_ident,
+        &env.module_env.types,
+        &env.scratch,
+        &env.occurs_scratch,
+        a_range,
+        b_range,
+    );
 
     try std.testing.expectEqual(1, result.only_in_a.len());
     try std.testing.expectEqual(1, result.only_in_b.len());
@@ -1174,7 +1232,15 @@ test "partitionTags - reordering is normalized" {
     const a_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ f3, f1, f2 });
     const b_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ f1, f2, f3 });
 
-    const result = try unify_mod.partitionTags(env.module_env.getIdentStore(), &env.scratch, a_range, b_range);
+    const result = try unify_mod.partitionTags(
+        env.module_env.getIdentStoreConst(),
+        env.module_env.qualified_module_ident,
+        &env.module_env.types,
+        &env.scratch,
+        &env.occurs_scratch,
+        a_range,
+        b_range,
+    );
 
     try std.testing.expectEqual(0, result.only_in_a.len());
     try std.testing.expectEqual(0, result.only_in_b.len());
@@ -1642,4 +1708,109 @@ test "unify - flex vs nominal type captures constraint" {
         env.module_env.types.resolveVar(deferred.var_).var_,
     );
     try std.testing.expectEqual(constraints, deferred.constraints);
+}
+
+test "unify - from_numeral flex with rigid retains constraints on resolved rigid" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const to_str_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
+    const to_str_constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
+        .fn_var = to_str_fn,
+        .origin = .from_numeral,
+        .num_literal = types_mod.NumeralInfo.fromU128(12345, false, base.Region.zero()),
+    };
+    const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
+
+    const flex_var = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = constraints,
+    } });
+    env.module_env.types.from_numeral_flex_count += 1;
+
+    const rigid_ident = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("a"));
+    const rigid_var = try env.module_env.types.freshFromContent(.{ .rigid = Rigid.init(rigid_ident) });
+
+    const result = try env.unify(flex_var, rigid_var);
+    try std.testing.expectEqual(.ok, result);
+
+    const resolved = env.module_env.types.resolveVar(rigid_var);
+    try std.testing.expectEqual(@as(u32, 0), env.module_env.types.from_numeral_flex_count);
+    try std.testing.expect(resolved.desc.content == .rigid);
+    const retained_constraints = env.module_env.types.sliceStaticDispatchConstraints(resolved.desc.content.rigid.constraints);
+    try std.testing.expectEqual(@as(usize, 0), retained_constraints.len);
+    try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
+    try std.testing.expectEqual(constraints, env.scratch.deferred_constraints.items.items[0].constraints);
+}
+
+test "unify - rigid with from_numeral flex retains constraints on resolved rigid" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const to_str_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
+    const to_str_constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
+        .fn_var = to_str_fn,
+        .origin = .from_numeral,
+        .num_literal = types_mod.NumeralInfo.fromU128(12345, false, base.Region.zero()),
+    };
+    const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
+
+    const rigid_ident = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("a"));
+    const rigid_var = try env.module_env.types.freshFromContent(.{ .rigid = Rigid.init(rigid_ident) });
+    const flex_var = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = constraints,
+    } });
+    env.module_env.types.from_numeral_flex_count += 1;
+
+    const result = try env.unify(rigid_var, flex_var);
+    try std.testing.expectEqual(.ok, result);
+
+    const resolved = env.module_env.types.resolveVar(rigid_var);
+    try std.testing.expectEqual(@as(u32, 0), env.module_env.types.from_numeral_flex_count);
+    try std.testing.expect(resolved.desc.content == .rigid);
+    const retained_constraints = env.module_env.types.sliceStaticDispatchConstraints(resolved.desc.content.rigid.constraints);
+    try std.testing.expectEqual(@as(usize, 0), retained_constraints.len);
+    try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
+    try std.testing.expectEqual(constraints, env.scratch.deferred_constraints.items.items[0].constraints);
+}
+
+test "unify - non-numeric flex with rigid keeps constraints deferred-only" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const to_str_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
+    const to_str_constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
+        .fn_var = to_str_fn,
+        .origin = .method_call,
+    };
+    const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
+
+    const flex_var = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = constraints,
+    } });
+    const rigid_ident = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("a"));
+    const rigid_var = try env.module_env.types.freshFromContent(.{ .rigid = Rigid.init(rigid_ident) });
+
+    const result = try env.unify(flex_var, rigid_var);
+    try std.testing.expectEqual(.ok, result);
+
+    const resolved = env.module_env.types.resolveVar(rigid_var);
+    try std.testing.expect(resolved.desc.content == .rigid);
+    try std.testing.expectEqual(
+        types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+        resolved.desc.content.rigid.constraints,
+    );
+    try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
+    try std.testing.expectEqual(constraints, env.scratch.deferred_constraints.items.items[0].constraints);
 }

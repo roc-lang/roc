@@ -145,7 +145,7 @@ expect getName(Wrapper.WithRecord({ name: "hello" })) == "hello"
 									(p-nominal
 										(p-applied-tag))))
 							(value
-								(e-dot-access (field "name")
+								(e-field-access (field "name")
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "r")))))))))))

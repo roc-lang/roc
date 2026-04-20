@@ -1,0 +1,66 @@
+# category | path | function | reason
+#
+# This allowlist must stay narrow. Every entry is a deliberately permitted
+# ownership-sensitive site until the migration fully centralizes non-builtin
+# ownership semantics in LIR.
+
+interpreter-perform-rc | src/eval/interpreter.zig | rocAllocFn | builtin/runtime forwarding lives in interpreter RocOps shim
+interpreter-perform-rc | src/eval/interpreter.zig | rocDeallocFn | builtin/runtime forwarding lives in interpreter RocOps shim
+interpreter-perform-rc | src/eval/interpreter.zig | rocReallocFn | builtin/runtime forwarding lives in interpreter RocOps shim
+interpreter-perform-rc | src/eval/interpreter.zig | listElementIncref | list builtin callback currently owns builtin-internal RC
+interpreter-perform-rc | src/eval/interpreter.zig | listElementDecref | list builtin callback currently owns builtin-internal RC
+interpreter-perform-rc | src/eval/interpreter.zig | performRawRc | layout-driven interpreter RC engine; callers are checked separately
+interpreter-perform-rc | src/eval/interpreter.zig | performRawRcPlan | raw interpreter RC-plan walker
+interpreter-perform-rc | src/eval/interpreter.zig | performExplicitRcStmt | explicit LIR RC execution choke point
+interpreter-perform-rc | src/eval/interpreter.zig | performBuiltinInternalRc | builtin/runtime-internal RC choke point
+interpreter-perform-rc | src/eval/interpreter.zig | performInterpreterApiRc | interpreter API cleanup for externally held result values
+interpreter-perform-rc | src/eval/interpreter.zig | decrefListElements | builtin/runtime-internal list payload iteration driven by explicit child plan
+ordinary-layout-refcount-branch | src/eval/interpreter.zig | builtinInternalContainsRefcounted | builtin/runtime-internal layout-refcount query helper
+ordinary-layout-refcount-branch | src/eval/interpreter.zig | builtinListElemRc | builtin-only list element RC query helper
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | generateLowLevel | builtin primitive lowering still wires helper callbacks/addresses
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | callListSublist | builtin primitive lowering still wires helper callbacks/addresses
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | callListSublistFromRecord | builtin primitive lowering still wires helper callbacks/addresses
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | callListDropAt | builtin primitive lowering still wires helper callbacks/addresses
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | callListReserveOp | builtin primitive lowering still wires helper callbacks/addresses
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | callListReleaseExcessCapOp | builtin primitive lowering still wires helper callbacks/addresses
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitCallRcHelperFromStackSlots | backend RC helper dispatch plumbing
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitRawRcHelperCallAtStackOffset | RC helper plumbing used by explicit RC lowering and builtin RC helpers
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitRawRcHelperCallForValue | RC helper plumbing used by explicit RC lowering and builtin RC helpers
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitRawRcHelperCallFromPtrReg | RC helper plumbing used by explicit RC lowering and builtin RC helpers
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitBuiltinInternalOptionalRcHelperAddress | builtin primitive helper-address plumbing
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitBuiltinInternalRcHelperCallForValue | builtin primitive lowering choke point
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitBuiltinInternalRcHelperStrIncref | backend RC helper-body infrastructure
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitBuiltinInternalRcHelperStrDrop | backend RC helper-body infrastructure
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitBuiltinInternalRcHelperListIncref | backend RC helper-body infrastructure
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitBuiltinInternalRcHelperListDrop | backend RC helper-body infrastructure
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitBuiltinInternalRcHelperBoxIncref | backend RC helper-body infrastructure
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitBuiltinInternalRcHelperBoxDrop | backend RC helper-body infrastructure
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitExplicitRcHelperCallAtStackOffset | explicit LIR RC lowering choke point
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | emitExplicitRcHelperCallForValue | explicit LIR RC lowering choke point
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | generateBuiltinInternalRcHelperBody | backend RC helper codegen infrastructure
+dev-emit-rc-helper | src/backend/dev/LirCodeGen.zig | compileBuiltinInternalRcHelper | backend RC helper compilation infrastructure
+ordinary-layout-refcount-branch | src/backend/dev/LirCodeGen.zig | builtinInternalLayoutContainsRefcounted | builtin primitive layout-refcount query helper
+ordinary-layout-refcount-branch | src/backend/dev/LirCodeGen.zig | builtinInternalLayoutValContainsRefcounted | builtin primitive layout-refcount query helper
+ordinary-layout-refcount-branch | src/backend/dev/LirCodeGen.zig | explicitRcLayoutValContainsRefcounted | explicit RC layout-refcount query helper
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | generateRcStmt | explicit LIR RC lowering choke point
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitRawRcForValueLocal | RC helper plumbing used by explicit RC lowering and builtin RC helpers
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitRawRcHelperCallForValuePtr | RC helper plumbing used by explicit RC lowering and builtin RC helpers
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitRawRcAtPtr | RC helper plumbing used by explicit RC lowering and builtin RC helpers
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitRawRcHelperCallByKey | RC helper plumbing used by explicit RC lowering and builtin RC helpers
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitRawDirectRcPlan | raw wasm direct-plan helper plumbing
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitBuiltinInternalFreeRcPtr | builtin helper-body RC infrastructure
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitBuiltinInternalListRc | builtin helper-body RC infrastructure
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitBuiltinInternalStrRc | builtin helper-body RC infrastructure
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitBuiltinInternalBoxRc | builtin helper-body RC infrastructure
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitBuiltinInternalRcForValueLocal | builtin primitive lowering choke point
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitBuiltinInternalRcAtPtr | builtin primitive lowering choke point
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitExplicitRcForValueLocal | explicit LIR RC lowering choke point
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitBuiltinInternalListElementDecrefsIfUnique | wasm builtin/helper RC infrastructure
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | emitBuiltinInternalBoxChildDropIfUnique | wasm builtin/helper RC infrastructure
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | generateBuiltinInternalRcHelperBody | wasm RC helper codegen infrastructure
+wasm-emit-rc-helper | src/backend/wasm/WasmCodeGen.zig | compileBuiltinInternalRcHelper | wasm RC helper codegen infrastructure
+ordinary-layout-refcount-branch | src/backend/wasm/WasmCodeGen.zig | builtinInternalLayoutContainsRefcounted | builtin primitive layout-refcount query helper
+ordinary-layout-refcount-branch | src/backend/wasm/WasmCodeGen.zig | explicitRcLayoutContainsRefcounted | explicit RC layout-refcount query helper
+wasm-raw-rc-helper-call | src/backend/wasm/WasmCodeGen.zig | emitRawRcForValueLocal | raw wasm RC helper plumbing under explicit/builtin wrappers
+wasm-raw-rc-helper-call | src/backend/wasm/WasmCodeGen.zig | emitRawRcAtPtr | raw wasm RC helper plumbing under explicit/builtin wrappers
+wasm-raw-rc-helper-call | src/backend/wasm/WasmCodeGen.zig | emitRawRcHelperCallForValuePtr | raw wasm helper-call emitter

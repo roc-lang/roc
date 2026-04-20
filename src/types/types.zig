@@ -36,7 +36,7 @@ test {
     try std.testing.expectEqual(24, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to is_opaque field
-    try std.testing.expectEqual(56, @sizeOf(StaticDispatchConstraint)); // Includes source expr + resolved dispatch target metadata
+    try std.testing.expectEqual(44, @sizeOf(StaticDispatchConstraint));
     try std.testing.expectEqual(16, @sizeOf(Func));
 }
 
@@ -90,6 +90,7 @@ pub const TypeScope = struct {
 pub const Descriptor = struct {
     content: Content,
     rank: Rank,
+    from_numeral_origin: bool = false,
 };
 
 /// In general, the rank tracks the number of let-bindings a variable is "under".
@@ -767,36 +768,17 @@ pub const NumeralInfo = struct {
 pub const StaticDispatchConstraint = struct {
     const Self = @This();
 
-    pub const no_source_expr: u32 = std.math.maxInt(u32);
-
-    pub const ResolvedTarget = struct {
-        origin_module: Ident.Idx,
-        method_ident: Ident.Idx,
-
-        pub const none: ResolvedTarget = .{
-            .origin_module = Ident.Idx.NONE,
-            .method_ident = Ident.Idx.NONE,
-        };
-
-        pub fn isNone(self: ResolvedTarget) bool {
-            return self.origin_module.isNone() and self.method_ident.isNone();
-        }
-    };
-
     /// the dispatch fn name
     fn_name: Ident.Idx,
     /// the dispatch fn var, a function
     fn_var: Var,
     /// the origin of this constraint (operator, method call, or where clause)
     origin: Origin,
+    /// For `desugared_binop` equality constraints, whether the original source
+    /// operator was `!=` rather than `==`.
+    binop_negated: bool = false,
     /// Optional numeric literal info for from_numeral constraints
     num_literal: ?NumeralInfo = null,
-    /// Expression that introduced this dispatch constraint, if known.
-    /// Used to wire resolved static dispatch targets into MIR lowering.
-    source_expr_idx: u32 = no_source_expr,
-    /// Resolved method target after constraint solving.
-    /// `.none` means unresolved or non-nominal dispatch.
-    resolved_target: ResolvedTarget = .none,
 
     /// Tracks where a static dispatch constraint originated from
     pub const Origin = enum(u4) {

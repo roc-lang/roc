@@ -3664,7 +3664,7 @@ test "check type - bool diagnostic - lambda negation applied to Bool.True" {
 // CRITICAL DISTINCTION: In Roc, bare tags like `True` and `False` are structural tag unions,
 // NOT Bool primitives. They only become nominal `Bool` when unified with a Bool annotation
 // or a qualified reference like `Bool.True`. This is by design.
-// See also: corresponding MIR tests in lower_test.zig.
+// See also: corresponding lowering coverage in eval/backend integration tests.
 
 test "check type - nominal Bool - annotated True is Bool" {
     const source =
@@ -3916,8 +3916,8 @@ test "check type - try return with match and error propagation should type-check
 test "check type - try operator on method call should apply to whole expression (#8646)" {
     // Regression test for https://github.com/roc-lang/roc/issues/8646
     // The `?` suffix on `strings.first()` should apply to the entire method call expression,
-    // not just to the right side of the field access. Previously, the parser was attaching
-    // `?` to `first()` before creating the field_access node, causing a type mismatch error
+    // not just to the callee fragment. Previously, the parser was attaching
+    // `?` to `first()` before creating the method_call node, causing a type mismatch error
     // that expected `{ unknown: _field }`.
     const source =
         \\question_fail : List(Str) -> Try(Str, _)
@@ -4209,6 +4209,21 @@ test "check type - issue8934 recursive nominal type unification" {
     // The key thing is that the compiler should NOT crash with stack overflow.
     // It should successfully type-check the file.
     try checkTypesModule(source, .{ .pass = .{ .def = "flatten" } }, "List(Node(a)) -> List(a)");
+}
+
+test "check type - nested same-module mutually recursive nominal types" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Tree := [Leaf, Branch(Tree.Forest)].{
+        \\    Forest := [Empty, More(Tree, Forest)]
+        \\}
+        \\
+        \\mk : {} -> Tree
+        \\mk = |_| Tree.Branch(Tree.Forest.More(Tree.Leaf, Tree.Forest.Empty))
+    ;
+
+    try checkTypesModule(source, .{ .pass = .{ .def = "mk" } }, "{} -> Tree");
 }
 
 // early return //
@@ -4841,6 +4856,43 @@ test "check type - mutually recursive functions - type mismatch error" {
         \\}
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check can - recursive non-function top-level cycle is rejected before type checking" {
+    const source =
+        \\force : ({} -> I64) -> I64
+        \\force = |thunk| thunk(0)
+        \\
+        \\t1 = |_| force(|_| t2)
+        \\t2 = t1(0)
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneCanError("CIRCULAR VALUE DEFINITION");
+}
+
+test "check type - monomorphic top-level numeric constant cannot be used at multiple types" {
+    const source =
+        \\x = 5
+        \\a : I64
+        \\a = x
+        \\b : U8
+        \\b = x
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - monomorphic top-level empty list cannot be used at multiple element types" {
+    const source =
+        \\xs = []
+        \\a : List(I64)
+        \\a = xs
+        \\b : List(Str)
+        \\b = xs
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
 }
 
 test "check type - mutually recursive functions - three-way polymorphic" {

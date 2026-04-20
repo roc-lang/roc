@@ -609,8 +609,7 @@ pub const Document = struct {
     }
 
     /// Render the document to the specified writer and target format.
-    pub fn render(self: *const Document, writer: anytype, target: RenderTarget, config: ReportingConfig) std.mem.Allocator.Error!void {
-        _ = config; // TODO: Pass config to renderer when it supports it
+    pub fn render(self: *const Document, writer: anytype, target: RenderTarget, _: ReportingConfig) std.mem.Allocator.Error!void {
         try renderDocument(self, writer, target);
     }
 };

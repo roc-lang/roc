@@ -11,13 +11,19 @@ const build_options = @import("build_options");
 const builtins = @import("builtins");
 const base = @import("base");
 const can = @import("can");
+const check = @import("check");
+const compile = @import("compile");
 const types = @import("types");
 const collections = @import("collections");
-const import_mapping_mod = types.import_mapping;
 const eval = @import("eval");
+const layout = @import("layout");
 const tracy = @import("tracy");
-const roc_target = @import("roc_target");
-
+const monotype = @import("monotype");
+const monotype_lifted = @import("monotype_lifted");
+const lambdasolved = @import("lambdasolved");
+const lambdamono = @import("lambdamono");
+const ir = @import("ir");
+const lir = @import("lir");
 // Module tracing flag - enabled via `zig build -Dtrace-modules`
 const trace_modules = if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
 
@@ -110,17 +116,6 @@ extern fn roc_alloc(size: usize, alignment: u32) callconv(.c) ?*anyopaque;
 extern fn roc_realloc(ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.c) ?*anyopaque;
 extern fn roc_dealloc(ptr: *anyopaque, alignment: u32) callconv(.c) void;
 
-// Static empty import mapping for shim (no type name resolution needed)
-// Lazy-initialized to use the properly wrapped allocator
-var shim_import_mapping: ?import_mapping_mod.ImportMapping = null;
-
-fn getShimImportMapping() *import_mapping_mod.ImportMapping {
-    if (shim_import_mapping == null) {
-        shim_import_mapping = import_mapping_mod.ImportMapping.init(wrapped_allocator);
-    }
-    return &shim_import_mapping.?;
-}
-
 const SharedMemoryAllocator = if (is_wasm32) struct {} else ipc.SharedMemoryAllocator;
 
 /// Thread-safe initialization flag with unified interface.
@@ -185,6 +180,12 @@ var global_app_env_ptr: ?*ModuleEnv = null; // App env for e_lookup_required res
 var global_builtin_modules: ?eval.BuiltinModules = null;
 var global_imported_envs: ?[]*const ModuleEnv = null;
 var global_full_imported_envs: ?[]*const ModuleEnv = null; // Full slice with builtin prepended (for interpreter)
+var global_full_mutable_envs: ?[]*ModuleEnv = null; // Exact lowering order consumed by later stages
+var global_full_mutable_envs_const: ?[]*const ModuleEnv = null; // Borrowed const view of global_full_mutable_envs
+var global_builtin_module_idx: ?u32 = null;
+var global_primary_module_idx: ?u32 = null;
+var global_app_module_idx: ?u32 = null;
+var global_builtin_str: ?base.Ident.Idx = null;
 var global_constant_strings_arena: ?*std.heap.ArenaAllocator = null; // Persists across interpreter calls for immortal strings
 var shm_mutex = PlatformMutex.init();
 
@@ -214,6 +215,51 @@ const Header = struct {
     app_env_offset: u64, // Always present, used for e_lookup_required resolution
 };
 
+fn appendModuleEnvIfMissing(
+    allocator: std.mem.Allocator,
+    module_envs: *std.ArrayList(*ModuleEnv),
+    module_env: *ModuleEnv,
+) std.mem.Allocator.Error!void {
+    for (module_envs.items) |existing_env| {
+        if (existing_env == module_env) return;
+    }
+
+    try module_envs.append(allocator, module_env);
+}
+
+fn rebuildLegacyRuntimeState(
+    roc_ops: *RocOps,
+    module_env: *ModuleEnv,
+    allocator: std.mem.Allocator,
+) ShimError!void {
+    module_env.gpa = allocator;
+    module_env.evaluation_order = null;
+    module_env.rigid_vars = .{};
+    module_env.import_mapping = types.import_mapping.ImportMapping.init(allocator);
+
+    var graph = can.DependencyGraph.buildDependencyGraph(
+        module_env,
+        module_env.all_defs,
+        allocator,
+    ) catch {
+        roc_ops.crash("Interpreter shim: failed to rebuild dependency graph for legacy module");
+        return error.ModuleEnvSetupFailed;
+    };
+    defer graph.deinit();
+
+    var eval_order = can.DependencyGraph.computeSCCs(&graph, allocator) catch {
+        roc_ops.crash("Interpreter shim: failed to rebuild evaluation order for legacy module");
+        return error.ModuleEnvSetupFailed;
+    };
+    const eval_order_ptr = allocator.create(can.DependencyGraph.EvaluationOrder) catch {
+        eval_order.deinit();
+        roc_ops.crash("Interpreter shim: failed to allocate evaluation order for legacy module");
+        return error.OutOfMemory;
+    };
+    eval_order_ptr.* = eval_order;
+    module_env.evaluation_order = eval_order_ptr;
+}
+
 // Import serialization types from the shared module
 const SERIALIZED_FORMAT_MAGIC = collections.SERIALIZED_FORMAT_MAGIC;
 
@@ -234,7 +280,7 @@ const ShimError = error{
     BugUnboxedRigidVar,
     UnsupportedResultType,
     InvalidEntryIndex,
-} || safe_memory.MemoryError || eval.EvalError;
+} || safe_memory.MemoryError || eval.Interpreter.Error;
 
 /// Exported symbol that reads ModuleEnv from shared memory and evaluates it
 /// Returns a RocStr to the caller
@@ -300,29 +346,25 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
             return error.SharedMemoryError;
         };
 
-        // Validate memory layout - we need at least space for the header
-        const min_required_size = FIRST_ALLOC_OFFSET + @sizeOf(Header);
-        if (shm.total_size < min_required_size) {
-            const msg = std.fmt.bufPrint(&buf, "Invalid memory layout: size {} is too small (minimum required: {})", .{ shm.total_size, min_required_size }) catch "Invalid memory layout";
+        // Ensure memory layout is valid
+        if (shm.total_size < FIRST_ALLOC_OFFSET + @sizeOf(Header)) {
+            const msg = std.fmt.bufPrint(&buf, "Invalid memory layout: size {} is too small", .{shm.total_size}) catch "Invalid memory layout";
             roc_ops.crash(msg);
             return error.MemoryLayoutInvalid;
         }
 
-        // setup base pointer
+        // Store in global for future use
+        global_shm = shm;
+
+        // Set base pointer to start of shared memory
         roc__serialized_base_ptr = shm.getBasePtr();
         roc__serialized_size = shm.total_size;
-    }
-
-    // For wasm32 embedded mode: roc__serialized_base_ptr must be set by linker
-    if (is_wasm32 and roc__serialized_base_ptr == null) {
-        roc_ops.crash("wasm32: serialized module data not embedded (roc__serialized_base_ptr is null)");
-        return error.SharedMemoryError;
     }
 
     // Set up ModuleEnv from serialized data (embedded or shared memory)
     const setup_result = try setupModuleEnv(roc_ops);
 
-    // Load builtin modules from compiled binary (same as CLI does)
+    // Load builtin modules from compiled binary
     const builtin_modules = eval.BuiltinModules.init(allocator) catch |err| {
         const msg2 = std.fmt.bufPrint(&buf, "Failed to load builtin modules: {s}", .{@errorName(err)}) catch "Failed to load builtin modules";
         roc_ops.crash(msg2);
@@ -334,18 +376,15 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
     global_app_env_ptr = setup_result.app_env;
     global_builtin_modules = builtin_modules;
 
-    // Build the full imported_envs slice (builtin + platform modules) for interpreter use
-    // This is done once and reused for all interpreter instances
+    // Build the full imported_envs slice (builtin + platform modules)
     const builtin_module_env = builtin_modules.builtin_module.env;
     var all_imported_envs = std.ArrayList(*const can.ModuleEnv).empty;
 
-    // First add builtin module (to match 'Builtin' import)
     all_imported_envs.append(allocator, builtin_module_env) catch {
         roc_ops.crash("Failed to build imported envs list");
         return error.OutOfMemory;
     };
 
-    // Then add platform modules
     if (global_imported_envs) |platform_envs| {
         for (platform_envs) |penv| {
             all_imported_envs.append(allocator, penv) catch {
@@ -361,21 +400,66 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
     };
     global_full_imported_envs = full_imported_envs;
 
-    // Resolve imports - map each import name to its index in imported_envs
-    // This modifies global state and only needs to happen once
+    var all_lowering_envs = std.ArrayList(*ModuleEnv).empty;
+    defer all_lowering_envs.deinit(allocator);
+
+    for (full_imported_envs) |env| {
+        all_lowering_envs.append(allocator, @constCast(env)) catch {
+            roc_ops.crash("Failed to build lowering envs list");
+            return error.OutOfMemory;
+        };
+    }
+
+    appendModuleEnvIfMissing(allocator, &all_lowering_envs, setup_result.primary_env) catch {
+        roc_ops.crash("Failed to add primary env to lowering envs");
+        return error.OutOfMemory;
+    };
+    appendModuleEnvIfMissing(allocator, &all_lowering_envs, setup_result.app_env) catch {
+        roc_ops.crash("Failed to add app env to lowering envs");
+        return error.OutOfMemory;
+    };
+
+    const mutable_envs = all_lowering_envs.toOwnedSlice(allocator) catch {
+        roc_ops.crash("Failed to allocate mutable lowering envs");
+        return error.OutOfMemory;
+    };
+    global_full_mutable_envs = mutable_envs;
+
+    const mutable_envs_const = allocator.alloc(*const ModuleEnv, mutable_envs.len) catch {
+        roc_ops.crash("Failed to allocate const lowering envs");
+        return error.OutOfMemory;
+    };
+    for (mutable_envs, 0..) |module_env, i| {
+        mutable_envs_const[i] = module_env;
+    }
+    global_full_mutable_envs_const = mutable_envs_const;
+
+    global_builtin_module_idx = compile.runner.findModuleEnvIdx(mutable_envs, builtin_module_env) orelse {
+        roc_ops.crash("INTERPRETER SHIM: builtin module missing from lowering envs");
+        return error.InterpreterSetupFailed;
+    };
+    global_primary_module_idx = compile.runner.findModuleEnvIdx(mutable_envs, setup_result.primary_env) orelse {
+        roc_ops.crash("INTERPRETER SHIM: primary module missing from lowering envs");
+        return error.InterpreterSetupFailed;
+    };
+    global_app_module_idx = compile.runner.findModuleEnvIdx(mutable_envs, setup_result.app_env) orelse {
+        roc_ops.crash("INTERPRETER SHIM: app module missing from lowering envs");
+        return error.InterpreterSetupFailed;
+    };
+    global_builtin_str = builtin_module_env.idents.builtin_str;
+
+    // Resolve imports for primary and app envs
     const env_ptr = setup_result.primary_env;
     const app_env = setup_result.app_env;
 
     traceDbg(roc_ops, "Resolving imports for primary env \"{s}\"", .{env_ptr.module_name});
     env_ptr.imports.resolveImports(env_ptr, full_imported_envs);
 
-    // Also resolve imports for the app env if it's different from the primary env
     if (app_env != env_ptr) {
         traceDbg(roc_ops, "Resolving imports for app env \"{s}\"", .{app_env.module_name});
         app_env.imports.resolveImports(app_env, full_imported_envs);
     }
 
-    // Also resolve imports for all imported module environments
     traceDbg(roc_ops, "Re-resolving imports for all imported modules", .{});
     for (full_imported_envs) |imp_env| {
         traceDbg(roc_ops, "  Re-resolving for \"{s}\"", .{imp_env.module_name});
@@ -383,7 +467,6 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
     }
 
     // Enable runtime inserts on all deserialized module environments
-    // This copies data from read-only embedded buffer into growable allocated memory
     env_ptr.common.idents.interner.enableRuntimeInserts(allocator) catch {
         roc_ops.crash("INTERPRETER SHIM: Failed to enable runtime inserts on platform env");
         return error.InterpreterSetupFailed;
@@ -394,143 +477,151 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
             return error.InterpreterSetupFailed;
         };
     }
-    for (full_imported_envs) |imp_env| {
-        @constCast(imp_env).common.idents.interner.enableRuntimeInserts(allocator) catch {
-            roc_ops.crash("INTERPRETER SHIM: Failed to enable runtime inserts on imported env");
-            return error.InterpreterSetupFailed;
-        };
-    }
-
-    // Fix up display_module_name_idx for deserialized modules
-    // This is critical for nominal type method dispatch (e.g., is_eq)
-    if (env_ptr.display_module_name_idx.isNone() and env_ptr.module_name.len > 0) {
-        env_ptr.display_module_name_idx = env_ptr.insertIdent(base.Ident.for_text(env_ptr.module_name)) catch {
-            roc_ops.crash("INTERPRETER SHIM: Failed to insert module name for platform env");
-            return error.InterpreterSetupFailed;
-        };
-    }
-    // qualified_module_ident is already set correctly from serialization (set by coordinator before roc build).
-    // Only fix up if it's NONE (shouldn't happen in normal builds, but handle gracefully).
-    if (env_ptr.qualified_module_ident.isNone() and !env_ptr.display_module_name_idx.isNone()) {
-        env_ptr.qualified_module_ident = env_ptr.display_module_name_idx;
-    }
-    if (app_env != env_ptr) {
-        if (app_env.display_module_name_idx.isNone() and app_env.module_name.len > 0) {
-            @constCast(app_env).display_module_name_idx = @constCast(app_env).insertIdent(base.Ident.for_text(app_env.module_name)) catch {
-                roc_ops.crash("INTERPRETER SHIM: Failed to insert module name for app env");
+    if (global_imported_envs) |imported_envs| {
+        for (imported_envs) |imp_env| {
+            @constCast(imp_env).common.idents.interner.enableRuntimeInserts(allocator) catch {
+                roc_ops.crash("INTERPRETER SHIM: Failed to enable runtime inserts on imported env");
                 return error.InterpreterSetupFailed;
             };
         }
-        if (app_env.qualified_module_ident.isNone() and !app_env.display_module_name_idx.isNone()) {
-            @constCast(app_env).qualified_module_ident = app_env.display_module_name_idx;
-        }
-    }
-    for (full_imported_envs) |imp_env| {
-        if (imp_env.display_module_name_idx.isNone() and imp_env.module_name.len > 0) {
-            @constCast(imp_env).display_module_name_idx = @constCast(imp_env).insertIdent(base.Ident.for_text(imp_env.module_name)) catch {
-                roc_ops.crash("INTERPRETER SHIM: Failed to insert module name for imported env");
-                return error.InterpreterSetupFailed;
-            };
-        }
-        if (imp_env.qualified_module_ident.isNone() and !imp_env.display_module_name_idx.isNone()) {
-            @constCast(imp_env).qualified_module_ident = imp_env.display_module_name_idx;
-        }
     }
 
-    // Create the global constant strings arena once (reused by all interpreter instances)
-    // Use page_allocator to bypass GPA tracking - these strings are immortal (refcount=0)
-    // and freed wholesale at shutdown, not individually through rocDealloc
-    const arena_ptr = allocator.create(std.heap.ArenaAllocator) catch {
-        roc_ops.crash("INTERPRETER SHIM: Failed to allocate constant strings arena");
-        return error.OutOfMemory;
-    };
-    arena_ptr.* = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    global_constant_strings_arena = arena_ptr;
+    // Initialize global arena for immortal strings (used across interpreter calls)
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    global_constant_strings_arena = &arena;
 
-    // Mark as initialized (release semantics ensure all writes above are visible)
+    // Mark initialization done
     shared_memory_initialized.set();
 }
 
-/// Cross-platform evaluation (works for both IPC and embedded modes)
+/// Evaluate an entrypoint by reading ModuleEnv from shared memory
 fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) ShimError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // Initialize shared memory once per process
+    // Initialize shared memory + module env (only once)
     try initializeOnce(roc_ops);
 
-    // Use the global shared memory and environment
-    const env_ptr = global_env_ptr.?;
-    const app_env = global_app_env_ptr;
-
-    // Get builtin modules
-    const builtin_modules = &global_builtin_modules.?;
-
-    // Create interpreter for this evaluation (global setup was done in initializeOnce)
-    // The interpreter uses the global constant_strings_arena (doesn't own it), so deinit()
-    // cleans up everything except the arena, which persists across interpreter calls.
-    var interpreter = try createInterpreter(env_ptr, app_env, builtin_modules, roc_ops);
-    defer interpreter.deinit();
-
-    // Get expression info using entry_idx
-    // Use the cached globals set during initialization (works for both formats)
-    const base_ptr = roc__serialized_base_ptr.?;
-    var buf: [256]u8 = undefined;
+    const env_ptr = global_env_ptr orelse return error.ModuleEnvSetupFailed;
+    _ = global_app_env_ptr orelse return error.ModuleEnvSetupFailed;
+    _ = global_builtin_modules orelse return error.ModuleEnvSetupFailed;
+    const lowering_module_envs = global_full_mutable_envs orelse return error.ModuleEnvSetupFailed;
+    const lowering_module_envs_const = global_full_mutable_envs_const orelse return error.ModuleEnvSetupFailed;
+    const builtin_module_idx = global_builtin_module_idx orelse return error.ModuleEnvSetupFailed;
+    const primary_module_idx = global_primary_module_idx orelse return error.ModuleEnvSetupFailed;
+    const app_module_idx = global_app_module_idx orelse return error.ModuleEnvSetupFailed;
+    const builtin_str = global_builtin_str;
 
     if (entry_idx >= global_entry_count) {
-        const err_msg = std.fmt.bufPrint(&buf, "Invalid entry_idx {} >= entry_count {}", .{ entry_idx, global_entry_count }) catch "Invalid entry_idx";
-        roc_ops.crash(err_msg);
+        roc_ops.crash("Invalid entry index");
         return error.InvalidEntryIndex;
     }
 
-    const def_offset = global_def_indices_offset + entry_idx * @sizeOf(u32);
-    const def_idx_raw: u32 = if (global_is_serialized_format) blk: {
-        // For serialized format, use unaligned reads since data may not be aligned
-        const byte_offset: usize = @intCast(def_offset);
-        if (byte_offset + 4 > roc__serialized_size) {
-            const err_msg = std.fmt.bufPrint(&buf, "def_idx out of bounds: offset={}, size={}", .{ byte_offset, roc__serialized_size }) catch "def_idx out of bounds";
-            roc_ops.crash(err_msg);
-            return error.MemoryLayoutInvalid;
+    // Look up entrypoint index from shared memory
+    const base_ptr = roc__serialized_base_ptr.?;
+    const def_indices_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(global_def_indices_offset));
+    const def_indices: [*]const u32 = @ptrFromInt(def_indices_addr);
+    const def_idx = def_indices[entry_idx];
+
+    // Find the expression in the primary env (platform or app)
+    const def_id: CIR.Def.Idx = @enumFromInt(def_idx);
+    const entrypoint_expr = env_ptr.store.getDef(def_id).expr;
+
+    const defs = env_ptr.store.sliceDefs(env_ptr.all_defs);
+    var entry_def: ?CIR.Def.Idx = null;
+    for (defs) |def_idx_candidate| {
+        const def = env_ptr.store.getDef(def_idx_candidate);
+        if (def.expr == entrypoint_expr) {
+            entry_def = def_idx_candidate;
+            break;
         }
-        const ptr: *const [4]u8 = @ptrCast(base_ptr + byte_offset);
-        const val = std.mem.readInt(u32, ptr, .little);
-        break :blk val;
-    } else blk: {
-        // For legacy format, use safe aligned read
-        break :blk safe_memory.safeRead(u32, base_ptr, @intCast(def_offset), roc__serialized_size) catch |err| {
-            const read_err = std.fmt.bufPrint(&buf, "Failed to read def_idx: {}", .{err}) catch "Failed to read def_idx";
-            roc_ops.crash(read_err);
-            return error.MemoryLayoutInvalid;
-        };
+    }
+    const entry_def_idx = entry_def orelse {
+        roc_ops.crash("Interpreter shim: entry def not found");
+        return error.EvaluationFailed;
     };
-    const def_idx: CIR.Def.Idx = @enumFromInt(def_idx_raw);
 
-    // Get the definition and extract its expression
-    const def = env_ptr.store.getDef(def_idx);
-    const expr_idx = def.expr;
+    var source_modules = try wrapped_allocator.alloc(check.TypedCIR.Modules.SourceModule, lowering_module_envs.len);
+    defer wrapped_allocator.free(source_modules);
+    for (lowering_module_envs, 0..) |module_env, i| {
+        source_modules[i] = .{ .precompiled = module_env };
+    }
+    var typed_modules = try check.TypedCIR.Modules.init(wrapped_allocator, source_modules);
+    defer typed_modules.deinit();
+    try compile.platform_requirements.populateRequiredLookupTargets(&typed_modules, app_module_idx);
 
-    // WASM-compatible tracing for entry point evaluation
-    traceDbg(roc_ops, "Evaluating entry_idx={d}, def_idx={d}, expr_idx={d}", .{ entry_idx, def_idx_raw, @intFromEnum(expr_idx) });
+    var mono_lowerer = try monotype.Lower.Lowerer.init(
+        wrapped_allocator,
+        &typed_modules,
+        builtin_module_idx,
+        app_module_idx,
+    );
+    defer mono_lowerer.deinit();
+    const entry_symbol = try mono_lowerer.specializeTopLevelDef(primary_module_idx, entry_def_idx);
+    var mono = try mono_lowerer.run(primary_module_idx);
+    defer mono.deinit();
+    var lifted = try monotype_lifted.Lower.run(wrapped_allocator, &mono);
+    defer lifted.deinit();
+    var solved = try lambdasolved.Lower.run(wrapped_allocator, &lifted);
+    defer solved.deinit();
+    var executable = try lambdamono.Lower.runWithEntrypoints(wrapped_allocator, &solved, &.{entry_symbol});
+    const entrypoint_wrappers = executable.entrypoint_wrappers;
+    executable.entrypoint_wrappers = &.{};
+    defer if (entrypoint_wrappers.len > 0) wrapped_allocator.free(entrypoint_wrappers);
+    defer executable.deinit();
+    const entry_symbol_for_lir = if (entrypoint_wrappers.len == 0)
+        entry_symbol
+    else
+        entrypoint_wrappers[0];
+    var lowered_ir = try ir.Lower.run(wrapped_allocator, &executable);
 
-    // Evaluate the expression (with optional arguments)
-    interpreter.evaluateExpression(expr_idx, ret_ptr, roc_ops, arg_ptr) catch |err| switch (err) {
-        error.TypeMismatch => {
-            roc_ops.crash("TypeMismatch from evaluateExpression");
-            return err;
-        },
-        else => return err,
+    var lir_result = try lir.FromIr.run(
+        wrapped_allocator,
+        lowering_module_envs_const,
+        builtin_str,
+        base.target.TargetUsize.native,
+        &lowered_ir,
+    );
+    defer lir_result.deinit();
+    try lir.Ownership.inferProcResultContracts(wrapped_allocator, &lir_result.store, &lir_result.layouts);
+    try lir.RcInsert.run(wrapped_allocator, &lir_result.store, &lir_result.layouts);
+
+    const proc_id = lir_result.proc_ids_by_symbol.get(entry_symbol_for_lir.raw()) orelse {
+        roc_ops.crash("Interpreter shim: entry proc not found");
+        return error.EvaluationFailed;
     };
+    const proc = lir_result.store.getProcSpec(proc_id);
+    const arg_locals = lir_result.store.getLocalSpan(proc.args);
+    var arg_layouts = try wrapped_allocator.alloc(layout.Idx, arg_locals.len);
+    defer wrapped_allocator.free(arg_layouts);
+    for (arg_locals, 0..) |local_id, i| {
+        arg_layouts[i] = lir_result.store.getLocal(local_id).layout_idx;
+    }
+
+    var interpreter = try eval.Interpreter.init(wrapped_allocator, &lir_result.store, &lir_result.layouts, roc_ops);
+    defer interpreter.deinit();
+
+    const eval_result = interpreter.eval(.{
+        .proc_id = proc_id,
+        .arg_layouts = arg_layouts,
+        .ret_layout = proc.ret_layout,
+        .arg_ptr = arg_ptr,
+        .ret_ptr = ret_ptr,
+    }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.RuntimeError, error.DivisionByZero, error.Crash => return error.EvaluationFailed,
+    };
+
+    interpreter.dropValue(eval_result.value, proc.ret_layout);
 }
 
 /// Result of setting up module environments
 const SetupResult = struct {
-    primary_env: *ModuleEnv, // Platform main env or app env (for entry points)
-    app_env: *ModuleEnv, // App env (for e_lookup_required resolution)
+    primary_env: *ModuleEnv,
+    app_env: *ModuleEnv,
 };
 
 /// Set up ModuleEnv from serialized data with proper relocation (multi-module format)
-/// Works for both IPC mode (roc run) and embedded mode (roc build)
-/// Detects portable serialized format (cross-architecture) via magic number
 fn setupModuleEnv(roc_ops: *RocOps) ShimError!SetupResult {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -539,36 +630,29 @@ fn setupModuleEnv(roc_ops: *RocOps) ShimError!SetupResult {
     const base_ptr = roc__serialized_base_ptr.?;
     const allocator = wrapped_allocator;
 
-    // Check for portable serialized format by looking at first 4 bytes
-    // The magic number is at the very start of the buffer (no FIRST_ALLOC_OFFSET for portable format)
-    // Use unaligned read to avoid alignment issues in debug builds
+    // Check for portable serialized format
     const magic = std.mem.readInt(u32, base_ptr[0..4], .little);
     if (magic == SERIALIZED_FORMAT_MAGIC) {
-        // Portable serialized format - use deserialize()
         return setupModuleEnvFromSerialized(roc_ops, base_ptr, allocator);
     }
 
-    // Legacy format: Read parent's shared memory base address from header and calculate relocation offset
-    // For embedded mode: parent_base_addr == 0
-    // For IPC mode: parent_base_addr == actual parent address
+    // Legacy format
     const header_addr = @intFromPtr(base_ptr) + FIRST_ALLOC_OFFSET;
     const header_ptr: *const Header = @ptrFromInt(header_addr);
     const parent_base_addr = header_ptr.parent_base_addr;
     const module_count = header_ptr.module_count;
 
-    // Store header info in globals for use during evaluation (legacy format)
+    // Cache header info
     global_entry_count = header_ptr.entry_count;
     global_def_indices_offset = header_ptr.def_indices_offset;
     global_is_serialized_format = false;
 
     // Calculate relocation offset
     const child_base_addr = @intFromPtr(base_ptr);
-    // Use signed arithmetic to avoid overflow on 64-bit addresses
     const offset: i64 = @as(i64, @intCast(child_base_addr)) - @as(i64, @intCast(parent_base_addr));
 
-    // Verify offset preserves alignment (ASLR can cause misaligned shared memory mapping)
-    // Skip debug checks on freestanding as std.debug.print uses stderr which isn't available
-    if (comptime builtin.mode == .Debug and !is_wasm32) {
+    // In debug mode, verify that the offset is aligned to the serialization alignment
+    if (comptime builtin.mode == .Debug) {
         const REQUIRED_ALIGNMENT: u64 = collections.SERIALIZATION_ALIGNMENT.toByteUnits();
         const abs_offset: u64 = @abs(offset);
         if (abs_offset % REQUIRED_ALIGNMENT != 0) {
@@ -615,6 +699,8 @@ fn setupModuleEnv(roc_ops: *RocOps) ShimError!SetupResult {
         roc_ops.crash("Failed to allocate imported envs array");
         return error.OutOfMemory;
     };
+    var unique_module_envs = std.ArrayList(*ModuleEnv).empty;
+    defer unique_module_envs.deinit(allocator);
 
     // Relocate platform modules first (indices 0 to module_count-2)
     for (0..module_count - 1) |i| {
@@ -636,7 +722,7 @@ fn setupModuleEnv(roc_ops: *RocOps) ShimError!SetupResult {
 
         const module_env_ptr: *ModuleEnv = @ptrFromInt(module_env_addr);
         module_env_ptr.relocate(@intCast(offset));
-        module_env_ptr.gpa = allocator;
+        try appendModuleEnvIfMissing(allocator, &unique_module_envs, module_env_ptr);
         imported_envs[i] = module_env_ptr;
     }
 
@@ -660,7 +746,7 @@ fn setupModuleEnv(roc_ops: *RocOps) ShimError!SetupResult {
 
     const app_env_ptr: *ModuleEnv = @ptrFromInt(app_env_addr);
     app_env_ptr.relocate(@intCast(offset));
-    app_env_ptr.gpa = allocator;
+    try appendModuleEnvIfMissing(allocator, &unique_module_envs, app_env_ptr);
 
     // Determine primary env: platform main if available, otherwise app
     const primary_env: *ModuleEnv = if (header_ptr.platform_main_env_offset != 0) blk: {
@@ -680,9 +766,13 @@ fn setupModuleEnv(roc_ops: *RocOps) ShimError!SetupResult {
 
         const platform_env_ptr: *ModuleEnv = @ptrFromInt(platform_env_addr);
         platform_env_ptr.relocate(@intCast(offset));
-        platform_env_ptr.gpa = allocator;
+        try appendModuleEnvIfMissing(allocator, &unique_module_envs, platform_env_ptr);
         break :blk platform_env_ptr;
     } else app_env_ptr;
+
+    for (unique_module_envs.items) |module_env| {
+        try rebuildLegacyRuntimeState(roc_ops, module_env, allocator);
+    }
 
     return SetupResult{
         .primary_env = primary_env,
@@ -804,41 +894,4 @@ fn setupModuleEnvFromSerialized(roc_ops: *RocOps, base_ptr: [*]align(1) u8, allo
         .primary_env = env_ptrs[primary_env_index],
         .app_env = env_ptrs[app_env_index],
     };
-}
-
-/// Create interpreter instance (global setup was done in initializeOnce)
-/// This is now lightweight and safe to call per-evaluation since it doesn't modify global state.
-fn createInterpreter(env_ptr: *ModuleEnv, app_env: ?*ModuleEnv, builtin_modules: *const eval.BuiltinModules, roc_ops: *RocOps) ShimError!Interpreter {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const allocator = wrapped_allocator;
-
-    // Use builtin types from the loaded builtin modules
-    const builtin_types = builtin_modules.asBuiltinTypes();
-    const builtin_module_env = builtin_modules.builtin_module.env;
-
-    // Create a copy of the global imported_envs slice for this interpreter instance
-    // The interpreter takes ownership and will free this on deinit
-    const global_envs = global_full_imported_envs.?;
-    const imported_envs = allocator.dupe(*const can.ModuleEnv, global_envs) catch {
-        roc_ops.crash("Failed to duplicate imported envs slice");
-        return error.OutOfMemory;
-    };
-
-    traceDbg(roc_ops, "=== Creating Interpreter ===", .{});
-    traceDbg(roc_ops, "imported_envs.len={d}, primary=\"{s}\"", .{ imported_envs.len, env_ptr.module_name });
-
-    var interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, builtin_module_env, imported_envs, getShimImportMapping(), app_env, global_constant_strings_arena, roc_target.RocTarget.detectNative()) catch {
-        roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
-        return error.InterpreterSetupFailed;
-    };
-
-    // Setup for-clause type mappings from platform to app
-    interpreter.setupForClauseTypeMappings(env_ptr) catch {
-        roc_ops.crash("INTERPRETER SHIM: Failed to setup for-clause type mappings");
-        return error.InterpreterSetupFailed;
-    };
-
-    return interpreter;
 }

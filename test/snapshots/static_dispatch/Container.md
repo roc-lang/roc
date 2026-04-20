@@ -194,30 +194,30 @@ EndOfFile,
 							(e-int (raw "100"))))
 					(s-decl
 						(p-ident (raw "chained"))
-						(e-field-access
-							(e-field-access
-								(e-field-access
-									(e-ident (raw "num_container"))
-									(e-apply
-										(e-ident (raw ".map"))
+						(e-method-call (method ".get_or")
+							(receiver
+								(e-method-call (method ".flat_map")
+									(receiver
+										(e-method-call (method ".map")
+											(receiver
+												(e-ident (raw "num_container")))
+											(args
+												(e-lambda
+													(args
+														(p-ident (raw "x")))
+													(e-binop (op "+")
+														(e-ident (raw "x"))
+														(e-int (raw "1")))))))
+									(args
 										(e-lambda
 											(args
 												(p-ident (raw "x")))
-											(e-binop (op "+")
-												(e-ident (raw "x"))
-												(e-int (raw "1"))))))
-								(e-apply
-									(e-ident (raw ".flat_map"))
-									(e-lambda
-										(args
-											(p-ident (raw "x")))
-										(e-apply
-											(e-tag (raw "Container.Value"))
-											(e-binop (op "+")
-												(e-ident (raw "x"))
-												(e-int (raw "2")))))))
-							(e-apply
-								(e-ident (raw ".get_or"))
+											(e-apply
+												(e-tag (raw "Container.Value"))
+												(e-binop (op "+")
+													(e-ident (raw "x"))
+													(e-int (raw "2"))))))))
+							(args
 								(e-int (raw "0")))))
 					(e-ident (raw "chained")))))))
 ~~~
@@ -256,9 +256,15 @@ func = {
 	num_container = Container.Value(100)
 
 	chained = num_container
-		.map(|x| x + 1)
-		.flat_map(|x| Container.Value(x + 2))
-		.get_or(0)
+		.map(
+			|x| x + 1,
+		)
+		.flat_map(
+			|x| Container.Value(x + 2),
+		)
+		.get_or(
+			0,
+		)
 
 	chained
 }
@@ -385,11 +391,11 @@ func = {
 							(e-num (value "100"))))))
 			(s-let
 				(p-assign (ident "chained"))
-				(e-dot-access (field "get_or")
+				(e-method-call (method "get_or")
 					(receiver
-						(e-dot-access (field "flat_map")
+						(e-method-call (method "flat_map")
 							(receiver
-								(e-dot-access (field "map")
+								(e-method-call (method "map")
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "num_container"))))

@@ -1455,7 +1455,7 @@ EndOfFile,
 								(field (name "bar") (rest false)
 									(p-int (raw "2")))
 								(field (name "rest") (rest true)))
-							(e-local-dispatch
+							(e-arrow-call
 								(e-int (raw "12"))
 								(e-apply
 									(e-ident (raw "add"))
@@ -2262,17 +2262,17 @@ expect {
 					(e-match
 						(match
 							(cond
-								(e-dot-access (field "recd")
+								(e-field-access (field "recd")
 									(receiver
 										(e-match
 											(match
 												(cond
-													(e-dot-access (field "ned")
+													(e-field-access (field "ned")
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dot-access (field "statod")
+																		(e-field-access (field "statod")
 																			(receiver
 																				(e-match
 																					(match
@@ -2496,7 +2496,7 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "(Error, Error)"))
-		(patt (type "Bool -> Dec"))
+		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "U64 -> U64"))
 		(patt (type "[Blue, Red, ..], _arg -> Error"))
 		(patt (type "List(Error) -> Try({}, _d)"))
@@ -2533,7 +2533,7 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "(Error, Error)"))
-		(expr (type "Bool -> Dec"))
+		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "U64 -> U64"))
 		(expr (type "[Blue, Red, ..], _arg -> Error"))
 		(expr (type "List(Error) -> Try({}, _d)"))

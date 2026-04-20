@@ -1,22 +1,41 @@
 //! Evaluation module for the Roc compiler.
 //!
-//! Provides native code generation and execution for Roc expressions.
+//! Provides interpreter-based evaluation support.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
-/// Dev backend-based evaluator for native code generation using Mono IR
-const dev_evaluator_mod = @import("dev_evaluator.zig");
-pub const DevEvaluator = dev_evaluator_mod.DevEvaluator;
+/// Backends available for evaluating Roc code.
+pub const EvalBackend = enum {
+    interpreter,
+    dev,
+    wasm,
+    llvm,
+};
+
+/// Whether a backend is currently implemented in this compiler build.
+pub fn backendAvailable(backend_kind: EvalBackend) bool {
+    if (builtin.target.os.tag == .freestanding and backend_kind != .wasm) return false;
+    return switch (backend_kind) {
+        .interpreter => true,
+        .dev => true,
+        .wasm => true,
+        // TODO: implement statement-only LIR LLVM codegen.
+        .llvm => false,
+    };
+}
+
 /// Compile-time value representation for the dev backend
 pub const comptime_value = @import("comptime_value.zig");
+/// Compile-time evaluator for top-level declarations
+pub const ComptimeEvaluator = @import("comptime_evaluator.zig").ComptimeEvaluator;
+/// Dev backend evaluator for tests/CLI expect execution.
+pub const DevEvaluator = @import("dev_evaluator.zig").DevEvaluator;
 /// Executable memory for running generated code (re-exported from backend module)
 const backend = @import("backend");
 pub const ExecutableMemory = backend.ExecutableMemory;
 /// Layout module (re-exported for result type information)
 pub const layout = @import("layout");
-/// Interpreter-specific layout module, forked to keep runtime evaluation isolated
-/// from future dev-backend layout changes.
-pub const interpreter_layout = @import("interpreter_layout");
 /// Utilities for loading compiled builtin modules
 pub const builtin_loading = @import("builtin_loading.zig");
 /// Centralized loading and management of builtin modules
@@ -27,66 +46,88 @@ pub const BuiltinTypes = @import("builtins.zig").BuiltinTypes;
 const crash_context = @import("crash_context.zig");
 pub const CrashContext = crash_context.CrashContext;
 pub const CrashState = crash_context.CrashState;
-/// Compile-time expression evaluator for constant folding
-pub const ComptimeEvaluator = @import("comptime_evaluator.zig").ComptimeEvaluator;
-/// Interpreter for running CIR expressions
-pub const Interpreter = @import("interpreter.zig").Interpreter;
-/// Stack value representation for interpreter
+
+/// Concrete runtime value for the interpreter
+pub const value = @import("value.zig");
+pub const Value = value.Value;
+/// Stack value representation used by the interpreter
 pub const StackValue = @import("StackValue.zig");
-/// Render helpers for outputting values
-pub const render_helpers = @import("render_helpers.zig");
-/// Stack memory allocator for evaluating Roc IR
-const stack_mod = @import("stack.zig");
-pub const Stack = stack_mod.Stack;
-pub const StackOverflow = stack_mod.StackOverflow;
-/// Eval error type alias
-pub const EvalError = Interpreter.Error;
-/// Test runner for expect expressions
+const real_interpreter = @import("interpreter.zig");
+/// LIR expression interpreter
+pub const interpreter = if (builtin.target.os.tag == .freestanding) struct {
+    pub const Interpreter = struct {
+        pub const EvalRequest = struct {
+            proc_id: @import("lir").LirProcSpecId,
+            arg_layouts: []const @import("layout").Idx = &.{},
+            ret_layout: ?@import("layout").Idx = null,
+            arg_ptr: ?*anyopaque = null,
+            ret_ptr: ?*anyopaque = null,
+        };
+
+        pub const EvalResult = union(enum) {
+            value: @import("value.zig").Value,
+        };
+
+        pub fn init(
+            _: std.mem.Allocator,
+            _: *const @import("lir").LirStore,
+            _: *const @import("layout").Store,
+            _: *const @import("builtins").host_abi.RocOps,
+        ) error{BackendUnavailable}!@This() {
+            return error.BackendUnavailable;
+        }
+
+        pub fn deinit(_: *@This()) void {}
+
+        pub fn eval(_: *@This(), _: EvalRequest) error{BackendUnavailable}!EvalResult {
+            return error.BackendUnavailable;
+        }
+    };
+} else real_interpreter;
+pub const Interpreter = interpreter.Interpreter;
+pub const LirInterpreter = real_interpreter.Interpreter;
+/// Production-faithful RocOps recorder used by eval tests.
+pub const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
+/// Backward-compatible export for existing eval test helpers and tests.
+pub const TestEnv = RuntimeHostEnv;
+/// Snapshot/eval runner for expect statements.
 pub const TestRunner = @import("test_runner.zig").TestRunner;
-/// LLVM-based evaluator for optimized code generation
-pub const LlvmEvaluator = @import("llvm_evaluator.zig").LlvmEvaluator;
-/// WebAssembly-based evaluator for wasm code generation
-const wasm_evaluator_mod = @import("wasm_evaluator.zig");
-pub const WasmEvaluator = wasm_evaluator_mod.WasmEvaluator;
+/// Shared cor-style eval test helpers.
+pub const test_helpers = @import("test/helpers.zig");
+/// Shared parsing/checking/lowering pipeline.
+pub const pipeline = @import("pipeline.zig");
+/// LIR-backed wasm evaluator.
+pub const wasm_evaluator = @import("wasm_evaluator.zig");
+/// Bytebox runner for wasm modules.
+pub const wasm_runner = if (builtin.target.os.tag == .freestanding) struct {
+    pub const EvalError = error{WasmExecFailed};
+
+    pub fn runWasmStr(_: std.mem.Allocator, _: []const u8, _: bool) EvalError![]u8 {
+        return error.WasmExecFailed;
+    }
+} else @import("wasm_runner.zig");
 
 test "eval tests" {
     std.testing.refAllDecls(@This());
-
-    std.testing.refAllDecls(@import("dev_evaluator.zig"));
     std.testing.refAllDecls(@import("comptime_value.zig"));
     std.testing.refAllDecls(@import("BuiltinModules.zig"));
     std.testing.refAllDecls(@import("builtins.zig"));
     std.testing.refAllDecls(@import("crash_context.zig"));
-    std.testing.refAllDecls(@import("comptime_evaluator.zig"));
+    std.testing.refAllDecls(@import("value.zig"));
+    std.testing.refAllDecls(@import("interpreter_values.zig"));
     std.testing.refAllDecls(@import("interpreter.zig"));
-    std.testing.refAllDecls(@import("StackValue.zig"));
-    std.testing.refAllDecls(@import("render_helpers.zig"));
-    std.testing.refAllDecls(@import("llvm_evaluator.zig"));
-    std.testing.refAllDecls(@import("wasm_evaluator.zig"));
     std.testing.refAllDecls(@import("stack.zig"));
+    std.testing.refAllDecls(@import("comptime_interpreter.zig"));
+    std.testing.refAllDecls(@import("comptime_evaluator.zig"));
+    std.testing.refAllDecls(@import("test/RuntimeHostEnv.zig"));
     std.testing.refAllDecls(@import("test/TestEnv.zig"));
-
-    // Test files that compare interpreter output with dev backend
     std.testing.refAllDecls(@import("test/helpers.zig"));
-    std.testing.refAllDecls(@import("test/eval_test.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_basic.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_simple.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_nested.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_pattern.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_alias.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_complex.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_conditional.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_containers.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_function.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_builtins.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_strings.zig"));
-    std.testing.refAllDecls(@import("test/arithmetic_comprehensive_test.zig"));
     std.testing.refAllDecls(@import("test/anno_only_interp_test.zig"));
     std.testing.refAllDecls(@import("test/comptime_eval_test.zig"));
-    std.testing.refAllDecls(@import("test/interpreter_polymorphism_test.zig"));
-    std.testing.refAllDecls(@import("test/interpreter_style_test.zig"));
-    std.testing.refAllDecls(@import("test/low_level_interp_test.zig"));
+    std.testing.refAllDecls(@import("test/cor_pipeline_test.zig"));
+    std.testing.refAllDecls(@import("test/module_env_serialization_test.zig"));
     std.testing.refAllDecls(@import("test/mono_emit_test.zig"));
-    std.testing.refAllDecls(@import("test/closure_test.zig"));
     std.testing.refAllDecls(@import("test/stack_test.zig"));
+    std.testing.refAllDecls(@import("pipeline.zig"));
+    std.testing.refAllDecls(@import("wasm_evaluator.zig"));
 }
