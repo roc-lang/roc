@@ -97,17 +97,22 @@ pub const Expr = struct {
             lhs: ExprId,
             rhs: ExprId,
         },
-        method_call: struct {
-            receiver: ExprId,
-            method_fn_ty: TypeVarId,
-            method_name: base.Ident.Idx,
-            args: Span(ExprId),
+        method_eq: struct {
+            lhs: ExprId,
+            rhs: ExprId,
+            negated: bool,
         },
-        type_method_call: struct {
-            dispatcher_ty: TypeVarId,
-            method_fn_ty: TypeVarId,
+        dispatch_call: struct {
+            receiver: ExprId,
             method_name: base.Ident.Idx,
             args: Span(ExprId),
+            dispatch_constraint_ty: TypeVarId,
+        },
+        type_dispatch_call: struct {
+            dispatcher_ty: TypeVarId,
+            method_name: base.Ident.Idx,
+            args: Span(ExprId),
+            dispatch_constraint_ty: TypeVarId,
         },
         let_: struct {
             bind: TypedSymbol,

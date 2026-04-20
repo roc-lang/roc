@@ -73,7 +73,7 @@ pub const Pass = struct {
                 .assign_ref => |assign| try self.incrementIncomingCount(assign.next),
                 .assign_literal => |assign| try self.incrementIncomingCount(assign.next),
                 .assign_call => |assign| try self.incrementIncomingCount(assign.next),
-                .assign_call_indirect => |assign| try self.incrementIncomingCount(assign.next),
+                .assign_call_erased => |assign| try self.incrementIncomingCount(assign.next),
                 .assign_low_level => |assign| try self.incrementIncomingCount(assign.next),
                 .assign_list => |assign| try self.incrementIncomingCount(assign.next),
                 .assign_struct => |assign| try self.incrementIncomingCount(assign.next),
@@ -134,7 +134,7 @@ pub const Pass = struct {
                 .args = assign.args,
                 .next = next,
             } },
-            .assign_call_indirect => |assign| .{ .assign_call_indirect = .{
+            .assign_call_erased => |assign| .{ .assign_call_erased = .{
                 .target = assign.target,
                 .result = assign.result,
                 .ownership = assign.ownership,
@@ -226,8 +226,8 @@ pub const Pass = struct {
                 self.assertValidStmtId(assign.next, "appendSuccessors assign_call.next");
                 try out.append(self.allocator, assign.next);
             },
-            .assign_call_indirect => |assign| {
-                self.assertValidStmtId(assign.next, "appendSuccessors assign_call_indirect.next");
+            .assign_call_erased => |assign| {
+                self.assertValidStmtId(assign.next, "appendSuccessors assign_call_erased.next");
                 try out.append(self.allocator, assign.next);
             },
             .assign_low_level => |assign| {
@@ -402,9 +402,9 @@ pub const Pass = struct {
                 stmt,
                 try self.rewritePrefixChild(assign.next, stop_id, join_id, clone_suffix, clone_map, prefix_map, "rewritePrefixUntilInner assign_call.next"),
             ),
-            .assign_call_indirect => |assign| linearWithNext(
+            .assign_call_erased => |assign| linearWithNext(
                 stmt,
-                try self.rewritePrefixChild(assign.next, stop_id, join_id, clone_suffix, clone_map, prefix_map, "rewritePrefixUntilInner assign_call_indirect.next"),
+                try self.rewritePrefixChild(assign.next, stop_id, join_id, clone_suffix, clone_map, prefix_map, "rewritePrefixUntilInner assign_call_erased.next"),
             ),
             .assign_low_level => |assign| linearWithNext(
                 stmt,
@@ -733,7 +733,7 @@ pub const Pass = struct {
             .assign_ref => |assign| linearWithNext(stmt, try self.rewriteStmtWithCloneModeInner(assign.next, must_clone, clone_map)),
             .assign_literal => |assign| linearWithNext(stmt, try self.rewriteStmtWithCloneModeInner(assign.next, must_clone, clone_map)),
             .assign_call => |assign| linearWithNext(stmt, try self.rewriteStmtWithCloneModeInner(assign.next, must_clone, clone_map)),
-            .assign_call_indirect => |assign| linearWithNext(stmt, try self.rewriteStmtWithCloneModeInner(assign.next, must_clone, clone_map)),
+            .assign_call_erased => |assign| linearWithNext(stmt, try self.rewriteStmtWithCloneModeInner(assign.next, must_clone, clone_map)),
             .assign_low_level => |assign| linearWithNext(stmt, try self.rewriteStmtWithCloneModeInner(assign.next, must_clone, clone_map)),
             .assign_list => |assign| linearWithNext(stmt, try self.rewriteStmtWithCloneModeInner(assign.next, must_clone, clone_map)),
             .assign_struct => |assign| linearWithNext(stmt, try self.rewriteStmtWithCloneModeInner(assign.next, must_clone, clone_map)),

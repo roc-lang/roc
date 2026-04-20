@@ -2056,6 +2056,14 @@ fn findPattern3(buf: []const u8, b0: u8, b1: u8, b2: u8) ?usize {
     return null;
 }
 
+fn findPattern4(buf: []const u8, b0: u8, b1: u8, b2: u8, b3: u8) ?usize {
+    if (buf.len < 4) return null;
+    for (0..buf.len - 3) |i| {
+        if (buf[i] == b0 and buf[i + 1] == b1 and buf[i + 2] == b2 and buf[i + 3] == b3) return i;
+    }
+    return null;
+}
+
 // x86_64 MOV reg,reg encoding reference (opcode 0x89, MOV r/m64, r64):
 // REX = 0x40 | (W<<3) | (R<<2) | B, where R=src.rexR, B=dst.rexB
 // ModRM = 0xC0 | (src.enc()<<3) | dst.enc()
@@ -2190,6 +2198,31 @@ test "parallel move: LEA then REG reading same dest — reordered" {
 
     // No scratch needed (LEA source isn't a register, can't form cycle)
     try std.testing.expect(findPattern3(emit.buf.items, 0x49, 0x89, 0xF3) == null);
+}
+
+test "aarch64 parallel move: LEA then REG reading same dest — reordered" {
+    const Emit = aarch64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    try builder.addLeaArg(.FP, -32); // dst=X0, sub x0, x29, #32
+    try builder.addRegArg(.X0); // dst=X1, src=X0
+
+    try builder.call(0x12345678);
+
+    // mov x1, x0  == aa0003e1
+    const mov_pos = findPattern4(emit.buf.items, 0xE1, 0x03, 0x00, 0xAA);
+    try std.testing.expect(mov_pos != null);
+    // sub x0, x29, #32 == d10083a0
+    const lea_pos = findPattern4(emit.buf.items, 0xA0, 0x83, 0x00, 0xD1);
+    try std.testing.expect(lea_pos != null);
+
+    try std.testing.expect(mov_pos.? < lea_pos.?);
 }
 
 test "parallel move: self-move eliminated" {

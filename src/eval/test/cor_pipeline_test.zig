@@ -171,11 +171,11 @@ fn countDirectCalls(compiled: *const helpers.CompiledProgram) usize {
     return count;
 }
 
-fn countIndirectCalls(compiled: *const helpers.CompiledProgram) usize {
+fn countErasedCalls(compiled: *const helpers.CompiledProgram) usize {
     var count: usize = 0;
     for (compiled.lowered.lir_result.store.cf_stmts.items) |stmt| {
         switch (stmt) {
-            .assign_call_indirect => count += 1,
+            .assign_call_erased => count += 1,
             else => {},
         }
     }
@@ -191,6 +191,28 @@ const CompiledExecutableProgram = struct {
         helpers.cleanupParseAndCanonical(allocator, self.resources);
     }
 };
+
+fn compileMonotypeFromParsedResources(
+    allocator: std.mem.Allocator,
+    resources: *helpers.ParsedResources,
+) !monotype.Lower.Result {
+    var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, &resources.typed_cir_modules, 1, null);
+    defer mono_lowerer.deinit();
+    return mono_lowerer.run(0);
+}
+
+fn compileExecutableFromParsedResources(
+    allocator: std.mem.Allocator,
+    resources: *helpers.ParsedResources,
+) !lambdamono.Lower.Result {
+    var mono = try compileMonotypeFromParsedResources(allocator, resources);
+    defer mono.deinit();
+    var lifted = try monotype_lifted.Lower.run(allocator, &mono);
+    defer lifted.deinit();
+    var solved = try lambdasolved.Lower.run(allocator, &lifted);
+    defer solved.deinit();
+    return lambdamono.Lower.run(allocator, &solved);
+}
 
 const CompiledIrProgram = struct {
     resources: helpers.ParsedResources,
@@ -265,11 +287,11 @@ fn countExecutableDirectCalls(executable: *const lambdamono.Lower.Result) usize 
     return count;
 }
 
-fn countExecutableIndirectCalls(executable: *const lambdamono.Lower.Result) usize {
+fn countExecutableErasedCalls(executable: *const lambdamono.Lower.Result) usize {
     var count: usize = 0;
     for (executable.store.exprs.items) |expr| {
         switch (expr.data) {
-            .call_indirect => count += 1,
+            .call_erased => count += 1,
             else => {},
         }
     }
@@ -420,7 +442,7 @@ fn expectDirectOnlyLoweringProgram(
     defer executable.deinit(arena_allocator);
 
     const executable_direct = countExecutableDirectCalls(&executable.executable);
-    const executable_indirect = countExecutableIndirectCalls(&executable.executable);
+    const executable_erased_calls = countExecutableErasedCalls(&executable.executable);
     const executable_packed = countExecutablePackedFns(&executable.executable);
     const executable_erased = countExecutableErasedFnTypes(&executable.executable);
 
@@ -428,23 +450,23 @@ fn expectDirectOnlyLoweringProgram(
     defer compiled.deinit(arena_allocator);
 
     const lir_direct = countDirectCalls(&compiled);
-    const lir_indirect = countIndirectCalls(&compiled);
+    const lir_erased_calls = countErasedCalls(&compiled);
     try testing.expectEqual(expected_executable_direct_calls, executable_direct);
-    try testing.expectEqual(@as(usize, 0), executable_indirect);
+    try testing.expectEqual(@as(usize, 0), executable_erased_calls);
     try testing.expectEqual(@as(usize, 0), executable_packed);
     try testing.expectEqual(@as(usize, 0), executable_erased);
     try testing.expectEqual(expected_lir_direct_calls, lir_direct);
-    try testing.expectEqual(@as(usize, 0), lir_indirect);
+    try testing.expectEqual(@as(usize, 0), lir_erased_calls);
 }
 
 fn expectErasedLoweringProgram(
     source_kind: helpers.SourceKind,
     source: []const u8,
     imports: []const helpers.ModuleSource,
-    expected_executable_indirect_calls: usize,
+    expected_executable_erased_calls: usize,
     expected_executable_packed_fns: usize,
     expected_executable_erased_fn_types: usize,
-    expected_lir_indirect_calls: usize,
+    expected_lir_erased_calls: usize,
 ) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -453,18 +475,18 @@ fn expectErasedLoweringProgram(
     var executable = try compileExecutableProgram(arena_allocator, source_kind, source, imports);
     defer executable.deinit(arena_allocator);
 
-    const executable_indirect = countExecutableIndirectCalls(&executable.executable);
+    const executable_erased_calls = countExecutableErasedCalls(&executable.executable);
     const executable_packed = countExecutablePackedFns(&executable.executable);
     const executable_erased = countExecutableErasedFnTypes(&executable.executable);
 
     var compiled = try helpers.compileProgram(arena_allocator, source_kind, source, imports);
     defer compiled.deinit(arena_allocator);
 
-    const lir_indirect = countIndirectCalls(&compiled);
-    try testing.expectEqual(expected_executable_indirect_calls, executable_indirect);
+    const lir_erased_calls = countErasedCalls(&compiled);
+    try testing.expectEqual(expected_executable_erased_calls, executable_erased_calls);
     try testing.expectEqual(expected_executable_packed_fns, executable_packed);
     try testing.expectEqual(expected_executable_erased_fn_types, executable_erased);
-    try testing.expectEqual(expected_lir_indirect_calls, lir_indirect);
+    try testing.expectEqual(expected_lir_erased_calls, lir_erased_calls);
 }
 
 const DirectCallCase = struct {
@@ -835,10 +857,10 @@ const ErasedCallCase = struct {
     source_kind: helpers.SourceKind,
     source: []const u8,
     imports: []const helpers.ModuleSource = &.{},
-    expected_executable_indirect_calls: usize,
+    expected_executable_erased_calls: usize,
     expected_executable_packed_fns: usize,
     expected_executable_erased_fn_types: usize,
-    expected_lir_indirect_calls: usize,
+    expected_lir_erased_calls: usize,
 };
 
 const boxed_lambda_round_trip_erased_case = ErasedCallCase{
@@ -851,10 +873,10 @@ const boxed_lambda_round_trip_erased_case = ErasedCallCase{
     \\    f(41.I64)
     \\}
     ,
-    .expected_executable_indirect_calls = 2,
+    .expected_executable_erased_calls = 2,
     .expected_executable_packed_fns = 1,
     .expected_executable_erased_fn_types = 1,
-    .expected_lir_indirect_calls = 3,
+    .expected_lir_erased_calls = 3,
 };
 
 fn countHostedProcSpecs(compiled: *const helpers.CompiledProgram) usize {
@@ -1123,6 +1145,65 @@ test "cor pipeline - generic local attached method specialization on nominal was
     defer testing.allocator.free(actual);
 
     try testing.expectEqualStrings("(5, 8)", actual);
+}
+
+test "cor pipeline - checked nominal method call rewrites to dispatch_call" {
+    var resources = try helpers.parseAndCanonicalizeProgram(
+        testing.allocator,
+        .module,
+        \\Counter := [Counter(U64)].{
+        \\  get : Counter -> U64
+        \\  get = |Counter.Counter(n)| n
+        \\}
+        \\
+        \\main = Counter.Counter(5).get()
+    ,
+        &.{},
+    );
+    defer helpers.cleanupParseAndCanonical(testing.allocator, resources);
+
+    switch (resources.module_env.store.getExpr(resources.expr_idx)) {
+        .e_dispatch_call => |call| {
+            try testing.expectEqual(@as(usize, 0), resources.module_env.store.sliceExpr(call.args).len);
+        },
+        else => return error.UnexpectedCheckedDispatchShape,
+    }
+}
+
+test "cor pipeline - checked record equality stays structural_eq" {
+    var resources = try helpers.parseAndCanonicalizeProgram(
+        testing.allocator,
+        .expr,
+        "({ x: 1.U64 } == { x: 1.U64 })",
+        &.{},
+    );
+    defer helpers.cleanupParseAndCanonical(testing.allocator, resources);
+
+    switch (resources.module_env.store.getExpr(resources.expr_idx)) {
+        .e_structural_eq => {},
+        else => return error.UnexpectedCheckedStructuralEqShape,
+    }
+}
+
+test "cor pipeline - generic local attached method specialization stays non-erased" {
+    var compiled = try compileExecutableProgram(
+        testing.allocator,
+        .module,
+        \\Counter := [Counter(U64)].{
+        \\  get : Counter -> U64
+        \\  get = |Counter.Counter(n)| n
+        \\}
+        \\
+        \\read = |value| value.get()
+        \\
+        \\main = (read(Counter.Counter(5)), read(Counter.Counter(8)))
+    ,
+        &.{},
+    );
+    defer compiled.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 0), countExecutableErasedCalls(&compiled.executable));
+    try testing.expect(countExecutableDirectCalls(&compiled.executable) >= 2);
 }
 
 test "cor pipeline - generic local attached method specialization picks different nominal targets" {
@@ -1530,14 +1611,14 @@ test "cor pipeline - lowering opaque function field lookup issue 9262 has no era
     var executable = try compileExecutableProgram(arena_allocator, .module, opaque_function_field_lookup_source, &.{});
     defer executable.deinit(arena_allocator);
 
-    try testing.expectEqual(@as(usize, 0), countExecutableIndirectCalls(&executable.executable));
+    try testing.expectEqual(@as(usize, 0), countExecutableErasedCalls(&executable.executable));
     try testing.expectEqual(@as(usize, 0), countExecutablePackedFns(&executable.executable));
     try testing.expectEqual(@as(usize, 0), countExecutableErasedFnTypes(&executable.executable));
 
     var compiled = try helpers.compileProgram(arena_allocator, .module, opaque_function_field_lookup_source, &.{});
     defer compiled.deinit(arena_allocator);
 
-    try testing.expectEqual(@as(usize, 0), countIndirectCalls(&compiled));
+    try testing.expectEqual(@as(usize, 0), countErasedCalls(&compiled));
 }
 
 test "cor pipeline - lowering local callback specialization uses two distinct concrete defs" {
@@ -1630,7 +1711,7 @@ test "cor pipeline - lowering emits explicit bridges only at real representation
     try testing.expectEqual(executable_bridges, countIrBridgeNodes(&ir_program.ir_result));
 }
 
-test "cor pipeline - boxed lambda lowering uses erased indirect-call path" {
+test "cor pipeline - boxed lambda lowering uses erased-call path" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
@@ -1650,17 +1731,17 @@ test "cor pipeline - boxed lambda lowering uses erased indirect-call path" {
     const actual = try helpers.lirInterpreterInspectedStr(arena_allocator, &compiled.lowered);
     try testing.expectEqualStrings("42", actual);
 
-    try testing.expect(countIndirectCalls(&compiled) >= 1);
+    try testing.expect(countErasedCalls(&compiled) >= 1);
     try testing.expect(countLowLevelOp(&compiled, .box_box) >= 1);
     try testing.expect(countLowLevelOp(&compiled, .box_unbox) >= 1);
     try expectErasedLoweringProgram(
         boxed_lambda_round_trip_erased_case.source_kind,
         boxed_lambda_round_trip_erased_case.source,
         boxed_lambda_round_trip_erased_case.imports,
-        boxed_lambda_round_trip_erased_case.expected_executable_indirect_calls,
+        boxed_lambda_round_trip_erased_case.expected_executable_erased_calls,
         boxed_lambda_round_trip_erased_case.expected_executable_packed_fns,
         boxed_lambda_round_trip_erased_case.expected_executable_erased_fn_types,
-        boxed_lambda_round_trip_erased_case.expected_lir_indirect_calls,
+        boxed_lambda_round_trip_erased_case.expected_lir_erased_calls,
     );
 }
 
@@ -1763,7 +1844,7 @@ test "cor pipeline - hosted function can flow as a first-class argument" {
     try testing.expectEqualStrings("hello", dev_run.events[0].bytes());
 }
 
-test "cor pipeline - hosted function survives boxed indirect-call round trip" {
+test "cor pipeline - hosted function survives boxed erased-call round trip" {
     // Blocked by a pre-existing monotype_lifted placeholder invariant failure.
     return error.SkipZigTest;
 }
@@ -1846,4 +1927,99 @@ test "cor pipeline - multi-arg hosted proc call preserves argument marshaling" {
     try testing.expectEqual(@as(usize, 2), dev_run.events.len);
     try testing.expectEqualStrings("left", dev_run.events[0].bytes());
     try testing.expectEqualStrings("right", dev_run.events[1].bytes());
+}
+
+test "cor pipeline - checked bool inequality is negated equality" {
+    var resources = try helpers.parseAndCanonicalizeProgram(testing.allocator, .expr, "True != False", &.{});
+    defer helpers.cleanupParseAndCanonical(testing.allocator, resources);
+
+    switch (resources.module_env.store.getExpr(resources.expr_idx)) {
+        .e_method_eq => |eq| try testing.expect(eq.negated),
+        .e_structural_eq => |eq| try testing.expect(eq.negated),
+        else => return error.UnexpectedCheckedEqualityShape,
+    }
+}
+
+test "cor pipeline - inspect-wrapped bool inequality stays negated in checked cir" {
+    var resources = try helpers.parseAndCanonicalizeInspectedExpr(testing.allocator, "True != False");
+    defer helpers.cleanupParseAndCanonical(testing.allocator, resources);
+
+    const inner_expr_idx = switch (resources.module_env.store.getExpr(resources.expr_idx)) {
+        .e_call => |call| blk: {
+            const args = resources.module_env.store.sliceExpr(call.args);
+            try testing.expectEqual(@as(usize, 1), args.len);
+            break :blk args[0];
+        },
+        else => return error.UnexpectedInspectWrapShape,
+    };
+
+    switch (resources.module_env.store.getExpr(inner_expr_idx)) {
+        .e_method_eq => |eq| try testing.expect(eq.negated),
+        .e_structural_eq => |eq| try testing.expect(eq.negated),
+        else => return error.UnexpectedCheckedEqualityShape,
+    }
+}
+
+test "cor pipeline - inspect-wrapped bool inequality keeps bool_not in executable" {
+    var resources = try helpers.parseAndCanonicalizeInspectedExpr(testing.allocator, "True != False");
+    defer helpers.cleanupParseAndCanonical(testing.allocator, resources);
+
+    var executable = try compileExecutableFromParsedResources(testing.allocator, &resources);
+    defer executable.deinit();
+
+    try testing.expect(countExecutableLowLevelOp(&executable, .bool_not) >= 1);
+}
+
+fn rootMonotypeExprId(mono: *const monotype.Lower.Result) monotype.Ast.ExprId {
+    const root_def_id = mono.program.root_defs.items[mono.program.root_defs.items.len - 1];
+    const root_def = mono.program.store.getDef(root_def_id);
+    return switch (root_def.value) {
+        .val => |expr_id| expr_id,
+        .run => |run_def| run_def.body,
+        else => @panic("expected monotype root expr def"),
+    };
+}
+
+test "cor pipeline - inspect-wrapped bool inequality keeps bool_not in monotype" {
+    var resources = try helpers.parseAndCanonicalizeInspectedExpr(testing.allocator, "True != False");
+    defer helpers.cleanupParseAndCanonical(testing.allocator, resources);
+
+    var mono = try compileMonotypeFromParsedResources(testing.allocator, &resources);
+    defer mono.deinit();
+
+    const root_expr = mono.program.store.getExpr(rootMonotypeExprId(&mono));
+    const inspect_child = switch (root_expr.data) {
+        .inspect => |expr_id| expr_id,
+        else => return error.UnexpectedMonotypeInspectShape,
+    };
+    const child = mono.program.store.getExpr(inspect_child);
+    switch (child.data) {
+        .low_level => |ll| try testing.expectEqual(base.LowLevel.bool_not, ll.op),
+        else => return error.UnexpectedMonotypeInspectChildShape,
+    }
+}
+
+fn countExecutableLowLevelOp(executable: *const lambdamono.Lower.Result, op: base.LowLevel) usize {
+    var count: usize = 0;
+    for (executable.store.exprs.items) |expr| {
+        switch (expr.data) {
+            .low_level => |low_level| {
+                if (low_level.op == op) count += 1;
+            },
+            else => {},
+        }
+    }
+    return count;
+}
+
+test "cor pipeline - bool inequality lowers to bool_not over equality" {
+    var compiled = try helpers.compileInspectedExpr(testing.allocator, "True != False");
+    defer compiled.deinit(testing.allocator);
+
+    try testing.expect(countLowLevelOp(&compiled, .bool_not) >= 1);
+    try testing.expect(countLowLevelOp(&compiled, .num_is_eq) >= 1);
+
+    const actual = try helpers.lirInterpreterInspectedStr(testing.allocator, &compiled.lowered);
+    defer testing.allocator.free(actual);
+    try testing.expectEqualStrings("True", actual);
 }

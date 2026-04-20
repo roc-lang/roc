@@ -347,7 +347,7 @@ fn collectReachableStmtIds(
             .assign_ref => |assign| try stack.append(allocator, assign.next),
             .assign_literal => |assign| try stack.append(allocator, assign.next),
             .assign_call => |assign| try stack.append(allocator, assign.next),
-            .assign_call_indirect => |assign| try stack.append(allocator, assign.next),
+            .assign_call_erased => |assign| try stack.append(allocator, assign.next),
             .assign_low_level => |assign| try stack.append(allocator, assign.next),
             .assign_list => |assign| try stack.append(allocator, assign.next),
             .assign_struct => |assign| try stack.append(allocator, assign.next),
@@ -503,7 +503,7 @@ fn collectReturnedRefcountedProjectionParams(
         .assign_ref => |assign| try collectReturnedRefcountedProjectionParams(allocator, store, layouts, assign.next, arg_index_by_local, visited, needs_owned),
         .assign_literal => |assign| try collectReturnedRefcountedProjectionParams(allocator, store, layouts, assign.next, arg_index_by_local, visited, needs_owned),
         .assign_call => |assign| try collectReturnedRefcountedProjectionParams(allocator, store, layouts, assign.next, arg_index_by_local, visited, needs_owned),
-        .assign_call_indirect => |assign| try collectReturnedRefcountedProjectionParams(allocator, store, layouts, assign.next, arg_index_by_local, visited, needs_owned),
+        .assign_call_erased => |assign| try collectReturnedRefcountedProjectionParams(allocator, store, layouts, assign.next, arg_index_by_local, visited, needs_owned),
         .assign_low_level => |assign| try collectReturnedRefcountedProjectionParams(allocator, store, layouts, assign.next, arg_index_by_local, visited, needs_owned),
         .assign_list => |assign| try collectReturnedRefcountedProjectionParams(allocator, store, layouts, assign.next, arg_index_by_local, visited, needs_owned),
         .assign_struct => |assign| try collectReturnedRefcountedProjectionParams(allocator, store, layouts, assign.next, arg_index_by_local, visited, needs_owned),
@@ -621,7 +621,7 @@ fn collectReturnedFreshOwnerParams(
                 .fresh => {},
             }
         },
-        .assign_call_indirect => |assign| {
+        .assign_call_erased => |assign| {
             try markSpanParamsOwned(allocator, store, assign.ownership.consumed_owned_inputs, arg_index_by_local, active, needs_owned);
             try markSpanParamsOwned(allocator, store, assign.ownership.retained_borrows, arg_index_by_local, active, needs_owned);
         },
@@ -748,7 +748,7 @@ fn collectOwnedParams(
             }
             try collectOwnedParams(allocator, store, assign.next, arg_index_by_local, visited, active, needs_owned);
         },
-        .assign_call_indirect => |assign| {
+        .assign_call_erased => |assign| {
             for (store.getLocalSpan(assign.args)) |arg_local| {
                 try markLocalParamOwned(allocator, store, arg_local, arg_index_by_local, active, needs_owned);
             }
@@ -832,7 +832,7 @@ fn collectReturnContracts(
         .assign_ref => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, owned_param_locals, visited, out),
         .assign_literal => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, owned_param_locals, visited, out),
         .assign_call => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, owned_param_locals, visited, out),
-        .assign_call_indirect => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, owned_param_locals, visited, out),
+        .assign_call_erased => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, owned_param_locals, visited, out),
         .assign_low_level => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, owned_param_locals, visited, out),
         .assign_list => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, owned_param_locals, visited, out),
         .assign_struct => |assign| try collectReturnContracts(allocator, store, assign.next, arg_index_by_local, owned_param_locals, visited, out),
@@ -993,7 +993,7 @@ fn inferLocalContract(
             store.getProcSpec(assign.proc).result_contract
         else
             try contractFromResultSemantics(allocator, store, assign.result, arg_index_by_local, owned_param_locals, active),
-        .assign_call_indirect => |assign| try contractFromResultSemantics(allocator, store, assign.result, arg_index_by_local, owned_param_locals, active),
+        .assign_call_erased => |assign| try contractFromResultSemantics(allocator, store, assign.result, arg_index_by_local, owned_param_locals, active),
         .assign_low_level => |assign| try contractFromResultSemantics(allocator, store, assign.result, arg_index_by_local, owned_param_locals, active),
         .assign_literal,
         .assign_symbol,
@@ -1119,7 +1119,7 @@ fn findProducer(store: *const LirStore, target: LocalId) ?CFStmt {
             .assign_ref => |assign| if (assign.target == target) return stmt,
             .assign_literal => |assign| if (assign.target == target) return stmt,
             .assign_call => |assign| if (assign.target == target) return stmt,
-            .assign_call_indirect => |assign| if (assign.target == target) return stmt,
+            .assign_call_erased => |assign| if (assign.target == target) return stmt,
             .assign_low_level => |assign| if (assign.target == target) return stmt,
             .assign_list => |assign| if (assign.target == target) return stmt,
             .assign_struct => |assign| if (assign.target == target) return stmt,
@@ -1448,7 +1448,7 @@ fn localResultSemantics(store: *const LirStore, local: LocalId) ?ResultSemantics
         .assign_ref => |assign| assign.result,
         .assign_literal => |assign| assign.result,
         .assign_call => |assign| assign.result,
-        .assign_call_indirect => |assign| assign.result,
+        .assign_call_erased => |assign| assign.result,
         .assign_low_level => |assign| assign.result,
         .assign_list => |assign| assign.result,
         .assign_struct => |assign| assign.result,

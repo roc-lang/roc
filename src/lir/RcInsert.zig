@@ -210,7 +210,7 @@ const ProcPass = struct {
                 .assign_ref => |assign| self.markOwnedFresh(assign.target, assign.result),
                 .assign_literal => |assign| self.markOwnedFresh(assign.target, assign.result),
                 .assign_call => |assign| self.markOwnedFresh(assign.target, assign.result),
-                .assign_call_indirect => |assign| self.markOwnedFresh(assign.target, assign.result),
+                .assign_call_erased => |assign| self.markOwnedFresh(assign.target, assign.result),
                 .assign_low_level => |assign| self.markOwnedFresh(assign.target, assign.result),
                 .assign_list => |assign| self.markOwnedFresh(assign.target, assign.result),
                 .assign_struct => |assign| self.markOwnedFresh(assign.target, assign.result),
@@ -266,7 +266,7 @@ const ProcPass = struct {
             switch (self.store.getCFStmt(stmt_id)) {
                 .assign_ref => |assign| self.recordAssignRefOwner(assign.target, assign.op, assign.result),
                 .assign_call => |assign| self.recordWholeValueOwner(assign.target, assign.result),
-                .assign_call_indirect => |assign| self.recordWholeValueOwner(assign.target, assign.result),
+                .assign_call_erased => |assign| self.recordWholeValueOwner(assign.target, assign.result),
                 .assign_low_level => |assign| self.recordWholeValueOwner(assign.target, assign.result),
                 .assign_literal => |assign| self.clearOwnerFacts(assign.target),
                 .assign_symbol => |assign| self.clearOwnerFacts(assign.target),
@@ -495,7 +495,7 @@ const ProcPass = struct {
             .assign_ref => |assign| self.unionLiveInDirectFor(assign.next, out),
             .assign_literal => |assign| self.unionLiveInDirectFor(assign.next, out),
             .assign_call => |assign| self.unionLiveInDirectFor(assign.next, out),
-            .assign_call_indirect => |assign| self.unionLiveInDirectFor(assign.next, out),
+            .assign_call_erased => |assign| self.unionLiveInDirectFor(assign.next, out),
             .assign_low_level => |assign| self.unionLiveInDirectFor(assign.next, out),
             .assign_list => |assign| self.unionLiveInDirectFor(assign.next, out),
             .assign_struct => |assign| self.unionLiveInDirectFor(assign.next, out),
@@ -542,7 +542,7 @@ const ProcPass = struct {
             .assign_ref => |assign| self.unionLiveInFor(assign.next, out),
             .assign_literal => |assign| self.unionLiveInFor(assign.next, out),
             .assign_call => |assign| self.unionLiveInFor(assign.next, out),
-            .assign_call_indirect => |assign| self.unionLiveInFor(assign.next, out),
+            .assign_call_erased => |assign| self.unionLiveInFor(assign.next, out),
             .assign_low_level => |assign| self.unionLiveInFor(assign.next, out),
             .assign_list => |assign| self.unionLiveInFor(assign.next, out),
             .assign_struct => |assign| self.unionLiveInFor(assign.next, out),
@@ -674,7 +674,7 @@ const ProcPass = struct {
                 self.markOwnedCallArgsPassed(assign.proc, assign.args, ownership_passed);
                 self.markOwnedCallArgsConsumed(assign.proc, assign.args, defs);
             },
-            .assign_call_indirect => |assign| {
+            .assign_call_erased => |assign| {
                 defs.set(@intFromEnum(assign.target));
                 uses.set(@intFromEnum(assign.closure));
                 self.markSpanUses(assign.args, uses);
@@ -873,7 +873,7 @@ const ProcPass = struct {
                 .args = assign.args,
                 .next = assign.next,
             } }),
-            .assign_call_indirect => |assign| self.store.addCFStmt(.{ .assign_call_indirect = .{
+            .assign_call_erased => |assign| self.store.addCFStmt(.{ .assign_call_erased = .{
                 .target = assign.target,
                 .result = assign.result,
                 .ownership = assign.ownership,
@@ -1006,7 +1006,7 @@ const ProcPass = struct {
                 .args = assign.args,
                 .next = undefined,
             } }, assign.next),
-            .assign_call_indirect => |assign| try self.rewriteLinear(stmt_id, .{ .assign_call_indirect = .{
+            .assign_call_erased => |assign| try self.rewriteLinear(stmt_id, .{ .assign_call_erased = .{
                 .target = assign.target,
                 .result = assign.result,
                 .ownership = assign.ownership,
@@ -1161,7 +1161,7 @@ const ProcPass = struct {
         const with_drops = try self.prependEdgeDrops(original_stmt_id, rewritten_next, next_stmt);
         const next_for_stmt = switch (stmt_template) {
             .assign_ref => |assign| try self.prependMaterializationRetain(assign.target, assign.result, assign.ownership, with_drops),
-            .assign_call_indirect => |assign| try self.prependMaterializationRetain(assign.target, assign.result, assign.ownership, with_drops),
+            .assign_call_erased => |assign| try self.prependMaterializationRetain(assign.target, assign.result, assign.ownership, with_drops),
             .assign_low_level => |assign| try self.prependMaterializationRetain(assign.target, assign.result, assign.ownership, with_drops),
             .assign_list => |assign| try self.prependMaterializationRetain(assign.target, assign.result, assign.ownership, with_drops),
             .assign_struct => |assign| try self.prependMaterializationRetain(assign.target, assign.result, assign.ownership, with_drops),
@@ -1174,7 +1174,7 @@ const ProcPass = struct {
             .assign_ref => |assign| self.store.addCFStmt(.{ .assign_ref = .{ .target = assign.target, .result = assign.result, .ownership = assign.ownership, .op = assign.op, .next = next_for_stmt } }),
             .assign_literal => |assign| self.store.addCFStmt(.{ .assign_literal = .{ .target = assign.target, .result = assign.result, .value = assign.value, .next = next_for_stmt } }),
             .assign_call => |assign| self.store.addCFStmt(.{ .assign_call = .{ .target = assign.target, .result = assign.result, .proc = assign.proc, .args = assign.args, .next = next_for_stmt } }),
-            .assign_call_indirect => |assign| self.store.addCFStmt(.{ .assign_call_indirect = .{ .target = assign.target, .result = assign.result, .ownership = assign.ownership, .closure = assign.closure, .args = assign.args, .capture_layout = assign.capture_layout, .next = next_for_stmt } }),
+            .assign_call_erased => |assign| self.store.addCFStmt(.{ .assign_call_erased = .{ .target = assign.target, .result = assign.result, .ownership = assign.ownership, .closure = assign.closure, .args = assign.args, .capture_layout = assign.capture_layout, .next = next_for_stmt } }),
             .assign_low_level => |assign| self.store.addCFStmt(.{ .assign_low_level = .{ .target = assign.target, .result = assign.result, .ownership = assign.ownership, .op = assign.op, .args = assign.args, .next = next_for_stmt } }),
             .assign_list => |assign| self.store.addCFStmt(.{ .assign_list = .{ .target = assign.target, .result = assign.result, .ownership = assign.ownership, .elems = assign.elems, .next = next_for_stmt } }),
             .assign_struct => |assign| self.store.addCFStmt(.{ .assign_struct = .{ .target = assign.target, .result = assign.result, .ownership = assign.ownership, .fields = assign.fields, .next = next_for_stmt } }),
@@ -1623,7 +1623,7 @@ const ProcPass = struct {
             .assign_ref => |assign| try self.collectLoopContinueTargetsRec(assign.next, for_stack, visited),
             .assign_literal => |assign| try self.collectLoopContinueTargetsRec(assign.next, for_stack, visited),
             .assign_call => |assign| try self.collectLoopContinueTargetsRec(assign.next, for_stack, visited),
-            .assign_call_indirect => |assign| try self.collectLoopContinueTargetsRec(assign.next, for_stack, visited),
+            .assign_call_erased => |assign| try self.collectLoopContinueTargetsRec(assign.next, for_stack, visited),
             .assign_low_level => |assign| try self.collectLoopContinueTargetsRec(assign.next, for_stack, visited),
             .assign_list => |assign| try self.collectLoopContinueTargetsRec(assign.next, for_stack, visited),
             .assign_struct => |assign| try self.collectLoopContinueTargetsRec(assign.next, for_stack, visited),
@@ -1700,7 +1700,7 @@ fn appendReachableStmtIds(
             .assign_ref => |assign| try stack.append(allocator, assign.next),
             .assign_literal => |assign| try stack.append(allocator, assign.next),
             .assign_call => |assign| try stack.append(allocator, assign.next),
-            .assign_call_indirect => |assign| try stack.append(allocator, assign.next),
+            .assign_call_erased => |assign| try stack.append(allocator, assign.next),
             .assign_low_level => |assign| try stack.append(allocator, assign.next),
             .assign_list => |assign| try stack.append(allocator, assign.next),
             .assign_struct => |assign| try stack.append(allocator, assign.next),
@@ -1741,7 +1741,7 @@ fn findProducerStmt(store: *const LirStore, target: LocalId) ?CFStmtId {
             .assign_ref => |assign| if (assign.target == target) return @enumFromInt(@as(u32, @intCast(idx))),
             .assign_literal => |assign| if (assign.target == target) return @enumFromInt(@as(u32, @intCast(idx))),
             .assign_call => |assign| if (assign.target == target) return @enumFromInt(@as(u32, @intCast(idx))),
-            .assign_call_indirect => |assign| if (assign.target == target) return @enumFromInt(@as(u32, @intCast(idx))),
+            .assign_call_erased => |assign| if (assign.target == target) return @enumFromInt(@as(u32, @intCast(idx))),
             .assign_low_level => |assign| if (assign.target == target) return @enumFromInt(@as(u32, @intCast(idx))),
             .assign_list => |assign| if (assign.target == target) return @enumFromInt(@as(u32, @intCast(idx))),
             .assign_struct => |assign| if (assign.target == target) return @enumFromInt(@as(u32, @intCast(idx))),

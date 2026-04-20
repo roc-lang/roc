@@ -1228,6 +1228,18 @@ pub fn roc_builtins_float_to_str(out: *RocStr, val_bits: u64, is_f32: bool, roc_
     writeRocStrFromSlice(out, result, roc_ops);
 }
 
+test "direct float wrapper f32" {
+    var env = utils.TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+
+    var out: RocStr = undefined;
+    const bits: u32 = @bitCast(@as(f32, 3.14));
+    roc_builtins_float_to_str(&out, bits, true, env.getOps());
+    defer out.decref(env.getOps());
+
+    try std.testing.expectEqualStrings("3.140000104904175", out.asSlice());
+}
+
 // ── Numeric-from-string wrappers ──
 
 fn writeIntParseResult(comptime T: type, out: [*]u8, disc_offset: u32, roc_str: RocStr) void {

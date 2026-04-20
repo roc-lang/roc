@@ -23,6 +23,11 @@ pub const Result = struct {
     types: type_mod.Store,
     strings: base.StringLiteral.Store,
     idents: base.Ident.Store,
+    attached_method_index: symbol_mod.AttachedMethodIndex,
+    builtin_module_idx: u32,
+    builtin_list_ident: base.Ident.Idx,
+    builtin_box_ident: base.Ident.Idx,
+    builtin_primitive_owner_idents: symbol_mod.PrimitiveMethodOwnerIdents,
     runtime_inspect_symbols: std.AutoHashMap(Symbol, Symbol),
     exact_callable_aliases: std.AutoHashMap(Symbol, Symbol),
 
@@ -33,6 +38,7 @@ pub const Result = struct {
         self.types.deinit();
         self.strings.deinit(self.store.allocator);
         self.idents.deinit(self.store.allocator);
+        self.attached_method_index.deinit();
         self.runtime_inspect_symbols.deinit();
         self.exact_callable_aliases.deinit();
     }
@@ -46,6 +52,11 @@ pub const Result = struct {
             .types = type_mod.Store.init(allocator),
             .strings = .{},
             .idents = try base.Ident.Store.initCapacity(allocator, 1),
+            .attached_method_index = symbol_mod.AttachedMethodIndex.init(allocator),
+            .builtin_module_idx = 0,
+            .builtin_list_ident = base.Ident.Idx.NONE,
+            .builtin_box_ident = base.Ident.Idx.NONE,
+            .builtin_primitive_owner_idents = symbol_mod.PrimitiveMethodOwnerIdents.none(),
             .runtime_inspect_symbols = std.AutoHashMap(Symbol, Symbol).init(allocator),
             .exact_callable_aliases = std.AutoHashMap(Symbol, Symbol).init(allocator),
         };
@@ -155,6 +166,11 @@ const Lowerer = struct {
             .types = self.types,
             .strings = self.input.strings,
             .idents = self.input.idents,
+            .attached_method_index = self.input.attached_method_index,
+            .builtin_module_idx = self.input.builtin_module_idx,
+            .builtin_list_ident = self.input.builtin_list_ident,
+            .builtin_box_ident = self.input.builtin_box_ident,
+            .builtin_primitive_owner_idents = self.input.builtin_primitive_owner_idents,
             .runtime_inspect_symbols = self.input.runtime_inspect_symbols,
             .exact_callable_aliases = self.exact_callable_aliases,
         };
@@ -165,6 +181,11 @@ const Lowerer = struct {
         self.input.symbols = symbol_mod.Store.init(self.allocator);
         self.input.strings = .{};
         self.input.idents = try base.Ident.Store.initCapacity(self.allocator, 1);
+        self.input.attached_method_index = symbol_mod.AttachedMethodIndex.init(self.allocator);
+        self.input.builtin_module_idx = 0;
+        self.input.builtin_list_ident = base.Ident.Idx.NONE;
+        self.input.builtin_box_ident = base.Ident.Idx.NONE;
+        self.input.builtin_primitive_owner_idents = symbol_mod.PrimitiveMethodOwnerIdents.none();
         self.input.runtime_inspect_symbols = std.AutoHashMap(Symbol, Symbol).init(self.allocator);
         self.exact_callable_aliases = std.AutoHashMap(Symbol, Symbol).init(self.allocator);
         return result;
@@ -366,17 +387,22 @@ const Lowerer = struct {
                 .lhs = try self.instantiateExpr(eq.lhs),
                 .rhs = try self.instantiateExpr(eq.rhs),
             } },
-            .method_call => |method_call| .{ .method_call = .{
-                    .receiver = try self.instantiateExpr(method_call.receiver),
-                    .method_fn_ty = try self.instantiateType(method_call.method_fn_ty),
-                    .method_name = method_call.method_name,
-                    .args = try self.instantiateExprSpan(method_call.args),
-                } },
-            .type_method_call => |method_call| .{ .type_method_call = .{
-                .dispatcher_ty = try self.instantiateType(method_call.dispatcher_ty),
-                .method_fn_ty = try self.instantiateType(method_call.method_fn_ty),
+            .method_eq => |eq| .{ .method_eq = .{
+                .lhs = try self.instantiateExpr(eq.lhs),
+                .rhs = try self.instantiateExpr(eq.rhs),
+                .negated = eq.negated,
+            } },
+            .dispatch_call => |method_call| .{ .dispatch_call = .{
+                .receiver = try self.instantiateExpr(method_call.receiver),
                 .method_name = method_call.method_name,
                 .args = try self.instantiateExprSpan(method_call.args),
+                .dispatch_constraint_ty = try self.instantiateType(method_call.dispatch_constraint_ty),
+            } },
+            .type_dispatch_call => |method_call| .{ .type_dispatch_call = .{
+                .dispatcher_ty = try self.instantiateType(method_call.dispatcher_ty),
+                .method_name = method_call.method_name,
+                .args = try self.instantiateExprSpan(method_call.args),
+                .dispatch_constraint_ty = try self.instantiateType(method_call.dispatch_constraint_ty),
             } },
             .let_ => |let_expr| .{ .let_ = .{
                 .bind = try self.instantiateTypedSymbol(let_expr.bind),
@@ -1032,6 +1058,17 @@ const Lowerer = struct {
         return arg_tys;
     }
 
+    fn inferCallArgExprs(
+        self: *Lowerer,
+        venv: []const EnvEntry,
+        arg_exprs: []const ast.ExprId,
+    ) std.mem.Allocator.Error!void {
+        for (arg_exprs) |arg| {
+            const arg_ty = try self.inferExpr(venv, arg);
+            self.output.exprs.items[@intFromEnum(arg)].ty = arg_ty;
+        }
+    }
+
     fn buildSolvedFunctionType(
         self: *Lowerer,
         arg_tys: []const TypeVarId,
@@ -1607,54 +1644,45 @@ const Lowerer = struct {
                 try self.unify(target_ty, try self.freshPrimitiveType(.bool));
                 break :blk target_ty;
             },
-            .method_call => |method_call| blk: {
-                const previous_call_context = self.current_call_context;
-                defer self.restoreCallDebugContext(previous_call_context);
-                const receiver = method_call.receiver;
-                const method_fn_ty = method_call.method_fn_ty;
-                const method_args = try self.allocator.dupe(ast.ExprId, self.output.sliceExprSpan(method_call.args));
-                defer self.allocator.free(method_args);
-                const receiver_ty = try self.inferExpr(venv, receiver);
-                try self.unify(receiver_ty, self.output.getExpr(receiver).ty);
-                const method_func_ty = try self.instantiateOccurrenceType(method_fn_ty);
-                const arg_tys = try self.inferCallArgTypes(venv, method_args);
-                defer self.allocator.free(arg_tys);
-                const wanted_arg_tys = try self.allocator.alloc(TypeVarId, arg_tys.len + 1);
-                defer self.allocator.free(wanted_arg_tys);
-                wanted_arg_tys[0] = receiver_ty;
-                @memcpy(wanted_arg_tys[1..], arg_tys);
-                try self.assertSaturatedFunctionCall(
-                    method_func_ty,
-                    wanted_arg_tys.len,
-                    "lambdasolved.method_call invariant violated: method call must be saturated",
-                );
-                const wanted_func_ty = try self.freshWantedFunctionType(wanted_arg_tys, target_ty);
-                try self.withCallDebugContext(method_call.receiver, method_args, method_func_ty, wanted_arg_tys, target_ty);
-                try self.assertCallBoundaryNotGeneralized("method_call", method_func_ty, method_args, wanted_arg_tys, target_ty, wanted_func_ty);
-                try self.unify(method_func_ty, wanted_func_ty);
-                try self.assertCallResultNotGeneralized("method_call", target_ty);
+            .method_eq => |eq| blk: {
+                const lhs_ty = try self.inferExpr(venv, eq.lhs);
+                const rhs_ty = try self.inferExpr(venv, eq.rhs);
+                try self.unify(lhs_ty, self.output.getExpr(eq.lhs).ty);
+                try self.unify(rhs_ty, self.output.getExpr(eq.rhs).ty);
+                try self.unify(lhs_ty, rhs_ty);
+                try self.unify(target_ty, try self.freshPrimitiveType(.bool));
                 break :blk target_ty;
             },
-            .type_method_call => |method_call| blk: {
-                const previous_call_context = self.current_call_context;
-                defer self.restoreCallDebugContext(previous_call_context);
-                const method_fn_ty = method_call.method_fn_ty;
-                const method_args = try self.allocator.dupe(ast.ExprId, self.output.sliceExprSpan(method_call.args));
-                defer self.allocator.free(method_args);
-                const method_func_ty = try self.instantiateOccurrenceType(method_fn_ty);
-                const arg_tys = try self.inferCallArgTypes(venv, method_args);
+            .dispatch_call => |method_call| blk: {
+                const receiver = method_call.receiver;
+                const receiver_ty = try self.inferExpr(venv, receiver);
+                try self.unify(receiver_ty, self.output.getExpr(receiver).ty);
+                const arg_tys = try self.inferCallArgTypes(venv, self.output.sliceExprSpan(method_call.args));
                 defer self.allocator.free(arg_tys);
-                try self.assertSaturatedFunctionCall(
-                    method_func_ty,
-                    arg_tys.len,
-                    "lambdasolved.type_method_call invariant violated: type method call must be saturated",
-                );
-                const wanted_func_ty = try self.freshWantedFunctionType(arg_tys, target_ty);
-                const debug_func_expr = if (method_args.len != 0) method_args[0] else expr_id;
-                try self.withCallDebugContext(debug_func_expr, method_args, method_func_ty, arg_tys, target_ty);
-                try self.assertCallBoundaryNotGeneralized("type_method_call", method_func_ty, method_args, arg_tys, target_ty, wanted_func_ty);
-                try self.unify(method_func_ty, wanted_func_ty);
-                try self.assertCallResultNotGeneralized("type_method_call", target_ty);
+                const constraint_shape = self.types.fnShape(method_call.dispatch_constraint_ty);
+                const constraint_args = self.types.sliceTypeVarSpan(constraint_shape.args);
+                if (constraint_args.len != arg_tys.len + 1) {
+                    debugPanic("lambdasolved.dispatch_call invariant violated: dispatch arg arity mismatch", .{});
+                }
+                try self.unify(constraint_args[0], receiver_ty);
+                for (arg_tys, 0..) |arg_ty, i| {
+                    try self.unify(constraint_args[i + 1], arg_ty);
+                }
+                try self.unify(target_ty, constraint_shape.ret);
+                break :blk target_ty;
+            },
+            .type_dispatch_call => |method_call| blk: {
+                const arg_tys = try self.inferCallArgTypes(venv, self.output.sliceExprSpan(method_call.args));
+                defer self.allocator.free(arg_tys);
+                const constraint_shape = self.types.fnShape(method_call.dispatch_constraint_ty);
+                const constraint_args = self.types.sliceTypeVarSpan(constraint_shape.args);
+                if (constraint_args.len != arg_tys.len) {
+                    debugPanic("lambdasolved.type_dispatch_call invariant violated: dispatch arg arity mismatch", .{});
+                }
+                for (arg_tys, 0..) |arg_ty, i| {
+                    try self.unify(constraint_args[i], arg_ty);
+                }
+                try self.unify(target_ty, constraint_shape.ret);
                 break :blk target_ty;
             },
             .let_ => |let_expr| blk: {
@@ -2181,17 +2209,6 @@ const Lowerer = struct {
                 const body_ty = try self.inferExpr(venv, decl.body);
                 try self.unify(body_ty, decl.bind.ty);
                 try self.generalize(venv, decl.bind.ty);
-                if (builtin.mode == .Debug) {
-                    const bind_entry = self.input.symbols.get(decl.bind.symbol);
-                    if (!bind_entry.name.isNone()) {
-                        const bind_name = self.input.idents.getText(bind_entry.name);
-                        if (std.mem.eql(u8, bind_name, "append_one") or std.mem.eql(u8, bind_name, "clone_via_fold")) {
-                            const summary = self.debugTypeSummary(decl.bind.ty);
-                            defer if (summary.owned) self.allocator.free(summary.text);
-                            std.debug.print("inferStmt decl generalized {s} -> {s}\n", .{ bind_name, summary.text });
-                        }
-                    }
-                }
                 break :blk try self.extendEnvOne(venv, .{ .symbol = decl.bind.symbol, .ty = decl.bind.ty });
             },
             .var_decl => |decl| blk: {
@@ -2398,13 +2415,17 @@ const Lowerer = struct {
                 self.debugCountExprSymbol(eq.lhs, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
                 self.debugCountExprSymbol(eq.rhs, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
             },
-            .method_call => |method_call| {
+            .method_eq => |eq| {
+                self.debugCountExprSymbol(eq.lhs, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+                self.debugCountExprSymbol(eq.rhs, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+            },
+            .dispatch_call => |method_call| {
                 self.debugCountExprSymbol(method_call.receiver, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
                 for (self.output.sliceExprSpan(method_call.args)) |arg| {
                     self.debugCountExprSymbol(arg, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
                 }
             },
-            .type_method_call => |method_call| {
+            .type_dispatch_call => |method_call| {
                 for (self.output.sliceExprSpan(method_call.args)) |arg| {
                     self.debugCountExprSymbol(arg, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
                 }
@@ -2576,7 +2597,7 @@ const Lowerer = struct {
                         if (fn_env.len != 0 and fn_env.ptr != top_env.ptr) self.allocator.free(fn_env);
                         fn_env = next_env;
                     }
-                    defer if (fn_env.len != 0) self.allocator.free(fn_env);
+                    defer if (fn_env.len != 0 and fn_env.ptr != top_env.ptr) self.allocator.free(fn_env);
                     const member = self.types.requireLambdaMember(def.bind.ty, def.bind.symbol);
                     for (member.captures) |capture| {
                         const next_env = try self.extendEnvOne(fn_env, .{
@@ -2686,13 +2707,17 @@ const Lowerer = struct {
                 try self.propagateExprErasure(eq.lhs, venv);
                 try self.propagateExprErasure(eq.rhs, venv);
             },
-            .method_call => |method_call| {
+            .method_eq => |eq| {
+                try self.propagateExprErasure(eq.lhs, venv);
+                try self.propagateExprErasure(eq.rhs, venv);
+            },
+            .dispatch_call => |method_call| {
                 try self.propagateExprErasure(method_call.receiver, venv);
                 for (self.output.sliceExprSpan(method_call.args)) |arg| {
                     try self.propagateExprErasure(arg, venv);
                 }
             },
-            .type_method_call => |method_call| {
+            .type_dispatch_call => |method_call| {
                 for (self.output.sliceExprSpan(method_call.args)) |arg| {
                     try self.propagateExprErasure(arg, venv);
                 }
@@ -3276,13 +3301,17 @@ const Lowerer = struct {
                 try self.collectExprEdges(eq.lhs, edges);
                 try self.collectExprEdges(eq.rhs, edges);
             },
-            .method_call => |method_call| {
+            .method_eq => |eq| {
+                try self.collectExprEdges(eq.lhs, edges);
+                try self.collectExprEdges(eq.rhs, edges);
+            },
+            .dispatch_call => |method_call| {
                 try self.collectExprEdges(method_call.receiver, edges);
                 for (self.output.sliceExprSpan(method_call.args)) |arg| {
                     try self.collectExprEdges(arg, edges);
                 }
             },
-            .type_method_call => |method_call| {
+            .type_dispatch_call => |method_call| {
                 for (self.output.sliceExprSpan(method_call.args)) |arg| {
                     try self.collectExprEdges(arg, edges);
                 }

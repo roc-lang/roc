@@ -115,17 +115,22 @@ pub const Expr = struct {
             lhs: ExprId,
             rhs: ExprId,
         },
-        method_call: struct {
-            receiver: ExprId,
-            method_fn_ty: TypeId,
-            method_name: base.Ident.Idx,
-            args: Span(ExprId),
+        method_eq: struct {
+            lhs: ExprId,
+            rhs: ExprId,
+            negated: bool,
         },
-        type_method_call: struct {
-            dispatcher_ty: TypeId,
-            method_fn_ty: TypeId,
+        dispatch_call: struct {
+            receiver: ExprId,
             method_name: base.Ident.Idx,
             args: Span(ExprId),
+            dispatch_constraint_ty: TypeId,
+        },
+        type_dispatch_call: struct {
+            dispatcher_ty: TypeId,
+            method_name: base.Ident.Idx,
+            args: Span(ExprId),
+            dispatch_constraint_ty: TypeId,
         },
         let_: struct {
             def: LetDef,

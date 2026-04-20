@@ -851,7 +851,7 @@ pub const Interpreter = struct {
                         @intFromEnum(self.store.getLocal(assign.target).layout_idx),
                     },
                 ),
-                .assign_call_indirect => |assign| debugPrint(
+                .assign_call_erased => |assign| debugPrint(
                     "  stmt {d}: {any} target_layout={d}\n",
                     .{
                         @intFromEnum(current),
@@ -907,7 +907,7 @@ pub const Interpreter = struct {
                 .assign_ref => |assign| assign.next,
                 .assign_literal => |assign| assign.next,
                 .assign_call => |assign| assign.next,
-                .assign_call_indirect => |assign| assign.next,
+                .assign_call_erased => |assign| assign.next,
                 .assign_low_level => |assign| assign.next,
                 .assign_list => |assign| assign.next,
                 .assign_struct => |assign| assign.next,
@@ -1124,7 +1124,7 @@ pub const Interpreter = struct {
             .assign_ref => |assign| try self.collectJoinPoints(join_points, assign.next),
             .assign_literal => |assign| try self.collectJoinPoints(join_points, assign.next),
             .assign_call => |assign| try self.collectJoinPoints(join_points, assign.next),
-            .assign_call_indirect => |assign| try self.collectJoinPoints(join_points, assign.next),
+            .assign_call_erased => |assign| try self.collectJoinPoints(join_points, assign.next),
             .assign_low_level => |assign| try self.collectJoinPoints(join_points, assign.next),
             .assign_list => |assign| try self.collectJoinPoints(join_points, assign.next),
             .assign_struct => |assign| try self.collectJoinPoints(join_points, assign.next),
@@ -1207,10 +1207,10 @@ pub const Interpreter = struct {
                     );
                     current = assign.next;
                 },
-                .assign_call_indirect => |assign| {
+                .assign_call_erased => |assign| {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
-                    const result = try self.evalIndirectCall(
+                    const result = try self.evalErasedCall(
                         frame,
                         assign.closure,
                         arg_values,
@@ -1601,8 +1601,8 @@ pub const Interpreter = struct {
                     debugPrint("next={d}\n", .{@intFromEnum(assign.next)});
                     stack.append(self.allocator, assign.next) catch return;
                 },
-                .assign_call_indirect => |assign| {
-                    debugPrint("    {d}: assign_call_indirect target={d} next={d}\n", .{
+                .assign_call_erased => |assign| {
+                    debugPrint("    {d}: assign_call_erased target={d} next={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(assign.target),
                         @intFromEnum(assign.next),
@@ -1816,7 +1816,7 @@ pub const Interpreter = struct {
         return layouts;
     }
 
-    const IndirectCallResult = struct {
+    const ErasedCallResult = struct {
         value: Value,
         layout: layout_mod.Idx,
     };
@@ -2079,28 +2079,28 @@ pub const Interpreter = struct {
         };
         if (encoded == 0) {
             self.invariantFailed(
-                "LIR/interpreter invariant violated: attempted indirect call through null function pointer",
+                "LIR/interpreter invariant violated: attempted erased call through null function pointer",
                 .{},
             );
         }
         return @enumFromInt(@as(u32, @intCast(encoded - 1)));
     }
 
-    fn evalIndirectCall(
+    fn evalErasedCall(
         self: *LirInterpreter,
         frame: *Frame,
         closure_local: LocalId,
         args: []const Value,
         arg_layouts: []const layout_mod.Idx,
         capture_layout: ?layout_mod.Idx,
-    ) Error!IndirectCallResult {
+    ) Error!ErasedCallResult {
         const closure_layout = self.store.getLocal(closure_local).layout_idx;
         const closure_value = try self.getLocalChecked(frame, closure_local);
         const closure_base = self.resolveStructBaseValue(closure_value, closure_layout);
         const closure_layout_val = self.layout_store.getLayout(closure_base.layout);
         if (closure_layout_val.tag != .struct_) {
             return self.invariantFailedError(
-                "LIR/interpreter invariant violated: indirect call closure local {d} does not have struct layout",
+                "LIR/interpreter invariant violated: erased call closure local {d} does not have struct layout",
                 .{@intFromEnum(closure_local)},
             );
         }
@@ -2109,7 +2109,7 @@ pub const Interpreter = struct {
         const fn_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(closure_layout_val.data.struct_.idx, 0);
         if (fn_layout != .opaque_ptr) {
             return self.invariantFailedError(
-                "LIR/interpreter invariant violated: indirect call closure field 0 layout {d} is not opaque_ptr",
+                "LIR/interpreter invariant violated: erased call closure field 0 layout {d} is not opaque_ptr",
                 .{@intFromEnum(fn_layout)},
             );
         }
@@ -2128,7 +2128,7 @@ pub const Interpreter = struct {
 
         if (!has_capture_arg or proc_args.len != args.len + 1) {
             return self.invariantFailedError(
-                "LIR/interpreter invariant violated: indirect callee {d} expects {d} args, but call site provided {d} or {d} with captures",
+                "LIR/interpreter invariant violated: erased callee {d} expects {d} args, but call site provided {d} or {d} with captures",
                 .{ @intFromEnum(proc_id), proc_args.len, args.len, args.len + 1 },
             );
         }
@@ -2145,7 +2145,7 @@ pub const Interpreter = struct {
                 capture_ptr_layout,
             );
             const capture_ptr = self.readBoxedDataPointer(capture_ptr_value) orelse self.invariantFailed(
-                "LIR/interpreter invariant violated: indirect call capture pointer is null",
+                "LIR/interpreter invariant violated: erased call capture pointer is null",
                 .{},
             );
             const result = try self.alloc(capture_layout_idx);

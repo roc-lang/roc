@@ -177,7 +177,7 @@ fn cloneTypeRec(
     mapping: *std.AutoHashMap(TypeVarId, TypeVarId),
     ty: TypeVarId,
 ) std.mem.Allocator.Error!TypeVarId {
-    const id = source_types.unlinkConst(ty);
+    const id = source_types.unlinkPreservingNominalConst(ty);
     if (mapping.get(id)) |cached| return cached;
 
     const cloned = switch (source_types.getNode(id)) {

@@ -465,8 +465,6 @@ import_mapping: types_mod.import_mapping.ImportMapping,
 /// Enables O(1) index-based method lookup during type checking and evaluation.
 /// Populated during canonicalization when methods are defined in associated blocks.
 method_idents: MethodIdents,
-/// Exact checked callable facts for source method-call sites.
-method_call_fns: MethodCallFn.SafeList,
 
 /// Whether to defer finalizing numeric defaults until after platform requirements are checked.
 /// Set to true for app modules that have platform imports, so that numeric literals can be
@@ -525,24 +523,6 @@ pub const RequiredType = struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
-/// Public struct `MethodCallFn`.
-pub const MethodCallFn = struct {
-    pub const ResolvedTarget = struct {
-        module_name: Ident.Idx,
-        def_idx: CIR.Def.Idx,
-
-        pub const SafeList = collections.SafeList(@This());
-    };
-
-    expr_idx: CIR.Expr.Idx,
-    method_name: Ident.Idx,
-    origin: types_mod.StaticDispatchConstraint.Origin,
-    fn_var: TypeVar,
-    resolved_targets: ResolvedTarget.SafeList.Range,
-
-    pub const SafeList = collections.SafeList(@This());
-};
-
 /// Relocate all pointers in the ModuleEnv by the given offset.
 /// This is used when loading a ModuleEnv from shared memory at a different address.
 pub fn relocate(self: *Self, offset: isize) void {
@@ -557,7 +537,6 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.store.relocate(offset);
     self.deferred_numeric_literals.relocate(offset);
     self.method_idents.relocate(offset);
-    self.method_call_fns.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
     if (self.module_name.len > 0) {
@@ -625,7 +604,6 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .deferred_numeric_literals = try DeferredNumericLiteral.SafeList.initCapacity(gpa, 32),
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
         .method_idents = MethodIdents.init(),
-        .method_call_fns = try MethodCallFn.SafeList.initCapacity(gpa, 32),
     };
 }
 
@@ -670,9 +648,6 @@ pub fn cloneForEval(self: *const Self, gpa: std.mem.Allocator) std.mem.Allocator
     var method_idents = try self.method_idents.clone(gpa);
     errdefer method_idents.deinit(gpa);
 
-    var method_call_fns = try self.method_call_fns.clone(gpa);
-    errdefer method_call_fns.deinit(gpa);
-
     var rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){};
     errdefer rigid_vars.deinit(gpa);
     {
@@ -716,7 +691,6 @@ pub fn cloneForEval(self: *const Self, gpa: std.mem.Allocator) std.mem.Allocator
         .deferred_numeric_literals = deferred_numeric_literals,
         .import_mapping = import_mapping,
         .method_idents = method_idents,
-        .method_call_fns = method_call_fns,
         .defer_numeric_defaults = self.defer_numeric_defaults,
     };
 }
@@ -734,7 +708,6 @@ pub fn deinit(self: *Self) void {
     self.deferred_numeric_literals.deinit(self.gpa);
     self.import_mapping.deinit();
     self.method_idents.deinit(self.gpa);
-    self.method_call_fns.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
 
@@ -2623,7 +2596,6 @@ pub const Serialized = extern struct {
     deferred_numeric_literals: DeferredNumericLiteral.SafeList.Serialized,
     import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
     method_idents: MethodIdents.Serialized,
-    method_call_fns: MethodCallFn.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
@@ -2676,7 +2648,6 @@ pub const Serialized = extern struct {
         self.import_mapping_reserved = .{ 0, 0, 0, 0, 0, 0 };
         // Serialize method_idents map
         try self.method_idents.serialize(&env.method_idents, allocator, writer);
-        try self.method_call_fns.serialize(&env.method_call_fns, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
     }
@@ -2720,7 +2691,6 @@ pub const Serialized = extern struct {
             .deferred_numeric_literals = self.deferred_numeric_literals.deserializeInto(base_addr),
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
-            .method_call_fns = self.method_call_fns.deserializeInto(base_addr),
             .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
         };
 
@@ -2768,7 +2738,6 @@ pub const Serialized = extern struct {
             .deferred_numeric_literals = self.deferred_numeric_literals.deserializeInto(base_addr),
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
-            .method_call_fns = self.method_call_fns.deserializeInto(base_addr),
             .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
         };
 
@@ -3471,112 +3440,6 @@ pub fn getMethodIdent(self: *const Self, type_name: []const u8, method_name: []c
 pub fn registerMethodIdent(self: *Self, type_ident: Ident.Idx, method_ident: Ident.Idx, qualified_ident: Ident.Idx) !void {
     const key = MethodKey{ .type_ident = type_ident, .method_ident = method_ident };
     try self.method_idents.put(self.gpa, key, qualified_ident);
-}
-
-/// Public function `recordMethodCallFn`.
-pub fn recordMethodCallFn(
-    self: *Self,
-    expr_idx: CIR.Expr.Idx,
-    method_name: Ident.Idx,
-    origin: types_mod.StaticDispatchConstraint.Origin,
-    fn_var: TypeVar,
-) std.mem.Allocator.Error!void {
-    for (self.method_call_fns.items.items) |entry| {
-        if (entry.expr_idx != expr_idx or entry.method_name != method_name or entry.origin != origin) continue;
-        if (entry.fn_var != fn_var) {
-            std.debug.panic(
-                "ModuleEnv invariant violated: duplicate dispatch-call fn for expr {d} method {s}",
-                .{ @intFromEnum(expr_idx), self.getIdent(method_name) },
-            );
-        }
-        return;
-    }
-
-    _ = try self.method_call_fns.append(self.gpa, .{
-        .expr_idx = expr_idx,
-        .method_name = method_name,
-        .origin = origin,
-        .fn_var = fn_var,
-        .resolved_targets = MethodCallFn.ResolvedTarget.SafeList.Range.empty(),
-    });
-}
-
-pub fn setMethodCallFnVar(
-    self: *Self,
-    expr_idx: CIR.Expr.Idx,
-    method_name: Ident.Idx,
-    origin: types_mod.StaticDispatchConstraint.Origin,
-    fn_var: TypeVar,
-) void {
-    for (self.method_call_fns.items.items) |*entry| {
-        if (entry.expr_idx != expr_idx or entry.method_name != method_name or entry.origin != origin) continue;
-        entry.fn_var = fn_var;
-        return;
-    }
-
-    std.debug.panic(
-        "ModuleEnv invariant violated: missing dispatch-call fn for expr {d} method {s}",
-        .{ @intFromEnum(expr_idx), self.getIdent(method_name) },
-    );
-}
-
-pub fn setMethodCallResolvedTarget(
-    self: *Self,
-    expr_idx: CIR.Expr.Idx,
-    method_name: Ident.Idx,
-    origin: types_mod.StaticDispatchConstraint.Origin,
-    target: MethodCallFn.ResolvedTarget,
-) std.mem.Allocator.Error!void {
-    for (self.method_call_fns.items.items) |*entry| {
-        if (entry.expr_idx != expr_idx or entry.method_name != method_name or entry.origin != origin) continue;
-        const existing = self.method_callResolvedTargets(entry.resolved_targets);
-        for (existing) |candidate| {
-            if (candidate.module_name == target.module_name and candidate.def_idx == target.def_idx) {
-                return;
-            }
-        }
-
-        var updated = std.ArrayList(MethodCallFn.ResolvedTarget).empty;
-        defer updated.deinit(self.gpa);
-        try updated.appendSlice(self.gpa, existing);
-        try updated.append(self.gpa, target);
-        entry.resolved_targets = try self.appendMethodCallResolvedTargets(updated.items);
-        return;
-    }
-
-    std.debug.panic(
-        "ModuleEnv invariant violated: missing dispatch-call resolved target for expr {d} method {s}",
-        .{ @intFromEnum(expr_idx), self.getIdent(method_name) },
-    );
-}
-
-pub fn appendMethodCallResolvedTargets(
-    self: *Self,
-    values: []const MethodCallFn.ResolvedTarget,
-) std.mem.Allocator.Error!MethodCallFn.ResolvedTarget.SafeList.Range {
-    return try self.appendRange(MethodCallFn.ResolvedTarget, values);
-}
-
-pub fn methodCallResolvedTargets(
-    self: *const Self,
-    range: MethodCallFn.ResolvedTarget.SafeList.Range,
-) []const MethodCallFn.ResolvedTarget {
-    return self.sliceRange(MethodCallFn.ResolvedTarget, range);
-}
-
-/// Public function `methodCallFnVar`.
-pub fn methodCallFnVar(
-    self: *const Self,
-    expr_idx: CIR.Expr.Idx,
-    _: Ident.Idx,
-    origin: types_mod.StaticDispatchConstraint.Origin,
-) ?TypeVar {
-    for (self.method_call_fns.items.items) |entry| {
-        if (entry.expr_idx == expr_idx and entry.origin == origin) {
-            return entry.fn_var;
-        }
-    }
-    return null;
 }
 
 /// Looks up a method identifier by type and method ident indices.

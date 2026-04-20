@@ -70,7 +70,7 @@ pub const FieldExpr = struct {
     value: ExprId,
 };
 
-/// First-class erased function packaging for indirect-call sites.
+/// First-class erased function packaging for erased-call sites.
 pub const PackedFn = struct {
     lambda: Symbol,
     captures: ?ExprId,
@@ -114,7 +114,7 @@ pub const Expr = struct {
             args: Span(ExprId),
         },
         packed_fn: PackedFn,
-        call_indirect: struct {
+        call_erased: struct {
             func: ExprId,
             args: Span(ExprId),
             capture_ty: ?TypeId,

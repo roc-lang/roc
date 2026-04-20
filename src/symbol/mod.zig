@@ -36,6 +36,44 @@ pub const AttachedMethodKey = struct {
 /// Public value `AttachedMethodIndex`.
 pub const AttachedMethodIndex = std.AutoHashMap(AttachedMethodKey, Symbol);
 
+pub const PrimitiveMethodOwnerIdents = extern struct {
+    bool: base.Ident.Idx,
+    str: base.Ident.Idx,
+    u8: base.Ident.Idx,
+    i8: base.Ident.Idx,
+    u16: base.Ident.Idx,
+    i16: base.Ident.Idx,
+    u32: base.Ident.Idx,
+    i32: base.Ident.Idx,
+    u64: base.Ident.Idx,
+    i64: base.Ident.Idx,
+    u128: base.Ident.Idx,
+    i128: base.Ident.Idx,
+    f32: base.Ident.Idx,
+    f64: base.Ident.Idx,
+    dec: base.Ident.Idx,
+
+    pub fn none() PrimitiveMethodOwnerIdents {
+        return .{
+            .bool = base.Ident.Idx.NONE,
+            .str = base.Ident.Idx.NONE,
+            .u8 = base.Ident.Idx.NONE,
+            .i8 = base.Ident.Idx.NONE,
+            .u16 = base.Ident.Idx.NONE,
+            .i16 = base.Ident.Idx.NONE,
+            .u32 = base.Ident.Idx.NONE,
+            .i32 = base.Ident.Idx.NONE,
+            .u64 = base.Ident.Idx.NONE,
+            .i64 = base.Ident.Idx.NONE,
+            .u128 = base.Ident.Idx.NONE,
+            .i128 = base.Ident.Idx.NONE,
+            .f32 = base.Ident.Idx.NONE,
+            .f64 = base.Ident.Idx.NONE,
+            .dec = base.Ident.Idx.NONE,
+        };
+    }
+};
+
 /// Public enum `BuiltinAttachedMethodOwner`.
 pub const BuiltinAttachedMethodOwner = enum {
     list,

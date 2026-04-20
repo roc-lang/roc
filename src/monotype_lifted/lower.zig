@@ -29,6 +29,11 @@ pub const Result = struct {
     types: type_mod.Store,
     strings: base.StringLiteral.Store,
     idents: base.Ident.Store,
+    attached_method_index: symbol_mod.AttachedMethodIndex,
+    builtin_module_idx: u32,
+    builtin_list_ident: base.Ident.Idx,
+    builtin_box_ident: base.Ident.Idx,
+    builtin_primitive_owner_idents: symbol_mod.PrimitiveMethodOwnerIdents,
     runtime_inspect_symbols: std.AutoHashMap(Symbol, Symbol),
 
     pub fn deinit(self: *Result) void {
@@ -38,6 +43,7 @@ pub const Result = struct {
         self.types.deinit();
         self.strings.deinit(self.store.allocator);
         self.idents.deinit(self.store.allocator);
+        self.attached_method_index.deinit();
         self.runtime_inspect_symbols.deinit();
     }
 
@@ -50,6 +56,11 @@ pub const Result = struct {
             .types = type_mod.Store.init(allocator),
             .strings = .{},
             .idents = try base.Ident.Store.initCapacity(allocator, 1),
+            .attached_method_index = symbol_mod.AttachedMethodIndex.init(allocator),
+            .builtin_module_idx = 0,
+            .builtin_list_ident = base.Ident.Idx.NONE,
+            .builtin_box_ident = base.Ident.Idx.NONE,
+            .builtin_primitive_owner_idents = symbol_mod.PrimitiveMethodOwnerIdents.none(),
             .runtime_inspect_symbols = std.AutoHashMap(Symbol, Symbol).init(allocator),
         };
         return result;
@@ -131,6 +142,11 @@ const Lowerer = struct {
             .types = self.input.types,
             .strings = self.input.strings,
             .idents = self.input.idents,
+            .attached_method_index = self.input.attached_method_index,
+            .builtin_module_idx = self.input.builtin_module_idx,
+            .builtin_list_ident = self.input.builtin_list_ident,
+            .builtin_box_ident = self.input.builtin_box_ident,
+            .builtin_primitive_owner_idents = self.input.builtin_primitive_owner_idents,
             .runtime_inspect_symbols = self.input.runtime_inspect_symbols,
         };
 
@@ -140,6 +156,11 @@ const Lowerer = struct {
         self.input.types = type_mod.Store.init(self.allocator);
         self.input.strings = .{};
         self.input.idents = try base.Ident.Store.initCapacity(self.allocator, 1);
+        self.input.attached_method_index = symbol_mod.AttachedMethodIndex.init(self.allocator);
+        self.input.builtin_module_idx = 0;
+        self.input.builtin_list_ident = base.Ident.Idx.NONE;
+        self.input.builtin_box_ident = base.Ident.Idx.NONE;
+        self.input.builtin_primitive_owner_idents = symbol_mod.PrimitiveMethodOwnerIdents.none();
         self.input.runtime_inspect_symbols = std.AutoHashMap(Symbol, Symbol).init(self.allocator);
         return result;
     }
@@ -311,25 +332,35 @@ const Lowerer = struct {
                     } },
                 });
             },
-            .method_call => |method_call| {
+            .method_eq => |eq| {
                 lowered.expr = try self.output.addExpr(.{
                     .ty = expr.ty,
-                    .data = .{ .method_call = .{
-                        .receiver = try self.lowerExprInto(&lowered.lifted_defs, venv, method_call.receiver),
-                        .method_fn_ty = method_call.method_fn_ty,
-                        .method_name = method_call.method_name,
-                        .args = try self.lowerExprSpan(&lowered.lifted_defs, venv, method_call.args),
+                    .data = .{ .method_eq = .{
+                        .lhs = try self.lowerExprInto(&lowered.lifted_defs, venv, eq.lhs),
+                        .rhs = try self.lowerExprInto(&lowered.lifted_defs, venv, eq.rhs),
+                        .negated = eq.negated,
                     } },
                 });
             },
-            .type_method_call => |method_call| {
+            .dispatch_call => |method_call| {
                 lowered.expr = try self.output.addExpr(.{
                     .ty = expr.ty,
-                    .data = .{ .type_method_call = .{
-                        .dispatcher_ty = method_call.dispatcher_ty,
-                        .method_fn_ty = method_call.method_fn_ty,
+                    .data = .{ .dispatch_call = .{
+                        .receiver = try self.lowerExprInto(&lowered.lifted_defs, venv, method_call.receiver),
                         .method_name = method_call.method_name,
                         .args = try self.lowerExprSpan(&lowered.lifted_defs, venv, method_call.args),
+                        .dispatch_constraint_ty = method_call.dispatch_constraint_ty,
+                    } },
+                });
+            },
+            .type_dispatch_call => |method_call| {
+                lowered.expr = try self.output.addExpr(.{
+                    .ty = expr.ty,
+                    .data = .{ .type_dispatch_call = .{
+                        .dispatcher_ty = method_call.dispatcher_ty,
+                        .method_name = method_call.method_name,
+                        .args = try self.lowerExprSpan(&lowered.lifted_defs, venv, method_call.args),
+                        .dispatch_constraint_ty = method_call.dispatch_constraint_ty,
                     } },
                 });
             },
@@ -988,13 +1019,17 @@ const Lowerer = struct {
                 try self.collectFreeVarsExpr(eq.lhs, bound, free);
                 try self.collectFreeVarsExpr(eq.rhs, bound, free);
             },
-            .method_call => |method_call| {
+            .method_eq => |eq| {
+                try self.collectFreeVarsExpr(eq.lhs, bound, free);
+                try self.collectFreeVarsExpr(eq.rhs, bound, free);
+            },
+            .dispatch_call => |method_call| {
                 try self.collectFreeVarsExpr(method_call.receiver, bound, free);
                 for (self.input.program.store.sliceExprSpan(method_call.args)) |arg| {
                     try self.collectFreeVarsExpr(arg, bound, free);
                 }
             },
-            .type_method_call => |method_call| {
+            .type_dispatch_call => |method_call| {
                 for (self.input.program.store.sliceExprSpan(method_call.args)) |arg| {
                     try self.collectFreeVarsExpr(arg, bound, free);
                 }
@@ -1358,13 +1393,17 @@ const Lowerer = struct {
                 try self.collectBindingTypesExpr(eq.lhs);
                 try self.collectBindingTypesExpr(eq.rhs);
             },
-            .method_call => |method_call| {
+            .method_eq => |eq| {
+                try self.collectBindingTypesExpr(eq.lhs);
+                try self.collectBindingTypesExpr(eq.rhs);
+            },
+            .dispatch_call => |method_call| {
                 try self.collectBindingTypesExpr(method_call.receiver);
                 for (self.input.program.store.sliceExprSpan(method_call.args)) |arg| {
                     try self.collectBindingTypesExpr(arg);
                 }
             },
-            .type_method_call => |method_call| {
+            .type_dispatch_call => |method_call| {
                 for (self.input.program.store.sliceExprSpan(method_call.args)) |arg| {
                     try self.collectBindingTypesExpr(arg);
                 }

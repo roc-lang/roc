@@ -122,6 +122,8 @@ str_var: Var,
 builtin_types_copied: bool,
 /// Map representation of Ident -> Var, used in checking static dispatch constraints
 ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
+/// Checker-local source-site mapping for method/equality rewrites.
+constraint_expr_by_fn_var: std.AutoHashMap(Var, CIR.Expr.Idx),
 /// Map representation all top level patterns, and if we've processed them yet
 top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
 /// The name of the enclosing function, if known.
@@ -321,6 +323,7 @@ fn initAssumePrepared(
         .str_var = undefined,
         .builtin_types_copied = false,
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
+        .constraint_expr_by_fn_var = std.AutoHashMap(Var, CIR.Expr.Idx).init(gpa),
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
         .enclosing_func_name = null,
         // Initialize with null import_mapping - caller should call fixupTypeWriter() after storing Check
@@ -374,6 +377,7 @@ pub fn deinit(self: *Self) void {
     self.constraint_check_stack.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
     self.ident_to_var_map.deinit();
+    self.constraint_expr_by_fn_var.deinit();
     self.top_level_ptrns.deinit();
     self.type_writer.deinit();
     self.deferred_def_unifications.deinit(self.gpa);
@@ -4848,7 +4852,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             if (did_err) {
                 try self.unifyWith(expr_var, .err, env);
             } else {
-                try self.mkMethodCallConstraint(
+                const constraint_fn_var = try self.mkMethodCallConstraint(
                     receiver_var,
                     arg_vars,
                     expr_var,
@@ -4857,6 +4861,27 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     expr_region,
                     expr_idx,
                 );
+                self.cir.store.replaceExprWithDispatchCall(
+                    expr_idx,
+                    method_call.receiver,
+                    method_call.method_name,
+                    method_call.args,
+                    constraint_fn_var,
+                );
+            }
+        },
+        .e_dispatch_call => |method_call| {
+            does_fx = try self.checkExpr(method_call.receiver, env, Expected.none()) or does_fx;
+            var did_err = self.types.resolveVar(ModuleEnv.varFrom(method_call.receiver)).desc.content == .err;
+
+            for (self.cir.store.sliceExpr(method_call.args)) |arg_expr_idx| {
+                self.checking_call_arg = true;
+                does_fx = try self.checkExpr(arg_expr_idx, env, Expected.none()) or does_fx;
+                did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(arg_expr_idx)).desc.content == .err);
+            }
+
+            if (did_err) {
+                try self.unifyWith(expr_var, .err, env);
             }
         },
         .e_structural_eq => |eq| {
@@ -4867,6 +4892,33 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const rhs_var = ModuleEnv.varFrom(eq.rhs);
             _ = try self.unify(lhs_var, rhs_var, env);
             _ = try self.unify(try self.freshBool(env, expr_region), expr_var, env);
+        },
+        .e_method_eq => |eq| {
+            const arg_vars = try self.gpa.alloc(Var, 1);
+            defer self.gpa.free(arg_vars);
+
+            self.checking_call_arg = true;
+            does_fx = try self.checkExpr(eq.lhs, env, Expected.none()) or does_fx;
+            self.checking_call_arg = true;
+            does_fx = try self.checkExpr(eq.rhs, env, Expected.none()) or does_fx;
+
+            const lhs_var = ModuleEnv.varFrom(eq.lhs);
+            arg_vars[0] = ModuleEnv.varFrom(eq.rhs);
+            if (self.types.resolveVar(lhs_var).desc.content == .err or
+                self.types.resolveVar(arg_vars[0]).desc.content == .err)
+            {
+                try self.unifyWith(expr_var, .err, env);
+            } else {
+                _ = try self.mkMethodCallConstraint(
+                    lhs_var,
+                    arg_vars,
+                    expr_var,
+                    self.cir.idents.is_eq,
+                    env,
+                    expr_region,
+                    expr_idx,
+                );
+            }
         },
         .e_type_method_call => |method_call| {
             const arg_expr_idxs = self.cir.store.sliceExpr(method_call.args);
@@ -4887,7 +4939,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             } else {
                 const type_var_alias_stmt = self.cir.store.getStatement(method_call.type_var_alias_stmt);
                 const dispatcher_var = ModuleEnv.varFrom(type_var_alias_stmt.s_type_var_alias.type_var_anno);
-                try self.mkTypeMethodCallConstraint(
+                const constraint_fn_var = try self.mkTypeMethodCallConstraint(
                     dispatcher_var,
                     arg_vars,
                     expr_var,
@@ -4896,6 +4948,25 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     expr_region,
                     expr_idx,
                 );
+                self.cir.store.replaceExprWithTypeDispatchCall(
+                    expr_idx,
+                    method_call.type_var_alias_stmt,
+                    method_call.method_name,
+                    method_call.args,
+                    constraint_fn_var,
+                );
+            }
+        },
+        .e_type_dispatch_call => |method_call| {
+            var did_err = false;
+            for (self.cir.store.sliceExpr(method_call.args)) |arg_expr_idx| {
+                self.checking_call_arg = true;
+                does_fx = try self.checkExpr(arg_expr_idx, env, Expected.none()) or does_fx;
+                did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(arg_expr_idx)).desc.content == .err);
+            }
+
+            if (did_err) {
+                try self.unifyWith(expr_var, .err, env);
             }
         },
         .e_crash => {
@@ -5954,7 +6025,7 @@ fn checkBinopExpr(
                 }
             }
 
-            if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, method_name, env, expr_region, expr_idx)) {
+            if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, method_name, env, expr_region)) {
                 return does_fx;
             }
 
@@ -5966,6 +6037,7 @@ fn checkBinopExpr(
                 rhs_var,
                 ret_var,
                 method_name,
+                false,
                 env,
                 expr_region,
                 expr_idx,
@@ -5985,7 +6057,7 @@ fn checkBinopExpr(
                     else => unreachable,
                 };
 
-            if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, method_name, env, expr_region, expr_idx)) {
+            if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, method_name, env, expr_region)) {
                 return does_fx;
             }
 
@@ -6005,6 +6077,7 @@ fn checkBinopExpr(
                 arg_var,
                 ret_var,
                 method_name,
+                false,
                 env,
                 expr_region,
                 expr_idx,
@@ -6014,7 +6087,7 @@ fn checkBinopExpr(
             _ = try self.unify(expr_var, ret_var, env);
         },
         .eq => {
-            if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, self.cir.idents.is_eq, env, expr_region, expr_idx)) {
+            if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, self.cir.idents.is_eq, env, expr_region)) {
                 return does_fx;
             }
 
@@ -6030,6 +6103,7 @@ fn checkBinopExpr(
                 rhs_var,
                 eq_ret_var,
                 self.cir.idents.is_eq,
+                false,
                 env,
                 expr_region,
                 expr_idx,
@@ -6048,7 +6122,7 @@ fn checkBinopExpr(
             // may revisit this in the future, but relaxing the restriction
             // should be a non-breaking change.
 
-            if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, self.cir.idents.is_eq, env, expr_region, expr_idx)) {
+            if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, self.cir.idents.is_eq, env, expr_region)) {
                 return does_fx;
             }
 
@@ -6067,7 +6141,7 @@ fn checkBinopExpr(
             const eq_ret_var = try self.freshBool(env, expr_region);
 
             // Create the eq static dispatch function: arg.is_eq(arg) -> Bool
-            try self.mkBinopConstraint(eq_arg_var, eq_arg_var, eq_ret_var, eq_method_name, env, expr_region, expr_idx);
+            try self.mkBinopConstraint(eq_arg_var, eq_arg_var, eq_ret_var, eq_method_name, true, env, expr_region, expr_idx);
 
             // Get the not method + ret var
             const not_method_name = self.cir.idents.not;
@@ -6128,7 +6202,6 @@ fn reportMissingNominalMethodForBinop(
     method_name: Ident.Idx,
     env: *Env,
     region: Region,
-    expr_idx: CIR.Expr.Idx,
 ) Allocator.Error!bool {
     const resolved_lhs = self.types.resolveVar(lhs_var);
     if (resolved_lhs.desc.content == .err) return false;
@@ -6143,12 +6216,12 @@ fn reportMissingNominalMethodForBinop(
     }
     const original_env = self.getNominalOriginEnv(nominal_type);
     const method_ident = original_env.lookupMethodIdentFromEnvConst(self.cir, nominal_type.ident.ident_idx, method_name) orelse {
-        try self.reportMissingNominalMethodForBinopConstraint(lhs_var, rhs_var, expr_var, method_name, env, region, expr_idx);
+        try self.reportMissingNominalMethodForBinopConstraint(lhs_var, rhs_var, expr_var, method_name, env, region);
         return true;
     };
 
     if (original_env.getExposedNodeIndexById(method_ident) == null) {
-        try self.reportMissingNominalMethodForBinopConstraint(lhs_var, rhs_var, expr_var, method_name, env, region, expr_idx);
+        try self.reportMissingNominalMethodForBinopConstraint(lhs_var, rhs_var, expr_var, method_name, env, region);
         return true;
     }
 
@@ -6163,7 +6236,6 @@ fn reportMissingNominalMethodForBinopConstraint(
     method_name: Ident.Idx,
     env: *Env,
     region: Region,
-    expr_idx: CIR.Expr.Idx,
 ) Allocator.Error!void {
     const args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
     const ret_var = try self.fresh(env, region);
@@ -6176,7 +6248,6 @@ fn reportMissingNominalMethodForBinopConstraint(
     const constraint = StaticDispatchConstraint{
         .fn_name = method_name,
         .fn_var = constraint_fn_var,
-        .site_expr_var = ModuleEnv.varFrom(expr_idx),
         .origin = .desugared_binop,
     };
 
@@ -6215,38 +6286,6 @@ fn getNominalOriginEnv(self: *Self, nominal_type: types_mod.NominalType) *const 
     );
 }
 
-fn currentConstraintSiteModule(self: *Self) Ident.Idx {
-    if (!self.cir.qualified_module_ident.isNone()) return self.cir.qualified_module_ident;
-    return self.cir.module_name;
-}
-
-fn methodCallOwnerEnv(self: *Self, site_module_name: ?Ident.Idx) *ModuleEnv {
-    const module_name = site_module_name orelse return self.cir;
-    if (module_name.eql(self.currentConstraintSiteModule())) return self.cir;
-
-    if (module_name.eql(self.builtin_ctx.module_name)) {
-        if (self.builtin_ctx.builtin_module) |builtin_env| {
-            return @constCast(builtin_env);
-        }
-        return self.cir;
-    }
-
-    for (self.imported_modules) |imported_env| {
-        const imported_ident = if (!imported_env.qualified_module_ident.isNone())
-            imported_env.qualified_module_ident
-        else
-            imported_env.module_name;
-        if (module_name.eql(imported_ident)) {
-            return @constCast(imported_env);
-        }
-    }
-
-    std.debug.panic(
-        "Check invariant violated: missing owner env for method-call site module {s}",
-        .{self.cir.getIdent(module_name)},
-    );
-}
-
 // binop + unary op exprs //
 
 /// Create a static dispatch fn like: `lhs, rhs -> ret` and assert the
@@ -6257,6 +6296,7 @@ fn mkBinopConstraint(
     rhs_var: Var,
     ret_var: Var,
     method_name: Ident.Idx,
+    negated: bool,
     env: *Env,
     region: Region,
     binop_expr_idx: ?CIR.Expr.Idx,
@@ -6278,13 +6318,12 @@ fn mkBinopConstraint(
     const constraint = StaticDispatchConstraint{
         .fn_name = method_name,
         .fn_var = constraint_fn_var,
-        .site_expr_var = if (binop_expr_idx) |idx| ModuleEnv.varFrom(idx) else null,
-        .site_module_name = if (binop_expr_idx != null) self.currentConstraintSiteModule() else null,
         .origin = .desugared_binop,
+        .binop_negated = negated,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
-    if (binop_expr_idx) |idx| {
-        try self.cir.recordMethodCallFn(idx, method_name, .desugared_binop, constraint_fn_var);
+    if (binop_expr_idx) |expr_idx| {
+        try self.constraint_expr_by_fn_var.put(constraint_fn_var, expr_idx);
     }
 
     // Create a constrained flex and unify it with the lhs (receiver)
@@ -6325,13 +6364,11 @@ fn mkUnaryOp(
     const constraint = StaticDispatchConstraint{
         .fn_name = method_name,
         .fn_var = constraint_fn_var,
-        .site_expr_var = if (unary_expr_idx) |idx| ModuleEnv.varFrom(idx) else null,
-        .site_module_name = if (unary_expr_idx != null) self.currentConstraintSiteModule() else null,
         .origin = .desugared_unaryop,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
-    if (unary_expr_idx) |idx| {
-        try self.cir.recordMethodCallFn(idx, method_name, .desugared_unaryop, constraint_fn_var);
+    if (unary_expr_idx) |expr_idx| {
+        try self.constraint_expr_by_fn_var.put(constraint_fn_var, expr_idx);
     }
 
     // Create a constrained flex and unify it with the arg
@@ -6353,7 +6390,7 @@ fn mkMethodCallConstraint(
     env: *Env,
     region: Region,
     method_expr_idx: CIR.Expr.Idx,
-) Allocator.Error!void {
+) Allocator.Error!Var {
     const all_args = try self.gpa.alloc(Var, arg_vars.len + 1);
     defer self.gpa.free(all_args);
     all_args[0] = receiver_var;
@@ -6369,12 +6406,10 @@ fn mkMethodCallConstraint(
     const constraint = StaticDispatchConstraint{
         .fn_name = method_name,
         .fn_var = constraint_fn_var,
-        .site_expr_var = ModuleEnv.varFrom(method_expr_idx),
-        .site_module_name = self.currentConstraintSiteModule(),
         .origin = .method_call,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
-    try self.cir.recordMethodCallFn(method_expr_idx, method_name, .method_call, constraint_fn_var);
+    try self.constraint_expr_by_fn_var.put(constraint_fn_var, method_expr_idx);
 
     const constrained_var = try self.freshFromContent(
         .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
@@ -6383,6 +6418,7 @@ fn mkMethodCallConstraint(
     );
 
     _ = try self.unify(constrained_var, receiver_var, env);
+    return constraint_fn_var;
 }
 
 fn mkTypeMethodCallConstraint(
@@ -6394,7 +6430,7 @@ fn mkTypeMethodCallConstraint(
     env: *Env,
     region: Region,
     method_expr_idx: CIR.Expr.Idx,
-) Allocator.Error!void {
+) Allocator.Error!Var {
     const args_range = try self.types.appendVars(arg_vars);
     const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
         .args = args_range,
@@ -6405,12 +6441,10 @@ fn mkTypeMethodCallConstraint(
     const constraint = StaticDispatchConstraint{
         .fn_name = method_name,
         .fn_var = constraint_fn_var,
-        .site_expr_var = ModuleEnv.varFrom(method_expr_idx),
-        .site_module_name = self.currentConstraintSiteModule(),
         .origin = .method_call,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
-    try self.cir.recordMethodCallFn(method_expr_idx, method_name, .method_call, constraint_fn_var);
+    try self.constraint_expr_by_fn_var.put(constraint_fn_var, method_expr_idx);
 
     const constrained_var = try self.freshFromContent(
         .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
@@ -6419,44 +6453,14 @@ fn mkTypeMethodCallConstraint(
     );
 
     _ = try self.unify(constrained_var, dispatcher_var, env);
-}
-
-fn recordResolvedMethodCall(
-    self: *Self,
-    constraint: StaticDispatchConstraint,
-    resolved_method_var: Var,
-    resolved_target: ?ModuleEnv.MethodCallFn.ResolvedTarget,
-) std.mem.Allocator.Error!void {
-    const site_expr_var = constraint.site_expr_var orelse return;
-    const expr_idx: CIR.Expr.Idx = @enumFromInt(@intFromEnum(site_expr_var));
-    const owner_env = self.methodCallOwnerEnv(constraint.site_module_name);
-    owner_env.setMethodCallFnVar(expr_idx, constraint.fn_name, constraint.origin, resolved_method_var);
-    if (resolved_target) |target| {
-        try owner_env.setMethodCallResolvedTarget(expr_idx, constraint.fn_name, constraint.origin, target);
-    }
-}
-
-fn freezeResolvedMethodCallVar(
-    self: *Self,
-    resolved_method_var: Var,
-    env: *Env,
-    region: Region,
-) std.mem.Allocator.Error!Var {
-    return try self.instantiateVarOrphan(
-        resolved_method_var,
-        env,
-        env.rank(),
-        .{ .explicit = region },
-    );
+    return constraint_fn_var;
 }
 
 fn rewriteImplicitEqMethodCallAsStructuralEq(
     self: *Self,
     constraint: StaticDispatchConstraint,
 ) void {
-    const site_expr_var = constraint.site_expr_var orelse return;
-    const expr_idx: CIR.Expr.Idx = @enumFromInt(@intFromEnum(site_expr_var));
-    if (constraint.origin != .method_call) return;
+    const expr_idx = self.constraint_expr_by_fn_var.get(constraint.fn_var) orelse return;
 
     switch (self.cir.store.getExpr(expr_idx)) {
         .e_method_call => |method_call| {
@@ -6468,7 +6472,40 @@ fn rewriteImplicitEqMethodCallAsStructuralEq(
                 );
             }
 
-            self.cir.store.replaceExprWithStructuralEq(expr_idx, method_call.receiver, args[0]);
+            self.cir.store.replaceExprWithStructuralEq(expr_idx, method_call.receiver, args[0], constraint.binop_negated);
+        },
+        .e_dispatch_call => |method_call| {
+            const args = self.cir.store.sliceExpr(method_call.args);
+            if (args.len != 1) {
+                std.debug.panic(
+                    "type checker invariant violated: structural equality method call expected exactly one argument, found {d}",
+                    .{args.len},
+                );
+            }
+
+            self.cir.store.replaceExprWithStructuralEq(expr_idx, method_call.receiver, args[0], constraint.binop_negated);
+        },
+        .e_binop => |binop| {
+            if (binop.op != .eq and binop.op != .ne) return;
+            self.cir.store.replaceExprWithStructuralEq(expr_idx, binop.lhs, binop.rhs, constraint.binop_negated);
+        },
+        .e_structural_eq => |eq| {
+            self.cir.store.replaceExprWithStructuralEq(expr_idx, eq.lhs, eq.rhs, constraint.binop_negated);
+        },
+        else => {},
+    }
+}
+
+fn rewriteEqBinopAsMethodEq(self: *Self, constraint: StaticDispatchConstraint) void {
+    if (constraint.origin != .desugared_binop) return;
+    const expr_idx = self.constraint_expr_by_fn_var.get(constraint.fn_var) orelse return;
+    switch (self.cir.store.getExpr(expr_idx)) {
+        .e_binop => |binop| {
+            if (binop.op != .eq and binop.op != .ne) return;
+            self.cir.store.replaceExprWithMethodEq(expr_idx, binop.lhs, binop.rhs, constraint.binop_negated);
+        },
+        .e_method_eq => |eq| {
+            self.cir.store.replaceExprWithMethodEq(expr_idx, eq.lhs, eq.rhs, constraint.binop_negated);
         },
         else => {},
     }
@@ -6986,7 +7023,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
 
                     // Then, lookup the inferred constraint in the actual list of rigid constraints
                     if (self.ident_to_var_map.get(constraint.fn_name)) |rigid_var| {
-                        try self.recordResolvedMethodCall(constraint, rigid_var, null);
                         // Unify the actual function var against the inferred var
                         //
                         // TODO: For better error messages, we should check if these
@@ -7099,6 +7135,9 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         );
                         continue;
                     };
+                    if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
+                        self.rewriteEqBinopAsMethodEq(constraint);
+                    }
 
                     // Get the def index in the original env
                     const node_idx_in_original_env = original_env.getExposedNodeIndexById(method_ident) orelse {
@@ -7210,14 +7249,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 .method_name = constraint.fn_name,
                             },
                         });
-                        try self.recordResolvedMethodCall(
-                            constraint,
-                            try self.freezeResolvedMethodCallVar(method_var, env, region),
-                            .{
-                                .module_name = original_module_ident,
-                                .def_idx = def_idx,
-                            },
-                        );
                         try self.unifyWith(deferred_constraint.var_, .err, env);
                         continue;
                     };
@@ -7229,14 +7260,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             .method_name = constraint.fn_name,
                         },
                     });
-                    try self.recordResolvedMethodCall(
-                        constraint,
-                        try self.freezeResolvedMethodCallVar(method_var, env, region),
-                        .{
-                            .module_name = original_module_ident,
-                            .def_idx = def_idx,
-                        },
-                    );
                     // If there was a problem, then ensure the error gets propagated
                     // to all args and return types.
                     if (fn_result.isProblem()) {
@@ -7344,6 +7367,9 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         );
                         continue;
                     };
+                    if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
+                        self.rewriteEqBinopAsMethodEq(constraint);
+                    }
 
                     const node_idx_in_original_env = original_env.getExposedNodeIndexById(method_ident) orelse {
                         try self.reportConstraintError(
@@ -7434,14 +7460,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 .method_name = constraint.fn_name,
                             },
                         });
-                        try self.recordResolvedMethodCall(
-                            constraint,
-                            try self.freezeResolvedMethodCallVar(method_var, env, region),
-                            .{
-                                .module_name = original_module_ident,
-                                .def_idx = def_idx,
-                            },
-                        );
                         try self.unifyWith(deferred_constraint.var_, .err, env);
                         continue;
                     };
@@ -7453,14 +7471,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             .method_name = constraint.fn_name,
                         },
                     });
-                    try self.recordResolvedMethodCall(
-                        constraint,
-                        try self.freezeResolvedMethodCallVar(method_var, env, region),
-                        .{
-                            .module_name = original_module_ident,
-                            .def_idx = def_idx,
-                        },
-                    );
                     if (fn_result.isProblem()) {
                         var args_iter = self.types.iterVars(constraint_fn.args);
                         while (args_iter.next()) |arg| {

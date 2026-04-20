@@ -1107,7 +1107,7 @@ pub fn main() !void {
 
     // Coverage mode: simple single-threaded loop, no fork, no watchdog, no threads.
     // Just run each test with the interpreter and print progress to stdout.
-    if (comptime coverage_mode) {
+    if (coverage_mode) {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
 

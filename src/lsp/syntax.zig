@@ -731,6 +731,16 @@ pub const SyntaxChecker = struct {
                         }
                     }
                 },
+                .e_dispatch_call => |method_call| {
+                    const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
+                    if (resolveTypeIdentForMethodLookup(module_env, receiver_type_var)) |type_ident| {
+                        if (findMethodQualifiedIdent(module_env, type_ident, method_call.method_name)) |qualified_ident| {
+                            if (findTypeForQualifiedIdent(module_env, qualified_ident)) |method_type_var| {
+                                hover_type_var = method_type_var;
+                            }
+                        }
+                    }
+                },
                 else => {},
             }
         }
@@ -962,6 +972,26 @@ pub const SyntaxChecker = struct {
                     // Prefer local method docs first (e.g. static-dispatch methods
                     // defined in the current module), then fall back to external
                     // module lookup for builtin/qualified providers.
+                    if (findMethodDocForTypeAndName(self.allocator, module_env, type_ident, method_name)) |local_doc| {
+                        return local_doc;
+                    }
+
+                    const type_name = module_env.getIdentText(type_ident);
+                    if (findExternalModuleEnv(env, type_name)) |external_env| {
+                        const qualified_name = std.fmt.allocPrint(
+                            self.allocator,
+                            "{s}.{s}",
+                            .{ type_name, method_name },
+                        ) catch return null;
+                        defer self.allocator.free(qualified_name);
+                        return findDocInModule(self.allocator, external_env, qualified_name);
+                    }
+                }
+            },
+            .e_dispatch_call => |method_call| {
+                const method_name = module_env.getIdentText(method_call.method_name);
+                const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
+                if (resolveTypeIdentForMethodLookup(module_env, receiver_type_var)) |type_ident| {
                     if (findMethodDocForTypeAndName(self.allocator, module_env, type_ident, method_name)) |local_doc| {
                         return local_doc;
                     }
@@ -1376,6 +1406,28 @@ pub const SyntaxChecker = struct {
                     return null;
                 },
                 .e_method_call => |method_call| {
+                    // Attached method call - navigate to the provider module for the receiver type
+                    // Get the type of the receiver to find which module provides the method
+                    const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
+                    var type_writer = module_env.initTypeWriter() catch |err| {
+                        self.logDebug(.build, "[DEF] initTypeWriter failed: {s}", .{@errorName(err)});
+                        return null;
+                    };
+                    defer type_writer.deinit();
+
+                    type_writer.write(receiver_type_var, .one_line) catch |err| {
+                        self.logDebug(.build, "[DEF] type_writer.write failed: {s}", .{@errorName(err)});
+                        return null;
+                    };
+                    const type_str = type_writer.get();
+
+                    if (findModuleInTypeString(type_str)) |module_name| {
+                        return self.findModuleByName(module_name);
+                    }
+
+                    return null;
+                },
+                .e_dispatch_call => |method_call| {
                     // Attached method call - navigate to the provider module for the receiver type
                     // Get the type of the receiver to find which module provides the method
                     const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);

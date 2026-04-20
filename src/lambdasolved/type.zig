@@ -210,6 +210,13 @@ pub const Store = struct {
         };
     }
 
+    pub fn unlinkPreservingNominalConst(self: *const Store, id: TypeVarId) TypeVarId {
+        return switch (self.getNode(id)) {
+            .link => |next| self.unlinkPreservingNominalConst(next),
+            else => id,
+        };
+    }
+
     pub fn unlinkErasingNominal(self: *Store, id: TypeVarId) TypeVarId {
         const node = self.getNode(id);
         return switch (node) {
@@ -398,40 +405,6 @@ pub const Store = struct {
     pub fn hasCapturelessLambda(self: *const Store, fn_ty: TypeVarId, symbol: Symbol) bool {
         const member = self.maybeLambdaMember(fn_ty, symbol) orelse return false;
         return member.captures.len == 0;
-    }
-
-    pub fn exactTargetForResolvedFn(self: *const Store, fn_ty: TypeVarId) ?Symbol {
-        return switch (self.lambdaRepr(fn_ty)) {
-            .erased => null,
-            .lset => |lambdas| if (lambdas.len == 1) lambdas[0].symbol else null,
-        };
-    }
-
-    pub fn requireExactTargetForResolvedFn(self: *const Store, fn_ty: TypeVarId) Symbol {
-        if (self.exactTargetForResolvedFn(fn_ty)) |symbol| return symbol;
-        switch (self.lambdaRepr(fn_ty)) {
-            .erased => debugPanicFmt(
-                "lambdasolved.type requireExactTargetForResolvedFn expected singleton resolved callable, found erased callable at fn_ty {d}",
-                .{@intFromEnum(fn_ty)},
-            ),
-            .lset => |lambdas| {
-                if (lambdas.len > 0) {
-                    debugPanicFmt(
-                        "lambdasolved.type requireExactTargetForResolvedFn expected singleton resolved callable, found {d} lambdas at fn_ty {d} (first symbol {d}, last symbol {d})",
-                        .{
-                            lambdas.len,
-                            @intFromEnum(fn_ty),
-                            @intFromEnum(lambdas[0].symbol),
-                            @intFromEnum(lambdas[lambdas.len - 1].symbol),
-                        },
-                    );
-                }
-                debugPanicFmt(
-                    "lambdasolved.type requireExactTargetForResolvedFn expected singleton resolved callable, found empty lambda set at fn_ty {d}",
-                    .{@intFromEnum(fn_ty)},
-                );
-            },
-        }
     }
 
     pub fn structuralKeyOwned(self: *const Store, ty: TypeVarId) std.mem.Allocator.Error![]u8 {
@@ -635,7 +608,7 @@ const StructuralKeySerializer = struct {
     }
 
     fn writeType(self: *StructuralKeySerializer, ty: TypeVarId) std.mem.Allocator.Error!void {
-        const root = self.store.unlinkConst(ty);
+        const root = self.store.unlinkPreservingNominalConst(ty);
         if (self.seen.get(root)) |existing| {
             try self.out.append(self.allocator, 'r');
             try self.writeU32(existing);

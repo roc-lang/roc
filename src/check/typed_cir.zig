@@ -14,7 +14,6 @@ const StringLiteral = base.StringLiteral;
 const CommonIdents = ModuleEnv.CommonIdents;
 const EvaluationOrder = can.DependencyGraph.EvaluationOrder;
 const CompactWriter = collections.CompactWriter;
-pub const ResolvedMethodTarget = ModuleEnv.MethodCallFn.ResolvedTarget;
 const CachedModule = struct {
     env: *ModuleEnv,
     buffer: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
@@ -358,35 +357,6 @@ pub const Module = struct {
             },
             else => false,
         };
-    }
-
-    /// Return the checked function var associated with a method-call constraint, if any.
-    pub fn methodCallConstraintFnVar(self: @This(), idx: CIR.Expr.Idx) ?Var {
-        const expr_data = self.expr(idx).data;
-        const method_name = switch (expr_data) {
-            .e_method_call => |method_call| method_call.method_name,
-            .e_type_method_call => |method_call| method_call.method_name,
-            else => return null,
-        };
-        return self.env().methodCallFnVar(idx, method_name, .method_call);
-    }
-
-    pub fn methodCallResolvedTargets(
-        self: @This(),
-        expr_idx: CIR.Expr.Idx,
-        origin: types.StaticDispatchConstraint.Origin,
-    ) []const ResolvedMethodTarget {
-        for (self.env().method_call_fns.items.items) |entry| {
-            if (entry.expr_idx == expr_idx and entry.origin == origin) {
-                return self.env().methodCallResolvedTargets(entry.resolved_targets);
-            }
-        }
-        return &.{};
-    }
-
-    /// Return the checked function var associated with a desugared binop dispatch, if any.
-    pub fn binopConstraintFnVar(self: @This(), idx: CIR.Expr.Idx, method_name: Ident.Idx) ?Var {
-        return self.env().methodCallFnVar(idx, method_name, .desugared_binop);
     }
 
     /// Flatten a checked function type into its argument list and final return var.

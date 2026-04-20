@@ -434,7 +434,7 @@ const ProcLowerer = struct {
                 .assign_ref => |assign| if (assign.target == local) return assign.result,
                 .assign_literal => |assign| if (assign.target == local) return assign.result,
                 .assign_call => |assign| if (assign.target == local) return assign.result,
-                .assign_call_indirect => |assign| if (assign.target == local) return assign.result,
+                .assign_call_erased => |assign| if (assign.target == local) return assign.result,
                 .assign_low_level => |assign| if (assign.target == local) return assign.result,
                 .assign_list => |assign| if (assign.target == local) return assign.result,
                 .assign_struct => |assign| if (assign.target == local) return assign.result,
@@ -1184,20 +1184,28 @@ const ProcLowerer = struct {
             return next;
         }
 
-        if (self.resolvedListElemLayoutRef(actual_ref)) |actual_elem_ref| {
-            if (self.resolvedListElemLayoutRef(target_ref)) |target_elem_ref| {
-                const actual_elem_backing_ref = self.unwrapNominalRef(actual_elem_ref);
-                const target_elem_backing_ref = self.unwrapNominalRef(target_elem_ref);
-                const actual_elem_layout = try self.parent.lowerLayoutId(actual_elem_backing_ref);
-                const target_elem_layout = try self.parent.lowerLayoutId(target_elem_backing_ref);
-                if (layoutRefsEqual(actual_elem_ref, target_elem_ref) or
-                    layoutRefsEqual(actual_elem_backing_ref, target_elem_backing_ref) or
-                    actual_elem_layout == target_elem_layout or
-                    self.layoutRuntimeEquivalent(actual_elem_layout, target_elem_layout) or
-                    try self.layoutsStructurallyEqual(actual_elem_layout, target_elem_layout))
-                {
-                    return try self.addAssignRef(target_local, .fresh, .{ .list_reinterpret = .{ .backing_ref = source_local } }, next);
+        if (isListLayout(actual) and isListLayout(target)) {
+            const actual_elem_layout = self.lowerListElemLayout(actual_layout);
+            const target_elem_layout = self.lowerListElemLayout(target_layout);
+            var can_reinterpret = actual_elem_layout == target_elem_layout or
+                (ls.isZeroSized(ls.getLayout(actual_elem_layout)) and
+                    ls.isZeroSized(ls.getLayout(target_elem_layout))) or
+                self.layoutRuntimeEquivalent(actual_elem_layout, target_elem_layout) or
+                try self.layoutsStructurallyEqual(actual_elem_layout, target_elem_layout);
+
+            if (!can_reinterpret) {
+                if (self.resolvedListElemLayoutRef(actual_ref)) |actual_elem_ref| {
+                    if (self.resolvedListElemLayoutRef(target_ref)) |target_elem_ref| {
+                        const actual_elem_backing_ref = self.unwrapNominalRef(actual_elem_ref);
+                        const target_elem_backing_ref = self.unwrapNominalRef(target_elem_ref);
+                        can_reinterpret = layoutRefsEqual(actual_elem_ref, target_elem_ref) or
+                            layoutRefsEqual(actual_elem_backing_ref, target_elem_backing_ref);
+                    }
                 }
+            }
+
+            if (can_reinterpret) {
+                return try self.addAssignRef(target_local, .fresh, .{ .list_reinterpret = .{ .backing_ref = source_local } }, next);
             }
         }
 
@@ -1251,6 +1259,12 @@ const ProcLowerer = struct {
         const target_singleton_payload_ref = self.singletonTagUnionPayloadRef(target_ref);
 
         if (actual.tag == .zst and target.tag == .tag_union) {
+            if (target_singleton_payload_ref) |target_payload_ref| {
+                const target_payload_layout = try self.parent.lowerLayoutId(target_payload_ref);
+                if (self.parent.layouts.isZeroSized(self.parent.layouts.getLayout(target_payload_layout))) {
+                    return try self.lowerSingletonTagUnionIntoTagUnion(source_local, target_local, next, target_payload_ref);
+                }
+            }
             _ = try self.singletonZeroSizedTagUnionDiscriminant(actual_ref) orelse if (builtin.mode == .Debug)
                 std.debug.panic(
                     "lir.from_ir invariant violated: zst->tag_union bridge source ref is not a singleton zero-sized tag union",
@@ -2004,10 +2018,10 @@ const ProcLowerer = struct {
                 }
                 break :blk cursor;
             },
-            .call_indirect => |call| blk: {
+            .call_erased => |call| blk: {
                 const locals = try self.lowerVarSpan(self.parent.input.store.sliceVarSpan(call.args));
                 defer self.parent.allocator.free(locals);
-                break :blk try self.parent.store.addCFStmt(.{ .assign_call_indirect = .{
+                break :blk try self.parent.store.addCFStmt(.{ .assign_call_erased = .{
                     .target = target,
                     .result = .fresh,
                     .ownership = .{},

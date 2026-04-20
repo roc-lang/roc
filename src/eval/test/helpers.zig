@@ -398,6 +398,24 @@ pub fn wasmEvaluatorInspectedStr(
     return @import("../wasm_evaluator.zig").evalLoweredToStr(allocator, lowered);
 }
 
+test "dev evaluator repro: F32.to_str" {
+    var compiled = try compileInspectedExpr(
+        std.testing.allocator,
+        \\{
+        \\a : F32
+        \\a = 3.14.F32
+        \\x = F32.to_str(a)
+        \\x
+        \\}
+    );
+    defer compiled.deinit(std.testing.allocator);
+
+    const actual = try devEvaluatorInspectedStr(std.testing.allocator, &compiled.lowered);
+    defer std.testing.allocator.free(actual);
+
+    try std.testing.expectEqualStrings("3.140000104904175", actual);
+}
+
 fn valueToRocStr(val: Value) RocStr {
     var roc_str: RocStr = undefined;
     @memcpy(std.mem.asBytes(&roc_str), val.ptr[0..@sizeOf(RocStr)]);

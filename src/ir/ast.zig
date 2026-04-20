@@ -81,7 +81,7 @@ pub const Expr = union(enum) {
         proc: Symbol,
         args: Span(Var),
     },
-    call_indirect: struct {
+    call_erased: struct {
         func: Var,
         args: Span(Var),
         capture_layout: ?LayoutRef,

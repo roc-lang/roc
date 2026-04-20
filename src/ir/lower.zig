@@ -478,15 +478,15 @@ const Lowerer = struct {
                 } });
                 block.setTerm(.{ .value = temp });
             },
-            .call_indirect => |call| {
+            .call_erased => |call| {
                 const func = try self.lowerSubexprValue(&block, env, call.func);
-                if (func == null) return if (block.has_term) block else debugPanic("ir.lower call_indirect missing func terminator");
+                if (func == null) return if (block.has_term) block else debugPanic("ir.lower call_erased missing func terminator");
                 const args = try self.lowerValueSpan(&block, env, call.args);
-                if (args == null) return if (block.has_term) block else debugPanic("ir.lower call_indirect missing args terminator");
-                const temp = try self.freshVar(expr.ty, "call_indirect");
+                if (args == null) return if (block.has_term) block else debugPanic("ir.lower call_erased missing args terminator");
+                const temp = try self.freshVar(expr.ty, "call_erased");
                 try block.stmts.append(self.allocator, .{ .let_ = .{
                     .bind = temp,
-                    .expr = try self.output.addExpr(.{ .call_indirect = .{
+                    .expr = try self.output.addExpr(.{ .call_erased = .{
                         .func = func.?,
                         .args = args.?,
                         .capture_layout = if (call.capture_ty) |capture_ty|

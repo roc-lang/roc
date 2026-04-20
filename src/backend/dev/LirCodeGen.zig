@@ -4478,7 +4478,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     try self.collectStmtReadLocals(assign.next, locals, visited);
                 },
-                .assign_call_indirect => |assign| {
+                .assign_call_erased => |assign| {
                     try locals.put(localKey(assign.closure), assign.closure);
                     for (self.store.getLocalSpan(assign.args)) |arg| {
                         try locals.put(localKey(arg), arg);
@@ -4596,7 +4596,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     try self.collectStmtLocals(assign.next, locals, visited);
                 },
-                .assign_call_indirect => |assign| {
+                .assign_call_erased => |assign| {
                     try locals.put(localKey(assign.target), assign.target);
                     try locals.put(localKey(assign.closure), assign.closure);
                     for (self.store.getLocalSpan(assign.args)) |arg| {
@@ -9043,7 +9043,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return try self.generateCallToCompiledProc(proc, arg_locs, arg_layouts, call.ret_layout);
         }
 
-        fn generateIndirectCall(
+        fn generateErasedCall(
             self: *Self,
             closure_local: LocalId,
             call_args: LocalSpan,
@@ -9055,7 +9055,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const closure_layout_val = self.layout_store.getLayout(runtime_closure_layout);
             if (builtin.mode == .Debug and closure_layout_val.tag != .struct_) {
                 std.debug.panic(
-                    "Dev/codegen invariant violated: indirect call closure local {d} must have struct layout, got {s}",
+                    "Dev/codegen invariant violated: erased call closure local {d} must have struct layout, got {s}",
                     .{ @intFromEnum(closure_local), @tagName(closure_layout_val.tag) },
                 );
             }
@@ -9069,7 +9069,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const fn_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(closure_idx, 0);
             if (builtin.mode == .Debug and fn_layout != .opaque_ptr) {
                 std.debug.panic(
-                    "Dev/codegen invariant violated: indirect call closure field 0 must be opaque_ptr, got {d}",
+                    "Dev/codegen invariant violated: erased call closure field 0 must be opaque_ptr, got {d}",
                     .{@intFromEnum(fn_layout)},
                 );
             }
@@ -9085,7 +9085,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (arg_refs, 0..) |arg_ref, i| {
                 const arg_layout = self.localLayout(arg_ref);
                 const raw_arg_loc = try self.emitValueLocal(arg_ref);
-                const arg_loc = self.requireExactValueLocationToLayout(raw_arg_loc, arg_layout, arg_layout, "indirect_call.arg");
+                const arg_loc = self.requireExactValueLocationToLayout(raw_arg_loc, arg_layout, arg_layout, "erased_call.arg");
                 arg_infos[i] = .{
                     .loc = arg_loc,
                     .layout_idx = arg_layout,
@@ -9098,7 +9098,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const capture_size = self.getLayoutSize(capture_layout_idx);
                 if (capture_size == 0) {
                     const capture_loc = self.fieldLocationFromLayout(closure_offset + capture_offset, 0, capture_layout_idx);
-                    const capture_arg = self.requireExactValueLocationToLayout(capture_loc, capture_layout_idx, capture_layout_idx, "indirect_call.capture");
+                    const capture_arg = self.requireExactValueLocationToLayout(capture_loc, capture_layout_idx, capture_layout_idx, "erased_call.capture");
                     arg_infos[arg_refs.len] = .{
                         .loc = capture_arg,
                         .layout_idx = capture_layout_idx,
@@ -9115,7 +9115,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(capture_ptr_reg);
 
                     const capture_loc = self.fieldLocationFromLayout(capture_stack_offset, capture_size, capture_layout_idx);
-                    const capture_arg = self.requireExactValueLocationToLayout(capture_loc, capture_layout_idx, capture_layout_idx, "indirect_call.capture");
+                    const capture_arg = self.requireExactValueLocationToLayout(capture_loc, capture_layout_idx, capture_layout_idx, "erased_call.capture");
                     arg_infos[arg_refs.len] = .{
                         .loc = capture_arg,
                         .layout_idx = capture_layout_idx,
@@ -11564,6 +11564,208 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             emit_roc_ops: bool = false,
         };
 
+        const FrozenCallArg = struct {
+            stack_offset: i32,
+            num_regs: u8,
+            value_size: ValueSize = .qword,
+            pass_by_ptr: bool,
+        };
+
+        fn freezeCallArg(self: *Self, info: ArgInfo, pass_by_ptr: bool) Allocator.Error!FrozenCallArg {
+            std.debug.assert(info.num_regs > 0);
+
+            if (pass_by_ptr or info.num_regs > 1) {
+                const size: u32 = @as(u32, info.num_regs) * 8;
+                const offset = switch (info.loc) {
+                    .stack_i128, .stack_str => |off| off,
+                    .stack => |s| s.offset,
+                    .list_stack => |li| li.struct_offset,
+                    .immediate_i128 => |val| blk: {
+                        const slot = self.codegen.allocStackSlot(@intCast(size));
+                        const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                        const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                        try self.codegen.emitLoadImm(scratch_reg, @bitCast(low));
+                        try self.emitStore(.w64, frame_ptr, slot, scratch_reg);
+                        try self.codegen.emitLoadImm(scratch_reg, @bitCast(high));
+                        try self.emitStore(.w64, frame_ptr, slot + 8, scratch_reg);
+                        break :blk slot;
+                    },
+                    else => if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "freezeCallArg expected stack-backed multi-reg arg, got {s} for layout {any}",
+                            .{ @tagName(info.loc), info.layout_idx },
+                        );
+                    } else unreachable,
+                };
+                return .{
+                    .stack_offset = offset,
+                    .num_regs = info.num_regs,
+                    .pass_by_ptr = pass_by_ptr,
+                };
+            }
+
+            const arg_layout = info.layout_idx orelse .u64;
+            if (arg_layout == .f32) {
+                switch (info.loc) {
+                    .stack => |s| {
+                        if (s.size == .dword) {
+                            return .{
+                                .stack_offset = s.offset,
+                                .num_regs = 1,
+                                .value_size = .dword,
+                                .pass_by_ptr = false,
+                            };
+                        }
+                    },
+                    .float_reg => |freg| {
+                        const slot = self.codegen.allocStackSlot(4);
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            const tmp = self.codegen.allocFloat() orelse unreachable;
+                            try self.codegen.emit.fcvtFloatFloat(.single, tmp, .double, freg);
+                            try self.codegen.emitStoreStackF32(slot, tmp);
+                            self.codegen.freeFloat(tmp);
+                        } else {
+                            const tmp = self.codegen.allocFloat() orelse unreachable;
+                            try self.codegen.emit.cvtsd2ssRegReg(tmp, freg);
+                            try self.codegen.emitStoreStackF32(slot, tmp);
+                            self.codegen.freeFloat(tmp);
+                        }
+                        return .{
+                            .stack_offset = slot,
+                            .num_regs = 1,
+                            .value_size = .dword,
+                            .pass_by_ptr = false,
+                        };
+                    },
+                    else => {},
+                }
+
+                const slot = self.codegen.allocStackSlot(4);
+                switch (info.loc) {
+                    .general_reg => |reg| {
+                        try self.emitStore(.w32, frame_ptr, slot, reg);
+                    },
+                    .immediate_i64 => |val| {
+                        const f32_val: f32 = @floatFromInt(val);
+                        const bits: u32 = @bitCast(f32_val);
+                        try self.codegen.emitLoadImm(scratch_reg, @as(i64, bits));
+                        try self.emitStore(.w32, frame_ptr, slot, scratch_reg);
+                    },
+                    .immediate_f64 => |val| {
+                        const f32_val: f32 = @floatCast(val);
+                        const bits: u32 = @bitCast(f32_val);
+                        try self.codegen.emitLoadImm(scratch_reg, @as(i64, bits));
+                        try self.emitStore(.w32, frame_ptr, slot, scratch_reg);
+                    },
+                    .stack => |s| {
+                        const tmp = self.codegen.allocFloat() orelse unreachable;
+                        try self.codegen.emitLoadStackF64(tmp, s.offset);
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            try self.codegen.emit.fcvtFloatFloat(.single, tmp, .double, tmp);
+                            try self.codegen.emitStoreStackF32(slot, tmp);
+                        } else {
+                            try self.codegen.emit.cvtsd2ssRegReg(tmp, tmp);
+                            try self.codegen.emitStoreStackF32(slot, tmp);
+                        }
+                        self.codegen.freeFloat(tmp);
+                    },
+                    else => if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "freezeCallArg unsupported F32 source {s} for layout {any}",
+                            .{ @tagName(info.loc), info.layout_idx },
+                        );
+                    } else unreachable,
+                }
+                return .{
+                    .stack_offset = slot,
+                    .num_regs = 1,
+                    .value_size = .dword,
+                    .pass_by_ptr = false,
+                };
+            }
+
+            switch (info.loc) {
+                .stack => |s| {
+                    if (s.size == .qword) {
+                        return .{
+                            .stack_offset = s.offset,
+                            .num_regs = 1,
+                            .value_size = .qword,
+                            .pass_by_ptr = false,
+                        };
+                    }
+                },
+                .stack_i128 => |offset| {
+                    return .{
+                        .stack_offset = offset,
+                        .num_regs = 1,
+                        .value_size = .qword,
+                        .pass_by_ptr = false,
+                    };
+                },
+                .stack_str => |offset| {
+                    return .{
+                        .stack_offset = offset,
+                        .num_regs = 1,
+                        .value_size = .qword,
+                        .pass_by_ptr = false,
+                    };
+                },
+                .list_stack => |li| {
+                    return .{
+                        .stack_offset = li.struct_offset,
+                        .num_regs = 1,
+                        .value_size = .qword,
+                        .pass_by_ptr = false,
+                    };
+                },
+                .float_reg => |freg| {
+                    const slot = self.codegen.allocStackSlot(8);
+                    try self.codegen.emitStoreStackF64(slot, freg);
+                    return .{
+                        .stack_offset = slot,
+                        .num_regs = 1,
+                        .value_size = .qword,
+                        .pass_by_ptr = false,
+                    };
+                },
+                else => {},
+            }
+
+            const slot = self.codegen.allocStackSlot(8);
+            switch (info.loc) {
+                .general_reg => |reg| {
+                    try self.emitStore(.w64, frame_ptr, slot, reg);
+                },
+                .immediate_i64 => |val| {
+                    try self.codegen.emitLoadImm(scratch_reg, val);
+                    try self.emitStore(.w64, frame_ptr, slot, scratch_reg);
+                },
+                .immediate_f64 => |val| {
+                    const bits: u64 = @bitCast(val);
+                    try self.codegen.emitLoadImm(scratch_reg, @bitCast(bits));
+                    try self.emitStore(.w64, frame_ptr, slot, scratch_reg);
+                },
+                .stack => |s| {
+                    try self.emitValueLoadStack(scratch_reg, s.offset, s.size, s.layout_idx);
+                    try self.emitStore(.w64, frame_ptr, slot, scratch_reg);
+                },
+                .noreturn => unreachable,
+                else => if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "freezeCallArg unsupported scalar source {s} for layout {any}",
+                        .{ @tagName(info.loc), info.layout_idx },
+                    );
+                } else unreachable,
+            }
+            return .{
+                .stack_offset = slot,
+                .num_regs = 1,
+                .value_size = .qword,
+                .pass_by_ptr = false,
+            };
+        }
+
         /// Place arguments in registers and/or stack slots per the calling convention.
         /// Handles i128 even-alignment on aarch64, 3-reg list/str, multi-reg structs,
         /// lambda_code addressing, pass-by-pointer conversion, and stack spilling.
@@ -11614,6 +11816,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitSubImm(.w64, stack_ptr, stack_ptr, stack_spill_size);
             }
 
+            const frozen_args = try self.allocator.alloc(FrozenCallArg, arg_infos.len);
+            defer self.allocator.free(frozen_args);
+            for (arg_infos, 0..) |info, i| {
+                if (info.num_regs == 0) {
+                    frozen_args[i] = .{
+                        .stack_offset = 0,
+                        .num_regs = 0,
+                        .pass_by_ptr = false,
+                    };
+                    continue;
+                }
+
+                const pbp = if (config.pass_by_ptr) |p| p[i] else false;
+                frozen_args[i] = try self.freezeCallArg(info, pbp);
+            }
+
             // Place arguments in registers or on stack
             var reg_idx: u8 = 0;
             var stack_arg_offset: i32 = 0;
@@ -11629,34 +11847,29 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (info.num_regs == 0) {
                     continue;
                 }
-                const arg_loc = info.loc;
+                const frozen = frozen_args[i];
                 const arg_layout = info.layout_idx;
 
                 // Check if this argument is passed by pointer
-                if (config.pass_by_ptr) |pbp| {
-                    if (pbp[i]) {
-                        const arg_size: u32 = @as(u32, info.num_regs) * 8;
-                        const arg_offset = try self.ensureOnStack(arg_loc, arg_size);
-                        if (reg_idx < max_arg_regs) {
-                            const arg_reg = self.getArgumentRegister(reg_idx);
-                            try self.emitLeaStack(arg_reg, arg_offset);
-                            reg_idx += 1;
-                        } else {
-                            const temp = try self.allocTempGeneral();
-                            try self.emitLeaStack(temp, arg_offset);
-                            try self.spillArgToStack(.{ .general_reg = temp }, null, stack_arg_offset, 1);
-                            self.codegen.freeGeneral(temp);
-                            stack_arg_offset += 8;
-                            reg_idx = max_arg_regs;
-                        }
-                        continue;
+                if (frozen.pass_by_ptr) {
+                    if (reg_idx < max_arg_regs) {
+                        const arg_reg = self.getArgumentRegister(reg_idx);
+                        try self.emitLeaStack(arg_reg, frozen.stack_offset);
+                        reg_idx += 1;
+                    } else {
+                        try self.codegen.emitLoadImm(scratch_reg, 0);
+                        try self.emitLeaStack(scratch_reg, frozen.stack_offset);
+                        try self.spillArgToStack(.{ .general_reg = scratch_reg }, null, stack_arg_offset, 1);
+                        stack_arg_offset += 8;
+                        reg_idx = max_arg_regs;
                     }
+                    continue;
                 }
 
                 // Check if this argument fits in registers
                 if (reg_idx + info.num_regs <= max_arg_regs) {
                     // Handle i128/Dec arguments (need two registers, even-aligned on aarch64)
-                    const is_i128_arg = self.argNeedsI128Abi(arg_loc, arg_layout);
+                    const is_i128_arg = self.argNeedsI128Abi(info.loc, arg_layout);
                     if (is_i128_arg) {
                         if (comptime target.toCpuArch() == .aarch64) {
                             if (reg_idx % 2 != 0) {
@@ -11665,103 +11878,42 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                         const low_reg = self.getArgumentRegister(reg_idx);
                         const high_reg = self.getArgumentRegister(reg_idx + 1);
-                        switch (arg_loc) {
-                            .stack_i128 => |offset| {
-                                try self.codegen.emitLoadStack(.w64, low_reg, offset);
-                                try self.codegen.emitLoadStack(.w64, high_reg, offset + 8);
-                            },
-                            .stack => |s| {
-                                try self.codegen.emitLoadStack(.w64, low_reg, s.offset);
-                                try self.codegen.emitLoadStack(.w64, high_reg, s.offset + 8);
-                            },
-                            .immediate_i128 => |val| {
-                                const low: u64 = @truncate(@as(u128, @bitCast(val)));
-                                const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                                try self.codegen.emitLoadImm(low_reg, @bitCast(low));
-                                try self.codegen.emitLoadImm(high_reg, @bitCast(high));
-                            },
-                            else => if (builtin.mode == .Debug) {
-                                std.debug.panic(
-                                    "placeCallArguments i128 ABI mismatch: arg_loc={s} arg_layout={?} proc={d}",
-                                    .{
-                                        @tagName(arg_loc),
-                                        arg_layout,
-                                        if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64),
-                                    },
-                                );
-                            } else unreachable,
-                        }
+                        try self.codegen.emitLoadStack(.w64, low_reg, frozen.stack_offset);
+                        try self.codegen.emitLoadStack(.w64, high_reg, frozen.stack_offset + 8);
                         reg_idx += 2;
                         continue;
                     }
 
                     if (info.num_regs == 3) {
-                        // List or string (24 bytes)
-                        const offset: i32 = switch (arg_loc) {
-                            .stack => |s| s.offset,
-                            .list_stack => |li| li.struct_offset,
-                            .stack_str => |off| off,
-                            else => if (builtin.mode == .Debug) {
-                                std.debug.panic(
-                                    "placeCallArguments expected 3-register arg on stack, got {s} for layout {any}",
-                                    .{ @tagName(arg_loc), arg_layout },
-                                );
-                            } else unreachable,
-                        };
                         const reg0 = self.getArgumentRegister(reg_idx);
                         const reg1 = self.getArgumentRegister(reg_idx + 1);
                         const reg2 = self.getArgumentRegister(reg_idx + 2);
-                        try self.emitLoad(.w64, reg0, frame_ptr, offset);
-                        try self.emitLoad(.w64, reg1, frame_ptr, offset + 8);
-                        try self.emitLoad(.w64, reg2, frame_ptr, offset + 16);
+                        try self.emitLoad(.w64, reg0, frame_ptr, frozen.stack_offset);
+                        try self.emitLoad(.w64, reg1, frame_ptr, frozen.stack_offset + 8);
+                        try self.emitLoad(.w64, reg2, frame_ptr, frozen.stack_offset + 16);
                         reg_idx += 3;
                     } else if (info.num_regs > 1) {
                         // Multi-register struct (record > 8 bytes)
-                        const offset: i32 = switch (arg_loc) {
-                            .stack => |s| s.offset,
-                            else => {
-                                const arg_reg = self.getArgumentRegister(reg_idx);
-                                try self.moveToReg(arg_loc, arg_reg);
-                                reg_idx += 1;
-                                continue;
-                            },
-                        };
                         var ri: u8 = 0;
                         while (ri < info.num_regs) : (ri += 1) {
                             const r = self.getArgumentRegister(reg_idx + ri);
-                            try self.codegen.emitLoadStack(.w64, r, offset + @as(i32, ri) * 8);
+                            try self.codegen.emitLoadStack(.w64, r, frozen.stack_offset + @as(i32, ri) * 8);
                         }
                         reg_idx += info.num_regs;
                     } else {
                         // Single register argument
                         const arg_reg = self.getArgumentRegister(reg_idx);
-                        if (arg_layout == .f32) {
-                            const bits_reg = try self.materializeF32BitsInGeneralReg(arg_loc);
-                            if (bits_reg != arg_reg) {
-                                try self.codegen.emit.movRegReg(.w64, arg_reg, bits_reg);
-                                self.codegen.freeGeneral(bits_reg);
-                            }
-                        } else switch (arg_loc) {
-                            .general_reg => |reg| {
-                                if (reg != arg_reg) {
-                                    try self.codegen.emit.movRegReg(.w64, arg_reg, reg);
-                                }
-                            },
-                            .stack => |s| {
-                                try self.emitSizedLoadStack(arg_reg, s.offset, s.size);
-                            },
-                            .immediate_i64 => |val| {
-                                try self.codegen.emitLoadImm(arg_reg, @bitCast(val));
-                            },
-                            else => {
-                                try self.moveToReg(arg_loc, arg_reg);
-                            },
-                        }
+                        try self.emitSizedLoadStack(arg_reg, frozen.stack_offset, frozen.value_size);
                         reg_idx += 1;
                     }
                 } else {
                     // Spill to stack — registers exhausted
-                    try self.spillArgToStack(arg_loc, arg_layout, stack_arg_offset, info.num_regs);
+                    try self.spillArgToStack(
+                        .{ .stack = .{ .offset = frozen.stack_offset, .size = frozen.value_size, .layout_idx = arg_layout orelse .u64 } },
+                        arg_layout,
+                        stack_arg_offset,
+                        info.num_regs,
+                    );
                     stack_arg_offset += @as(i32, info.num_regs) * 8;
                     reg_idx = max_arg_regs;
                 }
@@ -12287,8 +12439,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.generateStmt(assign.next);
                 },
 
-                .assign_call_indirect => |assign| {
-                    const value_loc = try self.generateIndirectCall(
+                .assign_call_erased => |assign| {
+                    const value_loc = try self.generateErasedCall(
                         assign.closure,
                         assign.args,
                         self.localLayout(assign.target),

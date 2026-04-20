@@ -291,7 +291,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 73;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 47;
+pub const MODULEENV_EXPR_NODE_COUNT = 50;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 17;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -949,11 +949,33 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 } },
             } };
         },
+        .expr_dispatch_call => {
+            const p = payload.expr_dispatch_call;
+            const args_span = store.span2_data.items.items[p.args_span2_idx];
+            return CIR.Expr{ .e_dispatch_call = .{
+                .receiver = @enumFromInt(p.receiver),
+                .method_name = @bitCast(p.method_name),
+                .args = .{ .span = .{
+                    .start = args_span.start,
+                    .len = args_span.len,
+                } },
+                .constraint_fn_var = @enumFromInt(p.constraint_fn_var),
+            } };
+        },
         .expr_structural_eq => {
             const p = payload.expr_structural_eq;
             return CIR.Expr{ .e_structural_eq = .{
                 .lhs = @enumFromInt(p.lhs),
                 .rhs = @enumFromInt(p.rhs),
+                .negated = p.negated != 0,
+            } };
+        },
+        .expr_method_eq => {
+            const p = payload.expr_method_eq;
+            return CIR.Expr{ .e_method_eq = .{
+                .lhs = @enumFromInt(p.lhs),
+                .rhs = @enumFromInt(p.rhs),
+                .negated = p.negated != 0,
             } };
         },
         .expr_type_method_call => {
@@ -966,6 +988,19 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                     .start = args_span.start,
                     .len = args_span.len,
                 } },
+            } };
+        },
+        .expr_type_dispatch_call => {
+            const p = payload.expr_type_dispatch_call;
+            const args_span = store.span2_data.items.items[p.args_span2_idx];
+            return CIR.Expr{ .e_type_dispatch_call = .{
+                .type_var_alias_stmt = @enumFromInt(p.type_var_alias_stmt),
+                .method_name = @bitCast(p.method_name),
+                .args = .{ .span = .{
+                    .start = args_span.start,
+                    .len = args_span.len,
+                } },
+                .constraint_fn_var = @enumFromInt(p.constraint_fn_var),
             } };
         },
         .malformed => {
@@ -1066,12 +1101,79 @@ pub fn replaceExprWithStructuralEq(
     expr_idx: CIR.Expr.Idx,
     lhs: CIR.Expr.Idx,
     rhs: CIR.Expr.Idx,
+    negated: bool,
 ) void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
     var node = Node.init(.expr_structural_eq);
     node.setPayload(.{ .expr_structural_eq = .{
         .lhs = @intFromEnum(lhs),
         .rhs = @intFromEnum(rhs),
+        .negated = @intFromBool(negated),
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+pub fn replaceExprWithMethodEq(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    lhs: CIR.Expr.Idx,
+    rhs: CIR.Expr.Idx,
+    negated: bool,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    var node = Node.init(.expr_method_eq);
+    node.setPayload(.{ .expr_method_eq = .{
+        .lhs = @intFromEnum(lhs),
+        .rhs = @intFromEnum(rhs),
+        .negated = @intFromBool(negated),
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+pub fn replaceExprWithDispatchCall(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    receiver: CIR.Expr.Idx,
+    method_name: base.Ident.Idx,
+    args: CIR.Expr.Span,
+    constraint_fn_var: types.Var,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    const args_span2_idx: u32 = @intCast(store.span2_data.len());
+    _ = store.span2_data.append(store.gpa, .{
+        .start = args.span.start,
+        .len = args.span.len,
+    }) catch unreachable;
+    var node = Node.init(.expr_dispatch_call);
+    node.setPayload(.{ .expr_dispatch_call = .{
+        .receiver = @intFromEnum(receiver),
+        .method_name = @bitCast(method_name),
+        .args_span2_idx = args_span2_idx,
+        .constraint_fn_var = @intFromEnum(constraint_fn_var),
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+pub fn replaceExprWithTypeDispatchCall(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    type_var_alias_stmt: CIR.Statement.Idx,
+    method_name: base.Ident.Idx,
+    args: CIR.Expr.Span,
+    constraint_fn_var: types.Var,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    const args_span2_idx: u32 = @intCast(store.span2_data.len());
+    _ = store.span2_data.append(store.gpa, .{
+        .start = args.span.start,
+        .len = args.span.len,
+    }) catch unreachable;
+    var node = Node.init(.expr_type_dispatch_call);
+    node.setPayload(.{ .expr_type_dispatch_call = .{
+        .type_var_alias_stmt = @intFromEnum(type_var_alias_stmt),
+        .method_name = @bitCast(method_name),
+        .args_span2_idx = args_span2_idx,
+        .constraint_fn_var = @intFromEnum(constraint_fn_var),
     } });
     store.nodes.set(node_idx, node);
 }
@@ -2035,11 +2137,34 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .args_span2_idx = args_span2_idx,
             } });
         },
+        .e_dispatch_call => |e| {
+            node.tag = .expr_dispatch_call;
+            const args_span2_idx: u32 = @intCast(store.span2_data.len());
+            _ = try store.span2_data.append(store.gpa, .{
+                .start = e.args.span.start,
+                .len = e.args.span.len,
+            });
+            node.setPayload(.{ .expr_dispatch_call = .{
+                .receiver = @intFromEnum(e.receiver),
+                .method_name = @bitCast(e.method_name),
+                .args_span2_idx = args_span2_idx,
+                .constraint_fn_var = @intFromEnum(e.constraint_fn_var),
+            } });
+        },
         .e_structural_eq => |e| {
             node.tag = .expr_structural_eq;
             node.setPayload(.{ .expr_structural_eq = .{
                 .lhs = @intFromEnum(e.lhs),
                 .rhs = @intFromEnum(e.rhs),
+                .negated = @intFromBool(e.negated),
+            } });
+        },
+        .e_method_eq => |e| {
+            node.tag = .expr_method_eq;
+            node.setPayload(.{ .expr_method_eq = .{
+                .lhs = @intFromEnum(e.lhs),
+                .rhs = @intFromEnum(e.rhs),
+                .negated = @intFromBool(e.negated),
             } });
         },
         .e_type_method_call => |e| {
@@ -2053,6 +2178,20 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .type_var_alias_stmt = @intFromEnum(e.type_var_alias_stmt),
                 .method_name = @bitCast(e.method_name),
                 .args_span2_idx = args_span2_idx,
+            } });
+        },
+        .e_type_dispatch_call => |e| {
+            node.tag = .expr_type_dispatch_call;
+            const args_span2_idx: u32 = @intCast(store.span2_data.len());
+            _ = try store.span2_data.append(store.gpa, .{
+                .start = e.args.span.start,
+                .len = e.args.span.len,
+            });
+            node.setPayload(.{ .expr_type_dispatch_call = .{
+                .type_var_alias_stmt = @intFromEnum(e.type_var_alias_stmt),
+                .method_name = @bitCast(e.method_name),
+                .args_span2_idx = args_span2_idx,
+                .constraint_fn_var = @intFromEnum(e.constraint_fn_var),
             } });
         },
         .e_runtime_error => |e| {

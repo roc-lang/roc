@@ -71,7 +71,7 @@ pub const TailRecursionPass = struct {
                 .args = assign.args,
                 .next = next,
             } }),
-            .assign_call_indirect => |assign| self.store.addCFStmt(.{ .assign_call_indirect = .{
+            .assign_call_erased => |assign| self.store.addCFStmt(.{ .assign_call_erased = .{
                 .target = assign.target,
                 .result = assign.result,
                 .ownership = assign.ownership,
@@ -156,7 +156,7 @@ pub const TailRecursionPass = struct {
             .assign_symbol => |assign| try self.transformAssignLike(stmt, assign.next),
             .assign_ref => |assign| try self.transformAssignLike(stmt, assign.next),
             .assign_literal => |assign| try self.transformAssignLike(stmt, assign.next),
-            .assign_call_indirect => |assign| try self.transformAssignLike(stmt, assign.next),
+            .assign_call_erased => |assign| try self.transformAssignLike(stmt, assign.next),
             .assign_low_level => |assign| try self.transformAssignLike(stmt, assign.next),
             .assign_list => |assign| try self.transformAssignLike(stmt, assign.next),
             .assign_struct => |assign| try self.transformAssignLike(stmt, assign.next),

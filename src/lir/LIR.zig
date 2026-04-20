@@ -284,7 +284,7 @@ pub const CFStmt = union(enum) {
         args: LocalSpan,
         next: CFStmtId,
     },
-    assign_call_indirect: struct {
+    assign_call_erased: struct {
         target: LocalId,
         result: ResultSemantics,
         ownership: OwnershipSemantics = .{},

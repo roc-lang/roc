@@ -97,7 +97,7 @@ func_type_cache: std.StringHashMap(u32),
 func_type_key_scratch: std.ArrayList(u8),
 /// Type index for the RocOps function signature: (i32, i32) -> void.
 roc_ops_type_idx: u32 = 0,
-/// Table indices for RocOps functions (used with call_indirect).
+/// Table indices for RocOps functions (used with erased calls via wasm `call_indirect`).
 roc_alloc_table_idx: u32 = 0,
 roc_dealloc_table_idx: u32 = 0,
 roc_realloc_table_idx: u32 = 0,
@@ -306,8 +306,8 @@ fn registerHostImports(self: *Self) !void {
     );
     self.list_eq_import = try self.module.addImport("env", "roc_list_eq", list_eq_type);
 
-    // RocOps function imports: all have signature (i32 args_ptr, i32 env_ptr) -> void
-    // These are called via call_indirect through the funcref table.
+    // RocOps function imports: all have signature (i32 args_ptr, i32 env_ptr) -> void.
+    // These are invoked for erased calls via the wasm funcref table and `call_indirect`.
     const roc_ops_type = try self.module.addFuncType(
         &.{ .i32, .i32 },
         &.{},
@@ -1735,7 +1735,7 @@ fn collectProcLocals(
             for (self.store.getLocalSpan(assign.args)) |arg| try recordProcLocal(locals, arg);
             try self.collectProcLocals(assign.next, locals, visited);
         },
-        .assign_call_indirect => |assign| {
+        .assign_call_erased => |assign| {
             try recordProcLocal(locals, assign.target);
             try recordProcLocal(locals, assign.closure);
             for (self.store.getLocalSpan(assign.args)) |arg| try recordProcLocal(locals, arg);
@@ -4422,7 +4422,7 @@ fn allocStackMemory(self: *Self, size: u32, alignment: u32) Allocator.Error!u32 
 /// Emit bump allocation: allocates `size` bytes with given alignment
 /// from the heap (global 1). Leaves the allocated pointer on the wasm stack.
 /// This is a simple bump allocator that never frees — suitable for tests.
-/// Emit heap allocation via roc_alloc (call_indirect through RocOps).
+/// Emit heap allocation via roc_alloc (erased call through RocOps).
 /// `size_local` holds the size to allocate; `alignment` is the byte alignment.
 /// Leaves the allocated pointer on the wasm stack.
 fn emitHeapAlloc(self: *Self, size_local: u32, alignment: u32) Allocator.Error!void {
@@ -4444,7 +4444,7 @@ fn emitHeapAlloc(self: *Self, size_local: u32, alignment: u32) Allocator.Error!v
     WasmModule.leb128WriteU32(self.allocator, &self.body, 2) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, &self.body, 4) catch return error.OutOfMemory;
 
-    // Push call_indirect args: (alloc_args_ptr, env_ptr)
+    // Push erased-call args: (alloc_args_ptr, env_ptr)
     try self.emitFpOffset(alloc_slot); // args_ptr
     try self.emitLocalGet(self.roc_ops_local); // load roc_ops_ptr
     self.body.append(self.allocator, Op.i32_load) catch return error.OutOfMemory; // load env from offset 0
@@ -4457,7 +4457,7 @@ fn emitHeapAlloc(self: *Self, size_local: u32, alignment: u32) Allocator.Error!v
     WasmModule.leb128WriteU32(self.allocator, &self.body, 2) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, &self.body, 4) catch return error.OutOfMemory;
 
-    // call_indirect with RocOps function type, table 0
+    // wasm call_indirect with RocOps function type, table 0
     self.body.append(self.allocator, Op.call_indirect) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, &self.body, self.roc_ops_type_idx) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory; // table index 0
@@ -4907,8 +4907,8 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
             try self.bindAssignedLocal(assign.target);
             try self.generateCFStmt(assign.next);
         },
-        .assign_call_indirect => |assign| {
-            try self.generateCallIndirect(.{
+        .assign_call_erased => |assign| {
+            try self.generateErasedCall(.{
                 .closure = assign.closure,
                 .args = assign.args,
                 .ret_layout = self.procLocalLayoutIdx(assign.target),
@@ -5669,7 +5669,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
     }
 }
 
-fn generateCallIndirect(self: *Self, c: anytype) Allocator.Error!void {
+fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
     const ls = self.getLayoutStore();
     const closure_layout = self.procLocalLayoutIdx(c.closure);
     const closure_layout_val = ls.getLayout(closure_layout);
@@ -5681,14 +5681,14 @@ fn generateCallIndirect(self: *Self, c: anytype) Allocator.Error!void {
             const inner_layout = ls.getLayout(struct_layout_idx);
             if (inner_layout.tag != .struct_) {
                 std.debug.panic(
-                    "WasmCodeGen invariant violated: indirect call closure layout {d} boxed non-struct layout {d}",
+                    "WasmCodeGen invariant violated: erased call closure layout {d} boxed non-struct layout {d}",
                     .{ @intFromEnum(closure_layout), @intFromEnum(struct_layout_idx) },
                 );
             }
         },
         .struct_ => {},
         else => std.debug.panic(
-            "WasmCodeGen invariant violated: indirect call closure layout {d} is not struct or boxed struct",
+            "WasmCodeGen invariant violated: erased call closure layout {d} is not struct or boxed struct",
             .{@intFromEnum(closure_layout)},
         ),
     }
@@ -5705,7 +5705,7 @@ fn generateCallIndirect(self: *Self, c: anytype) Allocator.Error!void {
     const fn_layout = ls.getStructFieldLayoutByOriginalIndex(struct_idx, 0);
     if (fn_layout != .opaque_ptr) {
         std.debug.panic(
-            "WasmCodeGen invariant violated: indirect call closure field 0 layout {d} is not opaque_ptr",
+            "WasmCodeGen invariant violated: erased call closure field 0 layout {d} is not opaque_ptr",
             .{@intFromEnum(fn_layout)},
         );
     }

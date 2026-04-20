@@ -5142,6 +5142,17 @@ pub const Interpreter = struct {
                 }
                 return false;
             },
+            .e_dispatch_call => |method_call| {
+                if (self.conditionInvolvesMutableVariable(method_call.receiver)) {
+                    return true;
+                }
+                for (self.env.store.sliceExpr(method_call.args)) |arg| {
+                    if (self.conditionInvolvesMutableVariable(arg)) {
+                        return true;
+                    }
+                }
+                return false;
+            },
             .e_structural_eq => |eq| {
                 if (self.conditionInvolvesMutableVariable(eq.lhs)) {
                     return true;
@@ -5151,7 +5162,24 @@ pub const Interpreter = struct {
                 }
                 return false;
             },
+            .e_method_eq => |eq| {
+                if (self.conditionInvolvesMutableVariable(eq.lhs)) {
+                    return true;
+                }
+                if (self.conditionInvolvesMutableVariable(eq.rhs)) {
+                    return true;
+                }
+                return false;
+            },
             .e_type_method_call => |method_call| {
+                for (self.env.store.sliceExpr(method_call.args)) |arg| {
+                    if (self.conditionInvolvesMutableVariable(arg)) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            .e_type_dispatch_call => |method_call| {
                 for (self.env.store.sliceExpr(method_call.args)) |arg| {
                     if (self.conditionInvolvesMutableVariable(arg)) {
                         return true;
@@ -11527,10 +11555,19 @@ pub const Interpreter = struct {
             .e_method_call => {
                 return error.RequiresSpecialization;
             },
+            .e_dispatch_call => {
+                return error.RequiresSpecialization;
+            },
             .e_structural_eq => {
                 return error.RequiresSpecialization;
             },
+            .e_method_eq => {
+                return error.RequiresSpecialization;
+            },
             .e_type_method_call => {
+                return error.RequiresSpecialization;
+            },
+            .e_type_dispatch_call => {
                 return error.RequiresSpecialization;
             },
 

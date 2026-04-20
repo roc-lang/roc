@@ -389,9 +389,25 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(gpa, CIR.Expr{
+        .e_dispatch_call = .{
+            .receiver = rand_idx(CIR.Expr.Idx),
+            .method_name = rand_ident_idx(),
+            .args = CIR.Expr.Span{ .span = rand_span() },
+            .constraint_fn_var = rand_idx(types.Var),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
         .e_structural_eq = .{
             .lhs = rand_idx(CIR.Expr.Idx),
             .rhs = rand_idx(CIR.Expr.Idx),
+            .negated = rand.random().boolean(),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_method_eq = .{
+            .lhs = rand_idx(CIR.Expr.Idx),
+            .rhs = rand_idx(CIR.Expr.Idx),
+            .negated = rand.random().boolean(),
         },
     });
     try expressions.append(gpa, CIR.Expr{
@@ -399,6 +415,14 @@ test "NodeStore round trip - Expressions" {
             .type_var_alias_stmt = rand_idx(CIR.Statement.Idx),
             .method_name = rand_ident_idx(),
             .args = CIR.Expr.Span{ .span = rand_span() },
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_type_dispatch_call = .{
+            .type_var_alias_stmt = rand_idx(CIR.Statement.Idx),
+            .method_name = rand_ident_idx(),
+            .args = CIR.Expr.Span{ .span = rand_span() },
+            .constraint_fn_var = rand_idx(types.Var),
         },
     });
     try expressions.append(gpa, CIR.Expr{

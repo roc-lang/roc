@@ -352,6 +352,12 @@ pub const Expr = union(enum) {
         method_name: Ident.Idx,
         args: Expr.Span,
     },
+    e_dispatch_call: struct {
+        receiver: Expr.Idx,
+        method_name: Ident.Idx,
+        args: Expr.Span,
+        constraint_fn_var: TypeVar,
+    },
     /// Structural equality chosen explicitly by the checker.
     ///
     /// This is not method dispatch. It represents the semantic case where
@@ -360,6 +366,12 @@ pub const Expr = union(enum) {
     e_structural_eq: struct {
         lhs: Expr.Idx,
         rhs: Expr.Idx,
+        negated: bool,
+    },
+    e_method_eq: struct {
+        lhs: Expr.Idx,
+        rhs: Expr.Idx,
+        negated: bool,
     },
     /// Method call expression rooted in a type-var alias namespace.
     ///
@@ -371,6 +383,12 @@ pub const Expr = union(enum) {
         type_var_alias_stmt: CIR.Statement.Idx,
         method_name: Ident.Idx,
         args: Expr.Span,
+    },
+    e_type_dispatch_call: struct {
+        type_var_alias_stmt: CIR.Statement.Idx,
+        method_name: Ident.Idx,
+        args: Expr.Span,
+        constraint_fn_var: TypeVar,
     },
     /// Tuple element access by numeric index.
     /// Accesses an element of a tuple using dot notation with a numeric index.
@@ -1204,11 +1222,59 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
+            .e_dispatch_call => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-dispatch-call");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("method", ir.getIdentText(e.method_name));
+                try tree.pushU64Pair("constraint-fn-var", @intFromEnum(e.constraint_fn_var));
+                const attrs = tree.beginNode();
+
+                const receiver_begin = tree.beginNode();
+                try tree.pushStaticAtom("receiver");
+                const receiver_attrs = tree.beginNode();
+                try ir.store.getExpr(e.receiver).pushToSExprTree(ir, tree, e.receiver);
+                try tree.endNode(receiver_begin, receiver_attrs);
+
+                const args_begin = tree.beginNode();
+                try tree.pushStaticAtom("args");
+                const args_attrs = tree.beginNode();
+                for (ir.store.sliceExpr(e.args)) |arg_idx| {
+                    try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
+                }
+                try tree.endNode(args_begin, args_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
             .e_structural_eq => |e| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-structural-eq");
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("negated", if (e.negated) "true" else "false");
+                const attrs = tree.beginNode();
+
+                const lhs_begin = tree.beginNode();
+                try tree.pushStaticAtom("lhs");
+                const lhs_attrs = tree.beginNode();
+                try ir.store.getExpr(e.lhs).pushToSExprTree(ir, tree, e.lhs);
+                try tree.endNode(lhs_begin, lhs_attrs);
+
+                const rhs_begin = tree.beginNode();
+                try tree.pushStaticAtom("rhs");
+                const rhs_attrs = tree.beginNode();
+                try ir.store.getExpr(e.rhs).pushToSExprTree(ir, tree, e.rhs);
+                try tree.endNode(rhs_begin, rhs_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_method_eq => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-method-eq");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("negated", if (e.negated) "true" else "false");
                 const attrs = tree.beginNode();
 
                 const lhs_begin = tree.beginNode();
@@ -1234,6 +1300,26 @@ pub const Expr = union(enum) {
                 const attrs = tree.beginNode();
 
                 try tree.pushU64Pair("type-var-alias-stmt", @intFromEnum(e.type_var_alias_stmt));
+
+                const args_begin = tree.beginNode();
+                try tree.pushStaticAtom("args");
+                const args_attrs = tree.beginNode();
+                for (ir.store.sliceExpr(e.args)) |arg_idx| {
+                    try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
+                }
+                try tree.endNode(args_begin, args_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_type_dispatch_call => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-type-dispatch-call");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("method", ir.getIdentText(e.method_name));
+                try tree.pushU64Pair("type-var-alias-stmt", @intFromEnum(e.type_var_alias_stmt));
+                try tree.pushU64Pair("constraint-fn-var", @intFromEnum(e.constraint_fn_var));
+                const attrs = tree.beginNode();
 
                 const args_begin = tree.beginNode();
                 try tree.pushStaticAtom("args");

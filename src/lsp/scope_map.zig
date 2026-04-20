@@ -260,11 +260,28 @@ pub const ScopeMap = struct {
                     try self.traverseExpr(module_env, arg_idx, scope_end, depth + 1);
                 }
             },
+            .e_dispatch_call => |method_call| {
+                try self.traverseExpr(module_env, method_call.receiver, scope_end, depth + 1);
+                const args = module_env.store.sliceExpr(method_call.args);
+                for (args) |arg_idx| {
+                    try self.traverseExpr(module_env, arg_idx, scope_end, depth + 1);
+                }
+            },
             .e_structural_eq => |eq| {
                 try self.traverseExpr(module_env, eq.lhs, scope_end, depth + 1);
                 try self.traverseExpr(module_env, eq.rhs, scope_end, depth + 1);
             },
+            .e_method_eq => |eq| {
+                try self.traverseExpr(module_env, eq.lhs, scope_end, depth + 1);
+                try self.traverseExpr(module_env, eq.rhs, scope_end, depth + 1);
+            },
             .e_type_method_call => |method_call| {
+                const args = module_env.store.sliceExpr(method_call.args);
+                for (args) |arg_idx| {
+                    try self.traverseExpr(module_env, arg_idx, scope_end, depth + 1);
+                }
+            },
+            .e_type_dispatch_call => |method_call| {
                 const args = module_env.store.sliceExpr(method_call.args);
                 for (args) |arg_idx| {
                     try self.traverseExpr(module_env, arg_idx, scope_end, depth + 1);

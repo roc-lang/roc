@@ -61,7 +61,10 @@ pub const Result = struct {
     strings: base.StringLiteral.Store,
     idents: base.Ident.Store,
     attached_method_index: symbol_mod.AttachedMethodIndex,
-    builtin_attached_method_index: symbol_mod.BuiltinAttachedMethodIndex,
+    builtin_module_idx: u32,
+    builtin_list_ident: base.Ident.Idx,
+    builtin_box_ident: base.Ident.Idx,
+    builtin_primitive_owner_idents: symbol_mod.PrimitiveMethodOwnerIdents,
     runtime_inspect_symbols: std.AutoHashMap(symbol_mod.Symbol, symbol_mod.Symbol),
 
     pub fn deinit(self: *Result) void {
@@ -71,7 +74,6 @@ pub const Result = struct {
         self.strings.deinit(self.program.store.allocator);
         self.idents.deinit(self.program.store.allocator);
         self.attached_method_index.deinit();
-        self.builtin_attached_method_index.deinit();
         self.runtime_inspect_symbols.deinit();
     }
 
@@ -84,7 +86,10 @@ pub const Result = struct {
             .strings = .{},
             .idents = try base.Ident.Store.initCapacity(allocator, 1),
             .attached_method_index = symbol_mod.AttachedMethodIndex.init(allocator),
-            .builtin_attached_method_index = symbol_mod.BuiltinAttachedMethodIndex.init(allocator),
+            .builtin_module_idx = 0,
+            .builtin_list_ident = base.Ident.Idx.NONE,
+            .builtin_box_ident = base.Ident.Idx.NONE,
+            .builtin_primitive_owner_idents = symbol_mod.PrimitiveMethodOwnerIdents.none(),
             .runtime_inspect_symbols = std.AutoHashMap(symbol_mod.Symbol, symbol_mod.Symbol).init(allocator),
         };
         return result;
@@ -212,22 +217,6 @@ const Ctx = struct {
 
         pub fn exprDefaultsToDec(self: @This(), idx: CIR.Expr.Idx) bool {
             return self.source_module.exprDefaultsToDec(idx);
-        }
-
-        pub fn methodCallConstraintFnVar(self: @This(), idx: CIR.Expr.Idx) ?Var {
-            return self.source_module.methodCallConstraintFnVar(idx);
-        }
-
-        pub fn methodCallResolvedTargets(
-            self: @This(),
-            expr_idx: CIR.Expr.Idx,
-            origin: types.StaticDispatchConstraint.Origin,
-        ) []const typed_cir.ResolvedMethodTarget {
-            return self.source_module.methodCallResolvedTargets(expr_idx, origin);
-        }
-
-        pub fn binopConstraintFnVar(self: @This(), idx: CIR.Expr.Idx, method_name: Ident.Idx) ?Var {
-            return self.source_module.binopConstraintFnVar(idx, method_name);
         }
 
         pub fn fnShape(self: @This(), fn_var: Var) std.mem.Allocator.Error!typed_cir.Module.FnShape {
@@ -466,7 +455,6 @@ pub const Lowerer = struct {
     emitting_value_defs: std.AutoHashMap(symbol_mod.Symbol, void),
     runtime_inspect_symbols: std.AutoHashMap(symbol_mod.Symbol, symbol_mod.Symbol),
     attached_method_index: symbol_mod.AttachedMethodIndex,
-    builtin_attached_method_index: symbol_mod.BuiltinAttachedMethodIndex,
     attached_method_index_built: bool = false,
     required_app_module_idx: ?u32 = null,
 
@@ -788,7 +776,6 @@ pub const Lowerer = struct {
             .emitting_value_defs = std.AutoHashMap(symbol_mod.Symbol, void).init(allocator),
             .runtime_inspect_symbols = std.AutoHashMap(symbol_mod.Symbol, symbol_mod.Symbol).init(allocator),
             .attached_method_index = symbol_mod.AttachedMethodIndex.init(allocator),
-            .builtin_attached_method_index = symbol_mod.BuiltinAttachedMethodIndex.init(allocator),
             .required_app_module_idx = app_module_idx,
         };
     }
@@ -796,7 +783,6 @@ pub const Lowerer = struct {
     pub fn deinit(self: *Lowerer) void {
         self.runtime_inspect_symbols.deinit();
         self.attached_method_index.deinit();
-        self.builtin_attached_method_index.deinit();
         self.emitting_value_defs.deinit();
         self.emitted_defs_by_symbol.deinit();
         self.top_level_symbols_by_pattern.deinit();
@@ -812,6 +798,7 @@ pub const Lowerer = struct {
         try self.lowerAllTopLevelFunctions();
         try self.lowerRootModule(root_module_idx);
         try self.finalizeProgramTypes();
+        const builtin_common_idents = self.ctx.typedCirModule(self.ctx.builtin_module_idx).commonIdents();
 
         const result = Result{
             .program = self.program,
@@ -820,7 +807,26 @@ pub const Lowerer = struct {
             .strings = self.strings,
             .idents = self.ctx.idents,
             .attached_method_index = self.attached_method_index,
-            .builtin_attached_method_index = self.builtin_attached_method_index,
+            .builtin_module_idx = self.ctx.builtin_module_idx,
+            .builtin_list_ident = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.list),
+            .builtin_box_ident = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.box),
+            .builtin_primitive_owner_idents = .{
+                .bool = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.bool),
+                .str = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.str),
+                .u8 = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.u8),
+                .i8 = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.i8),
+                .u16 = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.u16),
+                .i16 = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.i16),
+                .u32 = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.u32),
+                .i32 = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.i32),
+                .u64 = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.u64),
+                .i64 = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.i64),
+                .u128 = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.u128),
+                .i128 = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.i128),
+                .f32 = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.f32),
+                .f64 = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.f64),
+                .dec = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.dec),
+            },
             .runtime_inspect_symbols = self.runtime_inspect_symbols,
         };
         self.program = Program.init(self.allocator);
@@ -829,7 +835,6 @@ pub const Lowerer = struct {
         self.ctx.idents = try base.Ident.Store.initCapacity(self.allocator, 1);
         self.strings = .{};
         self.attached_method_index = symbol_mod.AttachedMethodIndex.init(self.allocator);
-        self.builtin_attached_method_index = symbol_mod.BuiltinAttachedMethodIndex.init(self.allocator);
         self.attached_method_index_built = false;
         self.runtime_inspect_symbols = std.AutoHashMap(symbol_mod.Symbol, symbol_mod.Symbol).init(self.allocator);
         return result;
@@ -871,6 +876,7 @@ pub const Lowerer = struct {
         const def_id = try self.lowerRootExpr(module_idx, expr_idx);
         try self.program.root_defs.append(self.allocator, def_id);
         try self.finalizeProgramTypes();
+        const builtin_common_idents = self.ctx.typedCirModule(self.ctx.builtin_module_idx).commonIdents();
 
         const result = Result{
             .program = self.program,
@@ -879,7 +885,26 @@ pub const Lowerer = struct {
             .strings = self.strings,
             .idents = self.ctx.idents,
             .attached_method_index = self.attached_method_index,
-            .builtin_attached_method_index = self.builtin_attached_method_index,
+            .builtin_module_idx = self.ctx.builtin_module_idx,
+            .builtin_list_ident = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.list),
+            .builtin_box_ident = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.box),
+            .builtin_primitive_owner_idents = .{
+                .bool = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.bool),
+                .str = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.str),
+                .u8 = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.u8),
+                .i8 = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.i8),
+                .u16 = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.u16),
+                .i16 = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.i16),
+                .u32 = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.u32),
+                .i32 = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.i32),
+                .u64 = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.u64),
+                .i64 = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.i64),
+                .u128 = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.u128),
+                .i128 = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.i128),
+                .f32 = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.f32),
+                .f64 = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.f64),
+                .dec = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_common_idents.dec),
+            },
             .runtime_inspect_symbols = self.runtime_inspect_symbols,
         };
         self.program = Program.init(self.allocator);
@@ -887,7 +912,6 @@ pub const Lowerer = struct {
         self.ctx.types = type_mod.Store.init(self.allocator);
         self.ctx.idents = try base.Ident.Store.initCapacity(self.allocator, 1);
         self.attached_method_index = symbol_mod.AttachedMethodIndex.init(self.allocator);
-        self.builtin_attached_method_index = symbol_mod.BuiltinAttachedMethodIndex.init(self.allocator);
         self.attached_method_index_built = false;
         self.runtime_inspect_symbols = std.AutoHashMap(symbol_mod.Symbol, symbol_mod.Symbol).init(self.allocator);
         self.strings = .{};
@@ -1010,13 +1034,17 @@ pub const Lowerer = struct {
                 try self.finalizeExprById(eq.lhs, visited);
                 try self.finalizeExprById(eq.rhs, visited);
             },
-            .method_call => |method_call| {
+            .method_eq => |eq| {
+                try self.finalizeExprById(eq.lhs, visited);
+                try self.finalizeExprById(eq.rhs, visited);
+            },
+            .dispatch_call => |method_call| {
                 try self.finalizeExprById(method_call.receiver, visited);
                 for (self.program.store.sliceExprSpan(method_call.args)) |arg_expr| {
                     try self.finalizeExprById(arg_expr, visited);
                 }
             },
-            .type_method_call => |method_call| {
+            .type_dispatch_call => |method_call| {
                 for (self.program.store.sliceExprSpan(method_call.args)) |arg_expr| {
                     try self.finalizeExprById(arg_expr, visited);
                 }
@@ -1167,7 +1195,6 @@ pub const Lowerer = struct {
         for (0..self.ctx.moduleCount()) |module_idx_usize| {
             const module_idx: u32 = @intCast(module_idx_usize);
             const typed_cir_module = self.ctx.typedCirModule(module_idx);
-            const common_idents = typed_cir_module.commonIdents();
             for (typed_cir_module.methodIdentEntries()) |entry| {
                 const def_idx = typed_cir_module.topLevelDefByIdent(entry.value) orelse debugPanic(
                     "monotype invariant violated: attached method ident missing top-level def",
@@ -1181,21 +1208,6 @@ pub const Lowerer = struct {
                 };
                 try self.attached_method_index.put(key, symbol);
 
-                if (module_idx == self.ctx.builtin_module_idx) {
-                    const owner: ?symbol_mod.BuiltinAttachedMethodOwner =
-                        if (entry.key.type_ident == common_idents.list)
-                            .list
-                        else if (entry.key.type_ident == common_idents.box)
-                            .box
-                        else
-                            null;
-                    if (owner) |builtin_owner| {
-                        try self.builtin_attached_method_index.put(.{
-                            .owner = builtin_owner,
-                            .method_ident = key.method_ident,
-                        }, symbol);
-                    }
-                }
             }
         }
 
@@ -2232,6 +2244,14 @@ pub const Lowerer = struct {
             return self.lowerStringExpr(module_idx, type_scope, env, ty, expr.data.e_str);
         }
 
+        if (expr.data == .e_method_eq) {
+            return self.lowerMethodEqExpr(module_idx, type_scope, env, expr.data.e_method_eq, ty);
+        }
+
+        if (expr.data == .e_structural_eq) {
+            return self.lowerStructuralEqExpr(module_idx, type_scope, env, expr.data.e_structural_eq, ty);
+        }
+
         const data: ast.Expr.Data = switch (expr.data) {
             .e_num => |num| blk: {
                 break :blk try self.lowerNumericIntLiteralData(ty, num.value);
@@ -2349,11 +2369,6 @@ pub const Lowerer = struct {
                 });
             },
             .e_binop => |binop| blk: {
-                if (binop.op == .eq or binop.op == .ne) {
-                    if (try self.maybeLowerNominalEqBinop(module_idx, type_scope, env, expr.idx, binop)) |lowered| {
-                        return lowered;
-                    }
-                }
                 if (binop.op == .ne) {
                     const eq_args = try self.lowerHomogeneousBinopArgs(
                         module_idx,
@@ -2441,46 +2456,37 @@ pub const Lowerer = struct {
                     .field_index = try self.requireExprFieldIndex(module_idx, type_scope, expr.idx),
                 } };
             },
-            .e_structural_eq => |eq| .{ .structural_eq = .{
-                .lhs = try self.lowerExpr(module_idx, type_scope, env, eq.lhs),
-                .rhs = try self.lowerExpr(module_idx, type_scope, env, eq.rhs),
-            } },
-            .e_method_call => |method_call| blk: {
+            .e_structural_eq => unreachable,
+            .e_method_eq => unreachable,
+            .e_dispatch_call => |method_call| blk: {
                 const lowered_receiver = try self.lowerExpr(module_idx, type_scope, env, method_call.receiver);
                 const lowered_args = try self.lowerExprSlice(module_idx, type_scope, env, typed_cir_module.sliceExpr(method_call.args));
-                const method_fn_ty = try self.buildResolvedMethodCallType(
-                    module_idx,
-                    type_scope,
-                    try self.requireExprType(module_idx, type_scope, method_call.receiver),
-                    typed_cir_module.sliceExpr(method_call.args),
-                    ty,
-                    typed_cir_module.methodCallResolvedTargets(expr.idx, .method_call),
-                );
-                break :blk .{ .method_call = .{
+                break :blk .{ .dispatch_call = .{
                     .receiver = lowered_receiver,
-                    .method_fn_ty = method_fn_ty,
                     .method_name = try self.ctx.copyExecutableIdent(module_idx, method_call.method_name),
                     .args = lowered_args,
+                    .dispatch_constraint_ty = try self.instantiateSourceVarType(
+                        module_idx,
+                        type_scope,
+                        method_call.constraint_fn_var,
+                    ),
                 } };
             },
-            .e_type_method_call => |method_call| blk: {
+            .e_type_dispatch_call => |method_call| blk: {
                 const alias_stmt = typed_cir_module.getStatement(method_call.type_var_alias_stmt);
-                const method_fn_ty = try self.buildResolvedTypeMethodCallType(
-                    module_idx,
-                    type_scope,
-                    typed_cir_module.sliceExpr(method_call.args),
-                    ty,
-                    typed_cir_module.methodCallResolvedTargets(expr.idx, .method_call),
-                );
-                break :blk .{ .type_method_call = .{
+                break :blk .{ .type_dispatch_call = .{
                     .dispatcher_ty = try self.instantiateSourceVarType(
                         module_idx,
                         type_scope,
                         ModuleEnv.varFrom(alias_stmt.s_type_var_alias.type_var_anno),
                     ),
-                    .method_fn_ty = method_fn_ty,
                     .method_name = try self.ctx.copyExecutableIdent(module_idx, method_call.method_name),
                     .args = try self.lowerExprSlice(module_idx, type_scope, env, typed_cir_module.sliceExpr(method_call.args)),
+                    .dispatch_constraint_ty = try self.instantiateSourceVarType(
+                        module_idx,
+                        type_scope,
+                        method_call.constraint_fn_var,
+                    ),
                 } };
             },
             .e_tag => |tag| try self.lowerTagExprWithExpectedType(
@@ -5661,122 +5667,83 @@ pub const Lowerer = struct {
         });
     }
 
-    fn maybeLowerNominalEqBinop(
+    fn lowerMethodEqExpr(
         self: *Lowerer,
         module_idx: u32,
         type_scope: *TypeScope,
         env: BindingEnv,
-        expr_idx: CIR.Expr.Idx,
-        binop: CIR.Expr.Binop,
-    ) std.mem.Allocator.Error!?ast.ExprId {
-        if (binop.op != .eq and binop.op != .ne) return null;
-
-        const operand_ty = try self.requireExprType(module_idx, type_scope, binop.lhs);
-        switch (self.ctx.types.getTypePreservingNominal(operand_ty)) {
-            .nominal => |nominal| {
-                if (!try self.nominalHasAttachedMethod(nominal, module_idx, self.ctx.typedCirModule(module_idx).commonIdents().is_eq)) {
-                    return null;
-                }
-                const bool_ty = try self.makePrimitiveType(.bool);
-                const eq_expr = try self.lowerMethodCallExpr(
+        eq: @FieldType(CIR.Expr, "e_method_eq"),
+        result_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        return try self.program.store.addExpr(.{
+            .ty = result_ty,
+            .data = .{ .method_eq = .{
+                .lhs = try self.lowerExprWithExpectedType(
                     module_idx,
                     type_scope,
                     env,
-                    expr_idx,
-                    .desugared_binop,
-                    operand_ty,
-                    self.ctx.typedCirModule(module_idx).commonIdents().is_eq,
-                    binop.lhs,
-                    &.{binop.rhs},
-                    bool_ty,
-                );
-                if (binop.op == .eq) return eq_expr;
-                return try self.makeLowLevelExpr(bool_ty, .bool_not, &.{eq_expr});
-            },
-            else => return null,
-        }
-    }
-
-    fn nominalHasAttachedMethod(
-        self: *Lowerer,
-        nominal: @FieldType(type_mod.Content, "nominal"),
-        method_module_idx: u32,
-        method_name: base.Ident.Idx,
-    ) std.mem.Allocator.Error!bool {
-        try self.buildAttachedMethodIndex();
-        const method_ident = try self.ctx.copyExecutableIdent(method_module_idx, method_name);
-        return self.attached_method_index.contains(.{
-            .module_idx = nominal.module_idx,
-            .type_ident = nominal.ident,
-            .method_ident = method_ident,
+                    eq.lhs,
+                    try self.requireExprType(module_idx, type_scope, eq.lhs),
+                    try self.exprResultVar(module_idx, type_scope, env, eq.lhs),
+                ),
+                .rhs = try self.lowerExprWithExpectedType(
+                    module_idx,
+                    type_scope,
+                    env,
+                    eq.rhs,
+                    try self.requireExprType(module_idx, type_scope, eq.rhs),
+                    try self.exprResultVar(module_idx, type_scope, env, eq.rhs),
+                ),
+                .negated = eq.negated,
+            } },
         });
     }
 
-    fn buildResolvedMethodCallType(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeScope,
-        receiver_ty: type_mod.TypeId,
-        explicit_arg_exprs: []const CIR.Expr.Idx,
-        result_ty: type_mod.TypeId,
-        resolved_targets: []const typed_cir.ResolvedMethodTarget,
-    ) std.mem.Allocator.Error!type_mod.TypeId {
-        const arg_tys = try self.allocator.alloc(type_mod.TypeId, explicit_arg_exprs.len + 1);
-        defer self.allocator.free(arg_tys);
-        arg_tys[0] = receiver_ty;
-        for (explicit_arg_exprs, 0..) |arg_expr_idx, i| {
-            arg_tys[i + 1] = try self.requireExprType(module_idx, type_scope, arg_expr_idx);
-        }
-
-        const callable_targets = try self.allocator.alloc(Symbol, resolved_targets.len);
-        defer self.allocator.free(callable_targets);
-        for (resolved_targets, 0..) |target, i| {
-            callable_targets[i] = self.requireResolvedMethodTargetSymbol(module_idx, target);
-        }
-
-        return try self.ctx.types.addType(try self.buildFunctionType(arg_tys, result_ty, callable_targets));
-    }
-
-    fn buildResolvedTypeMethodCallType(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeScope,
-        explicit_arg_exprs: []const CIR.Expr.Idx,
-        result_ty: type_mod.TypeId,
-        resolved_targets: []const typed_cir.ResolvedMethodTarget,
-    ) std.mem.Allocator.Error!type_mod.TypeId {
-        const arg_tys = try self.allocator.alloc(type_mod.TypeId, explicit_arg_exprs.len);
-        defer self.allocator.free(arg_tys);
-        for (explicit_arg_exprs, 0..) |arg_expr_idx, i| {
-            arg_tys[i] = try self.requireExprType(module_idx, type_scope, arg_expr_idx);
-        }
-
-        const callable_targets = try self.allocator.alloc(Symbol, resolved_targets.len);
-        defer self.allocator.free(callable_targets);
-        for (resolved_targets, 0..) |target, i| {
-            callable_targets[i] = self.requireResolvedMethodTargetSymbol(module_idx, target);
-        }
-
-        return try self.ctx.types.addType(try self.buildFunctionType(arg_tys, result_ty, callable_targets));
-    }
-
-    fn lowerMethodCallExpr(
+    fn lowerStructuralEqExpr(
         self: *Lowerer,
         module_idx: u32,
         type_scope: *TypeScope,
         env: BindingEnv,
-        expr_idx: CIR.Expr.Idx,
-        method_call_origin: types.StaticDispatchConstraint.Origin,
-        receiver_ty: type_mod.TypeId,
-        lookup_name: base.Ident.Idx,
-        receiver_expr: ?CIR.Expr.Idx,
-        explicit_arg_exprs: []const CIR.Expr.Idx,
+        eq: @FieldType(CIR.Expr, "e_structural_eq"),
         result_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.ExprId {
-        const receiver_expr_idx = receiver_expr orelse debugPanic(
-            "monotype invariant violated: method call lowering requires explicit receiver expr",
-            .{},
-        );
+        const bool_ty = try self.makePrimitiveType(.bool);
+        const base_eq = try self.program.store.addExpr(.{
+            .ty = bool_ty,
+            .data = .{ .structural_eq = .{
+                .lhs = try self.lowerExprWithExpectedType(
+                    module_idx,
+                    type_scope,
+                    env,
+                    eq.lhs,
+                    try self.requireExprType(module_idx, type_scope, eq.lhs),
+                    try self.exprResultVar(module_idx, type_scope, env, eq.lhs),
+                ),
+                .rhs = try self.lowerExprWithExpectedType(
+                    module_idx,
+                    type_scope,
+                    env,
+                    eq.rhs,
+                    try self.requireExprType(module_idx, type_scope, eq.rhs),
+                    try self.exprResultVar(module_idx, type_scope, env, eq.rhs),
+                ),
+            } },
+        });
+        if (!eq.negated) return base_eq;
+        return try self.makeLowLevelExpr(result_ty, .bool_not, &.{base_eq});
+    }
+
+    fn lowerDispatchCallExpr(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeScope,
+        env: BindingEnv,
+        dispatch_call: @FieldType(CIR.Expr, "e_dispatch_call"),
+        result_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        const receiver_expr_idx = dispatch_call.receiver;
+        const receiver_ty = try self.requireExprType(module_idx, type_scope, receiver_expr_idx);
+        const explicit_arg_exprs = self.ctx.typedCirModule(module_idx).sliceExpr(dispatch_call.args);
         const lowered_receiver = try self.lowerExprWithExpectedType(
             module_idx,
             type_scope,
@@ -5797,32 +5764,27 @@ pub const Lowerer = struct {
                 try self.exprResultVar(module_idx, type_scope, env, arg_expr_idx),
             );
         }
-        const method_fn_ty = try self.buildResolvedMethodCallType(
-            module_idx,
-            type_scope,
-            receiver_ty,
-            explicit_arg_exprs,
-            result_ty,
-            self.ctx.typedCirModule(module_idx).methodCallResolvedTargets(expr_idx, method_call_origin),
-        );
         return try self.program.store.addExpr(.{
             .ty = result_ty,
-            .data = .{ .method_call = .{
+            .data = .{ .dispatch_call = .{
                 .receiver = lowered_receiver,
-                .method_fn_ty = method_fn_ty,
-                .method_name = try self.ctx.copyExecutableIdent(module_idx, lookup_name),
+                .method_name = try self.ctx.copyExecutableIdent(module_idx, dispatch_call.method_name),
                 .args = try self.program.store.addExprSpan(lowered_args),
+                .dispatch_constraint_ty = try self.instantiateSourceVarType(
+                    module_idx,
+                    type_scope,
+                    dispatch_call.constraint_fn_var,
+                ),
             } },
         });
     }
 
-    fn lowerTypeMethodCallExpr(
+    fn lowerTypeDispatchCallExpr(
         self: *Lowerer,
         module_idx: u32,
         type_scope: *TypeScope,
         env: BindingEnv,
-        expr_idx: CIR.Expr.Idx,
-        method_call: @FieldType(CIR.Expr, "e_type_method_call"),
+        method_call: @FieldType(CIR.Expr, "e_type_dispatch_call"),
         result_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.ExprId {
         const typed_cir_module = self.ctx.typedCirModule(module_idx);
@@ -5845,20 +5807,17 @@ pub const Lowerer = struct {
                 try self.exprResultVar(module_idx, type_scope, env, arg_expr_idx),
             );
         }
-        const method_fn_ty = try self.buildResolvedTypeMethodCallType(
-            module_idx,
-            type_scope,
-            explicit_arg_exprs,
-            result_ty,
-            typed_cir_module.methodCallResolvedTargets(expr_idx, .method_call),
-        );
         return try self.program.store.addExpr(.{
             .ty = result_ty,
-            .data = .{ .type_method_call = .{
+            .data = .{ .type_dispatch_call = .{
                 .dispatcher_ty = dispatcher_ty,
-                .method_fn_ty = method_fn_ty,
                 .method_name = try self.ctx.copyExecutableIdent(module_idx, method_call.method_name),
                 .args = try self.program.store.addExprSpan(lowered_args),
+                .dispatch_constraint_ty = try self.instantiateSourceVarType(
+                    module_idx,
+                    type_scope,
+                    method_call.constraint_fn_var,
+                ),
             } },
         });
     }
@@ -6171,46 +6130,37 @@ pub const Lowerer = struct {
             .e_lookup_local => try self.lowerSolvedExpr(module_idx, type_scope, env, expr),
             .e_lookup_external => try self.lowerSolvedExpr(module_idx, type_scope, env, expr),
             .e_field_access => |_| try self.lowerSolvedExpr(module_idx, type_scope, env, expr),
-            .e_structural_eq => |eq| try self.program.store.addExpr(.{
-                .ty = target_ty,
-                .data = .{ .structural_eq = .{
-                    .lhs = try self.lowerExprWithExpectedType(
-                        module_idx,
-                        type_scope,
-                        env,
-                        eq.lhs,
-                        try self.requireExprType(module_idx, type_scope, eq.lhs),
-                        try self.exprResultVar(module_idx, type_scope, env, eq.lhs),
-                    ),
-                    .rhs = try self.lowerExprWithExpectedType(
-                        module_idx,
-                        type_scope,
-                        env,
-                        eq.rhs,
-                        try self.requireExprType(module_idx, type_scope, eq.rhs),
-                        try self.exprResultVar(module_idx, type_scope, env, eq.rhs),
-                    ),
-                } },
-            }),
-            .e_method_call => |method_call| blk: {
-                break :blk self.lowerMethodCallExpr(
+            .e_structural_eq => |eq| blk: {
+                break :blk try self.lowerStructuralEqExpr(
                     module_idx,
                     type_scope,
                     env,
-                    expr.idx,
-                    .method_call,
-                    try self.requireExprType(module_idx, type_scope, method_call.receiver),
-                    method_call.method_name,
-                    method_call.receiver,
-                    typed_cir_module.sliceExpr(method_call.args),
+                    eq,
                     target_ty,
                 );
             },
-            .e_type_method_call => |method_call| self.lowerTypeMethodCallExpr(
+            .e_method_eq => |eq| blk: {
+                break :blk self.lowerMethodEqExpr(
+                    module_idx,
+                    type_scope,
+                    env,
+                    eq,
+                    target_ty,
+                );
+            },
+            .e_dispatch_call => |method_call| blk: {
+                break :blk self.lowerDispatchCallExpr(
+                    module_idx,
+                    type_scope,
+                    env,
+                    method_call,
+                    target_ty,
+                );
+            },
+            .e_type_dispatch_call => |method_call| self.lowerTypeDispatchCallExpr(
                 module_idx,
                 type_scope,
                 env,
-                expr.idx,
                 method_call,
                 target_ty,
             ),
@@ -7262,14 +7212,19 @@ pub const Lowerer = struct {
                 try self.collectSolvedExprInfo(module_idx, type_scope, env, solved_module.expr(eq.rhs));
                 break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
-            .e_method_call => |method_call| blk: {
+            .e_method_eq => |eq| blk: {
+                try self.collectSolvedExprInfo(module_idx, type_scope, env, solved_module.expr(eq.lhs));
+                try self.collectSolvedExprInfo(module_idx, type_scope, env, solved_module.expr(eq.rhs));
+                break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
+            },
+            .e_dispatch_call => |method_call| blk: {
                 try self.collectSolvedExprInfo(module_idx, type_scope, env, solved_module.expr(method_call.receiver));
                 for (typed_cir_module.sliceExpr(method_call.args)) |arg_expr| {
                     try self.collectSolvedExprInfo(module_idx, type_scope, env, solved_module.expr(arg_expr));
                 }
                 break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
-            .e_type_method_call => |method_call| blk: {
+            .e_type_dispatch_call => |method_call| blk: {
                 for (typed_cir_module.sliceExpr(method_call.args)) |arg_expr| {
                     try self.collectSolvedExprInfo(module_idx, type_scope, env, solved_module.expr(arg_expr));
                 }
@@ -9156,28 +9111,6 @@ pub const Lowerer = struct {
         return scoped_root;
     }
 
-    fn instantiateSourceVarFresh(
-        self: *Lowerer,
-        type_scope: *TypeScope,
-        source_module_idx: u32,
-        source_var: Var,
-    ) std.mem.Allocator.Error!Var {
-        const source_module = self.ctx.typedCirModule(source_module_idx);
-        var clone_map = clone_inst.ScopedCloneMap.init(self.allocator);
-        defer clone_map.deinit();
-        const copied_root = try clone_inst.cloneVarFromModule(
-            source_module_idx,
-            source_module.typeStoreConst(),
-            type_scope.typeStoreMut(),
-            source_var,
-            &clone_map,
-            source_module.identStoreConst(),
-            type_scope.identStoreMut(),
-            self.allocator,
-        );
-        return try self.instantiateScopedVar(type_scope, copied_root);
-    }
-
     fn instantiateSourceExprVar(
         self: *Lowerer,
         type_scope: *TypeScope,
@@ -9190,7 +9123,10 @@ pub const Lowerer = struct {
         };
         if (type_scope.memo.expr_source_var_map.get(key)) |existing| return existing;
         const source_var = self.ctx.typedCirModule(module_idx).exprType(expr_idx);
-        const scoped = try self.instantiateSourceVarFresh(type_scope, module_idx, source_var);
+        // Expression result vars must preserve the checked graph's sharing. If we
+        // clone each expr type in isolation, ordinary method-call result vars can
+        // drift away from the receiver/arg relation that checking already solved.
+        const scoped = try self.instantiateSourceVar(type_scope, module_idx, source_var);
         try type_scope.memo.expr_source_var_map.put(key, scoped);
         return scoped;
     }
@@ -9265,24 +9201,6 @@ pub const Lowerer = struct {
                 .ret = ret_id,
             },
         };
-    }
-
-    fn requireResolvedMethodTargetSymbol(
-        self: *const Lowerer,
-        current_module_idx: u32,
-        target: typed_cir.ResolvedMethodTarget,
-    ) Symbol {
-        const target_module_name = self.ctx.typedCirModule(current_module_idx).getIdent(target.module_name);
-        const target_module_idx = self.ctx.source_modules.moduleIdxByName(target_module_name) orelse
-            debugPanic(
-                "monotype invariant violated: missing module for explicit resolved method target {s}",
-                .{target_module_name},
-            );
-        return self.lookupTopLevelDefSymbol(target_module_idx, target.def_idx) orelse
-            debugPanic(
-                "monotype invariant violated: missing top-level symbol for explicit resolved method target {d}:{d}",
-                .{ target_module_idx, @intFromEnum(target.def_idx) },
-            );
     }
 
     fn stampCallableTarget(

@@ -36,7 +36,7 @@ test {
     try std.testing.expectEqual(24, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to is_opaque field
-    try std.testing.expectEqual(52, @sizeOf(StaticDispatchConstraint));
+    try std.testing.expectEqual(44, @sizeOf(StaticDispatchConstraint));
     try std.testing.expectEqual(16, @sizeOf(Func));
 }
 
@@ -772,13 +772,11 @@ pub const StaticDispatchConstraint = struct {
     fn_name: Ident.Idx,
     /// the dispatch fn var, a function
     fn_var: Var,
-    /// source expr var for source-site dispatches that must later resolve to an exact target
-    site_expr_var: ?Var = null,
-    /// module that owns `site_expr_var`, so later resolution can update the
-    /// correct ModuleEnv even after cross-module type copying
-    site_module_name: ?Ident.Idx = null,
     /// the origin of this constraint (operator, method call, or where clause)
     origin: Origin,
+    /// For `desugared_binop` equality constraints, whether the original source
+    /// operator was `!=` rather than `==`.
+    binop_negated: bool = false,
     /// Optional numeric literal info for from_numeral constraints
     num_literal: ?NumeralInfo = null,
 

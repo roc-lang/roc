@@ -214,7 +214,7 @@ pub const Layouts = struct {
                     try self.recordType(allocator, mono_types, idents, capture_box_ty);
                 }
             },
-            .call_indirect => |call| {
+            .call_erased => |call| {
                 if (call.capture_ty) |capture_ty| {
                     try self.recordType(allocator, mono_types, idents, capture_ty);
                 }

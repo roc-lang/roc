@@ -66,8 +66,11 @@ pub const Tag = enum {
     record_destruct,
     expr_field_access,
     expr_method_call,
+    expr_dispatch_call,
     expr_structural_eq,
+    expr_method_eq,
     expr_type_method_call,
+    expr_type_dispatch_call,
     expr_static_dispatch,
     expr_external_lookup,
     expr_pending_lookup,
@@ -300,8 +303,11 @@ pub const Payload = extern union {
     expr_string: ExprString,
     expr_field_access: ExprFieldAccess,
     expr_method_call: ExprMethodCall,
+    expr_dispatch_call: ExprDispatchCall,
     expr_structural_eq: ExprStructuralEq,
+    expr_method_eq: ExprMethodEq,
     expr_type_method_call: ExprTypeMethodCall,
+    expr_type_dispatch_call: ExprTypeDispatchCall,
     expr_hosted_lambda: ExprHostedLambda,
     expr_low_level: ExprLowLevel,
     expr_run_low_level: ExprRunLowLevel,
@@ -618,16 +624,38 @@ pub const Payload = extern union {
         args_span2_idx: u32,
     };
 
+    pub const ExprDispatchCall = extern struct {
+        receiver: u32,
+        method_name: u32,
+        args_span2_idx: u32,
+        constraint_fn_var: u32,
+    };
+
     pub const ExprStructuralEq = extern struct {
         lhs: u32,
         rhs: u32,
-        _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        negated: u8,
+        _padding: [3]u8 = .{ 0, 0, 0 },
+    };
+
+    pub const ExprMethodEq = extern struct {
+        lhs: u32,
+        rhs: u32,
+        negated: u8,
+        _padding: [3]u8 = .{ 0, 0, 0 },
     };
 
     pub const ExprTypeMethodCall = extern struct {
         type_var_alias_stmt: u32,
         method_name: u32,
         args_span2_idx: u32,
+    };
+
+    pub const ExprTypeDispatchCall = extern struct {
+        type_var_alias_stmt: u32,
+        method_name: u32,
+        args_span2_idx: u32,
+        constraint_fn_var: u32,
     };
 
     pub const ExprHostedLambda = extern struct {
@@ -1031,6 +1059,6 @@ pub const Payload = extern union {
 
     // Compile-time size verification
     comptime {
-        std.debug.assert(@sizeOf(Payload) == 12);
+        std.debug.assert(@sizeOf(Payload) == 16);
     }
 };
