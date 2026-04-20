@@ -1181,6 +1181,19 @@ test "roc run --opt=dev returns exit code 2 for warnings" {
     try testing.expect(has_warning);
 }
 
+test "roc run returns exit code 1 for old platform download" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{"--no-cache"}, "test/cli/old_hello_world.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "platform was built with the old Roc") != null);
+}
+
 test "roc run --opt=dev rejects non executable targets" {
     const testing = std.testing;
     const gpa = testing.allocator;

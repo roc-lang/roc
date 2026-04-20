@@ -686,14 +686,16 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) !Report {
 
         try report.document.addText("Possible Reasons: ");
         try report.document.addLineBreak();
-        try report.document.addText("1. The platform was built with the old Roc (Rust) compiler (alpha4 or older), instead of the new Roc (Zig) compiler, available at https://github.com/roc-lang/nightlies");
+        try report.document.addText("1. The ");
+        try report.document.addAnnotated("platform was built with the old Roc", .error_highlight);
+        try report.document.addText(" (Rust) compiler (alpha4 or older), instead of the new Roc (Zig) compiler. The new compiler is available at https://github.com/roc-lang/nightlies");
         try report.document.addLineBreak();
         try report.document.addText("2. The Hash portion of the URL is malformed.");
 
         try report.document.addLineBreaks(2);
         try report.document.addText("Tips:");
         try report.document.addLineBreak();
-        try report.document.addSuggestion("1. If there is newer version of the platform available, try updating.");
+        try report.document.addSuggestion("1. If there is a newer version of the platform available, try updating.");
         try report.document.addLineBreak();
         try report.document.addSuggestion("2. Verify the URL and ensure it matches a valid platform release.");
         try report.document.addLineBreak();
