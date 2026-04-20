@@ -1691,7 +1691,11 @@ fn createAndRunBuiltinCompiler(
             .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
             .target = b.graph.host, // this runs at build time on the *host* machine!
             .optimize = .Debug, // No need to optimize - only compiles builtin modules
-            // Note: libc linking is handled by add_tracy below (required when tracy is enabled)
+            // ctx.CoreCtx reads env vars via std.c.getenv; Zig 0.16 requires
+            // link_libc=true on any compile unit that references std.c.*.
+            // (add_tracy below also sets this when tracy is enabled, but tracy is
+            // always disabled for the build-time builtin compiler.)
+            .link_libc = true,
         }),
     });
     configureBackend(builtin_compiler_exe, b.graph.host);
@@ -1752,6 +1756,9 @@ fn createTestPlatformHostLib(
     configureBackend(lib, target);
     lib.root_module.addImport("builtins", roc_modules.builtins);
     lib.root_module.addImport("build_options", roc_modules.build_options);
+    lib.root_module.addImport("shim_io", b.addModule("shim_io", .{
+        .root_source_file = b.path("src/shim_io.zig"),
+    }));
     // Bundle compiler-rt when LLVM is used (e.g. x64mac), so that LLVM-generated
     // symbols like __zig_probe_stack are available at link time. Otherwise skip it
     // to avoid duplicate symbol errors (e.g. on Windows).
@@ -2364,6 +2371,9 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{},
+            // runner_core.zig uses std.c.{timespec,clock_gettime,environ}; Zig 0.16 requires
+            // explicit libc linkage for any module that touches std.c.
+            .link_libc = true,
         }),
     });
     b.installArtifact(test_runner_exe);
@@ -2448,6 +2458,8 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path("src/cli/test/roc_subcommands.zig"),
                 .target = target,
                 .optimize = optimize,
+                // roc_subcommands.zig reads std.c.environ (Zig 0.16 requires explicit link_libc).
+                .link_libc = true,
             }),
             .filters = test_filters,
         });
@@ -2469,6 +2481,8 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path("src/cli/test/glue_test.zig"),
                 .target = target,
                 .optimize = optimize,
+                // Imports util/roc_subcommands which touch std.c; Zig 0.16 requires link_libc.
+                .link_libc = true,
             }),
             .filters = test_filters,
         });
@@ -2543,6 +2557,9 @@ pub fn build(b: *std.Build) void {
     });
     builtins_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub_bc", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+    }));
+    builtins_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io_bc", .{
+        .root_source_file = b.path("src/shim_io.zig"),
     }));
     builtins_bc_obj.root_module.omit_frame_pointer = true;
     builtins_bc_obj.root_module.stack_check = false;
@@ -3218,6 +3235,8 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path("src/cli/test/fx_platform_test.zig"),
                 .target = target,
                 .optimize = optimize,
+                // util.buildIsolatedTestEnvMap touches std.c (Zig 0.16 requires explicit link_libc).
+                .link_libc = true,
             }),
             .filters = test_filters,
         });
@@ -3522,6 +3541,9 @@ fn addMainExe(
     builtins_obj.root_module.addImport("tracy", b.addModule("tracy_stub", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
+    builtins_obj.root_module.addImport("shim_io", b.addModule("shim_io", .{
+        .root_source_file = b.path("src/shim_io.zig"),
+    }));
     builtins_obj.bundle_compiler_rt = false;
     configureBackend(builtins_obj, target);
 
@@ -3543,6 +3565,9 @@ fn addMainExe(
     configureBackend(shim_lib, target);
     // Add all modules from roc_modules that the shim needs
     roc_modules.addAll(shim_lib);
+    shim_lib.root_module.addImport("shim_io", b.addModule("shim_io", .{
+        .root_source_file = b.path("src/shim_io.zig"),
+    }));
     // Add compiled builtins module for loading builtin types
     shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
     shim_lib.step.dependOn(&write_compiled_builtins.step);
@@ -3586,6 +3611,9 @@ fn addMainExe(
     });
     configureBackend(dev_shim_lib, target);
     roc_modules.addAll(dev_shim_lib);
+    dev_shim_lib.root_module.addImport("shim_io", b.addModule("shim_io", .{
+        .root_source_file = b.path("src/shim_io.zig"),
+    }));
     dev_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
     dev_shim_lib.step.dependOn(&write_compiled_builtins.step);
     dev_shim_lib.root_module.addObjectFile(builtins_obj.getEmittedBin());
@@ -3633,6 +3661,10 @@ fn addMainExe(
         cross_builtins_obj.root_module.addImport("tracy", b.addModule(
             b.fmt("tracy_stub_{s}", .{cross_target.name}),
             .{ .root_source_file = b.path("src/builtins/tracy_stub.zig") },
+        ));
+        cross_builtins_obj.root_module.addImport("shim_io", b.addModule(
+            b.fmt("shim_io_{s}", .{cross_target.name}),
+            .{ .root_source_file = b.path("src/shim_io.zig") },
         ));
         cross_builtins_obj.bundle_compiler_rt = false;
         configureBackend(cross_builtins_obj, cross_resolved_target);

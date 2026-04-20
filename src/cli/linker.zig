@@ -127,12 +127,37 @@ pub const LinkError = error{
     DarwinSysrootNotFound,
 } || std.zig.system.DetectError;
 
+/// Resolve the path of the currently running executable, host-OS specific.
+///
+/// Zig 0.16 removed `std.fs.selfExePath` and the private std helpers live inside
+/// `std.Io.Threaded` / `std.Io.Dispatch`. We need a cross-host implementation
+/// because the linker runs on Linux/macOS/Windows but may target any OS.
+fn selfExePath(std_io: std.Io, buf: []u8) ![]const u8 {
+    switch (comptime builtin.os.tag) {
+        .macos, .ios, .tvos, .watchos, .visionos => {
+            var n: u32 = @intCast(buf.len);
+            if (std.c._NSGetExecutablePath(buf.ptr, &n) != 0) return error.NameTooLong;
+            return std.mem.sliceTo(buf, 0);
+        },
+        .linux => {
+            const len = try std.Io.Dir.readLinkAbsolute(std_io, "/proc/self/exe", buf);
+            return buf[0..len];
+        },
+        .windows => {
+            // The PEB's ImagePathName contains the full path to the running exe.
+            const image_path_name = std.os.windows.peb().ProcessParameters.ImagePathName;
+            const wide = image_path_name.sliceZ();
+            const written = std.unicode.wtf16LeToWtf8(buf, wide);
+            return buf[0..written];
+        },
+        else => return error.UnsupportedOs,
+    }
+}
+
 /// Get the directory containing the currently running executable.
 fn getSelfExeDir(allocator: std.mem.Allocator, std_io: std.Io) ![]const u8 {
-    var symlink_path_buf: [std.c.PATH_MAX + 1]u8 = undefined;
-    var n: u32 = symlink_path_buf.len;
-    if (std.c._NSGetExecutablePath(&symlink_path_buf, &n) != 0) return error.OutOfMemory;
-    const symlink_path = std.mem.sliceTo(&symlink_path_buf, 0);
+    var symlink_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const symlink_path = try selfExePath(std_io, &symlink_path_buf);
     var real_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const exe_path_len = std.Io.Dir.cwd().realPathFile(std_io, symlink_path, &real_path_buf) catch return error.OutOfMemory;
     const exe_path = real_path_buf[0..exe_path_len];
@@ -143,24 +168,8 @@ fn getSelfExeDir(allocator: std.mem.Allocator, std_io: std.Io) ![]const u8 {
 /// First looks for a 'darwin' directory next to the executable (for distributed builds),
 /// then falls back to the compile-time path (for local development builds).
 fn findDarwinSysroot(allocator: std.mem.Allocator, std_io: std.Io) ![]const u8 {
-    // Get the path to the currently running executable
-    var symlink_path_buf: [std.c.PATH_MAX + 1]u8 = undefined;
-    var n: u32 = symlink_path_buf.len;
-    if (std.c._NSGetExecutablePath(&symlink_path_buf, &n) != 0) {
-        std.log.warn("Failed to get executable path, falling back to compile-time path", .{});
-        return build_options.darwin_sysroot;
-    }
-    const symlink_path = std.mem.sliceTo(&symlink_path_buf, 0);
-    var real_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const exe_path_len = std.Io.Dir.cwd().realPathFile(std_io, symlink_path, &real_path_buf) catch |err| {
+    const exe_dir = getSelfExeDir(allocator, std_io) catch |err| {
         std.log.warn("Failed to resolve executable path: {}, falling back to compile-time path", .{err});
-        return build_options.darwin_sysroot;
-    };
-    const exe_path = real_path_buf[0..exe_path_len];
-
-    // Get the directory containing the executable
-    const exe_dir = std.fs.path.dirname(exe_path) orelse {
-        std.log.warn("Failed to get executable directory, falling back to compile-time path", .{});
         return build_options.darwin_sysroot;
     };
 

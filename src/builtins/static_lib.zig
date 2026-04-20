@@ -5,6 +5,14 @@
 //! - Numeric overflow functions (for compiler-rt)
 //! - Dev backend wrapper functions (for roc build --opt=dev)
 
+const shim_io = @import("shim_io");
+
+pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
+/// Minimal std.Io override for debug output; avoids pulling in the full threaded IO vtable.
+pub const std_options_debug_io = shim_io.io();
+/// Disables threaded debug IO to prevent the threaded vtable from being linked into user programs.
+pub const std_options_debug_threaded_io = null;
+
 // Export key functions that might need compiler-rt symbols
 comptime {
     // Export overflow functions that might need compiler-rt symbols

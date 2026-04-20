@@ -17,6 +17,13 @@ const import_mapping_mod = types.import_mapping;
 const eval = @import("eval");
 const tracy = @import("tracy");
 const roc_target = @import("roc_target");
+const shim_io = @import("shim_io");
+
+pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
+/// Minimal std.Io override for debug output; avoids pulling in the full threaded IO vtable.
+pub const std_options_debug_io = shim_io.io();
+/// Disables threaded debug IO to prevent the threaded vtable from being linked into user programs.
+pub const std_options_debug_threaded_io = null;
 
 // Module tracing flag - enabled via `zig build -Dtrace-modules`
 const trace_modules = if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
@@ -55,10 +62,11 @@ const ipc = if (is_wasm32) struct {
     };
 } else @import("ipc");
 
-var app_std_io: std.Io = std.Io.Threaded.global_single_threaded.io();
+var app_std_io: std.Io = shim_io.io();
 
-// Debug allocator for native platforms (not wasm32) - provides leak detection in Debug/ReleaseSafe builds
-var debug_allocator: if (is_wasm32) void else std.heap.DebugAllocator(.{}) =
+// Debug allocator for native platforms (not wasm32) - provides leak detection in Debug/ReleaseSafe builds.
+// Keep it single-threaded so static shim archives do not pull in std.Io.Threaded.
+var debug_allocator: if (is_wasm32) void else std.heap.DebugAllocator(.{ .thread_safe = false }) =
     if (is_wasm32) {} else .{ .backing_allocator = std.heap.c_allocator };
 
 // Get the base allocator based on platform and build mode

@@ -2,8 +2,13 @@
 //! Tests init/update/render pattern where Box is opaque to the host.
 
 const std = @import("std");
+const shim_io = @import("shim_io");
 const builtins = @import("builtins");
 const f32str = builtins.compiler_rt_128.f32_to_str;
+
+pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
+pub const std_options_debug_io = shim_io.io();
+pub const std_options_debug_threaded_io = null;
 
 /// Host environment - contains our arena allocator
 const HostEnv = struct {

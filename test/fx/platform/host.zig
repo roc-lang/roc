@@ -26,12 +26,17 @@
 //! - 0: All expectations matched in order
 //! - 1: Test failed (mismatch, missing output, extra output, or invalid spec)
 const std = @import("std");
+const shim_io = @import("shim_io");
 const builtin = @import("builtin");
 const builtins = @import("builtins");
 const build_options = @import("build_options");
 const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi) std.posix else undefined;
 
 const trace_refcount = build_options.trace_refcount;
+
+pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
+pub const std_options_debug_io = shim_io.io();
+pub const std_options_debug_threaded_io = null;
 
 pub const std_options: std.Options = .{
     .logFn = std.log.defaultLog,
@@ -358,7 +363,7 @@ const RocAllocation = struct {
 
 /// Host environment - contains DebugAllocator for leak detection
 const HostEnv = struct {
-    gpa: std.heap.DebugAllocator(.{ .safety = true }),
+    gpa: std.heap.DebugAllocator(.{ .safety = true, .thread_safe = false }),
     test_state: TestState,
     std_io: std.Io,
     /// Track Roc allocations for cleanup on test failure
@@ -965,9 +970,9 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
     installRuntimeSignalHandlers();
 
     var host_env = HostEnv{
-        .gpa = std.heap.DebugAllocator(.{ .safety = true }){},
+        .gpa = std.heap.DebugAllocator(.{ .safety = true, .thread_safe = false }){},
         .test_state = TestState.init(),
-        .std_io = std.Io.Threaded.global_single_threaded.io(),
+        .std_io = shim_io.io(),
     };
 
     // Parse test spec if provided

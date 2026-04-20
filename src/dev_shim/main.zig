@@ -19,6 +19,13 @@ const eval = @import("eval");
 const layout = @import("layout");
 const tracy = @import("tracy");
 const backend = @import("backend");
+const shim_io = @import("shim_io");
+
+pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
+/// Minimal std.Io override for debug output; avoids pulling in the full threaded IO vtable.
+pub const std_options_debug_io = shim_io.io();
+/// Disables threaded debug IO to prevent the threaded vtable from being linked into user programs.
+pub const std_options_debug_threaded_io = null;
 
 // Module tracing flag - enabled via `zig build -Dtrace-modules`
 const trace_modules = if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
@@ -31,10 +38,11 @@ fn traceDbg(comptime fmt: []const u8, args: anytype) void {
 
 const ipc = @import("ipc");
 
-var app_std_io: std.Io = std.Io.Threaded.global_single_threaded.io();
+var app_std_io: std.Io = shim_io.io();
 
-// Debug allocator for native platforms - provides leak detection in Debug/ReleaseSafe builds
-var debug_allocator: std.heap.DebugAllocator(.{}) = .{ .backing_allocator = std.heap.c_allocator };
+// Debug allocator for native platforms - provides leak detection in Debug/ReleaseSafe builds.
+// Keep it single-threaded so static shim archives do not pull in std.Io.Threaded.
+var debug_allocator: std.heap.DebugAllocator(.{ .thread_safe = false }) = .{ .backing_allocator = std.heap.c_allocator };
 
 fn getBaseAllocator() std.mem.Allocator {
     return switch (builtin.mode) {

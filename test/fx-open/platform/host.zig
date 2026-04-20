@@ -1,13 +1,18 @@
 ///! Platform host that tests effectful functions with open union error types.
 const std = @import("std");
+const shim_io = @import("shim_io");
 const builtins = @import("builtins");
 const build_options = @import("build_options");
 
 const trace_refcount = build_options.trace_refcount;
 
+pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
+pub const std_options_debug_io = shim_io.io();
+pub const std_options_debug_threaded_io = null;
+
 /// Host environment - contains DebugAllocator for leak detection
 const HostEnv = struct {
-    gpa: std.heap.DebugAllocator(.{}),
+    gpa: std.heap.DebugAllocator(.{ .thread_safe = false }),
     std_io: std.Io,
 };
 
@@ -266,8 +271,8 @@ fn buildArgsList(ops: *builtins.host_abi.RocOps, argc: c_int, argv: [*][*:0]u8) 
 /// Platform host entrypoint
 fn platform_main(argc: c_int, argv: [*][*:0]u8) !c_int {
     var host_env = HostEnv{
-        .gpa = std.heap.DebugAllocator(.{}){},
-        .std_io = std.Io.Threaded.global_single_threaded.io(),
+        .gpa = std.heap.DebugAllocator(.{ .thread_safe = false }){},
+        .std_io = shim_io.io(),
     };
     defer {
         const leaked = host_env.gpa.deinit();

@@ -381,7 +381,7 @@ pub const Watcher = struct {
                 if (self.impl.inotify_fd >= 0) {
                     const fd = self.impl.inotify_fd;
                     self.impl.inotify_fd = -1;
-                    std.posix.close(fd);
+                    _ = std.os.linux.close(fd);
                 }
                 self.clearLinuxWatchData();
             },
@@ -565,10 +565,13 @@ pub const Watcher = struct {
     }
 
     fn watchLoopLinux(self: *Watcher) void {
-        self.impl.inotify_fd = std.posix.inotify_init1(std.os.linux.IN.NONBLOCK | std.os.linux.IN.CLOEXEC) catch |err| {
-            std.log.err("inotify_init1 failed: {}", .{err});
+        const init_result = std.os.linux.inotify_init1(std.os.linux.IN.NONBLOCK | std.os.linux.IN.CLOEXEC);
+        const init_errno = std.posix.errno(init_result);
+        if (init_errno != .SUCCESS) {
+            std.log.err("inotify_init1 failed: {}", .{init_errno});
             return;
-        };
+        }
+        self.impl.inotify_fd = @as(i32, @intCast(init_result));
 
         // Add watches
         for (self.paths) |path| {
@@ -652,10 +655,11 @@ pub const Watcher = struct {
 
                             // Check if there are already .roc files in the new directory
                             // This handles the case where files are created immediately after the directory
-                            var dir = std.Io.Dir.openDirAbsolute(new_dir, .{ .iterate = true }) catch break;
-                            defer dir.close();
+                            const new_dir_io = std.Io.Threaded.global_single_threaded.io();
+                            var dir = std.Io.Dir.openDirAbsolute(new_dir_io, new_dir, .{ .iterate = true }) catch break;
+                            defer dir.close(new_dir_io);
                             var it = dir.iterate();
-                            while (it.next() catch null) |entry| {
+                            while (it.next(new_dir_io) catch null) |entry| {
                                 if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".roc")) {
                                     const full_path = std.fs.path.join(self.allocator, &.{ new_dir, entry.name }) catch continue;
                                     defer self.allocator.free(full_path);
@@ -680,7 +684,13 @@ pub const Watcher = struct {
         const path_z = try self.allocator.dupeZ(u8, path);
         defer self.allocator.free(path_z);
 
-        const wd = try std.posix.inotify_add_watch(self.impl.inotify_fd, path_z, flags);
+        const add_result = std.os.linux.inotify_add_watch(self.impl.inotify_fd, path_z, flags);
+        const add_errno = std.posix.errno(add_result);
+        if (add_errno != .SUCCESS) {
+            std.log.err("inotify_add_watch failed: {}", .{add_errno});
+            return error.InotifyAddWatchFailed;
+        }
+        const wd = @as(i32, @intCast(add_result));
 
         const path_copy = try self.allocator.dupe(u8, path);
         errdefer self.allocator.free(path_copy);
@@ -693,11 +703,12 @@ pub const Watcher = struct {
         const wd_key = try std.fmt.allocPrint(self.allocator, "{d}", .{wd});
         try self.impl.path_cache.put(wd_key, try self.allocator.dupe(u8, path));
 
-        var dir = try std.Io.Dir.openDirAbsolute(path, .{ .iterate = true });
-        defer dir.close();
+        const dir_io = std.Io.Threaded.global_single_threaded.io();
+        var dir = try std.Io.Dir.openDirAbsolute(dir_io, path, .{ .iterate = true });
+        defer dir.close(dir_io);
 
         var it = dir.iterate();
-        while (try it.next()) |entry| {
+        while (try it.next(dir_io)) |entry| {
             if (entry.kind == .directory) {
                 const subdir_path = try std.fs.path.join(self.allocator, &.{ path, entry.name });
                 defer self.allocator.free(subdir_path);

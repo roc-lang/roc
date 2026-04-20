@@ -6,11 +6,18 @@
 //!
 //! Entry point: make_glue : List Types -> Result (List File) Str
 const std = @import("std");
+const shim_io = @import("shim_io");
 const builtin = @import("builtin");
 const builtins = @import("builtins");
 const build_options = @import("build_options");
 
 const trace_refcount = build_options.trace_refcount;
+
+pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
+/// Minimal std.Io override for debug output; avoids pulling in the full threaded IO vtable.
+pub const std_options_debug_io = shim_io.io();
+/// Disables threaded debug IO to prevent the threaded vtable from being linked into user programs.
+pub const std_options_debug_threaded_io = null;
 
 /// Zig logging configuration override
 pub const std_options: std.Options = .{
@@ -433,7 +440,7 @@ comptime {
 fn __main() callconv(.c) void {}
 
 fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
-    const std_io = std.Io.Threaded.global_single_threaded.io();
+    const std_io = shim_io.io();
     const stderr_file: std.Io.File = .stderr();
 
     // Expect platform source path as first argument
