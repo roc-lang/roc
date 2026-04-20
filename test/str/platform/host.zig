@@ -1,7 +1,12 @@
 //! Simple platform host that calls into a simplified Roc entrypoint and prints a string result.
 
 const std = @import("std");
+const shim_io = @import("shim_io");
 const builtins = @import("builtins");
+
+pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
+pub const std_options_debug_io = shim_io.io();
+pub const std_options_debug_threaded_io = null;
 
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocDealloc = builtins.host_abi.RocDealloc;

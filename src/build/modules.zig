@@ -650,12 +650,13 @@ pub const RocModules = struct {
                     .root_source_file = module.root_source_file.?,
                     .target = target,
                     .optimize = optimize,
-                    // IPC module needs libc for mmap, munmap, close on POSIX systems
-                    // Bundle module needs libc for C zstd (unbundle uses stdlib zstd)
-                    // Eval module needs libc for setjmp/longjmp crash protection
-                    // sljmp module needs libc for setjmp/longjmp functions
-                    // compile/lsp modules transitively depend on eval->sljmp, so also need libc
-                    .link_libc = (module_type == .ipc or module_type == .bundle or module_type == .eval or module_type == .sljmp or module_type == .compile or module_type == .lsp),
+                    // Zig 0.16 requires explicit link_libc on any compile unit that references
+                    // std.c.* (directly or transitively). Our modules use std.c in multiple
+                    // places — stack_overflow, CoreCtx, ExecutableMemory, channel.nanosleep,
+                    // download.getaddrinfo, server.zig, etc. — and most of the remaining
+                    // modules import ctx/unbundle transitively. It's simpler (and has no
+                    // practical cost for native-only tests) to enable link_libc uniformly.
+                    .link_libc = true,
                 }),
                 .filters = filter_injection.filters,
             });
