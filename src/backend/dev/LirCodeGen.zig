@@ -10226,7 +10226,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const msg_aligned_size: u32 = std.mem.alignForward(u32, @intCast(msg.len), 8);
             const msg_slot = self.codegen.allocStackSlot(if (msg_aligned_size == 0) 8 else msg_aligned_size);
 
-            // Allocate a 16-byte stack slot for the RocCrashed struct { utf8_bytes, len }
+            // Allocate a 16-byte stack slot for the RocCrashed/RocExpectFailed struct { utf8_bytes, len }
             const crashed_slot = self.codegen.allocStackSlot(16);
 
             {
@@ -10253,7 +10253,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     offset += 8;
                 }
 
-                // Store pointer to stack-resident message bytes at RocCrashed offset 0
+                // Store pointer to stack-resident message bytes at RocCrashed/RocExpectFailed offset 0
                 try self.emitLeaStack(tmp, msg_slot);
                 if (comptime target.toCpuArch() == .aarch64) {
                     try self.codegen.emit.strRegMemSoff(.w64, tmp, base_reg, crashed_slot);
