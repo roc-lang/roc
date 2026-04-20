@@ -368,6 +368,9 @@ const HostEnv = struct {
     /// Allocation counters for diagnostics
     alloc_count: usize = 0,
     dealloc_count: usize = 0,
+    /// Set when an inline `expect` fails. Inline expect failures are
+    /// non-fatal but must cause the process to exit with a non-zero status.
+    inline_expect_failed: bool = false,
 };
 
 /// Roc allocation function with size-tracking metadata
@@ -570,7 +573,8 @@ fn rocDbgFn(roc_dbg: *const builtins.host_abi.RocDbg, env: *anyopaque) callconv(
 
 /// Roc expect failed function
 fn rocExpectFailedFn(roc_expect: *const builtins.host_abi.RocExpectFailed, env: *anyopaque) callconv(.c) void {
-    _ = env;
+    const host: *HostEnv = @ptrCast(@alignCast(env));
+    host.inline_expect_failed = true;
     const source_bytes = roc_expect.utf8_bytes[0..roc_expect.len];
     const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
     std.debug.print("Expect failed: {s}\n", .{trimmed});
@@ -1119,6 +1123,12 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
 
             return 1;
         }
+    }
+
+    // An inline `expect` failure doesn't halt execution, but must be
+    // reported via a non-zero exit status.
+    if (host_env.inline_expect_failed) {
+        return 1;
     }
 
     return 0;

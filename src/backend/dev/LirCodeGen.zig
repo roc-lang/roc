@@ -10208,7 +10208,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const skip_patch = try self.codegen.emitCondJump(condNotEqual());
 
             // Condition was false: report via roc_expect_failed and fall through.
-            try self.emitRocExpectFailed("expect failed");
+            try self.emitRocInlineExpectFailed("expect failed");
 
             // Patch the skip jump to land here
             self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
@@ -10297,7 +10297,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Emit a roc_expect_failed call via RocOps with a static message.
-        fn emitRocExpectFailed(self: *Self, msg: []const u8) Allocator.Error!void {
+        fn emitRocInlineExpectFailed(self: *Self, msg: []const u8) Allocator.Error!void {
             try self.emitRocOpsMsgCall(msg, 40);
         }
 

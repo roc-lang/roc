@@ -1657,3 +1657,29 @@ test "roc test complex_package --verbose passes all tests" {
     try testing.expect(std.mem.indexOf(u8, result.stdout, "tests passed") != null);
     try testing.expect(std.mem.indexOf(u8, result.stdout, "PASS") != null);
 }
+
+test "failed inline expect exits with code 1 and continues program (dev)" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{}, "test/cli/failed_inline_expect.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "Hello, World!") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "expect failed") != null);
+}
+
+test "failed inline expect exits with code 1 and continues program (interpreter)" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{"--opt=interpreter"}, "test/cli/failed_inline_expect.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "Hello, World!") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "Expect failed") != null);
+}

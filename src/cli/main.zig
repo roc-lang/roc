@@ -1812,7 +1812,8 @@ fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: [
 
     // Phase 4: Execute via selected backend
     var hosted_fn_array = [_]HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
-    var roc_ops = echo_platform.makeDefaultRocOps(&hosted_fn_array);
+    var default_roc_ops_env: echo_platform.DefaultRocOpsEnv = .{};
+    var roc_ops = echo_platform.makeDefaultRocOps(&default_roc_ops_env, &hosted_fn_array);
     var cli_args_list = echo_platform.buildCliArgs(args.app_args, &roc_ops);
     var result_buf: [16]u8 align(16) = undefined;
 
@@ -1855,6 +1856,11 @@ fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: [
     const exit_code = result_buf[0];
     if (exit_code != 0) {
         std.process.exit(exit_code);
+    }
+    // Inline `expect` failures don't halt the program but must cause a
+    // non-zero exit status so scripts and test runners can detect them.
+    if (default_roc_ops_env.inline_expect_failed) {
+        std.process.exit(1);
     }
 }
 /// Append an argument to a command line buffer with proper Windows quoting.
@@ -6184,6 +6190,14 @@ fn runViaDev(
         error.RocCrashed => return error.DevEvaluatorFailed,
         error.Segfault => return error.DevEvaluatorFailed,
     };
+
+    // Inline `expect` failures during dev execution report to DevRocEnv's own
+    // RocOps env. Propagate that back to the host's env so the outer process
+    // can exit with a non-zero status.
+    if (dev_eval.roc_env.inline_expect_failed) {
+        const default_env: *echo_platform.DefaultRocOpsEnv = @ptrCast(@alignCast(roc_ops.env));
+        default_env.inline_expect_failed = true;
+    }
 }
 
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.

@@ -1142,8 +1142,8 @@ test "fx platform inline expect fails in dev backend binary" {
         },
     }
 
-    // Should report a crash
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Roc crashed") != null);
+    // Should report the failing inline expect via roc_expect_failed
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Expect failed") != null);
 }
 
 test "fx platform index out of bounds in instantiate regression" {
