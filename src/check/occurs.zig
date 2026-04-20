@@ -85,7 +85,7 @@ pub fn occurs(types_store: *Store, scratch: *Scratch, var_: Var) std.mem.Allocat
 /// Performs an occurs check on a type variable.
 ///
 /// This struct encapsulates the recursive traversal logic used to detect
-/// whether a variable is recursively defined through it's children.
+/// whether a variable is recursively defined through its children.
 ///
 /// It uses a scratch space to track visited nodes and maintain state across
 /// recursive calls. It is intended for one-time use per `occurs()` call.
@@ -101,14 +101,14 @@ const CheckOccurs = struct {
 
     /// Init CheckOccurs
     ///
-    /// Note that this struct does not own any of it's fields
+    /// Note that this struct does not own any of its fields
     fn init(types_store: *Store, scratch: *Scratch) Self {
         return .{ .types_store = types_store, .scratch = scratch };
     }
 
     const Error = error{ InfiniteType, RecursiveAnonymous, RecursiveNominal, AllocatorError };
 
-    /// Recursively check if a type is referenced by it's children
+    /// Recursively check if a type is referenced by its children
     ///
     /// This method appends intermediate error chain information to the `scratch`,
     /// which can be queried after the run.
@@ -235,7 +235,7 @@ const CheckOccurs = struct {
 
 /// This type represents the context of a recursive branch in the occurs check
 ///
-/// This types is passed down through the occurs check and is modified to keep
+/// This type is passed down through the occurs check and is modified to keep
 /// track of whatever we've seen so far in this branch.
 const Context = struct {
     recursion_allowed: bool,
@@ -347,7 +347,7 @@ pub const Scratch = struct {
     }
 };
 
-test "occurs: no recurcion (v = Str)" {
+test "occurs: no recursion (v = Str)" {
     const gpa = std.testing.allocator;
 
     var types_store = try Store.init(gpa);
