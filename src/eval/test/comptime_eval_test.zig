@@ -3447,3 +3447,48 @@ test "issue 9281: dev evaluator stack overflow with nested recursive opaque type
     try testing.expect(code_result.code.len > 0);
     try testing.expect(code_result.entry_offset < code_result.code.len);
 }
+
+// Regression test: `roc test` aborts with
+//     "LIR/codegen invariant violated: exprLayout called on non-value
+//      expression runtime_error"
+// when a top-level `expect` has a type-erroneous condition. The type
+// error on `Dynamite` becomes a `runtime_error` LIR node; LIR codegen
+// of the surrounding `num_is_eq` then calls `exprLayout` on it and
+// panics. Moving the same erroneous call into `main!` reports the
+// type mismatch cleanly, so the bug is specific to `expect` codegen.
+test "top-level expect with type-erroneous condition does not panic in dev codegen" {
+    const src =
+        \\foo : U64 -> U64
+        \\foo = |x| x
+        \\
+        \\expect foo(Dynamite) == 5
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    // Locate the top-level `expect` statement so we can ask the dev
+    // backend to generate code for it, the same way `roc test` does
+    // (see rocTest in src/cli/main.zig).
+    const statements = result.module_env.store.sliceStatements(result.module_env.all_statements);
+    var expect_body: ?can.CIR.Expr.Idx = null;
+    for (statements) |stmt_idx| {
+        const stmt = result.module_env.store.getStatement(stmt_idx);
+        if (stmt == .s_expect) {
+            expect_body = stmt.s_expect.body;
+            break;
+        }
+    }
+    try testing.expect(expect_body != null);
+
+    var dev_eval = try DevEvaluator.init(test_allocator, null);
+    defer dev_eval.deinit();
+
+    const all_module_envs = [_]*ModuleEnv{ result.builtin_module.env, result.module_env };
+
+    // Returning an error is acceptable; panicking is the bug.
+    if (dev_eval.generateCode(result.module_env, expect_body.?, &all_module_envs, null)) |code_result_ok| {
+        var code_result = code_result_ok;
+        code_result.deinit();
+    } else |_| {}
+}
