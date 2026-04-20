@@ -449,6 +449,11 @@ const Lowerer = struct {
         exec_ret_ty: type_mod.TypeId,
     };
 
+    const PendingExecutableSignatureView = struct {
+        args_tys: []const type_mod.TypeId,
+        ret_ty: type_mod.TypeId,
+    };
+
     fn mergeExecutableSignatureType(
         self: *Lowerer,
         existing: type_mod.TypeId,
@@ -513,6 +518,19 @@ const Lowerer = struct {
         pending.summary_fn_ty = requested_ty;
     }
 
+    fn requirePendingExecutableSignature(
+        self: *const Lowerer,
+        pending: *const specializations.Pending,
+    ) PendingExecutableSignatureView {
+        _ = self;
+        return .{
+            .args_tys = pending.exec_args_tys orelse
+                debugPanic("lambdamono.lower.requirePendingExecutableSignature missing executable arg signature"),
+            .ret_ty = pending.exec_ret_ty orelse
+                debugPanic("lambdamono.lower.requirePendingExecutableSignature missing executable return signature"),
+        };
+    }
+
     fn ensureSpecializedCallableSummary(
         self: *Lowerer,
         solved_types: *const solved.Type.Store,
@@ -571,6 +589,7 @@ const Lowerer = struct {
     ) std.mem.Allocator.Error!*specializations.Pending {
         const updated = self.lookupPendingBySpecializedSymbol(pending_symbol) orelse
             debugPanic("lambdamono.lower.finishPendingSpecialization lost queued specialization after growth");
+        _ = self.requirePendingExecutableSignature(updated);
         updated.specialized = specialized.fn_def;
         updated.status = .done;
         return updated;
@@ -3327,30 +3346,31 @@ const Lowerer = struct {
         if (fn_args.len != requested_arg_tys.len) {
             debugPanic("lambdamono.lower.specializeFn function arg arity mismatch");
         }
-        const specialized_arg_exec_tys = try self.allocator.alloc(type_mod.TypeId, requested_arg_tys.len);
-        defer self.allocator.free(specialized_arg_exec_tys);
+        const initial_arg_exec_tys = try self.allocator.alloc(type_mod.TypeId, requested_arg_tys.len);
+        defer self.allocator.free(initial_arg_exec_tys);
         for (requested_arg_tys, 0..) |arg_ty, i| {
-            specialized_arg_exec_tys[i] = try self.lowerExecutableTypeFromSolvedIn(frozen.inst.types, &frozen.mono_cache, arg_ty);
+            initial_arg_exec_tys[i] = try self.lowerExecutableTypeFromSolvedIn(frozen.inst.types, &frozen.mono_cache, arg_ty);
         }
         switch (frozen.inst.types.lambdaRepr(frozen.fn_ty)) {
             .lset => {},
             .erased => debugPanic("lambdamono.lower.specializeFn expected concrete solved lambda-set type"),
         }
-        const specialized_ret_exec_ty = switch (pending.repr_mode) {
+        const initial_ret_exec_ty = switch (pending.repr_mode) {
             .erased_boundary => if (frozen.inst.types.maybeLambdaRepr(frozen.fn_shape.ret) != null)
                 try self.lowerBoxBoundaryCallableTypeIn(frozen.inst.types, &frozen.mono_cache, frozen.fn_shape.ret)
             else
                 try self.lowerExecutableTypeFromSolvedIn(frozen.inst.types, &frozen.mono_cache, frozen.fn_shape.ret),
             .natural => try self.lowerExecutableTypeFromSolvedIn(frozen.inst.types, &frozen.mono_cache, frozen.fn_shape.ret),
         };
-        try self.mergePendingExecutableSignature(pending, specialized_arg_exec_tys, specialized_ret_exec_ty);
+        try self.mergePendingExecutableSignature(pending, initial_arg_exec_tys, initial_ret_exec_ty);
+        const proc_sig = self.requirePendingExecutableSignature(pending);
         var final_source_ret_ty = frozen.fn_shape.ret;
         const result: ast.FnDef = switch (pending.repr_mode) {
             .natural => if (frozen_captures.len == 0) .{
                 .args = blk: {
                     const lowered_args = try self.allocator.alloc(ast.TypedSymbol, fn_args.len);
                     defer self.allocator.free(lowered_args);
-                    for (fn_args, specialized_arg_exec_tys, 0..) |arg, exec_ty, i| {
+                    for (fn_args, proc_sig.args_tys, 0..) |arg, exec_ty, i| {
                         lowered_args[i] = .{
                             .ty = exec_ty,
                             .symbol = arg.symbol,
@@ -3359,7 +3379,7 @@ const Lowerer = struct {
                     break :blk try self.output.addTypedSymbolSpan(lowered_args);
                 },
                 .body = blk: {
-                    const body_env = try self.buildFnBodyEnv(requested_arg_tys, specialized_arg_exec_tys, fn_args, &[_]EnvEntry{});
+                    const body_env = try self.buildFnBodyEnv(requested_arg_tys, proc_sig.args_tys, fn_args, &[_]EnvEntry{});
                     defer self.allocator.free(body_env);
                     const body = try self.specializeExprAtSourceTy(
                         &frozen.inst,
@@ -3375,11 +3395,11 @@ const Lowerer = struct {
                         frozen.fn_shape.ret,
                     );
                     const body_ty = self.output.getExpr(body).ty;
-                    const fn_ret_exec_ty = if (self.executableTypeIsAbstract(specialized_ret_exec_ty) and
+                    const fn_ret_exec_ty = if (self.executableTypeIsAbstract(proc_sig.ret_ty) and
                         !self.executableTypeIsAbstract(body_ty))
                         body_ty
                     else
-                        specialized_ret_exec_ty;
+                        proc_sig.ret_ty;
                     const bridged = if (!self.types.equalIds(body_ty, fn_ret_exec_ty))
                         try self.emitExplicitBridgeExpr(body, fn_ret_exec_ty)
                     else
@@ -3391,7 +3411,7 @@ const Lowerer = struct {
                 const capture_exec_ty = try self.lowerCaptureRecordTypeFromSolved(frozen.inst.types, &frozen.mono_cache, frozen_captures);
                 const capture_env = try self.captureBindingsFromCaptures(frozen_captures, capture_exec_ty);
                 defer self.allocator.free(capture_env);
-                const body_env = try self.buildFnBodyEnv(requested_arg_tys, specialized_arg_exec_tys, fn_args, capture_env);
+                const body_env = try self.buildFnBodyEnv(requested_arg_tys, proc_sig.args_tys, fn_args, capture_env);
                 defer self.allocator.free(body_env);
 
                 var body = try self.specializeExprAtSourceTy(
@@ -3408,11 +3428,11 @@ const Lowerer = struct {
                     frozen.fn_shape.ret,
                 );
                 const body_ty = self.output.getExpr(body).ty;
-                const fn_ret_exec_ty = if (self.executableTypeIsAbstract(specialized_ret_exec_ty) and
+                const fn_ret_exec_ty = if (self.executableTypeIsAbstract(proc_sig.ret_ty) and
                     !self.executableTypeIsAbstract(body_ty))
                     body_ty
                 else
-                    specialized_ret_exec_ty;
+                    proc_sig.ret_ty;
                 if (!self.types.equalIds(body_ty, fn_ret_exec_ty)) {
                     body = try self.emitExplicitBridgeExpr(body, fn_ret_exec_ty);
                 }
@@ -3424,7 +3444,7 @@ const Lowerer = struct {
                 );
                 const lowered_args = try self.allocator.alloc(ast.TypedSymbol, fn_args.len + 1);
                 defer self.allocator.free(lowered_args);
-                for (fn_args, specialized_arg_exec_tys, 0..) |arg, exec_ty, i| {
+                for (fn_args, proc_sig.args_tys, 0..) |arg, exec_ty, i| {
                     lowered_args[i] = .{
                         .ty = exec_ty,
                         .symbol = arg.symbol,
@@ -3449,7 +3469,7 @@ const Lowerer = struct {
                     captures_ty = lowered_capture_ty;
                     capture_env = try self.captureBindingsFromCaptures(frozen_captures, lowered_capture_ty);
                 }
-                const body_env = try self.buildFnBodyEnv(requested_arg_tys, specialized_arg_exec_tys, fn_args, capture_env);
+                const body_env = try self.buildFnBodyEnv(requested_arg_tys, proc_sig.args_tys, fn_args, capture_env);
                 defer self.allocator.free(body_env);
 
                 var body = try self.specializeExprAtSourceTy(
@@ -3465,7 +3485,7 @@ const Lowerer = struct {
                     fn_body,
                     frozen.fn_shape.ret,
                 );
-                if (self.types.getTypePreservingNominal(specialized_ret_exec_ty) == .erased_fn and
+                if (self.types.getTypePreservingNominal(proc_sig.ret_ty) == .erased_fn and
                     frozen.inst.types.maybeLambdaRepr(frozen.fn_shape.ret) != null)
                 {
                     body = try self.lowerBoxBoundaryExpr(
@@ -3477,11 +3497,11 @@ const Lowerer = struct {
                     );
                 }
                 const body_ty = self.output.getExpr(body).ty;
-                const fn_ret_exec_ty = if (self.executableTypeIsAbstract(specialized_ret_exec_ty) and
+                const fn_ret_exec_ty = if (self.executableTypeIsAbstract(proc_sig.ret_ty) and
                     !self.executableTypeIsAbstract(body_ty))
                     body_ty
                 else
-                    specialized_ret_exec_ty;
+                    proc_sig.ret_ty;
                 if (!self.types.equalIds(body_ty, fn_ret_exec_ty)) {
                     body = try self.emitExplicitBridgeExpr(body, fn_ret_exec_ty);
                 }
@@ -3492,7 +3512,7 @@ const Lowerer = struct {
                         .args = blk_args: {
                             const lowered_args = try self.allocator.alloc(ast.TypedSymbol, fn_args.len + 1);
                             defer self.allocator.free(lowered_args);
-                            for (fn_args, specialized_arg_exec_tys, 0..) |arg, exec_ty, i| {
+                            for (fn_args, proc_sig.args_tys, 0..) |arg, exec_ty, i| {
                                 lowered_args[i] = .{
                                     .ty = exec_ty,
                                     .symbol = arg.symbol,
@@ -3511,7 +3531,7 @@ const Lowerer = struct {
                     .args = blk_args: {
                         const lowered_args = try self.allocator.alloc(ast.TypedSymbol, fn_args.len);
                         defer self.allocator.free(lowered_args);
-                        for (fn_args, specialized_arg_exec_tys, 0..) |arg, exec_ty, i| {
+                        for (fn_args, proc_sig.args_tys, 0..) |arg, exec_ty, i| {
                             lowered_args[i] = .{
                                 .ty = exec_ty,
                                 .symbol = arg.symbol,
@@ -3526,7 +3546,7 @@ const Lowerer = struct {
         try self.unifyIn(frozen.inst.types, frozen.fn_shape.ret, final_source_ret_ty);
         try self.mergePendingExecutableSignature(
             pending,
-            specialized_arg_exec_tys,
+            proc_sig.args_tys,
             self.output.getExpr(result.body).ty,
         );
         return .{
