@@ -28,13 +28,16 @@ pub const Pending = struct {
     repr_mode: ReprMode,
     fn_ty: TypeVarId,
     fn_def: solved.Ast.FnDef,
-    requested_types: solved.Type.Store,
-    requested_ty: TypeVarId,
+    requested_types: ?solved.Type.Store,
+    requested_ty: ?TypeVarId,
     key_bytes: []const u8,
     specialized_symbol: Symbol,
     status: Status = .pending,
     specialized: ?ast.FnDef = null,
-    result_ty: ?type_mod.TypeId = null,
+    summary_types: ?*solved.Type.Store = null,
+    summary_fn_ty: ?TypeVarId = null,
+    exec_args_tys: ?[]const type_mod.TypeId = null,
+    exec_ret_ty: ?type_mod.TypeId = null,
 };
 
 /// Queue of pending and completed executable specializations.
@@ -55,7 +58,14 @@ pub const Queue = struct {
     /// Release all specialization queue state.
     pub fn deinit(self: *Queue) void {
         for (self.items.items) |*item| {
-            item.requested_types.deinit();
+            if (item.requested_types) |*types| types.deinit();
+            if (item.summary_types) |types| {
+                types.deinit();
+                self.allocator.destroy(types);
+            }
+            if (item.exec_args_tys) |args| {
+                if (args.len != 0) self.allocator.free(args);
+            }
             self.allocator.free(item.key_bytes);
         }
         self.items.deinit(self.allocator);
@@ -78,7 +88,7 @@ pub const Queue = struct {
             const fn_def = item.specialized orelse continue;
             try out.append(allocator, .{
                 .bind = item.specialized_symbol,
-                .result_ty = item.result_ty orelse debugPanic("lambdamono.specializations.solvedDefs missing result type"),
+                .result_ty = null,
                 .value = .{ .fn_ = fn_def },
             });
         }
@@ -201,25 +211,25 @@ fn cloneTypeRec(
                 .backing = try cloneTypeRec(allocator, source_types, target_types, mapping, nominal.backing),
             } });
             break :blk placeholder;
-            },
-            .content => |content| blk: {
-                const placeholder = try target_types.freshUnbd();
-                try mapping.put(id, placeholder);
-                const node = switch (content) {
-                    .primitive => solved.Type.Node{ .content = .{ .primitive = content.primitive } },
-                    .func => |func| blk2: {
-                        const args = source_types.sliceTypeVarSpan(func.args);
-                        const out_args = try allocator.alloc(TypeVarId, args.len);
-                        defer allocator.free(out_args);
-                        for (args, 0..) |arg, i| {
-                            out_args[i] = try cloneTypeRec(allocator, source_types, target_types, mapping, arg);
-                        }
-                        break :blk2 solved.Type.Node{ .content = .{ .func = .{
-                            .args = try target_types.addTypeVarSpan(out_args),
-                            .lset = try cloneTypeRec(allocator, source_types, target_types, mapping, func.lset),
-                            .ret = try cloneTypeRec(allocator, source_types, target_types, mapping, func.ret),
-                        } } };
-                    },
+        },
+        .content => |content| blk: {
+            const placeholder = try target_types.freshUnbd();
+            try mapping.put(id, placeholder);
+            const node = switch (content) {
+                .primitive => solved.Type.Node{ .content = .{ .primitive = content.primitive } },
+                .func => |func| blk2: {
+                    const args = source_types.sliceTypeVarSpan(func.args);
+                    const out_args = try allocator.alloc(TypeVarId, args.len);
+                    defer allocator.free(out_args);
+                    for (args, 0..) |arg, i| {
+                        out_args[i] = try cloneTypeRec(allocator, source_types, target_types, mapping, arg);
+                    }
+                    break :blk2 solved.Type.Node{ .content = .{ .func = .{
+                        .args = try target_types.addTypeVarSpan(out_args),
+                        .lset = try cloneTypeRec(allocator, source_types, target_types, mapping, func.lset),
+                        .ret = try cloneTypeRec(allocator, source_types, target_types, mapping, func.ret),
+                    } } };
+                },
                 .list => |elem| solved.Type.Node{ .content = .{
                     .list = try cloneTypeRec(allocator, source_types, target_types, mapping, elem),
                 } },
