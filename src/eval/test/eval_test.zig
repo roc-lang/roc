@@ -319,13 +319,34 @@ test "error test - crash statement" {
 
 test "inline expect statement fails" {
     // Regression test for #9261: s_expect statements must be lowered as
-    // .expect MIR nodes so the dev backend generates the assertion check.
-    try runExpectError(
+    // .expect MIR nodes so the dev backend evaluates the assertion.
+    // A failing inline expect invokes `roc_expect_failed` via RocOps but
+    // does not halt execution, so the surrounding block still returns its
+    // final value normally.
+    const resources = try helpers.parseAndCanonicalizeExpr(test_allocator,
         \\{
         \\    expect 1 == 2
         \\    {}
         \\}
-    , error.Crash, .no_trace);
+    );
+    defer helpers.cleanupParseAndCanonical(test_allocator, resources);
+
+    var test_env_instance = TestEnv.init(helpers.interpreter_allocator);
+    defer test_env_instance.deinit();
+
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
+    defer interpreter.deinit();
+
+    const ops = test_env_instance.get_ops();
+    _ = try interpreter.eval(resources.expr_idx, ops);
+
+    // The failing expect must have been reported via the RocOps callback.
+    switch (test_env_instance.crashState()) {
+        .crashed => |msg| try testing.expect(std.mem.indexOf(u8, msg, "Expect failed") != null),
+        .did_not_crash => try testing.expect(false),
+    }
 }
 
 test "inline expect statement passes" {

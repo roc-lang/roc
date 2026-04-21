@@ -409,7 +409,8 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
 
     // 6. Construct List(Types) as C-ABI structs
     const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{};
-    var roc_ops = echo_platform.makeDefaultRocOps(@constCast(&hosted_function_ptrs));
+    var default_roc_ops_env: echo_platform.DefaultRocOpsEnv = .{};
+    var roc_ops = echo_platform.makeDefaultRocOps(&default_roc_ops_env, @constCast(&hosted_function_ptrs));
 
     var types_list = constructTypesRocList(collected_modules.items, &platform_info, cir_provides_entries.items, &type_table, &entrypoint_type_ids, &provides_type_ids, &roc_ops);
 
