@@ -1626,6 +1626,19 @@ test "cor pipeline - inspect recursive nominal arithmetic expr wasm backend" {
     try testing.expectEqualStrings("Mul(Add(Lit(2), Lit(3)), Neg(Lit(4)))", actual);
 }
 
+test "cor pipeline - inspect recursive nominal dom element with text child" {
+    var compiled = try helpers.compileInspectedProgram(
+        testing.allocator,
+        .module,
+        \\Node := [Text(Str), Element(Str, List(Node))]
+        \\
+        \\main = Node.Element("p", [Node.Text("hello")])
+    ,
+        &.{},
+    );
+    defer compiled.deinit(testing.allocator);
+}
+
 test "cor pipeline - eval direct-only higher-order call annotated callback parameter slot" {
     const case = direct_call_cases[0];
     try expectInspectProgramWithArena(case.source_kind, case.source, case.imports, case.expected);
@@ -2490,6 +2503,13 @@ fn monotypeFnRetListElemPrim(types: *const monotype.Type.Store, fn_ty: monotype.
     };
 }
 
+fn monotypePrim(types: *const monotype.Type.Store, ty: monotype.Type.TypeId) !monotype.Type.Prim {
+    return switch (types.getType(ty)) {
+        .primitive => |prim| prim,
+        else => error.UnexpectedMonotypePrimitiveShape,
+    };
+}
+
 fn liftedSymbolName(lifted: *const monotype_lifted.Lower.Result, symbol: symbol_mod.Symbol) []const u8 {
     return lifted.idents.getText(lifted.symbols.get(symbol).name);
 }
@@ -2651,6 +2671,16 @@ fn solvedFnRetListElemPrim(types: *const lambdasolved.Type.Store, fn_ty: lambdas
     };
 }
 
+fn solvedPrim(types: *const lambdasolved.Type.Store, ty: lambdasolved.Type.TypeVarId) !lambdasolved.Type.Prim {
+    return switch (solvedResolvedNode(types, ty)) {
+        .content => |content| switch (content) {
+            .primitive => |prim| prim,
+            else => error.UnexpectedSolvedPrimitiveShape,
+        },
+        else => error.UnexpectedSolvedPrimitiveNode,
+    };
+}
+
 fn rootSolvedExprId(solved: *const lambdasolved.Lower.Result) lambdasolved.Ast.ExprId {
     const root_def_id = solved.root_defs.items[solved.root_defs.items.len - 1];
     const root_def = solved.store.getDef(root_def_id);
@@ -2758,6 +2788,146 @@ test "cor pipeline - to_utf8 local binding stays list u8 before lambdamono" {
     const solved_x_decl = try solvedBlockDeclByName(&solved, solvedRootValueExprId(&solved), "x");
     try testing.expectEqual(lambdasolved.Type.Prim.u8, try solvedListElemPrim(&solved.types, solved_x_decl.bind.ty));
     try testing.expectEqual(lambdasolved.Type.Prim.u8, try solvedListElemPrim(&solved.types, solved.store.getExpr(solved_x_decl.body).ty));
+}
+
+test "cor pipeline - List.fold builtin sum keeps numeric facts before lambdamono" {
+    var resources = try helpers.parseAndCanonicalizeInspectedExpr(
+        testing.allocator,
+        "List.fold([1, 2, 3], 0, |acc, item| acc + item)",
+    );
+    defer helpers.cleanupParseAndCanonical(testing.allocator, resources);
+
+    const typed = resources.typed_cir_modules.module(0);
+    const typed_root_expr = switch (typed.expr(resources.expr_idx).data) {
+        .e_call => |call| typed.sliceExpr(call.args)[0],
+        else => resources.expr_idx,
+    };
+    const typed_root_call = switch (typed.expr(typed_root_expr).data) {
+        .e_call => |call| call,
+        else => return error.UnexpectedTypedCirCallShape,
+    };
+    const typed_args = typed.sliceExpr(typed_root_call.args);
+    const typed_root_text = try checkedTypeText(testing.allocator, typed, typed.expr(typed_root_expr).ty());
+    defer testing.allocator.free(typed_root_text);
+    const typed_list_text = try checkedTypeText(testing.allocator, typed, typed.expr(typed_args[0]).ty());
+    defer testing.allocator.free(typed_list_text);
+    const typed_seed_text = try checkedTypeText(testing.allocator, typed, typed.expr(typed_args[1]).ty());
+    defer testing.allocator.free(typed_seed_text);
+    const typed_root_resolved = typed.typeStoreConst().resolveVar(typed.expr(typed_root_expr).ty());
+    const typed_seed_resolved = typed.typeStoreConst().resolveVar(typed.expr(typed_args[1]).ty());
+    try testing.expectEqualStrings("Dec", typed_root_text);
+    try testing.expectEqualStrings("List(Dec)", typed_list_text);
+    try testing.expectEqualStrings("Dec", typed_seed_text);
+    try testing.expectEqual(types_mod.Rank.outermost, typed_root_resolved.desc.rank);
+    try testing.expectEqual(types_mod.Rank.outermost, typed_seed_resolved.desc.rank);
+
+    var mono = try compileMonotypeFromParsedResources(testing.allocator, &resources);
+    defer mono.deinit();
+
+    const mono_root = mono.program.store.getExpr(monotypeRootValueExprId(&mono));
+    const mono_call = switch (mono_root.data) {
+        .call => |call| call,
+        else => return error.UnexpectedMonotypeCallShape,
+    };
+    const mono_args = mono.program.store.sliceExprSpan(mono_call.args);
+    try testing.expectEqual(@as(usize, 3), mono_args.len);
+    try testing.expectEqual(monotype.Type.Prim.dec, try monotypeListElemPrim(&mono.types, mono.program.store.getExpr(mono_args[0]).ty));
+    try testing.expectEqual(monotype.Type.Prim.dec, try monotypePrim(&mono.types, mono.program.store.getExpr(mono_args[1]).ty));
+
+    var lifted = try monotype_lifted.Lower.run(testing.allocator, &mono);
+    defer lifted.deinit();
+    var solved = try lambdasolved.Lower.run(testing.allocator, &lifted);
+    defer solved.deinit();
+
+    const solved_root = solved.store.getExpr(solvedRootValueExprId(&solved));
+    const solved_call = switch (solved_root.data) {
+        .call => |call| call,
+        else => return error.UnexpectedSolvedCallShape,
+    };
+    const solved_args = solved.store.sliceExprSpan(solved_call.args);
+    try testing.expectEqual(@as(usize, 3), solved_args.len);
+    try testing.expectEqual(lambdasolved.Type.Prim.dec, try solvedListElemPrim(&solved.types, solved.store.getExpr(solved_args[0]).ty));
+    try testing.expectEqual(lambdasolved.Type.Prim.dec, try solvedPrim(&solved.types, solved.store.getExpr(solved_args[1]).ty));
+}
+
+test "cor pipeline - polymorphic return function call keeps numeric facts before lambdamono" {
+    var resources = try helpers.parseAndCanonicalizeInspectedExpr(
+        testing.allocator,
+        "(|_| (|x| x))(0)(42)",
+    );
+    defer helpers.cleanupParseAndCanonical(testing.allocator, resources);
+
+    const typed = resources.typed_cir_modules.module(0);
+    const typed_root_expr = switch (typed.expr(resources.expr_idx).data) {
+        .e_call => |call| typed.sliceExpr(call.args)[0],
+        else => resources.expr_idx,
+    };
+    const typed_final_call = switch (typed.expr(typed_root_expr).data) {
+        .e_call => |call| call,
+        else => return error.UnexpectedTypedCirCallShape,
+    };
+    const typed_first_call_expr = typed_final_call.func;
+    const typed_first_call = switch (typed.expr(typed_first_call_expr).data) {
+        .e_call => |call| call,
+        else => return error.UnexpectedTypedCirCallShape,
+    };
+    const typed_first_args = typed.sliceExpr(typed_first_call.args);
+    const typed_final_args = typed.sliceExpr(typed_final_call.args);
+
+    const typed_root_text = try checkedTypeText(testing.allocator, typed, typed.expr(typed_root_expr).ty());
+    defer testing.allocator.free(typed_root_text);
+    const typed_first_arg_text = try checkedTypeText(testing.allocator, typed, typed.expr(typed_first_args[0]).ty());
+    defer testing.allocator.free(typed_first_arg_text);
+    const typed_final_arg_text = try checkedTypeText(testing.allocator, typed, typed.expr(typed_final_args[0]).ty());
+    defer testing.allocator.free(typed_final_arg_text);
+    const typed_root_resolved = typed.typeStoreConst().resolveVar(typed.expr(typed_root_expr).ty());
+    const typed_first_arg_resolved = typed.typeStoreConst().resolveVar(typed.expr(typed_first_args[0]).ty());
+    const typed_final_arg_resolved = typed.typeStoreConst().resolveVar(typed.expr(typed_final_args[0]).ty());
+
+    try testing.expectEqualStrings("Dec", typed_root_text);
+    try testing.expectEqualStrings("Dec", typed_first_arg_text);
+    try testing.expectEqualStrings("Dec", typed_final_arg_text);
+    try testing.expectEqual(types_mod.Rank.outermost, typed_root_resolved.desc.rank);
+    try testing.expectEqual(types_mod.Rank.outermost, typed_first_arg_resolved.desc.rank);
+    try testing.expectEqual(types_mod.Rank.outermost, typed_final_arg_resolved.desc.rank);
+}
+
+test "cor pipeline - dbg literal in polymorphic function body keeps numeric facts before lambdamono" {
+    var resources = try helpers.parseAndCanonicalizeProgram(
+        testing.allocator,
+        .module,
+        \\debug = |v| {
+        \\    dbg 42
+        \\    v
+        \\}
+        \\xs = [1, 2, 3]
+        \\main = xs->debug()->List.fold(0, |acc, x| acc + x)
+    ,
+        &.{},
+    );
+    defer helpers.cleanupParseAndCanonical(testing.allocator, resources);
+
+    const typed = resources.typed_cir_modules.module(0);
+    const debug_expr = try typedCirTopLevelDefExprByName(typed, "debug");
+    const debug_body = try typedCirLambdaBodyFromExpr(&resources.typed_cir_modules, typed, debug_expr);
+    const body_expr = debug_body.module.expr(debug_body.body);
+    const block = switch (body_expr.data) {
+        .e_block => |block| block,
+        else => return error.UnexpectedTypedCirBlockShape,
+    };
+    const body_stmts = debug_body.module.sliceStatements(block.stmts);
+    try testing.expect(body_stmts.len >= 1);
+    const dbg_lit_expr = switch (debug_body.module.getStatement(body_stmts[0])) {
+        .s_dbg => |dbg_stmt| dbg_stmt.expr,
+        else => return error.UnexpectedTypedCirStmtShape,
+    };
+
+    const dbg_lit_text = try checkedTypeText(testing.allocator, debug_body.module, debug_body.module.expr(dbg_lit_expr).ty());
+    defer testing.allocator.free(dbg_lit_text);
+    const dbg_lit_resolved = debug_body.module.typeStoreConst().resolveVar(debug_body.module.expr(dbg_lit_expr).ty());
+
+    try testing.expectEqualStrings("Dec", dbg_lit_text);
+    try testing.expectEqual(types_mod.Rank.outermost, dbg_lit_resolved.desc.rank);
 }
 
 test "cor pipeline - entry-specialized to_utf8 local binding stays list u8 before lambdamono" {

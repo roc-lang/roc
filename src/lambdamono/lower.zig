@@ -376,43 +376,56 @@ const Lowerer = struct {
     }
 
     fn sourceTypeIsAbstract(self: *Lowerer, solved_types: *const solved.Type.Store, ty: TypeVarId) bool {
+        var visited = std.AutoHashMap(TypeVarId, void).init(self.allocator);
+        defer visited.deinit();
+        return self.sourceTypeIsAbstractVisited(solved_types, ty, &visited) catch true;
+    }
+
+    fn sourceTypeIsAbstractVisited(
+        self: *Lowerer,
+        solved_types: *const solved.Type.Store,
+        ty: TypeVarId,
+        visited: *std.AutoHashMap(TypeVarId, void),
+    ) std.mem.Allocator.Error!bool {
         const id = solved_types.unlinkPreservingNominalConst(ty);
+        if (visited.contains(id)) return false;
+        try visited.put(id, {});
         return switch (solved_types.getNode(id)) {
             .for_a, .flex_for_a, .unbd => true,
             .link => unreachable,
             .nominal => |nominal| blk: {
                 for (solved_types.sliceTypeVarSpan(nominal.args)) |arg| {
-                    if (self.sourceTypeIsAbstract(solved_types, arg)) break :blk true;
+                    if (try self.sourceTypeIsAbstractVisited(solved_types, arg, visited)) break :blk true;
                 }
-                break :blk self.sourceTypeIsAbstract(solved_types, nominal.backing);
+                break :blk try self.sourceTypeIsAbstractVisited(solved_types, nominal.backing, visited);
             },
             .content => |content| switch (content) {
                 .primitive, .lambda_set => false,
                 .func => |func| blk: {
                     for (solved_types.sliceTypeVarSpan(func.args)) |arg| {
-                        if (self.sourceTypeIsAbstract(solved_types, arg)) break :blk true;
+                        if (try self.sourceTypeIsAbstractVisited(solved_types, arg, visited)) break :blk true;
                     }
-                    if (self.sourceTypeIsAbstract(solved_types, func.ret)) break :blk true;
-                    break :blk self.sourceTypeIsAbstract(solved_types, func.lset);
+                    if (try self.sourceTypeIsAbstractVisited(solved_types, func.ret, visited)) break :blk true;
+                    break :blk try self.sourceTypeIsAbstractVisited(solved_types, func.lset, visited);
                 },
-                .list => |elem| self.sourceTypeIsAbstract(solved_types, elem),
-                .box => |elem| self.sourceTypeIsAbstract(solved_types, elem),
+                .list => |elem| try self.sourceTypeIsAbstractVisited(solved_types, elem, visited),
+                .box => |elem| try self.sourceTypeIsAbstractVisited(solved_types, elem, visited),
                 .tuple => |elems| blk: {
                     for (solved_types.sliceTypeVarSpan(elems)) |elem| {
-                        if (self.sourceTypeIsAbstract(solved_types, elem)) break :blk true;
+                        if (try self.sourceTypeIsAbstractVisited(solved_types, elem, visited)) break :blk true;
                     }
                     break :blk false;
                 },
                 .record => |record| blk: {
                     for (solved_types.sliceFields(record.fields)) |field| {
-                        if (self.sourceTypeIsAbstract(solved_types, field.ty)) break :blk true;
+                        if (try self.sourceTypeIsAbstractVisited(solved_types, field.ty, visited)) break :blk true;
                     }
                     break :blk false;
                 },
                 .tag_union => |tag_union| blk: {
                     for (solved_types.sliceTags(tag_union.tags)) |tag| {
                         for (solved_types.sliceTypeVarSpan(tag.args)) |arg| {
-                            if (self.sourceTypeIsAbstract(solved_types, arg)) break :blk true;
+                            if (try self.sourceTypeIsAbstractVisited(solved_types, arg, visited)) break :blk true;
                         }
                     }
                     break :blk false;
@@ -846,7 +859,6 @@ const Lowerer = struct {
             &.{}
         else
             try self.allocator.alloc(type_mod.TypeId, source_arg_tys.len);
-        errdefer if (derived_args.len != 0) self.allocator.free(derived_args);
 
         for (source_arg_tys, 0..) |arg_ty, i| {
             derived_args[i] = switch (pending.repr_mode) {
@@ -861,10 +873,25 @@ const Lowerer = struct {
         };
 
         if (pending.exec_args_tys) |existing_args| {
+            const merged_args = try self.allocator.alloc(type_mod.TypeId, existing_args.len);
+            errdefer self.allocator.free(merged_args);
+            if (existing_args.len != derived_args.len) {
+                debugPanic("lambdamono.lower.refreshPendingExecutableSignatureFromSummary arg arity mismatch");
+            }
+            for (existing_args, derived_args, 0..) |existing, incoming, i| {
+                merged_args[i] = try self.mergeExecutableSignatureType(existing, incoming);
+            }
             if (existing_args.len != 0) self.allocator.free(existing_args);
+            if (derived_args.len != 0) self.allocator.free(derived_args);
+            pending.exec_args_tys = merged_args;
+        } else {
+            pending.exec_args_tys = derived_args;
         }
-        pending.exec_args_tys = derived_args;
-        pending.exec_ret_ty = derived_ret;
+
+        pending.exec_ret_ty = if (pending.exec_ret_ty) |existing|
+            try self.mergeExecutableSignatureType(existing, derived_ret)
+        else
+            derived_ret;
     }
 
     fn ensureQueuedCallableSpecializedForCall(
@@ -5233,6 +5260,16 @@ const Lowerer = struct {
         value_ty: type_mod.TypeId,
         result_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!Symbol {
+        if (self.types.containsAbstractLeaf(value_ty)) {
+            const value_summary = self.debugExecutableTypeSummary(value_ty);
+            defer value_summary.deinit(self.allocator);
+            const result_summary = self.debugExecutableTypeSummary(result_ty);
+            defer result_summary.deinit(self.allocator);
+            debugPanicFmt(
+                "lambdamono.inspect helper received abstract executable value type value={s} result={s}",
+                .{ value_summary.text, result_summary.text },
+            );
+        }
         const key: InspectKey = .{
             .value_ty = value_ty,
             .result_ty = result_ty,
@@ -7312,20 +7349,36 @@ const Lowerer = struct {
                                 exact_requested_ty,
                             );
                         defer frozen.deinit(self.allocator);
+                        const frozen_shape = frozen.inst.types.fnShape(frozen.fn_ty);
+                        const frozen_arg_tys = frozen.inst.types.sliceTypeVarSpan(frozen_shape.args);
+                        try self.refineCallArgSourceTypesIn(
+                            &frozen.inst,
+                            frozen.env,
+                            arg_expr_ids,
+                            frozen_arg_tys,
+                        );
                         break :blk try self.cloneTypeIntoInstFromStore(
                             inst,
                             frozen.inst.types,
-                            frozen.inst.types.fnShape(frozen.fn_ty).ret,
+                            frozen_shape.ret,
                         );
                     }
                 }
 
                 var frozen = try self.freezeCallWorld(inst.types, venv, func_ty, arg_source_tys, current_source_ty);
                 defer frozen.deinit(self.allocator);
+                const frozen_shape = frozen.inst.types.fnShape(frozen.fn_ty);
+                const frozen_arg_tys = frozen.inst.types.sliceTypeVarSpan(frozen_shape.args);
+                try self.refineCallArgSourceTypesIn(
+                    &frozen.inst,
+                    frozen.env,
+                    arg_expr_ids,
+                    frozen_arg_tys,
+                );
                 break :blk try self.cloneTypeIntoInstFromStore(
                     inst,
                     frozen.inst.types,
-                    frozen.inst.types.fnShape(frozen.fn_ty).ret,
+                    frozen_shape.ret,
                 );
             },
             .low_level => |ll| blk: {
@@ -8196,6 +8249,12 @@ const Lowerer = struct {
             const requested_call_ty = frozen_exact.fn_ty;
             const fn_shape = frozen_exact.inst.types.fnShape(requested_call_ty);
             const fn_arg_tys = frozen_exact.inst.types.sliceTypeVarSpan(fn_shape.args);
+            try self.refineCallArgSourceTypesIn(
+                &frozen_exact.inst,
+                frozen_exact.env,
+                arg_expr_ids,
+                fn_arg_tys,
+            );
             const lowered_args = try self.allocator.alloc(ast.ExprId, arg_expr_ids.len);
             defer self.allocator.free(lowered_args);
             for (arg_expr_ids, 0..) |arg_expr_id, i| {

@@ -147,11 +147,12 @@ current_processing_def: ?CIR.Def.Idx = null,
 cycle_root_def: ?CIR.Def.Idx = null,
 /// True when generalization should be deferred (a dispatch cycle was detected)
 defer_generalize: bool = false,
-/// True when checking a direct call argument expression. Used to suppress
-/// generalization of standalone lambdas that are call arguments, since they
-/// don't need independent generalization (they're consumed immediately).
-/// This prevents rank pollution where inner lambda generalization pulls
-/// outer scope vars to rank 0 via Rank.min in merge.
+/// True when checking an immediately-consumed call operand expression. Used to
+/// suppress generalization of standalone lambdas that appear either as the
+/// direct callee or as a direct call argument, since they don't need
+/// independent generalization.
+/// This prevents rank pollution where inner lambda generalization pulls outer
+/// scope vars to rank 0 via Rank.min in merge.
 checking_call_arg: bool = false,
 /// Deferred def-level unifications (def_var = ptrn_var = expr_var).
 /// These must happen AFTER generalization to avoid lowering expr_var's rank
@@ -1503,6 +1504,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // this should be called after checkPlatformRequirements() so platform types can
     // constrain numeric literals first)
     if (!skip_numeric_defaults) {
+        try self.defaultEscapedGeneralizedNumericsInRetainedValueRoots(&env);
         try self.finalizeNumericDefaultsInternal(&env);
 
         // After finalizing numeric defaults, resolve any remaining deferred
@@ -3620,14 +3622,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
     // Value restriction: only generalize at the inner lambda level, not the
     // outer e_closure wrapper (which delegates to e_lambda's own checkExpr).
-    // Skip generalization for lambdas that are direct call arguments inside
-    // other functions — they're consumed immediately and independent
-    // generalization would pollute the enclosing function's type vars
-    // (via Rank.min in merge pulling outer-rank vars to rank 0).
-    // At the outermost rank, allow generalization so that the enclosing
-    // value's type is properly generalized for instantiation at use sites.
-    const should_generalize = isFunctionDef(&self.cir.store, expr) and expr != .e_closure and
-        (!is_call_arg or env.rank() == .outermost);
+    // Direct call-argument lambdas are consumed immediately, so they must not
+    // generalize independently. Doing so lets their generalized vars escape
+    // into the enclosing value via unification.
+    const should_generalize = isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg;
 
     // Push/pop ranks based on if we should generalize
     if (should_generalize) try env.var_pool.pushRank();
@@ -4593,6 +4591,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 .apply => blk: {
                     // First, check the function being called
                     // It could be effectful, e.g. `(mk_fn!())(arg)`
+                    self.checking_call_arg = true;
                     does_fx = try self.checkExpr(call.func, env, Expected.none()) or does_fx;
                     const func_var = ModuleEnv.varFrom(call.func);
 
@@ -6863,12 +6862,403 @@ fn resolveNumericLiteralsFromContext(self: *Self, env: *Env) std.mem.Allocator.E
 pub fn finalizeNumericDefaults(self: *Self) std.mem.Allocator.Error!void {
     var env = try self.env_pool.acquire();
     defer self.env_pool.release(env);
+    try env.var_pool.pushRank();
+    std.debug.assert(env.rank() == .outermost);
+
+    try self.defaultEscapedGeneralizedNumericsInRetainedValueRoots(&env);
     try self.finalizeNumericDefaultsInternal(&env);
 
     // After finalizing numeric defaults, resolve any remaining deferred
     // static dispatch constraints (e.g., Dec.plus, Dec.to_str).
     if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
         try self.checkStaticDispatchConstraints(&env, true);
+    }
+}
+
+/// Generalized numeric vars that escape into a retained non-function value root
+/// are no longer polymorphic facts; later stages need them concrete.
+/// Walk retained top-level value expressions, stop at function boundaries, and
+/// default any escaped `from_numeral` vars to `Dec` before generic fallback.
+fn defaultEscapedGeneralizedNumericsInRetainedValueRoots(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    if (self.types.from_numeral_flex_count == 0) return;
+
+    var expr_visited = std.AutoHashMap(CIR.Expr.Idx, void).init(self.gpa);
+    defer expr_visited.deinit();
+    var type_visited = std.AutoHashMap(Var, void).init(self.gpa);
+    defer type_visited.deinit();
+    var to_default = std.AutoHashMap(Var, void).init(self.gpa);
+    defer to_default.deinit();
+
+    const defs_slice = self.cir.store.sliceDefs(self.cir.all_defs);
+    for (defs_slice) |def_idx| {
+        try self.collectEscapedGeneralizedNumericsFromRetainedExpr(
+            self.cir.store.getDef(def_idx).expr,
+            &expr_visited,
+            &type_visited,
+            &to_default,
+        );
+    }
+
+    var iter = to_default.keyIterator();
+    while (iter.next()) |var_ptr| {
+        const default_var = var_ptr.*;
+        try self.setVarRank(default_var, env);
+        const dec_var = try self.freshFromContent(try self.mkDecContent(env), env, self.getRegionAt(default_var));
+        _ = try self.unify(default_var, dec_var, env);
+    }
+}
+
+fn collectEscapedGeneralizedNumericsFromRetainedExpr(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    expr_visited: *std.AutoHashMap(CIR.Expr.Idx, void),
+    type_visited: *std.AutoHashMap(Var, void),
+    to_default: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!void {
+    if (expr_visited.contains(expr_idx)) return;
+    try expr_visited.put(expr_idx, {});
+
+    const expr = self.cir.store.getExpr(expr_idx);
+    if (isFunctionDef(&self.cir.store, expr)) {
+        try self.collectEscapedGeneralizedNumericsFromRetainedFunctionExpr(
+            expr_idx,
+            expr,
+            expr_visited,
+            to_default,
+        );
+        return;
+    }
+
+    try self.collectEscapedGeneralizedNumericsFromType(ModuleEnv.varFrom(expr_idx), type_visited, to_default);
+
+    switch (expr) {
+        .e_lambda, .e_closure, .e_hosted_lambda, .e_anno_only => unreachable,
+        .e_block => |block| {
+            for (self.cir.store.sliceStatements(block.stmts)) |stmt_idx| {
+                try self.collectEscapedGeneralizedNumericsFromRetainedStmt(
+                    stmt_idx,
+                    expr_visited,
+                    type_visited,
+                    to_default,
+                );
+            }
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(
+                block.final_expr,
+                expr_visited,
+                type_visited,
+                to_default,
+            );
+        },
+        .e_if => |if_expr| {
+            for (self.cir.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                const branch = self.cir.store.getIfBranch(branch_idx);
+                try self.collectEscapedGeneralizedNumericsFromRetainedExpr(branch.cond, expr_visited, type_visited, to_default);
+                try self.collectEscapedGeneralizedNumericsFromRetainedExpr(branch.body, expr_visited, type_visited, to_default);
+            }
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(if_expr.final_else, expr_visited, type_visited, to_default);
+        },
+        .e_match => |match_expr| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(match_expr.cond, expr_visited, type_visited, to_default);
+            for (self.cir.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                const branch = self.cir.store.getMatchBranch(branch_idx);
+                try self.collectEscapedGeneralizedNumericsFromRetainedExpr(branch.value, expr_visited, type_visited, to_default);
+                if (branch.guard) |guard_expr_idx| {
+                    try self.collectEscapedGeneralizedNumericsFromRetainedExpr(guard_expr_idx, expr_visited, type_visited, to_default);
+                }
+            }
+        },
+        .e_call => |call| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(call.func, expr_visited, type_visited, to_default);
+            for (self.cir.store.sliceExpr(call.args)) |arg_expr_idx| {
+                try self.collectEscapedGeneralizedNumericsFromRetainedExpr(arg_expr_idx, expr_visited, type_visited, to_default);
+            }
+        },
+        .e_binop => |binop| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(binop.lhs, expr_visited, type_visited, to_default);
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(binop.rhs, expr_visited, type_visited, to_default);
+        },
+        .e_unary_minus => |unary| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(unary.expr, expr_visited, type_visited, to_default);
+        },
+        .e_unary_not => |unary| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(unary.expr, expr_visited, type_visited, to_default);
+        },
+        .e_field_access => |field_access| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(field_access.receiver, expr_visited, type_visited, to_default);
+        },
+        .e_method_call => |method_call| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(method_call.receiver, expr_visited, type_visited, to_default);
+            for (self.cir.store.sliceExpr(method_call.args)) |arg_expr_idx| {
+                try self.collectEscapedGeneralizedNumericsFromRetainedExpr(arg_expr_idx, expr_visited, type_visited, to_default);
+            }
+        },
+        .e_dispatch_call => |dispatch_call| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(dispatch_call.receiver, expr_visited, type_visited, to_default);
+            for (self.cir.store.sliceExpr(dispatch_call.args)) |arg_expr_idx| {
+                try self.collectEscapedGeneralizedNumericsFromRetainedExpr(arg_expr_idx, expr_visited, type_visited, to_default);
+            }
+        },
+        .e_structural_eq => |eq| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(eq.lhs, expr_visited, type_visited, to_default);
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(eq.rhs, expr_visited, type_visited, to_default);
+        },
+        .e_method_eq => |eq| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(eq.lhs, expr_visited, type_visited, to_default);
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(eq.rhs, expr_visited, type_visited, to_default);
+        },
+        .e_type_method_call => |method_call| {
+            for (self.cir.store.sliceExpr(method_call.args)) |arg_expr_idx| {
+                try self.collectEscapedGeneralizedNumericsFromRetainedExpr(arg_expr_idx, expr_visited, type_visited, to_default);
+            }
+        },
+        .e_type_dispatch_call => |dispatch_call| {
+            for (self.cir.store.sliceExpr(dispatch_call.args)) |arg_expr_idx| {
+                try self.collectEscapedGeneralizedNumericsFromRetainedExpr(arg_expr_idx, expr_visited, type_visited, to_default);
+            }
+        },
+        .e_tuple_access => |tuple_access| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(tuple_access.tuple, expr_visited, type_visited, to_default);
+        },
+        .e_list => |list| {
+            for (self.cir.store.sliceExpr(list.elems)) |elem_expr_idx| {
+                try self.collectEscapedGeneralizedNumericsFromRetainedExpr(elem_expr_idx, expr_visited, type_visited, to_default);
+            }
+        },
+        .e_tuple => |tuple| {
+            for (self.cir.store.sliceExpr(tuple.elems)) |elem_expr_idx| {
+                try self.collectEscapedGeneralizedNumericsFromRetainedExpr(elem_expr_idx, expr_visited, type_visited, to_default);
+            }
+        },
+        .e_record => |record| {
+            for (self.cir.store.sliceRecordFields(record.fields)) |field_idx| {
+                const field = self.cir.store.getRecordField(field_idx);
+                try self.collectEscapedGeneralizedNumericsFromRetainedExpr(field.value, expr_visited, type_visited, to_default);
+            }
+            if (record.ext) |ext_expr_idx| {
+                try self.collectEscapedGeneralizedNumericsFromRetainedExpr(ext_expr_idx, expr_visited, type_visited, to_default);
+            }
+        },
+        .e_str => |str| {
+            for (self.cir.store.sliceExpr(str.span)) |segment_expr_idx| {
+                try self.collectEscapedGeneralizedNumericsFromRetainedExpr(segment_expr_idx, expr_visited, type_visited, to_default);
+            }
+        },
+        .e_tag => |tag| {
+            for (self.cir.store.sliceExpr(tag.args)) |arg_expr_idx| {
+                try self.collectEscapedGeneralizedNumericsFromRetainedExpr(arg_expr_idx, expr_visited, type_visited, to_default);
+            }
+        },
+        .e_nominal => |nominal| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(nominal.backing_expr, expr_visited, type_visited, to_default);
+        },
+        .e_nominal_external => |nominal| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(nominal.backing_expr, expr_visited, type_visited, to_default);
+        },
+        .e_dbg => |dbg_expr| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(dbg_expr.expr, expr_visited, type_visited, to_default);
+        },
+        .e_expect => |expect_expr| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(expect_expr.body, expr_visited, type_visited, to_default);
+        },
+        .e_return => |return_expr| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(return_expr.expr, expr_visited, type_visited, to_default);
+        },
+        .e_for => |for_expr| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(for_expr.expr, expr_visited, type_visited, to_default);
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(for_expr.body, expr_visited, type_visited, to_default);
+        },
+        .e_run_low_level => |run_ll| {
+            for (self.cir.store.exprSlice(run_ll.args)) |arg_expr_idx| {
+                try self.collectEscapedGeneralizedNumericsFromRetainedExpr(arg_expr_idx, expr_visited, type_visited, to_default);
+            }
+        },
+        .e_num,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_str_segment,
+        .e_empty_list,
+        .e_empty_record,
+        .e_lookup_local,
+        .e_lookup_external,
+        .e_lookup_required,
+        .e_lookup_pending,
+        .e_zero_argument_tag,
+        .e_runtime_error,
+        .e_crash,
+        .e_ellipsis,
+        .e_bytes_literal,
+        => {},
+    }
+}
+
+/// Function bodies are retained executable code too, but their outward type
+/// scheme must stay generalized. Default only generalized numerics that remain
+/// internal to the retained body, not ones reachable from the function type.
+fn collectEscapedGeneralizedNumericsFromRetainedFunctionExpr(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    expr: CIR.Expr,
+    expr_visited: *std.AutoHashMap(CIR.Expr.Idx, void),
+    to_default: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!void {
+    const body_expr_idx = switch (expr) {
+        .e_lambda => |lambda| lambda.body,
+        .e_closure => |closure| blk: {
+            break :blk switch (self.cir.store.getExpr(closure.lambda_idx)) {
+                .e_lambda => |lambda| lambda.body,
+                else => unreachable,
+            };
+        },
+        .e_anno_only, .e_hosted_lambda => return,
+        else => unreachable,
+    };
+
+    var body_type_visited = std.AutoHashMap(Var, void).init(self.gpa);
+    defer body_type_visited.deinit();
+    var body_to_default = std.AutoHashMap(Var, void).init(self.gpa);
+    defer body_to_default.deinit();
+    try self.collectEscapedGeneralizedNumericsFromRetainedExpr(
+        body_expr_idx,
+        expr_visited,
+        &body_type_visited,
+        &body_to_default,
+    );
+
+    var outward_type_visited = std.AutoHashMap(Var, void).init(self.gpa);
+    defer outward_type_visited.deinit();
+    var outward_generalized_numerics = std.AutoHashMap(Var, void).init(self.gpa);
+    defer outward_generalized_numerics.deinit();
+    try self.collectEscapedGeneralizedNumericsFromType(
+        ModuleEnv.varFrom(expr_idx),
+        &outward_type_visited,
+        &outward_generalized_numerics,
+    );
+
+    var iter = body_to_default.keyIterator();
+    while (iter.next()) |var_ptr| {
+        const var_ = var_ptr.*;
+        if (outward_generalized_numerics.contains(var_)) continue;
+        try to_default.put(var_, {});
+    }
+}
+
+fn collectEscapedGeneralizedNumericsFromRetainedStmt(
+    self: *Self,
+    stmt_idx: CIR.Statement.Idx,
+    expr_visited: *std.AutoHashMap(CIR.Expr.Idx, void),
+    type_visited: *std.AutoHashMap(Var, void),
+    to_default: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!void {
+    const stmt = self.cir.store.getStatement(stmt_idx);
+    switch (stmt) {
+        .s_decl => |decl_stmt| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(decl_stmt.expr, expr_visited, type_visited, to_default);
+        },
+        .s_var => |var_stmt| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(var_stmt.expr, expr_visited, type_visited, to_default);
+        },
+        .s_reassign => |reassign| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(reassign.expr, expr_visited, type_visited, to_default);
+        },
+        .s_for => |for_stmt| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(for_stmt.expr, expr_visited, type_visited, to_default);
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(for_stmt.body, expr_visited, type_visited, to_default);
+        },
+        .s_while => |while_stmt| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(while_stmt.cond, expr_visited, type_visited, to_default);
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(while_stmt.body, expr_visited, type_visited, to_default);
+        },
+        .s_expr => |expr_stmt| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(expr_stmt.expr, expr_visited, type_visited, to_default);
+        },
+        .s_expect => |expect_stmt| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(expect_stmt.body, expr_visited, type_visited, to_default);
+        },
+        .s_dbg => |dbg_stmt| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(dbg_stmt.expr, expr_visited, type_visited, to_default);
+        },
+        .s_return => |return_stmt| {
+            try self.collectEscapedGeneralizedNumericsFromRetainedExpr(return_stmt.expr, expr_visited, type_visited, to_default);
+        },
+        .s_crash,
+        .s_break,
+        .s_import,
+        .s_type_var_alias,
+        .s_runtime_error,
+        .s_type_anno,
+        .s_alias_decl,
+        .s_nominal_decl,
+        => {},
+    }
+}
+
+fn collectEscapedGeneralizedNumericsFromType(
+    self: *Self,
+    var_: Var,
+    visited: *std.AutoHashMap(Var, void),
+    to_default: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!void {
+    const resolved = self.types.resolveVar(var_);
+    const root_var = resolved.var_;
+
+    if (visited.contains(root_var)) return;
+    try visited.put(root_var, {});
+
+    if (resolved.desc.rank == .generalized and self.varHasFromNumeralConstraint(root_var)) {
+        try to_default.put(root_var, {});
+        return;
+    }
+
+    switch (resolved.desc.content) {
+        .flex, .rigid, .err => {},
+        .alias => |alias| {
+            try self.collectEscapedGeneralizedNumericsFromType(self.types.getAliasBackingVar(alias), visited, to_default);
+            for (self.types.sliceAliasArgs(alias)) |arg_var| {
+                try self.collectEscapedGeneralizedNumericsFromType(arg_var, visited, to_default);
+            }
+        },
+        .structure => |flat_type| switch (flat_type) {
+            .fn_pure, .fn_effectful, .fn_unbound => {},
+            .tuple => |tuple| {
+                for (self.types.sliceVars(tuple.elems)) |elem_var| {
+                    try self.collectEscapedGeneralizedNumericsFromType(elem_var, visited, to_default);
+                }
+            },
+            .nominal_type => |nominal| {
+                try self.collectEscapedGeneralizedNumericsFromType(self.types.getNominalBackingVar(nominal), visited, to_default);
+                var arg_iter = self.types.iterNominalArgs(nominal);
+                while (arg_iter.next()) |arg_var| {
+                    try self.collectEscapedGeneralizedNumericsFromType(arg_var, visited, to_default);
+                }
+            },
+            .record => |record| {
+                const fields = self.types.getRecordFieldsSlice(record.fields);
+                for (fields.items(.var_)) |field_var| {
+                    try self.collectEscapedGeneralizedNumericsFromType(field_var, visited, to_default);
+                }
+                try self.collectEscapedGeneralizedNumericsFromType(record.ext, visited, to_default);
+            },
+            .record_unbound => |fields_range| {
+                const fields = self.types.getRecordFieldsSlice(fields_range);
+                for (fields.items(.var_)) |field_var| {
+                    try self.collectEscapedGeneralizedNumericsFromType(field_var, visited, to_default);
+                }
+            },
+            .tag_union => |tag_union| {
+                const tags = self.types.getTagsSlice(tag_union.tags);
+                for (tags.items(.args)) |tag_args| {
+                    for (self.types.sliceVars(tag_args)) |arg_var| {
+                        try self.collectEscapedGeneralizedNumericsFromType(arg_var, visited, to_default);
+                    }
+                }
+                try self.collectEscapedGeneralizedNumericsFromType(tag_union.ext, visited, to_default);
+            },
+            .empty_record, .empty_tag_union => {},
+        },
     }
 }
 
