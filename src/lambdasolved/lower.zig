@@ -375,28 +375,8 @@ const Lowerer = struct {
                 }
                 break :blk null;
             },
-            .call => |call| blk: {
-                const args = self.output.sliceExprSpan(call.args);
-                if (args.len != 1) break :blk null;
-                const callee_symbol = self.maybeExactCallableSymbolForExpr(call.func) orelse blk_callee: {
-                    const func_expr = self.output.getExpr(call.func);
-                    if (func_expr.data != .var_) break :blk_callee null;
-                    break :blk_callee func_expr.data.var_;
-                } orelse break :blk null;
-                const op = self.boxBoundaryBuiltinOpForSymbol(callee_symbol) orelse break :blk null;
-                switch (op) {
-                    .box_box, .box_unbox => break :blk self.maybeExactCallableSymbolForExpr(args[0]),
-                    else => break :blk null,
-                }
-            },
-            .low_level => |ll| blk: {
-                const args = self.output.sliceExprSpan(ll.args);
-                if (args.len != 1) break :blk null;
-                switch (ll.op) {
-                    .box_box, .box_unbox => break :blk self.maybeExactCallableSymbolForExpr(args[0]),
-                    else => break :blk null,
-                }
-            },
+            .call => null,
+            .low_level => null,
             else => null,
         };
     }
@@ -2833,14 +2813,15 @@ const Lowerer = struct {
                         const arg_ty = self.output.getExpr(call_args[0]).ty;
                         switch (op) {
                             .box_box => {
+                                const boxed_arg_ty = try self.eraseBoundaryCallableType(arg_ty);
                                 expr.ty = try self.types.freshContent(.{
-                                    .box = arg_ty,
+                                    .box = boxed_arg_ty,
                                 });
                             },
                             .box_unbox => {
                                 const boxed_elem_ty = self.boxedPayloadType(arg_ty) orelse
                                     return debugPanic("lambdasolved.propagateExprErasure box_unbox call expected boxed arg", .{});
-                                expr.ty = boxed_elem_ty;
+                                expr.ty = try self.eraseBoundaryCallableType(boxed_elem_ty);
                             },
                             else => unreachable,
                         }
@@ -2860,8 +2841,9 @@ const Lowerer = struct {
                         }
 
                         const arg_ty = self.output.getExpr(args[0]).ty;
+                        const boxed_arg_ty = try self.eraseBoundaryCallableType(arg_ty);
                         expr.ty = try self.types.freshContent(.{
-                            .box = arg_ty,
+                            .box = boxed_arg_ty,
                         });
                     },
                     .box_unbox => {
@@ -2872,7 +2854,7 @@ const Lowerer = struct {
                         const arg_ty = self.output.getExpr(args[0]).ty;
                         const boxed_elem_ty = self.boxedPayloadType(arg_ty) orelse
                             return debugPanic("lambdasolved.propagateExprErasure box_unbox expected boxed arg", .{});
-                        expr.ty = boxed_elem_ty;
+                        expr.ty = try self.eraseBoundaryCallableType(boxed_elem_ty);
                     },
                     else => {},
                 }
@@ -3114,6 +3096,13 @@ const Lowerer = struct {
                 else => debugPanic("lambdasolved.rewriteFunctionLsetType expected function", .{}),
             },
             else => debugPanic("lambdasolved.rewriteFunctionLsetType expected function", .{}),
+        };
+    }
+
+    fn eraseBoundaryCallableType(self: *Lowerer, ty: TypeVarId) std.mem.Allocator.Error!TypeVarId {
+        return switch (self.types.maybeLambdaRepr(ty) orelse return ty) {
+            .erased => ty,
+            .lset => try self.rewriteFunctionLsetType(ty, try self.freshPrimitiveType(.erased)),
         };
     }
 

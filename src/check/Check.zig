@@ -7222,7 +7222,12 @@ fn collectEscapedGeneralizedNumericsFromType(
             }
         },
         .structure => |flat_type| switch (flat_type) {
-            .fn_pure, .fn_effectful, .fn_unbound => {},
+            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                for (self.types.sliceVars(func.args)) |arg_var| {
+                    try self.collectEscapedGeneralizedNumericsFromType(arg_var, visited, to_default);
+                }
+                try self.collectEscapedGeneralizedNumericsFromType(func.ret, visited, to_default);
+            },
             .tuple => |tuple| {
                 for (self.types.sliceVars(tuple.elems)) |elem_var| {
                     try self.collectEscapedGeneralizedNumericsFromType(elem_var, visited, to_default);

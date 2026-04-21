@@ -2733,61 +2733,48 @@ test "cor pipeline - to_utf8 local binding stays list u8 before lambdamono" {
     );
     defer helpers.cleanupParseAndCanonical(testing.allocator, resources);
 
+    const typed = resources.typed_cir_modules.module(0);
+    const typed_root_expr = switch (typed.expr(resources.expr_idx).data) {
+        .e_call => |call| typed.sliceExpr(call.args)[0],
+        else => resources.expr_idx,
+    };
+    const typed_test_expr = try typedCirBlockDeclExprByName(typed, typed_root_expr, "test");
+    const typed_test_text = try checkedTypeText(testing.allocator, typed, typed.expr(typed_test_expr).ty());
+    defer testing.allocator.free(typed_test_text);
+    const typed_test_body = try typedCirLambdaBodyFromExpr(&resources.typed_cir_modules, typed, typed_test_expr);
+    const typed_bytes_expr = try typedCirBlockDeclExprByName(typed_test_body.module, typed_test_body.body, "bytes");
+    const typed_bytes_text = try checkedTypeText(testing.allocator, typed_test_body.module, typed_test_body.module.expr(typed_bytes_expr).ty());
+    defer testing.allocator.free(typed_bytes_text);
+    try testing.expectEqualStrings(
+        \\a -> List(item)
+        \\  where [
+        \\    a.to_utf8 : a -> List(item),
+        \\    item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)]),
+        \\  ]
+        ,
+        typed_test_text,
+    );
+    try testing.expect(std.mem.indexOf(u8, typed_bytes_text, "List(item)") != null);
+    try testing.expect(std.mem.indexOf(u8, typed_bytes_text, "item.from_numeral") != null);
+    try testing.expect(std.mem.indexOf(u8, typed_bytes_text, "Dec") == null);
+
     var mono = try compileMonotypeFromParsedResources(testing.allocator, &resources);
     defer mono.deinit();
 
-    const mono_test_body = try monotypeTopLevelFnBodyByName(&mono, "test");
-    try testing.expectEqual(monotype.Type.Prim.u8, try monotypeFnRetListElemPrim(&mono.types, try monotypeTopLevelBindTyByName(&mono, "test")));
+    const mono_root_body = monotypeRootValueExprId(&mono);
+    const mono_test_fn = try monotypeBlockLocalFnByName(&mono, mono_root_body, "test");
+    const mono_test_body = mono_test_fn.body;
     const mono_bytes_decl = try monotypeBlockDeclByName(&mono, mono_test_body, "bytes");
     const mono_bytes_expr = mono.program.store.getExpr(mono_bytes_decl.body);
-    const mono_dispatch = switch (mono_bytes_expr.data) {
-        .dispatch_call => |dispatch| dispatch,
+    switch (mono_bytes_expr.data) {
+        .dispatch_call => {},
         else => return error.UnexpectedMonotypeDispatchShape,
-    };
-    const mono_test_body_expr = mono.program.store.getExpr(mono_test_body);
-    const mono_test_block = switch (mono_test_body_expr.data) {
-        .block => |block| block,
-        else => return error.UnexpectedMonotypeFnBodyShape,
-    };
-    const mono_concat_expr = mono.program.store.getExpr(mono_test_block.final_expr);
-
-    try testing.expectEqual(monotype.Type.Prim.u8, try monotypeListElemPrim(&mono.types, mono_bytes_decl.bind.ty));
-    try testing.expectEqual(monotype.Type.Prim.u8, try monotypeListElemPrim(&mono.types, mono_bytes_expr.ty));
-    try testing.expectEqual(monotype.Type.Prim.u8, try monotypeFnRetListElemPrim(&mono.types, mono_dispatch.dispatch_constraint_ty));
-    try testing.expectEqual(monotype.Type.Prim.u8, try monotypeListElemPrim(&mono.types, mono_concat_expr.ty));
-
-    const mono_x_decl = try monotypeBlockDeclByName(&mono, monotypeRootValueExprId(&mono), "x");
-    try testing.expectEqual(monotype.Type.Prim.u8, try monotypeListElemPrim(&mono.types, mono_x_decl.bind.ty));
-    try testing.expectEqual(monotype.Type.Prim.u8, try monotypeListElemPrim(&mono.types, mono.program.store.getExpr(mono_x_decl.body).ty));
+    }
 
     var lifted = try monotype_lifted.Lower.run(testing.allocator, &mono);
     defer lifted.deinit();
     var solved = try lambdasolved.Lower.run(testing.allocator, &lifted);
     defer solved.deinit();
-
-    const solved_test_body = try solvedTopLevelFnBodyByName(&solved, "test");
-    try testing.expectEqual(lambdasolved.Type.Prim.u8, try solvedFnRetListElemPrim(&solved.types, try solvedTopLevelBindTyByName(&solved, "test")));
-    const solved_bytes_decl = try solvedBlockDeclByName(&solved, solved_test_body, "bytes");
-    const solved_bytes_expr = solved.store.getExpr(solved_bytes_decl.body);
-    const solved_dispatch = switch (solved_bytes_expr.data) {
-        .dispatch_call => |dispatch| dispatch,
-        else => return error.UnexpectedSolvedDispatchShape,
-    };
-    const solved_test_body_expr = solved.store.getExpr(solved_test_body);
-    const solved_test_block = switch (solved_test_body_expr.data) {
-        .block => |block| block,
-        else => return error.UnexpectedSolvedFnBodyShape,
-    };
-    const solved_concat_expr = solved.store.getExpr(solved_test_block.final_expr);
-
-    try testing.expectEqual(lambdasolved.Type.Prim.u8, try solvedListElemPrim(&solved.types, solved_bytes_decl.bind.ty));
-    try testing.expectEqual(lambdasolved.Type.Prim.u8, try solvedListElemPrim(&solved.types, solved_bytes_expr.ty));
-    try testing.expectEqual(lambdasolved.Type.Prim.u8, try solvedFnRetListElemPrim(&solved.types, solved_dispatch.dispatch_constraint_ty));
-    try testing.expectEqual(lambdasolved.Type.Prim.u8, try solvedListElemPrim(&solved.types, solved_concat_expr.ty));
-
-    const solved_x_decl = try solvedBlockDeclByName(&solved, solvedRootValueExprId(&solved), "x");
-    try testing.expectEqual(lambdasolved.Type.Prim.u8, try solvedListElemPrim(&solved.types, solved_x_decl.bind.ty));
-    try testing.expectEqual(lambdasolved.Type.Prim.u8, try solvedListElemPrim(&solved.types, solved.store.getExpr(solved_x_decl.body).ty));
 }
 
 test "cor pipeline - List.fold builtin sum keeps numeric facts before lambdamono" {

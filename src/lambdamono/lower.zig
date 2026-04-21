@@ -468,7 +468,11 @@ const Lowerer = struct {
             mono_cache,
             refined_bind_ty,
         );
-        if (self.types.equalIds(self.output.getExpr(body_expr).ty, expected_exec_ty)) {
+        const strengthened_exec_ty = try self.mergeExecutableSignatureType(
+            expected_exec_ty,
+            self.output.getExpr(body_expr).ty,
+        );
+        if (self.types.equalIds(self.output.getExpr(body_expr).ty, strengthened_exec_ty)) {
             return body_expr;
         }
 
@@ -477,7 +481,7 @@ const Lowerer = struct {
             mono_cache,
             refined_bind_ty,
             body_expr,
-            expected_exec_ty,
+            strengthened_exec_ty,
         );
     }
 
@@ -2952,12 +2956,15 @@ const Lowerer = struct {
                         }
                         debugPanic("lambdamono.lower.strengthenRecordExecutableType missing field");
                     };
+                    const actual_field_ty = self.output.getExpr(actual_fields[actual_field].value).ty;
                     merged_fields[i] = .{
                         .name = existing_field.name,
-                        .ty = try self.mergeExecutableSignatureType(
+                        .ty = if (self.types.equalIds(existing_field.ty, actual_field_ty))
+                            existing_field.ty
+                        else if (self.containsErasedFn(existing_field.ty) or self.containsErasedFn(actual_field_ty))
+                            try self.mergeExecutableSignatureType(existing_field.ty, actual_field_ty)
+                        else
                             existing_field.ty,
-                            self.output.getExpr(actual_fields[actual_field].value).ty,
-                        ),
                     };
                 }
                 break :blk try self.internExecutableType(try self.types.internResolved(.{
@@ -4649,13 +4656,13 @@ const Lowerer = struct {
                         .value = value,
                     };
                 }
-                const record_ty = if (self.executableTypeIsAbstract(default_ty)) switch (self.types.getTypePreservingNominal(default_ty)) {
+                const record_ty = switch (self.types.getTypePreservingNominal(default_ty)) {
                     .nominal, .record => try self.strengthenRecordExecutableType(default_ty, lowered),
-                    else => blk2: {
+                    else => if (self.executableTypeIsAbstract(default_ty)) blk2: {
                         const lowered_fields = try self.output.addFieldExprSpan(lowered);
                         break :blk2 try self.recordTypeFromFields(lowered_fields);
-                    },
-                } else default_ty;
+                    } else default_ty,
+                };
                 for (lowered) |*field| {
                     const expected_field = self.recordFieldByName(record_ty, field.name) orelse
                         debugPanic("lambdamono.lower.record missing executable record field");
@@ -7150,21 +7157,8 @@ const Lowerer = struct {
                 null
             else
                 self.exactCallableSymbolForBinding(symbol),
-            .call => |call| blk: {
-                const func_expr = self.input.store.getExpr(call.func);
-                const func_symbol = self.directCallableSymbol(func_expr) orelse break :blk null;
-                const op = self.boxBoundaryBuiltinOp(func_symbol) orelse break :blk null;
-                if (op != .box_box and op != .box_unbox) break :blk null;
-                const args = self.input.store.sliceExprSpan(call.args);
-                if (args.len != 1) break :blk null;
-                break :blk self.directCallableSymbol(self.input.store.getExpr(args[0]));
-            },
-            .low_level => |ll| blk: {
-                if (ll.op != .box_box and ll.op != .box_unbox) break :blk null;
-                const args = self.input.store.sliceExprSpan(ll.args);
-                if (args.len != 1) break :blk null;
-                break :blk self.directCallableSymbol(self.input.store.getExpr(args[0]));
-            },
+            .call => null,
+            .low_level => null,
             else => null,
         };
     }
@@ -8317,15 +8311,19 @@ const Lowerer = struct {
                 &frozen.mono_cache,
                 requested_call_ty,
             );
-            if (!self.types.equalIds(self.output.getExpr(lowered_func).ty, expected_func_exec_ty) and
-                !self.executableTypeIsAbstract(expected_func_exec_ty))
+            const strengthened_func_exec_ty = try self.mergeExecutableSignatureType(
+                expected_func_exec_ty,
+                self.output.getExpr(lowered_func).ty,
+            );
+            if (!self.types.equalIds(self.output.getExpr(lowered_func).ty, strengthened_func_exec_ty) and
+                !self.executableTypeIsAbstract(strengthened_func_exec_ty))
             {
                 lowered_func = try self.bridgeExprAtSolvedTypeToExpectedExecutableType(
                     &frozen.inst,
                     &frozen.mono_cache,
                     requested_call_ty,
                     lowered_func,
-                    expected_func_exec_ty,
+                    strengthened_func_exec_ty,
                 );
             }
             const lowered_func_exec_ty = self.output.getExpr(lowered_func).ty;
@@ -8613,7 +8611,11 @@ const Lowerer = struct {
                         effective_bind_ty,
                     );
                     const actual_exec_ty = self.output.getExpr(body).ty;
-                    if (!self.types.equalIds(actual_exec_ty, expected_exec_ty)) {
+                    const strengthened_exec_ty = try self.mergeExecutableSignatureType(
+                        expected_exec_ty,
+                        actual_exec_ty,
+                    );
+                    if (!self.types.equalIds(actual_exec_ty, strengthened_exec_ty)) {
                         const bind_name = self.input.idents.getText(self.input.symbols.get(decl.bind.symbol).name);
                         const current_fn_name = if (self.current_specializing_symbol) |symbol|
                             self.input.idents.getText(self.input.symbols.get(symbol).name)
@@ -8635,7 +8637,7 @@ const Lowerer = struct {
                         defer pre_summary.deinit(self.allocator);
                         const actual_summary = self.debugExecutableTypeSummary(actual_exec_ty);
                         defer actual_summary.deinit(self.allocator);
-                        const expected_summary = self.debugExecutableTypeSummary(expected_exec_ty);
+                        const expected_summary = self.debugExecutableTypeSummary(strengthened_exec_ty);
                         defer expected_summary.deinit(self.allocator);
                         std.debug.panic(
                             "lambdamono.lower.specializeStmt decl normalization mismatch fn={s} bind={s} source_input_exec={s} preexisting_map_exec={s} pre_exec={s} source={s} actual_exec={s} expected_exec={s}",
@@ -8735,13 +8737,17 @@ const Lowerer = struct {
                         effective_bind_ty,
                     );
                     const actual_exec_ty = self.output.getExpr(body).ty;
-                    if (!self.types.equalIds(actual_exec_ty, expected_exec_ty)) {
+                    const strengthened_exec_ty = try self.mergeExecutableSignatureType(
+                        expected_exec_ty,
+                        actual_exec_ty,
+                    );
+                    if (!self.types.equalIds(actual_exec_ty, strengthened_exec_ty)) {
                         const bind_name = self.input.idents.getText(self.input.symbols.get(decl.bind.symbol).name);
                         const source_key = inst.types.structuralKeyOwned(effective_bind_ty) catch "<oom>";
                         defer if (!std.mem.eql(u8, source_key, "<oom>")) inst.types.allocator.free(source_key);
                         const actual_summary = self.debugExecutableTypeSummary(actual_exec_ty);
                         defer actual_summary.deinit(self.allocator);
-                        const expected_summary = self.debugExecutableTypeSummary(expected_exec_ty);
+                        const expected_summary = self.debugExecutableTypeSummary(strengthened_exec_ty);
                         defer expected_summary.deinit(self.allocator);
                         std.debug.panic(
                             "lambdamono.lower.specializeStmt var_decl normalization mismatch bind={s} source={s} actual_exec={s} expected_exec={s}",
