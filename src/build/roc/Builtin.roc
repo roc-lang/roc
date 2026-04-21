@@ -15,48 +15,48 @@ Builtin :: [].{
 		is_empty = |str| Str.count_utf8_bytes(str) == 0
 		## Concatenates two strings together.
 		## ```roc
-		## expect Str.concat("ab", "cd") == "abcd"
-		## expect Str.concat("hello", "") == "hello"
-		## expect Str.concat("", "") == ""
+		## expect "ab".concat("cd") == "abcd"
+		## expect "hello".concat("") == "hello"
+		## expect "".concat("") == ""
 		## ```
 		concat : Str, Str -> Str
 		## Determines whether or not the first Str contains the second.
 		## ```roc
-		## expect Str.contains("foobarbaz", "bar")
-		## expect !Str.contains("apple", "orange")
-		## expect Str.contains("anything", "")
+		## expect "foobarbaz".contains("bar")
+		## expect !"apple".contains("orange")
+		## expect "anything".contains("")
 		## ```
 		contains : Str, Str -> Bool
 		## Return the [Str] with all whitespace removed from both the beginning
 		## as well as the end.
 		## ```roc
-		## expect Str.trim("   Hello      \n\n") == "Hello"
+		## expect "   Hello      \n\n".trim() == "Hello"
 		## ```
 		trim : Str -> Str
 		## Return the [Str] with all whitespace removed from the beginning.
 		## ```roc
-		## expect Str.trim_start("   Hello      \n\n") == "Hello      \n\n"
+		## expect "   Hello      \n\n".trim_start() == "Hello      \n\n"
 		## ```
 		trim_start : Str -> Str
 		## Return the [Str] with all whitespace removed from the end.
 		## ```roc
-		## expect Str.trim_end("   Hello      \n\n") == "   Hello"
+		## expect "   Hello      \n\n".trim_end() == "   Hello"
 		## ```
 		trim_end : Str -> Str
-		## Returns `True` if all the [ASCII characters](https://en.wikipedia.org/wiki/ASCII) in the string are the same
-		## when ignoring differences in capitalization.
+		## Returns `True` if all the [ASCII characters](https://en.wikipedia.org/wiki/ASCII) in both strings are the same,
+		## ignoring differences in capitalization.
 		## Non-ASCII characters must all be exactly the same,
 		## including capitalization. For example:
 		##
 		## ```roc
-		##  expect Str.caseless_ascii_equals("café", "CAFé")
+		##  expect "café".caseless_ascii_equals("CAFé")
 		##
-		##  expect !Str.caseless_ascii_equals("café", "CAFÉ")
+		##  expect !"café".caseless_ascii_equals("CAFÉ")
 		## ```
 		##
 		## The first call returns `True` because all the ASCII characters are the same
 		## when ignoring differences in capitalization, and the only non-ASCII character
-		## (`é`) is the same in both strings. The second call returns `False`because
+		## (`é`) is the same in both strings. The second call returns `False` because
 		## `é` and `É` are not ASCII characters, and they are different.
 		##
 		## This function is useful for things like [command-line flags](https://en.wikipedia.org/wiki/Command-line_interface#Command-line_option)
@@ -79,7 +79,7 @@ Builtin :: [].{
 		## Non-ASCII characters are left unmodified. For example:
 		##
 		## ```roc
-		## expect Str.with_ascii_lowercased("CALFÉ") == "calfÉ"
+		## expect "CALFÉ".with_ascii_lowercased() == "calfÉ"
 		## ```
 		##
 		## This function is useful for things like [command-line flags](https://en.wikipedia.org/wiki/Command-line_interface#Command-line_option)
@@ -102,14 +102,14 @@ Builtin :: [].{
 		## Non-ASCII characters are left unmodified. For example:
 		##
 		## ```roc
-		##  expect Str.with_ascii_uppercased("café") == "CAFé"
+		##  expect "café".with_ascii_uppercased() == "CAFé"
 		## ```
 		##
 		## This function is useful for things like
 		## [command-line flags](https://en.wikipedia.org/wiki/Command-line_interface#Command-line_option)
 		## and [environment variable names](https://en.wikipedia.org/wiki/Environment_variable)
 		## where you know in advance that you're dealing with a string containing only ASCII characters.
-		## It has better performance than lowercasing operations which take Unicode into account.
+		## It has better performance than uppercasing operations which take Unicode into account.
 		##
 		## That said, strings received from user input can always contain
 		## non-ASCII Unicode characters, and uppercasing [Unicode](https://unicode.org)
@@ -125,30 +125,30 @@ Builtin :: [].{
 		with_ascii_uppercased : Str -> Str
 		## Check if the given [Str] starts with a value.
 		## ```roc
-		## expect Str.starts_with("ABC", "A") == Bool.true
-		## expect Str.starts_with("ABC", "X") == Bool.false
+		## expect "ABC".starts_with("A") == Bool.True
+		## expect "ABC".starts_with("X") == Bool.False
 		## ```
 		starts_with : Str, Str -> Bool
 		## Check if the given [Str] ends with a value.
 		## ```roc
-		## expect Str.ends_with("ABC", "C") == Bool.true
-		## expect Str.ends_with("ABC", "X") == Bool.false
+		## expect "ABC".ends_with("C") == Bool.True
+		## expect "ABC".ends_with("X") == Bool.False
 		## ```
 		ends_with : Str, Str -> Bool
 		## Repeats a string the given number of times.
 		## ```roc
-		## expect Str.repeat("z", 3) == "zzz"
-		## expect Str.repeat("na", 8) == "nananananananana"
+		## expect "z".repeat(3) == "zzz"
+		## expect "na".repeat(8) == "nananananananana"
 		## ```
 		## Returns `""` when given `""` for the string or `0` for the count.
 		## ```roc
-		## expect Str.repeat("", 10) == ""
-		## expect Str.repeat("anything", 0) == ""
+		## expect "".repeat(10) == ""
+		## expect "anything".repeat(0) == ""
 		## ```
 		repeat : Str, U64 -> Str
 		## Adds a prefix to the given [Str].
 		## ```roc
-		## expect Str.with_prefix("Awesome", "Roc") == "RocAwesome"
+		## expect "Awesome".with_prefix("Roc") == "RocAwesome"
 		## ```
 		with_prefix : Str, Str -> Str
 		with_prefix = |string, prefix| Str.concat(prefix, string)
@@ -156,26 +156,26 @@ Builtin :: [].{
 		## If the prefix is not found, returns the original string.
 		##
 		## ```roc
-		## expect Str.drop_prefix("bar", "foo") == "bar"
-		## expect Str.drop_prefix("foobar", "foo") == "bar"
+		## expect "bar".drop_prefix("foo") == "bar"
+		## expect "foobar".drop_prefix("foo") == "bar"
 		## ```
 		drop_prefix : Str, Str -> Str
 		## Drops the given suffix [Str] from the end of a [Str]
 		## If the suffix is not found, returns the original string.
 		##
 		## ```roc
-		## expect Str.drop_suffix("bar", "foo") == "bar"
-		## expect Str.drop_suffix("barfoo", "foo") == "bar"
+		## expect "bar".drop_suffix("foo") == "bar"
+		## expect "barfoo".drop_suffix("foo") == "bar"
 		## ```
 		drop_suffix : Str, Str -> Str
 		## Gives the number of bytes in a [Str] value.
 		## ```roc
-		## expect Str.count_utf8_bytes("Hello World") == 11
+		## expect "Hello World".count_utf8_bytes() == 11
 		## ```
 		count_utf8_bytes : Str -> U64
 		## Returns a string of the specified capacity without any content.
 		##
-		## This is a performance optimization tool that's like calling [Str.reserve] on an empty string.
+		## This is a performance optimization that's like calling [Str.reserve] on an empty string.
 		## It's useful when you plan to build up a string incrementally, for example by calling [Str.concat] on it:
 		##
 		## ```roc
@@ -185,10 +185,10 @@ Builtin :: [].{
 		## # Evaluates to "Hello and welcome to Roc, Awesome Programmer!"
 		## hello_world =
 		##     Str.with_capacity(45)
-		##     |> Str.concat(greeting)
-		##     |> Str.concat(", ")
-		##     |> Str.concat(subject)
-		##     |> Str.concat("!")
+		##         .concat(greeting)
+		##         .concat(", ")
+		##         .concat(subject)
+		##         .concat("!")
 		## ```
 		##
 		## In general, if you plan to use [Str.concat] on an empty string, it will be faster to start with
@@ -211,16 +211,16 @@ Builtin :: [].{
 		## # Evaluates to "Hello and welcome to Roc, Awesome Programmer!"
 		## hello_world =
 		##     greeting
-		##     |> Str.concat(", ")
-		##     |> Str.concat(subject)
-		##     |> Str.concat("!")
+		##         .concat(", ")
+		##         .concat(subject)
+		##         .concat("!")
 		## ```
 		##
 		## In this example:
 		## 1. We start with `greeting`, which has both a length and capacity of 24 (bytes).
-		## 2. `|> Str.concat ", "` will see that there isn't enough capacity to add 2 more bytes for the `", "`, so it will create a new heap allocation with enough bytes to hold both. (This probably will be more than 7 bytes, because when [Str] functions reallocate, they apply a multiplier to the exact capacity required. This makes it less likely that future realloctions will be needed. The multiplier amount is not specified, because it may change in future releases of Roc, but it will likely be around 1.5 to 2 times the exact capacity required.) Then it will copy the current bytes (`"Hello"`) into the new allocation, and finally concatenate the `", "` into the new allocation. The old allocation will then be deallocated because it's no longer referenced anywhere in the program.
-		## 3. `|> Str.concat subject` will again check if there is enough capacity in the string. If it doesn't find enough capacity once again, it will make a third allocation, copy the existing bytes (`"Hello, "`) into that third allocation, and then deallocate the second allocation because it's already no longer being referenced anywhere else in the program. (It may find enough capacity in this particular case, because the previous [Str.concat] allocated something like 1.5 to 2 times the necessary capacity in order to anticipate future concatenations like this...but if something longer than `"World"` were being concatenated here, it might still require further reallocation and copying.)
-		## 4. `|> Str.concat "!\n"` will repeat this process once more.
+		## 2. `.concat(", ")` will see that there isn't enough capacity to add 2 more bytes for the `", "`, so it will create a new heap allocation with enough bytes to hold both. (This probably will be more than 7 bytes, because when [Str] functions reallocate, they apply a multiplier to the exact capacity required. This makes it less likely that future realloctions will be needed. The multiplier amount is not specified, because it may change in future releases of Roc, but it will likely be around 1.5 to 2 times the exact capacity required.) Then it will copy the current bytes (`"Hello"`) into the new allocation, and finally concatenate the `", "` into the new allocation. The old allocation will then be deallocated because it's no longer referenced anywhere in the program.
+		## 3. `.concat(subject)` will again check if there is enough capacity in the string. If it doesn't find enough capacity once again, it will make a third allocation, copy the existing bytes (`"Hello, "`) into that third allocation, and then deallocate the second allocation because it's already no longer being referenced anywhere else in the program. (It may find enough capacity in this particular case, because the previous [Str.concat] allocated something like 1.5 to 2 times the necessary capacity in order to anticipate future concatenations like this...but if something longer than `"World"` were being concatenated here, it might still require further reallocation and copying.)
+		## 4. `.concat("!\n")` will repeat this process once more.
 		##
 		## This process can have significant performance costs due to multiple reallocation of new strings, copying between old strings and new strings, and deallocation of immediately obsolete strings.
 		##
@@ -229,18 +229,18 @@ Builtin :: [].{
 		## ```roc
 		## hello_world =
 		##     greeting
-		##     |> Str.reserve(21)
-		##     |> Str.concat(", ")
-		##     |> Str.concat(subject)
-		##     |> Str.concat("!")
+		##         .reserve(21)
+		##         .concat(", ")
+		##         .concat(subject)
+		##         .concat("!")
 		## ```
 		##
 		## In this example:
 		## 1. We again start with `greeting`, which has both a length and capacity of 24 bytes.
-		## 2. `|> Str.reserve(21)` will ensure that there is enough capacity in the string for an additional 21 bytes (to make room for `", "`, `"Awesome Programmer"`, and `"!"`). Since the current capacity is only 24, it will create a new 45-byte (24 + 21) heap allocation and copy the contents of the existing allocation (`greeting`) into it.
-		## 3. `|> Str.concat(", ")` will concatenate `, ` to the string. No reallocation, copying, or deallocation will be necessary, because the string already has a capacity of 45 btytes, and `greeting` will only use 24 of them.
-		## 4. `|> Str.concat(subject)` will concatenate `subject` (`"Awesome Programmer"`) to the string. Again, no reallocation, copying, or deallocation will be necessary.
-		## 5. `|> Str.concat "!\n"` will concatenate `"!\n"` to the string, still without any reallocation, copying, or deallocation.
+		## 2. `.reserve(21)` will ensure that there is enough capacity in the string for an additional 21 bytes (to make room for `", "`, `"Awesome Programmer"`, and `"!"`). Since the current capacity is only 24, it will create a new 45-byte (24 + 21) heap allocation and copy the contents of the existing allocation (`greeting`) into it.
+		## 3. `.concat(", ")` will concatenate `, ` to the string. No reallocation, copying, or deallocation will be necessary, because the string already has a capacity of 45 btytes, and `greeting` will only use 24 of them.
+		## 4. `.concat(subject)` will concatenate `subject` (`"Awesome Programmer"`) to the string. Again, no reallocation, copying, or deallocation will be necessary.
+		## 5. `.concat("!\n")` will concatenate `"!\n"` to the string, still without any reallocation, copying, or deallocation.
 		##
 		## Here, [Str.reserve] prevented multiple reallocations, copies, and deallocations during the
 		## [Str.concat] calls. Notice that it did perform a heap allocation before any [Str.concat] calls
@@ -262,10 +262,10 @@ Builtin :: [].{
 		## (To split the string into a [List] of smaller [Str] values instead of [U8] values,
 		## see [Str.split_on].)
 		## ```roc
-		## expect Str.to_utf8("Roc") == [82, 111, 99]
-		## expect Str.to_utf8("鹏") == [233, 185, 143]
-		## expect Str.to_utf8("சி") == [224, 174, 154, 224, 174, 191]
-		## expect Str.to_utf8("🐦") == [240, 159, 144, 166]
+		## expect "Roc".to_utf8() == [82, 111, 99]
+		## expect "鹏".to_utf8() == [233, 185, 143]
+		## expect "சி".to_utf8() == [224, 174, 154, 224, 174, 191]
+		## expect "🐦".to_utf8() == [240, 159, 144, 166]
 		## ```
 		to_utf8 : Str -> List(U8)
 		## Converts a [List] of [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit) to a string.
@@ -280,21 +280,21 @@ Builtin :: [].{
 		## - any valid codepoint encoded as an incorrect sequence, for instance a codepoint that should be a 2-byte sequence encoded as a 3- or 4-byte sequence
 		##
 		## ```roc
-		## expect (Str.from_utf8_lossy [82, 111, 99, 240, 159, 144, 166]) == "Roc🐦"
-		## expect (Str.from_utf8_lossy [82, 255, 99]) == "R�c"
-		## expect (Str.from_utf8_lossy [82, 0xED, 0xA0, 0xBD, 99]) == "R�c"
+		## expect Str.from_utf8_lossy([82, 111, 99, 240, 159, 144, 166]) == "Roc🐦"
+		## expect Str.from_utf8_lossy([82, 255, 99]) == "R�c"
+		## expect Str.from_utf8_lossy([82, 0xED, 0xA0, 0xBD, 99]) == "R�c"
 		## ```
 		from_utf8_lossy : List(U8) -> Str
 		## Converts a [List] of [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit) to a string.
 		##
-		## Returns `Err` if the given bytes are invalid UTF-8, and returns `Ok ""` when given `[]`.
+		## Returns `Err` if the given bytes are invalid UTF-8, and returns `Ok("")` when given `[]`.
 		## ```roc
 		## expect Str.from_utf8([82, 111, 99]) == Ok("Roc")
 		## expect Str.from_utf8([233, 185, 143]) == Ok("鹏")
 		## expect Str.from_utf8([224, 174, 154, 224, 174, 191]) == Ok("சி")
 		## expect Str.from_utf8([240, 159, 144, 166]) == Ok("🐦")
 		## expect Str.from_utf8([]) == Ok("")
-		## expect Str.from_utf8([255]) |> Result.is_err
+		## expect Str.from_utf8([255]).is_err()
 		## ```
 		from_utf8 : List(U8) -> Try(Str, [BadUtf8({ problem : Str.Utf8Problem, index : U64 }), ..])
 		## Split a string around a separator.
@@ -302,8 +302,8 @@ Builtin :: [].{
 		## Passing `""` for the separator is not useful;
 		## it returns the original string wrapped in a [List].
 		## ```roc
-		## expect Str.split_on("1,2,3", ",") == ["1","2","3"]
-		## expect Str.split_on("1,2,3", "") == ["1,2,3"]
+		## expect "1,2,3".split_on(",") == ["1","2","3"]
+		## expect "1,2,3".split_on("") == ["1,2,3"]
 		## ```
 		split_on : Str, Str -> List(Str)
 		## Combines a [List] of strings into a single string, with a separator
@@ -314,17 +314,20 @@ Builtin :: [].{
 		## ```
 		join_with : List(Str), Str -> Str
 
+		## Returns `True` if the two strings are exactly the same.
 		is_eq : Str, Str -> Bool
 
+		## Returns a human-readable representation of a value, useful for debugging.
 		inspect : _val -> Str
 
-		# Encode a string using a format that provides encode_str
+		## Encode a string using a format that provides encode_str
 		encode : Str, fmt -> Try(encoded, err)
 			where [fmt.encode_str : fmt, Str -> Try(encoded, err)]
 		encode = |self, format| {
 			format.encode_str(self)
 		}
 
+		## Decode a string using a format that provides decode_str
 		decode : src, fmt -> (Try(Str, err), src)
 			where [fmt.decode_str : fmt, src -> (Try(Str, err), src)]
 		decode = |source, format| {
@@ -334,32 +337,39 @@ Builtin :: [].{
 	}
 
 	List(_item) :: [ProvidedByCompiler].{
-		## Returns the length of the list - the number of elements it contains.
+		## Returns the length of the list, which is equal to the number of elements it contains.
 		##
-		## One [List] can store up to `Num.max_i64` elements on 64-bit targets and `Num.max_i32` on 32-bit targets like wasm.
+		## One [List] can store up to `Num.max_i64` (TODO update for current max function) elements on 64-bit targets and `Num.max_i32` (TODO update for current max function) on 32-bit targets like wasm.
 		## This means the #U64 this function returns can always be safely converted to #I64 or #I32, depending on the target.
 		len : List(_item) -> U64
 		##  Check if the list is empty.
 		## ```roc
-		## List.is_empty([1, 2, 3])
+		## [1, 2, 3].is_empty()
 		##
-		## List.is_empty([])
+		## [].is_empty()
 		## ```
 		is_empty : List(_item) -> Bool
 		is_empty = |list| List.len(list) == 0
 		## Put two lists together.
 		## ```roc
-		## List.concat([1, 2, 3], [4, 5])
+		## [1, 2, 3].concat([4, 5])
 		##
-		## [0, 1, 2]
-		##     |> List.concat([3, 4])
+		## [0, 1, 2].concat([3, 4])
 		## ```
 		concat : List(item), List(item) -> List(item)
 		## Create a list with space for at least capacity elements
 		with_capacity : U64 -> List(item)
-		## Sort with a custom comparison function
+		## Sort a list using a custom comparison function. The comparator receives two
+		## elements and returns `LT`, `EQ`, or `GT` to indicate their relative order.
+		## ```roc
+		## expect [3, 1, 2].sort_with(|a, b| if a < b LT else if a > b GT else EQ) == [1, 2, 3]
+		##
+		## # Sort in descending order by swapping the LT and GT
+		## expect [3, 1, 2].sort_with(|a, b| if a > b LT else if a < b GT else EQ) == [3, 2, 1]
+		## ```
 		sort_with : List(item), (item, item -> [LT, EQ, GT]) -> List(item)
 
+		## Returns `True` if the two lists have the same length and their elements are pairwise equal.
 		is_eq : List(item), List(item) -> Bool
 			where [item.is_eq : item, item -> Bool]
 		is_eq = |self, other| {
@@ -382,18 +392,17 @@ Builtin :: [].{
 
 		## Add a single element to the end of a list.
 		## ```roc
-		## List.append([1, 2, 3], 4)
+		## [1, 2, 3].append(4)
 		##
-		## [0, 1, 2]
-		##     |> List.append(3)
+		## [0, 1, 2].append(3)
 		## ```
 		append : List(a), a -> List(a)
 		append = |list, item| list_append_unsafe(list, item)
 
 		## Returns the first element in the list, or `ListWasEmpty` if it was empty.
 		## ```roc
-		## expect List.first([1, 2, 3]) == Ok(1)
-		## expect List.first([]) == Err(ListWasEmpty)
+		## expect [1, 2, 3].first() == Ok(1)
+		## expect [].first() == Err(ListWasEmpty)
 		## ```
 		first : List(item) -> Try(item, [ListWasEmpty, ..])
 		first = |list| if List.is_empty(list) {
@@ -406,8 +415,8 @@ Builtin :: [].{
 		##
 		## Returns `Err OutOfBounds` if the given index exceeds the List's length
 		## ```roc
-		## expect List.get([100, 200, 300], 1) == Ok(200)
-		## expect List.get([100, 200, 300], 5) == Err(OutOfBounds)
+		## expect [100, 200, 300].get(1) == Ok(200)
+		## expect [100, 200, 300].get(5) == Err(OutOfBounds)
 		## ```
 		get : List(item), U64 -> Try(item, [OutOfBounds, ..])
 		get = |list, index| if index < List.len(list) {
@@ -418,8 +427,8 @@ Builtin :: [].{
 
 		## Returns the reversed list.
 		## ```roc
-		## expect List.rev([1, 2, 3]) == [3, 2, 1]
-		## expect List.rev([]) == []
+		## expect [1, 2, 3].rev() == [3, 2, 1]
+		## expect [].rev() == []
 		## ```
 		rev : List(item) -> List(item)
 		rev = |list| {
@@ -429,16 +438,16 @@ Builtin :: [].{
 		}
 
 		for_each! : List(item), (item => {}) => {}
-		for_each! = |items, cb!| for item in items {
-			cb!(item)
+		for_each! = |items, fun!| for item in items {
+			fun!(item)
 		}
 
 		## Convert each element in the list to something new, by calling a conversion
 		## function on each of them. Then return a new list of the converted values.
 		## ```roc
-		## expect List.map([1, 2, 3], (|num| num + 1)) == [2, 3, 4]
+		## expect [1, 2, 3].map(|num| num + 1) == [2, 3, 4]
 		##
-		## expect List.map(["", "a", "bc"], Str.is_empty) == [Bool.true, Bool.false, Bool.false]
+		## expect ["", "a", "bc"].map(Str.is_empty) == [Bool.True, Bool.False, Bool.False]
 		## ```
 		map : List(a), (a -> b) -> List(b)
 		map = |list, transform| {
@@ -451,9 +460,9 @@ Builtin :: [].{
 		}
 
 		## Run the given function on each element of a list, and return all the
-		## elements for which the function returned `Bool.true`.
+		## elements for which the function returned `Bool.True`.
 		## ```roc
-		## List.keep_if([1, 2, 3, 4], (|num| num > 2))
+		## [1, 2, 3, 4].keep_if(|num| num > 2)
 		## ```
 		## ## Performance Details
 		##
@@ -463,7 +472,7 @@ Builtin :: [].{
 		## length that's too low, it would have to re-allocate.
 		##
 		## (If you want to do an operation like this which reduces the memory footprint
-		## of the resulting list, you can do two passes over the list with [List.walk] - one
+		## of the resulting list, you can do two passes over the list with [List.fold] - one
 		## to calculate the precise new size, and another to populate the new list.)
 		##
 		## If given a unique list, [List.keep_if] will mutate it in place to assemble the appropriate list.
@@ -485,9 +494,9 @@ Builtin :: [].{
 			)
 
 		## Run the given function on each element of a list, and return all the
-		## elements for which the function returned `Bool.false`.
+		## elements for which the function returned `Bool.False`.
 		## ```roc
-		## List.drop_if([1, 2, 3, 4], (|num| num > 2))
+		## [1, 2, 3, 4].drop_if(|num| num > 2)
 		## ```
 		## ## Performance Details
 		##
@@ -507,10 +516,10 @@ Builtin :: [].{
 			)
 
 		## Run the given function on each element of a list, and return the
-		## number of elements for which the function returned `Bool.true`.
+		## number of elements for which the function returned `Bool.True`.
 		## ```roc
-		## expect List.count_if([1, -2, -3], Num.is_negative) == 2
-		## expect List.count_if([1, 2, 3], (|num| num > 1)) == 2
+		## expect [1, -2, -3].count_if(I64.is_negative) == 2
+		## expect [1, 2, 3].count_if(|num| num > 1) == 2
 		## ```
 		count_if : List(a), (a -> Bool) -> U64
 		count_if = |list, predicate|
@@ -527,23 +536,20 @@ Builtin :: [].{
 
 		## Build a value using each element in the list.
 		##
-		## Starting with a given `state` value, this walks through each element in the
+		## Starting with a given `state` value, this folds through each element in the
 		## list from first to last, running a given `step` function on that element
 		## which updates the `state`. It returns the final `state` at the end.
-		##
-		## You can use it in a pipeline:
 		## ```roc
-		## [2, 4, 8]
-		##     |> List.walk(0, Num.add)
+		## [2, 4, 8].fold(0, U64.plus)
 		## ```
 		## This returns 14 because:
 		## * `state` starts at 0
-		## * Each `step` runs `Num.add(state, elem)`, and the return value becomes the new `state`.
+		## * Each `step` runs `state.plus(elem)`, and the return value becomes the new `state`.
 		##
-		## Here is a table of how `state` changes as [List.walk] walks over the elements
-		## `[2, 4, 8]` using [Num.add] as its `step` function to determine the next `state`.
+		## Here is a table of how `state` changes as [List.fold] folds over the elements
+		## `[2, 4, 8]` using [U64.plus] as its `step` function to determine the next `state`.
 		##
-		## state | elem  | Num.add state elem
+		## state | elem  | U64.plus(state, elem)
 		## :---: | :---: | :----------------:
 		## 0     |       |
 		## 0     | 2     | 2
@@ -552,11 +558,10 @@ Builtin :: [].{
 		##
 		## The following returns -6:
 		## ```roc
-		## [1, 2, 3]
-		##     |> List.walk(0, Num.sub)
+		## [1, 2, 3].fold(0, I64.minus)
 		## ```
-		## Note that in other languages, `walk` is sometimes called `reduce`,
-		## `fold`, `fold_left`, or `foldl`.
+		## Note that in other languages, `fold` is sometimes called `reduce`,
+		## `fold_left`, or `foldl`.
 		fold : List(item), state, (state, item -> state) -> state
 		fold = |list, init, step| {
 			var $state = init
@@ -568,8 +573,25 @@ Builtin :: [].{
 			$state
 		}
 
-		## Note that in other languages, `walk_backwards` is sometimes called `reduce_right`,
-		## `fold`, `fold_right`, or `foldr`.
+		## Like [List.fold], but walks the list from last to first. The `step` function
+		## receives the element first and the current `state` second.
+		##
+		## ```roc
+		## expect [1, 2, 3].fold_rev(0, I64.minus) == 2
+		## ```
+		##
+		## Here is a table of how `state` changes as [List.fold_rev] folds over the
+		## elements `[1, 2, 3]` using [I64.minus] as its `step` function.
+		##
+		## state | elem  | I64.minus(elem, state)
+		## :---: | :---: | :-------------------:
+		## 0     |       |
+		## 0     | 3     | 3
+		## 3     | 2     | -1
+		## -1    | 1     | 2
+		##
+		## Note that in other languages, `fold_rev` is sometimes called `reduce_right`,
+		## `fold_right`, or `foldr`.
 		fold_rev : List(item), state, (item, state -> state) -> state
 		fold_rev = |list, init, step| {
 			var $state = init
@@ -584,8 +606,13 @@ Builtin :: [].{
 			$state
 		}
 
-		## Run the given predicate on each element of the list, returning `Bool.true` if
+		## Run the given predicate on each element of the list, returning `Bool.True` if
 		## any of the elements satisfy it.
+		## ```roc
+		## expect [1, 2, 3].any(|n| n % 2 == 0)
+		##
+		## expect ![1, 2, 3].any(|n| n < 0)
+		## ```
 		any : List(a), (a -> Bool) -> Bool
 		any = |list, predicate| {
 			for item in list {
@@ -596,13 +623,24 @@ Builtin :: [].{
 			False
 		}
 
+		## Returns `Bool.True` if the list contains an element equal to the given value.
+		## ```roc
+		## expect [1, 2, 3].contains(2)
+		##
+		## expect ![1, 2, 3].contains(4)
+		## ```
 		contains : List(a), a -> Bool where [a.is_eq : a, a -> Bool]
 		contains = |list, elt| {
 			List.any(list, |x| x == elt)
 		}
 
-		## Run the given predicate on each element of the list, returning `Bool.true` if
+		## Run the given predicate on each element of the list, returning `Bool.True` if
 		## all of the elements satisfy it.
+		## ```roc
+		## expect [2, 4, 6].all(|n| n % 2 == 0)
+		##
+		## expect ![1, 2, 3].all(|n| n % 2 == 0)
+		## ```
 		all : List(a), (a -> Bool) -> Bool
 		all = |list, predicate| {
 			for item in list {
@@ -615,8 +653,8 @@ Builtin :: [].{
 
 		## Returns the last element in the list, or `ListWasEmpty` if it was empty.
 		## ```roc
-		## expect List.last([1, 2, 3]) == Ok(3)
-		## expect List.last([]) == Err(ListWasEmpty)
+		## expect [1, 2, 3].last() == Ok(3.0)
+		## expect [].last() == Err(ListWasEmpty)
 		## ```
 		last : List(item) -> Try(item, [ListWasEmpty, ..])
 		last = |list| if List.is_empty(list) {
@@ -625,21 +663,41 @@ Builtin :: [].{
 			Try.Ok(list_get_unsafe(list, List.len(list) - 1))
 		}
 
-		## A list with a single element in it.
+		## Create a list with a single element in it.
 		##
-		## This is useful in pipelines, like so:
 		## ```roc
-		## websites =
-		##     Str.concat(domain, ".com")
-		##         |> List.single
+		## expect List.single(42) == [42.0]
 		## ```
 		single : item -> List(item)
 		single = |x| [x]
 
+		## Remove the element at the given index. If the index is out of bounds, the
+		## list is returned unchanged.
+		## ```roc
+		## expect [10, 20, 30, 40].drop_at(1) == [10, 30, 40]
+		##
+		## expect [10, 20, 30].drop_at(5) == [10, 20, 30]
+		## ```
 		drop_at : List(a), U64 -> List(a)
 
+		## Return a sublist of the list starting at `start` and containing up to `len`
+		## elements. Out-of-bounds ranges are clamped, producing a shorter or empty list.
+		## ```roc
+		## expect [1, 2, 3, 4, 5].sublist({ start: 1, len: 3 }) == [2, 3, 4]
+		##
+		## expect [1, 2, 3].sublist({ start: 1, len: 10 }) == [2, 3]
+		##
+		## expect [1, 2, 3].sublist({ start: 10, len: 2 }) == []
+		## ```
 		sublist : List(a), { start : U64, len : U64 } -> List(a)
 
+		## Return the first `n` elements of the list. If the list has fewer than `n`
+		## elements, the entire list is returned.
+		## ```roc
+		## expect [1, 2, 3, 4, 5].take_first(3) == [1, 2, 3]
+		##
+		## expect [1, 2].take_first(10) == [1, 2]
+		## ```
 		take_first : List(a), U64 -> List(a)
 		take_first = |list, n| {
 			List.sublist(list, { len: n, start: 0 })
@@ -647,19 +705,17 @@ Builtin :: [].{
 
 		## Returns the given number of elements from the end of the list.
 		## ```roc
-		## List.take_last([1, 2, 3, 4, 5, 6, 7, 8], 4) == [5, 6, 7, 8]
+		## expect [1, 2, 3, 4, 5, 6, 7, 8].take_last(4) == [5, 6, 7, 8]
 		## ```
 		## If there are fewer elements in the list than the requested number,
-		## returns the entire list.
+		## the entire list is returned.
 		## ```roc
-		## List.take_last([1, 2], 5) == [1, 2]
+		## expect [1, 2].take_last(5) == [1, 2]
 		## ```
 		## To *remove* elements from the end of the list, use `List.take_first`.
 		##
 		## To remove elements from both the beginning and end of the list,
 		## use `List.sublist`.
-		##
-		## To split the list into two lists, use `List.split_at`.
 		##
 		take_last : List(a), U64 -> List(a)
 		take_last = |list, n| {
@@ -668,14 +724,26 @@ Builtin :: [].{
 			List.sublist(list, { start: start, len: len })
 		}
 
-		## Drops n elements from the beginning of the list.
+		## Drops n elements from the beginning of the list. If `n` is larger than the
+		## list length, an empty list is returned.
+		## ```roc
+		## expect [1, 2, 3, 4, 5].drop_first(2) == [3, 4, 5]
+		##
+		## expect [1, 2, 3].drop_first(10) == []
+		## ```
 		drop_first : List(a), U64 -> List(a)
 		drop_first = |list, n| {
 			len = List.len(list)
 			List.sublist(list, { start: n, len: len })
 		}
 
-		## Drops n elements from the end of the list.
+		## Drops n elements from the end of the list. If `n` is larger than the
+		## list length, an empty list is returned.
+		## ```roc
+		## expect [1, 2, 3, 4, 5].drop_last(2) == [1, 2, 3]
+		##
+		## expect [1, 2, 3].drop_last(10) == []
+		## ```
 		drop_last : List(a), U64 -> List(a)
 		drop_last = |list, n| {
 			len = List.len(list)
@@ -683,6 +751,13 @@ Builtin :: [].{
 			List.sublist(list, { start: 0, len: take_len })
 		}
 
+		## Join a list of items into a single item, inserting the given separator between
+		## each pair. Works for any type that implements a `join_with` method, such as [Str].
+		## ```roc
+		## expect ["a", "b", "c"].join_with(", ") == "a, b, c"
+		##
+		## expect [].join_with(", ") == ""
+		## ```
 		join_with : List(item), item -> item
 			where [item.join_with : List(item), item -> item]
 		join_with = |list, joiner| {
@@ -690,6 +765,12 @@ Builtin :: [].{
 			Item.join_with(list, joiner)
 		}
 
+		## Build a list by repeating the given value `n` times.
+		## ```roc
+		## expect List.repeat(0, 3) == [0, 0, 0]
+		##
+		## expect List.repeat("hi", 0) == []
+		## ```
 		repeat : a, U64 -> List(a)
 		repeat = |item, n| {
 			var $list = List.with_capacity(n)
@@ -701,6 +782,13 @@ Builtin :: [].{
 			$list
 		}
 
+		## Sum the elements of a list. Works for any type that implements `plus` and
+		## `default` methods, such as the numeric types.
+		## ```roc
+		## expect List.sum([1.I64, 2, 3, 4]) == 10
+		##
+		## expect List.sum([]) == 0.I64
+		## ```
 		sum : List(item) -> item
 			where [item.plus : item, item -> item, item.default : item]
 		sum = |list| {
@@ -708,7 +796,7 @@ Builtin :: [].{
 			List.fold(list, Item.default(), |acc, elem| acc + elem)
 		}
 
-		# Encode a list using a format that provides encode_list
+		## Encode a list using a format that provides encode_list
 		encode : List(item), fmt -> Try(encoded, err)
 			where [
 				fmt.encode_list : fmt, List(item), (item, fmt -> Try(encoded, err)) -> Try(encoded, err),
@@ -718,7 +806,7 @@ Builtin :: [].{
 			format.encode_list(self, |elem, f| elem.encode(f))
 		}
 
-		# Decode a list using a format that provides decode_list
+		## Decode a list using a format that provides decode_list
 		decode : src, fmt -> (Try(List(item), err), src)
 			where [
 				fmt.decode_list : fmt, src, (src, fmt -> (Try(item, err), src)) -> (Try(List(item), err), src),
@@ -733,12 +821,12 @@ Builtin :: [].{
 	}
 
 	Bool := [False, True].{
-		## Returns `Bool.false` when given `Bool.true`, and vice versa. This is
+		## Returns `Bool.False` when given `Bool.True`, and vice versa. This is
 		## equivalent to the logic [NOT](https://en.wikipedia.org/wiki/Negation)
 		## gate. The operator `!` can also be used as shorthand for `Bool.not`.
 		## ```roc
-		## expect Bool.not(Bool.false) == Bool.true
-		## expect !Bool.false == Bool.true
+		## expect Bool.not(Bool.False) == Bool.True
+		## expect !Bool.False == Bool.True
 		## ```
 		not : Bool -> Bool
 		not = |bool| match bool {
@@ -746,6 +834,7 @@ Builtin :: [].{
 			Bool.False => Bool.True
 		}
 
+		## Returns `Bool.True` if the two booleans are the same, and `Bool.False` if they are different.
 		is_eq : Bool, Bool -> Bool
 		is_eq = |a, b| match a {
 			Bool.True => match b {
@@ -758,13 +847,14 @@ Builtin :: [].{
 			}
 		}
 
-		# Encode a bool using a format that provides encode_bool
+		## Encode a bool using a format that provides encode_bool
 		encode : Bool, fmt -> Try(encoded, err)
 			where [fmt.encode_bool : fmt, Bool -> Try(encoded, err)]
 		encode = |self, format| {
 			format.encode_bool(self)
 		}
 
+		## Decode a bool using a format that provides decode_bool
 		decode : src, fmt -> (Try(Bool, err), src)
 			where [fmt.decode_bool : fmt, src -> (Try(Bool, err), src)]
 		decode = |source, format| {
@@ -774,14 +864,19 @@ Builtin :: [].{
 	}
 
 	Box(item) :: [ProvidedByCompiler].{
+		## Wraps a value in a generic, opaque representation (box) that can easily be passed to the platform.
+		## Boxing is an expensive process because it copies the value from the stack to the heap.
+		## This may provide a performance optimization for advanced use cases with large values.
 		box : item -> Box(item)
+
+		## Unwraps a value from a box. This is the inverse of `Box.box`, and is also an expensive operation.
 		unbox : Box(item) -> item
 	}
 
 	Try(ok, err) := [Ok(ok), Err(err)].{
-		## Returns `Bool.true` if the result indicates a success, else returns `Bool.false`.
+		## Returns `Bool.True` if the result indicates a success, else returns `Bool.False`.
 		## ```roc
-		## Result.is_ok(Ok(5))
+		## expect Try.Ok(5).is_ok()
 		## ```
 		is_ok : Try(_ok, _err) -> Bool
 		is_ok = |try| match try {
@@ -789,9 +884,9 @@ Builtin :: [].{
 			Err(_) => False
 		}
 
-		## Returns `Bool.true` if the result indicates a failure, else returns `Bool.false`.
+		## Returns `Bool.True` if the result indicates a failure, else returns `Bool.False`.
 		## ```roc
-		## Result.is_err(Err("uh oh"))
+		## expect Try.Err("uh oh").is_err()
 		## ```
 		is_err : Try(_ok, _err) -> Bool
 		is_err = |try| match try {
@@ -804,11 +899,11 @@ Builtin :: [].{
 		##
 		## Note: This function should be used sparingly, because it hides that an error
 		## happened, which will make debugging harder. Prefer using `?` to forward errors or
-		## handle them explicitly with `when`.
+		## handle them explicitly with `match`.
 		## ```roc
-		## Result.with_default(Err("uh oh"), 42) # = 42
+		## expect Try.Err("uh oh").ok_or(42) == 42
 		##
-		## Result.with_default(Ok(7), 42) # = 7
+		## expect Try.Ok(7).ok_or(42) == 7
 		## ```
 		ok_or : Try(ok, _err), ok -> ok
 		ok_or = |try, fallback| match try {
@@ -816,6 +911,13 @@ Builtin :: [].{
 			Err(_) => fallback
 		}
 
+		## If the result is `Err`, returns the value it holds. Otherwise, returns
+		## the given default value.
+		## ```roc
+		## expect Try.Err("uh oh").err_or("fallback") == "uh oh"
+		##
+		## expect Try.Ok(7).err_or("fallback") == "fallback"
+		## ```
 		err_or : Try(_ok, err), err -> err
 		err_or = |try, fallback| match try {
 			Err(val) => val
@@ -826,18 +928,27 @@ Builtin :: [].{
 		## function on it. Then returns a new `Ok` holding the transformed value. If the
 		## result is `Err`, this has no effect. Use [map_err] to transform an `Err`.
 		## ```roc
-		## Result.map_ok(Ok(12), Num.neg) # = Ok(-12)
+		## expect Try.Ok(12.I64).map_ok(|n| -n) == Ok(-12)
 		##
-		## Result.map_ok(Err("yipes!"), Num.neg) # = Err("yipes!")
+		## expect {
+		## 	err : Try(I64, Str)
+		## 	err = Err("yipes!")
+		## 	err.map_ok(|n| -n) == Err("yipes!")
+		## }
 		## ```
-		## Functions like `map` are common in Roc; see for example [List.map],
-		## `Set.map`, and `Dict.map`.
+		## Functions like `map` are common in Roc; see for example [List.map] and [Set.map].
 		map_ok : Try(a, err), (a -> b) -> Try(b, err)
 		map_ok = |try, transform| match try {
 			Err(err) => Err(err)
 			Ok(a) => Ok(transform(a))
 		}
 
+		## Like [map_ok], but the transform function is effectful. If the argument is
+		## an `Ok`, the effect is run and its return value is wrapped in a new `Ok`. If
+		## the result is `Err`, the effect is not run and the `Err` is returned unchanged.
+		## ```roc
+		## artist_try.map_ok!(|a| SQL.query!("SELECT * FROM albums WHERE artist_id = ?", [a.id]))
+		## ```
 		map_ok! : Try(a, err), (a => b) => Try(b, err)
 		map_ok! = |try, transform!| match try {
 			Err(err) => Err(err)
@@ -848,9 +959,9 @@ Builtin :: [].{
 		## function on it. Then returns a new `Err` holding the transformed value. If
 		## the result is `Ok`, this has no effect. Use [map_ok] to transform an `Ok`.
 		## ```roc
-		## List.last([]) |> Result.map_err(|_| ProvidedListIsEmpty) # = Err(ProvidedListIsEmpty)
+		## expect [].last().map_err(|_| ProvidedListIsEmpty) == Err(ProvidedListIsEmpty)
 		##
-		## List.last([4]) |> Result.map_err(|_| ProvidedListIsEmpty) # = Ok(4)
+		## expect [4].last().map_err(|_| ProvidedListIsEmpty) == Ok(4.0)
 		## ```
 		map_err : Try(ok, a), (a -> b) -> Try(ok, b)
 		map_err = |try, transform| match try {
@@ -858,12 +969,20 @@ Builtin :: [].{
 			Ok(ok) => Ok(ok)
 		}
 
+		## Like [map_err], but the transform function is effectful. If the argument is
+		## an `Err`, the effect is run and its return value is wrapped in a new `Err`. If
+		## the result is `Ok`, the effect is not run and the `Ok` is returned unchanged.
+		## ```roc
+		## # Log the failure to the database only when the request errored.
+		## request.map_err!(|e| SQL.execute!("INSERT INTO errors (message) VALUES (?)", [e.message]))
+		## ```
 		map_err! : Try(ok, a), (a => b) => Try(ok, b)
 		map_err! = |try, transform!| match try {
 			Err(a) => Err(transform!(a))
 			Ok(ok) => Ok(ok)
 		}
 
+		## Returns `Bool.True` if the two `Try` values are the same variant (`Ok` or `Err`) and their contents are pairwise equal. Otherwise, returns `Bool.False`.
 		is_eq : Try(ok, err), Try(ok, err) -> Bool
 			where [
 				ok.is_eq : ok, ok -> Bool,
@@ -885,9 +1004,12 @@ Builtin :: [].{
 		}
 	}
 
+	## TODO actually implement Dict
 	Dict :: [EmptyDict].{}
 
 	Set(item) :: [Items(List(item))].{
+
+		## Returns `Bool.True` if the two sets contain the same values, and `Bool.False` otherwise.
 		is_eq : Set(a), Set(a) -> Bool
 			where [a.is_eq : a, a -> Bool]
 		is_eq = |set_a, set_b| {
@@ -916,10 +1038,16 @@ Builtin :: [].{
 		empty = || Items([])
 
 		## Creates a new `Set` with a single value.
+		## ```roc
+		## Set.single(42)
+		## ```
 		single : item -> Set(item)
 		single = |elem| Items([elem])
 
 		## Counts the number of values in a given `Set`.
+		## ```roc
+		## expect Set.single(42).len() == 1
+		## ```
 		len : Set(_item) -> U64
 		len = |set| match set {
 			Items(list) => List.len(list)
@@ -982,14 +1110,20 @@ Builtin :: [].{
 		}
 
 		## Run the given function on each element in the `Set`, and return
-		## a `Set` with just the elements for which the function returned `Bool.true`.
+		## a `Set` with just the elements for which the function returned `Bool.True`.
+		## ```roc
+		## expect Set.from_list([1, 2, 3, 4]).keep_if(|num| num > 2) == Set.from_list([3, 4])
+		## ```
 		keep_if : Set(a), (a -> Bool) -> Set(a)
 		keep_if = |set, predicate| match set {
 			Items(list) => Items(List.keep_if(list, predicate))
 		}
 
 		## Run the given function on each element in the `Set`, and return
-		## a `Set` with just the elements for which the function returned `Bool.false`.
+		## a `Set` with just the elements for which the function returned `Bool.False`.
+		## ```roc
+		## expect Set.from_list([1, 2, 3, 4]).drop_if(|num| num > 2) == Set.from_list([1, 2])
+		## ```
 		drop_if : Set(a), (a -> Bool) -> Set(a)
 		drop_if = |set, predicate| match set {
 			Items(list) => Items(List.drop_if(list, predicate))
@@ -998,6 +1132,13 @@ Builtin :: [].{
 		## Combine two `Set`s by keeping the
 		## [union](https://en.wikipedia.org/wiki/Union_(set_theory))
 		## of all the values.
+		## ```roc
+		## expect {
+		## 	  a = Set.from_list([1, 2, 3])
+		## 	  b = Set.from_list([3, 4, 5])
+		## 	  Set.union(a, b) == Set.from_list([1, 2, 3, 4, 5])
+		## }
+		## ```
 		union : Set(a), Set(a) -> Set(a)
 			where [a.is_eq : a, a -> Bool]
 		union = |set_a, set_b|
@@ -1006,6 +1147,13 @@ Builtin :: [].{
 		## Combine two `Set`s by keeping the
 		## [intersection](https://en.wikipedia.org/wiki/Intersection_(set_theory))
 		## of all the values.
+		## ```roc
+		## expect {
+		## 	  a = Set.from_list([1, 2, 3])
+		## 	  b = Set.from_list([2, 3, 4])
+		## 	  Set.intersection(a, b) == Set.from_list([2, 3])
+		## }
+		## ```
 		intersection : Set(a), Set(a) -> Set(a)
 			where [a.is_eq : a, a -> Bool]
 		intersection = |set_a, set_b| {
@@ -1027,6 +1175,13 @@ Builtin :: [].{
 
 		## Remove the values in the first `Set` that are also in the second `Set`
 		## using the [set difference](https://en.wikipedia.org/wiki/Complement_(set_theory)#Relative_complement).
+		## ```roc
+		## expect {
+		## 	a = Set.from_list([1, 2, 3])
+		## 	b = Set.from_list([2, 3, 4])
+		## 	Set.difference(a, b) == Set.from_list([1])
+		## }
+		## ```
 		difference : Set(a), Set(a) -> Set(a)
 			where [a.is_eq : a, a -> Bool]
 		difference = |set_a, set_b| {
@@ -1049,6 +1204,12 @@ Builtin :: [].{
 		## Convert each value in the set to something new, by calling a conversion
 		## function on each of them. Then return a new set containing the unique
 		## converted values.
+		## ```roc
+		## expect Set.from_list([1, 2, 3]).map(|n| n * 2) == Set.from_list([2, 4, 6])
+		##
+		## # Duplicates in the mapped output are collapsed — the result is a Set.
+		## expect Set.from_list([1, -1, 2, -2]).map(|n| n * n) == Set.from_list([1, 4])
+		## ```
 		map : Set(a), (a -> b) -> Set(b)
 			where [b.is_eq : b, b -> Bool]
 		map = |set, transform| match set {
