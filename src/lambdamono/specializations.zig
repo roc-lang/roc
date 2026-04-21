@@ -36,6 +36,7 @@ pub const Pending = struct {
     specialized: ?ast.FnDef = null,
     summary_types: ?*solved.Type.Store = null,
     summary_fn_ty: ?TypeVarId = null,
+    exec_capture_ty: ?type_mod.TypeId = null,
     exec_args_tys: ?[]const type_mod.TypeId = null,
     exec_ret_ty: ?type_mod.TypeId = null,
 };
@@ -131,7 +132,7 @@ pub fn lookupFnExact(fenv: []const FEnvEntry, name: Symbol) ?FEnvEntry {
 }
 
 /// Queue or reuse a specialization for a solved source function.
-pub fn specializeFn(
+pub fn specializeFnWithExecArgs(
     queue: *Queue,
     fenv: []const FEnvEntry,
     solved_types: *const solved.Type.Store,
@@ -139,10 +140,24 @@ pub fn specializeFn(
     requested_name: Symbol,
     repr_mode: Pending.ReprMode,
     requested_ty: TypeVarId,
+    exec_types: ?*type_mod.Store,
+    exec_capture_ty: ?type_mod.TypeId,
+    exec_arg_tys: []const type_mod.TypeId,
+    exec_ret_ty: ?type_mod.TypeId,
 ) std.mem.Allocator.Error!Symbol {
     const entry = lookupFnExact(fenv, requested_name) orelse
         debugPanic("lambdamono.specializations.specializeFn missing function");
-    const key = try makeKey(queue.allocator, solved_types, requested_name, repr_mode, requested_ty);
+    const key = try makeKey(
+        queue.allocator,
+        solved_types,
+        requested_name,
+        repr_mode,
+        requested_ty,
+        exec_types,
+        exec_capture_ty,
+        exec_arg_tys,
+        exec_ret_ty,
+    );
     errdefer queue.allocator.free(key);
     if (queue.by_key.get(key)) |idx| {
         queue.allocator.free(key);
@@ -164,6 +179,9 @@ pub fn specializeFn(
         .requested_ty = requested_ty_copy,
         .key_bytes = key,
         .specialized_symbol = specialized_symbol,
+        .exec_capture_ty = exec_capture_ty,
+        .exec_args_tys = try queue.allocator.dupe(type_mod.TypeId, exec_arg_tys),
+        .exec_ret_ty = exec_ret_ty,
     });
     try queue.by_key.put(key, queue.items.items.len - 1);
     return specialized_symbol;
@@ -192,7 +210,7 @@ fn cloneTypeRec(
 
     const cloned = switch (source_types.getNode(id)) {
         .link => unreachable,
-        .for_a => try target_types.freshForA(),
+        .for_a, .flex_for_a => try target_types.freshFlexForA(),
         .unbd => try target_types.freshUnbd(),
         .nominal => |nominal| blk: {
             const placeholder = try target_types.freshUnbd();
@@ -320,17 +338,64 @@ fn makeKey(
     requested_name: Symbol,
     repr_mode: Pending.ReprMode,
     requested_ty: TypeVarId,
+    exec_types: ?*type_mod.Store,
+    exec_capture_ty: ?type_mod.TypeId,
+    exec_arg_tys: []const type_mod.TypeId,
+    exec_ret_ty: ?type_mod.TypeId,
 ) std.mem.Allocator.Error![]const u8 {
     const ty_key = try solved_types.structuralKeyOwned(requested_ty);
     defer allocator.free(ty_key);
 
+    var key = std.ArrayList(u8).empty;
+    errdefer key.deinit(allocator);
+
     const source_raw: u32 = @intFromEnum(requested_name);
-    const prefix_len = @sizeOf(u32) + @sizeOf(u8);
-    const key = try allocator.alloc(u8, prefix_len + ty_key.len);
-    @memcpy(key[0..@sizeOf(u32)], std.mem.asBytes(&source_raw));
-    key[@sizeOf(u32)] = @intFromEnum(repr_mode);
-    @memcpy(key[prefix_len..], ty_key);
-    return key;
+    try key.appendSlice(allocator, std.mem.asBytes(&source_raw));
+    try key.append(allocator, @intFromEnum(repr_mode));
+
+    const ty_len: u32 = @intCast(ty_key.len);
+    try key.appendSlice(allocator, std.mem.asBytes(&ty_len));
+    try key.appendSlice(allocator, ty_key);
+
+    const has_exec_capture: u8 = if (exec_capture_ty != null) 1 else 0;
+    try key.append(allocator, has_exec_capture);
+    if (exec_capture_ty) |capture_ty| {
+        const exec_store = exec_types orelse
+            debugPanic("lambdamono.specializations.makeKey missing executable type store for executable capture key");
+        const capture_key = try exec_store.structuralKeyOwned(capture_ty);
+        defer exec_store.allocator.free(capture_key);
+        const capture_key_len: u32 = @intCast(capture_key.len);
+        try key.appendSlice(allocator, std.mem.asBytes(&capture_key_len));
+        try key.appendSlice(allocator, capture_key);
+    }
+
+    const exec_arg_count: u32 = @intCast(exec_arg_tys.len);
+    try key.appendSlice(allocator, std.mem.asBytes(&exec_arg_count));
+    if (exec_arg_tys.len != 0) {
+        const exec_store = exec_types orelse
+            debugPanic("lambdamono.specializations.makeKey missing executable type store for executable signature key");
+        for (exec_arg_tys) |exec_arg_ty| {
+            const exec_key = try exec_store.structuralKeyOwned(exec_arg_ty);
+            defer exec_store.allocator.free(exec_key);
+            const exec_key_len: u32 = @intCast(exec_key.len);
+            try key.appendSlice(allocator, std.mem.asBytes(&exec_key_len));
+            try key.appendSlice(allocator, exec_key);
+        }
+    }
+
+    const has_exec_ret: u8 = if (exec_ret_ty != null) 1 else 0;
+    try key.append(allocator, has_exec_ret);
+    if (exec_ret_ty) |ret_ty| {
+        const exec_store = exec_types orelse
+            debugPanic("lambdamono.specializations.makeKey missing executable type store for executable return key");
+        const ret_key = try exec_store.structuralKeyOwned(ret_ty);
+        defer exec_store.allocator.free(ret_key);
+        const ret_key_len: u32 = @intCast(ret_key.len);
+        try key.appendSlice(allocator, std.mem.asBytes(&ret_key_len));
+        try key.appendSlice(allocator, ret_key);
+    }
+
+    return try key.toOwnedSlice(allocator);
 }
 
 fn specializedOrigin(origin: symbol_mod.BindingOrigin, source_symbol: Symbol) symbol_mod.BindingOrigin {

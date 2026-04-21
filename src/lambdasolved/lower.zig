@@ -86,6 +86,7 @@ const Lowerer = struct {
     exact_callable_aliases: std.AutoHashMap(Symbol, Symbol),
     fn_infer_states: std.AutoHashMap(Symbol, FnInferState),
     current_instantiate_cache: ?*std.AutoHashMap(LiftedType.TypeId, TypeVarId),
+    current_expr_instantiate_cache: ?*std.AutoHashMap(LiftedAst.ExprId, ast.ExprId),
     current_return_ty: ?TypeVarId,
     current_def_symbol: ?Symbol,
     current_opaque_unify: ?DebugNominalContext,
@@ -138,6 +139,7 @@ const Lowerer = struct {
             .exact_callable_aliases = std.AutoHashMap(Symbol, Symbol).init(allocator),
             .fn_infer_states = std.AutoHashMap(Symbol, FnInferState).init(allocator),
             .current_instantiate_cache = null,
+            .current_expr_instantiate_cache = null,
             .current_return_ty = null,
             .current_def_symbol = null,
             .current_opaque_unify = null,
@@ -215,9 +217,14 @@ const Lowerer = struct {
             .fn_ => |lifted_fn_def| blk: {
                 var cache = std.AutoHashMap(LiftedType.TypeId, TypeVarId).init(self.allocator);
                 defer cache.deinit();
+                var expr_cache = std.AutoHashMap(LiftedAst.ExprId, ast.ExprId).init(self.allocator);
+                defer expr_cache.deinit();
                 const previous_cache = self.current_instantiate_cache;
+                const previous_expr_cache = self.current_expr_instantiate_cache;
                 self.current_instantiate_cache = &cache;
+                self.current_expr_instantiate_cache = &expr_cache;
                 defer self.current_instantiate_cache = previous_cache;
+                defer self.current_expr_instantiate_cache = previous_expr_cache;
 
                 const bind = try self.instantiateTypedSymbol(def.bind);
                 try self.lifted_fn_capture_spans.put(bind.symbol, lifted_fn_def.captures);
@@ -238,6 +245,12 @@ const Lowerer = struct {
                 } },
             }),
             .val => |expr_id| blk: {
+                var expr_cache = std.AutoHashMap(LiftedAst.ExprId, ast.ExprId).init(self.allocator);
+                defer expr_cache.deinit();
+                const previous_expr_cache = self.current_expr_instantiate_cache;
+                self.current_expr_instantiate_cache = &expr_cache;
+                defer self.current_expr_instantiate_cache = previous_expr_cache;
+
                 const bind = try self.instantiateTypedSymbol(def.bind);
                 const body = try self.instantiateExpr(expr_id);
                 try self.recordExactCallableAlias(bind.symbol, body);
@@ -246,13 +259,21 @@ const Lowerer = struct {
                     .value = .{ .val = body },
                 });
             },
-            .run => |run_def| self.emitDef(.{
-                .bind = try self.instantiateTypedSymbol(def.bind),
-                .value = .{ .run = .{
-                    .body = try self.instantiateExpr(run_def.body),
-                    .entry_ty = run_def.entry_ty,
-                } },
-            }),
+            .run => |run_def| blk: {
+                var expr_cache = std.AutoHashMap(LiftedAst.ExprId, ast.ExprId).init(self.allocator);
+                defer expr_cache.deinit();
+                const previous_expr_cache = self.current_expr_instantiate_cache;
+                self.current_expr_instantiate_cache = &expr_cache;
+                defer self.current_expr_instantiate_cache = previous_expr_cache;
+
+                break :blk self.emitDef(.{
+                    .bind = try self.instantiateTypedSymbol(def.bind),
+                    .value = .{ .run = .{
+                        .body = try self.instantiateExpr(run_def.body),
+                        .entry_ty = run_def.entry_ty,
+                    } },
+                });
+            },
         };
     }
 
@@ -341,18 +362,43 @@ const Lowerer = struct {
 
     fn maybeExactCallableSymbolForExpr(self: *Lowerer, expr_id: ast.ExprId) ?Symbol {
         const expr = self.output.getExpr(expr_id);
-        if (expr.data != .var_) return null;
-        const symbol = expr.data.var_;
-        if (symbol.isNone()) return null;
-        if (self.exact_callable_aliases.get(symbol)) |exact| return exact;
-        if (self.def_id_by_symbol.get(symbol)) |def_id| {
-            const def = self.output.getDef(def_id);
-            return switch (def.value) {
-                .fn_, .hosted_fn => symbol,
-                else => null,
-            };
-        }
-        return null;
+        return switch (expr.data) {
+            .var_ => |symbol| blk: {
+                if (symbol.isNone()) break :blk null;
+                if (self.exact_callable_aliases.get(symbol)) |exact| break :blk exact;
+                if (self.def_id_by_symbol.get(symbol)) |def_id| {
+                    const def = self.output.getDef(def_id);
+                    break :blk switch (def.value) {
+                        .fn_, .hosted_fn => symbol,
+                        else => null,
+                    };
+                }
+                break :blk null;
+            },
+            .call => |call| blk: {
+                const args = self.output.sliceExprSpan(call.args);
+                if (args.len != 1) break :blk null;
+                const callee_symbol = self.maybeExactCallableSymbolForExpr(call.func) orelse blk_callee: {
+                    const func_expr = self.output.getExpr(call.func);
+                    if (func_expr.data != .var_) break :blk_callee null;
+                    break :blk_callee func_expr.data.var_;
+                } orelse break :blk null;
+                const op = self.boxBoundaryBuiltinOpForSymbol(callee_symbol) orelse break :blk null;
+                switch (op) {
+                    .box_box, .box_unbox => break :blk self.maybeExactCallableSymbolForExpr(args[0]),
+                    else => break :blk null,
+                }
+            },
+            .low_level => |ll| blk: {
+                const args = self.output.sliceExprSpan(ll.args);
+                if (args.len != 1) break :blk null;
+                switch (ll.op) {
+                    .box_box, .box_unbox => break :blk self.maybeExactCallableSymbolForExpr(args[0]),
+                    else => break :blk null,
+                }
+            },
+            else => null,
+        };
     }
 
     fn recordExactCallableAlias(self: *Lowerer, bind_symbol: Symbol, body_expr: ast.ExprId) std.mem.Allocator.Error!void {
@@ -361,8 +407,15 @@ const Lowerer = struct {
     }
 
     fn instantiateExpr(self: *Lowerer, expr_id: LiftedAst.ExprId) std.mem.Allocator.Error!ast.ExprId {
+        if (self.current_expr_instantiate_cache) |cache| {
+            if (cache.get(expr_id)) |existing| return existing;
+        }
+
         const expr = self.input.store.getExpr(expr_id);
-        const ty = try self.instantiateType(expr.ty);
+        const ty = switch (expr.data) {
+            .var_ => try self.instantiateOccurrenceType(try self.instantiateType(expr.ty)),
+            else => try self.instantiateType(expr.ty),
+        };
         const data: ast.Expr.Data = switch (expr.data) {
             .var_ => |symbol| .{ .var_ = symbol },
             .int_lit => |value| .{ .int_lit = value },
@@ -391,6 +444,7 @@ const Lowerer = struct {
                 .lhs = try self.instantiateExpr(eq.lhs),
                 .rhs = try self.instantiateExpr(eq.rhs),
                 .negated = eq.negated,
+                .dispatch_constraint_ty = try self.instantiateType(eq.dispatch_constraint_ty),
             } },
             .dispatch_call => |method_call| .{ .dispatch_call = .{
                 .receiver = try self.instantiateExpr(method_call.receiver),
@@ -451,6 +505,9 @@ const Lowerer = struct {
             } },
         };
         const lowered = try self.output.addExpr(.{ .ty = ty, .data = data });
+        if (self.current_expr_instantiate_cache) |cache| {
+            try cache.put(expr_id, lowered);
+        }
         if (self.output.getExpr(lowered).data == .let_) {
             const let_expr = self.output.getExpr(lowered).data.let_;
             try self.recordExactCallableAlias(let_expr.bind.symbol, let_expr.body);
@@ -591,9 +648,6 @@ const Lowerer = struct {
 
         const mono_ty = self.input.types.getTypePreservingNominal(ty);
         if (mono_ty == .unbd) {
-            return placeholder;
-        }
-        if (mono_ty == .tag_union and mono_ty.tag_union.tags.len == 0) {
             return placeholder;
         }
 
@@ -739,7 +793,7 @@ const Lowerer = struct {
         if (mapping.get(id)) |cached| return cached;
 
         switch (self.types.getNode(id)) {
-            .unbd, .for_a => {
+            .unbd, .for_a, .flex_for_a => {
                 const fresh = try self.types.freshUnbd();
                 try mapping.put(id, fresh);
                 return fresh;
@@ -751,7 +805,7 @@ const Lowerer = struct {
         try mapping.put(id, placeholder);
 
         const copied = switch (self.types.getNode(id)) {
-            .unbd, .for_a => unreachable,
+            .unbd, .for_a, .flex_for_a => unreachable,
             .link => unreachable,
             .nominal => |nominal| blk: {
                 const args = try self.allocator.dupe(TypeVarId, self.types.sliceTypeVarSpan(nominal.args));
@@ -915,6 +969,11 @@ const Lowerer = struct {
                 try mapping.put(id, fresh);
                 return fresh;
             },
+            .flex_for_a => {
+                const fresh = try self.types.freshFlexForA();
+                try mapping.put(id, fresh);
+                return fresh;
+            },
             else => {},
         }
 
@@ -922,7 +981,7 @@ const Lowerer = struct {
         try mapping.put(id, placeholder);
 
         const frozen = switch (self.types.getNode(id)) {
-            .unbd, .for_a => unreachable,
+            .unbd, .for_a, .flex_for_a => unreachable,
             .link => unreachable,
             .nominal => |nominal| blk: {
                 const args = try self.allocator.dupe(TypeVarId, self.types.sliceTypeVarSpan(nominal.args));
@@ -1649,8 +1708,14 @@ const Lowerer = struct {
                 const rhs_ty = try self.inferExpr(venv, eq.rhs);
                 try self.unify(lhs_ty, self.output.getExpr(eq.lhs).ty);
                 try self.unify(rhs_ty, self.output.getExpr(eq.rhs).ty);
-                try self.unify(lhs_ty, rhs_ty);
-                try self.unify(target_ty, try self.freshPrimitiveType(.bool));
+                const constraint_shape = self.types.fnShape(eq.dispatch_constraint_ty);
+                const constraint_args = self.types.sliceTypeVarSpan(constraint_shape.args);
+                if (constraint_args.len != 2) {
+                    debugPanic("lambdasolved.method_eq invariant violated: dispatch arg arity mismatch", .{});
+                }
+                try self.unify(constraint_args[0], lhs_ty);
+                try self.unify(constraint_args[1], rhs_ty);
+                try self.unify(target_ty, constraint_shape.ret);
                 break :blk target_ty;
             },
             .dispatch_call => |method_call| blk: {
@@ -2048,11 +2113,11 @@ const Lowerer = struct {
 
         switch (left_node) {
             .unbd => return true,
-            .for_a => return debugPanic("lambdasolved.compatibility generalized type without instantiation", .{}),
+            .for_a, .flex_for_a => return debugPanic("lambdasolved.compatibility generalized type without instantiation", .{}),
             .link => unreachable,
             .nominal => |left_nominal| switch (right_node) {
                 .unbd => return true,
-                .for_a => return debugPanic("lambdasolved.compatibility generalized type without instantiation", .{}),
+                .for_a, .flex_for_a => return debugPanic("lambdasolved.compatibility generalized type without instantiation", .{}),
                 .link => unreachable,
                 .nominal => |right_nominal| {
                     if (left_nominal.module_idx != right_nominal.module_idx) return false;
@@ -2072,7 +2137,7 @@ const Lowerer = struct {
             },
             .content => |left_content| switch (right_node) {
                 .unbd => return true,
-                .for_a => return debugPanic("lambdasolved.compatibility generalized type without instantiation", .{}),
+                .for_a, .flex_for_a => return debugPanic("lambdasolved.compatibility generalized type without instantiation", .{}),
                 .link => unreachable,
                 .nominal => |right_nominal| return self.nominalBackingCompatible(right_nominal.backing, left_content, visited),
                 .content => |right_content| return self.contentsCompatible(left_content, right_content, visited),
@@ -2090,7 +2155,7 @@ const Lowerer = struct {
         return switch (self.types.getNode(backing_root)) {
             .content => |backing_content| self.contentsCompatible(backing_content, content, visited),
             .unbd => true,
-            .for_a => debugPanic("lambdasolved.compatibility generalized type without instantiation", .{}),
+            .for_a, .flex_for_a => debugPanic("lambdasolved.compatibility generalized type without instantiation", .{}),
             .link, .nominal => unreachable,
         };
     }
@@ -2552,7 +2617,7 @@ const Lowerer = struct {
                 },
                 else => ty,
             },
-            .unbd, .for_a => ty,
+            .unbd, .for_a, .flex_for_a => ty,
             .link => unreachable,
         };
     }
@@ -2567,6 +2632,7 @@ const Lowerer = struct {
             },
             .unbd,
             .for_a,
+            .flex_for_a,
             => false,
             .link => unreachable,
         };
@@ -2651,7 +2717,18 @@ const Lowerer = struct {
             .unit,
             .runtime_error,
             => {},
-            .tag => |tag| for (self.output.sliceExprSpan(tag.args)) |arg| try self.propagateExprErasure(arg, venv),
+            .tag => |tag| {
+                const arg_exprs = self.output.sliceExprSpan(tag.args);
+                for (arg_exprs) |arg| {
+                    try self.propagateExprErasure(arg, venv);
+                }
+                const arg_tys = try self.allocator.alloc(TypeVarId, arg_exprs.len);
+                defer self.allocator.free(arg_tys);
+                for (arg_exprs, 0..) |arg, i| {
+                    arg_tys[i] = self.output.getExpr(arg).ty;
+                }
+                expr.ty = try self.rewriteTagExprType(expr.ty, tag.name, arg_tys);
+            },
             .record => |fields| blk: {
                 const field_values = self.output.sliceFieldExprSpan(fields);
                 for (field_values) |field| {
@@ -2716,11 +2793,13 @@ const Lowerer = struct {
                 for (self.output.sliceExprSpan(method_call.args)) |arg| {
                     try self.propagateExprErasure(arg, venv);
                 }
+                expr.ty = self.types.fnShape(method_call.dispatch_constraint_ty).ret;
             },
             .type_dispatch_call => |method_call| {
                 for (self.output.sliceExprSpan(method_call.args)) |arg| {
                     try self.propagateExprErasure(arg, venv);
                 }
+                expr.ty = self.types.fnShape(method_call.dispatch_constraint_ty).ret;
             },
             .let_ => |*let_expr| {
                 try self.propagateExprErasure(let_expr.body, venv);
@@ -2739,8 +2818,14 @@ const Lowerer = struct {
                     try self.propagateExprErasure(arg, venv);
                 }
                 const func_expr = self.output.getExpr(call.func);
-                if (func_expr.data == .var_) {
-                    if (self.boxBoundaryBuiltinOpForSymbol(func_expr.data.var_)) |op| {
+                expr.ty = self.functionResultType(func_expr.ty) orelse
+                    return debugPanic("lambdasolved.propagateExprErasure call expected function callee", .{});
+                const boundary_symbol = self.maybeExactCallableSymbolForExpr(call.func) orelse blk_boundary: {
+                    if (func_expr.data != .var_) break :blk_boundary null;
+                    break :blk_boundary func_expr.data.var_;
+                };
+                if (boundary_symbol) |symbol| {
+                    if (self.boxBoundaryBuiltinOpForSymbol(symbol)) |op| {
                         const call_args = self.output.sliceExprSpan(call.args);
                         if (call_args.len != 1) {
                             debugPanic("lambdasolved.propagateExprErasure box boundary builtin expected exactly one arg", .{});
@@ -2748,7 +2833,9 @@ const Lowerer = struct {
                         const arg_ty = self.output.getExpr(call_args[0]).ty;
                         switch (op) {
                             .box_box => {
-                                expr.ty = try self.types.freshContent(.{ .box = arg_ty });
+                                expr.ty = try self.types.freshContent(.{
+                                    .box = arg_ty,
+                                });
                             },
                             .box_unbox => {
                                 const boxed_elem_ty = self.boxedPayloadType(arg_ty) orelse
@@ -2773,7 +2860,9 @@ const Lowerer = struct {
                         }
 
                         const arg_ty = self.output.getExpr(args[0]).ty;
-                        expr.ty = try self.types.freshContent(.{ .box = arg_ty });
+                        expr.ty = try self.types.freshContent(.{
+                            .box = arg_ty,
+                        });
                     },
                     .box_unbox => {
                         if (args.len != 1) {
@@ -2790,19 +2879,56 @@ const Lowerer = struct {
             },
             .when => |when_expr| {
                 try self.propagateExprErasure(when_expr.cond, venv);
+                const cond_expr = &self.output.exprs.items[@intFromEnum(when_expr.cond)];
                 for (self.output.sliceBranchSpan(when_expr.branches)) |branch_id| {
                     const branch = self.output.getBranch(branch_id);
+                    try self.propagatePatErasure(branch.pat);
+                    const branch_pat = self.output.getPat(branch.pat);
+                    switch (branch_pat.data) {
+                        .var_ => |symbol| if (symbol.isNone()) continue,
+                        else => {},
+                    }
+                    cond_expr.ty = try self.overlayErasureTemplate(branch_pat.ty, cond_expr.ty);
+                }
+                var branch_ty: ?TypeVarId = null;
+                for (self.output.sliceBranchSpan(when_expr.branches)) |branch_id| {
+                    const branch = self.output.getBranch(branch_id);
+                    const branch_pat = &self.output.pats.items[@intFromEnum(branch.pat)];
+                    branch_pat.ty = try self.overlayErasureTemplate(cond_expr.ty, branch_pat.ty);
+                    try self.propagatePatternTagPayloadTypes(branch.pat);
                     const additions = try self.patternEnvEntries(branch.pat);
                     defer self.allocator.free(additions);
                     const body_env = try self.extendEnvMany(venv, additions);
                     defer if (body_env.len != 0) self.allocator.free(body_env);
                     try self.propagateExprErasure(branch.body, body_env);
+                    const current_ty = self.output.getExpr(branch.body).ty;
+                    if (self.output.getExpr(branch.body).data == .runtime_error) continue;
+                    if (branch_ty) |existing| {
+                        if (!self.types.equalIds(existing, current_ty)) {
+                            return debugPanic("lambdasolved.propagateExprErasure when branch type mismatch", .{});
+                        }
+                    } else {
+                        branch_ty = current_ty;
+                    }
                 }
+                if (branch_ty) |ty| expr.ty = ty;
             },
             .if_ => |if_expr| {
                 try self.propagateExprErasure(if_expr.cond, venv);
                 try self.propagateExprErasure(if_expr.then_body, venv);
                 try self.propagateExprErasure(if_expr.else_body, venv);
+                const then_expr = self.output.getExpr(if_expr.then_body);
+                const else_expr = self.output.getExpr(if_expr.else_body);
+                if (then_expr.data == .runtime_error) {
+                    expr.ty = else_expr.ty;
+                } else if (else_expr.data == .runtime_error) {
+                    expr.ty = then_expr.ty;
+                } else {
+                    if (!self.types.equalIds(then_expr.ty, else_expr.ty)) {
+                        return debugPanic("lambdasolved.propagateExprErasure if branch type mismatch", .{});
+                    }
+                    expr.ty = then_expr.ty;
+                }
             },
             .block => |block| {
                 var block_env = try self.cloneEnv(venv);
@@ -2864,6 +2990,69 @@ const Lowerer = struct {
                 try self.propagateExprErasure(for_expr.body, body_env);
             },
         }
+    }
+
+    fn propagatePatErasure(self: *Lowerer, pat_id: ast.PatId) std.mem.Allocator.Error!void {
+        const pat = &self.output.pats.items[@intFromEnum(pat_id)];
+        switch (pat.data) {
+            .bool_lit => {},
+            .var_ => |symbol| {
+                if (symbol.isNone()) {
+                    pat.ty = try self.freshPrimitiveType(.erased);
+                }
+            },
+            .tag => |tag| {
+                const arg_pat_ids = self.output.slicePatSpan(tag.args);
+                for (arg_pat_ids) |arg_pat_id| {
+                    try self.propagatePatErasure(arg_pat_id);
+                }
+                const arg_tys = try self.allocator.alloc(TypeVarId, arg_pat_ids.len);
+                defer self.allocator.free(arg_tys);
+                for (arg_pat_ids, 0..) |arg_pat_id, i| {
+                    arg_tys[i] = self.output.getPat(arg_pat_id).ty;
+                }
+                pat.ty = try self.rewriteTagExprType(pat.ty, tag.name, arg_tys);
+            },
+        }
+    }
+
+    fn propagatePatternTagPayloadTypes(self: *Lowerer, pat_id: ast.PatId) std.mem.Allocator.Error!void {
+        const pat = &self.output.pats.items[@intFromEnum(pat_id)];
+        switch (pat.data) {
+            .bool_lit, .var_ => {},
+            .tag => |tag| {
+                if (try self.isPrimitiveBoolType(pat.ty)) return;
+                const arg_tys = self.tagArgTypesByName(pat.ty, tag.name) orelse
+                    return debugPanic("lambdasolved.propagatePatternTagPayloadTypes missing tag payload types", .{});
+                const arg_pats = self.output.slicePatSpan(tag.args);
+                if (arg_tys.len != arg_pats.len) {
+                    return debugPanic("lambdasolved.propagatePatternTagPayloadTypes tag arg count mismatch", .{});
+                }
+                for (arg_pats, arg_tys) |arg_pat_id, arg_ty| {
+                    self.output.pats.items[@intFromEnum(arg_pat_id)].ty = arg_ty;
+                    try self.propagatePatternTagPayloadTypes(arg_pat_id);
+                }
+            },
+        }
+    }
+
+    fn tagArgTypesByName(self: *Lowerer, ty: TypeVarId, tag_name: base.Ident.Idx) ?[]const TypeVarId {
+        const id = self.types.unlinkPreservingNominal(ty);
+        return switch (self.types.getNode(id)) {
+            .nominal => |nominal| self.tagArgTypesByName(nominal.backing, tag_name),
+            .content => |content| switch (content) {
+                .tag_union => |tag_union| blk: {
+                    for (self.types.sliceTags(tag_union.tags)) |tag| {
+                        if (tag.name == tag_name) {
+                            break :blk self.types.sliceTypeVarSpan(tag.args);
+                        }
+                    }
+                    break :blk null;
+                },
+                else => null,
+            },
+            else => null,
+        };
     }
 
     fn functionResultType(self: *Lowerer, ty: TypeVarId) ?TypeVarId {
@@ -2928,6 +3117,55 @@ const Lowerer = struct {
         };
     }
 
+    fn rewriteTagExprType(
+        self: *Lowerer,
+        ty: TypeVarId,
+        tag_name: base.Ident.Idx,
+        arg_tys: []const TypeVarId,
+    ) std.mem.Allocator.Error!TypeVarId {
+        const id = self.types.unlinkPreservingNominal(ty);
+        return switch (self.types.getNode(id)) {
+            .nominal => |nominal| blk: {
+                const rewritten_backing = try self.rewriteTagExprType(nominal.backing, tag_name, arg_tys);
+                if (rewritten_backing == nominal.backing) break :blk id;
+                var lowered = nominal;
+                lowered.backing = rewritten_backing;
+                break :blk try self.types.fresh(.{ .nominal = lowered });
+            },
+            .content => |content| switch (content) {
+                .tag_union => |tag_union| blk: {
+                    const tags = self.types.sliceTags(tag_union.tags);
+                    const out_tags = try self.allocator.alloc(type_mod.Tag, tags.len);
+                    defer self.allocator.free(out_tags);
+                    var changed = false;
+                    for (tags, 0..) |tag, i| {
+                        if (tag.name == tag_name) {
+                            const current_args = self.types.sliceTypeVarSpan(tag.args);
+                            if (current_args.len != arg_tys.len) {
+                                debugPanic("lambdasolved.rewriteTagExprType tag arg count mismatch", .{});
+                            }
+                            for (current_args, arg_tys) |current_arg, new_arg| {
+                                if (current_arg != new_arg) changed = true;
+                            }
+                            out_tags[i] = .{
+                                .name = tag.name,
+                                .args = try self.types.addTypeVarSpan(arg_tys),
+                            };
+                        } else {
+                            out_tags[i] = tag;
+                        }
+                    }
+                    if (!changed) break :blk id;
+                    break :blk try self.types.freshContent(.{ .tag_union = .{
+                        .tags = try self.types.addTags(out_tags),
+                    } });
+                },
+                else => id,
+            },
+            else => id,
+        };
+    }
+
     fn overlayErasureTemplate(self: *Lowerer, template_ty: TypeVarId, actual_ty: TypeVarId) std.mem.Allocator.Error!TypeVarId {
         var visited = std.ArrayList(TypePair).empty;
         defer visited.deinit(self.allocator);
@@ -2951,7 +3189,7 @@ const Lowerer = struct {
         try visited.append(self.allocator, pair);
 
         return switch (self.types.getNode(template_id)) {
-            .for_a => actual_ty,
+            .for_a, .flex_for_a => actual_ty,
             .nominal => |template_nominal| switch (self.types.getNode(actual_id)) {
                 .nominal => |actual_nominal| blk: {
                     const lowered_backing = try self.overlayErasureTemplateRec(template_nominal.backing, actual_nominal.backing, visited);
@@ -2963,6 +3201,10 @@ const Lowerer = struct {
                 else => actual_ty,
             },
             .content => |template_content| switch (template_content) {
+                .primitive => |template_prim| switch (template_prim) {
+                    .erased => template_ty,
+                    else => actual_ty,
+                },
                 .func => |template_func| switch (self.types.getNode(actual_id)) {
                     .content => |actual_content| switch (actual_content) {
                         .func => |actual_func| blk: {
@@ -3013,6 +3255,86 @@ const Lowerer = struct {
                     },
                     else => actual_ty,
                 },
+                .tuple => |template_tuple| switch (self.types.getNode(actual_id)) {
+                    .content => |actual_content| switch (actual_content) {
+                        .tuple => |actual_tuple| blk: {
+                            const template_elems = self.types.sliceTypeVarSpan(template_tuple);
+                            const actual_elems = self.types.sliceTypeVarSpan(actual_tuple);
+                            if (template_elems.len != actual_elems.len) break :blk actual_ty;
+                            const out = try self.allocator.alloc(TypeVarId, template_elems.len);
+                            defer self.allocator.free(out);
+                            var changed = false;
+                            for (template_elems, actual_elems, 0..) |template_elem, actual_elem, i| {
+                                out[i] = try self.overlayErasureTemplateRec(template_elem, actual_elem, visited);
+                                if (out[i] != actual_elem) changed = true;
+                            }
+                            if (!changed) break :blk actual_ty;
+                            break :blk try self.types.freshContent(.{ .tuple = try self.types.addTypeVarSpan(out) });
+                        },
+                        else => actual_ty,
+                    },
+                    else => actual_ty,
+                },
+                .record => |template_record| switch (self.types.getNode(actual_id)) {
+                    .content => |actual_content| switch (actual_content) {
+                        .record => |actual_record| blk: {
+                            const template_fields = self.types.sliceFields(template_record.fields);
+                            const actual_fields = self.types.sliceFields(actual_record.fields);
+                            if (template_fields.len != actual_fields.len) break :blk actual_ty;
+                            const out = try self.allocator.alloc(type_mod.Field, template_fields.len);
+                            defer self.allocator.free(out);
+                            var changed = false;
+                            for (template_fields, actual_fields, 0..) |template_field, actual_field, i| {
+                                if (template_field.name != actual_field.name) break :blk actual_ty;
+                                out[i] = .{
+                                    .name = actual_field.name,
+                                    .ty = try self.overlayErasureTemplateRec(template_field.ty, actual_field.ty, visited),
+                                };
+                                if (out[i].ty != actual_field.ty) changed = true;
+                            }
+                            if (!changed) break :blk actual_ty;
+                            break :blk try self.types.freshContent(.{ .record = .{
+                                .fields = try self.types.addFields(out),
+                            } });
+                        },
+                        else => actual_ty,
+                    },
+                    else => actual_ty,
+                },
+                .tag_union => |template_union| switch (self.types.getNode(actual_id)) {
+                    .content => |actual_content| switch (actual_content) {
+                        .tag_union => |actual_union| blk: {
+                            const template_tags = self.types.sliceTags(template_union.tags);
+                            const actual_tags = self.types.sliceTags(actual_union.tags);
+                            if (template_tags.len != actual_tags.len) break :blk actual_ty;
+                            const out = try self.allocator.alloc(type_mod.Tag, template_tags.len);
+                            defer self.allocator.free(out);
+                            var changed = false;
+                            for (template_tags, actual_tags, 0..) |template_tag, actual_tag, i| {
+                                if (template_tag.name != actual_tag.name) break :blk actual_ty;
+                                const template_args = self.types.sliceTypeVarSpan(template_tag.args);
+                                const actual_args = self.types.sliceTypeVarSpan(actual_tag.args);
+                                if (template_args.len != actual_args.len) break :blk actual_ty;
+                                const out_args = try self.allocator.alloc(TypeVarId, template_args.len);
+                                defer self.allocator.free(out_args);
+                                for (template_args, actual_args, 0..) |template_arg, actual_arg, arg_i| {
+                                    out_args[arg_i] = try self.overlayErasureTemplateRec(template_arg, actual_arg, visited);
+                                    if (out_args[arg_i] != actual_arg) changed = true;
+                                }
+                                out[i] = .{
+                                    .name = actual_tag.name,
+                                    .args = try self.types.addTypeVarSpan(out_args),
+                                };
+                            }
+                            if (!changed) break :blk actual_ty;
+                            break :blk try self.types.freshContent(.{ .tag_union = .{
+                                .tags = try self.types.addTags(out),
+                            } });
+                        },
+                        else => actual_ty,
+                    },
+                    else => actual_ty,
+                },
                 else => actual_ty,
             },
             else => actual_ty,
@@ -3028,10 +3350,7 @@ const Lowerer = struct {
         switch (stmt.*) {
             .decl => |*decl| {
                 try self.propagateExprErasure(decl.body, venv);
-                decl.bind.ty = try self.overlayErasureTemplate(
-                    self.output.getExpr(decl.body).ty,
-                    decl.bind.ty,
-                );
+                decl.bind.ty = self.output.getExpr(decl.body).ty;
                 return try self.extendEnvOne(venv, .{
                     .symbol = decl.bind.symbol,
                     .ty = decl.bind.ty,
@@ -3039,10 +3358,7 @@ const Lowerer = struct {
             },
             .var_decl => |*decl| {
                 try self.propagateExprErasure(decl.body, venv);
-                decl.bind.ty = try self.overlayErasureTemplate(
-                    self.output.getExpr(decl.body).ty,
-                    decl.bind.ty,
-                );
+                decl.bind.ty = self.output.getExpr(decl.body).ty;
                 return try self.extendEnvOne(venv, .{
                     .symbol = decl.bind.symbol,
                     .ty = decl.bind.ty,
@@ -3116,7 +3432,7 @@ const Lowerer = struct {
                 .primitive => |prim| prim == .erased,
                 else => false,
             },
-            .unbd, .for_a => false,
+            .unbd, .for_a, .flex_for_a => false,
             .link => unreachable,
         };
     }
@@ -3134,10 +3450,18 @@ const Lowerer = struct {
     }
 
     fn boxBoundaryBuiltinOpForSymbol(self: *Lowerer, symbol: Symbol) ?base.LowLevel {
+        if (self.exact_callable_aliases.get(symbol)) |exact| {
+            if (exact != symbol) return self.boxBoundaryBuiltinOpForSymbol(exact);
+        }
         const def_id = self.def_id_by_symbol.get(symbol) orelse return null;
         const def = self.output.getDef(def_id);
         const fn_def = switch (def.value) {
             .fn_ => |fn_def| fn_def,
+            .val => |expr_id| {
+                const exact = self.maybeExactCallableSymbolForExpr(expr_id) orelse return null;
+                if (exact == symbol) return null;
+                return self.boxBoundaryBuiltinOpForSymbol(exact);
+            },
             else => return null,
         };
         if (!self.types.hasCapturelessLambda(def.bind.ty, def.bind.symbol)) return null;
@@ -3377,6 +3701,7 @@ const Lowerer = struct {
         }
     }
 
+
     fn lookupDenseIndex(self: *Lowerer, ids: []const ast.DefId, symbol: Symbol) ?usize {
         for (ids, 0..) |def_id, i| {
             if (self.output.getDef(def_id).bind.symbol == symbol) return i;
@@ -3421,7 +3746,7 @@ const Lowerer = struct {
 
         return switch (self.types.getNode(id)) {
             .unbd => false,
-            .for_a => true,
+            .for_a, .flex_for_a => true,
             .link => unreachable,
             .nominal => |nominal| blk: {
                 for (self.types.sliceTypeVarSpan(nominal.args)) |arg| {
@@ -3486,7 +3811,7 @@ const Lowerer = struct {
 
         switch (self.types.getNode(id)) {
             .unbd => return id,
-            .for_a => {
+            .for_a, .flex_for_a => {
                 const fresh = try self.types.freshUnbd();
                 try mapping.put(id, fresh);
                 return fresh;
@@ -3498,7 +3823,7 @@ const Lowerer = struct {
         try mapping.put(id, placeholder);
 
         const lowered = switch (self.types.getNode(id)) {
-            .unbd, .for_a => unreachable,
+            .unbd, .for_a, .flex_for_a => unreachable,
             .link => unreachable,
             .nominal => |nominal| blk: {
                 const args = self.types.sliceTypeVarSpan(nominal.args);
@@ -3637,7 +3962,7 @@ const Lowerer = struct {
         if (id == needle) return true;
 
         return switch (self.types.getNode(id)) {
-            .unbd, .for_a => false,
+            .unbd, .for_a, .flex_for_a => false,
             .link => unreachable,
             .nominal => |nominal| blk: {
                 for (self.types.sliceTypeVarSpan(nominal.args)) |arg| {
@@ -3708,7 +4033,7 @@ const Lowerer = struct {
                 }
                 self.types.setNode(id, .for_a);
             },
-            .for_a => {},
+            .for_a, .flex_for_a => {},
             .link => unreachable,
             .nominal => |nominal| {
                 for (self.types.sliceTypeVarSpan(nominal.args)) |arg| {
@@ -3797,7 +4122,7 @@ const Lowerer = struct {
                 self.types.setNode(l, .{ .link = r });
                 return;
             },
-            .for_a => {
+            .for_a, .flex_for_a => {
                 if (builtin.mode == .Debug) {
                     const left_text = self.debugTypeSummary(l);
                     defer if (left_text.owned) self.allocator.free(left_text.text);
@@ -3839,7 +4164,7 @@ const Lowerer = struct {
                     self.types.setNode(r, .{ .link = l });
                     return;
                 },
-                .for_a => {
+                .for_a, .flex_for_a => {
                     if (builtin.mode == .Debug) {
                         const left_text = self.debugTypeSummary(l);
                         defer if (left_text.owned) self.allocator.free(left_text.text);
@@ -3907,7 +4232,7 @@ const Lowerer = struct {
                     self.types.setNode(r, .{ .link = l });
                     return;
                 },
-                .for_a => {
+                .for_a, .flex_for_a => {
                     return debugPanic("lambdasolved.unify generalized type without instantiation", .{});
                 },
                 .link => unreachable,
@@ -3946,6 +4271,7 @@ const Lowerer = struct {
             .link => unreachable,
             .unbd => try out.writer(self.allocator).print("?{}", .{@intFromEnum(id)}),
             .for_a => try out.writer(self.allocator).print("forall{}", .{@intFromEnum(id)}),
+            .flex_for_a => try out.writer(self.allocator).print("flexforall{}", .{@intFromEnum(id)}),
             .nominal => |nominal| {
                 try out.appendSlice(self.allocator, self.input.idents.getText(nominal.ident));
                 if (depth == 0) return;
@@ -4325,7 +4651,7 @@ const Lowerer = struct {
                 .lambda_set => id,
                 else => null,
             },
-            .unbd, .for_a => null,
+            .unbd, .for_a, .flex_for_a => null,
             .link => unreachable,
         };
     }

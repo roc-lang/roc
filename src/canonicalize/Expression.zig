@@ -372,6 +372,7 @@ pub const Expr = union(enum) {
         lhs: Expr.Idx,
         rhs: Expr.Idx,
         negated: bool,
+        constraint_fn_var: types.Var,
     },
     /// Method call expression rooted in a type-var alias namespace.
     ///

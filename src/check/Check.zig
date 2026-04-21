@@ -4909,7 +4909,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             {
                 try self.unifyWith(expr_var, .err, env);
             } else {
-                _ = try self.mkMethodCallConstraint(
+                const constraint_fn_var = try self.mkMethodCallConstraint(
                     lhs_var,
                     arg_vars,
                     expr_var,
@@ -4917,6 +4917,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     env,
                     expr_region,
                     expr_idx,
+                );
+                self.cir.store.replaceExprWithMethodEq(
+                    expr_idx,
+                    eq.lhs,
+                    eq.rhs,
+                    eq.negated,
+                    constraint_fn_var,
                 );
             }
         },
@@ -6502,10 +6509,22 @@ fn rewriteEqBinopAsMethodEq(self: *Self, constraint: StaticDispatchConstraint) v
     switch (self.cir.store.getExpr(expr_idx)) {
         .e_binop => |binop| {
             if (binop.op != .eq and binop.op != .ne) return;
-            self.cir.store.replaceExprWithMethodEq(expr_idx, binop.lhs, binop.rhs, constraint.binop_negated);
+            self.cir.store.replaceExprWithMethodEq(
+                expr_idx,
+                binop.lhs,
+                binop.rhs,
+                constraint.binop_negated,
+                constraint.fn_var,
+            );
         },
         .e_method_eq => |eq| {
-            self.cir.store.replaceExprWithMethodEq(expr_idx, eq.lhs, eq.rhs, constraint.binop_negated);
+            self.cir.store.replaceExprWithMethodEq(
+                expr_idx,
+                eq.lhs,
+                eq.rhs,
+                constraint.binop_negated,
+                constraint.fn_var,
+            );
         },
         else => {},
     }
@@ -6862,6 +6881,7 @@ fn finalizeNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Err
         const var_: types_mod.Var = @enumFromInt(i);
         const resolved = self.types.resolveVar(var_);
         if (resolved.desc.content != .flex) continue;
+        if (resolved.desc.rank == .generalized) continue;
 
         const flex = resolved.desc.content.flex;
         const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);

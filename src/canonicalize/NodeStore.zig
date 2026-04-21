@@ -976,6 +976,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .lhs = @enumFromInt(p.lhs),
                 .rhs = @enumFromInt(p.rhs),
                 .negated = p.negated != 0,
+                .constraint_fn_var = @enumFromInt(p.constraint_fn_var),
             } };
         },
         .expr_type_method_call => {
@@ -1119,6 +1120,7 @@ pub fn replaceExprWithMethodEq(
     lhs: CIR.Expr.Idx,
     rhs: CIR.Expr.Idx,
     negated: bool,
+    constraint_fn_var: types.Var,
 ) void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
     var node = Node.init(.expr_method_eq);
@@ -1126,6 +1128,7 @@ pub fn replaceExprWithMethodEq(
         .lhs = @intFromEnum(lhs),
         .rhs = @intFromEnum(rhs),
         .negated = @intFromBool(negated),
+        .constraint_fn_var = @intFromEnum(constraint_fn_var),
     } });
     store.nodes.set(node_idx, node);
 }
@@ -2165,6 +2168,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .lhs = @intFromEnum(e.lhs),
                 .rhs = @intFromEnum(e.rhs),
                 .negated = @intFromBool(e.negated),
+                .constraint_fn_var = @intFromEnum(e.constraint_fn_var),
             } });
         },
         .e_type_method_call => |e| {

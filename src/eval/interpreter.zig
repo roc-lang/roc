@@ -5060,9 +5060,15 @@ pub const Interpreter = struct {
             const expected_layout_val = self.layout_store.getLayout(expected_layout);
             const actual_is_box = actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst;
             const expected_is_box = expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst;
+            const actual_is_erased_ptr = actual_layout_val.tag == .scalar and actual_layout_val.data.scalar.tag == .opaque_ptr;
+            const expected_is_erased_ptr = expected_layout_val.tag == .scalar and expected_layout_val.data.scalar.tag == .opaque_ptr;
             const actual_is_list = actual_layout_val.tag == .list or actual_layout_val.tag == .list_of_zst;
             const expected_is_list = expected_layout_val.tag == .list or expected_layout_val.tag == .list_of_zst;
-            if (actual_is_box != expected_is_box or actual_is_list or expected_is_list) {
+            const boxing_compatible =
+                (actual_is_box == expected_is_box) or
+                (actual_is_box and expected_is_erased_ptr) or
+                (expected_is_box and actual_is_erased_ptr);
+            if (!boxing_compatible or actual_is_list or expected_is_list) {
                 self.invariantFailed(
                     "LIR/interpreter invariant violated: explicit nominal bridge expected non-list layouts on the same side of physical boxing, got actual={d} ({s}) expected={d} ({s})",
                     .{

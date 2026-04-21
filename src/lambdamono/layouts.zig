@@ -147,6 +147,17 @@ pub const Layouts = struct {
         index: usize,
         value: ast.TypedSymbol,
     ) std.mem.Allocator.Error!void {
+        if (mono_types.containsAbstractLeaf(value.ty)) {
+            debugPanicFmt(
+                "lambdamono.layouts.recordTypedSymbol abstract executable type leaked before layout typed_symbol={d} symbol={d} ty={d} ({s})",
+                .{
+                    index,
+                    value.symbol.raw(),
+                    @intFromEnum(value.ty),
+                    @tagName(mono_types.getTypePreservingNominal(value.ty)),
+                },
+            );
+        }
         self.typed_symbol_layouts[index] = try self.layoutForExecutableType(allocator, mono_types, idents, value.ty);
     }
 
@@ -171,6 +182,29 @@ pub const Layouts = struct {
         expr: ast.Expr,
     ) std.mem.Allocator.Error!void {
         const i = @intFromEnum(expr_id);
+        if (mono_types.containsAbstractLeaf(expr.ty)) {
+            if (expr.data == .low_level) {
+                debugPanicFmt(
+                    "lambdamono.layouts.recordExpr abstract executable type leaked before layout expr={d} tag={s} ty={d} ({s}) low_level={s}",
+                    .{
+                        i,
+                        @tagName(expr.data),
+                        @intFromEnum(expr.ty),
+                        @tagName(mono_types.getTypePreservingNominal(expr.ty)),
+                        @tagName(expr.data.low_level.op),
+                    },
+                );
+            }
+            debugPanicFmt(
+                "lambdamono.layouts.recordExpr abstract executable type leaked before layout expr={d} tag={s} ty={d} ({s})",
+                .{
+                    i,
+                    @tagName(expr.data),
+                    @intFromEnum(expr.ty),
+                    @tagName(mono_types.getTypePreservingNominal(expr.ty)),
+                },
+            );
+        }
         self.expr_layouts[i] = try self.layoutForExecutableType(allocator, mono_types, idents, expr.ty);
         self.expr_discriminant_layouts[i] = try self.maybeDiscriminantLayout(self.exprLayout(expr_id));
         switch (expr.data) {
@@ -263,6 +297,17 @@ pub const Layouts = struct {
         pat: ast.Pat,
     ) std.mem.Allocator.Error!void {
         const i = @intFromEnum(pat_id);
+        if (mono_types.containsAbstractLeaf(pat.ty)) {
+            debugPanicFmt(
+                "lambdamono.layouts.recordPat abstract executable type leaked before layout pat={d} tag={s} ty={d} ({s})",
+                .{
+                    i,
+                    @tagName(pat.data),
+                    @intFromEnum(pat.ty),
+                    @tagName(mono_types.getTypePreservingNominal(pat.ty)),
+                },
+            );
+        }
         self.pat_layouts[i] = try self.layoutForExecutableType(allocator, mono_types, idents, pat.ty);
         switch (pat.data) {
             .tag => |tag| {
@@ -539,6 +584,11 @@ fn lowerPrim(prim: type_mod.Prim) layout_mod.Idx {
 fn debugPanic(comptime msg: []const u8) noreturn {
     @branchHint(.cold);
     std.debug.panic("{s}", .{msg});
+}
+
+fn debugPanicFmt(comptime msg: []const u8, args: anytype) noreturn {
+    @branchHint(.cold);
+    std.debug.panic(msg, args);
 }
 
 test "layouts tests" {

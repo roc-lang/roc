@@ -3223,24 +3223,29 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // The argument is the Box — get its layout to find element info
                     const box_arg_layout = self.valueLayout(args[0]);
                     const box_layout_data = ls.getLayout(box_arg_layout);
+                    const erased_box_ptr = box_layout_data.tag == .scalar and box_layout_data.data.scalar.tag == .opaque_ptr;
 
-                    if (box_layout_data.tag == .box_of_zst) {
+                    if (box_layout_data.tag == .box_of_zst or
+                        (erased_box_ptr and ls.isZeroSized(ls.getLayout(ll.ret_layout))))
+                    {
                         // Unboxing a ZST: evaluate the box expression (for side effects)
                         // but return a ZST (no data).
                         _ = try self.emitValueLocal(args[0]);
                         return .{ .immediate_i64 = 0 };
                     }
 
-                    const box_abi = ls.builtinBoxAbi(box_arg_layout);
-                    const elem_size: u32 = box_abi.elem_size;
+                    const elem_layout_idx: layout.Idx = if (erased_box_ptr)
+                        ll.ret_layout
+                    else
+                        (ls.builtinBoxAbi(box_arg_layout).elem_layout_idx orelse .zst);
+                    const elem_layout_data = ls.getLayout(elem_layout_idx);
+                    const elem_size: u32 = ls.layoutSize(elem_layout_data);
 
                     // Handle ZST element even when layout tag is .box (not .box_of_zst)
                     if (elem_size == 0) {
                         _ = try self.emitValueLocal(args[0]);
                         return .{ .immediate_i64 = 0 };
                     }
-                    const elem_layout_idx = box_abi.elem_layout_idx orelse .zst;
-                    const elem_layout_data = box_abi.elem_layout;
 
                     // Generate the box pointer expression
                     const box_loc = try self.emitValueLocal(args[0]);
@@ -7363,9 +7368,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const expected_layout_val = self.layout_store.getLayout(expected_layout);
                 const actual_is_box = actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst;
                 const expected_is_box = expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst;
+                const actual_is_erased_ptr = actual_layout_val.tag == .scalar and actual_layout_val.data.scalar.tag == .opaque_ptr;
+                const expected_is_erased_ptr = expected_layout_val.tag == .scalar and expected_layout_val.data.scalar.tag == .opaque_ptr;
                 const actual_is_list = actual_layout_val.tag == .list or actual_layout_val.tag == .list_of_zst;
                 const expected_is_list = expected_layout_val.tag == .list or expected_layout_val.tag == .list_of_zst;
-                if (actual_is_box != expected_is_box or actual_is_list or expected_is_list) {
+                const boxing_compatible =
+                    (actual_is_box == expected_is_box) or
+                    (actual_is_box and expected_is_erased_ptr) or
+                    (expected_is_box and actual_is_erased_ptr);
+                if (!boxing_compatible or actual_is_list or expected_is_list) {
                     std.debug.panic(
                         "LIR/codegen invariant violated at {s}: explicit nominal bridge expected non-list layouts on the same side of physical boxing, got actual={} ({s}) expected={} ({s})",
                         .{

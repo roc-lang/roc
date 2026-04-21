@@ -1,6 +1,7 @@
 //! Lower lambdamono into cor-style IR.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const types = @import("types");
 const lambdamono = @import("lambdamono");

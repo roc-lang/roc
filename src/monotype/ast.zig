@@ -119,6 +119,7 @@ pub const Expr = struct {
             lhs: ExprId,
             rhs: ExprId,
             negated: bool,
+            dispatch_constraint_ty: TypeId,
         },
         dispatch_call: struct {
             receiver: ExprId,

@@ -2635,7 +2635,7 @@ pub const Interpreter = struct {
             // },
             // Numeric comparison operations
             .num_is_eq => {
-                // num.is_eq : num, num -> Bool (all integer types + Dec, NOT F32/F64)
+                // num.is_eq : num, num -> Bool
                 std.debug.assert(args.len == 2); // low-level .num_is_eq expects 2 arguments
                 const lhs = try self.extractNumericValue(args[0]);
                 const rhs = try self.extractNumericValue(args[1]);

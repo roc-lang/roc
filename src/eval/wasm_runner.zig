@@ -200,6 +200,9 @@ pub fn runWasmStr(
         if (wasm_crash_state == .crashed) {
             return error.Crash;
         }
+        if (std.debug.runtime_safety) {
+            debugPrint("wasm invoke failed: {s}\n", .{@errorName(err)});
+        }
         switch (err) {
             error.TrapUnreachable => {
                 std.debug.assert(false);
@@ -212,6 +215,9 @@ pub fn runWasmStr(
     const str_ptr: u32 = @bitCast(returns[0].I32);
     const mem_slice = module_instance.memoryAll();
     if (str_ptr + 12 > mem_slice.len) {
+        if (std.debug.runtime_safety) {
+            debugPrint("wasm invalid str ptr: ptr={d} mem_len={d}\n", .{ str_ptr, mem_slice.len });
+        }
         return error.WasmExecFailed;
     }
 
@@ -219,6 +225,9 @@ pub fn runWasmStr(
     const str_data: []const u8 = if (byte11 & 0x80 != 0) sd: {
         const sso_len: u32 = byte11 & 0x7F;
         if (sso_len > 11) {
+            if (std.debug.runtime_safety) {
+                debugPrint("wasm invalid sso len: ptr={d} len={d}\n", .{ str_ptr, sso_len });
+            }
             return error.WasmExecFailed;
         }
         break :sd mem_slice[str_ptr..][0..sso_len];
@@ -226,6 +235,9 @@ pub fn runWasmStr(
         const data_ptr: u32 = @bitCast(mem_slice[str_ptr..][0..4].*);
         const data_len: u32 = @bitCast(mem_slice[str_ptr + 4 ..][0..4].*);
         if (data_ptr + data_len > mem_slice.len) {
+            if (std.debug.runtime_safety) {
+                debugPrint("wasm invalid str heap slice: str_ptr={d} data_ptr={d} data_len={d} mem_len={d}\n", .{ str_ptr, data_ptr, data_len, mem_slice.len });
+            }
             return error.WasmExecFailed;
         }
         break :sd mem_slice[data_ptr..][0..data_len];

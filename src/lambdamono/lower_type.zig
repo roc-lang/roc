@@ -108,7 +108,7 @@ fn lowerTypeRec(
                 .backing = try lowerTypeRec(types, mono_types, mono_cache, nominal.backing, symbols),
             } };
         },
-        .for_a, .unbd => .{ .tag_union = .{ .tags = &.{} } },
+        .unbd, .for_a, .flex_for_a => .unbd,
         .content => |content| switch (content) {
             .func => blk: {
                 const unit_ty = try mono_types.internResolved(.{
@@ -121,7 +121,7 @@ fn lowerTypeRec(
                 .list = try lowerTypeRec(types, mono_types, mono_cache, elem, symbols),
             },
             .box => |elem| .{
-                .box = try lowerTypeRec(types, mono_types, mono_cache, elem, symbols),
+                .box = try lowerBoxPayloadType(types, mono_types, mono_cache, elem, symbols),
             },
             .tuple => |tuple| blk: {
                 const elems = types.sliceTypeVarSpan(tuple);
@@ -231,6 +231,54 @@ fn lowerLambdaSet(
     } };
 }
 
+fn commonErasedCaptureType(
+    types: *solved.Type.Store,
+    mono_types: *mono.Store,
+    mono_cache: *MonoCache,
+    lambdas: []const solved.Type.Lambda,
+    symbols: *const symbol_mod.Store,
+) std.mem.Allocator.Error!?mono.TypeId {
+    var common: ?mono.TypeId = null;
+    for (lambdas) |lambda| {
+        const captures = types.sliceCaptures(lambda.captures);
+        const next: ?mono.TypeId = if (captures.len == 0)
+            null
+        else
+            try lowerCaptures(types, mono_types, mono_cache, captures, symbols);
+        if (common == null) {
+            common = next;
+            continue;
+        }
+        if (common == null and next == null) continue;
+        if (common == null or next == null or common.? != next.?) {
+            @branchHint(.cold);
+            std.debug.panic(
+                "lambdamono.lower_type boxed callable variants require a common capture type",
+                .{},
+            );
+        }
+    }
+    return common;
+}
+
+fn lowerBoxPayloadType(
+    types: *solved.Type.Store,
+    mono_types: *mono.Store,
+    mono_cache: *MonoCache,
+    elem: TypeVarId,
+    symbols: *const symbol_mod.Store,
+) std.mem.Allocator.Error!mono.TypeId {
+    if (types.maybeLambdaRepr(elem)) |repr| {
+        return switch (repr) {
+            .lset => |lambdas| try mono_types.internResolved(.{
+                .erased_fn = try commonErasedCaptureType(types, mono_types, mono_cache, lambdas, symbols),
+            }),
+            .erased => try mono_types.internResolved(.{ .erased_fn = null }),
+        };
+    }
+    return try lowerTypeRec(types, mono_types, mono_cache, elem, symbols);
+}
+
 /// Lower solved lambda captures into an executable capture-record type.
 pub fn lowerCaptures(
     types: *solved.Type.Store,
@@ -250,6 +298,17 @@ pub fn lowerCaptures(
     }
 
     return try lowerCaptureBindings(types, mono_types, mono_cache, capture_bindings, symbols);
+}
+
+/// Lower one solved type into an executable type without applying boundary erasure.
+pub fn lowerType(
+    types: *solved.Type.Store,
+    mono_types: *mono.Store,
+    mono_cache: *MonoCache,
+    ty: TypeVarId,
+    symbols: *const symbol_mod.Store,
+) std.mem.Allocator.Error!mono.TypeId {
+    return try lowerTypeRec(types, mono_types, mono_cache, ty, symbols);
 }
 
 fn unlinkExecutable(types: *solved.Type.Store, ty: TypeVarId) TypeVarId {

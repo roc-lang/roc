@@ -303,7 +303,6 @@ const ProcLowerer = struct {
     locals_by_var: std.AutoHashMap(VarKey, LIR.LocalId),
     join_locals_by_id: std.AutoHashMap(u32, LIR.LocalId),
     loop_break_targets: std.ArrayList(LIR.CFStmtId),
-    current_expr_id: ?ir.Ast.ExprId,
 
     const VarKey = struct {
         symbol: u64,
@@ -317,7 +316,6 @@ const ProcLowerer = struct {
             .locals_by_var = std.AutoHashMap(VarKey, LIR.LocalId).init(parent.allocator),
             .join_locals_by_id = std.AutoHashMap(u32, LIR.LocalId).init(parent.allocator),
             .loop_break_targets = .empty,
-            .current_expr_id = null,
         };
     }
 
@@ -1080,11 +1078,10 @@ const ProcLowerer = struct {
         const source_payload_layout = try self.parent.lowerLayoutId(source_payload_ref);
         const source_payload_local = try self.freshLocalWithLayoutAndRef(source_payload_layout, source_payload_ref);
         const target_payload_ref = self.unionPayloadLayoutRef(target_ref, discriminant);
-        const target_payload_local = if (source_payload_layout == target_payload_layout and
-            layoutRefsEqual(source_payload_ref, target_payload_ref))
-            source_payload_local
-        else
-            try self.freshLocalWithLayoutAndRef(target_payload_layout, target_payload_ref);
+        const target_payload_local = try self.freshLocalWithLayoutAndRef(
+            target_payload_layout,
+            target_payload_ref,
+        );
 
         const assign_tag = try self.parent.store.addCFStmt(.{ .assign_tag = .{
             .target = target_local,
@@ -1121,11 +1118,10 @@ const ProcLowerer = struct {
             next
         else blk: {
             const actual_payload_local = try self.freshLocalWithLayoutAndRef(actual_payload_layout, actual_payload_ref);
-            const target_payload_local = if (actual_payload_layout == target_payload_layout and
-                layoutRefsEqual(actual_payload_ref, target_payload_ref))
-                actual_payload_local
-            else
-                try self.freshLocalWithLayoutAndRef(target_payload_layout, target_payload_ref);
+            const target_payload_local = try self.freshLocalWithLayoutAndRef(
+                target_payload_layout,
+                target_payload_ref,
+            );
 
             const assign_tag = if (self.parent.layouts.getLayout(target_layout).tag == .zst)
                 next
@@ -1227,6 +1223,22 @@ const ProcLowerer = struct {
             return try self.addAssignRef(target_local, .fresh, .{ .nominal = .{ .backing_ref = source_local } }, next);
         }
 
+        if (actual_is_box and target.tag == .scalar and target.data.scalar.tag == .opaque_ptr) {
+            return try self.addAssignRef(target_local, .fresh, .{ .nominal = .{ .backing_ref = source_local } }, next);
+        }
+
+        if (actual.tag == .scalar and actual.data.scalar.tag == .opaque_ptr) {
+            const args = try self.parent.store.addLocalSpan(&.{source_local});
+            return try self.parent.store.addCFStmt(.{ .assign_low_level = .{
+                .target = target_local,
+                .result = lowLevelResultSemantics(.box_unbox, &.{source_local}),
+                .ownership = try self.lowLevelOwnership(.box_unbox, &.{source_local}),
+                .op = .box_unbox,
+                .args = args,
+                .next = next,
+            } });
+        }
+
         if (actual.tag == .box and actual.data.box == target_layout) {
             const args = try self.parent.store.addLocalSpan(&.{source_local});
             return try self.parent.store.addCFStmt(.{ .assign_low_level = .{
@@ -1257,6 +1269,12 @@ const ProcLowerer = struct {
 
         const actual_singleton_payload_ref = self.singletonTagUnionPayloadRef(actual_ref);
         const target_singleton_payload_ref = self.singletonTagUnionPayloadRef(target_ref);
+
+        if (target.tag == .tag_union) {
+            if (actual_singleton_payload_ref) |source_payload_ref| {
+                return try self.lowerSingletonTagUnionIntoTagUnion(source_local, target_local, next, source_payload_ref);
+            }
+        }
 
         if (actual.tag == .zst and target.tag == .tag_union) {
             if (target_singleton_payload_ref) |target_payload_ref| {
@@ -1327,34 +1345,17 @@ const ProcLowerer = struct {
         }
 
         if (builtin.mode == .Debug) {
-            if (self.current_expr_id) |expr_id| {
-                const expr = self.parent.input.store.getExpr(expr_id);
-                const extra = switch (expr) {
-                    .call_direct => |call| call.proc.raw(),
-                    else => 0,
-                };
-                std.debug.panic(
-                    "lir.from_ir invariant violated: no explicit bridge in proc {d} expr {d} tag {s} extra {d} from layout {d} ({s}) to layout {d} ({s})",
-                    .{
-                        @intFromEnum(self.proc_id),
-                        @intFromEnum(expr_id),
-                        @tagName(expr),
-                        extra,
-                        @intFromEnum(actual_layout),
-                        @tagName(ls.getLayout(actual_layout).tag),
-                        @intFromEnum(target_layout),
-                        @tagName(ls.getLayout(target_layout).tag),
-                    },
-                );
-            }
             std.debug.panic(
-                "lir.from_ir invariant violated: no explicit bridge in proc {d} from layout {d} ({s}) to layout {d} ({s})",
+                "lir.from_ir invariant violated: proc={d} symbol={d} no explicit bridge from layout {d} ({s}) ref={any} to layout {d} ({s}) ref={any}",
                 .{
                     @intFromEnum(self.proc_id),
+                    self.parent.store.getProcSpec(self.proc_id).name.raw(),
                     @intFromEnum(actual_layout),
                     @tagName(ls.getLayout(actual_layout).tag),
+                    actual_ref,
                     @intFromEnum(target_layout),
                     @tagName(ls.getLayout(target_layout).tag),
+                    target_ref,
                 },
             );
         }
@@ -1469,11 +1470,10 @@ const ProcLowerer = struct {
                 const actual_payload_ref = self.unionPayloadLayoutRef(actual_ref, discriminant);
                 const target_payload_ref = self.unionPayloadLayoutRef(target_ref, discriminant);
                 const actual_payload_local = try self.freshLocalWithLayoutAndRef(actual_payload_layout, actual_payload_ref);
-                const target_payload_local = if (actual_payload_layout == target_payload_layout and
-                    layoutRefsEqual(actual_payload_ref, target_payload_ref))
-                    actual_payload_local
-                else
-                    try self.freshLocalWithLayoutAndRef(target_payload_layout, target_payload_ref);
+                const target_payload_local = try self.freshLocalWithLayoutAndRef(
+                    target_payload_layout,
+                    target_payload_ref,
+                );
 
                 const assign_tag = try self.parent.store.addCFStmt(.{ .assign_tag = .{
                     .target = target_local,
@@ -1721,8 +1721,6 @@ const ProcLowerer = struct {
         expr_id: ir.Ast.ExprId,
         next: LIR.CFStmtId,
     ) std.mem.Allocator.Error!LIR.CFStmtId {
-        self.current_expr_id = expr_id;
-        defer self.current_expr_id = null;
         const target = try self.lowerVar(bind);
         const expr = self.parent.input.store.getExpr(expr_id);
         return switch (expr) {

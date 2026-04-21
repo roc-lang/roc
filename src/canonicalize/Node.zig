@@ -643,6 +643,7 @@ pub const Payload = extern union {
         rhs: u32,
         negated: u8,
         _padding: [3]u8 = .{ 0, 0, 0 },
+        constraint_fn_var: u32,
     };
 
     pub const ExprTypeMethodCall = extern struct {

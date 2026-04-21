@@ -3,15 +3,18 @@
 const std = @import("std");
 const base = @import("base");
 const can = @import("can");
+const check = @import("check");
 const backend = @import("backend");
 const builtins = @import("builtins");
 const collections = @import("collections");
 const layout = @import("layout");
+const types_mod = @import("types");
 const monotype = @import("monotype");
 const monotype_lifted = @import("monotype_lifted");
 const lambdasolved = @import("lambdasolved");
 const lambdamono = @import("lambdamono");
 const ir = @import("ir");
+const symbol_mod = @import("symbol");
 const Interpreter = @import("../interpreter.zig").Interpreter;
 const RuntimeHostEnv = @import("RuntimeHostEnv.zig");
 const helpers = @import("helpers.zig");
@@ -201,6 +204,27 @@ fn compileMonotypeFromParsedResources(
     return mono_lowerer.run(0);
 }
 
+fn compileEntrySpecializedMonotypeFromParsedResources(
+    allocator: std.mem.Allocator,
+    resources: *helpers.ParsedResources,
+) !monotype.Lower.Result {
+    const defs = resources.module_env.store.sliceDefs(resources.module_env.all_defs);
+    var entry_def: ?can.CIR.Def.Idx = null;
+    for (defs) |def_idx| {
+        const def = resources.module_env.store.getDef(def_idx);
+        if (def.expr == resources.expr_idx) {
+            entry_def = def_idx;
+            break;
+        }
+    }
+    const entry_def_idx = entry_def orelse return error.NoRootDefinition;
+
+    var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, &resources.typed_cir_modules, 1, null);
+    defer mono_lowerer.deinit();
+    _ = try mono_lowerer.specializeTopLevelDef(0, entry_def_idx);
+    return mono_lowerer.run(0);
+}
+
 fn compileExecutableFromParsedResources(
     allocator: std.mem.Allocator,
     resources: *helpers.ParsedResources,
@@ -364,6 +388,175 @@ fn countIrBridgeNodes(ir_result: *const ir.Lower.Result) usize {
         }
     }
     return count;
+}
+
+fn debugPrintExecutableType(
+    executable: *const lambdamono.Lower.Result,
+    ty: lambdamono.Type.TypeId,
+) void {
+    const content = executable.types.getTypePreservingNominal(ty);
+    std.debug.print("{s}#{d}", .{ @tagName(content), @intFromEnum(ty) });
+    switch (content) {
+        .primitive => |prim| std.debug.print("({s})", .{@tagName(prim)}),
+        .list => |elem| std.debug.print("(elem=#{d})", .{@intFromEnum(elem)}),
+        .box => |elem| std.debug.print("(elem=#{d})", .{@intFromEnum(elem)}),
+        .erased_fn => |capture_ty| {
+            if (capture_ty) |capture| {
+                std.debug.print("(capture=#{d})", .{@intFromEnum(capture)});
+            } else {
+                std.debug.print("(capture=none)", .{});
+            }
+        },
+        .tuple => |elems| {
+            std.debug.print("(len={d}", .{elems.len});
+            for (elems) |elem| {
+                std.debug.print(" #{d}", .{@intFromEnum(elem)});
+            }
+            std.debug.print(")", .{});
+        },
+        .nominal => |nominal| {
+            std.debug.print("(module={d} ident={any} backing=#{d}", .{
+                nominal.module_idx,
+                nominal.ident,
+                @intFromEnum(nominal.backing),
+            });
+            for (nominal.args) |arg| {
+                std.debug.print(" arg=#{d}", .{@intFromEnum(arg)});
+            }
+            std.debug.print(")", .{});
+        },
+        .record => |record| {
+                std.debug.print("(fields={d}", .{record.fields.len});
+                for (record.fields) |field| {
+                std.debug.print(" {any}:#{d}", .{
+                    field.name,
+                    @intFromEnum(field.ty),
+                });
+            }
+            std.debug.print(")", .{});
+        },
+        .tag_union => |tag_union| {
+            std.debug.print("(tags={d}", .{tag_union.tags.len});
+            for (tag_union.tags, 0..) |tag, i| {
+                std.debug.print(" [{d}:{s}", .{ i, @tagName(tag.name) });
+                switch (tag.name) {
+                    .ctor => |name| std.debug.print(" ctor={any}", .{name}),
+                    .lambda => |lambda| std.debug.print(" lambda={d}", .{lambda.raw()}),
+                }
+                for (tag.args) |arg| {
+                    std.debug.print(" arg=#{d}", .{@intFromEnum(arg)});
+                }
+                std.debug.print("]", .{});
+            }
+            std.debug.print(")", .{});
+        },
+        .placeholder, .unbd, .link => {},
+    }
+}
+
+fn debugPrintExecutableExprs(executable: *const lambdamono.Lower.Result) void {
+    std.debug.print("\n== executable exprs ==\n", .{});
+    for (executable.store.exprs.items, 0..) |expr, i| {
+        std.debug.print("expr[{d}] tag={s} ty=", .{ i, @tagName(std.meta.activeTag(expr.data)) });
+        debugPrintExecutableType(executable, expr.ty);
+        switch (expr.data) {
+            .bridge => |source| {
+                const source_expr = executable.store.getExpr(source);
+                std.debug.print(" source={d} source_tag={s} source_ty=", .{
+                    @intFromEnum(source),
+                    @tagName(std.meta.activeTag(source_expr.data)),
+                });
+                debugPrintExecutableType(executable, source_expr.ty);
+            },
+            .call => |call| {
+                std.debug.print(" proc={d} args_len={d}", .{ call.proc.raw(), call.args.len });
+            },
+            .tag => |tag| {
+                std.debug.print(" discr={d} args_len={d}", .{ tag.discriminant, tag.args.len });
+            },
+            .tag_payload => |payload| {
+                std.debug.print(" union={d} discr={d} payload={d}", .{
+                    @intFromEnum(payload.tag_union),
+                    payload.tag_discriminant,
+                    payload.payload_index,
+                });
+            },
+            .when => |when_expr| {
+                std.debug.print(" cond={d} branches={d}", .{
+                    @intFromEnum(when_expr.cond),
+                    when_expr.branches.len,
+                });
+            },
+            .let_ => |let_expr| {
+                std.debug.print(" bind_sym={d} bind_ty=", .{ let_expr.bind.symbol.raw() });
+                debugPrintExecutableType(executable, let_expr.bind.ty);
+                std.debug.print(" body={d} rest={d}", .{
+                    @intFromEnum(let_expr.body),
+                    @intFromEnum(let_expr.rest),
+                });
+            },
+            .var_ => |symbol| {
+                std.debug.print(" symbol={d}", .{symbol.raw()});
+            },
+            else => {},
+        }
+        std.debug.print("\n", .{});
+    }
+}
+
+fn debugPrintIrLayoutRef(graph: *const layout.Graph, ref: ir.Ast.LayoutRef) void {
+    switch (ref) {
+        .canonical => |idx| std.debug.print("canonical#{d}", .{@intFromEnum(idx)}),
+        .local => |node| std.debug.print("{s}#{d}", .{
+            @tagName(graph.getNode(node)),
+            @intFromEnum(node),
+        }),
+    }
+}
+
+fn debugPrintIrBridges(ir_result: *const ir.Lower.Result) void {
+    std.debug.print("\n== ir bridge lets ==\n", .{});
+    for (ir_result.store.stmts.items, 0..) |stmt, stmt_idx| {
+        switch (stmt) {
+            .let_ => |let_stmt| {
+                const expr = ir_result.store.getExpr(let_stmt.expr);
+                switch (expr) {
+                    .bridge => |source| {
+                        std.debug.print("stmt[{d}] bind_sym={d} bind_layout=", .{
+                            stmt_idx,
+                            let_stmt.bind.symbol.raw(),
+                        });
+                        debugPrintIrLayoutRef(&ir_result.layouts, let_stmt.bind.layout);
+                        std.debug.print(" source_sym={d} source_layout=", .{source.symbol.raw()});
+                        debugPrintIrLayoutRef(&ir_result.layouts, source.layout);
+                        std.debug.print("\n", .{});
+                    },
+                    else => {},
+                }
+            },
+            else => {},
+        }
+    }
+}
+
+fn debugPrintBridgeShapesForSource(
+    source_kind: helpers.SourceKind,
+    source: []const u8,
+    imports: []const helpers.ModuleSource,
+) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const arena_allocator = arena.allocator();
+    var executable = try compileExecutableProgram(arena_allocator, source_kind, source, imports);
+    defer executable.deinit(arena_allocator);
+    debugPrintExecutableExprs(&executable.executable);
+    std.debug.print("executable bridge count={d}\n", .{countExecutableBridgeNodes(&executable.executable)});
+
+    var ir_program = try compileIrProgram(arena_allocator, source_kind, source, imports);
+    defer ir_program.deinit(arena_allocator);
+    debugPrintIrBridges(&ir_program.ir_result);
+    std.debug.print("ir bridge count={d}\n", .{countIrBridgeNodes(&ir_program.ir_result)});
 }
 
 fn countSpecializedLocalFnDefs(executable: *const lambdamono.Lower.Result) usize {
@@ -1711,6 +1904,66 @@ test "cor pipeline - lowering emits explicit bridges only at real representation
     try testing.expectEqual(executable_bridges, countIrBridgeNodes(&ir_program.ir_result));
 }
 
+test "cor pipeline - debug bridge shapes recursive tag payload issue 8754" {
+    try debugPrintBridgeShapesForSource(
+        .module,
+        \\Tree := [Node(Str, List(Tree)), Text(Str), Wrapper(Tree)]
+        \\
+        \\inner : Tree
+        \\inner = Text("hello")
+        \\
+        \\wrapped : Tree
+        \\wrapped = Wrapper(inner)
+        \\
+        \\main = match wrapped {
+        \\    Wrapper(inner_tree) =>
+        \\        match inner_tree {
+        \\            Text(_) => 1
+        \\            Node(_, _) => 2
+        \\            Wrapper(_) => 3
+        \\        }
+        \\    _ => 0
+        \\}
+    ,
+        &.{},
+    );
+}
+
+test "cor pipeline - debug bridge shapes boxed lambda stored in tag union" {
+    try debugPrintBridgeShapesForSource(
+        .expr,
+        \\{
+        \\make = |n| |x| x + n
+        \\boxed = Box.box(make(6))
+        \\tagged = if Bool.True Ok(boxed) else Err(boxed)
+        \\f = Box.unbox(match tagged {
+        \\    Ok(value) => value
+        \\    Err(value) => value
+        \\})
+        \\f(1) + f(2)
+        \\}
+    ,
+        &.{},
+    );
+}
+
+test "cor pipeline - debug bridge shapes list concat utf8 issue 8618" {
+    try debugPrintBridgeShapesForSource(
+        .expr,
+        \\{
+        \\test = |line| {
+        \\    bytes = line.to_utf8()
+        \\    List.concat([0], bytes)
+        \\}
+        \\
+        \\x = test("abc")
+        \\x
+        \\}
+    ,
+        &.{},
+    );
+}
+
 test "cor pipeline - boxed lambda lowering uses erased-call path" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -1980,6 +2233,442 @@ fn rootMonotypeExprId(mono: *const monotype.Lower.Result) monotype.Ast.ExprId {
     };
 }
 
+fn monotypeRootValueExprId(mono: *const monotype.Lower.Result) monotype.Ast.ExprId {
+    const root_expr = mono.program.store.getExpr(rootMonotypeExprId(mono));
+    return switch (root_expr.data) {
+        .inspect => |expr_id| expr_id,
+        else => rootMonotypeExprId(mono),
+    };
+}
+
+fn checkedTypeText(
+    allocator: std.mem.Allocator,
+    module: check.TypedCIR.Module,
+    var_: types_mod.Var,
+) ![]u8 {
+    var type_writer = try types_mod.TypeWriter.initFromParts(
+        allocator,
+        module.typeStoreConst(),
+        module.identStoreConst(),
+        null,
+    );
+    defer type_writer.deinit();
+    try type_writer.write(var_, .wrap);
+    return try allocator.dupe(u8, type_writer.get());
+}
+
+fn typedCirPatternName(module: check.TypedCIR.Module, pattern_idx: can.CIR.Pattern.Idx) []const u8 {
+    return switch (module.pattern(pattern_idx).data) {
+        .assign => |assign| module.identStoreConst().getText(assign.ident),
+        else => @panic("expected assign pattern"),
+    };
+}
+
+fn typedCirBlockDeclExprByName(
+    module: check.TypedCIR.Module,
+    body_expr_idx: can.CIR.Expr.Idx,
+    name: []const u8,
+) !can.CIR.Expr.Idx {
+    const body_expr = module.expr(body_expr_idx);
+    const block = switch (body_expr.data) {
+        .e_block => |block| block,
+        else => return error.UnexpectedTypedCirBlockShape,
+    };
+
+    for (module.sliceStatements(block.stmts)) |stmt_idx| {
+        switch (module.getStatement(stmt_idx)) {
+            .s_decl => |decl| {
+                if (std.mem.eql(u8, typedCirPatternName(module, decl.pattern), name)) {
+                    return decl.expr;
+                }
+            },
+            else => {},
+        }
+    }
+
+    return error.MissingTypedCirLocalDecl;
+}
+
+fn typedCirTopLevelDefExprByName(module: check.TypedCIR.Module, name: []const u8) !can.CIR.Expr.Idx {
+    for (module.allDefs()) |def_idx| {
+        const def = module.def(def_idx);
+        if (std.mem.eql(u8, typedCirPatternName(module, def.data.pattern), name)) {
+            return def.data.expr;
+        }
+    }
+
+    return error.MissingTypedCirTopLevelDef;
+}
+
+const TypedCirLambdaBody = struct {
+    module: check.TypedCIR.Module,
+    body: can.CIR.Expr.Idx,
+};
+
+fn typedCirLambdaBodyFromExpr(
+    modules: *const check.TypedCIR.Modules,
+    module: check.TypedCIR.Module,
+    expr_idx: can.CIR.Expr.Idx,
+) !TypedCirLambdaBody {
+    const expr = module.expr(expr_idx);
+    return switch (expr.data) {
+        .e_lambda => |lambda| .{ .module = module, .body = lambda.body },
+        .e_closure => |closure| try typedCirLambdaBodyFromExpr(modules, module, closure.lambda_idx),
+        .e_call => |call| try typedCirLambdaBodyFromExpr(modules, module, call.func),
+        .e_lookup_external => |lookup| {
+            const target_module_idx = module.resolvedImportModule(lookup.module_idx) orelse
+                return error.MissingTypedCirImportTarget;
+            const target_module = modules.module(target_module_idx);
+            return try typedCirLambdaBodyFromExpr(
+                modules,
+                target_module,
+                target_module.def(@enumFromInt(lookup.target_node_idx)).data.expr,
+            );
+        },
+        else => return error.UnexpectedTypedCirEntrypointLambdaShape,
+    };
+}
+
+fn monotypeSymbolName(mono: *const monotype.Lower.Result, symbol: symbol_mod.Symbol) []const u8 {
+    return mono.idents.getText(mono.symbols.get(symbol).name);
+}
+
+fn monotypeTopLevelFnBodyByName(mono: *const monotype.Lower.Result, name: []const u8) !monotype.Ast.ExprId {
+    for (mono.program.store.defsSlice()) |def| {
+        if (!std.mem.eql(u8, monotypeSymbolName(mono, def.bind.symbol), name)) continue;
+        return switch (def.value) {
+            .fn_ => |fn_def| fn_def.body,
+            else => error.UnexpectedMonotypeDefShape,
+        };
+    }
+
+    return error.MissingMonotypeTopLevelDef;
+}
+
+fn monotypeTopLevelBindTyByName(mono: *const monotype.Lower.Result, name: []const u8) !monotype.Type.TypeId {
+    for (mono.program.store.defsSlice()) |def| {
+        if (std.mem.eql(u8, monotypeSymbolName(mono, def.bind.symbol), name)) {
+            return def.bind.ty;
+        }
+    }
+
+    return error.MissingMonotypeTopLevelDef;
+}
+
+fn rootLiftedExprId(lifted: *const monotype_lifted.Lower.Result) monotype_lifted.Ast.ExprId {
+    const root_def_id = lifted.root_defs.items[lifted.root_defs.items.len - 1];
+    const root_def = lifted.store.getDef(root_def_id);
+    return switch (root_def.value) {
+        .val => |expr_id| expr_id,
+        .run => |run_def| run_def.body,
+        else => @panic("expected lifted root expr def"),
+    };
+}
+
+fn liftedRootValueExprId(lifted: *const monotype_lifted.Lower.Result) monotype_lifted.Ast.ExprId {
+    const root_expr = lifted.store.getExpr(rootLiftedExprId(lifted));
+    return switch (root_expr.data) {
+        .inspect => |expr_id| expr_id,
+        else => rootLiftedExprId(lifted),
+    };
+}
+
+fn monotypeBlockDeclByName(
+    mono: *const monotype.Lower.Result,
+    body_expr_id: monotype.Ast.ExprId,
+    name: []const u8,
+) !@FieldType(monotype.Ast.Stmt, "decl") {
+    const body_expr = mono.program.store.getExpr(body_expr_id);
+    const block = switch (body_expr.data) {
+        .block => |block| block,
+        else => return error.UnexpectedMonotypeFnBodyShape,
+    };
+
+    for (mono.program.store.sliceStmtSpan(block.stmts)) |stmt_id| {
+        switch (mono.program.store.getStmt(stmt_id)) {
+            .decl => |decl| {
+                if (std.mem.eql(u8, monotypeSymbolName(mono, decl.bind.symbol), name)) {
+                    return decl;
+                }
+            },
+            else => {},
+        }
+    }
+
+    return error.MissingMonotypeLocalDecl;
+}
+
+fn maybeMonotypeBlockDeclByName(
+    mono: *const monotype.Lower.Result,
+    body_expr_id: monotype.Ast.ExprId,
+    name: []const u8,
+) ?@FieldType(monotype.Ast.Stmt, "decl") {
+    const body_expr = mono.program.store.getExpr(body_expr_id);
+    const block = switch (body_expr.data) {
+        .block => |block| block,
+        else => return null,
+    };
+
+    for (mono.program.store.sliceStmtSpan(block.stmts)) |stmt_id| {
+        switch (mono.program.store.getStmt(stmt_id)) {
+            .decl => |decl| {
+                if (std.mem.eql(u8, monotypeSymbolName(mono, decl.bind.symbol), name)) {
+                    return decl;
+                }
+            },
+            else => {},
+        }
+    }
+
+    return null;
+}
+
+fn monotypeBlockLocalFnBodyByName(
+    mono: *const monotype.Lower.Result,
+    body_expr_id: monotype.Ast.ExprId,
+    name: []const u8,
+) !monotype.Ast.ExprId {
+    const body_expr = mono.program.store.getExpr(body_expr_id);
+    const block = switch (body_expr.data) {
+        .block => |block| block,
+        else => return error.UnexpectedMonotypeFnBodyShape,
+    };
+
+    for (mono.program.store.sliceStmtSpan(block.stmts)) |stmt_id| {
+        switch (mono.program.store.getStmt(stmt_id)) {
+            .local_fn => |let_fn| {
+                if (std.mem.eql(u8, monotypeSymbolName(mono, let_fn.bind.symbol), name)) {
+                    return let_fn.body;
+                }
+            },
+            else => {},
+        }
+    }
+
+    return error.MissingMonotypeLocalFn;
+}
+
+fn monotypeBlockLocalFnByName(
+    mono: *const monotype.Lower.Result,
+    body_expr_id: monotype.Ast.ExprId,
+    name: []const u8,
+) !@FieldType(monotype.Ast.Stmt, "local_fn") {
+    const body_expr = mono.program.store.getExpr(body_expr_id);
+    const block = switch (body_expr.data) {
+        .block => |block| block,
+        else => return error.UnexpectedMonotypeFnBodyShape,
+    };
+
+    for (mono.program.store.sliceStmtSpan(block.stmts)) |stmt_id| {
+        switch (mono.program.store.getStmt(stmt_id)) {
+            .local_fn => |let_fn| {
+                if (std.mem.eql(u8, monotypeSymbolName(mono, let_fn.bind.symbol), name)) {
+                    return let_fn;
+                }
+            },
+            else => {},
+        }
+    }
+
+    return error.MissingMonotypeLocalFn;
+}
+
+fn monotypeListElemPrim(types: *const monotype.Type.Store, ty: monotype.Type.TypeId) !monotype.Type.Prim {
+    return switch (types.getType(ty)) {
+        .list => |elem_ty| switch (types.getType(elem_ty)) {
+            .primitive => |prim| prim,
+            else => error.UnexpectedMonotypeListElemShape,
+        },
+        else => error.UnexpectedMonotypeListShape,
+    };
+}
+
+fn monotypeFnRetListElemPrim(types: *const monotype.Type.Store, fn_ty: monotype.Type.TypeId) !monotype.Type.Prim {
+    return switch (types.getType(fn_ty)) {
+        .func => |func| try monotypeListElemPrim(types, func.ret),
+        else => error.UnexpectedMonotypeFnShape,
+    };
+}
+
+fn liftedSymbolName(lifted: *const monotype_lifted.Lower.Result, symbol: symbol_mod.Symbol) []const u8 {
+    return lifted.idents.getText(lifted.symbols.get(symbol).name);
+}
+
+fn liftedTopLevelFnBodyByName(lifted: *const monotype_lifted.Lower.Result, name: []const u8) !monotype_lifted.Ast.ExprId {
+    for (lifted.store.defsSlice()) |def| {
+        if (!std.mem.eql(u8, liftedSymbolName(lifted, def.bind.symbol), name)) continue;
+        return switch (def.value) {
+            .fn_ => |fn_def| fn_def.body,
+            else => error.UnexpectedLiftedDefShape,
+        };
+    }
+
+    return error.MissingLiftedTopLevelDef;
+}
+
+fn liftedTopLevelBindTyByName(lifted: *const monotype_lifted.Lower.Result, name: []const u8) !monotype_lifted.Type.TypeId {
+    for (lifted.store.defsSlice()) |def| {
+        if (std.mem.eql(u8, liftedSymbolName(lifted, def.bind.symbol), name)) {
+            return def.bind.ty;
+        }
+    }
+
+    return error.MissingLiftedTopLevelDef;
+}
+
+fn liftedBlockDeclByName(
+    lifted: *const monotype_lifted.Lower.Result,
+    body_expr_id: monotype_lifted.Ast.ExprId,
+    name: []const u8,
+) !@FieldType(monotype_lifted.Ast.Stmt, "decl") {
+    const body_expr = lifted.store.getExpr(body_expr_id);
+    const block = switch (body_expr.data) {
+        .block => |block| block,
+        else => return error.UnexpectedLiftedFnBodyShape,
+    };
+
+    for (lifted.store.sliceStmtSpan(block.stmts)) |stmt_id| {
+        switch (lifted.store.getStmt(stmt_id)) {
+            .decl => |decl| {
+                if (std.mem.eql(u8, liftedSymbolName(lifted, decl.bind.symbol), name)) {
+                    return decl;
+                }
+            },
+            else => {},
+        }
+    }
+
+    return error.MissingLiftedLocalDecl;
+}
+
+fn solvedSymbolName(solved: *const lambdasolved.Lower.Result, symbol: symbol_mod.Symbol) []const u8 {
+    return solved.idents.getText(solved.symbols.get(symbol).name);
+}
+
+fn solvedTopLevelFnBodyByName(solved: *const lambdasolved.Lower.Result, name: []const u8) !lambdasolved.Ast.ExprId {
+    for (solved.store.defsSlice()) |def| {
+        if (!std.mem.eql(u8, solvedSymbolName(solved, def.bind.symbol), name)) continue;
+        return switch (def.value) {
+            .fn_ => |fn_def| fn_def.body,
+            else => error.UnexpectedSolvedDefShape,
+        };
+    }
+
+    return error.MissingSolvedTopLevelDef;
+}
+
+fn solvedTopLevelBindTyByName(solved: *const lambdasolved.Lower.Result, name: []const u8) !lambdasolved.Type.TypeVarId {
+    for (solved.store.defsSlice()) |def| {
+        if (std.mem.eql(u8, solvedSymbolName(solved, def.bind.symbol), name)) {
+            return def.bind.ty;
+        }
+    }
+
+    return error.MissingSolvedTopLevelDef;
+}
+
+fn solvedBlockDeclByName(
+    solved: *const lambdasolved.Lower.Result,
+    body_expr_id: lambdasolved.Ast.ExprId,
+    name: []const u8,
+) !@FieldType(lambdasolved.Ast.Stmt, "decl") {
+    const body_expr = solved.store.getExpr(body_expr_id);
+    const block = switch (body_expr.data) {
+        .block => |block| block,
+        else => return error.UnexpectedSolvedFnBodyShape,
+    };
+
+    for (solved.store.sliceStmtSpan(block.stmts)) |stmt_id| {
+        switch (solved.store.getStmt(stmt_id)) {
+            .decl => |decl| {
+                if (std.mem.eql(u8, solvedSymbolName(solved, decl.bind.symbol), name)) {
+                    return decl;
+                }
+            },
+            else => {},
+        }
+    }
+
+    return error.MissingSolvedLocalDecl;
+}
+
+fn maybeSolvedBlockDeclByName(
+    solved: *const lambdasolved.Lower.Result,
+    body_expr_id: lambdasolved.Ast.ExprId,
+    name: []const u8,
+) ?@FieldType(lambdasolved.Ast.Stmt, "decl") {
+    const body_expr = solved.store.getExpr(body_expr_id);
+    const block = switch (body_expr.data) {
+        .block => |block| block,
+        else => return null,
+    };
+
+    for (solved.store.sliceStmtSpan(block.stmts)) |stmt_id| {
+        switch (solved.store.getStmt(stmt_id)) {
+            .decl => |decl| {
+                if (std.mem.eql(u8, solvedSymbolName(solved, decl.bind.symbol), name)) {
+                    return decl;
+                }
+            },
+            else => {},
+        }
+    }
+
+    return null;
+}
+
+fn solvedResolvedNode(types: *const lambdasolved.Type.Store, ty: lambdasolved.Type.TypeVarId) lambdasolved.Type.Node {
+    const root = types.unlinkPreservingNominalConst(ty);
+    return switch (types.getNode(root)) {
+        .nominal => |nominal| solvedResolvedNode(types, nominal.backing),
+        else => |node| node,
+    };
+}
+
+fn solvedListElemPrim(types: *const lambdasolved.Type.Store, ty: lambdasolved.Type.TypeVarId) !lambdasolved.Type.Prim {
+    return switch (solvedResolvedNode(types, ty)) {
+        .content => |content| switch (content) {
+            .list => |elem_ty| switch (solvedResolvedNode(types, elem_ty)) {
+                .content => |elem_content| switch (elem_content) {
+                    .primitive => |prim| prim,
+                    else => error.UnexpectedSolvedListElemShape,
+                },
+                else => error.UnexpectedSolvedListElemNode,
+            },
+            else => error.UnexpectedSolvedListShape,
+        },
+        else => error.UnexpectedSolvedListNode,
+    };
+}
+
+fn solvedFnRetListElemPrim(types: *const lambdasolved.Type.Store, fn_ty: lambdasolved.Type.TypeVarId) !lambdasolved.Type.Prim {
+    return switch (solvedResolvedNode(types, fn_ty)) {
+        .content => |content| switch (content) {
+            .func => |func| try solvedListElemPrim(types, func.ret),
+            else => error.UnexpectedSolvedFnShape,
+        },
+        else => error.UnexpectedSolvedFnNode,
+    };
+}
+
+fn rootSolvedExprId(solved: *const lambdasolved.Lower.Result) lambdasolved.Ast.ExprId {
+    const root_def_id = solved.root_defs.items[solved.root_defs.items.len - 1];
+    const root_def = solved.store.getDef(root_def_id);
+    return switch (root_def.value) {
+        .val => |expr_id| expr_id,
+        .run => |run_def| run_def.body,
+        else => @panic("expected solved root expr def"),
+    };
+}
+
+fn solvedRootValueExprId(solved: *const lambdasolved.Lower.Result) lambdasolved.Ast.ExprId {
+    const root_expr = solved.store.getExpr(rootSolvedExprId(solved));
+    return switch (root_expr.data) {
+        .inspect => |expr_id| expr_id,
+        else => rootSolvedExprId(solved),
+    };
+}
+
 test "cor pipeline - inspect-wrapped bool inequality keeps bool_not in monotype" {
     var resources = try helpers.parseAndCanonicalizeInspectedExpr(testing.allocator, "True != False");
     defer helpers.cleanupParseAndCanonical(testing.allocator, resources);
@@ -1997,6 +2686,133 @@ test "cor pipeline - inspect-wrapped bool inequality keeps bool_not in monotype"
         .low_level => |ll| try testing.expectEqual(base.LowLevel.bool_not, ll.op),
         else => return error.UnexpectedMonotypeInspectChildShape,
     }
+}
+
+test "cor pipeline - to_utf8 local binding stays list u8 before lambdamono" {
+    var resources = try helpers.parseAndCanonicalizeInspectedExpr(
+        testing.allocator,
+        \\{
+        \\test = |line| {
+        \\    bytes = line.to_utf8()
+        \\    List.concat([0], bytes)
+        \\}
+        \\
+        \\x = test("abc")
+        \\x
+        \\}
+    );
+    defer helpers.cleanupParseAndCanonical(testing.allocator, resources);
+
+    var mono = try compileMonotypeFromParsedResources(testing.allocator, &resources);
+    defer mono.deinit();
+
+    const mono_test_body = try monotypeTopLevelFnBodyByName(&mono, "test");
+    try testing.expectEqual(monotype.Type.Prim.u8, try monotypeFnRetListElemPrim(&mono.types, try monotypeTopLevelBindTyByName(&mono, "test")));
+    const mono_bytes_decl = try monotypeBlockDeclByName(&mono, mono_test_body, "bytes");
+    const mono_bytes_expr = mono.program.store.getExpr(mono_bytes_decl.body);
+    const mono_dispatch = switch (mono_bytes_expr.data) {
+        .dispatch_call => |dispatch| dispatch,
+        else => return error.UnexpectedMonotypeDispatchShape,
+    };
+    const mono_test_body_expr = mono.program.store.getExpr(mono_test_body);
+    const mono_test_block = switch (mono_test_body_expr.data) {
+        .block => |block| block,
+        else => return error.UnexpectedMonotypeFnBodyShape,
+    };
+    const mono_concat_expr = mono.program.store.getExpr(mono_test_block.final_expr);
+
+    try testing.expectEqual(monotype.Type.Prim.u8, try monotypeListElemPrim(&mono.types, mono_bytes_decl.bind.ty));
+    try testing.expectEqual(monotype.Type.Prim.u8, try monotypeListElemPrim(&mono.types, mono_bytes_expr.ty));
+    try testing.expectEqual(monotype.Type.Prim.u8, try monotypeFnRetListElemPrim(&mono.types, mono_dispatch.dispatch_constraint_ty));
+    try testing.expectEqual(monotype.Type.Prim.u8, try monotypeListElemPrim(&mono.types, mono_concat_expr.ty));
+
+    const mono_x_decl = try monotypeBlockDeclByName(&mono, monotypeRootValueExprId(&mono), "x");
+    try testing.expectEqual(monotype.Type.Prim.u8, try monotypeListElemPrim(&mono.types, mono_x_decl.bind.ty));
+    try testing.expectEqual(monotype.Type.Prim.u8, try monotypeListElemPrim(&mono.types, mono.program.store.getExpr(mono_x_decl.body).ty));
+
+    var lifted = try monotype_lifted.Lower.run(testing.allocator, &mono);
+    defer lifted.deinit();
+    var solved = try lambdasolved.Lower.run(testing.allocator, &lifted);
+    defer solved.deinit();
+
+    const solved_test_body = try solvedTopLevelFnBodyByName(&solved, "test");
+    try testing.expectEqual(lambdasolved.Type.Prim.u8, try solvedFnRetListElemPrim(&solved.types, try solvedTopLevelBindTyByName(&solved, "test")));
+    const solved_bytes_decl = try solvedBlockDeclByName(&solved, solved_test_body, "bytes");
+    const solved_bytes_expr = solved.store.getExpr(solved_bytes_decl.body);
+    const solved_dispatch = switch (solved_bytes_expr.data) {
+        .dispatch_call => |dispatch| dispatch,
+        else => return error.UnexpectedSolvedDispatchShape,
+    };
+    const solved_test_body_expr = solved.store.getExpr(solved_test_body);
+    const solved_test_block = switch (solved_test_body_expr.data) {
+        .block => |block| block,
+        else => return error.UnexpectedSolvedFnBodyShape,
+    };
+    const solved_concat_expr = solved.store.getExpr(solved_test_block.final_expr);
+
+    try testing.expectEqual(lambdasolved.Type.Prim.u8, try solvedListElemPrim(&solved.types, solved_bytes_decl.bind.ty));
+    try testing.expectEqual(lambdasolved.Type.Prim.u8, try solvedListElemPrim(&solved.types, solved_bytes_expr.ty));
+    try testing.expectEqual(lambdasolved.Type.Prim.u8, try solvedFnRetListElemPrim(&solved.types, solved_dispatch.dispatch_constraint_ty));
+    try testing.expectEqual(lambdasolved.Type.Prim.u8, try solvedListElemPrim(&solved.types, solved_concat_expr.ty));
+
+    const solved_x_decl = try solvedBlockDeclByName(&solved, solvedRootValueExprId(&solved), "x");
+    try testing.expectEqual(lambdasolved.Type.Prim.u8, try solvedListElemPrim(&solved.types, solved_x_decl.bind.ty));
+    try testing.expectEqual(lambdasolved.Type.Prim.u8, try solvedListElemPrim(&solved.types, solved.store.getExpr(solved_x_decl.body).ty));
+}
+
+test "cor pipeline - entry-specialized to_utf8 local binding stays list u8 before lambdamono" {
+    var resources = try helpers.parseAndCanonicalizeInspectedExpr(
+        testing.allocator,
+        \\{
+        \\test = |line| {
+        \\    bytes = line.to_utf8()
+        \\    List.concat([0], bytes)
+        \\}
+        \\
+        \\x = test("abc")
+        \\x
+        \\}
+    );
+    defer helpers.cleanupParseAndCanonical(testing.allocator, resources);
+
+    const typed = resources.typed_cir_modules.module(0);
+    const typed_root_expr = switch (typed.expr(resources.expr_idx).data) {
+        .e_call => |call| typed.sliceExpr(call.args)[0],
+        else => resources.expr_idx,
+    };
+    const typed_x_expr = try typedCirBlockDeclExprByName(typed, typed_root_expr, "x");
+    const typed_x_call = switch (typed.expr(typed_x_expr).data) {
+        .e_call => |call| call,
+        else => return error.UnexpectedTypedCirCallShape,
+    };
+    const typed_lookup_text = try checkedTypeText(testing.allocator, typed, typed.expr(typed_x_call.func).ty());
+    defer testing.allocator.free(typed_lookup_text);
+    const typed_x_text = try checkedTypeText(testing.allocator, typed, typed.expr(typed_x_expr).ty());
+    defer testing.allocator.free(typed_x_text);
+    try testing.expectEqualStrings("Str -> List(U8)", typed_lookup_text);
+    try testing.expectEqualStrings("List(U8)", typed_x_text);
+
+    var mono = try compileEntrySpecializedMonotypeFromParsedResources(testing.allocator, &resources);
+    defer mono.deinit();
+
+    const mono_root_body = monotypeRootValueExprId(&mono);
+    const mono_x_decl = try monotypeBlockDeclByName(&mono, mono_root_body, "x");
+    try testing.expectEqual(monotype.Type.Prim.u8, try monotypeListElemPrim(&mono.types, mono_x_decl.bind.ty));
+    try testing.expectEqual(monotype.Type.Prim.u8, try monotypeListElemPrim(&mono.types, mono.program.store.getExpr(mono_x_decl.body).ty));
+
+    var lifted = try monotype_lifted.Lower.run(testing.allocator, &mono);
+    defer lifted.deinit();
+
+    const lifted_x_decl = try liftedBlockDeclByName(&lifted, liftedRootValueExprId(&lifted), "x");
+    try testing.expectEqual(monotype.Type.Prim.u8, try monotypeListElemPrim(&lifted.types, lifted_x_decl.bind.ty));
+    try testing.expectEqual(monotype.Type.Prim.u8, try monotypeListElemPrim(&lifted.types, lifted.store.getExpr(lifted_x_decl.body).ty));
+
+    var solved = try lambdasolved.Lower.run(testing.allocator, &lifted);
+    defer solved.deinit();
+
+    const solved_x_decl = try solvedBlockDeclByName(&solved, solvedRootValueExprId(&solved), "x");
+    try testing.expectEqual(lambdasolved.Type.Prim.u8, try solvedListElemPrim(&solved.types, solved_x_decl.bind.ty));
+    try testing.expectEqual(lambdasolved.Type.Prim.u8, try solvedListElemPrim(&solved.types, solved.store.getExpr(solved_x_decl.body).ty));
 }
 
 fn countExecutableLowLevelOp(executable: *const lambdamono.Lower.Result, op: base.LowLevel) usize {

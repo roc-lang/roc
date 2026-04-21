@@ -104,6 +104,7 @@ pub const Node = union(enum) {
     nominal: Nominal,
     unbd,
     for_a,
+    flex_for_a,
     content: Content,
 };
 
@@ -150,6 +151,10 @@ pub const Store = struct {
 
     pub fn freshForA(self: *Store) std.mem.Allocator.Error!TypeVarId {
         return try self.fresh(.for_a);
+    }
+
+    pub fn freshFlexForA(self: *Store) std.mem.Allocator.Error!TypeVarId {
+        return try self.fresh(.flex_for_a);
     }
 
     pub fn freshContent(self: *Store, content: Content) std.mem.Allocator.Error!TypeVarId {
@@ -351,7 +356,7 @@ pub const Store = struct {
                 },
                 else => debugPanic("lambdasolved.type lambdaRepr expected lambda set"),
             },
-            .unbd, .for_a => .erased,
+            .unbd, .for_a, .flex_for_a => .erased,
             else => debugPanic("lambdasolved.type lambdaRepr expected lambda set"),
         };
     }
@@ -471,6 +476,7 @@ pub const Store = struct {
             },
             .unbd => true,
             .for_a => true,
+            .flex_for_a => true,
             .content => |left_content| switch (right_node) {
                 .content => |right_content| switch (right_content) {
                     .primitive => |right_prim| switch (left_content) {
@@ -623,6 +629,7 @@ const StructuralKeySerializer = struct {
             .link => unreachable,
             .unbd => try self.out.append(self.allocator, 'u'),
             .for_a => try self.out.append(self.allocator, 'a'),
+            .flex_for_a => try self.out.append(self.allocator, 'f'),
             .nominal => |nominal| {
                 try self.out.append(self.allocator, 'n');
                 try self.writeU32(nominal.module_idx);

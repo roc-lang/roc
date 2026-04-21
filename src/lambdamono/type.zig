@@ -120,6 +120,12 @@ pub const Store = struct {
         return try self.internTypeId(root);
     }
 
+    pub fn structuralKeyOwned(self: *Store, id: TypeId) std.mem.Allocator.Error![]const u8 {
+        const root = self.resolveLinks(id);
+        try self.buildCanonicalKey(root);
+        return try self.allocator.dupe(u8, self.scratch_intern_key.items);
+    }
+
     /// Add and intern a fully resolved executable type node.
     pub fn internResolved(self: *Store, content: Content) std.mem.Allocator.Error!TypeId {
         const raw = try self.addType(content);

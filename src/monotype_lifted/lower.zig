@@ -83,6 +83,7 @@ const Lowerer = struct {
     root_defs: std.ArrayList(ast.DefId),
     top_levels: std.AutoHashMap(Symbol, void),
     binding_types: std.AutoHashMap(Symbol, type_mod.TypeId),
+    current_expr_lower_cache: ?*std.AutoHashMap(MonoAst.ExprId, ast.ExprId),
 
     const Rename = struct {
         from: Symbol,
@@ -123,6 +124,7 @@ const Lowerer = struct {
             .root_defs = .empty,
             .top_levels = std.AutoHashMap(Symbol, void).init(allocator),
             .binding_types = std.AutoHashMap(Symbol, type_mod.TypeId).init(allocator),
+            .current_expr_lower_cache = null,
         };
     }
 
@@ -225,6 +227,12 @@ const Lowerer = struct {
         const empty_venv: []const Rename = &.{};
         return switch (def.value) {
             .fn_ => |fn_def| blk: {
+                var expr_cache = std.AutoHashMap(MonoAst.ExprId, ast.ExprId).init(self.allocator);
+                defer expr_cache.deinit();
+                const previous_expr_cache = self.current_expr_lower_cache;
+                self.current_expr_lower_cache = &expr_cache;
+                defer self.current_expr_lower_cache = previous_expr_cache;
+
                 var lowered_body = try self.lowerExpr(empty_venv, fn_def.body);
                 defer lowered_body.deinit(self.allocator);
                 try self.emitLiftedDefs(lowered_body.lifted_defs.items);
@@ -256,6 +264,12 @@ const Lowerer = struct {
                 });
             },
             .val => |expr_id| blk: {
+                var expr_cache = std.AutoHashMap(MonoAst.ExprId, ast.ExprId).init(self.allocator);
+                defer expr_cache.deinit();
+                const previous_expr_cache = self.current_expr_lower_cache;
+                self.current_expr_lower_cache = &expr_cache;
+                defer self.current_expr_lower_cache = previous_expr_cache;
+
                 var lowered_expr = try self.lowerExpr(empty_venv, expr_id);
                 defer lowered_expr.deinit(self.allocator);
                 try self.emitLiftedDefs(lowered_expr.lifted_defs.items);
@@ -265,6 +279,12 @@ const Lowerer = struct {
                 });
             },
             .run => |run_def| blk: {
+                var expr_cache = std.AutoHashMap(MonoAst.ExprId, ast.ExprId).init(self.allocator);
+                defer expr_cache.deinit();
+                const previous_expr_cache = self.current_expr_lower_cache;
+                self.current_expr_lower_cache = &expr_cache;
+                defer self.current_expr_lower_cache = previous_expr_cache;
+
                 var lowered_expr = try self.lowerExpr(empty_venv, run_def.body);
                 defer lowered_expr.deinit(self.allocator);
                 try self.emitLiftedDefs(lowered_expr.lifted_defs.items);
@@ -280,6 +300,15 @@ const Lowerer = struct {
     }
 
     fn lowerExpr(self: *Lowerer, venv: []const Rename, expr_id: MonoAst.ExprId) std.mem.Allocator.Error!LoweredExpr {
+        if (self.current_expr_lower_cache) |cache| {
+            if (cache.get(expr_id)) |existing| {
+                return .{
+                    .expr = existing,
+                    .lifted_defs = .empty,
+                };
+            }
+        }
+
         const expr = self.input.program.store.getExpr(expr_id);
         var lowered = LoweredExpr.init();
         errdefer lowered.deinit(self.allocator);
@@ -339,6 +368,7 @@ const Lowerer = struct {
                         .lhs = try self.lowerExprInto(&lowered.lifted_defs, venv, eq.lhs),
                         .rhs = try self.lowerExprInto(&lowered.lifted_defs, venv, eq.rhs),
                         .negated = eq.negated,
+                        .dispatch_constraint_ty = eq.dispatch_constraint_ty,
                     } },
                 });
             },
@@ -566,6 +596,10 @@ const Lowerer = struct {
                     } },
                 });
             },
+        }
+
+        if (self.current_expr_lower_cache) |cache| {
+            try cache.put(expr_id, lowered.expr);
         }
 
         return lowered;

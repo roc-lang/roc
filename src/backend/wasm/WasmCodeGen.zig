@@ -1342,6 +1342,10 @@ fn emitBuiltinInternalListIncrefByLocal(
     if (list_abi.elements_refcounted and list_plan.child != null) {
         self.body.append(self.allocator, Op.block) catch return error.OutOfMemory;
         self.body.append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+        try self.emitLocalGet(alloc_ptr_local);
+        self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+        self.body.append(self.allocator, Op.br_if) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
         try self.emitLocalGet(is_slice_local);
         self.body.append(self.allocator, Op.br_if) catch return error.OutOfMemory;
         WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
@@ -8052,9 +8056,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // Box is a transparent pointer - dereference it
             const box_expr = args[0];
             const ls = self.getLayoutStore();
-            const box_layout = ls.getLayout(self.procLocalLayoutIdx(box_expr));
+            const box_layout_idx = self.procLocalLayoutIdx(box_expr);
+            const box_layout = ls.getLayout(box_layout_idx);
+            const erased_box_ptr = box_layout.tag == .scalar and box_layout.data.scalar.tag == .opaque_ptr;
 
-            if (box_layout.tag == .box_of_zst) {
+            if (box_layout.tag == .box_of_zst or
+                (erased_box_ptr and self.layoutByteSize(ll.ret_layout) == 0))
+            {
                 _ = try self.emitProcLocal(box_expr);
                 const result_vt = self.resolveValType(ll.ret_layout);
                 switch (result_vt) {
@@ -8076,8 +8084,11 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     },
                 }
             } else {
-                const box_abi = ls.builtinBoxAbi(self.procLocalLayoutIdx(box_expr));
-                if (box_abi.elem_size == 0) {
+                const elem_size = if (erased_box_ptr)
+                    self.layoutByteSize(ll.ret_layout)
+                else
+                    ls.builtinBoxAbi(box_layout_idx).elem_size;
+                if (elem_size == 0) {
                     _ = try self.emitProcLocal(box_expr);
                     const result_vt = self.resolveValType(ll.ret_layout);
                     switch (result_vt) {
