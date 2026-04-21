@@ -1421,11 +1421,11 @@ pub const SyntaxChecker = struct {
                     };
                     const type_str = type_writer.get();
 
-                    if (findModuleInTypeString(type_str)) |module_name| {
-                        return self.findModuleByName(module_name);
-                    }
+                    const base_type = extractBaseTypeName(type_str);
 
-                    return null;
+                    self.logDebug(.build, "[DEF] e_method_call type_str='{s}', base_type='{s}'", .{ type_str, base_type });
+
+                    return self.findModuleByName(base_type);
                 },
                 .e_dispatch_call => |method_call| {
                     // Attached method call - navigate to the provider module for the receiver type

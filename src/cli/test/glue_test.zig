@@ -213,8 +213,9 @@ test "glue command generated C header compiles with zig cc (dev backend)" {
     return error.SkipZigTest;
 }
 
-test "glue command with ZigGlue succeeds (interpreter)" {
-    // Regression test for nominal_translate_cache fix in interpreter.zig.
+test "glue regression: ZigGlue interpreter succeeds on fx platform" {
+    // This is the normal CLI-level repro for:
+    //   roc glue --opt=interpreter src/glue/src/ZigGlue.roc <tmp> test/fx/platform/main.roc
     const allocator = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
