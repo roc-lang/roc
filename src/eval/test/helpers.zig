@@ -413,7 +413,7 @@ test "dev evaluator repro: F32.to_str" {
     const actual = try devEvaluatorInspectedStr(std.testing.allocator, &compiled.lowered);
     defer std.testing.allocator.free(actual);
 
-    try std.testing.expectEqualStrings("3.140000104904175", actual);
+    try std.testing.expectEqualStrings("\"3.140000104904175\"", actual);
 }
 
 fn valueToRocStr(val: Value) RocStr {

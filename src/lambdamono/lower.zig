@@ -2961,7 +2961,10 @@ const Lowerer = struct {
                         .name = existing_field.name,
                         .ty = if (self.types.equalIds(existing_field.ty, actual_field_ty))
                             existing_field.ty
-                        else if (self.containsErasedFn(existing_field.ty) or self.containsErasedFn(actual_field_ty))
+                        else if (self.executableTypeIsAbstract(existing_field.ty) or
+                            self.executableTypeIsAbstract(actual_field_ty) or
+                            self.containsErasedFn(existing_field.ty) or
+                            self.containsErasedFn(actual_field_ty))
                             try self.mergeExecutableSignatureType(existing_field.ty, actual_field_ty)
                         else
                             existing_field.ty,
