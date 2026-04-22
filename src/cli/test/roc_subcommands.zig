@@ -1181,6 +1181,19 @@ test "roc run --opt=dev returns exit code 2 for warnings" {
     try testing.expect(has_warning);
 }
 
+test "roc run returns exit code 1 for old platform download" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{"--no-cache"}, "test/cli/old_hello_world.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "platform was built with the old Roc") != null);
+}
+
 test "roc run --opt=dev rejects non executable targets" {
     const testing = std.testing;
     const gpa = testing.allocator;
@@ -1642,4 +1655,44 @@ test "roc docs Builtin.roc succeeds" {
 
     const has_generated = std.mem.indexOf(u8, result.stdout, "Generated docs for") != null;
     try testing.expect(has_generated);
+}
+
+test "roc test complex_package --verbose passes all tests" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "test", "--no-cache", "--verbose" }, "test/complex_package/main.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try util.checkSuccess(result);
+
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "tests passed") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "PASS") != null);
+}
+
+test "failed inline expect exits with code 1 and continues program (dev)" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{}, "test/cli/failed_inline_expect.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "Hello, World!") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "expect failed") != null);
+}
+
+test "failed inline expect exits with code 1 and continues program (interpreter)" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{"--opt=interpreter"}, "test/cli/failed_inline_expect.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "Hello, World!") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "Expect failed") != null);
 }

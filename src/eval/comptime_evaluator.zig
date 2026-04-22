@@ -107,15 +107,15 @@ fn comptimeRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
 fn comptimeRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
     const source_bytes = expect_args.utf8_bytes[0..expect_args.len];
-    // Record the raw source bytes - the diagnostics machinery will handle formatting
-    // via buildComptimeExpectFailedReport which shows the source region with ANSI colors
-    evaluator.expect.recordCrash(source_bytes) catch {
-        // If we can't record the expect failure, halt evaluation
-        // This is the only case where expect should halt
+    // Inline expect failures are non-fatal: record the failure as a diagnostic
+    // problem (formatted later by buildComptimeExpectFailedReport) and keep
+    // evaluating. Each failure is appended so multiple failures in a single
+    // def are all reported.
+    const region = evaluator.current_expr_region orelse base.Region.zero();
+    evaluator.reportProblem(source_bytes, region, .expect_failed) catch {
+        // If we can't record the expect failure, halt evaluation.
         evaluator.halted = true;
-        return;
     };
-    // expect never halts execution - it only records the failure
 }
 
 fn comptimeRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c) void {
