@@ -3047,20 +3047,6 @@ const Lowerer = struct {
                 if (self.lookupEnvEntry(venv, reassign.target)) |target_entry| {
                     const body_source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, reassign.body);
                     try self.unifyIn(inst.types, target_entry.ty, body_source_ty);
-                    const target_entry_data = self.input.symbols.get(reassign.target);
-                    if (!target_entry_data.name.isNone()) {
-                        const target_name = self.input.idents.getText(target_entry_data.name);
-                        if (std.mem.eql(u8, target_name, "$new_list")) {
-                            const target_summary = self.debugSolvedTypeSummary(inst.types, target_entry.ty);
-                            defer target_summary.deinit(self.allocator);
-                            const body_summary = self.debugSolvedTypeSummary(inst.types, body_source_ty);
-                            defer body_summary.deinit(self.allocator);
-                            std.debug.print(
-                                "preRefine reassign target={s} target_ty={s} body_ty={s}\n",
-                                .{ target_name, target_summary.text, body_summary.text },
-                            );
-                        }
-                    }
                 }
                 return try self.cloneEnv(venv);
             },
@@ -3198,64 +3184,6 @@ const Lowerer = struct {
                 const refined_func_ty = try self.refinedSourceTypeForExpr(inst, venv, call.func, current_func_ty);
                 try self.unifyIn(inst.types, current_func_ty, refined_func_ty);
                 try self.unifyIn(inst.types, refined_func_ty, call_relation_ty);
-                if (self.directCallableSymbolFromExpr(venv, self.input.store.getExpr(call.func))) |direct_symbol| {
-                    const direct_entry = self.input.symbols.get(direct_symbol);
-                    if (!direct_entry.name.isNone()) {
-                        const direct_name = self.input.idents.getText(direct_entry.name);
-                        if (std.mem.eql(u8, direct_name, "list_append_unsafe")) {
-                            const func_summary = self.debugSolvedTypeSummary(inst.types, refined_func_ty);
-                            defer func_summary.deinit(self.allocator);
-                            const relation_summary = self.debugSolvedTypeSummary(inst.types, call_relation_ty);
-                            defer relation_summary.deinit(self.allocator);
-                            const result_summary = self.debugSolvedTypeSummary(inst.types, current_result_ty);
-                            defer result_summary.deinit(self.allocator);
-                            const relation_shape = inst.types.fnShape(call_relation_ty);
-                            const relation_args = inst.types.sliceTypeVarSpan(relation_shape.args);
-                            const arg0_summary = self.debugSolvedTypeSummary(inst.types, relation_args[0]);
-                            defer arg0_summary.deinit(self.allocator);
-                            const arg1_summary = self.debugSolvedTypeSummary(inst.types, relation_args[1]);
-                            defer arg1_summary.deinit(self.allocator);
-                            const source_arg0 = try self.instantiatedSourceTypeForExpr(inst, venv, arg_expr_ids[0]);
-                            const source_arg1 = try self.instantiatedSourceTypeForExpr(inst, venv, arg_expr_ids[1]);
-                            const source_arg0_summary = self.debugSolvedTypeSummary(inst.types, source_arg0);
-                            defer source_arg0_summary.deinit(self.allocator);
-                            const source_arg1_summary = self.debugSolvedTypeSummary(inst.types, source_arg1);
-                            defer source_arg1_summary.deinit(self.allocator);
-                            std.debug.print(
-                                "preRefine call func={s} func_ty={s} relation_ty={s} result_ty={s} rel_arg0={s} rel_arg1={s} src_arg0={s} src_arg1={s}\n",
-                                .{
-                                    direct_name,
-                                    func_summary.text,
-                                    relation_summary.text,
-                                    result_summary.text,
-                                    arg0_summary.text,
-                                    arg1_summary.text,
-                                    source_arg0_summary.text,
-                                    source_arg1_summary.text,
-                                },
-                            );
-                        }
-                    }
-                }
-                if (self.input.store.getExpr(call.func).data == .var_) {
-                    const func_symbol = self.input.store.getExpr(call.func).data.var_;
-                    const func_entry = self.input.symbols.get(func_symbol);
-                    if (!func_entry.name.isNone()) {
-                        const func_name = self.input.idents.getText(func_entry.name);
-                        if (std.mem.eql(u8, func_name, "transform")) {
-                            const func_summary = self.debugSolvedTypeSummary(inst.types, refined_func_ty);
-                            defer func_summary.deinit(self.allocator);
-                            const relation_summary = self.debugSolvedTypeSummary(inst.types, call_relation_ty);
-                            defer relation_summary.deinit(self.allocator);
-                            const result_summary = self.debugSolvedTypeSummary(inst.types, current_result_ty);
-                            defer result_summary.deinit(self.allocator);
-                            std.debug.print(
-                                "preRefine call func={s} func_ty={s} relation_ty={s} result_ty={s}\n",
-                                .{ func_name, func_summary.text, relation_summary.text, result_summary.text },
-                            );
-                        }
-                    }
-                }
             },
             .structural_eq => |eq| {
                 try self.preRefineExprSourceTypes(inst, mono_cache, venv, eq.lhs);
@@ -3885,6 +3813,10 @@ const Lowerer = struct {
                 const fn_shape = inst.types.fnShape(summary_fn_ty);
                 const requested_arg_tys = inst.types.sliceTypeVarSpan(fn_shape.args);
                 const body_contains_return = self.exprContainsReturn(fn_body);
+                const preserved_summary_ret_ty = if (body_contains_return)
+                    try self.freshCloneTypeIntoInstFromStore(&inst, inst.types, fn_shape.ret)
+                else
+                    null;
                 if (fn_args.len != requested_arg_tys.len) {
                     debugPanic("lambdamono.lower.specializeFn function arg arity mismatch");
                 }
@@ -3932,7 +3864,13 @@ const Lowerer = struct {
                             );
                             final_source_ret_ty = lowered_body.source_ty;
                             const body = lowered_body.expr;
-                            if (!body_contains_return) {
+                            if (body_contains_return) {
+                                try self.overwriteSolvedTypeWithExact(
+                                    inst.types,
+                                    fn_shape.ret,
+                                    preserved_summary_ret_ty.?,
+                                );
+                            } else {
                                 try self.overwriteSolvedTypeWithExact(inst.types, fn_shape.ret, final_source_ret_ty);
                             }
                             var final_ret_cache = lower_type.MonoCache.init(self.allocator);
@@ -4016,7 +3954,13 @@ const Lowerer = struct {
                         );
                         final_source_ret_ty = lowered_body.source_ty;
                         var body = lowered_body.expr;
-                        if (!body_contains_return) {
+                        if (body_contains_return) {
+                            try self.overwriteSolvedTypeWithExact(
+                                inst.types,
+                                fn_shape.ret,
+                                preserved_summary_ret_ty.?,
+                            );
+                        } else {
                             try self.overwriteSolvedTypeWithExact(inst.types, fn_shape.ret, final_source_ret_ty);
                         }
                         var final_ret_cache = lower_type.MonoCache.init(self.allocator);
@@ -4099,7 +4043,13 @@ const Lowerer = struct {
                         );
                         final_source_ret_ty = lowered_body.source_ty;
                         var body = lowered_body.expr;
-                        if (!body_contains_return) {
+                        if (body_contains_return) {
+                            try self.overwriteSolvedTypeWithExact(
+                                inst.types,
+                                fn_shape.ret,
+                                preserved_summary_ret_ty.?,
+                            );
+                        } else {
                             try self.overwriteSolvedTypeWithExact(inst.types, fn_shape.ret, final_source_ret_ty);
                         }
                         var final_ret_cache = lower_type.MonoCache.init(self.allocator);
@@ -4191,20 +4141,6 @@ const Lowerer = struct {
                 .exec_ty = arg_exec_ty,
                 .exact_fn_symbol = exact_fn_symbol,
             };
-            const arg_entry = self.input.symbols.get(arg.symbol);
-            if (!arg_entry.name.isNone()) {
-                const arg_name = self.input.idents.getText(arg_entry.name);
-                if (std.mem.eql(u8, arg_name, "transform") or std.mem.eql(u8, arg_name, "list")) {
-                    const arg_summary = self.debugSolvedTypeSummary(solved_types, arg_ty);
-                    defer arg_summary.deinit(self.allocator);
-                    const exec_summary = self.debugExecutableTypeSummary(arg_exec_ty);
-                    defer exec_summary.deinit(self.allocator);
-                    std.debug.print(
-                        "buildFnBodyEnv arg={s} source_ty={s} exec_ty={s} exact={any}\n",
-                        .{ arg_name, arg_summary.text, exec_summary.text, exact_fn_symbol },
-                    );
-                }
-            }
         }
         for (capture_env, 0..) |capture, i| {
             out[i + args.len] = capture;
@@ -4779,18 +4715,12 @@ const Lowerer = struct {
                     inst.types.sliceTypeVarSpan(constraint_shape.args),
                 );
                 defer if (constraint_arg_tys.len != 0) self.allocator.free(constraint_arg_tys);
-                const constraint_arg_exec_tys = try self.allocator.alloc(type_mod.TypeId, constraint_arg_tys.len);
-                defer if (constraint_arg_exec_tys.len != 0) self.allocator.free(constraint_arg_exec_tys);
-                for (constraint_arg_tys, 0..) |constraint_arg_ty, i| {
-                    constraint_arg_exec_tys[i] = self.requireConcreteExecutableType(
-                        try self.lowerExecutableTypeFromSolvedIn(
-                            inst.types,
-                            mono_cache,
-                            constraint_arg_ty,
-                        ),
-                        "specializeExpr(low_level arg)",
-                    );
-                }
+                try self.refineCallArgSourceTypesIn(
+                    inst,
+                    venv,
+                    source_args,
+                    constraint_arg_tys,
+                );
                 const lowered_args = switch (ll.op) {
                     .box_box, .box_unbox => blk_args: {
                         const out = try self.allocator.alloc(ast.ExprId, source_args.len);
@@ -4812,7 +4742,15 @@ const Lowerer = struct {
                                 arg_id,
                                 arg_expr,
                                 constraint_arg_tys[i],
-                                constraint_arg_exec_tys[i],
+                                try self.lowerExecutableTypeFromSolvedIn(
+                                    inst.types,
+                                    mono_cache,
+                                    constraint_arg_tys[i],
+                                ),
+                            );
+                            _ = self.requireConcreteExecutableType(
+                                self.output.getExpr(out[i]).ty,
+                                "specializeExpr(low_level arg)",
                             );
                         }
                         break :blk_args try self.output.addExprSpan(out);
@@ -5236,6 +5174,13 @@ const Lowerer = struct {
                     try self.lowerExecutableTypeFromSolvedIn(inst.types, mono_cache, elem_ty)
                 else
                     null;
+                const concrete_expected_elem_ty = if (expected_elem_ty) |elem_ty|
+                    if (!self.executableTypeIsAbstract(elem_ty))
+                        self.requireConcreteExecutableType(elem_ty, "specializeExpr(list elem)")
+                    else
+                        null
+                else
+                    null;
 
                 if (source_items.len == 0) {
                     const empty_list_ty = if (concrete_list_ty) |list_ty|
@@ -5261,7 +5206,7 @@ const Lowerer = struct {
                         item_expr_id,
                         item_expr,
                         item_source_ty,
-                        expected_elem_ty orelse try self.lowerExecutableTypeFromSolvedIn(
+                        concrete_expected_elem_ty orelse try self.lowerExecutableTypeFromSolvedIn(
                             inst.types,
                             mono_cache,
                             item_source_ty,
@@ -5269,7 +5214,7 @@ const Lowerer = struct {
                     );
                     lowered[i] = lowered_item;
                 }
-                if (expected_elem_ty) |elem_ty| {
+                if (concrete_expected_elem_ty) |elem_ty| {
                     for (lowered, 0..) |lowered_item, i| {
                         if (!self.types.equalIds(self.output.getExpr(lowered_item).ty, elem_ty)) {
                             lowered[i] = try self.retargetOrEmitExplicitBridgeExpr(lowered_item, elem_ty);
@@ -5279,6 +5224,8 @@ const Lowerer = struct {
                 const result_elem_ty = if (concrete_list_ty) |list_ty|
                     self.listElemType(list_ty) orelse
                         debugPanic("lambdamono.lower.list missing strengthened elem type")
+                else if (concrete_expected_elem_ty) |elem_ty|
+                    elem_ty
                 else
                     self.output.getExpr(lowered[0]).ty;
                 const result_ty = if (concrete_list_ty) |list_ty|
@@ -5287,7 +5234,18 @@ const Lowerer = struct {
                     try self.synthesizedListTypeFromElem(result_elem_ty);
                 break :blk .{ .ty = result_ty, .data = .{ .list = try self.output.addExprSpan(lowered) } };
             },
-            .return_ => |ret_expr| .{ .ty = default_ty, .data = .{ .return_ = try self.specializeExpr(inst, mono_cache, venv, ret_expr) } },
+            .return_ => |ret_expr| blk: {
+                var lowered_ret = try self.specializeExpr(inst, mono_cache, venv, ret_expr);
+                const expected_ret_ty = self.current_return_exec_ty orelse
+                    debugPanic("lambdamono.lower.specializeExpr(return_) missing current executable return type");
+                if (!self.types.equalIds(self.output.getExpr(lowered_ret).ty, expected_ret_ty)) {
+                    lowered_ret = try self.retargetOrEmitExplicitBridgeExpr(lowered_ret, expected_ret_ty);
+                }
+                break :blk .{
+                    .ty = default_ty,
+                    .data = .{ .return_ = lowered_ret },
+                };
+            },
             .runtime_error => |msg| .{ .ty = default_ty, .data = .{ .runtime_error = msg } },
             .for_ => |for_expr| .{ .ty = default_ty, .data = .{ .for_ = try self.specializeForExpr(inst, mono_cache, venv, for_expr) } },
         };
@@ -9217,18 +9175,6 @@ const Lowerer = struct {
                         decl.bind,
                         decl.body,
                     );
-                const bind_entry = self.input.symbols.get(decl.bind.symbol);
-                if (!bind_entry.name.isNone()) {
-                    const bind_name = self.input.idents.getText(bind_entry.name);
-                    if (std.mem.eql(u8, bind_name, "$new_list")) {
-                        const refined_summary = self.debugSolvedTypeSummary(inst.types, refined_entry.ty);
-                        defer refined_summary.deinit(self.allocator);
-                        std.debug.print(
-                            "specializeStmt var_decl bind={s} refined_ty={s}\n",
-                            .{ bind_name, refined_summary.text },
-                        );
-                    }
-                }
                 var lowered_binding = try self.lowerBindingBody(
                     inst,
                     mono_cache,

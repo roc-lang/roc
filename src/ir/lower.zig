@@ -57,7 +57,6 @@ const Lowerer = struct {
     root_defs: std.ArrayList(ast.DefId),
     value_thunks: std.AutoHashMap(Symbol, ValueThunk),
     current_def_ret_layout: ?ast.LayoutRef = null,
-    current_def_symbol: ?Symbol = null,
 
     const EnvEntry = struct {
         symbol: Symbol,
@@ -163,11 +162,8 @@ const Lowerer = struct {
 
     fn lowerDef(self: *Lowerer, def_id: lambdamono.Ast.DefId, def: lambdamono.Ast.Def) std.mem.Allocator.Error!ast.Def {
         const saved_ret_layout = self.current_def_ret_layout;
-        const saved_def_symbol = self.current_def_symbol;
         self.current_def_ret_layout = self.input.layouts.defRetLayout(def_id);
-        self.current_def_symbol = def.bind;
         defer self.current_def_ret_layout = saved_ret_layout;
-        defer self.current_def_symbol = saved_def_symbol;
 
         return switch (def.value) {
             .fn_ => |fn_def| blk: {
@@ -407,7 +403,6 @@ const Lowerer = struct {
                 const source = try self.lowerSubexprValue(&block, env, source_expr);
                 if (source == null) return if (block.has_term) block else debugPanic("ir.lower bridge missing terminator");
                 const temp = try self.freshVar(expr.ty, "bridge");
-                self.debugBridgeSite("expr_bridge", source.?.layout, temp.layout);
                 const bridge_expr = try self.output.addExpr(.{ .bridge = source.? });
                 try block.stmts.append(self.allocator, .{ .let_ = .{
                     .bind = temp,
@@ -528,7 +523,6 @@ const Lowerer = struct {
                     value.?
                 else blk: {
                     const bridged = try self.freshVarWithLayout(ret_layout, "return");
-                    self.debugBridgeSite("return", value.?.layout, ret_layout);
                     try block.stmts.append(self.allocator, .{ .let_ = .{
                         .bind = bridged,
                         .expr = try self.output.addExpr(.{ .bridge = value.? }),
@@ -619,22 +613,6 @@ const Lowerer = struct {
         block.setTerm(.{ .value = temp });
     }
 
-    fn debugBridgeSite(
-        self: *Lowerer,
-        comptime site: []const u8,
-        source_layout: ast.LayoutRef,
-        target_layout: ast.LayoutRef,
-    ) void {
-        if (self.current_def_symbol) |def_symbol| {
-            if (def_symbol.raw() == 1785) {
-                std.debug.print(
-                    "ir.lower bridge site={s} def={d} source_layout={any} target_layout={any}\n",
-                    .{ site, def_symbol.raw(), source_layout, target_layout },
-                );
-            }
-        }
-    }
-
     fn emitStructFieldValue(
         self: *Lowerer,
         block: *LoweredBlock,
@@ -657,7 +635,6 @@ const Lowerer = struct {
         if (std.meta.eql(actual_field.layout, target_layout)) return actual_field;
 
         const bridged = try self.freshVar(result_ty, label);
-        self.debugBridgeSite("struct_field_value", actual_field.layout, bridged.layout);
         try block.stmts.append(self.allocator, .{ .let_ = .{
             .bind = bridged,
             .expr = try self.output.addExpr(.{ .bridge = actual_field }),
@@ -689,7 +666,6 @@ const Lowerer = struct {
         if (std.meta.eql(actual_payload.layout, target_layout)) return actual_payload;
 
         const bridged = try self.freshVarWithLayout(target_layout, label);
-        self.debugBridgeSite("union_payload_value", actual_payload.layout, target_layout);
         try stmts.append(self.allocator, .{ .let_ = .{
             .bind = bridged,
             .expr = try self.output.addExpr(.{ .bridge = actual_payload }),
@@ -715,7 +691,6 @@ const Lowerer = struct {
             }
 
             const bridged = try self.freshVarWithLayout(slot_ref, "struct_field");
-            self.debugBridgeSite("bridge_struct_field", source_field.layout, slot_ref);
             try block.stmts.append(self.allocator, .{ .let_ = .{
                 .bind = bridged,
                 .expr = try self.output.addExpr(.{ .bridge = source_field }),
