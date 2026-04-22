@@ -299,6 +299,10 @@ const DevRocEnv = struct {
     allocations: std.AutoHashMap(usize, AllocInfo),
     /// Set to true when roc_crashed is called during execution.
     crashed: bool = false,
+    /// Set to true when roc_expect_failed is called during execution.
+    /// Inline expect failures are non-fatal, but the host uses this flag
+    /// to report a non-zero exit status after the program finishes.
+    inline_expect_failed: bool = false,
     /// The crash message (duped from the callback argument).
     crash_message: ?[]const u8 = null,
     /// Jump buffer for unwinding from roc_crashed back to the call site.
@@ -462,6 +466,7 @@ const DevRocEnv = struct {
     /// Expect failed function.
     fn rocExpectFailedFn(_: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
         const self: *DevRocEnv = @ptrCast(@alignCast(env));
+        self.inline_expect_failed = true;
         self.io.writeStderr("[expect failed]\n") catch {};
     }
 
