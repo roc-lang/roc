@@ -1347,11 +1347,22 @@ const ProcLowerer = struct {
         }
 
         if (builtin.mode == .Debug) {
+            const proc_symbol = self.parent.store.getProcSpec(self.proc_id).name;
+            const proc_origin = self.parent.input.symbols.entries.items[@intCast(proc_symbol.raw())].origin;
+            const proc_source_symbol_raw: u32 = switch (proc_origin) {
+                .specialized_top_level_def => |data| data.source_symbol,
+                .specialized_local_fn => |data| data.source_symbol,
+                .lifted_local_fn => |data| data.source_symbol,
+                .lifted_local_fn_alias => |data| data.source_symbol,
+                else => std.math.maxInt(u32),
+            };
             std.debug.panic(
-                "lir.from_ir invariant violated: proc={d} symbol={d} no explicit bridge from layout {d} ({s}) ref={any} to layout {d} ({s}) ref={any}",
+                "lir.from_ir invariant violated: proc={d} symbol={d} origin={s} source_symbol={d} no explicit bridge from layout {d} ({s}) ref={any} to layout {d} ({s}) ref={any}",
                 .{
                     @intFromEnum(self.proc_id),
-                    self.parent.store.getProcSpec(self.proc_id).name.raw(),
+                    proc_symbol.raw(),
+                    @tagName(proc_origin),
+                    proc_source_symbol_raw,
                     @intFromEnum(actual_layout),
                     @tagName(ls.getLayout(actual_layout).tag),
                     actual_ref,

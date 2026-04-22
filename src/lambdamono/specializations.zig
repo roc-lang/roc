@@ -101,9 +101,8 @@ pub const Queue = struct {
             try out.append(allocator, .{
                 .bind = item.specialized_symbol,
                 .result_ty = switch (specialized) {
-                    .fn_ => null,
-                    .hosted_fn => item.exec_ret_ty orelse
-                        debugPanic("lambdamono.specializations.solvedDefs hosted specialization missing executable return type"),
+                    .fn_, .hosted_fn => item.exec_ret_ty orelse
+                        debugPanic("lambdamono.specializations.solvedDefs specialization missing executable return type"),
                     .val, .run => debugPanic("lambdamono.specializations.solvedDefs unexpected non-callable specialization"),
                 },
                 .value = specialized,

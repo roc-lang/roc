@@ -457,6 +457,7 @@ const Lowerer = struct {
             .when => |when_expr| .{ .when = .{
                 .cond = try self.instantiateExpr(when_expr.cond),
                 .branches = try self.instantiateBranchSpan(when_expr.branches),
+                .is_try_suffix = when_expr.is_try_suffix,
             } },
             .if_ => |if_expr| .{ .if_ = .{
                 .cond = try self.instantiateExpr(if_expr.cond),

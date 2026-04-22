@@ -1929,6 +1929,7 @@ pub const Lowerer = struct {
             .data = .{ .when = .{
                 .cond = arg_expr,
                 .branches = try self.program.store.addBranchSpan(&branches),
+                .is_try_suffix = false,
             } },
         });
     }
@@ -3528,6 +3529,7 @@ pub const Lowerer = struct {
         return .{
             .cond = cond.expr,
             .branches = try self.program.store.addBranchSpan(out),
+            .is_try_suffix = match_expr.is_try_suffix,
         };
     }
 
@@ -3951,6 +3953,7 @@ pub const Lowerer = struct {
                 .data = .{ .when = .{
                     .cond = scrutinee_expr,
                     .branches = try self.program.store.addBranchSpan(&branches),
+                    .is_try_suffix = false,
                 } },
             });
         }
@@ -3987,6 +3990,7 @@ pub const Lowerer = struct {
             .data = .{ .when = .{
                 .cond = scrutinee_expr,
                 .branches = try self.program.store.addBranchSpan(&branches),
+                .is_try_suffix = false,
             } },
         });
     }

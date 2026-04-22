@@ -133,6 +133,7 @@ pub const Expr = struct {
         when: struct {
             cond: ExprId,
             branches: Span(BranchId),
+            is_try_suffix: bool,
         },
         if_: struct {
             cond: ExprId,

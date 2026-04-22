@@ -523,6 +523,7 @@ const Lowerer = struct {
                     .data = .{ .when = .{
                         .cond = try self.lowerExprInto(&lowered.lifted_defs, venv, when_expr.cond),
                         .branches = try self.lowerBranchSpan(&lowered.lifted_defs, venv, when_expr.branches),
+                        .is_try_suffix = when_expr.is_try_suffix,
                     } },
                 });
             },

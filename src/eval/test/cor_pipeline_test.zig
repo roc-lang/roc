@@ -400,8 +400,8 @@ fn debugPrintExecutableType(
         .primitive => |prim| std.debug.print("({s})", .{@tagName(prim)}),
         .list => |elem| std.debug.print("(elem=#{d})", .{@intFromEnum(elem)}),
         .box => |elem| std.debug.print("(elem=#{d})", .{@intFromEnum(elem)}),
-        .erased_fn => |capture_ty| {
-            if (capture_ty) |capture| {
+        .erased_fn => |erased_fn| {
+            if (erased_fn.capture) |capture| {
                 std.debug.print("(capture=#{d})", .{@intFromEnum(capture)});
             } else {
                 std.debug.print("(capture=none)", .{});
@@ -415,13 +415,31 @@ fn debugPrintExecutableType(
             std.debug.print(")", .{});
         },
         .nominal => |nominal| {
-            std.debug.print("(module={d} ident={any} backing=#{d}", .{
+            const backing = executable.types.getTypePreservingNominal(nominal.backing);
+            std.debug.print("(module={d} ident={any} backing={s}#{d}", .{
                 nominal.module_idx,
                 nominal.ident,
+                @tagName(backing),
                 @intFromEnum(nominal.backing),
             });
             for (nominal.args) |arg| {
                 std.debug.print(" arg=#{d}", .{@intFromEnum(arg)});
+            }
+            switch (backing) {
+                .tag_union => |tag_union| {
+                    for (tag_union.tags, 0..) |tag, i| {
+                        std.debug.print(" [{d}:{s}", .{ i, @tagName(tag.name) });
+                        switch (tag.name) {
+                            .ctor => |name| std.debug.print(" ctor={any}", .{name}),
+                            .lambda => |lambda| std.debug.print(" lambda={d}", .{lambda.raw()}),
+                        }
+                        for (tag.args) |arg| {
+                            std.debug.print(" arg=#{d}", .{@intFromEnum(arg)});
+                        }
+                        std.debug.print("]", .{});
+                    }
+                },
+                else => {},
             }
             std.debug.print(")", .{});
         },
@@ -507,10 +525,52 @@ fn debugPrintExecutableExprs(executable: *const lambdamono.Lower.Result) void {
 fn debugPrintIrLayoutRef(graph: *const layout.Graph, ref: ir.Ast.LayoutRef) void {
     switch (ref) {
         .canonical => |idx| std.debug.print("canonical#{d}", .{@intFromEnum(idx)}),
-        .local => |node| std.debug.print("{s}#{d}", .{
-            @tagName(graph.getNode(node)),
-            @intFromEnum(node),
-        }),
+        .local => |node| {
+            const layout_node = graph.getNode(node);
+            std.debug.print("{s}#{d}", .{
+                @tagName(layout_node),
+                @intFromEnum(node),
+            });
+            switch (layout_node) {
+                .nominal => |backing| {
+                    std.debug.print("(backing=", .{});
+                    debugPrintIrLayoutRef(graph, backing);
+                    std.debug.print(")", .{});
+                },
+                .box => |child| {
+                    std.debug.print("(child=", .{});
+                    debugPrintIrLayoutRef(graph, child);
+                    std.debug.print(")", .{});
+                },
+                .list => |child| {
+                    std.debug.print("(elem=", .{});
+                    debugPrintIrLayoutRef(graph, child);
+                    std.debug.print(")", .{});
+                },
+                .closure => |child| {
+                    std.debug.print("(capture=", .{});
+                    debugPrintIrLayoutRef(graph, child);
+                    std.debug.print(")", .{});
+                },
+                .struct_ => |fields| {
+                    std.debug.print("(fields={d}", .{graph.getFields(fields).len});
+                    for (graph.getFields(fields)) |field| {
+                        std.debug.print(" {d}=", .{field.index});
+                        debugPrintIrLayoutRef(graph, field.child);
+                    }
+                    std.debug.print(")", .{});
+                },
+                .tag_union => |refs| {
+                    std.debug.print("(variants={d}", .{graph.getRefs(refs).len});
+                    for (graph.getRefs(refs), 0..) |child, i| {
+                        std.debug.print(" [{d}]=", .{i});
+                        debugPrintIrLayoutRef(graph, child);
+                    }
+                    std.debug.print(")", .{});
+                },
+                .pending => {},
+            }
+        },
     }
 }
 
