@@ -6807,6 +6807,7 @@ fn finalizeNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Err
         const resolved = self.types.resolveVar(var_);
         if (resolved.desc.content != .flex) continue;
         if (resolved.desc.rank == .generalized) continue;
+        if (resolved.desc.retained_in_generalized_scheme) continue;
 
         const flex = resolved.desc.content.flex;
         const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
@@ -7219,7 +7220,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         try self.unifyWith(deferred_constraint.var_, .err, env);
                         try self.unifyWith(constraint_fn.ret, .err, env);
                     }
-
                 }
                 break :dispatch_resolution;
             } else if (dispatcher_content == .alias) {

@@ -91,6 +91,7 @@ pub const Descriptor = struct {
     content: Content,
     rank: Rank,
     from_numeral_origin: bool = false,
+    retained_in_generalized_scheme: bool = false,
 };
 
 /// In general, the rank tracks the number of let-bindings a variable is "under".

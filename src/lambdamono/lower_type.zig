@@ -440,10 +440,13 @@ fn lowerFunctionType(
     symbols: *const symbol_mod.Store,
     mode: LowerMode,
 ) std.mem.Allocator.Error!mono.Content {
-    const callable_mode: LowerMode = if (mode == .erased_boundary or lambdaSetIsErased(types, types.fnShape(fn_ty).lset))
-        .erased_boundary
-    else
-        .natural;
+    const callable_mode: LowerMode = switch (mode) {
+        .erased_boundary => .erased_boundary,
+        .natural => switch (types.lambdaRepr(fn_ty)) {
+            .erased => .erased_boundary,
+            .lset => .natural,
+        },
+    };
 
     const call_sig = try lowerCallableSig(types, mono_types, mono_cache, fn_ty, symbols, callable_mode);
     return switch (callable_mode) {
@@ -486,17 +489,6 @@ fn requireFunctionType(types: *solved.Type.Store, ty: TypeVarId) TypeVarId {
             else => std.debug.panic("lambdamono.lower_type expected function type for callable lowering", .{}),
         },
         else => std.debug.panic("lambdamono.lower_type expected function type for callable lowering", .{}),
-    };
-}
-
-fn lambdaSetIsErased(types: *solved.Type.Store, lset: TypeVarId) bool {
-    const id = types.unlink(lset);
-    return switch (types.getNode(id)) {
-        .content => |content| switch (content) {
-            .primitive => |prim| prim == .erased,
-            else => false,
-        },
-        else => false,
     };
 }
 

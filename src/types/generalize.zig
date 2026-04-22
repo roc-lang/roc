@@ -67,6 +67,8 @@ pub const Generalizer = struct {
     store: *TypesStore,
     /// Tracks which variables we've already adjusted (for handling recursive types)
     rank_adjusted_vars: std.AutoHashMap(Var, void),
+    /// Tracks which variables have already been marked as retained in a generalized scheme.
+    retained_marked_vars: std.AutoHashMap(Var, void),
     /// Temporary pool for processing variables during rank adjustment
     tmp_var_pool: VarPool,
     /// Map of which variables we are generalizing this pass
@@ -81,6 +83,7 @@ pub const Generalizer = struct {
             .store = store,
             .tmp_var_pool = try VarPool.init(gpa),
             .rank_adjusted_vars = std.AutoHashMap(Var, void).init(gpa),
+            .retained_marked_vars = std.AutoHashMap(Var, void).init(gpa),
             .vars_to_generalized = std.AutoHashMap(Var, void).init(gpa),
         };
     }
@@ -89,12 +92,14 @@ pub const Generalizer = struct {
     pub fn reset(self: *Self) void {
         self.tmp_var_pool.clearRetainingCapacity();
         self.rank_adjusted_vars.clearRetainingCapacity();
+        self.retained_marked_vars.clearRetainingCapacity();
         self.vars_to_generalized.clearRetainingCapacity();
     }
 
     pub fn deinit(self: *Self, _: std.mem.Allocator) void {
         self.tmp_var_pool.deinit();
         self.rank_adjusted_vars.deinit();
+        self.retained_marked_vars.deinit();
         self.vars_to_generalized.deinit();
     }
 
@@ -195,8 +200,85 @@ pub const Generalizer = struct {
             }
         }
 
+        var retained_iter = self.vars_to_generalized.keyIterator();
+        while (retained_iter.next()) |retained_var| {
+            try self.markRetainedReachable(retained_var.*);
+        }
+
         // Clear the rank we just processed from the main pool
         var_pool.ranks.items[rank_to_generalize_int].clearRetainingCapacity();
+    }
+
+    fn markRetainedReachable(self: *Self, var_: Var) std.mem.Allocator.Error!void {
+        const resolved = self.store.resolveVar(var_);
+        if (self.retained_marked_vars.contains(resolved.var_)) return;
+
+        try self.retained_marked_vars.put(resolved.var_, {});
+        self.store.markRetainedInGeneralizedScheme(resolved.var_);
+        try self.markRetainedReachableContent(resolved.desc.content);
+    }
+
+    fn markRetainedReachableContent(self: *Self, content: Content) std.mem.Allocator.Error!void {
+        switch (content) {
+            .flex, .rigid, .err => {},
+            .alias => |alias| {
+                var args_iter = self.store.iterAliasArgs(alias);
+                while (args_iter.next()) |arg_var| {
+                    try self.markRetainedReachable(arg_var);
+                }
+            },
+            .structure => |flat_type| switch (flat_type) {
+                .empty_record, .empty_tag_union => {},
+                .tuple => |tuple| {
+                    for (self.store.sliceVars(tuple.elems)) |elem_var| {
+                        try self.markRetainedReachable(elem_var);
+                    }
+                },
+                .nominal_type => |nominal| {
+                    var args_iter = self.store.iterNominalArgs(nominal);
+                    while (args_iter.next()) |arg_var| {
+                        try self.markRetainedReachable(arg_var);
+                    }
+                },
+                .fn_pure => |func| {
+                    try self.markRetainedReachable(func.ret);
+                    for (self.store.sliceVars(func.args)) |arg_var| {
+                        try self.markRetainedReachable(arg_var);
+                    }
+                },
+                .fn_effectful => |func| {
+                    try self.markRetainedReachable(func.ret);
+                    for (self.store.sliceVars(func.args)) |arg_var| {
+                        try self.markRetainedReachable(arg_var);
+                    }
+                },
+                .fn_unbound => |func| {
+                    try self.markRetainedReachable(func.ret);
+                    for (self.store.sliceVars(func.args)) |arg_var| {
+                        try self.markRetainedReachable(arg_var);
+                    }
+                },
+                .record => |record| {
+                    try self.markRetainedReachable(record.ext);
+                    for (self.store.getRecordFieldsSlice(record.fields).items(.var_)) |field_var| {
+                        try self.markRetainedReachable(field_var);
+                    }
+                },
+                .record_unbound => |record_fields| {
+                    for (self.store.getRecordFieldsSlice(record_fields).items(.var_)) |field_var| {
+                        try self.markRetainedReachable(field_var);
+                    }
+                },
+                .tag_union => |tag_union| {
+                    try self.markRetainedReachable(tag_union.ext);
+                    for (self.store.getTagsSlice(tag_union.tags).items(.args)) |arg_range| {
+                        for (self.store.sliceVars(arg_range)) |tag_arg_var| {
+                            try self.markRetainedReachable(tag_arg_var);
+                        }
+                    }
+                },
+            },
+        }
     }
 
     // adjust rank //
