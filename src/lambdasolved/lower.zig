@@ -2634,14 +2634,12 @@ const Lowerer = struct {
             },
             .let_ => |*let_expr| {
                 try self.propagateExprErasure(let_expr.body, venv);
-                let_expr.bind.ty = self.output.getExpr(let_expr.body).ty;
                 const rest_env = try self.extendEnvOne(venv, .{
                     .symbol = let_expr.bind.symbol,
                     .ty = let_expr.bind.ty,
                 });
                 defer if (rest_env.len != 0) self.allocator.free(rest_env);
                 try self.propagateExprErasure(let_expr.rest, rest_env);
-                expr.ty = self.output.getExpr(let_expr.rest).ty;
             },
             .call => |call| {
                 try self.propagateExprErasure(call.func, venv);
@@ -2722,7 +2720,6 @@ const Lowerer = struct {
                     }
                     cond_expr.ty = try self.overlayErasureTemplate(branch_pat.ty, cond_expr.ty);
                 }
-                var branch_ty: ?TypeVarId = null;
                 for (self.output.sliceBranchSpan(when_expr.branches)) |branch_id| {
                     const branch = self.output.getBranch(branch_id);
                     const branch_pat = &self.output.pats.items[@intFromEnum(branch.pat)];
@@ -2733,34 +2730,12 @@ const Lowerer = struct {
                     const body_env = try self.extendEnvMany(venv, additions);
                     defer if (body_env.len != 0) self.allocator.free(body_env);
                     try self.propagateExprErasure(branch.body, body_env);
-                    const current_ty = self.output.getExpr(branch.body).ty;
-                    if (self.output.getExpr(branch.body).data == .runtime_error) continue;
-                    if (branch_ty) |existing| {
-                        if (!self.types.equalIds(existing, current_ty)) {
-                            return debugPanic("lambdasolved.propagateExprErasure when branch type mismatch", .{});
-                        }
-                    } else {
-                        branch_ty = current_ty;
-                    }
                 }
-                if (branch_ty) |ty| expr.ty = ty;
             },
             .if_ => |if_expr| {
                 try self.propagateExprErasure(if_expr.cond, venv);
                 try self.propagateExprErasure(if_expr.then_body, venv);
                 try self.propagateExprErasure(if_expr.else_body, venv);
-                const then_expr = self.output.getExpr(if_expr.then_body);
-                const else_expr = self.output.getExpr(if_expr.else_body);
-                if (then_expr.data == .runtime_error) {
-                    expr.ty = else_expr.ty;
-                } else if (else_expr.data == .runtime_error) {
-                    expr.ty = then_expr.ty;
-                } else {
-                    if (!self.types.equalIds(then_expr.ty, else_expr.ty)) {
-                        return debugPanic("lambdasolved.propagateExprErasure if branch type mismatch", .{});
-                    }
-                    expr.ty = then_expr.ty;
-                }
             },
             .block => |block| {
                 var block_env = try self.cloneEnv(venv);
@@ -2771,7 +2746,6 @@ const Lowerer = struct {
                     block_env = next_env;
                 }
                 try self.propagateExprErasure(block.final_expr, block_env);
-                expr.ty = self.output.getExpr(block.final_expr).ty;
             },
             .tuple => |tuple| blk: {
                 const elem_values = self.output.sliceExprSpan(tuple);

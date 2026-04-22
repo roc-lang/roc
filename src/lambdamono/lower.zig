@@ -2579,7 +2579,7 @@ const Lowerer = struct {
         body_expr_id: solved.Ast.ExprId,
         comptime context: []const u8,
     ) std.mem.Allocator.Error!LoweredBinding {
-        const bind_ty = try self.cloneTypeIntoInstFromStore(inst, &self.input.types, bind.ty);
+        const bind_ty = try self.freshCloneTypeIntoInstFromStore(inst, &self.input.types, bind.ty);
         if (!self.sourceTypeIsAbstract(&self.input.types, bind.ty) and
             self.sourceTypeIsAbstract(inst.types, bind_ty))
         {
@@ -2618,11 +2618,10 @@ const Lowerer = struct {
             };
         }
 
-        const body_source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, body_expr_id);
-        const body_exec_ty = try self.lowerExecutableTypeFromSolvedIn(
+        const bind_exec_ty = try self.lowerExecutableTypeFromSolvedIn(
             inst.types,
             mono_cache,
-            body_source_ty,
+            bind_ty,
         );
         const lowered_body = try self.specializeExprWithDefaultTyAndSourceTy(
             inst,
@@ -2630,16 +2629,16 @@ const Lowerer = struct {
             venv,
             body_expr_id,
             body_expr,
-            body_source_ty,
-            body_exec_ty,
+            bind_ty,
+            bind_exec_ty,
         );
         const lowered_exec_ty = self.output.getExpr(lowered_body.expr).ty;
         if (self.executableTypeHasLayoutAbstractLeaf(lowered_exec_ty)) {
             _ = self.requireConcreteExecutableType(lowered_exec_ty, context);
         }
         return .{
-            .source_ty = lowered_body.source_ty,
-            .exec_ty = lowered_exec_ty,
+            .source_ty = bind_ty,
+            .exec_ty = bind_exec_ty,
             .body = lowered_body.expr,
         };
     }
@@ -2715,9 +2714,7 @@ const Lowerer = struct {
         body_expr_id: solved.Ast.ExprId,
     ) std.mem.Allocator.Error!EnvEntry {
         try self.preRefineExprSourceTypes(inst, mono_cache, venv, body_expr_id);
-        const bind_ty = try self.cloneInstType(inst, bind.ty);
-        const body_source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, body_expr_id);
-        try self.unifyIn(inst.types, bind_ty, body_source_ty);
+        const bind_ty = try self.freshCloneTypeIntoInstFromStore(inst, &self.input.types, bind.ty);
         return .{
             .symbol = bind.symbol,
             .ty = bind_ty,
@@ -2889,14 +2886,6 @@ const Lowerer = struct {
             .structural_eq => |eq| {
                 try self.preRefineExprSourceTypes(inst, mono_cache, venv, eq.lhs);
                 try self.preRefineExprSourceTypes(inst, mono_cache, venv, eq.rhs);
-                const lhs_ty = try self.instantiatedSourceTypeForExpr(inst, venv, eq.lhs);
-                const rhs_ty = try self.instantiatedSourceTypeForExpr(inst, venv, eq.rhs);
-                try self.unifyIn(inst.types, lhs_ty, rhs_ty);
-                const refined_lhs_ty = try self.refinedSourceTypeForExpr(inst, venv, eq.lhs, lhs_ty);
-                try self.unifyIn(inst.types, lhs_ty, refined_lhs_ty);
-                const refined_rhs_ty = try self.refinedSourceTypeForExpr(inst, venv, eq.rhs, rhs_ty);
-                try self.unifyIn(inst.types, rhs_ty, refined_rhs_ty);
-                try self.unifyIn(inst.types, lhs_ty, rhs_ty);
             },
             .method_eq => |eq| {
                 try self.preRefineExprSourceTypes(inst, mono_cache, venv, eq.lhs);
@@ -4131,18 +4120,26 @@ const Lowerer = struct {
                 const lowered_args = try self.allocator.alloc(ast.ExprId, source_args.len);
                 defer self.allocator.free(lowered_args);
 
-                const solved_tag_info = self.solvedTagInfoByName(inst.types, ty, tag.name) orelse
-                    debugPanic("lambdamono.lower.tag missing solved tag info");
-                if (solved_tag_info.args.len != source_args.len) {
-                    debugPanic("lambdamono.lower.tag expected solved tag arg count mismatch");
-                }
-                const concrete_tag_ty = if (!self.executableTypeIsAbstract(default_ty))
+                const solved_tag_arg_tys = try self.explicitTagArgSourceTypesFromExprs(inst, venv, source_args);
+                defer if (solved_tag_arg_tys.len != 0) self.allocator.free(solved_tag_arg_tys);
+                const concrete_tag_ty = if (!self.sourceTypeIsAbstract(inst.types, ty))
+                    self.requireConcreteExecutableType(
+                        try self.lowerExecutableTypeFromSolvedIn(inst.types, mono_cache, ty),
+                        "specializeExpr(tag source)",
+                    )
+                else if (!self.executableTypeIsAbstract(default_ty))
                     self.requireConcreteExecutableType(default_ty, "specializeExpr(tag)")
                 else
                     null;
                 const tag_exec_info = if (concrete_tag_ty) |tag_ty|
-                    self.executableTagInfoByName(tag_ty, tag.name) orelse
-                        debugPanic("lambdamono.lower.tag missing executable tag info")
+                    self.executableTagInfoByName(tag_ty, tag.name) orelse {
+                        const tag_ty_summary = self.debugExecutableTypeSummary(tag_ty);
+                        defer tag_ty_summary.deinit(self.allocator);
+                        debugPanicFmt(
+                            "lambdamono.lower.tag missing executable tag info tag={s} exec_ty={s}",
+                            .{ self.input.idents.getText(tag.name), tag_ty_summary.text },
+                        );
+                    }
                 else
                     null;
                 if (tag_exec_info) |info| {
@@ -4159,7 +4156,7 @@ const Lowerer = struct {
                         try self.lowerExecutableTypeFromSolvedIn(
                             inst.types,
                             mono_cache,
-                            solved_tag_info.args[i],
+                            solved_tag_arg_tys[i],
                         );
                     const lowered = try self.specializeExprWithDefaultTy(
                         inst,
@@ -4167,7 +4164,7 @@ const Lowerer = struct {
                         venv,
                         arg_expr_id,
                         arg_expr,
-                        solved_tag_info.args[i],
+                        solved_tag_arg_tys[i],
                         expected_arg_ty,
                     );
                     lowered_args[i] = lowered;
@@ -4195,7 +4192,7 @@ const Lowerer = struct {
                         inst.types,
                         ty,
                         tag.name,
-                        solved_tag_info.args,
+                        solved_tag_arg_tys,
                     ),
                 };
             },
@@ -4477,8 +4474,19 @@ const Lowerer = struct {
                 var lowered_branches = std.ArrayList(ast.Branch).empty;
                 defer lowered_branches.deinit(self.allocator);
                 try lowered_branches.ensureTotalCapacity(self.allocator, input_branch_ids.len);
-                var result_source_ty: ?TypeVarId = null;
                 var all_remaining_covered = false;
+                const explicit_result_ty = try self.lowerExecutableTypeFromSolvedIn(
+                    inst.types,
+                    mono_cache,
+                    ty,
+                );
+                const concrete_result_ty = if (!self.executableTypeIsAbstract(explicit_result_ty))
+                    self.requireConcreteExecutableType(explicit_result_ty, "specializeExpr(when result)")
+                else if (!self.executableTypeIsAbstract(default_ty))
+                    self.requireConcreteExecutableType(default_ty, "specializeExpr(when)")
+                else
+                    null;
+                const branch_default_ty = concrete_result_ty orelse explicit_result_ty;
 
                 for (input_branch_ids) |branch_id| {
                     if (all_remaining_covered) break;
@@ -4503,19 +4511,11 @@ const Lowerer = struct {
                     const branch_env = try self.concatEnv(venv, pat_result.additions);
                     defer self.allocator.free(branch_env);
                     const branch_body_expr = self.input.store.getExpr(branch.body);
-                    const branch_body_source_ty = try self.cloneTypeIntoInstFromStore(
+                    const branch_body_source_ty = try self.freshCloneTypeIntoInstFromStore(
                         inst,
-                        &self.input.types,
-                        branch_body_expr.ty,
+                        inst.types,
+                        ty,
                     );
-                    const branch_default_ty = if (!self.executableTypeIsAbstract(default_ty))
-                        self.requireConcreteExecutableType(default_ty, "specializeExpr(when)")
-                    else
-                        try self.lowerExecutableTypeFromSolvedIn(
-                            inst.types,
-                            mono_cache,
-                            branch_body_source_ty,
-                        );
                     const lowered_body = try self.specializeExprWithDefaultTyAndSourceTy(
                         inst,
                         mono_cache,
@@ -4525,11 +4525,6 @@ const Lowerer = struct {
                         branch_body_source_ty,
                         branch_default_ty,
                     );
-                    if (result_source_ty) |current_source_ty| {
-                        try self.unifyIn(inst.types, current_source_ty, lowered_body.source_ty);
-                    } else {
-                        result_source_ty = lowered_body.source_ty;
-                    }
                     try lowered_branches.append(self.allocator, .{
                         .pat = pat_result.pat,
                         .body = lowered_body.expr,
@@ -4542,11 +4537,9 @@ const Lowerer = struct {
                     debugPanic("lambdamono.lower.specializeExpr(when) removed all branches");
                 }
 
-                var result_ty = if (!self.executableTypeIsAbstract(default_ty))
-                    self.requireConcreteExecutableType(default_ty, "specializeExpr(when)")
-                else
-                    self.output.getExpr(lowered_branches.items[0].body).ty;
-                if (self.executableTypeIsAbstract(default_ty)) {
+                var result_ty = concrete_result_ty orelse explicit_result_ty;
+                if (self.executableTypeIsAbstract(result_ty)) {
+                    result_ty = self.output.getExpr(lowered_branches.items[0].body).ty;
                     for (lowered_branches.items[1..]) |branch| {
                         result_ty = try self.commonExecutableType(
                             result_ty,
@@ -4568,26 +4561,34 @@ const Lowerer = struct {
                 break :blk .{ .ty = result_ty, .data = .{ .when = .{
                     .cond = cond,
                     .branches = branches,
-                } }, .source_ty = result_source_ty orelse ty };
+                } }, .source_ty = ty };
             },
             .if_ => |if_expr| blk: {
                 const cond = try self.specializeExpr(inst, mono_cache, venv, if_expr.cond);
                 const then_expr = self.input.store.getExpr(if_expr.then_body);
                 const else_expr = self.input.store.getExpr(if_expr.else_body);
-                const then_source_ty = try self.cloneTypeIntoInstFromStore(
+                const then_source_ty = try self.freshCloneTypeIntoInstFromStore(
                     inst,
-                    &self.input.types,
-                    then_expr.ty,
+                    inst.types,
+                    ty,
                 );
-                const else_source_ty = try self.cloneTypeIntoInstFromStore(
+                const else_source_ty = try self.freshCloneTypeIntoInstFromStore(
                     inst,
-                    &self.input.types,
-                    else_expr.ty,
+                    inst.types,
+                    ty,
                 );
-                const concrete_result_ty = if (!self.executableTypeIsAbstract(default_ty))
+                const explicit_result_ty = try self.lowerExecutableTypeFromSolvedIn(
+                    inst.types,
+                    mono_cache,
+                    ty,
+                );
+                const concrete_result_ty = if (!self.executableTypeIsAbstract(explicit_result_ty))
+                    self.requireConcreteExecutableType(explicit_result_ty, "specializeExpr(if_ result)")
+                else if (!self.executableTypeIsAbstract(default_ty))
                     self.requireConcreteExecutableType(default_ty, "specializeExpr(if_)")
                 else
                     null;
+                const branch_default_ty = concrete_result_ty orelse explicit_result_ty;
                 const then_lowered = try self.specializeExprWithDefaultTyAndSourceTy(
                     inst,
                     mono_cache,
@@ -4595,11 +4596,7 @@ const Lowerer = struct {
                     if_expr.then_body,
                     then_expr,
                     then_source_ty,
-                    concrete_result_ty orelse try self.lowerExecutableTypeFromSolvedIn(
-                        inst.types,
-                        mono_cache,
-                        then_source_ty,
-                    ),
+                    branch_default_ty,
                 );
                 const else_lowered = try self.specializeExprWithDefaultTyAndSourceTy(
                     inst,
@@ -4608,18 +4605,17 @@ const Lowerer = struct {
                     if_expr.else_body,
                     else_expr,
                     else_source_ty,
-                    concrete_result_ty orelse try self.lowerExecutableTypeFromSolvedIn(
-                        inst.types,
-                        mono_cache,
-                        else_source_ty,
-                    ),
+                    branch_default_ty,
                 );
-                try self.unifyIn(inst.types, then_lowered.source_ty, else_lowered.source_ty);
                 var then_body = then_lowered.expr;
                 var else_body = else_lowered.expr;
                 const then_ty = self.output.getExpr(then_body).ty;
                 const else_ty = self.output.getExpr(else_body).ty;
-                const result_ty = concrete_result_ty orelse
+                const result_ty = if (concrete_result_ty) |concrete|
+                    concrete
+                else if (!self.executableTypeIsAbstract(explicit_result_ty))
+                    explicit_result_ty
+                else
                     (try self.commonExecutableType(then_ty, else_ty) orelse then_ty);
                 if (!self.executableTypeIsAbstract(result_ty)) {
                     if (!self.types.equalIds(then_ty, result_ty)) {
@@ -4637,7 +4633,7 @@ const Lowerer = struct {
                     .cond = cond,
                     .then_body = then_body,
                     .else_body = else_body,
-                } }, .source_ty = then_lowered.source_ty };
+                } }, .source_ty = ty };
             },
             .block => |block| blk: {
                 const lowered = try self.specializeBlockExpr(
@@ -5723,72 +5719,6 @@ const Lowerer = struct {
         }
         const expr = self.output.getExpr(expr_id);
         const actual_ty = expr.ty;
-        const actual_tag = self.types.getTypePreservingNominal(actual_ty);
-        const expected_tag = self.types.getTypePreservingNominal(expected_ty);
-        const same_runtime_callable_bridge = actual_tag == .tag_union and
-            expected_tag == .tag_union and
-            self.naturalExecutableCallableTypesMatchIgnoringCallSig(actual_ty, expected_ty);
-        if ((actual_tag == .record and expected_tag == .tag_union) or
-            ((actual_tag == .tag_union and expected_tag == .tag_union) and !same_runtime_callable_bridge) or
-            (actual_tag == .list and expected_tag == .list))
-        {
-            const actual_elem_id: u32 = switch (actual_tag) {
-                .list => |elem| @intFromEnum(elem),
-                else => 0,
-            };
-            const expected_elem_id: u32 = switch (expected_tag) {
-                .list => |elem| @intFromEnum(elem),
-                else => 0,
-            };
-            const actual_elem_tag = switch (actual_tag) {
-                .list => |elem| @tagName(self.types.getTypePreservingNominal(elem)),
-                else => "-",
-            };
-            const expected_elem_tag = switch (expected_tag) {
-                .list => |elem| @tagName(self.types.getTypePreservingNominal(elem)),
-                else => "-",
-            };
-            const actual_elem_prim = switch (actual_tag) {
-                .list => |elem| switch (self.types.getTypePreservingNominal(elem)) {
-                    .primitive => |prim| @tagName(prim),
-                    else => "-",
-                },
-                else => "-",
-            };
-            const expected_elem_prim = switch (expected_tag) {
-                .list => |elem| switch (self.types.getTypePreservingNominal(elem)) {
-                    .primitive => |prim| @tagName(prim),
-                    else => "-",
-                },
-                else => "-",
-            };
-            const var_symbol_name = switch (expr.data) {
-                .var_ => |symbol| blk: {
-                    const entry = self.input.symbols.get(symbol);
-                    if (entry.name.isNone()) break :blk "<none>";
-                    break :blk self.input.idents.getText(entry.name);
-                },
-                else => "-",
-            };
-            debugPanicFmt(
-                "lambdamono.lower.emitExplicitBridgeExpr debug trap expr={d} expr_tag={s} var={s} actual_ty={d} actual_tag={s} expected_ty={d} expected_tag={s} actual_elem={d}:{s}:{s} expected_elem={d}:{s}:{s}",
-                .{
-                    @intFromEnum(expr_id),
-                    @tagName(expr.data),
-                    var_symbol_name,
-                    @intFromEnum(actual_ty),
-                    @tagName(actual_tag),
-                    @intFromEnum(expected_ty),
-                    @tagName(expected_tag),
-                    actual_elem_id,
-                    actual_elem_tag,
-                    actual_elem_prim,
-                    expected_elem_id,
-                    expected_elem_tag,
-                    expected_elem_prim,
-                },
-            );
-        }
         if (actual_ty == expected_ty) return expr_id;
         if (self.types.getTypePreservingNominal(expected_ty) == .primitive and
             self.types.getTypePreservingNominal(expected_ty).primitive == .erased)
@@ -5937,6 +5867,53 @@ const Lowerer = struct {
                 }
                 expr.ty = expected_ty;
                 expr.data = .{ .list = try self.output.addExprSpan(updated_items) };
+                self.output.exprs.items[expr_idx] = expr;
+                return true;
+            },
+            .when => |when_expr| {
+                const branch_ids = self.output.sliceBranchSpan(when_expr.branches);
+                const updated_branches = try self.allocator.alloc(ast.Branch, branch_ids.len);
+                defer self.allocator.free(updated_branches);
+                for (branch_ids, 0..) |branch_id, i| {
+                    const branch = self.output.getBranch(branch_id);
+                    const updated_body = if (self.types.equalIds(self.output.getExpr(branch.body).ty, expected_ty))
+                        branch.body
+                    else if (try self.retargetExprToExpectedExecutableType(branch.body, expected_ty))
+                        branch.body
+                    else
+                        return false;
+                    updated_branches[i] = .{
+                        .pat = branch.pat,
+                        .body = updated_body,
+                    };
+                }
+                expr.ty = expected_ty;
+                expr.data = .{ .when = .{
+                    .cond = when_expr.cond,
+                    .branches = try self.output.addBranchSpan(updated_branches),
+                } };
+                self.output.exprs.items[expr_idx] = expr;
+                return true;
+            },
+            .if_ => |if_expr| {
+                const updated_then = if (self.types.equalIds(self.output.getExpr(if_expr.then_body).ty, expected_ty))
+                    if_expr.then_body
+                else if (try self.retargetExprToExpectedExecutableType(if_expr.then_body, expected_ty))
+                    if_expr.then_body
+                else
+                    return false;
+                const updated_else = if (self.types.equalIds(self.output.getExpr(if_expr.else_body).ty, expected_ty))
+                    if_expr.else_body
+                else if (try self.retargetExprToExpectedExecutableType(if_expr.else_body, expected_ty))
+                    if_expr.else_body
+                else
+                    return false;
+                expr.ty = expected_ty;
+                expr.data = .{ .if_ = .{
+                    .cond = if_expr.cond,
+                    .then_body = updated_then,
+                    .else_body = updated_else,
+                } };
                 self.output.exprs.items[expr_idx] = expr;
                 return true;
             },
@@ -7127,6 +7104,31 @@ const Lowerer = struct {
         };
     }
 
+    fn explicitTagArgSourceTypesFromExprs(
+        self: *Lowerer,
+        inst: *InstScope,
+        venv: []const EnvEntry,
+        arg_expr_ids: []const solved.Ast.ExprId,
+    ) std.mem.Allocator.Error![]TypeVarId {
+        const arg_tys = try self.allocator.alloc(TypeVarId, arg_expr_ids.len);
+        for (arg_expr_ids, 0..) |arg_expr_id, i| {
+            arg_tys[i] = try self.instantiatedSourceTypeForExpr(inst, venv, arg_expr_id);
+        }
+        return arg_tys;
+    }
+
+    fn explicitTagArgSourceTypesFromPats(
+        self: *Lowerer,
+        inst: *InstScope,
+        arg_pat_ids: []const solved.Ast.PatId,
+    ) std.mem.Allocator.Error![]TypeVarId {
+        const arg_tys = try self.allocator.alloc(TypeVarId, arg_pat_ids.len);
+        for (arg_pat_ids, 0..) |arg_pat_id, i| {
+            arg_tys[i] = try self.cloneInstType(inst, self.input.store.getPat(arg_pat_id).ty);
+        }
+        return arg_tys;
+    }
+
     fn refinedSourceTypeForExpr(
         self: *Lowerer,
         inst: *InstScope,
@@ -7156,26 +7158,23 @@ const Lowerer = struct {
                 break :blk current_source_ty;
             },
             .tag => |tag| blk: {
-                const tag_info = self.solvedTagInfoByName(inst.types, current_source_ty, tag.name) orelse
-                    debugPanic("lambdamono.lower.refinedSourceTypeForExpr missing solved tag info");
                 const source_args = self.input.store.sliceExprSpan(tag.args);
-                if (source_args.len != tag_info.args.len) {
-                    debugPanic("lambdamono.lower.refinedSourceTypeForExpr tag arg arity mismatch");
-                }
+                const tag_arg_tys = try self.explicitTagArgSourceTypesFromExprs(inst, venv, source_args);
+                defer if (tag_arg_tys.len != 0) self.allocator.free(tag_arg_tys);
                 for (source_args, 0..) |arg_expr_id, i| {
                     const refined_arg_ty = try self.refinedSourceTypeForExpr(
                         inst,
                         venv,
                         arg_expr_id,
-                        tag_info.args[i],
+                        tag_arg_tys[i],
                     );
-                    try self.unifyIn(inst.types, tag_info.args[i], refined_arg_ty);
+                    try self.unifyIn(inst.types, tag_arg_tys[i], refined_arg_ty);
                 }
                 break :blk try self.refinedSingletonTagSourceType(
                     inst.types,
                     current_source_ty,
                     tag.name,
-                    tag_info.args,
+                    tag_arg_tys,
                 );
             },
             .call => |call| blk: {
@@ -7564,9 +7563,16 @@ const Lowerer = struct {
         eq: @FieldType(solved.Ast.Expr.Data, "structural_eq"),
         expected_exec_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!SpecializedExprLowering {
-        const receiver_source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, eq.lhs);
-        const arg_source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, eq.rhs);
-        try self.unifyIn(inst.types, receiver_source_ty, arg_source_ty);
+        const receiver_source_ty = try self.freshCloneTypeIntoInstFromStore(
+            inst,
+            &self.input.types,
+            self.input.store.getExpr(eq.lhs).ty,
+        );
+        const arg_source_ty = try self.freshCloneTypeIntoInstFromStore(
+            inst,
+            &self.input.types,
+            self.input.store.getExpr(eq.rhs).ty,
+        );
         const refined_receiver_ty = try self.refinedSourceTypeForExpr(
             inst,
             venv,
@@ -7581,11 +7587,16 @@ const Lowerer = struct {
             arg_source_ty,
         );
         try self.unifyIn(inst.types, arg_source_ty, refined_arg_ty);
-        try self.unifyIn(inst.types, receiver_source_ty, arg_source_ty);
+        const operand_source_ty = try self.freshCloneTypeIntoInstFromStore(
+            inst,
+            inst.types,
+            receiver_source_ty,
+        );
+        try self.unifyIn(inst.types, operand_source_ty, arg_source_ty);
         const operand_default_ty = try self.lowerExecutableTypeFromSolvedIn(
             inst.types,
             mono_cache,
-            receiver_source_ty,
+            operand_source_ty,
         );
 
         const lhs_expr = self.input.store.getExpr(eq.lhs);
@@ -7623,12 +7634,22 @@ const Lowerer = struct {
         }
         const receiver_exec_ty = self.output.getExpr(lowered_receiver).ty;
         const arg_exec_ty = self.output.getExpr(lowered_arg).ty;
-        const operand_exec_ty = try self.commonExecutableType(receiver_exec_ty, arg_exec_ty) orelse receiver_exec_ty;
+        const operand_exec_ty = if (!self.executableTypeIsAbstract(operand_default_ty))
+            self.requireConcreteExecutableType(
+                operand_default_ty,
+                "specializeStructuralEqExpr",
+            )
+        else if (self.types.equalIds(receiver_exec_ty, arg_exec_ty))
+            receiver_exec_ty
+        else if (try self.commonExecutableType(receiver_exec_ty, arg_exec_ty)) |merged|
+            merged
+        else
+            debugPanic("lambdamono.lower.specializeStructuralEqExpr abstract operand executable types disagree");
         if (!self.types.equalIds(self.output.getExpr(lowered_receiver).ty, operand_exec_ty)) {
-            lowered_receiver = try self.emitExplicitBridgeExpr(lowered_receiver, operand_exec_ty);
+            lowered_receiver = try self.retargetOrEmitExplicitBridgeExpr(lowered_receiver, operand_exec_ty);
         }
         if (!self.types.equalIds(self.output.getExpr(lowered_arg).ty, operand_exec_ty)) {
-            lowered_arg = try self.emitExplicitBridgeExpr(lowered_arg, operand_exec_ty);
+            lowered_arg = try self.retargetOrEmitExplicitBridgeExpr(lowered_arg, operand_exec_ty);
         }
 
         const bool_ty = try self.makePrimitiveType(.bool);
@@ -8420,12 +8441,8 @@ const Lowerer = struct {
                 const source_args = self.input.store.slicePatSpan(tag.args);
                 var additions = std.ArrayList(EnvEntry).empty;
                 defer additions.deinit(self.allocator);
-                const tag_info = self.solvedTagInfoByName(inst.types, ty, tag.name) orelse
-                    debugPanic("lambdamono.lower.collectPatBindingsAtSourceTy missing solved tag info");
-                const arg_tys = tag_info.args;
-                if (arg_tys.len != source_args.len) {
-                    debugPanic("lambdamono.lower.collectPatBindingsAtSourceTy expected tag arg count mismatch");
-                }
+                const arg_tys = try self.explicitTagArgSourceTypesFromPats(inst, source_args);
+                defer if (arg_tys.len != 0) self.allocator.free(arg_tys);
                 for (source_args, 0..) |arg_pat, i| {
                     const arg_pat_data = self.input.store.getPat(arg_pat);
                     const lowered = try self.collectPatBindingsAtSourceTy(
@@ -8539,15 +8556,11 @@ const Lowerer = struct {
 
                 var additions = std.ArrayList(EnvEntry).empty;
                 defer additions.deinit(self.allocator);
-                const tag_info = self.solvedTagInfoByName(inst.types, ty, tag.name) orelse
-                    debugPanic("lambdamono.lower.specializePat missing solved tag info");
-                const arg_tys = tag_info.args;
+                const arg_tys = try self.explicitTagArgSourceTypesFromPats(inst, source_args);
+                defer if (arg_tys.len != 0) self.allocator.free(arg_tys);
                 const exec_tag_info = self.executableTagInfoByName(lowered_ty, tag.name) orelse
                     debugPanic("lambdamono.lower.specializePat missing executable tag info");
                 const exec_arg_tys = exec_tag_info.args;
-                if (arg_tys.len != source_args.len) {
-                    debugPanic("lambdamono.lower.specializePat expected tag arg count mismatch");
-                }
                 if (exec_arg_tys.len != source_args.len) {
                     debugPanic("lambdamono.lower.specializePat expected executable tag arg count mismatch");
                 }

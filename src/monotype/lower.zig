@@ -2447,7 +2447,17 @@ pub const Lowerer = struct {
                 ),
                 .elem_index = access.elem_index,
             } },
-            .e_if => |if_expr| .{ .if_ = try self.lowerIfExpr(module_idx, type_scope, env, if_expr) },
+            .e_if => |if_expr| return try self.program.store.addExpr(.{
+                .ty = ty,
+                .data = .{ .if_ = try self.lowerIfExprWithExpectedType(
+                    module_idx,
+                    type_scope,
+                    env,
+                    ty,
+                    try self.scopedSolvedExprResultVar(type_scope, env, expr),
+                    if_expr,
+                ) },
+            }),
             .e_match => |match_expr| try self.lowerMatchExprData(module_idx, type_scope, env, ty, null, match_expr),
             .e_block => |block| {
                 const lowered = try self.lowerBlockExpr(module_idx, type_scope, env, block.stmts, block.final_expr);
@@ -3670,6 +3680,7 @@ pub const Lowerer = struct {
                     current = try self.lowerPatternGuardExpr(
                         module_idx,
                         type_scope,
+                        result_ty,
                         scrutinee_expr,
                         scrutinee.ty,
                         branch_pattern.pattern,
@@ -3897,6 +3908,7 @@ pub const Lowerer = struct {
         return self.lowerPatternGuardExpr(
             module_idx,
             type_scope,
+            result_ty,
             scrutinee_expr,
             scrutinee_ty,
             match_pattern_idx,
@@ -3914,6 +3926,7 @@ pub const Lowerer = struct {
         self: *Lowerer,
         module_idx: u32,
         type_scope: *TypeScope,
+        result_ty: type_mod.TypeId,
         scrutinee_expr: ast.ExprId,
         scrutinee_ty: type_mod.TypeId,
         pattern_idx: CIR.Pattern.Idx,
@@ -3934,7 +3947,7 @@ pub const Lowerer = struct {
                 .{ .pat = try self.program.store.addPat(.{ .ty = scrutinee_ty, .data = .{ .var_ = symbol_mod.Symbol.none } }), .body = else_expr },
             };
             return try self.program.store.addExpr(.{
-                .ty = self.program.store.getExpr(then_expr).ty,
+                .ty = result_ty,
                 .data = .{ .when = .{
                     .cond = scrutinee_expr,
                     .branches = try self.program.store.addBranchSpan(&branches),
@@ -3956,6 +3969,7 @@ pub const Lowerer = struct {
             current = try self.lowerPatternGuardExpr(
                 module_idx,
                 type_scope,
+                result_ty,
                 guard.expr,
                 guard_ty,
                 guard.pattern_idx,
@@ -3969,7 +3983,7 @@ pub const Lowerer = struct {
             .{ .pat = try self.program.store.addPat(.{ .ty = scrutinee_ty, .data = .{ .var_ = symbol_mod.Symbol.none } }), .body = else_expr },
         };
         return try self.program.store.addExpr(.{
-            .ty = self.program.store.getExpr(then_expr).ty,
+            .ty = result_ty,
             .data = .{ .when = .{
                 .cond = scrutinee_expr,
                 .branches = try self.program.store.addBranchSpan(&branches),
@@ -4064,6 +4078,7 @@ pub const Lowerer = struct {
         self: *Lowerer,
         module_idx: u32,
         type_scope: *TypeScope,
+        result_ty: type_mod.TypeId,
         scrutinee_expr: ast.ExprId,
         scrutinee_ty: type_mod.TypeId,
         pattern_idx: CIR.Pattern.Idx,
@@ -4077,6 +4092,7 @@ pub const Lowerer = struct {
             .as => |as_pat| self.lowerPatternGuardExpr(
                 module_idx,
                 type_scope,
+                result_ty,
                 scrutinee_expr,
                 scrutinee_ty,
                 as_pat.pattern,
@@ -4086,6 +4102,7 @@ pub const Lowerer = struct {
             .nominal => |nominal| self.lowerPatternGuardExpr(
                 module_idx,
                 type_scope,
+                result_ty,
                 scrutinee_expr,
                 scrutinee_ty,
                 nominal.backing_pattern,
@@ -4095,6 +4112,7 @@ pub const Lowerer = struct {
             .nominal_external => |nominal| self.lowerPatternGuardExpr(
                 module_idx,
                 type_scope,
+                result_ty,
                 scrutinee_expr,
                 scrutinee_ty,
                 nominal.backing_pattern,
@@ -4128,6 +4146,7 @@ pub const Lowerer = struct {
                     current = try self.lowerPatternGuardExpr(
                         module_idx,
                         type_scope,
+                        result_ty,
                         field_expr,
                         field_ty,
                         child_pattern_idx,
@@ -4155,6 +4174,7 @@ pub const Lowerer = struct {
                     current = try self.lowerPatternGuardExpr(
                         module_idx,
                         type_scope,
+                        result_ty,
                         try self.makeTupleAccessExpr(
                             scrutinee_expr,
                             elem_ty,
@@ -4182,7 +4202,7 @@ pub const Lowerer = struct {
                     pattern,
                 );
                 break :blk try self.program.store.addExpr(.{
-                    .ty = self.program.store.getExpr(then_expr).ty,
+                    .ty = result_ty,
                     .data = .{ .if_ = .{
                         .cond = cond_expr,
                         .then_body = then_expr,
@@ -4231,6 +4251,7 @@ pub const Lowerer = struct {
                     current = try self.lowerPatternGuardExpr(
                         module_idx,
                         type_scope,
+                        result_ty,
                         elem_expr,
                         elem_ty,
                         elem_pattern_idx,
@@ -4249,6 +4270,7 @@ pub const Lowerer = struct {
                             current = try self.lowerPatternGuardExpr(
                                 module_idx,
                                 type_scope,
+                                result_ty,
                                 rest_expr,
                                 scrutinee_ty,
                                 rest_pattern_idx,
@@ -4260,7 +4282,7 @@ pub const Lowerer = struct {
                 }
 
                 break :blk try self.program.store.addExpr(.{
-                    .ty = self.program.store.getExpr(then_expr).ty,
+                    .ty = result_ty,
                     .data = .{ .if_ = .{
                         .cond = cond_expr,
                         .then_body = current,
@@ -4271,6 +4293,7 @@ pub const Lowerer = struct {
             .applied_tag => |tag| try self.lowerTagPatternGuardExpr(
                 module_idx,
                 type_scope,
+                result_ty,
                 scrutinee_expr,
                 scrutinee_ty,
                 pattern_idx,
@@ -4435,6 +4458,7 @@ pub const Lowerer = struct {
         return try self.lowerPatternGuardExpr(
             module_idx,
             type_scope,
+            result_ty,
             scrutinee_expr,
             scrutinee_ty,
             match_pattern_idx,
