@@ -271,7 +271,6 @@ const Unifier = struct {
             .content = new_content,
             .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
             .from_numeral_origin = is_flex and (vars.a.desc.from_numeral_origin or vars.b.desc.from_numeral_origin),
-            .retained_in_generalized_scheme = vars.a.desc.retained_in_generalized_scheme or vars.b.desc.retained_in_generalized_scheme,
         });
     }
 
@@ -285,7 +284,6 @@ const Unifier = struct {
             .content = new_content,
             .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
             .from_numeral_origin = is_flex and (vars.a.desc.from_numeral_origin or vars.b.desc.from_numeral_origin),
-            .retained_in_generalized_scheme = vars.a.desc.retained_in_generalized_scheme or vars.b.desc.retained_in_generalized_scheme,
         });
         _ = try self.scratch.fresh_vars.append(self.scratch.gpa, var_);
         return var_;

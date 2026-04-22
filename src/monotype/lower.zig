@@ -7689,18 +7689,8 @@ pub const Lowerer = struct {
                 .nominal_type => |nominal| try self.lowerNominalType(module_idx, type_scope, placeholder, nominal),
             },
             .alias => |alias| .{ .link = try self.lowerInstantiatedType(module_idx, type_scope, type_scope.typeStoreConst().getAliasBackingVar(alias)) },
-            .flex => |flex| blk: {
-                if (try self.defaultPrimitiveForConstraints(module_idx, type_scope, flex.constraints)) |prim| {
-                    break :blk .{ .primitive = prim };
-                }
-                break :blk .unbd;
-            },
-            .rigid => |rigid| blk: {
-                if (try self.defaultPrimitiveForConstraints(module_idx, type_scope, rigid.constraints)) |prim| {
-                    break :blk .{ .primitive = prim };
-                }
-                break :blk .unbd;
-            },
+            .flex => .unbd,
+            .rigid => .unbd,
             // Checked error vars must not leak the monotype builder's internal
             // placeholder into published program types. Preserve them as explicit
             // unknown leaves so downstream stages can still retarget erroneous
@@ -8025,21 +8015,6 @@ pub const Lowerer = struct {
             .rigid => |rigid| builtinNumPrimInStore(type_scope.identStoreConst(), rigid.name),
             else => null,
         };
-    }
-
-    fn defaultPrimitiveForConstraints(
-        _: *Lowerer,
-        _: u32,
-        type_scope: *const TypeScope,
-        constraints_range: types.StaticDispatchConstraint.SafeList.Range,
-    ) std.mem.Allocator.Error!?type_mod.Prim {
-        const constraints = type_scope.typeStoreConst().sliceStaticDispatchConstraints(constraints_range);
-        for (constraints) |constraint| {
-            if (constraint.origin == .from_numeral) {
-                return .dec;
-            }
-        }
-        return null;
     }
 
     fn debugPanicUnresolvedTypeVar(

@@ -299,13 +299,6 @@ pub const Store = struct {
         self.descs.set(resolved.desc_idx, desc);
     }
 
-    pub fn markRetainedInGeneralizedScheme(self: *Self, var_: Var) void {
-        const resolved = self.resolveVar(var_);
-        var desc = self.descs.get(resolved.desc_idx);
-        desc.retained_in_generalized_scheme = true;
-        self.descs.set(resolved.desc_idx, desc);
-    }
-
     /// Create a new variable with the provided content assuming there is capacity
     pub fn appendFromContentAssumeCapacity(self: *Self, content: Content, rank: Rank) Var {
         const desc_idx = self.descs.appendAssumeCapacity(.{

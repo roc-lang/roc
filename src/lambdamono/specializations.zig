@@ -28,6 +28,7 @@ pub const Pending = struct {
     repr_mode: ReprMode,
     fn_ty: TypeVarId,
     source_def: SourceDef,
+    source_captures: []const solved.Type.Capture,
     requested_types: ?solved.Type.Store,
     requested_ty: ?TypeVarId,
     key_bytes: []const u8,
@@ -37,6 +38,7 @@ pub const Pending = struct {
     summary_types: ?*solved.Type.Store = null,
     summary_fn_ty: ?TypeVarId = null,
     summary_exact_fn_ty: ?TypeVarId = null,
+    summary_exact_captures: ?[]const solved.Type.Capture = null,
     summary_seeded: bool = false,
     exec_capture_ty: ?type_mod.TypeId = null,
     capture_exact_symbols: ?[]const Symbol = null,
@@ -71,6 +73,12 @@ pub const Queue = struct {
             if (item.summary_types) |types| {
                 types.deinit();
                 self.allocator.destroy(types);
+            }
+            if (item.source_captures.len != 0) {
+                self.allocator.free(item.source_captures);
+            }
+            if (item.summary_exact_captures) |captures| {
+                if (captures.len != 0) self.allocator.free(captures);
             }
             if (item.exec_args_tys) |args| {
                 if (args.len != 0) self.allocator.free(args);
@@ -117,6 +125,7 @@ pub const FEnvEntry = struct {
     name: Symbol,
     fn_ty: TypeVarId,
     fn_def: solved.Ast.FnDef,
+    captures: []const solved.Type.Capture,
     capture_symbols: []const Symbol,
 };
 
@@ -125,6 +134,7 @@ pub fn buildFEnv(allocator: std.mem.Allocator, input: *const solved.Lower.Result
     var out = std.ArrayList(FEnvEntry).empty;
     errdefer {
         for (out.items) |entry| {
+            if (entry.captures.len != 0) allocator.free(entry.captures);
             if (entry.capture_symbols.len != 0) allocator.free(entry.capture_symbols);
         }
         out.deinit(allocator);
@@ -134,6 +144,8 @@ pub fn buildFEnv(allocator: std.mem.Allocator, input: *const solved.Lower.Result
         switch (def.value) {
             .fn_ => |fn_def| {
                 const captures = input.types.requireLambdaCaptures(def.bind.ty, def.bind.symbol);
+                const copied_captures = try allocator.dupe(solved.Type.Capture, captures);
+                errdefer allocator.free(copied_captures);
                 const capture_symbols = try allocator.alloc(Symbol, captures.len);
                 errdefer allocator.free(capture_symbols);
                 for (captures, 0..) |capture, i| {
@@ -143,6 +155,7 @@ pub fn buildFEnv(allocator: std.mem.Allocator, input: *const solved.Lower.Result
                     .name = def.bind.symbol,
                     .fn_ty = def.bind.ty,
                     .fn_def = fn_def,
+                    .captures = copied_captures,
                     .capture_symbols = capture_symbols,
                 });
             },
@@ -155,6 +168,7 @@ pub fn buildFEnv(allocator: std.mem.Allocator, input: *const solved.Lower.Result
 
 pub fn deinitFEnv(allocator: std.mem.Allocator, fenv: []const FEnvEntry) void {
     for (fenv) |entry| {
+        if (entry.captures.len != 0) allocator.free(entry.captures);
         if (entry.capture_symbols.len != 0) allocator.free(entry.capture_symbols);
     }
     if (fenv.len != 0) allocator.free(fenv);
@@ -214,6 +228,7 @@ pub fn specializeFnWithExecArgs(
         .repr_mode = repr_mode,
         .fn_ty = entry.fn_ty,
         .source_def = .{ .fn_ = entry.fn_def },
+        .source_captures = try queue.allocator.dupe(solved.Type.Capture, entry.captures),
         .requested_types = requested_types,
         .requested_ty = requested_ty_copy,
         .key_bytes = key,
@@ -273,6 +288,7 @@ pub fn specializeHostedWithExecArgs(
         .repr_mode = repr_mode,
         .fn_ty = hosted_fn.bind.ty,
         .source_def = .{ .hosted_fn = hosted_fn },
+        .source_captures = &.{},
         .requested_types = requested_types,
         .requested_ty = requested_ty_copy,
         .key_bytes = key,

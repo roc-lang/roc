@@ -353,14 +353,6 @@ const Lowerer = struct {
             const def_id = try self.output.addDef(def);
             try self.root_defs.append(self.allocator, def_id);
         }
-        for (self.input.store.defsSlice()) |def| {
-            switch (def.value) {
-                .hosted_fn => |hosted_fn| {
-                    _ = try self.output.addDef(try self.lowerHostedDef(def.bind, hosted_fn));
-                },
-                else => {},
-            }
-        }
         for (self.inspect_defs.items) |def| {
             const def_id = try self.output.addDef(def);
             try self.root_defs.append(self.allocator, def_id);
@@ -578,14 +570,78 @@ const Lowerer = struct {
         };
         if (!self.executableTypeIsAbstract(defaulted)) return defaulted;
         if (self.isExecutableCallableType(defaulted)) return defaulted;
-        return self.requireConcreteExecutableType(
-            try self.lowerErasedBoundaryExecutableTypeIn(
-                inst.types,
-                mono_cache,
-                source_ty,
+        if (repr_mode == .natural) {
+            if (try self.concreteExecutableTypeFromExprShape(inst, mono_cache, expr_id, source_ty)) |concrete| {
+                return concrete;
+            }
+        }
+        return switch (repr_mode) {
+            .natural => defaulted,
+            .erased_boundary => self.requireConcreteExecutableType(
+                try self.lowerErasedBoundaryExecutableTypeIn(
+                    inst.types,
+                    mono_cache,
+                    source_ty,
+                ),
+                "lowerRequestedExecutableArgTypeFromExpr(erased boundary)",
             ),
-            "lowerRequestedExecutableArgTypeFromExpr(erased boundary)",
-        );
+        };
+    }
+
+    fn concreteExecutableTypeFromExprShape(
+        self: *Lowerer,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        expr_id: solved.Ast.ExprId,
+        source_ty: TypeVarId,
+    ) std.mem.Allocator.Error!?type_mod.TypeId {
+        const lowered = try self.lowerExecutableTypeFromSolvedIn(inst.types, mono_cache, source_ty);
+        if (!self.executableTypeIsAbstract(lowered)) {
+            return self.requireConcreteExecutableType(lowered, "concreteExecutableTypeFromExprShape(lowered)");
+        }
+
+        const expr = self.input.store.getExpr(expr_id);
+        return switch (expr.data) {
+            .tag => |tag| blk: {
+                const tag_info = self.solvedTagInfoByName(inst.types, source_ty, tag.name) orelse break :blk null;
+                const tag_args = self.input.store.sliceExprSpan(tag.args);
+                if (tag_info.args.len != tag_args.len) {
+                    debugPanic("lambdamono.lower.concreteExecutableTypeFromExprShape tag arg count mismatch");
+                }
+                const arg_tys = try self.allocator.alloc(type_mod.TypeId, tag_args.len);
+                defer self.allocator.free(arg_tys);
+                for (tag_args, tag_info.args, 0..) |arg_expr_id, arg_source_ty, i| {
+                    arg_tys[i] = (try self.concreteExecutableTypeFromExprShape(
+                        inst,
+                        mono_cache,
+                        arg_expr_id,
+                        arg_source_ty,
+                    )) orelse break :blk null;
+                }
+                break :blk try self.synthesizedSingletonTagTypeFromArgTypes(tag.name, arg_tys);
+            },
+            .list => |items_span| blk: {
+                const elem_source_ty = self.solvedListElemType(inst.types, source_ty) orelse break :blk null;
+                const items = self.input.store.sliceExprSpan(items_span);
+                if (items.len == 0) break :blk null;
+                var elem_exec_ty: ?type_mod.TypeId = null;
+                for (items) |item_expr_id| {
+                    const next = (try self.concreteExecutableTypeFromExprShape(
+                        inst,
+                        mono_cache,
+                        item_expr_id,
+                        elem_source_ty,
+                    )) orelse break :blk null;
+                    if (elem_exec_ty) |existing| {
+                        if (!self.types.equalIds(existing, next)) break :blk null;
+                    } else {
+                        elem_exec_ty = next;
+                    }
+                }
+                break :blk try self.synthesizedListTypeFromElem(elem_exec_ty orelse break :blk null);
+            },
+            else => null,
+        };
     }
 
     fn defaultExecutableTypeForScalarNumericLiteral(
@@ -731,14 +787,37 @@ const Lowerer = struct {
                     concrete_callable_exec_ty,
                     "ensurePendingExecutableArgTypes(callable)",
                 );
-            } else self.requireConcreteExecutableType(
-                try self.lowerErasedBoundaryExecutableTypeIn(
-                    summary_types,
-                    &mono_cache,
-                    summary_arg_ty,
+            } else switch (pending.repr_mode) {
+                .natural => {
+                    const pending_entry = self.input.symbols.get(pending.name);
+                    const pending_name = if (pending_entry.name == base.Ident.Idx.NONE)
+                        "<none>"
+                    else
+                        self.input.idents.getText(pending_entry.name);
+                    const source_summary = self.debugSolvedTypeSummary(summary_types, summary_arg_ty);
+                    defer source_summary.deinit(self.allocator);
+                    const exec_summary = self.debugExecutableTypeSummary(lowered);
+                    defer exec_summary.deinit(self.allocator);
+                    debugPanicFmt(
+                        "lambdamono.lower.ensurePendingExecutableArgTypes natural arg remained abstract symbol={d} origin={s} name={s} source={s} exec={s}",
+                        .{
+                            pending.name.raw(),
+                            @tagName(pending_entry.origin),
+                            pending_name,
+                            source_summary.text,
+                            exec_summary.text,
+                        },
+                    );
+                },
+                .erased_boundary => self.requireConcreteExecutableType(
+                    try self.lowerErasedBoundaryExecutableTypeIn(
+                        summary_types,
+                        &mono_cache,
+                        summary_arg_ty,
+                    ),
+                    "ensurePendingExecutableArgTypes(erased boundary)",
                 ),
-                "ensurePendingExecutableArgTypes(erased boundary)",
-            );
+            };
             if (!self.executableTypeIsAbstract(exec_args[i]) and !self.types.equalIds(exec_args[i], derived)) {
                 debugPanic("lambdamono.lower.ensurePendingExecutableArgTypes executable arg signature mismatch against specialization summary");
             }
@@ -779,15 +858,26 @@ const Lowerer = struct {
             self.requireConcreteExecutableType(lowered_ret_ty, "ensurePendingExecutableReturnType")
         else if (self.isExecutableCallableType(lowered_ret_ty))
             self.requireConcreteExecutableType(lowered_ret_ty, "ensurePendingExecutableReturnType(callable)")
-        else
-            self.requireConcreteExecutableType(
+        else switch (pending.repr_mode) {
+            .natural => {
+                const source_summary = self.debugSolvedTypeSummary(summary_types, summary_types.fnShape(summary_fn_ty).ret);
+                defer source_summary.deinit(self.allocator);
+                const exec_summary = self.debugExecutableTypeSummary(lowered_ret_ty);
+                defer exec_summary.deinit(self.allocator);
+                debugPanicFmt(
+                    "lambdamono.lower.ensurePendingExecutableReturnType natural return remained abstract source={s} exec={s}",
+                    .{ source_summary.text, exec_summary.text },
+                );
+            },
+            .erased_boundary => self.requireConcreteExecutableType(
                 try self.lowerErasedBoundaryExecutableTypeIn(
                     summary_types,
                     &mono_cache,
                     summary_types.fnShape(summary_fn_ty).ret,
                 ),
                 "ensurePendingExecutableReturnType(erased boundary)",
-            );
+            ),
+        };
         pending.exec_ret_ty = ret_ty;
         return ret_ty;
     }
@@ -800,9 +890,6 @@ const Lowerer = struct {
             try self.promotePendingSummary(pending);
         }
         if (pending.summary_seeded) return;
-        if (pending.repr_mode == .natural) {
-            try self.seedPendingNaturalSummaryFromExecutableSignature(pending);
-        }
 
         switch (pending.source_def) {
             .hosted_fn => {},
@@ -813,15 +900,47 @@ const Lowerer = struct {
                     debugPanic("lambdamono.lower.preparePendingSummary missing specialization summary type");
                 var inst = InstScope.borrow(self.allocator, summary_types);
                 defer inst.deinit();
-                const source_fn_ty = try self.cloneTypeIntoInstFromStore(
-                    &inst,
+                var exact_mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
+                defer exact_mapping.deinit();
+                pending.summary_exact_fn_ty = try self.cloneTypeFromStoreRec(
+                    summary_types,
                     &self.input.types,
+                    &exact_mapping,
                     pending.fn_ty,
                 );
-                try self.unifyIn(inst.types, source_fn_ty, summary_fn_ty);
-                pending.summary_exact_fn_ty = source_fn_ty;
-                try self.refreshPendingExecutableCaptureTypeFromSummary(pending);
+                if (pending.summary_exact_captures) |captures| {
+                    if (captures.len != 0) self.allocator.free(captures);
+                }
+                if (pending.source_captures.len == 0) {
+                    pending.summary_exact_captures = &.{};
+                } else {
+                    const exact_captures = try self.allocator.alloc(solved.Type.Capture, pending.source_captures.len);
+                    for (pending.source_captures, 0..) |capture, i| {
+                        exact_captures[i] = .{
+                            .symbol = capture.symbol,
+                            .ty = try self.cloneTypeFromStoreRec(
+                                summary_types,
+                                &self.input.types,
+                                &exact_mapping,
+                                capture.ty,
+                            ),
+                        };
+                    }
+                    pending.summary_exact_captures = exact_captures;
+                }
+                const source_summary_fn_ty = pending.summary_exact_fn_ty orelse
+                    debugPanic("lambdamono.lower.preparePendingSummary missing cloned source specialization type");
+                try self.unifyIn(inst.types, source_summary_fn_ty, summary_fn_ty);
             },
+        }
+
+        if (pending.repr_mode == .natural) {
+            try self.seedPendingNaturalSummaryFromExecutableSignature(pending);
+        }
+
+        switch (pending.source_def) {
+            .hosted_fn => {},
+            .fn_ => try self.refreshPendingExecutableCaptureTypeFromSummary(pending),
         }
 
         self.validatePendingExecutableSignature(pending);
@@ -837,10 +956,8 @@ const Lowerer = struct {
 
         const summary_types = pending.summary_types orelse
             debugPanic("lambdamono.lower.refreshPendingExecutableCaptureTypeFromSummary missing specialization summary store");
-        const summary_exact_fn_ty = pending.summary_exact_fn_ty orelse
-            debugPanic("lambdamono.lower.refreshPendingExecutableCaptureTypeFromSummary missing exact specialization summary type");
-        const member = summary_types.requireLambdaMember(summary_exact_fn_ty, pending.name);
-        const captures = summary_types.sliceCaptures(member.lambda.captures);
+        const captures = pending.summary_exact_captures orelse
+            debugPanic("lambdamono.lower.refreshPendingExecutableCaptureTypeFromSummary missing exact specialization captures");
         if (captures.len == 0) {
             pending.exec_capture_ty = null;
             return;
@@ -911,14 +1028,6 @@ const Lowerer = struct {
                         try self.constrainSolvedTypeToExecutable(solved_types, source_nominal.backing, exec_ty);
                         return;
                     }
-
-                    const source_args = solved_types.sliceTypeVarSpan(source_nominal.args);
-                    if (source_args.len != exec_nominal.args.len) {
-                        debugPanic("lambdamono.lower.constrainSolvedTypeToExecutable nominal arg arity mismatch");
-                    }
-                    for (source_args, exec_nominal.args) |source_arg, exec_arg| {
-                        try self.constrainSolvedTypeToExecutable(solved_types, source_arg, exec_arg);
-                    }
                     try self.constrainSolvedTypeToExecutable(solved_types, source_nominal.backing, exec_nominal.backing);
                 },
                 else => try self.constrainSolvedTypeToExecutable(solved_types, source_nominal.backing, exec_ty),
@@ -980,7 +1089,35 @@ const Lowerer = struct {
                         }
                         const source_tags = solved_types.sliceTags(source_union.tags);
                         if (source_tags.len != exec_union.tags.len) {
-                            debugPanic("lambdamono.lower.constrainSolvedTypeToExecutable tag union arity mismatch");
+                            if (self.sourceTypeIsAbstract(solved_types, source_ty)) {
+                                var mapping = std.AutoHashMap(type_mod.TypeId, TypeVarId).init(self.allocator);
+                                defer mapping.deinit();
+                                const exact_ty = try self.cloneConcreteExecutableTypeIntoSolvedStore(
+                                    solved_types,
+                                    exec_ty,
+                                    &mapping,
+                                );
+                                try self.overwriteSolvedTypeWithExact(solved_types, source_id, exact_ty);
+                                return;
+                            }
+                            const source_summary = self.debugSolvedTypeSummary(solved_types, source_ty);
+                            defer source_summary.deinit(self.allocator);
+                            const exec_summary = self.debugExecutableTypeSummary(exec_ty);
+                            defer exec_summary.deinit(self.allocator);
+                            const specializing_symbol = self.current_specializing_symbol orelse Symbol.none;
+                            const specializing_name = if (!specializing_symbol.isNone())
+                                self.input.idents.getText(self.input.symbols.get(specializing_symbol).name)
+                            else
+                                "<none>";
+                            debugPanicFmt(
+                                "lambdamono.lower.constrainSolvedTypeToExecutable tag union arity mismatch specializing_symbol={d} specializing_name={s} source={s} exec={s}",
+                                .{
+                                    specializing_symbol.raw(),
+                                    specializing_name,
+                                    source_summary.text,
+                                    exec_summary.text,
+                                },
+                            );
                         }
                         for (source_tags, exec_union.tags) |source_tag, exec_tag| {
                             switch (exec_tag.name) {
@@ -1114,16 +1251,11 @@ const Lowerer = struct {
             .nominal => |exec_nominal| blk: {
                 const placeholder = try solved_types.freshUnbd();
                 try mapping.put(exec_ty, placeholder);
-                const args = try self.allocator.alloc(TypeVarId, exec_nominal.args.len);
-                defer if (args.len != 0) self.allocator.free(args);
-                for (exec_nominal.args, 0..) |exec_arg, i| {
-                    args[i] = try self.cloneConcreteExecutableTypeIntoSolvedStore(solved_types, exec_arg, mapping);
-                }
                 solved_types.setNode(placeholder, .{ .nominal = .{
                     .module_idx = exec_nominal.module_idx,
                     .ident = exec_nominal.ident,
                     .is_opaque = exec_nominal.is_opaque,
-                    .args = try solved_types.addTypeVarSpan(args),
+                    .args = try solved_types.addTypeVarSpan(&.{}),
                     .backing = try self.cloneConcreteExecutableTypeIntoSolvedStore(solved_types, exec_nominal.backing, mapping),
                 } });
                 break :blk placeholder;
@@ -1283,15 +1415,26 @@ const Lowerer = struct {
             self.requireConcreteExecutableType(lowered_ret_ty, "refreshPendingExecutableReturnType")
         else if (self.isExecutableCallableType(lowered_ret_ty))
             self.requireConcreteExecutableType(lowered_ret_ty, "refreshPendingExecutableReturnType(callable)")
-        else
-            self.requireConcreteExecutableType(
+        else switch (pending.repr_mode) {
+            .natural => {
+                const source_summary = self.debugSolvedTypeSummary(solved_types, solved_types.fnShape(summary_fn_ty).ret);
+                defer source_summary.deinit(self.allocator);
+                const exec_summary = self.debugExecutableTypeSummary(lowered_ret_ty);
+                defer exec_summary.deinit(self.allocator);
+                debugPanicFmt(
+                    "lambdamono.lower.refreshPendingExecutableReturnType natural return remained abstract source={s} exec={s}",
+                    .{ source_summary.text, exec_summary.text },
+                );
+            },
+            .erased_boundary => self.requireConcreteExecutableType(
                 try self.lowerErasedBoundaryExecutableTypeIn(
                     solved_types,
                     mono_cache,
                     solved_types.fnShape(summary_fn_ty).ret,
                 ),
                 "refreshPendingExecutableReturnType(erased boundary)",
-            );
+            ),
+        };
         pending.exec_ret_ty = refreshed;
         return refreshed;
     }
@@ -1333,14 +1476,17 @@ const Lowerer = struct {
             );
         }
         if (self.isExecutableCallableType(lowered_ret_ty)) return lowered_ret_ty;
-        return self.requireConcreteExecutableType(
-            try self.lowerErasedBoundaryExecutableTypeIn(
-                solved_types,
-                mono_cache,
-                solved_types.fnShape(summary_fn_ty).ret,
+        return switch (pending.repr_mode) {
+            .natural => lowered_ret_ty,
+            .erased_boundary => self.requireConcreteExecutableType(
+                try self.lowerErasedBoundaryExecutableTypeIn(
+                    solved_types,
+                    mono_cache,
+                    solved_types.fnShape(summary_fn_ty).ret,
+                ),
+                "currentPendingExecutableReturnDefaultType(erased boundary)",
             ),
-            "currentPendingExecutableReturnDefaultType(erased boundary)",
-        );
+        };
     }
 
     fn finishPendingSpecialization(
@@ -1533,13 +1679,55 @@ const Lowerer = struct {
     fn explicitExprSourceType(
         self: *Lowerer,
         inst: *InstScope,
+        venv: []const EnvEntry,
         expr_id: solved.Ast.ExprId,
     ) std.mem.Allocator.Error!TypeVarId {
-        return try self.freshCloneTypeIntoInstFromStore(
-            inst,
-            &self.input.types,
-            self.input.store.getExpr(expr_id).ty,
-        );
+        const expr = self.input.store.getExpr(expr_id);
+        return switch (expr.data) {
+            .var_ => |symbol| if (self.lookupEnvEntry(venv, symbol)) |entry|
+                entry.ty
+            else
+                try self.cloneInstType(inst, expr.ty),
+            .access => |access| {
+                const record_ty = try self.explicitExprSourceType(inst, venv, access.record);
+                return self.solvedRecordFieldByName(inst.types, record_ty, access.field) orelse
+                    debugPanic("lambdamono.lower.explicitExprSourceType missing solved record field");
+            },
+            .tuple_access => |access| {
+                const tuple_ty = try self.explicitExprSourceType(inst, venv, access.tuple);
+                return self.solvedTupleElemType(inst.types, tuple_ty, access.elem_index) orelse
+                    debugPanic("lambdamono.lower.explicitExprSourceType missing solved tuple element");
+            },
+            .int_lit, .dec_lit => {
+                const current_ty = try self.cloneInstType(inst, expr.ty);
+                return try self.defaultNumericLiteralSourceType(inst.types, current_ty);
+            },
+            .list, .record, .tag => {
+                const current_ty = try self.cloneInstType(inst, expr.ty);
+                return try self.refinedSourceTypeForExpr(inst, venv, expr_id, current_ty);
+            },
+            else => try self.cloneInstType(inst, expr.ty),
+        };
+    }
+
+    fn defaultNumericLiteralSourceType(
+        self: *Lowerer,
+        solved_types: *solved.Type.Store,
+        current_source_ty: TypeVarId,
+    ) std.mem.Allocator.Error!TypeVarId {
+        _ = self;
+        const root = solved_types.unlinkPreservingNominal(current_source_ty);
+        return switch (solved_types.getNode(root)) {
+            .unbd, .for_a, .flex_for_a => try solved_types.freshContent(.{ .primitive = .dec }),
+            .content => |content| switch (content) {
+                .primitive => |prim| switch (prim) {
+                    .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => current_source_ty,
+                    else => current_source_ty,
+                },
+                else => current_source_ty,
+            },
+            else => current_source_ty,
+        };
     }
 
     fn buildEntrypointWrappers(self: *Lowerer) std.mem.Allocator.Error!void {
@@ -2129,41 +2317,6 @@ const Lowerer = struct {
         }
     }
 
-    fn lowerHostedDef(
-        self: *Lowerer,
-        bind: solved.Ast.TypedSymbol,
-        hosted_fn: solved.Ast.HostedFnDef,
-    ) std.mem.Allocator.Error!ast.Def {
-        var mono_cache = lower_type.MonoCache.init(self.allocator);
-        defer mono_cache.deinit();
-        const source_fn = self.input.types.fnShape(bind.ty);
-        const source_args = self.input.types.sliceTypeVarSpan(source_fn.args);
-        const hosted_args = self.input.store.sliceTypedSymbolSpan(hosted_fn.args);
-        if (source_args.len != hosted_args.len) {
-            debugPanic("lambdamono.lower.lowerHostedDef hosted arg arity mismatch");
-        }
-        const lowered_args = try self.allocator.alloc(ast.TypedSymbol, hosted_args.len);
-        defer self.allocator.free(lowered_args);
-
-        for (hosted_args, source_args, 0..) |arg, arg_source_ty, i| {
-            lowered_args[i] = .{
-                .ty = try self.lowerErasedBoundaryExecutableTypeIn(&self.input.types, &mono_cache, arg_source_ty),
-                .symbol = arg.symbol,
-            };
-        }
-        const ret_ty = try self.lowerErasedBoundaryExecutableTypeIn(&self.input.types, &mono_cache, source_fn.ret);
-
-        return .{
-            .bind = bind.symbol,
-            .result_ty = ret_ty,
-            .value = .{ .hosted_fn = .{
-                .bind = bind.symbol,
-                .args = try self.output.addTypedSymbolSpan(lowered_args),
-                .hosted = hosted_fn.hosted,
-            } },
-        };
-    }
-
     fn lowerErasedBoundaryNominalArgs(
         self: *Lowerer,
         solved_types: *solved.Type.Store,
@@ -2360,6 +2513,38 @@ const Lowerer = struct {
             try self.unifyIn(inst.types, constraint_arg_ty, refined_arg_ty);
         }
         try self.refineCallArgSourceTypesIn(inst, venv, arg_expr_ids, constraint_arg_tys);
+        return constraint_fn_ty;
+    }
+
+    fn instantiateExplicitConstraintFnTypeForExprs(
+        self: *Lowerer,
+        inst: *InstScope,
+        venv: []const EnvEntry,
+        arg_expr_ids: []const solved.Ast.ExprId,
+        source_constraint_ty: TypeVarId,
+        expected_result_source_ty: TypeVarId,
+    ) std.mem.Allocator.Error!TypeVarId {
+        var mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
+        defer mapping.deinit();
+        const constraint_fn_ty = try self.cloneTypeIntoInstFromStoreWithMapping(
+            inst,
+            &self.input.types,
+            &mapping,
+            source_constraint_ty,
+        );
+        const constraint_shape = inst.types.fnShape(constraint_fn_ty);
+        const constraint_arg_tys = try self.dupeTypeVarIds(
+            inst.types.sliceTypeVarSpan(constraint_shape.args),
+        );
+        defer if (constraint_arg_tys.len != 0) self.allocator.free(constraint_arg_tys);
+        if (constraint_arg_tys.len != arg_expr_ids.len) {
+            debugPanic("lambdamono.lower.instantiateExplicitConstraintFnTypeForExprs arg arity mismatch");
+        }
+        try self.unifyIn(inst.types, constraint_shape.ret, expected_result_source_ty);
+        for (arg_expr_ids, constraint_arg_tys) |arg_expr_id, constraint_arg_ty| {
+            const arg_source_ty = try self.explicitExprSourceType(inst, venv, arg_expr_id);
+            try self.unifyIn(inst.types, constraint_arg_ty, arg_source_ty);
+        }
         return constraint_fn_ty;
     }
 
@@ -2750,6 +2935,23 @@ const Lowerer = struct {
             arg_tys[i] = self.output.getExpr(arg).ty;
         }
 
+        const tags = try self.types.dupeTags(&.{.{
+            .name = .{ .ctor = tag_name },
+            .args = try self.types.dupeTypeIds(arg_tys),
+        }});
+        return try self.types.internResolved(.{
+            .tag_union = .{
+                .tags = tags,
+                .call = null,
+            },
+        });
+    }
+
+    fn synthesizedSingletonTagTypeFromArgTypes(
+        self: *Lowerer,
+        tag_name: base.Ident.Idx,
+        arg_tys: []const type_mod.TypeId,
+    ) std.mem.Allocator.Error!type_mod.TypeId {
         const tags = try self.types.dupeTags(&.{.{
             .name = .{ .ctor = tag_name },
             .args = try self.types.dupeTypeIds(arg_tys),
@@ -3719,7 +3921,7 @@ const Lowerer = struct {
                 for (arg_expr_ids) |arg_expr_id| {
                     try self.preRefineExprSourceTypes(inst, mono_cache, venv, arg_expr_id);
                 }
-                const current_result_ty = try self.explicitExprSourceType(inst, expr_id);
+                const current_result_ty = try self.explicitExprSourceType(inst, venv, expr_id);
                 const call_relation_ty = try self.instantiateConstraintFnTypeForExprs(
                     inst,
                     venv,
@@ -3739,7 +3941,7 @@ const Lowerer = struct {
             .method_eq => |eq| {
                 try self.preRefineExprSourceTypes(inst, mono_cache, venv, eq.lhs);
                 try self.preRefineExprSourceTypes(inst, mono_cache, venv, eq.rhs);
-                const current_result_ty = try self.explicitExprSourceType(inst, expr_id);
+                const current_result_ty = try self.explicitExprSourceType(inst, venv, expr_id);
                 const dispatch_arg_exprs = [_]solved.Ast.ExprId{ eq.lhs, eq.rhs };
                 _ = try self.instantiateConstraintFnTypeForExprs(
                     inst,
@@ -3801,10 +4003,23 @@ const Lowerer = struct {
         if (arg_expr_ids.len != expected_arg_tys.len) {
             debugPanic("lambdamono.lower.refineCallArgSourceTypesIn arg arity mismatch");
         }
+        const exact_arg_tys = try self.allocator.alloc(?TypeVarId, arg_expr_ids.len);
+        defer self.allocator.free(exact_arg_tys);
+        for (arg_expr_ids, 0..) |arg_expr_id, i| {
+            const expr = self.input.store.getExpr(arg_expr_id);
+            exact_arg_tys[i] = if (self.directCallableSymbolFromExpr(venv, expr)) |exact_symbol| blk: {
+                const exact_entry = specializations.lookupFnExact(self.fenv, exact_symbol) orelse break :blk null;
+                break :blk try self.freshCloneTypeIntoInstFromStore(
+                    inst,
+                    &self.input.types,
+                    exact_entry.fn_ty,
+                );
+            } else null;
+        }
         var changed = true;
         while (changed) {
             changed = false;
-            for (arg_expr_ids, expected_arg_tys) |arg_expr_id, expected_arg_ty| {
+            for (arg_expr_ids, expected_arg_tys, 0..) |arg_expr_id, expected_arg_ty, i| {
                 const before = try inst.types.structuralKeyOwned(expected_arg_ty);
                 defer inst.types.allocator.free(before);
                 const refined_arg_ty = try self.refinedSourceTypeForExpr(
@@ -3814,15 +4029,8 @@ const Lowerer = struct {
                     expected_arg_ty,
                 );
                 try self.unifyIn(inst.types, expected_arg_ty, refined_arg_ty);
-                if (self.directCallableSymbolFromExpr(venv, self.input.store.getExpr(arg_expr_id))) |exact_symbol| {
-                    if (specializations.lookupFnExact(self.fenv, exact_symbol)) |exact_entry| {
-                        const exact_source_ty = try self.freshCloneTypeIntoInstFromStore(
-                            inst,
-                            &self.input.types,
-                            exact_entry.fn_ty,
-                        );
-                        try self.unifyIn(inst.types, expected_arg_ty, exact_source_ty);
-                    }
+                if (exact_arg_tys[i]) |exact_source_ty| {
+                    try self.unifyIn(inst.types, expected_arg_ty, exact_source_ty);
                 }
                 const after = try inst.types.structuralKeyOwned(expected_arg_ty);
                 defer inst.types.allocator.free(after);
@@ -4143,7 +4351,7 @@ const Lowerer = struct {
         return switch (expr.data) {
             .call => |call| blk: {
                 const arg_expr_ids = self.input.store.sliceExprSpan(call.args);
-                const call_result_ty = try self.explicitExprSourceType(inst, expr_id);
+                const call_result_ty = try self.explicitExprSourceType(inst, venv, expr_id);
                 const call_constraint_ty = try self.instantiateConstraintFnTypeForExprs(
                     inst,
                     venv,
@@ -4163,7 +4371,7 @@ const Lowerer = struct {
                 defer self.allocator.free(dispatch_arg_exprs);
                 dispatch_arg_exprs[0] = method_call.receiver;
                 @memcpy(dispatch_arg_exprs[1..], method_args);
-                const call_result_ty = try self.explicitExprSourceType(inst, expr_id);
+                const call_result_ty = try self.explicitExprSourceType(inst, venv, expr_id);
                 const dispatch_constraint_ty = try self.instantiateConstraintFnTypeForExprs(
                     inst,
                     venv,
@@ -4216,7 +4424,7 @@ const Lowerer = struct {
             },
             .type_dispatch_call => |method_call| blk: {
                 const method_args = self.input.store.sliceExprSpan(method_call.args);
-                const call_result_ty = try self.explicitExprSourceType(inst, expr_id);
+                const call_result_ty = try self.explicitExprSourceType(inst, venv, expr_id);
                 const dispatch_constraint_ty = try self.instantiateConstraintFnTypeForExprs(
                     inst,
                     venv,
@@ -4347,16 +4555,15 @@ const Lowerer = struct {
                     debugPanic("lambdamono.lower.specializeFn missing specialization summary store");
                 const summary_fn_ty = pending.summary_fn_ty orelse
                     debugPanic("lambdamono.lower.specializeFn missing specialization summary type");
-                const summary_exact_fn_ty = pending.summary_exact_fn_ty orelse
-                    debugPanic("lambdamono.lower.specializeFn missing exact specialization summary type");
+                const summary_exact_captures = pending.summary_exact_captures orelse
+                    debugPanic("lambdamono.lower.specializeFn missing exact specialization captures");
                 var inst = InstScope.borrow(self.allocator, summary_types);
                 defer inst.deinit();
                 var mono_cache = lower_type.MonoCache.init(self.allocator);
                 defer mono_cache.deinit();
 
                 const fn_body = fn_def.body;
-                const member = inst.types.requireLambdaMember(summary_exact_fn_ty, pending.name);
-                const frozen_captures = inst.types.sliceCaptures(member.lambda.captures);
+                const frozen_captures = summary_exact_captures;
                 const fn_args = self.input.store.sliceTypedSymbolSpan(fn_def.args);
                 const fn_shape = inst.types.fnShape(summary_fn_ty);
                 const requested_arg_tys = try self.dupeTypeVarIds(
@@ -4383,6 +4590,17 @@ const Lowerer = struct {
                         );
                         defer self.allocator.free(provisional_body_env);
                         try self.preRefineExprSourceTypes(&inst, &mono_cache, provisional_body_env, fn_body);
+                        const body_pending = self.lookupPendingBySpecializedSymbol(pending_symbol) orelse
+                            debugPanic("lambdamono.lower.specializeFn lost pending specialization before lowering natural body");
+                        const proc_arg_exec_tys = try self.ensurePendingExecutableArgTypes(body_pending);
+                        const body_env = try self.buildFnBodyEnv(
+                            inst.types,
+                            requested_arg_tys,
+                            proc_arg_exec_tys,
+                            fn_args,
+                            &[_]EnvEntry{},
+                        );
+                        defer self.allocator.free(body_env);
                         const body = blk_body: {
                             const pre_lower_ret_ty = try self.currentPendingExecutableReturnDefaultType(
                                 pending_symbol,
@@ -4396,7 +4614,7 @@ const Lowerer = struct {
                             const lowered_body = try self.specializeExprWithDefaultTyAndSourceTy(
                                 &inst,
                                 &mono_cache,
-                                provisional_body_env,
+                                body_env,
                                 fn_body,
                                 body_expr,
                                 fn_shape.ret,
@@ -4404,15 +4622,16 @@ const Lowerer = struct {
                             );
                             final_source_ret_ty = lowered_body.source_ty;
                             const body = lowered_body.expr;
-                            if (body_contains_return) {
-                                try self.overwriteSolvedTypeWithExact(
-                                    inst.types,
-                                    fn_shape.ret,
-                                    preserved_summary_ret_ty.?,
-                                );
-                            } else {
-                                try self.overwriteSolvedTypeWithExact(inst.types, fn_shape.ret, final_source_ret_ty);
-                            }
+                            const authoritative_ret_ty = if (body_contains_return and
+                                !self.sourceTypeIsAbstract(inst.types, preserved_summary_ret_ty.?))
+                                preserved_summary_ret_ty.?
+                            else
+                                final_source_ret_ty;
+                            try self.overwriteSolvedTypeWithExact(
+                                inst.types,
+                                fn_shape.ret,
+                                authoritative_ret_ty,
+                            );
                             var final_ret_cache = lower_type.MonoCache.init(self.allocator);
                             defer final_ret_cache.deinit();
                             const lowered_summary_ret_ty = try self.lowerExecutableTypeFromSolvedIn(
@@ -4456,10 +4675,10 @@ const Lowerer = struct {
                         const args_span = blk_args: {
                             const updated_pending = self.lookupPendingBySpecializedSymbol(pending_symbol) orelse
                                 debugPanic("lambdamono.lower.specializeFn lost pending specialization before finalizing natural args");
-                            const proc_arg_exec_tys = try self.ensurePendingExecutableArgTypes(updated_pending);
+                            const finalized_proc_arg_exec_tys = try self.ensurePendingExecutableArgTypes(updated_pending);
                             const lowered_args = try self.allocator.alloc(ast.TypedSymbol, fn_args.len);
                             defer self.allocator.free(lowered_args);
-                            for (fn_args, proc_arg_exec_tys, 0..) |arg, exec_ty, i| {
+                            for (fn_args, finalized_proc_arg_exec_tys, 0..) |arg, exec_ty, i| {
                                 lowered_args[i] = .{
                                     .ty = exec_ty,
                                     .symbol = arg.symbol,
@@ -4538,17 +4757,17 @@ const Lowerer = struct {
                             capture_env,
                             body,
                         );
-                            const updated_pending = self.lookupPendingBySpecializedSymbol(pending_symbol) orelse
-                                debugPanic("lambdamono.lower.specializeFn lost pending specialization before finalizing captured natural args");
-                            const proc_arg_exec_tys = try self.ensurePendingExecutableArgTypes(updated_pending);
-                            const lowered_args = try self.allocator.alloc(ast.TypedSymbol, fn_args.len + 1);
-                            defer self.allocator.free(lowered_args);
-                            for (fn_args, proc_arg_exec_tys, 0..) |arg, exec_ty, i| {
-                                lowered_args[i] = .{
-                                    .ty = exec_ty,
-                                    .symbol = arg.symbol,
-                                };
-                            }
+                        const updated_pending = self.lookupPendingBySpecializedSymbol(pending_symbol) orelse
+                            debugPanic("lambdamono.lower.specializeFn lost pending specialization before finalizing captured natural args");
+                        const finalized_proc_arg_exec_tys = try self.ensurePendingExecutableArgTypes(updated_pending);
+                        const lowered_args = try self.allocator.alloc(ast.TypedSymbol, fn_args.len + 1);
+                        defer self.allocator.free(lowered_args);
+                        for (fn_args, finalized_proc_arg_exec_tys, 0..) |arg, exec_ty, i| {
+                            lowered_args[i] = .{
+                                .ty = exec_ty,
+                                .symbol = arg.symbol,
+                            };
+                        }
                         lowered_args[fn_args.len] = .{
                             .ty = capture_exec_ty,
                             .symbol = captures_symbol,
@@ -5151,7 +5370,7 @@ const Lowerer = struct {
                         .discriminant = if (tag_exec_info) |info| info.discriminant else 0,
                         .args = try self.output.addExprSpan(lowered_args),
                     } },
-                    .source_ty = try self.refinedSingletonTagSourceType(
+                    .source_ty = try self.refineSingletonTagSourceTypeIfAbstract(
                         inst.types,
                         ty,
                         tag.name,
@@ -7371,10 +7590,25 @@ const Lowerer = struct {
         const solved_types = inst.types;
         var refined_source_ty = instantiated_ty;
         if (self.isHostedTopLevelSymbol(symbol)) {
-            const hosted_exec_ty = self.requireConcreteExecutableType(
-                default_ty,
-                "specializeVarExpr(hosted)",
-            );
+            const hosted_exec_ty = blk: {
+                if (!self.executableTypeIsAbstract(default_ty)) {
+                    const concrete = self.requireConcreteExecutableType(
+                        default_ty,
+                        "specializeVarExpr(hosted)",
+                    );
+                    if (self.types.getTypePreservingNominal(concrete) == .erased_fn) {
+                        break :blk concrete;
+                    }
+                }
+                break :blk self.requireConcreteExecutableType(
+                    try self.lowerErasedBoundaryExecutableTypeIn(
+                        solved_types,
+                        mono_cache,
+                        refined_source_ty,
+                    ),
+                    "specializeVarExpr(hosted derived)",
+                );
+            };
             if (self.types.getTypePreservingNominal(hosted_exec_ty) != .erased_fn) {
                 debugPanic("lambdamono.lower.specializeVarExpr hosted symbol expected erased callable executable type");
             }
@@ -8235,9 +8469,10 @@ const Lowerer = struct {
             else
                 current_source_ty,
             .int_lit,
+            .dec_lit,
+            => try self.defaultNumericLiteralSourceType(inst.types, current_source_ty),
             .frac_f32_lit,
             .frac_f64_lit,
-            .dec_lit,
             .str_lit,
             .bool_lit,
             .unit,
@@ -8298,7 +8533,7 @@ const Lowerer = struct {
                     );
                     try self.unifyIn(inst.types, tag_arg_tys[i], refined_arg_ty);
                 }
-                break :blk try self.refinedSingletonTagSourceType(
+                break :blk try self.refineSingletonTagSourceTypeIfAbstract(
                     inst.types,
                     current_source_ty,
                     tag.name,
@@ -8309,7 +8544,7 @@ const Lowerer = struct {
                 const arg_expr_ids = self.input.store.sliceExprSpan(call.args);
                 const base_func_source = self.input.store.getExpr(call.func);
                 const box_boundary = self.boxBoundaryBuiltinOpForExpr(venv, base_func_source);
-                const call_result_ty = try self.explicitExprSourceType(inst, expr_id);
+                const call_result_ty = try self.explicitExprSourceType(inst, venv, expr_id);
                 if (box_boundary) |op| {
                     if (arg_expr_ids.len != 1) {
                         debugPanic("lambdamono.lower.refinedSourceTypeForExpr box boundary call must have arity 1");
@@ -8351,7 +8586,7 @@ const Lowerer = struct {
             },
             .low_level => |ll| blk: {
                 const arg_expr_ids = self.input.store.sliceExprSpan(ll.args);
-                const expr_result_ty = try self.explicitExprSourceType(inst, expr_id);
+                const expr_result_ty = try self.explicitExprSourceType(inst, venv, expr_id);
                 const constraint_fn_ty = try self.instantiateConstraintFnTypeForExprs(
                     inst,
                     venv,
@@ -8367,7 +8602,7 @@ const Lowerer = struct {
                 defer self.allocator.free(dispatch_arg_exprs);
                 dispatch_arg_exprs[0] = method_call.receiver;
                 @memcpy(dispatch_arg_exprs[1..], method_args);
-                const call_result_ty = try self.explicitExprSourceType(inst, expr_id);
+                const call_result_ty = try self.explicitExprSourceType(inst, venv, expr_id);
                 const dispatch_constraint_ty = try self.instantiateConstraintFnTypeForExprs(
                     inst,
                     venv,
@@ -8400,7 +8635,7 @@ const Lowerer = struct {
             },
             .type_dispatch_call => |method_call| blk: {
                 const method_args = self.input.store.sliceExprSpan(method_call.args);
-                const call_result_ty = try self.explicitExprSourceType(inst, expr_id);
+                const call_result_ty = try self.explicitExprSourceType(inst, venv, expr_id);
                 const dispatch_constraint_ty = try self.instantiateConstraintFnTypeForExprs(
                     inst,
                     venv,
@@ -8479,6 +8714,24 @@ const Lowerer = struct {
             },
             .link => unreachable,
         };
+    }
+
+    fn refineSingletonTagSourceTypeIfAbstract(
+        self: *Lowerer,
+        solved_types: *solved.Type.Store,
+        current_source_ty: TypeVarId,
+        tag_name: base.Ident.Idx,
+        arg_tys: []const TypeVarId,
+    ) std.mem.Allocator.Error!TypeVarId {
+        if (!self.sourceTypeIsAbstract(solved_types, current_source_ty)) {
+            return current_source_ty;
+        }
+        return try self.refinedSingletonTagSourceType(
+            solved_types,
+            current_source_ty,
+            tag_name,
+            arg_tys,
+        );
     }
 
     fn bridgeExprAtSolvedTypeToExpectedExecutableType(
@@ -9291,36 +9544,50 @@ const Lowerer = struct {
         );
         try self.unifyIn(inst.types, func_source_ty, call_relation_ty);
         if (direct_func_symbol) |exact_symbol| {
-            if (specializations.lookupFnExact(self.fenv, exact_symbol)) |exact_entry| {
-                if (self.envHasAllCaptureSymbols(venv, exact_entry.capture_symbols)) {
+            const exact_capture_symbols: []const Symbol = if (specializations.lookupFnExact(self.fenv, exact_symbol)) |exact_entry|
+                exact_entry.capture_symbols
+            else if (self.isHostedTopLevelSymbol(exact_symbol))
+                &.{}
+            else
+                &.{};
+            if (specializations.lookupFnExact(self.fenv, exact_symbol) != null or self.isHostedTopLevelSymbol(exact_symbol)) {
+                if (self.envHasAllCaptureSymbols(venv, exact_capture_symbols)) {
+                    const explicit_call_relation_ty = try self.instantiateExplicitConstraintFnTypeForExprs(
+                        inst,
+                        venv,
+                        arg_expr_ids,
+                        call.call_constraint_ty,
+                        current_result_source_ty,
+                    );
+                    const explicit_call_shape = inst.types.fnShape(explicit_call_relation_ty);
+                    const explicit_call_arg_tys = try self.dupeTypeVarIds(
+                        inst.types.sliceTypeVarSpan(explicit_call_shape.args),
+                    );
+                    defer if (explicit_call_arg_tys.len != 0) self.allocator.free(explicit_call_arg_tys);
                     const current_capture = try self.currentCapturePayloadFromSymbols(
                         inst.types,
                         mono_cache,
-                        exact_entry.capture_symbols,
+                        exact_capture_symbols,
                         venv,
                     );
                     defer current_capture.deinit(self.allocator);
                     const capture_exact_symbols = try self.captureExactSymbolsFromEnv(
-                        exact_entry.capture_symbols,
+                        exact_capture_symbols,
                         current_capture.env,
                     );
                     defer if (capture_exact_symbols) |symbols| self.allocator.free(symbols);
                     const direct_exec_arg_tys = try self.allocator.alloc(type_mod.TypeId, arg_expr_ids.len);
                     defer if (direct_exec_arg_tys.len != 0) self.allocator.free(direct_exec_arg_tys);
                     const repr_mode = self.exactCallableReprMode(exact_symbol);
-                    for (arg_expr_ids, 0..) |arg_expr_id, i| {
-                        const refined_arg_ty = try self.refinedSourceTypeForExpr(
-                            inst,
-                            venv,
-                            arg_expr_id,
-                            call_arg_tys[i],
-                        );
-                        try self.unifyIn(inst.types, call_arg_tys[i], refined_arg_ty);
+                    if (explicit_call_arg_tys.len != arg_expr_ids.len) {
+                        debugPanic("lambdamono.lower.specializeCallExpr explicit direct arg arity mismatch");
+                    }
+                    for (arg_expr_ids, explicit_call_arg_tys, 0..) |arg_expr_id, explicit_arg_ty, i| {
                         direct_exec_arg_tys[i] = try self.lowerRequestedExecutableArgTypeFromExpr(
                             inst,
                             mono_cache,
                             arg_expr_id,
-                            call_arg_tys[i],
+                            explicit_arg_ty,
                             repr_mode,
                         );
                     }
@@ -9332,7 +9599,7 @@ const Lowerer = struct {
                         inst.types,
                         exact_symbol,
                         repr_mode,
-                        call_relation_ty,
+                        explicit_call_relation_ty,
                         current_capture.ty,
                         capture_exact_symbols,
                         direct_exec_arg_tys,
@@ -10450,11 +10717,9 @@ const Lowerer = struct {
                 continue;
             }
 
-            const order = std.mem.order(
-                u8,
-                self.input.idents.getText(left_tags[i].name),
-                self.input.idents.getText(right_tags[j].name),
-            );
+            const left_name: u32 = @bitCast(left_tags[i].name);
+            const right_name: u32 = @bitCast(right_tags[j].name);
+            const order = std.math.order(left_name, right_name);
             switch (order) {
                 .lt => {
                     try out.append(self.allocator, left_tags[i]);

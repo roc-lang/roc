@@ -1057,11 +1057,11 @@ const ProcLowerer = struct {
         target_local: LIR.LocalId,
         next: LIR.CFStmtId,
         source_payload_ref: ir.Layout.Ref,
+        target_discriminant: u16,
     ) std.mem.Allocator.Error!LIR.CFStmtId {
         const target_layout = self.localLayout(target_local);
         const target_ref = self.localLayoutRef(target_local);
-        const discriminant: u16 = 0;
-        const target_payload_layout = self.lowerUnionPayloadLayout(target_layout, discriminant);
+        const target_payload_layout = self.lowerUnionPayloadLayout(target_layout, target_discriminant);
         const target_payload_is_zst = self.parent.layouts.isZeroSized(self.parent.layouts.getLayout(target_payload_layout));
 
         if (target_payload_is_zst) {
@@ -1069,7 +1069,7 @@ const ProcLowerer = struct {
                 .target = target_local,
                 .result = .fresh,
                 .ownership = try self.freshAggregateOwnership(&.{}),
-                .discriminant = discriminant,
+                .discriminant = target_discriminant,
                 .payload = null,
                 .next = next,
             } });
@@ -1077,7 +1077,7 @@ const ProcLowerer = struct {
 
         const source_payload_layout = try self.parent.lowerLayoutId(source_payload_ref);
         const source_payload_local = try self.freshLocalWithLayoutAndRef(source_payload_layout, source_payload_ref);
-        const target_payload_ref = self.unionPayloadLayoutRef(target_ref, discriminant);
+        const target_payload_ref = self.unionPayloadLayoutRef(target_ref, target_discriminant);
         const target_payload_local = try self.freshLocalWithLayoutAndRef(
             target_payload_layout,
             target_payload_ref,
@@ -1087,14 +1087,14 @@ const ProcLowerer = struct {
             .target = target_local,
             .result = .fresh,
             .ownership = try self.freshAggregateOwnership(&.{target_payload_local}),
-            .discriminant = discriminant,
+            .discriminant = target_discriminant,
             .payload = target_payload_local,
             .next = next,
         } });
         const bridged_payload = try self.lowerExplicitBridgeIntoLocal(source_payload_local, target_payload_local, assign_tag);
         return try self.addAssignRef(source_payload_local, .fresh, .{ .tag_payload_struct = .{
             .source = source_local,
-            .tag_discriminant = discriminant,
+            .tag_discriminant = 0,
         } }, bridged_payload);
     }
 
@@ -1104,13 +1104,13 @@ const ProcLowerer = struct {
         target_local: LIR.LocalId,
         next: LIR.CFStmtId,
         target_payload_ref: ir.Layout.Ref,
+        source_discriminant: u16,
     ) std.mem.Allocator.Error!LIR.CFStmtId {
         const actual_layout = self.localLayout(source_local);
         const actual_ref = self.localLayoutRef(source_local);
         const target_layout = self.localLayout(target_local);
-        const discriminant: u16 = 0;
-        const actual_payload_layout = self.lowerUnionPayloadLayout(actual_layout, discriminant);
-        const actual_payload_ref = self.unionPayloadLayoutRef(actual_ref, discriminant);
+        const actual_payload_layout = self.lowerUnionPayloadLayout(actual_layout, source_discriminant);
+        const actual_payload_ref = self.unionPayloadLayoutRef(actual_ref, source_discriminant);
         const target_payload_layout = try self.parent.lowerLayoutId(target_payload_ref);
         const target_payload_is_zst = self.parent.layouts.isZeroSized(self.parent.layouts.getLayout(target_payload_layout));
 
@@ -1130,21 +1130,21 @@ const ProcLowerer = struct {
                     .target = target_local,
                     .result = .fresh,
                     .ownership = try self.freshAggregateOwnership(&.{target_payload_local}),
-                    .discriminant = discriminant,
+                    .discriminant = 0,
                     .payload = target_payload_local,
                     .next = next,
                 } });
             const bridged_payload = try self.lowerExplicitBridgeIntoLocal(actual_payload_local, target_payload_local, assign_tag);
             break :blk try self.addAssignRef(actual_payload_local, .fresh, .{ .tag_payload_struct = .{
                 .source = source_local,
-                .tag_discriminant = discriminant,
+                .tag_discriminant = source_discriminant,
             } }, bridged_payload);
         };
 
         const cond_local = try self.freshLocalWithRef(self.unionDiscriminantLayoutRef(actual_ref));
         const default_branch = try self.parent.store.addCFStmt(.runtime_error);
         const branches = try self.parent.store.addCFSwitchBranches(&.{
-            .{ .value = discriminant, .body = accepted_branch },
+            .{ .value = source_discriminant, .body = accepted_branch },
         });
         const switch_stmt = try self.parent.store.addCFStmt(.{ .switch_stmt = .{
             .cond = cond_local,
@@ -1159,6 +1159,21 @@ const ProcLowerer = struct {
         source_local: LIR.LocalId,
         target_local: LIR.LocalId,
         next: LIR.CFStmtId,
+    ) std.mem.Allocator.Error!LIR.CFStmtId {
+        return self.lowerExplicitBridgeIntoLocalWithSingletonDiscriminant(
+            source_local,
+            target_local,
+            next,
+            null,
+        );
+    }
+
+    fn lowerExplicitBridgeIntoLocalWithSingletonDiscriminant(
+        self: *ProcLowerer,
+        source_local: LIR.LocalId,
+        target_local: LIR.LocalId,
+        next: LIR.CFStmtId,
+        singleton_tag_discriminant: ?u16,
     ) std.mem.Allocator.Error!LIR.CFStmtId {
         const actual_layout = self.localLayout(source_local);
         const target_layout = self.localLayout(target_local);
@@ -1272,7 +1287,19 @@ const ProcLowerer = struct {
 
         if (target.tag == .tag_union) {
             if (actual_singleton_payload_ref) |source_payload_ref| {
-                return try self.lowerSingletonTagUnionIntoTagUnion(source_local, target_local, next, source_payload_ref);
+                const discriminant = if (target_singleton_payload_ref != null)
+                    @as(u16, 0)
+                else
+                    singleton_tag_discriminant orelse debugPanic(
+                        "lir.from_ir missing explicit singleton tag discriminant for singleton->tag_union bridge",
+                    );
+                return try self.lowerSingletonTagUnionIntoTagUnion(
+                    source_local,
+                    target_local,
+                    next,
+                    source_payload_ref,
+                    discriminant,
+                );
             }
         }
 
@@ -1280,7 +1307,13 @@ const ProcLowerer = struct {
             if (target_singleton_payload_ref) |target_payload_ref| {
                 const target_payload_layout = try self.parent.lowerLayoutId(target_payload_ref);
                 if (self.parent.layouts.isZeroSized(self.parent.layouts.getLayout(target_payload_layout))) {
-                    return try self.lowerSingletonTagUnionIntoTagUnion(source_local, target_local, next, target_payload_ref);
+                    return try self.lowerSingletonTagUnionIntoTagUnion(
+                        source_local,
+                        target_local,
+                        next,
+                        target_payload_ref,
+                        0,
+                    );
                 }
             }
             _ = try self.singletonZeroSizedTagUnionDiscriminant(actual_ref) orelse if (builtin.mode == .Debug)
@@ -1290,15 +1323,47 @@ const ProcLowerer = struct {
                 )
             else
                 unreachable;
-            return try self.lowerSingletonTagUnionIntoTagUnion(source_local, target_local, next, .{ .canonical = .zst });
+            return try self.lowerSingletonTagUnionIntoTagUnion(
+                source_local,
+                target_local,
+                next,
+                .{ .canonical = .zst },
+                singleton_tag_discriminant orelse debugPanic(
+                    "lir.from_ir missing explicit singleton tag discriminant for zst->tag_union bridge",
+                ),
+            );
         }
 
         if (actual.tag == .tag_union and target.tag == .tag_union) {
             if (actual_singleton_payload_ref) |source_payload_ref| {
-                return try self.lowerSingletonTagUnionIntoTagUnion(source_local, target_local, next, source_payload_ref);
+                const discriminant = if (target_singleton_payload_ref != null)
+                    @as(u16, 0)
+                else
+                    singleton_tag_discriminant orelse debugPanic(
+                        "lir.from_ir missing explicit singleton tag discriminant for singleton tag_union bridge",
+                    );
+                return try self.lowerSingletonTagUnionIntoTagUnion(
+                    source_local,
+                    target_local,
+                    next,
+                    source_payload_ref,
+                    discriminant,
+                );
             }
             if (target_singleton_payload_ref) |payload_ref| {
-                return try self.lowerTagUnionIntoSingletonTagUnion(source_local, target_local, next, payload_ref);
+                const discriminant = if (actual_singleton_payload_ref != null)
+                    @as(u16, 0)
+                else
+                    singleton_tag_discriminant orelse debugPanic(
+                        "lir.from_ir missing explicit singleton tag discriminant for tag_union->singleton bridge",
+                    );
+                return try self.lowerTagUnionIntoSingletonTagUnion(
+                    source_local,
+                    target_local,
+                    next,
+                    payload_ref,
+                    discriminant,
+                );
             }
             return try self.bridgeTagUnionIntoLocal(source_local, target_local, next);
         }
@@ -1311,7 +1376,18 @@ const ProcLowerer = struct {
                 )
             else
                 unreachable;
-            return try self.lowerTagUnionIntoSingletonTagUnion(source_local, target_local, next, .{ .canonical = .zst });
+            return try self.lowerTagUnionIntoSingletonTagUnion(
+                source_local,
+                target_local,
+                next,
+                .{ .canonical = .zst },
+                if (actual_singleton_payload_ref != null)
+                    0
+                else
+                    singleton_tag_discriminant orelse debugPanic(
+                        "lir.from_ir missing explicit singleton tag discriminant for tag_union->zst bridge",
+                    ),
+            );
         }
 
         if (target_is_box) {
@@ -1327,14 +1403,24 @@ const ProcLowerer = struct {
                 .args = box_args,
                 .next = next,
             } });
-            return try self.lowerExplicitBridgeIntoLocal(source_local, boxed_child_local, box_stmt);
+            return try self.lowerExplicitBridgeIntoLocalWithSingletonDiscriminant(
+                source_local,
+                boxed_child_local,
+                box_stmt,
+                singleton_tag_discriminant,
+            );
         }
 
         if (actual_is_box) {
             const unboxed_ref = self.physicalBoxChildLayoutRef(actual_ref);
             const unboxed_layout = try self.parent.lowerLayoutId(unboxed_ref);
             const unboxed_local = try self.freshLocalWithLayoutAndRef(unboxed_layout, unboxed_ref);
-            const bridged = try self.lowerExplicitBridgeIntoLocal(unboxed_local, target_local, next);
+            const bridged = try self.lowerExplicitBridgeIntoLocalWithSingletonDiscriminant(
+                unboxed_local,
+                target_local,
+                next,
+                singleton_tag_discriminant,
+            );
             const unbox_args = try self.parent.store.addLocalSpan(&.{source_local});
             return try self.parent.store.addCFStmt(.{ .assign_low_level = .{
                 .target = unboxed_local,
@@ -1738,8 +1824,13 @@ const ProcLowerer = struct {
         const expr = self.parent.input.store.getExpr(expr_id);
         return switch (expr) {
             .bridge => |value| blk: {
-                const source = try self.lowerVar(value);
-                break :blk try self.lowerExplicitBridgeIntoLocal(source, target, next);
+                const source = try self.lowerVar(value.value);
+                break :blk try self.lowerExplicitBridgeIntoLocalWithSingletonDiscriminant(
+                    source,
+                    target,
+                    next,
+                    value.singleton_tag_discriminant,
+                );
             },
             .var_ => |value| blk: {
                 const source = try self.lowerVar(value);

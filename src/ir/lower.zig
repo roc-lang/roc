@@ -57,6 +57,7 @@ const Lowerer = struct {
     root_defs: std.ArrayList(ast.DefId),
     value_thunks: std.AutoHashMap(Symbol, ValueThunk),
     current_def_ret_layout: ?ast.LayoutRef = null,
+    current_def_ret_ty: ?lambdamono.Type.TypeId = null,
 
     const EnvEntry = struct {
         symbol: Symbol,
@@ -162,8 +163,16 @@ const Lowerer = struct {
 
     fn lowerDef(self: *Lowerer, def_id: lambdamono.Ast.DefId, def: lambdamono.Ast.Def) std.mem.Allocator.Error!ast.Def {
         const saved_ret_layout = self.current_def_ret_layout;
+        const saved_ret_ty = self.current_def_ret_ty;
         self.current_def_ret_layout = self.input.layouts.defRetLayout(def_id);
+        self.current_def_ret_ty = switch (def.value) {
+            .fn_ => |fn_def| self.input.store.getExpr(fn_def.body).ty,
+            .hosted_fn => def.result_ty,
+            .val => |expr_id| def.result_ty orelse self.input.store.getExpr(expr_id).ty,
+            .run => |run_def| def.result_ty orelse self.input.store.getExpr(run_def.body).ty,
+        };
         defer self.current_def_ret_layout = saved_ret_layout;
+        defer self.current_def_ret_ty = saved_ret_ty;
 
         return switch (def.value) {
             .fn_ => |fn_def| blk: {
@@ -235,6 +244,23 @@ const Lowerer = struct {
         });
     }
 
+    fn lowerBlockExpecting(
+        self: *Lowerer,
+        env: []const EnvEntry,
+        expr_id: lambdamono.Ast.ExprId,
+        target_ty: lambdamono.Type.TypeId,
+        comptime label: []const u8,
+    ) std.mem.Allocator.Error!ast.BlockId {
+        var lowered = try self.lowerExpr(env, expr_id);
+        defer lowered.deinit(self.allocator);
+        try self.bridgeBlockTermToType(&lowered, self.input.store.getExpr(expr_id).ty, target_ty, label);
+        const stmt_span = try self.addStmtSpan(lowered.stmts.items);
+        return try self.output.addBlock(.{
+            .stmts = stmt_span,
+            .term = lowered.requireTerm(),
+        });
+    }
+
     fn lowerExpr(self: *Lowerer, env: []const EnvEntry, expr_id: lambdamono.Ast.ExprId) std.mem.Allocator.Error!LoweredBlock {
         return self.lowerExprReplacingRuntimeError(env, expr_id, null);
     }
@@ -284,14 +310,34 @@ const Lowerer = struct {
                 const lowered_fields = try self.lowerFieldValues(&block, env, expr.ty, fields);
                 if (lowered_fields == null) return if (block.has_term) block else debugPanic("ir.lower record missing terminator");
                 const target_layout = self.input.layouts.layoutForType(expr.ty);
-                const bridged_fields = try self.bridgeStructFieldsToTargetLayout(&block, target_layout, lowered_fields.?);
+                const source_field_tys = try self.orderedRecordFieldTypes(expr.ty, self.input.store.sliceFieldExprSpan(fields));
+                defer self.allocator.free(source_field_tys);
+                const target_field_tys = try self.recordFieldTypesOwned(expr.ty);
+                defer self.allocator.free(target_field_tys);
+                const bridged_fields = try self.bridgeStructFieldsToTargetLayout(
+                    &block,
+                    target_layout,
+                    lowered_fields.?,
+                    source_field_tys,
+                    target_field_tys,
+                );
                 try self.emitLeafExpr(&block, expr.ty, "record", .{ .make_struct = bridged_fields });
             },
             .tuple => |items| {
                 const lowered_items = try self.lowerValueSpan(&block, env, items);
                 if (lowered_items == null) return if (block.has_term) block else debugPanic("ir.lower tuple missing terminator");
                 const target_layout = self.input.layouts.layoutForType(expr.ty);
-                const bridged_items = try self.bridgeStructFieldsToTargetLayout(&block, target_layout, lowered_items.?);
+                const source_item_tys = try self.exprTypesForSpan(items);
+                defer self.allocator.free(source_item_tys);
+                const target_item_tys = self.tupleTypeElems(expr.ty) orelse
+                    debugPanic("ir.lower tuple missing executable element types");
+                const bridged_items = try self.bridgeStructFieldsToTargetLayout(
+                    &block,
+                    target_layout,
+                    lowered_items.?,
+                    source_item_tys,
+                    target_item_tys,
+                );
                 try self.emitLeafExpr(&block, expr.ty, "tuple", .{ .make_struct = bridged_items });
             },
             .tag_payload => |tag_payload| {
@@ -306,11 +352,19 @@ const Lowerer = struct {
                     "tag_payload",
                 );
                 const actual_field_layout = self.input.layouts.exprFieldLayout(expr_id);
+                const source_field_ty = self.tagUnionArgs(
+                    self.input.store.getExpr(tag_payload.tag_union).ty,
+                    tag_payload.tag_discriminant,
+                ) orelse debugPanic("ir.lower tag_payload missing source payload types");
+                if (tag_payload.payload_index >= source_field_ty.len) {
+                    debugPanic("ir.lower tag_payload payload index out of bounds");
+                }
                 const temp = try self.emitStructFieldValue(
                     &block,
                     payload_var,
                     tag_payload.payload_index,
                     actual_field_layout,
+                    source_field_ty[tag_payload.payload_index],
                     expr.ty,
                     "tag_payload_field",
                 );
@@ -333,7 +387,17 @@ const Lowerer = struct {
                         payload_layout,
                         "tag_payload",
                     );
-                    const bridged_args = try self.bridgeStructFieldsToTargetLayout(&block, payload_layout, lowered_args.?);
+                    const source_arg_tys = try self.exprTypesForSpan(tag.args);
+                    defer self.allocator.free(source_arg_tys);
+                    const target_arg_tys = self.tagUnionArgs(expr.ty, tag.discriminant) orelse
+                        debugPanic("ir.lower tag missing executable payload types");
+                    const bridged_args = try self.bridgeStructFieldsToTargetLayout(
+                        &block,
+                        payload_layout,
+                        lowered_args.?,
+                        source_arg_tys,
+                        target_arg_tys,
+                    );
                     try block.stmts.append(self.allocator, .{ .let_ = .{
                         .bind = payload_var,
                         .expr = try self.output.addExpr(.{ .make_struct = bridged_args }),
@@ -360,6 +424,8 @@ const Lowerer = struct {
                     record.?,
                     access.field_index,
                     actual_field_layout,
+                    self.fieldTypeAt(self.input.store.getExpr(access.record).ty, access.field_index) orelse
+                        debugPanic("ir.lower access missing source field type"),
                     expr.ty,
                     "field",
                 );
@@ -375,6 +441,8 @@ const Lowerer = struct {
                     tuple.?,
                     field_index,
                     actual_field_layout,
+                    self.fieldTypeAt(self.input.store.getExpr(tuple_access.tuple).ty, field_index) orelse
+                        debugPanic("ir.lower tuple_access missing source element type"),
                     expr.ty,
                     "tuple_field",
                 );
@@ -403,7 +471,11 @@ const Lowerer = struct {
                 const source = try self.lowerSubexprValue(&block, env, source_expr);
                 if (source == null) return if (block.has_term) block else debugPanic("ir.lower bridge missing terminator");
                 const temp = try self.freshVar(expr.ty, "bridge");
-                const bridge_expr = try self.output.addExpr(.{ .bridge = source.? });
+                const bridge_expr = try self.makeBridgeExpr(
+                    source.?,
+                    self.input.store.getExpr(source_expr).ty,
+                    expr.ty,
+                );
                 try block.stmts.append(self.allocator, .{ .let_ = .{
                     .bind = temp,
                     .expr = bridge_expr,
@@ -523,9 +595,15 @@ const Lowerer = struct {
                     value.?
                 else blk: {
                     const bridged = try self.freshVarWithLayout(ret_layout, "return");
+                    const ret_ty = self.current_def_ret_ty orelse
+                        debugPanic("ir.lower return missing current function return type");
                     try block.stmts.append(self.allocator, .{ .let_ = .{
                         .bind = bridged,
-                        .expr = try self.output.addExpr(.{ .bridge = value.? }),
+                        .expr = try self.makeBridgeExpr(
+                            value.?,
+                            self.input.store.getExpr(ret_expr).ty,
+                            ret_ty,
+                        ),
                     } });
                     break :blk bridged;
                 };
@@ -613,12 +691,100 @@ const Lowerer = struct {
         block.setTerm(.{ .value = temp });
     }
 
+    fn bridgeBlockTermToType(
+        self: *Lowerer,
+        block: *LoweredBlock,
+        source_ty: lambdamono.Type.TypeId,
+        target_ty: lambdamono.Type.TypeId,
+        comptime label: []const u8,
+    ) std.mem.Allocator.Error!void {
+        if (self.input.types.equalIds(source_ty, target_ty)) return;
+        const value = switch (block.term) {
+            .value => |value| value,
+            else => return,
+        };
+        const target_layout = self.input.layouts.layoutForType(target_ty);
+        if (std.meta.eql(value.layout, target_layout)) return;
+
+        const bridged = try self.freshVar(target_ty, label);
+        try block.stmts.append(self.allocator, .{ .let_ = .{
+            .bind = bridged,
+            .expr = try self.makeBridgeExpr(value, source_ty, target_ty),
+        } });
+        block.setTerm(.{ .value = bridged });
+    }
+
+    fn makeBridgeExpr(
+        self: *Lowerer,
+        value: ast.Var,
+        source_ty: lambdamono.Type.TypeId,
+        target_ty: lambdamono.Type.TypeId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        return try self.output.addExpr(.{ .bridge = .{
+            .value = value,
+            .singleton_tag_discriminant = self.singletonTagDiscriminantForBridge(
+                source_ty,
+                target_ty,
+            ),
+        } });
+    }
+
+    fn singletonTagDiscriminantForBridge(
+        self: *Lowerer,
+        source_ty: lambdamono.Type.TypeId,
+        target_ty: lambdamono.Type.TypeId,
+    ) ?u16 {
+        const source_tag_union = switch (self.input.types.getType(source_ty)) {
+            .tag_union => |tag_union| tag_union,
+            else => return null,
+        };
+        const target_tag_union = switch (self.input.types.getType(target_ty)) {
+            .tag_union => |tag_union| tag_union,
+            else => return null,
+        };
+
+        if (source_tag_union.tags.len == 1 and target_tag_union.tags.len > 1) {
+            return self.findTagDiscriminant(target_tag_union.tags, source_tag_union.tags[0].name) orelse if (builtin.mode == .Debug)
+                std.debug.panic(
+                    "ir.lower missing singleton source tag in bridge target source={any} target={any}",
+                    .{ source_tag_union.tags[0].name, target_tag_union.tags },
+                )
+            else
+                unreachable;
+        }
+
+        if (target_tag_union.tags.len == 1 and source_tag_union.tags.len > 1) {
+            return self.findTagDiscriminant(source_tag_union.tags, target_tag_union.tags[0].name) orelse if (builtin.mode == .Debug)
+                std.debug.panic(
+                    "ir.lower missing singleton target tag in bridge source source={any} target={any}",
+                    .{ source_tag_union.tags, target_tag_union.tags[0].name },
+                )
+            else
+                unreachable;
+        }
+
+        return null;
+    }
+
+    fn findTagDiscriminant(
+        self: *Lowerer,
+        tags: []const type_mod.Tag,
+        name: type_mod.TagName,
+    ) ?u16 {
+        _ = self;
+        for (tags, 0..) |tag, i| {
+            if (tagNamesEqual(tag.name, name)) return @intCast(i);
+        }
+        return null;
+    }
+
     fn emitStructFieldValue(
         self: *Lowerer,
         block: *LoweredBlock,
         record: ast.Var,
         field_index: u16,
         actual_layout: ir_layout.Ref,
+        source_field_ty: lambdamono.Type.TypeId,
         result_ty: lambdamono.Type.TypeId,
         comptime label: []const u8,
     ) std.mem.Allocator.Error!ast.Var {
@@ -637,7 +803,7 @@ const Lowerer = struct {
         const bridged = try self.freshVar(result_ty, label);
         try block.stmts.append(self.allocator, .{ .let_ = .{
             .bind = bridged,
-            .expr = try self.output.addExpr(.{ .bridge = actual_field }),
+            .expr = try self.makeBridgeExpr(actual_field, source_field_ty, result_ty),
         } });
         return bridged;
     }
@@ -662,15 +828,8 @@ const Lowerer = struct {
                 .tag_discriminant = tag_discriminant,
             } }),
         } });
-
-        if (std.meta.eql(actual_payload.layout, target_layout)) return actual_payload;
-
-        const bridged = try self.freshVarWithLayout(target_layout, label);
-        try stmts.append(self.allocator, .{ .let_ = .{
-            .bind = bridged,
-            .expr = try self.output.addExpr(.{ .bridge = actual_payload }),
-        } });
-        return bridged;
+        _ = target_layout;
+        return actual_payload;
     }
 
     fn bridgeStructFieldsToTargetLayout(
@@ -678,8 +837,13 @@ const Lowerer = struct {
         block: *LoweredBlock,
         target_layout: ast.LayoutRef,
         fields_span: ast.Span(ast.Var),
+        source_field_tys: []const type_mod.TypeId,
+        target_field_tys: []const type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.Span(ast.Var) {
         const source_fields = self.output.sliceVarSpan(fields_span);
+        if (source_fields.len != source_field_tys.len or source_fields.len != target_field_tys.len) {
+            debugPanic("ir.lower bridgeStructFieldsToTargetLayout field/type arity mismatch");
+        }
         const bridged_fields = try self.allocator.alloc(ast.Var, source_fields.len);
         defer self.allocator.free(bridged_fields);
 
@@ -693,7 +857,7 @@ const Lowerer = struct {
             const bridged = try self.freshVarWithLayout(slot_ref, "struct_field");
             try block.stmts.append(self.allocator, .{ .let_ = .{
                 .bind = bridged,
-                .expr = try self.output.addExpr(.{ .bridge = source_field }),
+                .expr = try self.makeBridgeExpr(source_field, source_field_tys[i], target_field_tys[i]),
             } });
             bridged_fields[i] = bridged;
         }
@@ -803,6 +967,101 @@ const Lowerer = struct {
         };
     }
 
+    fn tupleTypeElems(
+        self: *Lowerer,
+        tuple_ty: type_mod.TypeId,
+    ) ?[]const type_mod.TypeId {
+        return switch (self.input.types.getTypePreservingNominal(tuple_ty)) {
+            .nominal => |nominal| self.tupleTypeElems(nominal.backing),
+            .tuple => |tuple| tuple,
+            else => null,
+        };
+    }
+
+    fn tagUnionArgs(
+        self: *Lowerer,
+        tag_union_ty: type_mod.TypeId,
+        discriminant: u16,
+    ) ?[]const type_mod.TypeId {
+        return switch (self.input.types.getTypePreservingNominal(tag_union_ty)) {
+            .nominal => |nominal| self.tagUnionArgs(nominal.backing, discriminant),
+            .tag_union => |tag_union| blk: {
+                if (discriminant >= tag_union.tags.len) break :blk null;
+                break :blk tag_union.tags[discriminant].args;
+            },
+            else => null,
+        };
+    }
+
+    fn fieldTypeAt(
+        self: *Lowerer,
+        aggregate_ty: type_mod.TypeId,
+        field_index: usize,
+    ) ?type_mod.TypeId {
+        return switch (self.input.types.getTypePreservingNominal(aggregate_ty)) {
+            .nominal => |nominal| self.fieldTypeAt(nominal.backing, field_index),
+            .record => |record| if (field_index < record.fields.len) record.fields[field_index].ty else null,
+            .tuple => |tuple| if (field_index < tuple.len) tuple[field_index] else null,
+            else => null,
+        };
+    }
+
+    fn orderedRecordFieldTypes(
+        self: *Lowerer,
+        record_ty: type_mod.TypeId,
+        fields: []const lambdamono.Ast.FieldExpr,
+    ) std.mem.Allocator.Error![]type_mod.TypeId {
+        const record_fields = self.recordTypeFields(record_ty) orelse {
+            const out = try self.allocator.alloc(type_mod.TypeId, fields.len);
+            for (fields, 0..) |field, i| {
+                out[i] = self.input.store.getExpr(field.value).ty;
+            }
+            return out;
+        };
+        if (record_fields.len != fields.len) {
+            debugPanic("ir.lower record field type arity mismatch");
+        }
+
+        var by_name = std.AutoHashMap(base.Ident.Idx, type_mod.TypeId).init(self.allocator);
+        defer by_name.deinit();
+        try by_name.ensureTotalCapacity(@intCast(fields.len));
+        for (fields) |field| {
+            by_name.putAssumeCapacity(field.name, self.input.store.getExpr(field.value).ty);
+        }
+
+        const ordered = try self.allocator.alloc(type_mod.TypeId, record_fields.len);
+        for (record_fields, 0..) |field, i| {
+            ordered[i] = by_name.get(field.name) orelse
+                debugPanic("ir.lower missing record field type for layout order");
+        }
+        return ordered;
+    }
+
+    fn exprTypesForSpan(
+        self: *Lowerer,
+        span: lambdamono.Ast.Span(lambdamono.Ast.ExprId),
+    ) std.mem.Allocator.Error![]type_mod.TypeId {
+        const exprs = self.input.store.sliceExprSpan(span);
+        const out = try self.allocator.alloc(type_mod.TypeId, exprs.len);
+        for (exprs, 0..) |expr_id, i| {
+            out[i] = self.input.store.getExpr(expr_id).ty;
+        }
+        return out;
+    }
+
+    fn recordFieldTypesOwned(
+        self: *Lowerer,
+        record_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error![]type_mod.TypeId {
+        const record_fields = self.recordTypeFields(record_ty) orelse
+            debugPanic("ir.lower recordFieldTypesOwned expected record type");
+        const out = try self.allocator.alloc(type_mod.TypeId, record_fields.len);
+        for (record_fields, 0..) |field, i| {
+            out[i] = field.ty;
+        }
+        return out;
+    }
+
     fn lowerWhenExpr(
         self: *Lowerer,
         block: *LoweredBlock,
@@ -859,18 +1118,18 @@ const Lowerer = struct {
             const pat = self.input.store.getPat(branch.pat);
             switch (pat.data) {
                 .var_ => {
-                    default_block = try self.lowerPatternBranchBlock(env, cond.?, branch.pat, branch.body, runtime_replacement);
+                    default_block = try self.lowerPatternBranchBlock(env, cond.?, branch.pat, branch.body, result_ty, runtime_replacement);
                 },
                 .bool_lit => |value| {
                     try tag_branches.append(self.allocator, .{
                         .value = if (value) 1 else 0,
-                        .block = try self.lowerPatternBranchBlock(env, cond.?, branch.pat, branch.body, runtime_replacement),
+                        .block = try self.lowerPatternBranchBlock(env, cond.?, branch.pat, branch.body, result_ty, runtime_replacement),
                     });
                 },
                 .tag => |tag| {
                     try tag_branches.append(self.allocator, .{
                         .value = tag.discriminant,
-                        .block = try self.lowerPatternBranchBlock(env, cond.?, branch.pat, branch.body, runtime_replacement),
+                        .block = try self.lowerPatternBranchBlock(env, cond.?, branch.pat, branch.body, result_ty, runtime_replacement),
                     });
                 },
             }
@@ -909,7 +1168,7 @@ const Lowerer = struct {
         while (index > 0) {
             index -= 1;
             const branch = self.input.store.getBranch(branches[index]);
-            chained_block = try self.lowerPatternBranchBlock(env, source_var, branch.pat, branch.body, chained_block);
+            chained_block = try self.lowerPatternBranchBlock(env, source_var, branch.pat, branch.body, null, chained_block);
         }
 
         return chained_block orelse debugPanic("ir.lower invariant violated: empty sequential when branches");
@@ -939,8 +1198,8 @@ const Lowerer = struct {
         const cond = try self.lowerSubexprValue(block, env, cond_expr);
         if (cond == null) return;
 
-        const then_block = try self.lowerBlock(env, then_expr);
-        const else_block = try self.lowerBlock(env, else_expr);
+        const then_block = try self.lowerBlockExpecting(env, then_expr, result_ty, "if_join");
+        const else_block = try self.lowerBlockExpecting(env, else_expr, result_ty, "if_join");
         const join = try self.freshVar(result_ty, "if_join");
 
         const branches = try self.output.addBranchSpan(&.{
@@ -1104,7 +1363,7 @@ const Lowerer = struct {
         if (iterable == null) return;
 
         const elem = try self.freshVarWithLayout(self.input.layouts.patLayout(patt), "for_elem");
-        const body_block = try self.lowerPatternBranchBlock(env, elem, patt, body_expr, null);
+        const body_block = try self.lowerPatternBranchBlock(env, elem, patt, body_expr, null, null);
         try block.stmts.append(self.allocator, .{ .for_list = .{
             .elem = elem,
             .iterable = iterable.?,
@@ -1131,6 +1390,7 @@ const Lowerer = struct {
         source_var: ast.Var,
         pat_id: lambdamono.Ast.PatId,
         body_expr: lambdamono.Ast.ExprId,
+        branch_result_ty: ?lambdamono.Type.TypeId,
         runtime_replacement: ?ast.BlockId,
     ) std.mem.Allocator.Error!ast.BlockId {
         var prefix = std.ArrayList(ast.Stmt).empty;
@@ -1148,6 +1408,9 @@ const Lowerer = struct {
         else
             try self.lowerExpr(extended_env, body_expr);
         defer body.deinit(self.allocator);
+        if (branch_result_ty) |target_ty| {
+            try self.bridgeBlockTermToType(&body, self.input.store.getExpr(body_expr).ty, target_ty, "when_join");
+        }
 
         try prefix.appendSlice(self.allocator, body.stmts.items);
         const stmt_span = try self.addStmtSpan(prefix.items);
@@ -1198,13 +1461,18 @@ const Lowerer = struct {
                     } });
                     const arg_pat = self.input.store.getPat(arg_pat_id);
                     const expected_layout = self.input.layouts.layoutForType(arg_pat.ty);
+                    const source_field_ty = self.tagUnionArgs(pat.ty, tag.discriminant) orelse
+                        debugPanic("ir.lower destructurePattern missing source payload types");
+                    if (i >= source_field_ty.len) {
+                        debugPanic("ir.lower destructurePattern payload index out of bounds");
+                    }
                     const field_var = if (std.meta.eql(actual_field_var.layout, expected_layout))
                         actual_field_var
                     else blk: {
                         const bridged = try self.freshVarWithLayout(expected_layout, "pat_field");
                         try prefix.append(self.allocator, .{ .let_ = .{
                             .bind = bridged,
-                            .expr = try self.output.addExpr(.{ .bridge = actual_field_var }),
+                            .expr = try self.makeBridgeExpr(actual_field_var, source_field_ty[i], arg_pat.ty),
                         } });
                         break :blk bridged;
                     };
@@ -1252,6 +1520,19 @@ const Lowerer = struct {
 fn debugPanic(comptime msg: []const u8) noreturn {
     @branchHint(.cold);
     std.debug.panic("{s}", .{msg});
+}
+
+fn tagNamesEqual(left: type_mod.TagName, right: type_mod.TagName) bool {
+    return switch (left) {
+        .ctor => |left_ctor| switch (right) {
+            .ctor => |right_ctor| left_ctor == right_ctor,
+            .lambda => false,
+        },
+        .lambda => |left_lambda| switch (right) {
+            .ctor => false,
+            .lambda => |right_lambda| left_lambda == right_lambda,
+        },
+    };
 }
 
 test "ir lower tests" {

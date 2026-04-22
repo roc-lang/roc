@@ -785,12 +785,9 @@ pub const Store = struct {
             .placeholder, .unbd => true,
             .link => unreachable,
             .primitive => false,
-            .nominal => |nominal| blk: {
-                for (nominal.args) |arg| {
-                    if (try self.containsAbstractLeafVisited(arg, visited)) break :blk true;
-                }
-                break :blk try self.containsAbstractLeafVisited(nominal.backing, visited);
-            },
+            // Executable nominal args are retained metadata; only the lowered backing
+            // participates in executable layout/concreteness.
+            .nominal => |nominal| try self.containsAbstractLeafVisited(nominal.backing, visited),
             .list => |elem| try self.containsAbstractLeafVisited(elem, visited),
             .box => |elem| try self.containsAbstractLeafVisited(elem, visited),
             .erased_fn => |erased_fn| blk: {

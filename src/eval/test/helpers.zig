@@ -372,7 +372,6 @@ pub fn devEvaluatorInspectedStr(
         @ptrCast(ret_buf.ptr),
         if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
     );
-
     switch (runtime_env.crashState()) {
         .did_not_crash => {},
         .crashed => |msg| {

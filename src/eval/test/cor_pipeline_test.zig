@@ -344,6 +344,136 @@ fn countExecutableErasedFnTypes(executable: *const lambdamono.Lower.Result) usiz
     return count;
 }
 
+fn executableTypeContainsReferencedErasedPrimitiveRec(
+    executable: *const lambdamono.Lower.Result,
+    ty: lambdamono.Type.TypeId,
+    visited: *std.AutoHashMap(lambdamono.Type.TypeId, void),
+) std.mem.Allocator.Error!bool {
+    const gop = try visited.getOrPut(ty);
+    if (gop.found_existing) return false;
+
+    return switch (executable.types.getTypePreservingNominal(ty)) {
+        .placeholder, .unbd => false,
+        .link => unreachable,
+        .primitive => |prim| prim == .erased,
+        .nominal => |nominal| blk: {
+            for (nominal.args) |arg| {
+                if (try executableTypeContainsReferencedErasedPrimitiveRec(executable, arg, visited)) {
+                    break :blk true;
+                }
+            }
+            break :blk try executableTypeContainsReferencedErasedPrimitiveRec(executable, nominal.backing, visited);
+        },
+        .list => |elem| try executableTypeContainsReferencedErasedPrimitiveRec(executable, elem, visited),
+        .box => |elem| try executableTypeContainsReferencedErasedPrimitiveRec(executable, elem, visited),
+        .erased_fn => |erased_fn| blk: {
+            if (erased_fn.capture) |capture| {
+                if (try executableTypeContainsReferencedErasedPrimitiveRec(executable, capture, visited)) {
+                    break :blk true;
+                }
+            }
+            for (erased_fn.call.args) |arg| {
+                if (try executableTypeContainsReferencedErasedPrimitiveRec(executable, arg, visited)) {
+                    break :blk true;
+                }
+            }
+            break :blk try executableTypeContainsReferencedErasedPrimitiveRec(executable, erased_fn.call.ret, visited);
+        },
+        .tuple => |elems| blk: {
+            for (elems) |elem| {
+                if (try executableTypeContainsReferencedErasedPrimitiveRec(executable, elem, visited)) {
+                    break :blk true;
+                }
+            }
+            break :blk false;
+        },
+        .record => |record| blk: {
+            for (record.fields) |field| {
+                if (try executableTypeContainsReferencedErasedPrimitiveRec(executable, field.ty, visited)) {
+                    break :blk true;
+                }
+            }
+            break :blk false;
+        },
+        .tag_union => |tag_union| blk: {
+            for (tag_union.tags) |tag| {
+                for (tag.args) |arg| {
+                    if (try executableTypeContainsReferencedErasedPrimitiveRec(executable, arg, visited)) {
+                        break :blk true;
+                    }
+                }
+            }
+            if (tag_union.call) |call| {
+                for (call.args) |arg| {
+                    if (try executableTypeContainsReferencedErasedPrimitiveRec(executable, arg, visited)) {
+                        break :blk true;
+                    }
+                }
+                if (try executableTypeContainsReferencedErasedPrimitiveRec(executable, call.ret, visited)) {
+                    break :blk true;
+                }
+            }
+            break :blk false;
+        },
+    };
+}
+
+fn executableTypeContainsReferencedErasedPrimitive(
+    allocator: std.mem.Allocator,
+    executable: *const lambdamono.Lower.Result,
+    ty: lambdamono.Type.TypeId,
+) std.mem.Allocator.Error!bool {
+    var visited = std.AutoHashMap(lambdamono.Type.TypeId, void).init(allocator);
+    defer visited.deinit();
+    return try executableTypeContainsReferencedErasedPrimitiveRec(executable, ty, &visited);
+}
+
+fn countExecutableReferencedErasedPrimitiveTypes(
+    allocator: std.mem.Allocator,
+    executable: *const lambdamono.Lower.Result,
+) std.mem.Allocator.Error!usize {
+    var count: usize = 0;
+
+    for (executable.store.exprs.items) |expr| {
+        if (try executableTypeContainsReferencedErasedPrimitive(allocator, executable, expr.ty)) {
+            count += 1;
+        }
+    }
+
+    for (executable.store.pats.items) |pat| {
+        if (try executableTypeContainsReferencedErasedPrimitive(allocator, executable, pat.ty)) {
+            count += 1;
+        }
+    }
+
+    for (executable.store.defsSlice()) |def| {
+        if (def.result_ty) |result_ty| {
+            if (try executableTypeContainsReferencedErasedPrimitive(allocator, executable, result_ty)) {
+                count += 1;
+            }
+        }
+        switch (def.value) {
+            .fn_ => |fn_def| {
+                for (executable.store.sliceTypedSymbolSpan(fn_def.args)) |arg| {
+                    if (try executableTypeContainsReferencedErasedPrimitive(allocator, executable, arg.ty)) {
+                        count += 1;
+                    }
+                }
+            },
+            .hosted_fn => |hosted_fn| {
+                for (executable.store.sliceTypedSymbolSpan(hosted_fn.args)) |arg| {
+                    if (try executableTypeContainsReferencedErasedPrimitive(allocator, executable, arg.ty)) {
+                        count += 1;
+                    }
+                }
+            },
+            .val, .run => {},
+        }
+    }
+
+    return count;
+}
+
 fn countExecutableBridgeNodes(executable: *const lambdamono.Lower.Result) usize {
     var count: usize = 0;
     for (executable.store.exprs.items) |expr| {
@@ -2169,6 +2299,68 @@ test "cor pipeline - hosted function can flow as a first-class argument" {
     try testing.expectEqual(RuntimeHostEnv.Termination.returned, dev_run.termination);
     try testing.expectEqual(@as(usize, 1), dev_run.events.len);
     try testing.expectEqualStrings("hello", dev_run.events[0].bytes());
+}
+
+test "cor pipeline - hosted polymorphic list signature does not implicitly erase element type" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const arena_allocator = arena.allocator();
+    var executable = try compileExecutableProgram(
+        arena_allocator,
+        .module,
+        \\import Platform
+        \\
+        \\main = Platform.id([1.U8, 2.U8])
+    ,
+        &.{.{
+            .name = "Platform",
+            .source =
+            \\module [id]
+            \\
+            \\id : List(elem) -> List(elem)
+            ,
+        }},
+    );
+    defer executable.deinit(arena_allocator);
+
+    try testing.expectEqual(@as(usize, 0), countExecutableErasedCalls(&executable.executable));
+    try testing.expectEqual(@as(usize, 0), countExecutableErasedFnTypes(&executable.executable));
+    try testing.expectEqual(@as(usize, 0), try countExecutableReferencedErasedPrimitiveTypes(
+        arena_allocator,
+        &executable.executable,
+    ));
+}
+
+test "cor pipeline - hosted polymorphic record signature does not implicitly erase field type" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const arena_allocator = arena.allocator();
+    var executable = try compileExecutableProgram(
+        arena_allocator,
+        .module,
+        \\import Platform
+        \\
+        \\main = Platform.echo({ value: 1.U8 })
+    ,
+        &.{.{
+            .name = "Platform",
+            .source =
+            \\module [echo]
+            \\
+            \\echo : { value : elem } -> { value : elem }
+            ,
+        }},
+    );
+    defer executable.deinit(arena_allocator);
+
+    try testing.expectEqual(@as(usize, 0), countExecutableErasedCalls(&executable.executable));
+    try testing.expectEqual(@as(usize, 0), countExecutableErasedFnTypes(&executable.executable));
+    try testing.expectEqual(@as(usize, 0), try countExecutableReferencedErasedPrimitiveTypes(
+        arena_allocator,
+        &executable.executable,
+    ));
 }
 
 test "cor pipeline - hosted function survives boxed erased-call round trip" {
