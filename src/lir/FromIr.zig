@@ -1733,6 +1733,9 @@ const ProcLowerer = struct {
             .var_ => |value| blk: {
                 const source = try self.lowerVar(value);
                 if (source == target) break :blk next;
+                if (!layoutRefsEqual(self.localLayoutRef(source), self.localLayoutRef(target))) {
+                    break :blk try self.lowerExplicitBridgeIntoLocal(source, target, next);
+                }
                 self.requireLocalMatchesShape(source, self.localLayout(target), self.localLayoutRef(target), "var");
                 break :blk try self.addAssignRef(target, .fresh, .{ .local = source }, next);
             },

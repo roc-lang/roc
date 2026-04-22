@@ -264,10 +264,34 @@ const Lowerer = struct {
         }
         for (self.output.exprs.items, 0..) |*expr, i| {
             try self.finalizeExpr(expr, i);
+            switch (expr.data) {
+                .let_ => |let_expr| try layouts.recordType(
+                    self.allocator,
+                    &self.types,
+                    &self.input.idents,
+                    let_expr.bind.ty,
+                ),
+                else => {},
+            }
             try layouts.recordExpr(self.allocator, &self.types, &self.input.idents, &self.output, @enumFromInt(@as(u32, @intCast(i))), expr.*);
         }
         for (self.output.stmts.items) |*stmt| {
             try self.finalizeStmt(stmt);
+            switch (stmt.*) {
+                .decl => |decl| try layouts.recordType(
+                    self.allocator,
+                    &self.types,
+                    &self.input.idents,
+                    decl.bind.ty,
+                ),
+                .var_decl => |decl| try layouts.recordType(
+                    self.allocator,
+                    &self.types,
+                    &self.input.idents,
+                    decl.bind.ty,
+                ),
+                else => {},
+            }
         }
         for (self.output.defs.items, 0..) |*def, i| {
             try self.finalizeDef(def);
@@ -356,6 +380,66 @@ const Lowerer = struct {
 
     fn executableTypeIsAbstract(self: *const Lowerer, ty: type_mod.TypeId) bool {
         return self.types.containsAbstractLeaf(ty);
+    }
+
+    fn executableTypeHasLayoutAbstractLeaf(self: *const Lowerer, ty: type_mod.TypeId) bool {
+        var visited = std.AutoHashMap(type_mod.TypeId, void).init(self.allocator);
+        defer visited.deinit();
+        return self.executableTypeHasLayoutAbstractLeafVisited(ty, &visited) catch true;
+    }
+
+    fn executableTypeHasLayoutAbstractLeafVisited(
+        self: *const Lowerer,
+        ty: type_mod.TypeId,
+        visited: *std.AutoHashMap(type_mod.TypeId, void),
+    ) std.mem.Allocator.Error!bool {
+        var root = ty;
+        while (true) switch (self.types.types.items[@intFromEnum(root)]) {
+            .link => |next| root = next,
+            else => break,
+        };
+        if (visited.contains(root)) return false;
+        try visited.put(root, {});
+
+        return switch (self.types.types.items[@intFromEnum(root)]) {
+            .placeholder, .unbd => true,
+            .link => unreachable,
+            .primitive => false,
+            .nominal => |nominal| blk: {
+                for (nominal.args) |arg| {
+                    if (try self.executableTypeHasLayoutAbstractLeafVisited(arg, visited)) break :blk true;
+                }
+                break :blk try self.executableTypeHasLayoutAbstractLeafVisited(nominal.backing, visited);
+            },
+            .list => |elem| try self.executableTypeHasLayoutAbstractLeafVisited(elem, visited),
+            .box => |elem| try self.executableTypeHasLayoutAbstractLeafVisited(elem, visited),
+            .erased_fn => |erased_fn| blk: {
+                if (erased_fn.capture) |capture| {
+                    if (try self.executableTypeHasLayoutAbstractLeafVisited(capture, visited)) break :blk true;
+                }
+                break :blk false;
+            },
+            .tuple => |tuple| blk: {
+                for (tuple) |elem| {
+                    if (try self.executableTypeHasLayoutAbstractLeafVisited(elem, visited)) break :blk true;
+                }
+                break :blk false;
+            },
+            .record => |record| blk: {
+                for (record.fields) |field| {
+                    if (try self.executableTypeHasLayoutAbstractLeafVisited(field.ty, visited)) break :blk true;
+                }
+                break :blk false;
+            },
+            .tag_union => |tag_union| blk: {
+                for (tag_union.tags) |tag| {
+                    for (tag.args) |arg| {
+                        if (try self.executableTypeHasLayoutAbstractLeafVisited(arg, visited)) break :blk true;
+                    }
+                }
+                break :blk false;
+            },
+        };
     }
 
     fn sourceTypeIsAbstract(self: *Lowerer, solved_types: *const solved.Type.Store, ty: TypeVarId) bool {
@@ -1810,6 +1894,35 @@ const Lowerer = struct {
         });
     }
 
+    fn naturalExecutableCallableTypesMatchIgnoringCallSig(
+        self: *Lowerer,
+        left_ty: type_mod.TypeId,
+        right_ty: type_mod.TypeId,
+    ) bool {
+        const left_union = switch (self.types.getTypePreservingNominal(left_ty)) {
+            .nominal => |nominal| return self.naturalExecutableCallableTypesMatchIgnoringCallSig(nominal.backing, right_ty),
+            .tag_union => |tag_union| if (self.tagUnionIsInternalLambdaSet(tag_union.tags))
+                tag_union
+            else
+                return false,
+            else => return false,
+        };
+        const right_union = switch (self.types.getTypePreservingNominal(right_ty)) {
+            .nominal => |nominal| return self.naturalExecutableCallableTypesMatchIgnoringCallSig(left_ty, nominal.backing),
+            .tag_union => |tag_union| if (self.tagUnionIsInternalLambdaSet(tag_union.tags))
+                tag_union
+            else
+                return false,
+            else => return false,
+        };
+        if (left_union.tags.len != right_union.tags.len) return false;
+        for (left_union.tags, right_union.tags) |left_tag, right_tag| {
+            if (!std.meta.eql(left_tag.name, right_tag.name)) return false;
+            if (!self.executableTagArgsEqual(left_tag.args, right_tag.args)) return false;
+        }
+        return true;
+    }
+
     fn commonExecutableType(
         self: *Lowerer,
         left_ty: type_mod.TypeId,
@@ -2155,6 +2268,14 @@ const Lowerer = struct {
             );
     }
 
+    fn isNaturalExecutableCallableType(self: *const Lowerer, ty: type_mod.TypeId) bool {
+        return switch (self.types.getTypePreservingNominal(ty)) {
+            .nominal => |nominal| self.isNaturalExecutableCallableType(nominal.backing),
+            .tag_union => |tag_union| self.tagUnionIsInternalLambdaSet(tag_union.tags),
+            else => false,
+        };
+    }
+
     fn erasedFnCaptureType(self: *Lowerer, ty: type_mod.TypeId) ?type_mod.TypeId {
         var visited = std.AutoHashMap(type_mod.TypeId, void).init(self.allocator);
         defer visited.deinit();
@@ -2349,12 +2470,13 @@ const Lowerer = struct {
             body_source_ty,
             body_exec_ty,
         );
+        const lowered_exec_ty = self.output.getExpr(lowered_body.expr).ty;
+        if (self.executableTypeHasLayoutAbstractLeaf(lowered_exec_ty)) {
+            _ = self.requireConcreteExecutableType(lowered_exec_ty, context);
+        }
         return .{
             .source_ty = lowered_body.source_ty,
-            .exec_ty = self.requireConcreteExecutableType(
-                self.output.getExpr(lowered_body.expr).ty,
-                context,
-            ),
+            .exec_ty = lowered_exec_ty,
             .body = lowered_body.expr,
         };
     }
@@ -5301,8 +5423,11 @@ const Lowerer = struct {
         const actual_ty = expr.ty;
         const actual_tag = self.types.getTypePreservingNominal(actual_ty);
         const expected_tag = self.types.getTypePreservingNominal(expected_ty);
+        const same_runtime_callable_bridge = actual_tag == .tag_union and
+            expected_tag == .tag_union and
+            self.naturalExecutableCallableTypesMatchIgnoringCallSig(actual_ty, expected_ty);
         if ((actual_tag == .record and expected_tag == .tag_union) or
-            (actual_tag == .tag_union and expected_tag == .tag_union) or
+            ((actual_tag == .tag_union and expected_tag == .tag_union) and !same_runtime_callable_bridge) or
             (actual_tag == .list and expected_tag == .list))
         {
             const actual_elem_id: u32 = switch (actual_tag) {
@@ -5984,13 +6109,29 @@ const Lowerer = struct {
                 const exact_entry = specializations.lookupFnExact(self.fenv, exact_symbol) orelse
                     debugPanic("lambdamono.lower.specializeVarExpr env exact callable missing source definition");
                 refined_source_ty = try self.unifyExactCallableSourceType(inst, exact_entry.fn_ty, refined_source_ty);
-                return try self.lowerExactCallableVarExpr(
+                if (self.envHasAllCaptureSymbols(venv, exact_entry.capture_symbols)) {
+                    return try self.lowerExactCallableVarExpr(
+                        inst,
+                        mono_cache,
+                        venv,
+                        exact_symbol,
+                        exact_entry.capture_symbols,
+                        refined_source_ty,
+                        default_ty,
+                    );
+                }
+                const current_exec_ty = try self.currentEnvEntryExecutableType(
+                    solved_types,
+                    mono_cache,
+                    entry,
+                    "specializeVarExpr(env_exact)",
+                );
+                return try self.lowerVarExprToExpectedExecutableType(
                     inst,
                     mono_cache,
-                    venv,
-                    exact_symbol,
-                    exact_entry.capture_symbols,
+                    symbol,
                     refined_source_ty,
+                    current_exec_ty,
                     default_ty,
                 );
             }
@@ -7550,12 +7691,12 @@ const Lowerer = struct {
             call.func,
             initial_func_source_ty,
         );
-        try self.unifyIn(inst.types, func_source_ty, call_relation_ty);
-        const expected_func_exec_ty = try self.lowerExecutableTypeFromSolvedIn(
+        const func_default_ty = try self.lowerExecutableTypeFromSolvedIn(
             inst.types,
             mono_cache,
-            call_relation_ty,
+            func_source_ty,
         );
+        try self.unifyIn(inst.types, func_source_ty, call_relation_ty);
         const func_expr = self.input.store.getExpr(call.func);
         const lowered_func = try self.specializeExprWithDefaultTy(
             inst,
@@ -7564,7 +7705,7 @@ const Lowerer = struct {
             call.func,
             func_expr,
             func_source_ty,
-            expected_func_exec_ty,
+            func_default_ty,
         );
         const lowered_func_exec_ty = self.output.getExpr(lowered_func).ty;
         if (self.executableTypeIsAbstract(lowered_func_exec_ty)) {

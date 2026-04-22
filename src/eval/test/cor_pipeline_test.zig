@@ -1977,6 +1977,7 @@ test "cor pipeline - debug bridge shapes list concat utf8 issue 8618" {
     );
 }
 
+
 test "cor pipeline - boxed lambda lowering uses erased-call path" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
