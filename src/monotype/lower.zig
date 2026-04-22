@@ -8001,9 +8001,15 @@ pub const Lowerer = struct {
     fn defaultPrimitiveForConstraints(
         _: *Lowerer,
         _: u32,
-        _: *const TypeScope,
-        _: types.StaticDispatchConstraint.SafeList.Range,
+        type_scope: *const TypeScope,
+        constraints_range: types.StaticDispatchConstraint.SafeList.Range,
     ) std.mem.Allocator.Error!?type_mod.Prim {
+        const constraints = type_scope.typeStoreConst().sliceStaticDispatchConstraints(constraints_range);
+        for (constraints) |constraint| {
+            if (constraint.origin == .from_numeral) {
+                return .dec;
+            }
+        }
         return null;
     }
 

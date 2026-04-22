@@ -28,6 +28,66 @@ const LayoutCache = struct {
     }
 };
 
+fn containsLayoutAbstractLeaf(mono_types: *type_mod.Store, ty: type_mod.TypeId) bool {
+    var visited = std.AutoHashMap(type_mod.TypeId, void).init(mono_types.allocator);
+    defer visited.deinit();
+    return containsLayoutAbstractLeafVisited(mono_types, ty, &visited) catch true;
+}
+
+fn containsLayoutAbstractLeafVisited(
+    mono_types: *type_mod.Store,
+    ty: type_mod.TypeId,
+    visited: *std.AutoHashMap(type_mod.TypeId, void),
+) std.mem.Allocator.Error!bool {
+    var root = ty;
+    while (true) switch (mono_types.types.items[@intFromEnum(root)]) {
+        .link => |next| root = next,
+        else => break,
+    };
+    if (visited.contains(root)) return false;
+    try visited.put(root, {});
+
+    return switch (mono_types.types.items[@intFromEnum(root)]) {
+        .placeholder, .unbd => true,
+        .link => unreachable,
+        .primitive => false,
+        .nominal => |nominal| blk: {
+            for (nominal.args) |arg| {
+                if (try containsLayoutAbstractLeafVisited(mono_types, arg, visited)) break :blk true;
+            }
+            break :blk try containsLayoutAbstractLeafVisited(mono_types, nominal.backing, visited);
+        },
+        .list => |elem| try containsLayoutAbstractLeafVisited(mono_types, elem, visited),
+        .box => |elem| try containsLayoutAbstractLeafVisited(mono_types, elem, visited),
+        .erased_fn => |erased_fn| blk: {
+            if (erased_fn.capture) |capture| {
+                if (try containsLayoutAbstractLeafVisited(mono_types, capture, visited)) break :blk true;
+            }
+            break :blk false;
+        },
+        .tuple => |tuple| blk: {
+            for (tuple) |elem| {
+                if (try containsLayoutAbstractLeafVisited(mono_types, elem, visited)) break :blk true;
+            }
+            break :blk false;
+        },
+        .record => |record| blk: {
+            for (record.fields) |field| {
+                if (try containsLayoutAbstractLeafVisited(mono_types, field.ty, visited)) break :blk true;
+            }
+            break :blk false;
+        },
+        .tag_union => |tag_union| blk: {
+            for (tag_union.tags) |tag| {
+                for (tag.args) |arg| {
+                    if (try containsLayoutAbstractLeafVisited(mono_types, arg, visited)) break :blk true;
+                }
+            }
+            break :blk false;
+        },
+    };
+}
+
 /// Explicit logical layouts derived from executable lambdamono types and nodes.
 pub const Layouts = struct {
     graph: layout_mod.Graph,
@@ -147,7 +207,7 @@ pub const Layouts = struct {
         index: usize,
         value: ast.TypedSymbol,
     ) std.mem.Allocator.Error!void {
-        if (mono_types.containsAbstractLeaf(value.ty)) {
+        if (containsLayoutAbstractLeaf(mono_types, value.ty)) {
             debugPanicFmt(
                 "lambdamono.layouts.recordTypedSymbol abstract executable type leaked before layout typed_symbol={d} symbol={d} ty={d} ({s})",
                 .{
@@ -182,7 +242,7 @@ pub const Layouts = struct {
         expr: ast.Expr,
     ) std.mem.Allocator.Error!void {
         const i = @intFromEnum(expr_id);
-        if (mono_types.containsAbstractLeaf(expr.ty)) {
+        if (containsLayoutAbstractLeaf(mono_types, expr.ty)) {
             if (expr.data == .low_level) {
                 debugPanicFmt(
                     "lambdamono.layouts.recordExpr abstract executable type leaked before layout expr={d} tag={s} ty={d} ({s}) low_level={s}",
@@ -297,7 +357,7 @@ pub const Layouts = struct {
         pat: ast.Pat,
     ) std.mem.Allocator.Error!void {
         const i = @intFromEnum(pat_id);
-        if (mono_types.containsAbstractLeaf(pat.ty)) {
+        if (containsLayoutAbstractLeaf(mono_types, pat.ty)) {
             debugPanicFmt(
                 "lambdamono.layouts.recordPat abstract executable type leaked before layout pat={d} tag={s} ty={d} ({s})",
                 .{

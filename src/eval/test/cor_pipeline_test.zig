@@ -426,8 +426,8 @@ fn debugPrintExecutableType(
             std.debug.print(")", .{});
         },
         .record => |record| {
-                std.debug.print("(fields={d}", .{record.fields.len});
-                for (record.fields) |field| {
+            std.debug.print("(fields={d}", .{record.fields.len});
+            for (record.fields) |field| {
                 std.debug.print(" {any}:#{d}", .{
                     field.name,
                     @intFromEnum(field.ty),
@@ -488,7 +488,7 @@ fn debugPrintExecutableExprs(executable: *const lambdamono.Lower.Result) void {
                 });
             },
             .let_ => |let_expr| {
-                std.debug.print(" bind_sym={d} bind_ty=", .{ let_expr.bind.symbol.raw() });
+                std.debug.print(" bind_sym={d} bind_ty=", .{let_expr.bind.symbol.raw()});
                 debugPrintExecutableType(executable, let_expr.bind.ty);
                 std.debug.print(" body={d} rest={d}", .{
                     @intFromEnum(let_expr.body),
@@ -2719,8 +2719,7 @@ test "cor pipeline - inspect-wrapped bool inequality keeps bool_not in monotype"
 }
 
 test "cor pipeline - to_utf8 local binding stays list u8 before lambdamono" {
-    var resources = try helpers.parseAndCanonicalizeInspectedExpr(
-        testing.allocator,
+    var resources = try helpers.parseAndCanonicalizeInspectedExpr(testing.allocator,
         \\{
         \\test = |line| {
         \\    bytes = line.to_utf8()
@@ -2751,7 +2750,7 @@ test "cor pipeline - to_utf8 local binding stays list u8 before lambdamono" {
         \\    a.to_utf8 : a -> List(item),
         \\    item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)]),
         \\  ]
-        ,
+    ,
         typed_test_text,
     );
     try testing.expect(std.mem.indexOf(u8, typed_bytes_text, "List(item)") != null);
@@ -2837,6 +2836,106 @@ test "cor pipeline - List.fold builtin sum keeps numeric facts before lambdamono
     try testing.expectEqual(lambdasolved.Type.Prim.dec, try solvedPrim(&solved.types, solved.store.getExpr(solved_args[1]).ty));
 }
 
+test "cor pipeline - List.fold method syntax keeps accumulator facts before lambdamono" {
+    var resources = try helpers.parseAndCanonicalizeInspectedExpr(testing.allocator,
+        \\{
+        \\    append_one = |acc, x| List.append(acc, x)
+        \\    xs = [1.I64, 2.I64]
+        \\    xs.fold(List.with_capacity(1), append_one)
+        \\}
+    );
+    defer helpers.cleanupParseAndCanonical(testing.allocator, resources);
+
+    const typed = resources.typed_cir_modules.module(0);
+    const typed_root_expr = switch (typed.expr(resources.expr_idx).data) {
+        .e_call => |call| typed.sliceExpr(call.args)[0],
+        else => resources.expr_idx,
+    };
+    const typed_root = typed.expr(typed_root_expr);
+    const typed_dispatch = switch (typed_root.data) {
+        .e_dispatch_call => |call| call,
+        else => return error.UnexpectedTypedCirDispatchShape,
+    };
+    const typed_args = typed.sliceExpr(typed_dispatch.args);
+    try testing.expectEqual(@as(usize, 2), typed_args.len);
+    const typed_receiver_text = try checkedTypeText(testing.allocator, typed, typed.expr(typed_dispatch.receiver).ty());
+    defer testing.allocator.free(typed_receiver_text);
+    const typed_seed_text = try checkedTypeText(testing.allocator, typed, typed.expr(typed_args[0]).ty());
+    defer testing.allocator.free(typed_seed_text);
+    const typed_callback_text = try checkedTypeText(testing.allocator, typed, typed.expr(typed_args[1]).ty());
+    defer testing.allocator.free(typed_callback_text);
+    try testing.expectEqualStrings("List(I64)", typed_receiver_text);
+    try testing.expectEqualStrings("List(I64)", typed_seed_text);
+    try testing.expect(std.mem.indexOf(u8, typed_callback_text, "I64") != null);
+
+    var mono = try compileMonotypeFromParsedResources(testing.allocator, &resources);
+    defer mono.deinit();
+
+    const mono_root = mono.program.store.getExpr(monotypeRootValueExprId(&mono));
+    const mono_dispatch = switch (mono_root.data) {
+        .dispatch_call => |call| call,
+        else => return error.UnexpectedMonotypeDispatchShape,
+    };
+    const mono_args = mono.program.store.sliceExprSpan(mono_dispatch.args);
+    try testing.expectEqual(@as(usize, 2), mono_args.len);
+    try testing.expectEqual(monotype.Type.Prim.i64, try monotypeListElemPrim(&mono.types, mono.program.store.getExpr(mono_dispatch.receiver).ty));
+    try testing.expectEqual(monotype.Type.Prim.i64, try monotypeListElemPrim(&mono.types, mono.program.store.getExpr(mono_args[0]).ty));
+
+    var lifted = try monotype_lifted.Lower.run(testing.allocator, &mono);
+    defer lifted.deinit();
+    var solved = try lambdasolved.Lower.run(testing.allocator, &lifted);
+    defer solved.deinit();
+
+    const solved_root = solved.store.getExpr(solvedRootValueExprId(&solved));
+    const solved_dispatch = switch (solved_root.data) {
+        .dispatch_call => |call| call,
+        else => return error.UnexpectedSolvedDispatchShape,
+    };
+    const solved_args = solved.store.sliceExprSpan(solved_dispatch.args);
+    try testing.expectEqual(@as(usize, 2), solved_args.len);
+    try testing.expectEqual(lambdasolved.Type.Prim.i64, try solvedListElemPrim(&solved.types, solved.store.getExpr(solved_dispatch.receiver).ty));
+    try testing.expectEqual(lambdasolved.Type.Prim.i64, try solvedListElemPrim(&solved.types, solved.store.getExpr(solved_args[0]).ty));
+}
+
+test "cor pipeline - polymorphic additional specialization via List.append keeps len result facts before lambdamono" {
+    var resources = try helpers.parseAndCanonicalizeInspectedExpr(testing.allocator,
+        \\{
+        \\    append_one = |acc, x| List.append(acc, x)
+        \\    clone_via_fold = |xs| xs.fold(List.with_capacity(1), append_one)
+        \\    _first_len = clone_via_fold([1.I64, 2.I64]).len()
+        \\    clone_via_fold([[1.I64, 2.I64], [3.I64, 4.I64]]).len()
+        \\}
+    );
+    defer helpers.cleanupParseAndCanonical(testing.allocator, resources);
+
+    const typed = resources.typed_cir_modules.module(0);
+    const typed_root_expr = switch (typed.expr(resources.expr_idx).data) {
+        .e_call => |call| typed.sliceExpr(call.args)[0],
+        else => resources.expr_idx,
+    };
+    const typed_first_len_expr = try typedCirBlockDeclExprByName(typed, typed_root_expr, "_first_len");
+    const typed_root_text = try checkedTypeText(testing.allocator, typed, typed.expr(typed_root_expr).ty());
+    defer testing.allocator.free(typed_root_text);
+    const typed_first_len_text = try checkedTypeText(testing.allocator, typed, typed.expr(typed_first_len_expr).ty());
+    defer testing.allocator.free(typed_first_len_text);
+    try testing.expectEqualStrings("U64", typed_root_text);
+    try testing.expectEqualStrings("U64", typed_first_len_text);
+
+    var mono = try compileMonotypeFromParsedResources(testing.allocator, &resources);
+    defer mono.deinit();
+    try testing.expectEqual(monotype.Type.Prim.u64, try monotypePrim(&mono.types, mono.program.store.getExpr(monotypeRootValueExprId(&mono)).ty));
+    const mono_first_len_decl = try monotypeBlockDeclByName(&mono, monotypeRootValueExprId(&mono), "_first_len");
+    try testing.expectEqual(monotype.Type.Prim.u64, try monotypePrim(&mono.types, mono.program.store.getExpr(mono_first_len_decl.body).ty));
+
+    var lifted = try monotype_lifted.Lower.run(testing.allocator, &mono);
+    defer lifted.deinit();
+    var solved = try lambdasolved.Lower.run(testing.allocator, &lifted);
+    defer solved.deinit();
+    try testing.expectEqual(lambdasolved.Type.Prim.u64, try solvedPrim(&solved.types, solved.store.getExpr(solvedRootValueExprId(&solved)).ty));
+    const solved_first_len_decl = try solvedBlockDeclByName(&solved, solvedRootValueExprId(&solved), "_first_len");
+    try testing.expectEqual(lambdasolved.Type.Prim.u64, try solvedPrim(&solved.types, solved.store.getExpr(solved_first_len_decl.body).ty));
+}
+
 test "cor pipeline - polymorphic return function call keeps numeric facts before lambdamono" {
     var resources = try helpers.parseAndCanonicalizeInspectedExpr(
         testing.allocator,
@@ -2918,8 +3017,7 @@ test "cor pipeline - dbg literal in polymorphic function body keeps numeric fact
 }
 
 test "cor pipeline - entry-specialized to_utf8 local binding stays list u8 before lambdamono" {
-    var resources = try helpers.parseAndCanonicalizeInspectedExpr(
-        testing.allocator,
+    var resources = try helpers.parseAndCanonicalizeInspectedExpr(testing.allocator,
         \\{
         \\test = |line| {
         \\    bytes = line.to_utf8()
