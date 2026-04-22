@@ -453,17 +453,20 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
     const app_env = setup_result.app_env;
 
     traceDbg(roc_ops, "Resolving imports for primary env \"{s}\"", .{env_ptr.module_name});
-    env_ptr.imports.resolveImports(env_ptr, full_imported_envs);
+    env_ptr.imports.clearResolvedModules();
+    env_ptr.imports.resolveImportsByExactModuleName(env_ptr, full_imported_envs);
 
     if (app_env != env_ptr) {
         traceDbg(roc_ops, "Resolving imports for app env \"{s}\"", .{app_env.module_name});
-        app_env.imports.resolveImports(app_env, full_imported_envs);
+        app_env.imports.clearResolvedModules();
+        app_env.imports.resolveImportsByExactModuleName(app_env, full_imported_envs);
     }
 
     traceDbg(roc_ops, "Re-resolving imports for all imported modules", .{});
     for (full_imported_envs) |imp_env| {
         traceDbg(roc_ops, "  Re-resolving for \"{s}\"", .{imp_env.module_name});
-        @constCast(imp_env).imports.resolveImports(imp_env, full_imported_envs);
+        @constCast(imp_env).imports.clearResolvedModules();
+        @constCast(imp_env).imports.resolveImportsByExactModuleName(imp_env, full_imported_envs);
     }
 
     // Enable runtime inserts on all deserialized module environments

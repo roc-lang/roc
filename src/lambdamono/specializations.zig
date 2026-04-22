@@ -27,18 +27,24 @@ pub const Pending = struct {
     name: Symbol,
     repr_mode: ReprMode,
     fn_ty: TypeVarId,
-    fn_def: solved.Ast.FnDef,
+    source_def: SourceDef,
     requested_types: ?solved.Type.Store,
     requested_ty: ?TypeVarId,
     key_bytes: []const u8,
     specialized_symbol: Symbol,
     status: Status = .pending,
-    specialized: ?ast.FnDef = null,
+    specialized: ?ast.DefVal = null,
     summary_types: ?*solved.Type.Store = null,
     summary_fn_ty: ?TypeVarId = null,
+    summary_seeded: bool = false,
     exec_capture_ty: ?type_mod.TypeId = null,
-    exec_args_tys: ?[]const type_mod.TypeId = null,
+    exec_args_tys: ?[]type_mod.TypeId = null,
     exec_ret_ty: ?type_mod.TypeId = null,
+};
+
+pub const SourceDef = union(enum) {
+    fn_: solved.Ast.FnDef,
+    hosted_fn: solved.Ast.HostedFnDef,
 };
 
 /// Queue of pending and completed executable specializations.
@@ -86,11 +92,16 @@ pub const Queue = struct {
         var out = std.ArrayList(ast.Def).empty;
         errdefer out.deinit(allocator);
         for (self.items.items) |item| {
-            const fn_def = item.specialized orelse continue;
+            const specialized = item.specialized orelse continue;
             try out.append(allocator, .{
                 .bind = item.specialized_symbol,
-                .result_ty = null,
-                .value = .{ .fn_ = fn_def },
+                .result_ty = switch (specialized) {
+                    .fn_ => null,
+                    .hosted_fn => item.exec_ret_ty orelse
+                        debugPanic("lambdamono.specializations.solvedDefs hosted specialization missing executable return type"),
+                    .val, .run => debugPanic("lambdamono.specializations.solvedDefs unexpected non-callable specialization"),
+                },
+                .value = specialized,
             });
         }
         return try out.toOwnedSlice(allocator);
@@ -102,25 +113,47 @@ pub const FEnvEntry = struct {
     name: Symbol,
     fn_ty: TypeVarId,
     fn_def: solved.Ast.FnDef,
+    capture_symbols: []const Symbol,
 };
 
 /// Build a lookup table of solved function definitions from the solved program.
 pub fn buildFEnv(allocator: std.mem.Allocator, input: *const solved.Lower.Result) std.mem.Allocator.Error![]FEnvEntry {
     var out = std.ArrayList(FEnvEntry).empty;
-    errdefer out.deinit(allocator);
+    errdefer {
+        for (out.items) |entry| {
+            if (entry.capture_symbols.len != 0) allocator.free(entry.capture_symbols);
+        }
+        out.deinit(allocator);
+    }
 
     for (input.store.defsSlice()) |def| {
         switch (def.value) {
-            .fn_ => |fn_def| try out.append(allocator, .{
-                .name = def.bind.symbol,
-                .fn_ty = def.bind.ty,
-                .fn_def = fn_def,
-            }),
+            .fn_ => |fn_def| {
+                const captures = input.types.requireLambdaCaptures(def.bind.ty, def.bind.symbol);
+                const capture_symbols = try allocator.alloc(Symbol, captures.len);
+                errdefer allocator.free(capture_symbols);
+                for (captures, 0..) |capture, i| {
+                    capture_symbols[i] = capture.symbol;
+                }
+                try out.append(allocator, .{
+                    .name = def.bind.symbol,
+                    .fn_ty = def.bind.ty,
+                    .fn_def = fn_def,
+                    .capture_symbols = capture_symbols,
+                });
+            },
             else => {},
         }
     }
 
     return try out.toOwnedSlice(allocator);
+}
+
+pub fn deinitFEnv(allocator: std.mem.Allocator, fenv: []const FEnvEntry) void {
+    for (fenv) |entry| {
+        if (entry.capture_symbols.len != 0) allocator.free(entry.capture_symbols);
+    }
+    if (fenv.len != 0) allocator.free(fenv);
 }
 
 /// Look up a source function definition by its exact symbol.
@@ -174,7 +207,60 @@ pub fn specializeFnWithExecArgs(
         .name = entry.name,
         .repr_mode = repr_mode,
         .fn_ty = entry.fn_ty,
-        .fn_def = entry.fn_def,
+        .source_def = .{ .fn_ = entry.fn_def },
+        .requested_types = requested_types,
+        .requested_ty = requested_ty_copy,
+        .key_bytes = key,
+        .specialized_symbol = specialized_symbol,
+        .exec_capture_ty = exec_capture_ty,
+        .exec_args_tys = try queue.allocator.dupe(type_mod.TypeId, exec_arg_tys),
+        .exec_ret_ty = exec_ret_ty,
+    });
+    try queue.by_key.put(key, queue.items.items.len - 1);
+    return specialized_symbol;
+}
+
+pub fn specializeHostedWithExecArgs(
+    queue: *Queue,
+    solved_types: *const solved.Type.Store,
+    symbols: *symbol_mod.Store,
+    requested_name: Symbol,
+    repr_mode: Pending.ReprMode,
+    requested_ty: TypeVarId,
+    hosted_fn: solved.Ast.HostedFnDef,
+    exec_types: ?*type_mod.Store,
+    exec_capture_ty: ?type_mod.TypeId,
+    exec_arg_tys: []const type_mod.TypeId,
+    exec_ret_ty: ?type_mod.TypeId,
+) std.mem.Allocator.Error!Symbol {
+    const key = try makeKey(
+        queue.allocator,
+        solved_types,
+        requested_name,
+        repr_mode,
+        requested_ty,
+        exec_types,
+        exec_capture_ty,
+        exec_arg_tys,
+        exec_ret_ty,
+    );
+    errdefer queue.allocator.free(key);
+    if (queue.by_key.get(key)) |idx| {
+        queue.allocator.free(key);
+        return queue.items.items[idx].specialized_symbol;
+    }
+
+    var requested_types = solved.Type.Store.init(queue.allocator);
+    errdefer requested_types.deinit();
+    const requested_ty_copy = try cloneTypeIntoStore(queue.allocator, solved_types, &requested_types, requested_ty);
+
+    const source_entry = symbols.get(requested_name);
+    const specialized_symbol = try symbols.add(source_entry.name, specializedOrigin(source_entry.origin, requested_name));
+    try queue.items.append(queue.allocator, .{
+        .name = requested_name,
+        .repr_mode = repr_mode,
+        .fn_ty = hosted_fn.bind.ty,
+        .source_def = .{ .hosted_fn = hosted_fn },
         .requested_types = requested_types,
         .requested_ty = requested_ty_copy,
         .key_bytes = key,

@@ -82,7 +82,16 @@ pub fn buildLoweringModuleEnvs(
     }
 
     for (all_module_envs) |module_env| {
-        module_env.imports.resolveImports(module_env, all_module_envs_const);
+        module_env.imports.clearResolvedModules();
+        for (module_env.imports.imports.items.items, 0..) |str_idx, i| {
+            const import_name = module_env.getString(str_idx);
+            for (all_module_envs_const, 0..) |candidate_env, module_idx| {
+                if (std.mem.eql(u8, candidate_env.module_name, import_name)) {
+                    module_env.imports.setResolvedModule(@enumFromInt(i), @intCast(module_idx));
+                    break;
+                }
+            }
+        }
     }
 
     const builtin_module_idx: u32 = 0;

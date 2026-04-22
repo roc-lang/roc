@@ -446,11 +446,13 @@ const Lowerer = struct {
             .call => |call| .{ .call = .{
                 .func = try self.instantiateExpr(call.func),
                 .args = try self.instantiateExprSpan(call.args),
+                .call_constraint_ty = try self.instantiateType(call.call_constraint_ty),
             } },
             .inspect => |value| .{ .inspect = try self.instantiateExpr(value) },
             .low_level => |ll| .{ .low_level = .{
                 .op = ll.op,
                 .args = try self.instantiateExprSpan(ll.args),
+                .source_constraint_ty = try self.instantiateType(ll.source_constraint_ty),
             } },
             .when => |when_expr| .{ .when = .{
                 .cond = try self.instantiateExpr(when_expr.cond),
@@ -1121,26 +1123,6 @@ const Lowerer = struct {
         } });
     }
 
-    fn freshWantedFunctionType(
-        self: *Lowerer,
-        arg_tys: []const TypeVarId,
-        ret_ty: TypeVarId,
-    ) std.mem.Allocator.Error!TypeVarId {
-        return try self.buildSolvedFunctionType(arg_tys, try self.types.freshUnbd(), ret_ty);
-    }
-
-    fn assertSaturatedFunctionCall(
-        self: *Lowerer,
-        fn_ty: TypeVarId,
-        provided_arg_count: usize,
-        comptime panic_msg: []const u8,
-    ) std.mem.Allocator.Error!void {
-        const expected_arg_count = self.types.sliceTypeVarSpan(self.types.fnShape(fn_ty).args).len;
-        if (provided_arg_count != expected_arg_count) {
-            return debugPanic(panic_msg, .{});
-        }
-    }
-
     fn freeDebugCallContext(self: *Lowerer, ctx: DebugCallContext) void {
         if (std.mem.eql(u8, ctx.func_expr, "<none>") or std.mem.eql(u8, ctx.func_expr, "<pending>")) {} else self.allocator.free(ctx.func_expr);
         if (std.mem.eql(u8, ctx.arg_expr, "<none>") or std.mem.eql(u8, ctx.arg_expr, "<pending>")) {} else self.allocator.free(ctx.arg_expr);
@@ -1747,15 +1729,18 @@ const Lowerer = struct {
                 const func_ty = try self.inferExpr(venv, call.func);
                 const arg_tys = try self.inferCallArgTypes(venv, call_args);
                 defer self.allocator.free(arg_tys);
-                try self.assertSaturatedFunctionCall(
-                    func_ty,
-                    arg_tys.len,
-                    "lambdasolved.call invariant violated: call must be saturated",
-                );
-                const wanted_func_ty = try self.freshWantedFunctionType(arg_tys, target_ty);
+                const constraint_shape = self.types.fnShape(call.call_constraint_ty);
+                const constraint_args = self.types.sliceTypeVarSpan(constraint_shape.args);
+                if (constraint_args.len != arg_tys.len) {
+                    debugPanic("lambdasolved.call invariant violated: explicit call constraint arity mismatch", .{});
+                }
                 try self.withCallDebugContext(call.func, call_args, func_ty, arg_tys, target_ty);
-                try self.assertCallBoundaryNotGeneralized("call", func_ty, call_args, arg_tys, target_ty, wanted_func_ty);
-                try self.unify(func_ty, wanted_func_ty);
+                try self.assertCallBoundaryNotGeneralized("call", func_ty, call_args, arg_tys, target_ty, call.call_constraint_ty);
+                try self.unify(func_ty, call.call_constraint_ty);
+                for (constraint_args, arg_tys) |constraint_arg_ty, arg_ty| {
+                    try self.unify(constraint_arg_ty, arg_ty);
+                }
+                try self.unify(target_ty, constraint_shape.ret);
                 try self.assertCallResultNotGeneralized("call", target_ty);
                 break :blk target_ty;
             },
@@ -1774,151 +1759,15 @@ const Lowerer = struct {
                     arg_tys[i] = arg_ty;
                     try self.unify(arg_ty, self.output.getExpr(arg).ty);
                 }
-
-                switch (ll.op) {
-                    .bool_not => {
-                        const bool_ty = try self.freshPrimitiveType(.bool);
-                        try self.unify(target_ty, bool_ty);
-                        if (arg_tys.len != 1) {
-                            return debugPanic("lambdasolved.inferExpr bool_not expected one arg", .{});
-                        }
-                        try self.unify(arg_tys[0], bool_ty);
-                    },
-                    .str_concat => {
-                        const str_ty = try self.freshPrimitiveType(.str);
-                        try self.unify(target_ty, str_ty);
-                        for (arg_tys) |arg_ty| {
-                            try self.unify(arg_ty, str_ty);
-                        }
-                    },
-                    .num_negate,
-                    .num_abs,
-                    .num_plus,
-                    .num_minus,
-                    .num_times,
-                    .num_div_by,
-                    .num_div_trunc_by,
-                    .num_rem_by,
-                    .num_mod_by,
-                    .num_pow,
-                    .num_sqrt,
-                    .num_log,
-                    .num_round,
-                    .num_floor,
-                    .num_ceiling,
-                    => for (arg_tys, args) |arg_ty, arg_expr| {
-                        if (!self.exprIsFlexibleNumericLiteral(arg_expr)) {
-                            try self.unify(arg_ty, target_ty);
-                        }
-                    },
-                    .num_abs_diff => {
-                        if (arg_tys.len != 2) {
-                            return debugPanic("lambdasolved.inferExpr num_abs_diff expected two args", .{});
-                        }
-                        if (!self.exprIsFlexibleNumericLiteral(args[0])) {
-                            try self.unify(arg_tys[0], arg_tys[1]);
-                        } else if (!self.exprIsFlexibleNumericLiteral(args[1])) {
-                            try self.unify(arg_tys[1], arg_tys[0]);
-                        }
-                        try self.unify(target_ty, try self.absDiffResultType(arg_tys[0]));
-                    },
-                    .num_is_eq,
-                    .num_is_gt,
-                    .num_is_gte,
-                    .num_is_lt,
-                    .num_is_lte,
-                    => {
-                        const bool_ty = try self.freshPrimitiveType(.bool);
-                        try self.unify(target_ty, bool_ty);
-                        if (arg_tys.len == 0) {
-                            return debugPanic("lambdasolved.inferExpr numeric comparison expected args", .{});
-                        }
-                        for (arg_tys[1..], args[1..]) |arg_ty, arg_expr| {
-                            if (!self.exprIsFlexibleNumericLiteral(args[0])) {
-                                try self.unify(arg_tys[0], arg_ty);
-                            } else if (!self.exprIsFlexibleNumericLiteral(arg_expr)) {
-                                try self.unify(arg_ty, arg_tys[0]);
-                            }
-                        }
-                    },
-                    .num_to_str => {
-                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
-                    },
-                    .u8_to_str => {
-                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
-                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.u8));
-                    },
-                    .i8_to_str => {
-                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
-                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.i8));
-                    },
-                    .u16_to_str => {
-                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
-                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.u16));
-                    },
-                    .i16_to_str => {
-                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
-                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.i16));
-                    },
-                    .u32_to_str => {
-                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
-                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.u32));
-                    },
-                    .i32_to_str => {
-                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
-                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.i32));
-                    },
-                    .u64_to_str => {
-                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
-                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.u64));
-                    },
-                    .i64_to_str => {
-                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
-                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.i64));
-                    },
-                    .u128_to_str => {
-                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
-                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.u128));
-                    },
-                    .i128_to_str => {
-                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
-                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.i128));
-                    },
-                    .dec_to_str => {
-                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
-                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.dec));
-                    },
-                    .f32_to_str => {
-                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
-                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.f32));
-                    },
-                    .f64_to_str => {
-                        try self.unify(target_ty, try self.freshPrimitiveType(.str));
-                        try self.unify(arg_tys[0], try self.freshPrimitiveType(.f64));
-                    },
-                    .list_len => {
-                        if (arg_tys.len != 1) {
-                            return debugPanic("lambdasolved.inferExpr list_len expected one arg", .{});
-                        }
-                        try self.unify(target_ty, try self.freshPrimitiveType(.u64));
-                        try self.unify(arg_tys[0], try self.types.freshContent(.{
-                            .list = try self.types.freshUnbd(),
-                        }));
-                    },
-                    .box_box => {
-                        if (arg_tys.len != 1) {
-                            return debugPanic("lambdasolved.inferExpr box_box expected one arg", .{});
-                        }
-                        try self.unify(target_ty, try self.types.freshContent(.{ .box = arg_tys[0] }));
-                    },
-                    .box_unbox => {
-                        if (arg_tys.len != 1) {
-                            return debugPanic("lambdasolved.inferExpr box_unbox expected one arg", .{});
-                        }
-                        try self.unify(arg_tys[0], try self.types.freshContent(.{ .box = target_ty }));
-                    },
-                    else => {},
+                const constraint_shape = self.types.fnShape(ll.source_constraint_ty);
+                const constraint_args = self.types.sliceTypeVarSpan(constraint_shape.args);
+                if (constraint_args.len != arg_tys.len) {
+                    return debugPanic("lambdasolved.low_level invariant violated: source arg arity mismatch", .{});
                 }
+                for (constraint_args, arg_tys) |constraint_arg_ty, arg_ty| {
+                    try self.unify(constraint_arg_ty, arg_ty);
+                }
+                try self.unify(target_ty, constraint_shape.ret);
                 break :blk target_ty;
             },
             .when => |when_expr| blk: {
@@ -2798,8 +2647,7 @@ const Lowerer = struct {
                     try self.propagateExprErasure(arg, venv);
                 }
                 const func_expr = self.output.getExpr(call.func);
-                expr.ty = self.functionResultType(func_expr.ty) orelse
-                    return debugPanic("lambdasolved.propagateExprErasure call expected function callee", .{});
+                expr.ty = self.types.fnShape(call.call_constraint_ty).ret;
                 const boundary_symbol = self.maybeExactCallableSymbolForExpr(call.func) orelse blk_boundary: {
                     if (func_expr.data != .var_) break :blk_boundary null;
                     break :blk_boundary func_expr.data.var_;
@@ -3031,18 +2879,6 @@ const Lowerer = struct {
                     }
                     break :blk null;
                 },
-                else => null,
-            },
-            else => null,
-        };
-    }
-
-    fn functionResultType(self: *Lowerer, ty: TypeVarId) ?TypeVarId {
-        const id = self.types.unlinkPreservingNominal(ty);
-        return switch (self.types.getNode(id)) {
-            .nominal => |nominal| self.functionResultType(nominal.backing),
-            .content => |content| switch (content) {
-                .func => |func| func.ret,
                 else => null,
             },
             else => null,

@@ -99,14 +99,14 @@ pub const Expr = union(enum) {
     },
     /// An integer literal with explicit type annotation: `123.U64`
     /// The type_name stores the type identifier (e.g., "U64", "I32")
-    /// At compile time, from_numeral is called to validate and convert the value.
+    /// Type checking constrains it through `from_numeral`; lowering uses the solved expr type.
     e_typed_int: struct {
         value: CIR.IntValue,
         type_name: Ident.Idx,
     },
     /// A fractional literal with explicit type annotation: `3.14.Dec`
     /// The type_name stores the type identifier (e.g., "Dec", "F64")
-    /// At compile time, from_numeral is called to validate and convert the value.
+    /// Type checking constrains it through `from_numeral`; lowering uses the solved expr type.
     /// The value is stored as scaled i128 (like Dec, scaled by 10^18).
     e_typed_frac: struct {
         value: CIR.IntValue,
@@ -212,6 +212,7 @@ pub const Expr = union(enum) {
         func: Expr.Idx,
         args: Expr.Span,
         called_via: CalledVia,
+        constraint_fn_var: ?TypeVar = null,
     },
     /// Record literal with zero or more fields.
     /// Records are Roc's primary data structure for grouping related values.
@@ -956,6 +957,9 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-call");
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                if (c.constraint_fn_var) |constraint_fn_var| {
+                    try tree.pushU64Pair("constraint-fn-var", @intFromEnum(constraint_fn_var));
+                }
                 const attrs = tree.beginNode();
 
                 const all_exprs = ir.store.exprSlice(c.args);

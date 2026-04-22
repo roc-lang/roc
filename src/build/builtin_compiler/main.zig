@@ -1734,6 +1734,8 @@ fn compileModule(
     for (deps) |dep| {
         try imported_envs.append(gpa, dep.env);
     }
+    module_env.imports.clearResolvedModules();
+    module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs.items);
 
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
     defer module_envs.deinit();

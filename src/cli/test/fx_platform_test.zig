@@ -1235,7 +1235,7 @@ test "fx platform issue8826 app vs platform type mismatch" {
     // Regression test for https://github.com/roc-lang/roc/issues/8826
     // The bug was that `roc check` reported "No errors found" when the app's main!
     // signature didn't match the platform's requires. This happened because
-    // getRootEnv() was returning the wrong module (the first one added rather
+    // The root semantic-data lookup used to return the wrong module (the first one added rather
     // than the actual root module set in buildRoot).
     const allocator = testing.allocator;
 

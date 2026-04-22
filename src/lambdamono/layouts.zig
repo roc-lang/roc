@@ -491,8 +491,8 @@ fn lowerNode(
         .nominal => |nominal| .{ .nominal = try lowerTypeRec(allocator, mono_types, idents, graph, cache, nominal.backing) },
         .list => |elem| .{ .list = try lowerTypeRec(allocator, mono_types, idents, graph, cache, elem) },
         .box => |elem| .{ .box = try lowerTypeRec(allocator, mono_types, idents, graph, cache, elem) },
-        .erased_fn => |maybe_capture| blk: {
-            const capture_ty = maybe_capture orelse blk_capture: {
+        .erased_fn => |erased_fn| blk: {
+            const capture_ty = erased_fn.capture orelse blk_capture: {
                 const unit_ty = try mono_types.internResolved(.{ .record = .{ .fields = &.{} } });
                 break :blk_capture unit_ty;
             };

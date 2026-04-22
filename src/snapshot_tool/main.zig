@@ -1196,6 +1196,8 @@ fn processSnapshotContent(
         if (config.builtin_module) |builtin_env| {
             try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
         }
+        can_ir.imports.clearResolvedModules();
+        can_ir.imports.resolveImportsByExactModuleName(can_ir, builtin_modules.items);
 
         var checker = try Check.init(
             allocator,
@@ -1251,6 +1253,8 @@ fn processSnapshotContent(
             if (config.builtin_module) |builtin_env| {
                 try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
             }
+            can_ir.imports.clearResolvedModules();
+            can_ir.imports.resolveImportsByExactModuleName(can_ir, builtin_modules.items);
 
             var checker = try Check.init(
                 allocator,
@@ -1332,7 +1336,7 @@ fn processSnapshotContent(
 
     // Lambda lifting and lambda set inference are now handled during CIR→MIR and MIR→LIR lowering
 
-    // Run constant folding for mono tests
+    // Run compile-time evaluation for mono tests through the shared LIR path.
     if (content.meta.node_type == .mono) {
         if (config.builtin_module) |builtin_env| {
             const BuiltinTypes = eval_mod.BuiltinTypes;
@@ -1342,13 +1346,8 @@ fn processSnapshotContent(
             var comptime_evaluator = try ComptimeEvaluator.init(allocator, can_ir, imported_envs, &solver.problems, builtin_types, builtin_env, &solver.import_mapping, roc_target.RocTarget.detectNative(), null);
             defer comptime_evaluator.deinit();
 
-            // First evaluate any top-level defs
+            // Evaluate top-level compile-time defs through the shared LIR path.
             _ = try comptime_evaluator.evalAll();
-
-            // Then evaluate and fold the standalone expression if present
-            if (Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx)) |expr_idx| {
-                _ = try comptime_evaluator.evalAndFoldExpr(expr_idx);
-            }
         }
     }
 
@@ -1384,9 +1383,9 @@ fn processSnapshotContent(
         if (generated_reports.items.len > 0) break :snippet_expects;
 
         // Resolve imports so the interpreter can look up external functions (e.g. List.first).
-        // The type checker has its own fallback for unresolved imports, but the interpreter
-        // requires them to be explicitly resolved.
-        can_ir.imports.resolveImports(can_ir, builtin_modules.items);
+        // Type checking also requires explicit resolved import indices now.
+        can_ir.imports.clearResolvedModules();
+        can_ir.imports.resolveImportsByExactModuleName(can_ir, builtin_modules.items);
 
         const TestRunner = eval_mod.TestRunner;
         const builtin_types = eval_mod.BuiltinTypes.init(
@@ -3706,7 +3705,7 @@ fn processDocsSnapshot(
     }
 
     for (modules) |mod| {
-        var mod_docs = docs_mod.extract.extractModuleDocs(allocator, mod.env, mod.package_name) catch |err| {
+        var mod_docs = docs_mod.extract.extractModuleDocs(allocator, mod.semantic.env, mod.package_name) catch |err| {
             std.log.err("Failed to extract docs from module {s}: {}", .{ mod.name, err });
             continue;
         };
@@ -4016,12 +4015,13 @@ fn processDevObjectSnapshot(
     defer allocator.free(all_module_envs);
     all_module_envs[0] = builtin_env;
     for (modules, 0..) |mod, i| {
-        all_module_envs[i + 1] = mod.env;
+        all_module_envs[i + 1] = mod.semantic.env;
     }
 
     // Re-resolve imports
     for (all_module_envs[1..]) |module| {
-        module.imports.resolveImports(module, all_module_envs);
+        module.imports.clearResolvedModules();
+        module.imports.resolveImportsByExactModuleName(module, all_module_envs);
     }
 
     // Lambda lifting and lambda set inference are now handled during CIR→MIR and MIR→LIR lowering
@@ -4035,12 +4035,13 @@ fn processDevObjectSnapshot(
         for (modules) |mod| {
             if (!mod.is_platform_sibling) continue;
 
-            var module_fns = HostedCompiler.collectAndSortHostedFunctions(mod.env) catch continue;
-            defer module_fns.deinit(mod.env.gpa);
+            const mod_env = mod.semantic.env;
+            var module_fns = HostedCompiler.collectAndSortHostedFunctions(mod_env) catch continue;
+            defer module_fns.deinit(mod_env.gpa);
 
             for (module_fns.items) |fn_info| {
                 const name_copy = allocator.dupe(u8, fn_info.name_text) catch continue;
-                mod.env.gpa.free(fn_info.name_text);
+                mod_env.gpa.free(fn_info.name_text);
                 all_hosted_fns.append(allocator, .{
                     .symbol_name = fn_info.symbol_name,
                     .expr_idx = fn_info.expr_idx,
@@ -4077,7 +4078,7 @@ fn processDevObjectSnapshot(
             // Write hosted_index into CIR node payloads (mir.Lower reads e_hosted_lambda.index directly)
             for (modules) |mod| {
                 if (!mod.is_platform_sibling) continue;
-                const plat_env = mod.env;
+                const plat_env = mod.semantic.env;
 
                 const mod_all_defs = plat_env.store.sliceDefs(plat_env.all_defs);
                 for (mod_all_defs) |def_idx| {
@@ -4128,7 +4129,7 @@ fn processDevObjectSnapshot(
     defer allocator.free(source_modules);
     source_modules[0] = .{ .precompiled = builtin_env };
     for (modules, 0..) |mod, i| {
-        source_modules[i + 1] = .{ .precompiled = mod.env };
+        source_modules[i + 1] = .{ .precompiled = mod.semantic.env };
     }
 
     var typed_cir_modules = try typed_cir.Modules.init(allocator, source_modules);
@@ -4167,7 +4168,7 @@ fn processDevObjectSnapshot(
         return false;
     }
 
-    const platform_env = platform_module.env;
+    const platform_env = platform_module.semantic.env;
     const platform_defs = platform_env.store.sliceDefs(platform_env.all_defs);
 
     for (provides_entries) |entry| {
@@ -4342,7 +4343,7 @@ fn processDevObjectSnapshot(
     try md_writer.writer.writeAll(Section.MONO);
     {
         for (modules) |mod| {
-            const mod_env = mod.env;
+            const mod_env = mod.semantic.env;
             const mod_name = base.module_path.getModuleName(mod_env.module_name);
 
             var emitter = can.RocEmitter.init(allocator, mod_env);

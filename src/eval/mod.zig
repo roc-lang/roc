@@ -50,8 +50,6 @@ pub const CrashState = crash_context.CrashState;
 /// Concrete runtime value for the interpreter
 pub const value = @import("value.zig");
 pub const Value = value.Value;
-/// Stack value representation used by the interpreter
-pub const StackValue = @import("StackValue.zig");
 const real_interpreter = @import("interpreter.zig");
 /// LIR expression interpreter
 pub const interpreter = if (builtin.target.os.tag == .freestanding) struct {
@@ -117,7 +115,6 @@ test "eval tests" {
     std.testing.refAllDecls(@import("interpreter_values.zig"));
     std.testing.refAllDecls(@import("interpreter.zig"));
     std.testing.refAllDecls(@import("stack.zig"));
-    std.testing.refAllDecls(@import("comptime_interpreter.zig"));
     std.testing.refAllDecls(@import("comptime_evaluator.zig"));
     std.testing.refAllDecls(@import("test/RuntimeHostEnv.zig"));
     std.testing.refAllDecls(@import("test/TestEnv.zig"));

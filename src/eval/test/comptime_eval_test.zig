@@ -14,6 +14,7 @@ const builtin_loading = @import("../builtin_loading.zig");
 
 const Can = can.Can;
 const Check = check.Check;
+const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const Allocators = base.Allocators;
 const testing = std.testing;
@@ -87,13 +88,14 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
 
     // Production (compile_package.zig) builds imported_envs WITHOUT self — only
     // Builtin and other imports. ComptimeEvaluator.init prepends self internally.
-    // resolveImports and Check.init also expect this same list (without self).
+    // Exact resolved-import indices are populated against this same list (without self).
     const imported_envs = try gpa.alloc(*const ModuleEnv, 1);
     errdefer gpa.free(imported_envs);
     imported_envs[0] = builtin_module.env;
 
     // Resolve imports - map each import to its index in imported_envs
-    module_env.imports.resolveImports(module_env, imported_envs);
+    module_env.imports.clearResolvedModules();
+    module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs);
 
     var checker = try Check.init(gpa, &module_env.types, module_env, imported_envs, null, &module_env.store.regions, builtin_ctx);
     defer checker.deinit();
@@ -204,7 +206,7 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
 
     // Set up imported_envs for type checking and evaluation.
     // Order must match all_module_envs in the interpreter (self module first, then imports).
-    // evalLookupExternal uses all_module_envs[resolved_idx], so resolveImports indices
+    // evalLookupExternal uses all_module_envs[resolved_idx], so resolved import indices
     // must match this array. The interpreter detects other_envs[0]==env and uses it directly.
     var imported_envs = std.ArrayList(*const ModuleEnv).empty;
     defer imported_envs.deinit(gpa);
@@ -213,7 +215,8 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     try imported_envs.append(gpa, imported_module); // Then explicit imports
 
     // Resolve imports - map each import to its index in imported_envs
-    module_env.imports.resolveImports(module_env, imported_envs.items);
+    module_env.imports.clearResolvedModules();
+    module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs.items);
 
     // Type check the module
     var checker = try Check.init(gpa, &module_env.types, module_env, imported_envs.items, null, &module_env.store.regions, builtin_ctx);
@@ -309,6 +312,29 @@ fn expectNoUndeclaredTypeDiagnostics(module_env: *ModuleEnv, forbidden_names: []
             else => {},
         }
     }
+}
+
+fn findNamedPatternIdx(module_env: *ModuleEnv, name: []const u8) !CIR.Pattern.Idx {
+    const defs = module_env.store.sliceDefs(module_env.all_defs);
+    for (defs) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        const pattern = module_env.store.getPattern(def.pattern);
+        if (pattern != .assign) continue;
+        if (std.mem.eql(u8, module_env.getIdent(pattern.assign.ident), name)) {
+            return def.pattern;
+        }
+    }
+
+    return error.TestExpectedDefNotFound;
+}
+
+fn expectNamedIntBinding(result: anytype, name: []const u8, expected: i128) !void {
+    const pattern_idx = try findNamedPatternIdx(result.module_env, name);
+    const binding = result.evaluator.values.lookupBinding(@intFromEnum(pattern_idx)) orelse
+        return error.TestExpectedBindingNotFound;
+    const actual = result.evaluator.values.intAsI128(binding.schema_id, binding.value_id) orelse
+        return error.TestExpectedIntegerBinding;
+    try testing.expectEqual(expected, actual);
 }
 
 test "comptime eval - simple constant" {
@@ -846,14 +872,7 @@ test "comptime eval - constant folding multiplication" {
     try testing.expectEqual(@as(u32, 1), summary.evaluated);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 
-    // Verify the expression was folded
-    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
-    const def = result.module_env.store.getDef(defs[0]);
-    const expr = result.module_env.store.getExpr(def.expr);
-
-    try testing.expect(expr == .e_num);
-    const value = expr.e_num.value.toI128();
-    try testing.expectEqual(@as(i128, 42), value);
+    try expectNamedIntBinding(result, "x", 42);
 }
 
 test "comptime eval - constant folding preserves literal" {
@@ -867,14 +886,7 @@ test "comptime eval - constant folding preserves literal" {
     try testing.expectEqual(@as(u32, 1), summary.evaluated);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 
-    // The expression should stay as e_num with value 42
-    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
-    const def = result.module_env.store.getDef(defs[0]);
-    const expr = result.module_env.store.getExpr(def.expr);
-
-    try testing.expect(expr == .e_num);
-    const value = expr.e_num.value.toI128();
-    try testing.expectEqual(@as(i128, 42), value);
+    try expectNamedIntBinding(result, "x", 42);
 }
 
 test "comptime eval - constant folding multiple defs" {
@@ -892,36 +904,9 @@ test "comptime eval - constant folding multiple defs" {
     try testing.expectEqual(@as(u32, 3), summary.evaluated);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 
-    // Verify all expressions were folded
-    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
-    try testing.expectEqual(@as(usize, 3), defs.len);
-
-    // Check a = 15
-    {
-        const def = result.module_env.store.getDef(defs[0]);
-        const expr = result.module_env.store.getExpr(def.expr);
-        try testing.expect(expr == .e_num);
-        const value = expr.e_num.value.toI128();
-        try testing.expectEqual(@as(i128, 15), value);
-    }
-
-    // Check b = 40
-    {
-        const def = result.module_env.store.getDef(defs[1]);
-        const expr = result.module_env.store.getExpr(def.expr);
-        try testing.expect(expr == .e_num);
-        const value = expr.e_num.value.toI128();
-        try testing.expectEqual(@as(i128, 40), value);
-    }
-
-    // Check c = 42
-    {
-        const def = result.module_env.store.getDef(defs[2]);
-        const expr = result.module_env.store.getExpr(def.expr);
-        try testing.expect(expr == .e_num);
-        const value = expr.e_num.value.toI128();
-        try testing.expectEqual(@as(i128, 42), value);
-    }
+    try expectNamedIntBinding(result, "a", 15);
+    try expectNamedIntBinding(result, "b", 40);
+    try expectNamedIntBinding(result, "c", 42);
 }
 
 test "comptime eval - constant folding with function calls" {
@@ -947,50 +932,10 @@ test "comptime eval - constant folding with function calls" {
     try testing.expectEqual(@as(u32, 7), summary.evaluated);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 
-    // Get all the defs
-    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
-    try testing.expectEqual(@as(usize, 7), defs.len);
-
-    // The first 3 defs are the lambdas (add, multiply, double) - they should NOT be folded
-    // (lambdas are skipped during comptime evaluation)
-
-    // The last 4 defs are the values - they SHOULD be folded to constants
-
-    // Check value1 = add(10, 5) => 15
-    {
-        const def = result.module_env.store.getDef(defs[3]);
-        const expr = result.module_env.store.getExpr(def.expr);
-        try testing.expect(expr == .e_num);
-        const value = expr.e_num.value.toI128();
-        try testing.expectEqual(@as(i128, 15), value);
-    }
-
-    // Check value2 = multiply(6, 7) => 42
-    {
-        const def = result.module_env.store.getDef(defs[4]);
-        const expr = result.module_env.store.getExpr(def.expr);
-        try testing.expect(expr == .e_num);
-        const value = expr.e_num.value.toI128();
-        try testing.expectEqual(@as(i128, 42), value);
-    }
-
-    // Check value3 = double(21) => 42
-    {
-        const def = result.module_env.store.getDef(defs[5]);
-        const expr = result.module_env.store.getExpr(def.expr);
-        try testing.expect(expr == .e_num);
-        const value = expr.e_num.value.toI128();
-        try testing.expectEqual(@as(i128, 42), value);
-    }
-
-    // Check value4 = add (multiply 3 4) (double 5) => add 12 10 => 22
-    {
-        const def = result.module_env.store.getDef(defs[6]);
-        const expr = result.module_env.store.getExpr(def.expr);
-        try testing.expect(expr == .e_num);
-        const value = expr.e_num.value.toI128();
-        try testing.expectEqual(@as(i128, 22), value);
-    }
+    try expectNamedIntBinding(result, "value1", 15);
+    try expectNamedIntBinding(result, "value2", 42);
+    try expectNamedIntBinding(result, "value3", 42);
+    try expectNamedIntBinding(result, "value4", 22);
 }
 
 test "comptime eval - constant folding with recursive function" {
@@ -1020,44 +965,10 @@ test "comptime eval - constant folding with helper functions" {
     try testing.expectEqual(@as(u32, 6), summary.evaluated);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 
-    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
-    try testing.expectEqual(@as(usize, 6), defs.len);
-
-    // Check sq5 = square 5 => 25
-    {
-        const def = result.module_env.store.getDef(defs[2]);
-        const expr = result.module_env.store.getExpr(def.expr);
-        try testing.expect(expr == .e_num);
-        const value = expr.e_num.value.toI128();
-        try testing.expectEqual(@as(i128, 25), value);
-    }
-
-    // Check sq12 = square 12 => 144
-    {
-        const def = result.module_env.store.getDef(defs[3]);
-        const expr = result.module_env.store.getExpr(def.expr);
-        try testing.expect(expr == .e_num);
-        const value = expr.e_num.value.toI128();
-        try testing.expectEqual(@as(i128, 144), value);
-    }
-
-    // Check pythag_3_4 = sumOfSquares 3 4 => 9 + 16 => 25
-    {
-        const def = result.module_env.store.getDef(defs[4]);
-        const expr = result.module_env.store.getExpr(def.expr);
-        try testing.expect(expr == .e_num);
-        const value = expr.e_num.value.toI128();
-        try testing.expectEqual(@as(i128, 25), value);
-    }
-
-    // Check pythag_5_12 = sumOfSquares 5 12 => 25 + 144 => 169
-    {
-        const def = result.module_env.store.getDef(defs[5]);
-        const expr = result.module_env.store.getExpr(def.expr);
-        try testing.expect(expr == .e_num);
-        const value = expr.e_num.value.toI128();
-        try testing.expectEqual(@as(i128, 169), value);
-    }
+    try expectNamedIntBinding(result, "sq5", 25);
+    try expectNamedIntBinding(result, "sq12", 144);
+    try expectNamedIntBinding(result, "pythag_3_4", 25);
+    try expectNamedIntBinding(result, "pythag_5_12", 169);
 }
 
 test "comptime eval - associated item dependency order" {
@@ -1082,26 +993,7 @@ test "comptime eval - associated item dependency order" {
     try testing.expectEqual(@as(u32, 2), summary.evaluated);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 
-    // Find the def for 'x' and verify it was folded to 42
-    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
-
-    for (defs) |def_idx| {
-        const def = result.module_env.store.getDef(def_idx);
-        const pattern = result.module_env.store.getPattern(def.pattern);
-
-        if (pattern == .assign) {
-            const ident_text = result.module_env.getIdent(pattern.assign.ident);
-            if (std.mem.eql(u8, ident_text, "x")) {
-                const expr = result.module_env.store.getExpr(def.expr);
-                try testing.expect(expr == .e_num);
-                const value = expr.e_num.value.toI128();
-                try testing.expectEqual(@as(i128, 42), value);
-                return; // Test passed
-            }
-        }
-    }
-
-    return error.TestExpectedDefNotFound;
+    try expectNamedIntBinding(result, "x", 42);
 }
 
 test "comptime eval - multiple associated items with dependencies" {
@@ -1126,26 +1018,7 @@ test "comptime eval - multiple associated items with dependencies" {
     try testing.expectEqual(@as(u32, 5), summary.evaluated);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 
-    // Verify 'total' was folded to 7
-    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
-
-    for (defs) |def_idx| {
-        const def = result.module_env.store.getDef(def_idx);
-        const pattern = result.module_env.store.getPattern(def.pattern);
-
-        if (pattern == .assign) {
-            const ident_text = result.module_env.getIdent(pattern.assign.ident);
-            if (std.mem.eql(u8, ident_text, "total")) {
-                const expr = result.module_env.store.getExpr(def.expr);
-                try testing.expect(expr == .e_num);
-                const value = expr.e_num.value.toI128();
-                try testing.expectEqual(@as(i128, 7), value);
-                return; // Test passed
-            }
-        }
-    }
-
-    return error.TestExpectedDefNotFound;
+    try expectNamedIntBinding(result, "total", 7);
 }
 
 test "comptime eval - deeply nested associated items (5+ levels)" {
@@ -1175,26 +1048,7 @@ test "comptime eval - deeply nested associated items (5+ levels)" {
     try testing.expectEqual(@as(u32, 2), summary.evaluated);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 
-    // Verify 'result' was folded to 123
-    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
-
-    for (defs) |def_idx| {
-        const def = result.module_env.store.getDef(def_idx);
-        const pattern = result.module_env.store.getPattern(def.pattern);
-
-        if (pattern == .assign) {
-            const ident_text = result.module_env.getIdent(pattern.assign.ident);
-            if (std.mem.eql(u8, ident_text, "result")) {
-                const expr = result.module_env.store.getExpr(def.expr);
-                try testing.expect(expr == .e_num);
-                const value = expr.e_num.value.toI128();
-                try testing.expectEqual(@as(i128, 123), value);
-                return; // Test passed
-            }
-        }
-    }
-
-    return error.TestExpectedDefNotFound;
+    try expectNamedIntBinding(result, "result", 123);
 }
 
 test "comptime eval - deeply nested with multiple items at each level" {
@@ -1222,26 +1076,7 @@ test "comptime eval - deeply nested with multiple items at each level" {
     try testing.expectEqual(@as(u32, 4), summary.evaluated);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 
-    // Verify 'sum' was folded to 60
-    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
-
-    for (defs) |def_idx| {
-        const def = result.module_env.store.getDef(def_idx);
-        const pattern = result.module_env.store.getPattern(def.pattern);
-
-        if (pattern == .assign) {
-            const ident_text = result.module_env.getIdent(pattern.assign.ident);
-            if (std.mem.eql(u8, ident_text, "sum")) {
-                const expr = result.module_env.store.getExpr(def.expr);
-                try testing.expect(expr == .e_num);
-                const value = expr.e_num.value.toI128();
-                try testing.expectEqual(@as(i128, 60), value);
-                return; // Test passed
-            }
-        }
-    }
-
-    return error.TestExpectedDefNotFound;
+    try expectNamedIntBinding(result, "sum", 60);
 }
 
 // Numeric literal validation tests (validated during comptime eval)

@@ -62,7 +62,7 @@ pub fn serializeModules(
     const module_count: u32 = @intCast(modules.len);
 
     // Get entry points from primary environment
-    const primary_env = modules[primary_module_idx].env;
+    const primary_env = modules[primary_module_idx].semantic.env;
     const entry_defs = primary_env.exports;
     const entry_count: u32 = entry_defs.span.len;
 
@@ -139,7 +139,7 @@ pub fn serializeModules(
         const serialized_env = try writer.appendAlloc(allocator, ModuleEnv.Serialized);
         module_infos[i].env_serialized_offset = env_offset_before;
 
-        try serialized_env.serialize(mod.env, allocator, &writer);
+        try serialized_env.serialize(mod.semantic.env, allocator, &writer);
     }
 
     // 5. Serialize entry point def indices
@@ -195,13 +195,14 @@ fn reassignHostedLambdaIndices(
         // Only process platform siblings
         if (!mod.is_platform_sibling) continue;
 
-        var module_fns = try HostedCompiler.collectAndSortHostedFunctions(mod.env);
+        const mod_env = mod.semantic.env;
+        var module_fns = try HostedCompiler.collectAndSortHostedFunctions(mod_env);
         defer {
             // Free the name_text strings allocated by collectAndSortHostedFunctions
             for (module_fns.items) |fn_info| {
-                mod.env.gpa.free(fn_info.name_text);
+                mod_env.gpa.free(fn_info.name_text);
             }
-            module_fns.deinit(mod.env.gpa);
+            module_fns.deinit(mod_env.gpa);
         }
 
         for (module_fns.items) |fn_info| {
@@ -242,7 +243,7 @@ fn reassignHostedLambdaIndices(
         // Only process platform siblings
         if (!mod.is_platform_sibling) continue;
 
-        const platform_env = mod.env;
+        const platform_env = mod.semantic.env;
         const all_defs = platform_env.store.sliceDefs(platform_env.all_defs);
 
         for (all_defs) |def_idx| {

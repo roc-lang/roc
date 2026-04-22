@@ -123,11 +123,13 @@ pub const Expr = struct {
         call: struct {
             func: ExprId,
             args: Span(ExprId),
+            call_constraint_ty: TypeVarId,
         },
         inspect: ExprId,
         low_level: struct {
             op: base.LowLevel,
             args: Span(ExprId),
+            source_constraint_ty: TypeVarId,
         },
         when: struct {
             cond: ExprId,

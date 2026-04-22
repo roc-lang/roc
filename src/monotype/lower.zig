@@ -930,6 +930,20 @@ pub const Lowerer = struct {
         return result;
     }
 
+    /// Lower a root expression into the current program and return its synthetic
+    /// runtime symbol. Call `run(...)` later to finish the whole program.
+    pub fn addRootExprEntrypoint(
+        self: *Lowerer,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) std.mem.Allocator.Error!symbol_mod.Symbol {
+        try self.registerAllTopLevelDefs();
+        try self.buildAttachedMethodIndex();
+        const def_id = try self.lowerRootExpr(module_idx, expr_idx);
+        try self.program.root_defs.append(self.allocator, def_id);
+        return self.program.store.getDef(def_id).bind.symbol;
+    }
+
     fn finalizeTypedSymbol(_: *Lowerer, _: *ast.TypedSymbol) std.mem.Allocator.Error!void {}
 
     const FinalizeVisited = struct {
@@ -2304,8 +2318,7 @@ pub const Lowerer = struct {
                 module_idx,
                 type_scope,
                 env,
-                expr.data.e_call.func,
-                typed_cir_module.sliceExpr(expr.data.e_call.args),
+                expr.data.e_call,
             );
             return try self.program.store.addExpr(.{
                 .ty = lowered_call.result_ty,
@@ -2459,11 +2472,19 @@ pub const Lowerer = struct {
                         .data = .{ .low_level = .{
                             .op = .num_is_eq,
                             .args = eq_args,
+                            .source_constraint_ty = try self.makeLowLevelSourceConstraintTy(
+                                try self.makePrimitiveType(.bool),
+                                self.program.store.sliceExprSpan(eq_args),
+                            ),
                         } },
                     });
                     break :blk .{ .low_level = .{
                         .op = .bool_not,
                         .args = try self.program.store.addExprSpan(&.{eq_expr}),
+                        .source_constraint_ty = try self.makeLowLevelSourceConstraintTy(
+                            try self.makePrimitiveType(.bool),
+                            &.{eq_expr},
+                        ),
                     } };
                 }
                 if (binop.op == .@"and" or binop.op == .@"or") {
@@ -2503,27 +2524,46 @@ pub const Lowerer = struct {
                     .add, .sub, .mul, .div, .rem, .div_trunc, .lt, .gt, .le, .ge, .eq => try self.requireExprType(module_idx, type_scope, binop.lhs),
                     else => unreachable,
                 };
+                const lowered_args = try self.lowerHomogeneousBinopArgs(
+                    module_idx,
+                    type_scope,
+                    env,
+                    operand_ty,
+                    null,
+                    binop.lhs,
+                    binop.rhs,
+                );
                 break :blk .{ .low_level = .{
                     .op = binopToLowLevel(binop.op),
-                    .args = try self.lowerHomogeneousBinopArgs(
-                        module_idx,
-                        type_scope,
-                        env,
-                        operand_ty,
-                        null,
-                        binop.lhs,
-                        binop.rhs,
+                    .args = lowered_args,
+                    .source_constraint_ty = try self.makeLowLevelSourceConstraintTy(
+                        ty,
+                        self.program.store.sliceExprSpan(lowered_args),
                     ),
                 } };
             },
-            .e_unary_minus => |unary| .{ .low_level = .{
-                .op = .num_negate,
-                .args = try self.lowerExprSlice(module_idx, type_scope, env, &.{unary.expr}),
-            } },
-            .e_unary_not => |unary| .{ .low_level = .{
-                .op = .bool_not,
-                .args = try self.lowerExprSlice(module_idx, type_scope, env, &.{unary.expr}),
-            } },
+            .e_unary_minus => |unary| blk: {
+                const lowered_args = try self.lowerExprSlice(module_idx, type_scope, env, &.{unary.expr});
+                break :blk .{ .low_level = .{
+                    .op = .num_negate,
+                    .args = lowered_args,
+                    .source_constraint_ty = try self.makeLowLevelSourceConstraintTy(
+                        ty,
+                        self.program.store.sliceExprSpan(lowered_args),
+                    ),
+                } };
+            },
+            .e_unary_not => |unary| blk: {
+                const lowered_args = try self.lowerExprSlice(module_idx, type_scope, env, &.{unary.expr});
+                break :blk .{ .low_level = .{
+                    .op = .bool_not,
+                    .args = lowered_args,
+                    .source_constraint_ty = try self.makeLowLevelSourceConstraintTy(
+                        ty,
+                        self.program.store.sliceExprSpan(lowered_args),
+                    ),
+                } };
+            },
             .e_field_access => |field_access| blk: {
                 break :blk .{ .access = .{
                     .record = try self.lowerExpr(module_idx, type_scope, env, field_access.receiver),
@@ -2617,10 +2657,17 @@ pub const Lowerer = struct {
                 ) };
             },
             .e_for => |for_expr| .{ .for_ = try self.lowerForExpr(module_idx, type_scope, env, for_expr.patt, for_expr.expr, for_expr.body) },
-            .e_run_low_level => |ll| .{ .low_level = .{
-                .op = ll.op,
-                .args = try self.lowerExprList(module_idx, type_scope, env, ll.args),
-            } },
+            .e_run_low_level => |ll| blk: {
+                const lowered_args = try self.lowerExprList(module_idx, type_scope, env, ll.args);
+                break :blk .{ .low_level = .{
+                    .op = ll.op,
+                    .args = lowered_args,
+                    .source_constraint_ty = try self.makeLowLevelSourceConstraintTy(
+                        ty,
+                        self.program.store.sliceExprSpan(lowered_args),
+                    ),
+                } };
+            },
             else => debugTodoExpr(expr.data),
         };
 
@@ -3013,13 +3060,32 @@ pub const Lowerer = struct {
         op: base.LowLevel,
         args: []const ast.ExprId,
     ) std.mem.Allocator.Error!ast.ExprId {
+        const source_constraint_ty = try self.makeLowLevelSourceConstraintTy(ret_ty, args);
         return try self.program.store.addExpr(.{
             .ty = ret_ty,
             .data = .{ .low_level = .{
                 .op = op,
                 .args = try self.program.store.addExprSpan(args),
+                .source_constraint_ty = source_constraint_ty,
             } },
         });
+    }
+
+    fn makeLowLevelSourceConstraintTy(
+        self: *Lowerer,
+        ret_ty: type_mod.TypeId,
+        args: []const ast.ExprId,
+    ) std.mem.Allocator.Error!type_mod.TypeId {
+        const arg_tys = try self.allocator.alloc(type_mod.TypeId, args.len);
+        defer self.allocator.free(arg_tys);
+        for (args, 0..) |arg_expr_id, i| {
+            arg_tys[i] = self.program.store.getExpr(arg_expr_id).ty;
+        }
+        return try self.ctx.types.internResolved(.{ .func = .{
+            .args = try self.ctx.types.dupeTypeIds(arg_tys),
+            .lambdas = &.{},
+            .ret = ret_ty,
+        } });
     }
 
     fn makeU64LiteralExpr(self: *Lowerer, value: u64) std.mem.Allocator.Error!ast.ExprId {
@@ -5922,17 +5988,22 @@ pub const Lowerer = struct {
         module_idx: u32,
         type_scope: *TypeScope,
         env: BindingEnv,
-        func_expr_idx: CIR.Expr.Idx,
-        arg_exprs: []const CIR.Expr.Idx,
+        call: @FieldType(CIR.Expr, "e_call"),
     ) std.mem.Allocator.Error!LoweredCall {
-        const current_fn_ty = try self.requireExprType(module_idx, type_scope, func_expr_idx);
+        const constraint_fn_var = call.constraint_fn_var orelse
+            debugPanic("monotype.lower.lowerCall missing ordinary call constraint fn var", .{});
+        const current_fn_ty = try self.instantiateSourceVarType(
+            module_idx,
+            type_scope,
+            constraint_fn_var,
+        );
         const current_expr = try self.lowerExprWithExpectedType(
             module_idx,
             type_scope,
             env,
-            func_expr_idx,
+            call.func,
             current_fn_ty,
-            try self.exprResultVar(module_idx, type_scope, env, func_expr_idx),
+            try self.exprResultVar(module_idx, type_scope, env, call.func),
         );
         return self.lowerCallFromLoweredHead(
             module_idx,
@@ -5940,7 +6011,7 @@ pub const Lowerer = struct {
             env,
             current_expr,
             current_fn_ty,
-            arg_exprs,
+            self.ctx.typedCirModule(module_idx).sliceExpr(call.args),
         );
     }
 
@@ -5980,6 +6051,7 @@ pub const Lowerer = struct {
             .data = .{
                 .func = current_expr,
                 .args = try self.program.store.addExprSpan(lowered_args),
+                .call_constraint_ty = current_fn_ty,
             },
             .result_ty = fn_parts.ret,
         };
@@ -6013,7 +6085,6 @@ pub const Lowerer = struct {
         expected_ty: type_mod.TypeId,
         expected_var: ?Var,
     ) std.mem.Allocator.Error!ast.ExprId {
-        const typed_cir_module = self.ctx.typedCirModule(module_idx);
         const target_ty = blk: {
             const expected_kind = self.ctx.types.getType(expected_ty);
             if (expected_kind != .placeholder and expected_kind != .unbd) break :blk expected_ty;
@@ -6080,13 +6151,7 @@ pub const Lowerer = struct {
                         .data = self.program.store.getExpr(special).data,
                     });
                 }
-                const lowered_call = try self.lowerCall(
-                    module_idx,
-                    type_scope,
-                    env,
-                    call.func,
-                    typed_cir_module.sliceExpr(call.args),
-                );
+                const lowered_call = try self.lowerCall(module_idx, type_scope, env, call);
                 break :blk try self.program.store.addExpr(.{
                     .ty = lowered_call.result_ty,
                     .data = .{ .call = lowered_call.data },
@@ -6122,13 +6187,20 @@ pub const Lowerer = struct {
                 });
             },
             .e_hosted_lambda => debugPanic("monotype invariant violated: hosted top-level proc escaped into monotype.lowerExprWithExpectedType", .{}),
-            .e_run_low_level => |ll| try self.program.store.addExpr(.{
-                .ty = target_ty,
-                .data = .{ .low_level = .{
-                    .op = ll.op,
-                    .args = try self.lowerExprList(module_idx, type_scope, env, ll.args),
-                } },
-            }),
+            .e_run_low_level => |ll| blk: {
+                const lowered_args = try self.lowerExprList(module_idx, type_scope, env, ll.args);
+                break :blk try self.program.store.addExpr(.{
+                    .ty = target_ty,
+                    .data = .{ .low_level = .{
+                        .op = ll.op,
+                        .args = lowered_args,
+                        .source_constraint_ty = try self.makeLowLevelSourceConstraintTy(
+                            target_ty,
+                            self.program.store.sliceExprSpan(lowered_args),
+                        ),
+                    } },
+                });
+            },
             .e_record => |record| self.lowerRecordExpr(
                 module_idx,
                 type_scope,

@@ -242,6 +242,10 @@ pub const Interpreter = struct {
     call_depth: usize = 0,
     /// Kept for compatibility with existing callers; strongest-form LIR has no while loops.
     detect_infinite_while_loops: bool = false,
+    /// Active proc call stack for the current evaluation.
+    call_stack: std.ArrayList(LirProcSpecId),
+    /// Call stack captured at the first failed exit in the current evaluation.
+    failed_call_stack: std.ArrayList(LirProcSpecId),
 
     const JoinPointMap = std.AutoHashMapUnmanaged(u32, JoinPointInfo);
 
@@ -356,10 +360,14 @@ pub const Interpreter = struct {
                 .roc_crashed = &InterpreterRocEnv.rocCrashedFn,
                 .hosted_fns = caller_roc_ops.hosted_fns,
             },
+            .call_stack = .empty,
+            .failed_call_stack = .empty,
         };
     }
 
     pub fn deinit(self: *LirInterpreter) void {
+        self.failed_call_stack.deinit(self.allocator);
+        self.call_stack.deinit(self.allocator);
         self.roc_env.deinit();
         self.allocator.destroy(self.roc_env);
         self.arena.deinit();
@@ -377,6 +385,15 @@ pub const Interpreter = struct {
 
     pub fn getExpectMessage(self: *const LirInterpreter) ?[]const u8 {
         return self.roc_env.expect_message;
+    }
+
+    pub fn getFailedCallStack(self: *const LirInterpreter) []const LirProcSpecId {
+        return self.failed_call_stack.items;
+    }
+
+    fn recordFailedCallStackIfUnset(self: *LirInterpreter) Allocator.Error!void {
+        if (self.failed_call_stack.items.len != 0) return;
+        try self.failed_call_stack.appendSlice(self.allocator, self.call_stack.items);
     }
 
     /// Release ownership of an evaluated result value.
@@ -504,13 +521,18 @@ pub const Interpreter = struct {
     /// Evaluate a proc-root LIR program using the RocOps bound at initialization time.
     pub fn eval(self: *LirInterpreter, request: EvalRequest) Error!EvalResult {
         self.roc_env.resetForEval();
+        self.call_stack.clearRetainingCapacity();
+        self.failed_call_stack.clearRetainingCapacity();
 
         if (sljmp.supported) {
             var eval_jmp_buf: JmpBuf = undefined;
             const prev_jmp_buf = self.roc_env.installJumpBuf(&eval_jmp_buf);
             defer self.roc_env.restoreJumpBuf(prev_jmp_buf);
             const sj = setjmp(&eval_jmp_buf);
-            if (sj != 0) return error.Crash;
+            if (sj != 0) {
+                self.recordFailedCallStackIfUnset() catch {};
+                return error.Crash;
+            }
         }
 
         const args = try self.marshalAbiArgs(request.arg_ptr, request.arg_layouts);
@@ -987,6 +1009,10 @@ pub const Interpreter = struct {
         args: []const Value,
         arg_layouts: []const layout_mod.Idx,
     ) Error!Value {
+        try self.call_stack.append(self.allocator, proc_id);
+        defer _ = self.call_stack.pop();
+        errdefer self.recordFailedCallStackIfUnset() catch {};
+
         if (self.call_depth >= max_call_depth) {
             return self.triggerCrash(stack_overflow_message);
         }

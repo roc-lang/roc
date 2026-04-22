@@ -528,6 +528,7 @@ pub const Payload = extern union {
         func: u32,
         args_span2_idx: u32,
         called_via: u32,
+        constraint_fn_var_plus_one: u32,
     };
 
     pub const ExprRecord = extern struct {

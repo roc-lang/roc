@@ -31,6 +31,7 @@ const ModuleEnv = can.ModuleEnv;
 const Can = can.Can;
 const Check = check.Check;
 const PackageEnv = compile_package.PackageEnv;
+const SemanticModuleData = compile_package.SemanticModuleData;
 const ModuleTimingInfo = compile_package.TimingInfo;
 const ImportResolver = compile_package.ImportResolver;
 const ScheduleHook = compile_package.ScheduleHook;
@@ -642,24 +643,30 @@ pub const BuildEnv = struct {
                     std.debug.print("[TRANSFER]   Before transfer: sched_mod.reports.len={} cap={}\n", .{ sched_mod.reports.items.len, sched_mod.reports.capacity });
                 }
 
-                // Transfer env ownership - move from coordinator to scheduler
-                if (coord_mod.env) |env| {
-                    if (sched_mod.env == null) {
-                        if (comptime trace_build) {
-                            std.debug.print("[TRANSFER]   Transferring env for {s} (was_cache_hit={})\n", .{ coord_mod.name, coord_mod.was_cache_hit });
-                        }
-                        // Copy env content to scheduler (scheduler owns inline, not pointer)
-                        sched_mod.env = env.*;
-                        // Transfer the cache flag so scheduler knows not to deinit cached envs
-                        sched_mod.was_from_cache = coord_mod.was_cache_hit;
+                // Transfer semantic ownership - move from coordinator to scheduler.
+                if (coord_mod.semantic) |*coord_semantic| {
+                    std.debug.assert(sched_mod.semantic == null);
 
-                        // Free the heap-allocated struct wrapper.
-                        // IMPORTANT: Use env.gpa, not self.gpa, because the env was
-                        // allocated with env.gpa (page_allocator in multi-threaded mode).
-                        env.gpa.destroy(env);
-                        // Clear coordinator's pointer to prevent double-free during deinit
-                        coord_mod.env = null;
+                    if (comptime trace_build) {
+                        std.debug.print("[TRANSFER]   Transferring semantic data for {s} (was_cache_hit={})\n", .{ coord_mod.name, coord_mod.was_cache_hit });
                     }
+
+                    const env = coord_semantic.module_env;
+                    sched_mod.semantic = .{
+                        .module_env = env.*,
+                        .comptime_values = coord_semantic.comptime_values,
+                    };
+                    sched_mod.was_from_cache = coord_mod.was_cache_hit;
+
+                    coord_semantic.comptime_values = null;
+
+                    // Free the heap-allocated struct wrapper.
+                    // IMPORTANT: Use env.gpa, not self.gpa, because the env was
+                    // allocated with env.gpa (page_allocator in multi-threaded mode).
+                    env.gpa.destroy(env);
+
+                    // Clear coordinator ownership to prevent double-free during deinit.
+                    coord_mod.semantic = null;
                 }
 
                 if (comptime trace_build) {
@@ -760,7 +767,8 @@ pub const BuildEnv = struct {
                 if (mod_idx == root_id) continue;
             }
 
-            if (mod.env) |platform_env| {
+            if (mod.semantic) |semantic| {
+                const platform_env = semantic.module_env;
                 var module_fns = HostedCompiler.collectAndSortHostedFunctions(platform_env) catch continue;
                 defer module_fns.deinit(platform_env.gpa);
 
@@ -818,7 +826,8 @@ pub const BuildEnv = struct {
                 if (mod_idx == root_id) continue;
             }
 
-            if (mod.env) |platform_env| {
+            if (mod.semantic) |semantic| {
+                const platform_env = semantic.module_env;
                 const all_defs = platform_env.store.sliceDefs(platform_env.all_defs);
                 for (all_defs) |def_idx| {
                     const def = platform_env.store.getDef(def_idx);
@@ -911,25 +920,20 @@ pub const BuildEnv = struct {
         };
 
         // Get the app's root module env
-        const app_root_env = app_sched.getRootEnv() orelse {
+        const app_root_env = if (app_sched.getRootSemanticData()) |data| data.env else {
             if (comptime trace_build) std.debug.print("[PLAT-CHECK] No app root env found\n", .{});
             return;
         };
 
         // Get the platform's root module by finding the module that matches the root file
-        // Note: getRootEnv() returns modules.items[0], but that may not be the actual platform
+        // Note: the package root semantic data must come from the recorded root module id,
+        // not modules.items[0], because that may not be the actual platform root.
         // root file if other modules (like exposed imports) were scheduled first.
         const platform_root_module_name = PackageEnv.moduleNameFromPath(platform_pkg.root_file);
         if (comptime trace_build) {
             std.debug.print("[PLAT-CHECK] Looking for platform root module: {s} (from path: {s})\n", .{ platform_root_module_name, platform_pkg.root_file });
         }
-        const platform_module_state = platform_sched.getModuleState(platform_root_module_name) orelse {
-            if (comptime trace_build) {
-                std.debug.print("[PLAT-CHECK] Platform module state not found\n", .{});
-            }
-            return;
-        };
-        const platform_root_env = if (platform_module_state.env) |*env| env else {
+        const platform_root_env = if (platform_sched.getSemanticDataIfDone(platform_root_module_name)) |data| data.env else {
             if (comptime trace_build) {
                 std.debug.print("[PLAT-CHECK] Platform root env not found\n", .{});
             }
@@ -1071,7 +1075,7 @@ pub const BuildEnv = struct {
         const ref = cur_pkg.shorthands.get(qualified.qualifier) orelse return false;
         const sched = self.ws.schedulers.get(ref.name) orelse return false;
 
-        return sched.*.getEnvIfDone(qualified.module) != null;
+        return sched.*.getSemanticDataIfDone(qualified.module) != null;
     }
 
     fn resolverGetEnv(ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) ?*ModuleEnv {
@@ -1082,7 +1086,10 @@ pub const BuildEnv = struct {
         const qualified = base.module_path.parseQualifiedImport(import_name) orelse {
             // Local module - look it up in the current package's scheduler
             const cur_sched = self.ws.schedulers.get(current_package) orelse return null;
-            return cur_sched.*.getEnvIfDone(import_name);
+            return if (cur_sched.*.getSemanticDataIfDone(import_name)) |semantic|
+                semantic.env
+            else
+                null;
         };
 
         // External module - look it up via shorthands
@@ -1093,7 +1100,10 @@ pub const BuildEnv = struct {
             return null;
         };
 
-        return sched.*.getEnvIfDone(qualified.module);
+        return if (sched.*.getSemanticDataIfDone(qualified.module)) |semantic|
+            semantic.env
+        else
+            null;
     }
 
     fn resolverResolveLocalPath(ctx: ?*anyopaque, _: []const u8, root_dir: []const u8, import_name: []const u8) []const u8 {
@@ -2206,8 +2216,8 @@ pub const BuildEnv = struct {
     pub const CompiledModuleInfo = struct {
         /// Module name (e.g., "Main", "Stdout")
         name: []const u8,
-        /// Pointer to the compiled ModuleEnv
-        env: *ModuleEnv,
+        /// Paired semantic data retained after type checking
+        semantic: SemanticModuleData,
         /// Source code of the module
         source: []const u8,
         /// Package name this module belongs to
@@ -2249,31 +2259,34 @@ pub const BuildEnv = struct {
 
             for (sched.modules.items, 0..) |*sched_mod, mod_idx| {
                 // Skip modules without env (not compiled or failed)
-                if (sched_mod.env == null) continue;
-                const env_ptr: *ModuleEnv = &sched_mod.env.?;
+                if (sched_mod.semantic) |*semantic| {
+                    const env_ptr: *ModuleEnv = &semantic.module_env;
+                    const source = env_ptr.common.source;
 
-                const source = env_ptr.common.source;
+                    // Determine if this is platform main or sibling
+                    const is_root = sched.root_module_id != null and sched.root_module_id.? == mod_idx;
+                    const is_platform_main = is_platform_pkg and is_root;
+                    const is_platform_sibling = is_platform_pkg and !is_root;
+                    const is_app = is_app_pkg and is_root;
 
-                // Determine if this is platform main or sibling
-                const is_root = sched.root_module_id != null and sched.root_module_id.? == mod_idx;
-                const is_platform_main = is_platform_pkg and is_root;
-                const is_platform_sibling = is_platform_pkg and !is_root;
-                const is_app = is_app_pkg and is_root;
-
-                try modules.append(allocator, .{
-                    .name = sched_mod.name,
-                    .env = env_ptr,
-                    .source = source,
-                    .package_name = pkg_name,
-                    .is_platform_main = is_platform_main,
-                    .is_app = is_app,
-                    .is_platform_sibling = is_platform_sibling,
-                    .depth = sched_mod.depth,
-                    .provides_entries = if (is_platform_main or is_app)
-                        if (pkg_ptr) |p| p.provides_entries.items else &.{}
-                    else
-                        &.{},
-                });
+                    try modules.append(allocator, .{
+                        .name = sched_mod.name,
+                        .semantic = .{
+                            .env = env_ptr,
+                            .comptime_values = if (semantic.comptime_values) |*values| values else null,
+                        },
+                        .source = source,
+                        .package_name = pkg_name,
+                        .is_platform_main = is_platform_main,
+                        .is_app = is_app,
+                        .is_platform_sibling = is_platform_sibling,
+                        .depth = sched_mod.depth,
+                        .provides_entries = if (is_platform_main or is_app)
+                            if (pkg_ptr) |p| p.provides_entries.items else &.{}
+                        else
+                            &.{},
+                    });
+                }
             }
         }
 
@@ -2361,20 +2374,20 @@ pub const BuildEnv = struct {
         return null;
     }
 
-    /// Get the root module env for the app package (convenience method).
-    pub fn getAppEnv(self: *BuildEnv) ?*ModuleEnv {
+    /// Get the root semantic data for the app package (convenience method).
+    pub fn getAppSemanticData(self: *BuildEnv) ?SemanticModuleData {
         const sched = self.schedulers.get("app") orelse return null;
-        return sched.getRootEnv();
+        return sched.getRootSemanticData();
     }
 
-    /// Get the root module env for the platform package (convenience method).
-    pub fn getPlatformEnv(self: *BuildEnv) ?*ModuleEnv {
+    /// Get the root semantic data for the platform package (convenience method).
+    pub fn getPlatformSemanticData(self: *BuildEnv) ?SemanticModuleData {
         // Find platform package name
         var pkg_it = self.packages.iterator();
         while (pkg_it.next()) |entry| {
             if (entry.value_ptr.kind == .platform) {
                 const sched = self.schedulers.get(entry.key_ptr.*) orelse continue;
-                return sched.getRootEnv();
+                return sched.getRootSemanticData();
             }
         }
         return null;
@@ -2423,12 +2436,21 @@ pub const BuildEnv = struct {
         var all_module_envs = try allocator.alloc(*ModuleEnv, modules.len + 1);
         all_module_envs[0] = builtin_env;
         for (modules, 0..) |mod, i| {
-            all_module_envs[i + 1] = mod.env;
+            all_module_envs[i + 1] = mod.semantic.env;
         }
 
-        // Re-resolve imports against the unified all_module_envs array
+        // Resolve imports directly from the assembled module env array.
         for (all_module_envs) |module| {
-            module.imports.resolveImports(module, all_module_envs);
+            module.imports.clearResolvedModules();
+            for (module.imports.imports.items.items, 0..) |str_idx, i| {
+                const import_name = module.getString(str_idx);
+                for (all_module_envs, 0..) |candidate_env, module_idx| {
+                    if (std.mem.eql(u8, candidate_env.module_name, import_name)) {
+                        module.imports.setResolvedModule(@enumFromInt(i), @intCast(module_idx));
+                        break;
+                    }
+                }
+            }
         }
 
         return .{
@@ -2462,7 +2484,7 @@ pub const BuildEnv = struct {
             var app_module_idx: ?u32 = null;
             for (self.compiled_modules, 0..) |mod, i| {
                 if (mod.is_app) {
-                    app_module_env = mod.env;
+                    app_module_env = mod.semantic.env;
                     app_module_idx = @intCast(i + 1); // +1 for Builtin at [0]
                     break;
                 }
@@ -2512,12 +2534,13 @@ pub const BuildEnv = struct {
             for (self.compiled_modules) |mod| {
                 if (!mod.is_platform_sibling) continue;
 
-                var module_fns = HostedCompiler.collectAndSortHostedFunctions(mod.env) catch continue;
-                defer module_fns.deinit(mod.env.gpa);
+                const mod_env = mod.semantic.env;
+                var module_fns = HostedCompiler.collectAndSortHostedFunctions(mod_env) catch continue;
+                defer module_fns.deinit(mod_env.gpa);
 
                 for (module_fns.items) |fn_info| {
                     const name_copy = gpa.dupe(u8, fn_info.name_text) catch continue;
-                    mod.env.gpa.free(fn_info.name_text);
+                    mod_env.gpa.free(fn_info.name_text);
                     all_hosted_fns.append(gpa, .{
                         .symbol_name = fn_info.symbol_name,
                         .expr_idx = fn_info.expr_idx,
@@ -2556,7 +2579,7 @@ pub const BuildEnv = struct {
             // Assign global indices in the CIR e_hosted_lambda nodes
             for (self.compiled_modules, 0..) |mod, global_module_idx| {
                 if (!mod.is_platform_sibling) continue;
-                const platform_env = mod.env;
+                const platform_env = mod.semantic.env;
 
                 const mod_all_defs = platform_env.store.sliceDefs(platform_env.all_defs);
                 for (mod_all_defs) |def_idx| {
@@ -2621,24 +2644,25 @@ pub const BuildEnv = struct {
             var app_module_env: ?*ModuleEnv = null;
             for (self.compiled_modules) |mod| {
                 if (mod.is_app) {
-                    app_module_env = mod.env;
+                    app_module_env = mod.semantic.env;
                     break;
                 }
             }
 
             // Find main_for_host! CIR expression from platform provides entries
-            const platform_defs = platform_module.env.store.sliceDefs(platform_module.env.all_defs);
+            const platform_env = platform_module.semantic.env;
+            const platform_defs = platform_env.store.sliceDefs(platform_env.all_defs);
 
             for (provides_entries) |entry| {
                 for (platform_defs) |def_idx| {
-                    const def = platform_module.env.store.getDef(def_idx);
-                    const pattern = platform_module.env.store.getPattern(def.pattern);
+                    const def = platform_env.store.getDef(def_idx);
+                    const pattern = platform_env.store.getPattern(def.pattern);
                     if (pattern == .assign) {
-                        const ident_name = platform_module.env.getIdent(pattern.assign.ident);
+                        const ident_name = platform_env.getIdent(pattern.assign.ident);
                         if (std.mem.eql(u8, ident_name, entry.roc_ident)) {
                             return .{
                                 .platform_idx = platform_idx,
-                                .platform_env = platform_module.env,
+                                .platform_env = platform_env,
                                 .entrypoint_expr = def.expr,
                                 .app_module_env = app_module_env,
                                 .provides_entries = provides_entries,
@@ -2660,7 +2684,7 @@ pub const BuildEnv = struct {
             const provides_entries = app_module.provides_entries;
             if (provides_entries.len == 0) return error.NoModulesCompiled;
 
-            const app_env = app_module.env;
+            const app_env = app_module.semantic.env;
             const app_defs = app_env.store.sliceDefs(app_env.all_defs);
 
             for (provides_entries) |entry| {

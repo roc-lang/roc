@@ -47,6 +47,12 @@ pub const Field = struct {
 /// Borrowed slice of executable record fields.
 pub const Fields = []const Field;
 
+/// Executable callable signature metadata.
+pub const CallableSig = struct {
+    args: TypeIds,
+    ret: TypeId,
+};
+
 /// Executable monomorphic type content.
 pub const Content = union(enum) {
     placeholder,
@@ -55,10 +61,14 @@ pub const Content = union(enum) {
     nominal: Nominal,
     list: TypeId,
     box: TypeId,
-    erased_fn: ?TypeId,
+    erased_fn: struct {
+        capture: ?TypeId,
+        call: CallableSig,
+    },
     tuple: TypeIds,
     tag_union: struct {
         tags: Tags,
+        call: ?CallableSig = null,
     },
     record: struct {
         fields: Fields,
@@ -206,6 +216,14 @@ pub const Store = struct {
         return try self.allocator.dupe(Field, fields);
     }
 
+    /// Duplicate executable callable signature metadata into store-owned memory.
+    pub fn dupeCallableSig(self: *const Store, sig: CallableSig) std.mem.Allocator.Error!CallableSig {
+        return .{
+            .args = try self.dupeTypeIds(sig.args),
+            .ret = sig.ret,
+        };
+    }
+
     /// Compare two executable types structurally.
     pub fn equalIds(self: *const Store, left: TypeId, right: TypeId) bool {
         var visited = std.ArrayList(TypePair).empty;
@@ -242,6 +260,9 @@ pub const Store = struct {
             .nominal => |nominal| {
                 if (nominal.args.len > 0) self.allocator.free(nominal.args);
             },
+            .erased_fn => |erased_fn| {
+                if (erased_fn.call.args.len > 0) self.allocator.free(erased_fn.call.args);
+            },
             .tuple => |elems| {
                 if (elems.len > 0) self.allocator.free(elems);
             },
@@ -251,6 +272,9 @@ pub const Store = struct {
                         if (tag.args.len > 0) self.allocator.free(tag.args);
                     }
                     self.allocator.free(tag_union.tags);
+                }
+                if (tag_union.call) |call| {
+                    if (call.args.len > 0) self.allocator.free(call.args);
                 }
             },
             .record => |record| {
@@ -287,10 +311,15 @@ pub const Store = struct {
             },
             .list => |elem| try self.isFullyResolvedVisited(elem, visited),
             .box => |elem| try self.isFullyResolvedVisited(elem, visited),
-            .erased_fn => |maybe_capture| if (maybe_capture) |capture|
-                try self.isFullyResolvedVisited(capture, visited)
-            else
-                true,
+            .erased_fn => |erased_fn| blk: {
+                if (erased_fn.capture) |capture| {
+                    if (!try self.isFullyResolvedVisited(capture, visited)) break :blk false;
+                }
+                for (erased_fn.call.args) |arg| {
+                    if (!try self.isFullyResolvedVisited(arg, visited)) break :blk false;
+                }
+                break :blk try self.isFullyResolvedVisited(erased_fn.call.ret, visited);
+            },
             .tuple => |tuple| blk: {
                 for (tuple) |elem| {
                     if (!try self.isFullyResolvedVisited(elem, visited)) break :blk false;
@@ -302,6 +331,12 @@ pub const Store = struct {
                     for (tag.args) |arg| {
                         if (!try self.isFullyResolvedVisited(arg, visited)) break :blk false;
                     }
+                }
+                if (tag_union.call) |call| {
+                    for (call.args) |arg| {
+                        if (!try self.isFullyResolvedVisited(arg, visited)) break :blk false;
+                    }
+                    if (!try self.isFullyResolvedVisited(call.ret, visited)) break :blk false;
                 }
                 break :blk true;
             },
@@ -356,10 +391,23 @@ pub const Store = struct {
             },
             .list => |elem| .{ .list = try self.internTypeIdInner(elem, active) },
             .box => |elem| .{ .box = try self.internTypeIdInner(elem, active) },
-            .erased_fn => |maybe_capture| .{ .erased_fn = if (maybe_capture) |capture|
-                try self.internTypeIdInner(capture, active)
-            else
-                null },
+            .erased_fn => |erased_fn| blk: {
+                const lowered_call_args = try self.allocator.alloc(TypeId, erased_fn.call.args.len);
+                errdefer self.allocator.free(lowered_call_args);
+                for (erased_fn.call.args, 0..) |arg, i| {
+                    lowered_call_args[i] = try self.internTypeIdInner(arg, active);
+                }
+                break :blk .{ .erased_fn = .{
+                    .capture = if (erased_fn.capture) |capture|
+                        try self.internTypeIdInner(capture, active)
+                    else
+                        null,
+                    .call = .{
+                        .args = lowered_call_args,
+                        .ret = try self.internTypeIdInner(erased_fn.call.ret, active),
+                    },
+                } };
+            },
             .tuple => |tuple| blk: {
                 const lowered_elems = try self.allocator.alloc(TypeId, tuple.len);
                 errdefer self.allocator.free(lowered_elems);
@@ -402,7 +450,20 @@ pub const Store = struct {
                     };
                 }
                 self.assertDistinctSortedTags(lowered_tags);
-                break :blk .{ .tag_union = .{ .tags = lowered_tags } };
+                break :blk .{ .tag_union = .{
+                    .tags = lowered_tags,
+                    .call = if (tag_union.call) |call| blk2: {
+                        const lowered_call_args = try self.allocator.alloc(TypeId, call.args.len);
+                        errdefer self.allocator.free(lowered_call_args);
+                        for (call.args, 0..) |arg, i| {
+                            lowered_call_args[i] = try self.internTypeIdInner(arg, active);
+                        }
+                        break :blk2 .{
+                            .args = lowered_call_args,
+                            .ret = try self.internTypeIdInner(call.ret, active),
+                        };
+                    } else null,
+                } };
             },
         };
 
@@ -534,12 +595,17 @@ pub const Store = struct {
                         try self_builder.store.appendInternKeyValue(@as(u8, 13));
                         try self_builder.serializeType(elem);
                     },
-                    .erased_fn => |maybe_capture| {
+                    .erased_fn => |erased_fn| {
                         try self_builder.store.appendInternKeyValue(@as(u8, 14));
-                        try self_builder.store.appendInternKeyValue(@as(u8, if (maybe_capture != null) 1 else 0));
-                        if (maybe_capture) |capture| {
+                        try self_builder.store.appendInternKeyValue(@as(u8, if (erased_fn.capture != null) 1 else 0));
+                        if (erased_fn.capture) |capture| {
                             try self_builder.serializeType(capture);
                         }
+                        try self_builder.store.appendInternKeyValue(@as(u32, @intCast(erased_fn.call.args.len)));
+                        for (erased_fn.call.args) |arg| {
+                            try self_builder.serializeType(arg);
+                        }
+                        try self_builder.serializeType(erased_fn.call.ret);
                     },
                     .tuple => |tuple| {
                         try self_builder.store.appendInternKeyValue(@as(u8, 15));
@@ -565,6 +631,14 @@ pub const Store = struct {
                             for (tag.args) |arg| {
                                 try self_builder.serializeType(arg);
                             }
+                        }
+                        try self_builder.store.appendInternKeyValue(@as(u8, if (tag_union.call != null) 1 else 0));
+                        if (tag_union.call) |call| {
+                            try self_builder.store.appendInternKeyValue(@as(u32, @intCast(call.args.len)));
+                            for (call.args) |arg| {
+                                try self_builder.serializeType(arg);
+                            }
+                            try self_builder.serializeType(call.ret);
                         }
                     },
                 }
@@ -644,13 +718,17 @@ pub const Store = struct {
             },
             .list => |elem| self.equalIdsVisited(elem, right_content.list, visited),
             .box => |elem| self.equalIdsVisited(elem, right_content.box, visited),
-            .erased_fn => |maybe_capture| blk: {
-                const right_capture = right_content.erased_fn;
-                if ((maybe_capture == null) != (right_capture == null)) break :blk false;
-                if (maybe_capture) |capture| {
-                    break :blk try self.equalIdsVisited(capture, right_capture.?, visited);
+            .erased_fn => |erased_fn| blk: {
+                const right_erased_fn = right_content.erased_fn;
+                if ((erased_fn.capture == null) != (right_erased_fn.capture == null)) break :blk false;
+                if (erased_fn.capture) |capture| {
+                    if (!try self.equalIdsVisited(capture, right_erased_fn.capture.?, visited)) break :blk false;
                 }
-                break :blk true;
+                if (erased_fn.call.args.len != right_erased_fn.call.args.len) break :blk false;
+                for (erased_fn.call.args, right_erased_fn.call.args) |left_arg, right_arg| {
+                    if (!try self.equalIdsVisited(left_arg, right_arg, visited)) break :blk false;
+                }
+                break :blk try self.equalIdsVisited(erased_fn.call.ret, right_erased_fn.call.ret, visited);
             },
             .tuple => |tuple| blk: {
                 const right_elems = right_content.tuple;
@@ -670,7 +748,8 @@ pub const Store = struct {
                 break :blk true;
             },
             .tag_union => |tag_union| blk: {
-                const right_tags = right_content.tag_union.tags;
+                const right_tag_union = right_content.tag_union;
+                const right_tags = right_tag_union.tags;
                 if (tag_union.tags.len != right_tags.len) break :blk false;
                 for (tag_union.tags, right_tags) |left_tag, right_tag| {
                     if (!tagNameEqual(left_tag.name, right_tag.name)) break :blk false;
@@ -678,6 +757,15 @@ pub const Store = struct {
                     for (left_tag.args, right_tag.args) |left_arg, right_arg| {
                         if (!try self.equalIdsVisited(left_arg, right_arg, visited)) break :blk false;
                     }
+                }
+                if ((tag_union.call == null) != (right_tag_union.call == null)) break :blk false;
+                if (tag_union.call) |left_call| {
+                    const right_call = right_tag_union.call.?;
+                    if (left_call.args.len != right_call.args.len) break :blk false;
+                    for (left_call.args, right_call.args) |left_arg, right_arg| {
+                        if (!try self.equalIdsVisited(left_arg, right_arg, visited)) break :blk false;
+                    }
+                    if (!try self.equalIdsVisited(left_call.ret, right_call.ret, visited)) break :blk false;
                 }
                 break :blk true;
             },
@@ -705,10 +793,15 @@ pub const Store = struct {
             },
             .list => |elem| try self.containsAbstractLeafVisited(elem, visited),
             .box => |elem| try self.containsAbstractLeafVisited(elem, visited),
-            .erased_fn => |maybe_capture| if (maybe_capture) |capture|
-                try self.containsAbstractLeafVisited(capture, visited)
-            else
-                false,
+            .erased_fn => |erased_fn| blk: {
+                if (erased_fn.capture) |capture| {
+                    if (try self.containsAbstractLeafVisited(capture, visited)) break :blk true;
+                }
+                for (erased_fn.call.args) |arg| {
+                    if (try self.containsAbstractLeafVisited(arg, visited)) break :blk true;
+                }
+                break :blk try self.containsAbstractLeafVisited(erased_fn.call.ret, visited);
+            },
             .tuple => |tuple| blk: {
                 for (tuple) |elem| {
                     if (try self.containsAbstractLeafVisited(elem, visited)) break :blk true;
@@ -726,6 +819,12 @@ pub const Store = struct {
                     for (tag.args) |arg| {
                         if (try self.containsAbstractLeafVisited(arg, visited)) break :blk true;
                     }
+                }
+                if (tag_union.call) |call| {
+                    for (call.args) |arg| {
+                        if (try self.containsAbstractLeafVisited(arg, visited)) break :blk true;
+                    }
+                    if (try self.containsAbstractLeafVisited(call.ret, visited)) break :blk true;
                 }
                 break :blk false;
             },

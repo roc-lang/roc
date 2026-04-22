@@ -1049,7 +1049,6 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
                 .store = serialized_ptr.store.deserializeInto(base_ptr, gpa),
                 .evaluation_order = null,
                 .idents = ModuleEnv.CommonIdents.find(&common),
-                .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
                 .import_mapping = types.import_mapping.ImportMapping.init(gpa),
                 .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
                 .rigid_vars = std.AutoHashMapUnmanaged(base.Ident.Idx, types.Var){},
@@ -1153,7 +1152,8 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
         const imported_envs: []const *ModuleEnv = &.{};
 
         // Resolve imports - map each import to its index in imported_envs
-        type_can_ir.imports.resolveImports(type_can_ir, imported_envs);
+        type_can_ir.imports.clearResolvedModules();
+        type_can_ir.imports.resolveImportsByExactModuleName(type_can_ir, imported_envs);
 
         // Use pointer to the stored CIR to ensure solver references valid memory
         var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, null, &type_can_ir.store.regions, module_builtin_ctx);

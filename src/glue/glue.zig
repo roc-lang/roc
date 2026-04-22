@@ -225,12 +225,13 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
 
     for (modules) |mod| {
         if (mod.is_platform_sibling or mod.is_platform_main) {
-            var module_fns = HostedCompiler.collectAndSortHostedFunctions(mod.env) catch continue;
+            const env = mod.semantic.env;
+            var module_fns = HostedCompiler.collectAndSortHostedFunctions(env) catch continue;
             defer {
                 for (module_fns.items) |fn_info| {
-                    mod.env.gpa.free(fn_info.name_text);
+                    env.gpa.free(fn_info.name_text);
                 }
-                module_fns.deinit(mod.env.gpa);
+                module_fns.deinit(env.gpa);
             }
 
             for (module_fns.items) |fn_info| {
@@ -295,7 +296,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     for (modules) |mod| {
         if (mod.is_platform_main) {
             type_table.clearVarMap();
-            const env = mod.env;
+            const env = mod.semantic.env;
 
             // Extract provides entries from CIR
             const provides_items = env.provides_entries.items;
@@ -1977,7 +1978,7 @@ fn collectModuleTypeInfo(
     all_hosted_fns: *const std.ArrayList(can.HostedCompiler.HostedFunctionInfo),
     type_table: *TypeTable,
 ) ?CollectedModuleTypeInfo {
-    const env = compiled_module.env;
+    const env = compiled_module.semantic.env;
 
     // Find main type
     var main_type_str: []const u8 = "";

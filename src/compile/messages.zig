@@ -10,6 +10,7 @@ const std = @import("std");
 const can = @import("can");
 const parse = @import("parse");
 const reporting = @import("reporting");
+const eval = @import("eval");
 const cache_module = @import("cache_module.zig");
 const cache_manager = @import("cache_manager.zig");
 
@@ -35,6 +36,13 @@ pub const DiscoveredLocalImport = struct {
 pub const DiscoveredExternalImport = struct {
     /// The qualified import name (e.g., "pf.Stdout")
     import_name: []const u8,
+};
+
+pub const CanonicalizeImport = struct {
+    /// The direct import name for canonicalization lookup
+    import_name: []const u8,
+    /// The fully-ready semantic env for this import
+    module_env: *const ModuleEnv,
 };
 
 /// Information about detected import cycles
@@ -77,8 +85,8 @@ pub const CanonicalizeTask = struct {
     module_env: *ModuleEnv,
     /// Cached AST from parsing (ownership transferred)
     cached_ast: *AST,
-    /// Root directory for resolving local imports
-    root_dir: []const u8,
+    /// Real imported semantic envs available to canonicalization
+    imported_modules: []const CanonicalizeImport,
 };
 
 /// Task to type-check a canonicalized module
@@ -145,6 +153,10 @@ pub const ParsedResult = struct {
     module_env: *ModuleEnv,
     /// Cached AST for reuse in canonicalization (ownership returned)
     cached_ast: *AST,
+    /// Discovered local imports (within the same package)
+    discovered_local_imports: std.ArrayList(DiscoveredLocalImport),
+    /// Discovered external imports (cross-package qualified imports)
+    discovered_external_imports: std.ArrayList(DiscoveredExternalImport),
     /// Any reports generated during parsing
     reports: std.ArrayList(Report),
     /// Timing: nanoseconds spent parsing
@@ -176,6 +188,16 @@ pub const CanonicalizedResult = struct {
 };
 
 /// Result of successfully type-checking a module
+pub const OwnedSemanticModuleData = struct {
+    module_env: *ModuleEnv,
+    comptime_values: ?eval.comptime_value.Store = null,
+
+    pub fn deinit(self: *OwnedSemanticModuleData) void {
+        if (self.comptime_values) |*values| values.deinit();
+    }
+};
+
+/// Result of successfully type-checking a module
 pub const TypeCheckedResult = struct {
     /// Package this module belongs to
     package_name: []const u8,
@@ -185,8 +207,8 @@ pub const TypeCheckedResult = struct {
     module_name: []const u8,
     /// Path to the module file
     path: []const u8,
-    /// The type-checked module environment (ownership returned)
-    module_env: *ModuleEnv,
+    /// The type-checked semantic module data (ownership returned)
+    semantic: OwnedSemanticModuleData,
     /// Any reports generated during type checking
     reports: std.ArrayList(Report),
     /// Timing: nanoseconds spent type checking
@@ -239,8 +261,8 @@ pub const CacheHitResult = struct {
     module_name: []const u8,
     /// Path to the module file
     path: []const u8,
-    /// The cached module environment (ownership returned)
-    module_env: *ModuleEnv,
+    /// The cached semantic module data (ownership returned)
+    semantic: OwnedSemanticModuleData,
     /// Source code (kept for ModuleEnv)
     source: []const u8,
     /// Error count from cache
@@ -305,6 +327,15 @@ pub const WorkerResult = union(enum) {
     pub fn deinit(self: *WorkerResult, gpa: Allocator) void {
         switch (self.*) {
             .parsed => |*r| {
+                for (r.discovered_local_imports.items) |imp| {
+                    gpa.free(imp.module_name);
+                    gpa.free(imp.path);
+                }
+                r.discovered_local_imports.deinit(gpa);
+                for (r.discovered_external_imports.items) |imp| {
+                    gpa.free(imp.import_name);
+                }
+                r.discovered_external_imports.deinit(gpa);
                 for (r.reports.items) |*rep| rep.deinit();
                 r.reports.deinit(gpa);
             },
@@ -322,6 +353,7 @@ pub const WorkerResult = union(enum) {
                 r.reports.deinit(gpa);
             },
             .type_checked => |*r| {
+                r.semantic.deinit();
                 for (r.reports.items) |*rep| rep.deinit();
                 r.reports.deinit(gpa);
             },
@@ -334,7 +366,8 @@ pub const WorkerResult = union(enum) {
                 for (r.reports.items) |*rep| rep.deinit();
                 r.reports.deinit(gpa);
             },
-            .cache_hit => |_| {
+            .cache_hit => |*r| {
+                r.semantic.deinit();
                 // Module env ownership is transferred to ModuleState, nothing to free here
             },
         }
@@ -382,6 +415,8 @@ test "WorkerResult accessors" {
             .path = "/path/to/Foo.roc",
             .module_env = undefined,
             .cached_ast = undefined,
+            .discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty,
+            .discovered_external_imports = std.ArrayList(DiscoveredExternalImport).empty,
             .reports = reports,
             .parse_ns = 1000,
         },

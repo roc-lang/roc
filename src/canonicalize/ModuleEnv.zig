@@ -451,10 +451,6 @@ evaluation_order: ?*DependencyGraph.EvaluationOrder,
 /// Interned once during init to avoid repeated string comparisons.
 idents: CommonIdents,
 
-/// Deferred numeric literals collected during type checking
-/// These will be validated during comptime evaluation
-deferred_numeric_literals: DeferredNumericLiteral.SafeList,
-
 /// Import mapping for type display names in error messages.
 /// Maps fully-qualified type identifiers to their shortest display names based on imports.
 /// Built during canonicalization when processing import statements.
@@ -470,16 +466,6 @@ method_idents: MethodIdents,
 /// Set to true for app modules that have platform imports, so that numeric literals can be
 /// constrained by platform types (e.g., I64) before defaulting to Dec.
 defer_numeric_defaults: bool = false,
-
-/// Deferred numeric literal for compile-time validation
-pub const DeferredNumericLiteral = struct {
-    expr_idx: CIR.Expr.Idx,
-    type_var: TypeVar,
-    constraint: types_mod.StaticDispatchConstraint,
-    region: Region,
-
-    pub const SafeList = collections.SafeList(@This());
-};
 
 /// A type alias mapping from a for-clause: [Model : model]
 /// Maps an alias name (Model) to a rigid variable name (model)
@@ -535,7 +521,6 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.provides_entries.relocate(offset);
     self.imports.relocate(offset);
     self.store.relocate(offset);
-    self.deferred_numeric_literals.relocate(offset);
     self.method_idents.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
@@ -601,97 +586,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .store = try NodeStore.initCapacity(gpa, node_capacity),
         .evaluation_order = null, // Will be set after canonicalization completes
         .idents = idents,
-        .deferred_numeric_literals = try DeferredNumericLiteral.SafeList.initCapacity(gpa, 32),
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
         .method_idents = MethodIdents.init(),
-    };
-}
-
-/// Public function `cloneForEval`.
-pub fn cloneForEval(self: *const Self, gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
-    var common = try self.common.clone(gpa);
-    errdefer common.deinit(gpa);
-
-    var types = try self.types.clone(gpa);
-    errdefer types.deinit();
-
-    var requires_types = try self.requires_types.clone(gpa);
-    errdefer requires_types.deinit(gpa);
-
-    var for_clause_aliases = try self.for_clause_aliases.clone(gpa);
-    errdefer for_clause_aliases.deinit(gpa);
-
-    var provides_entries = try self.provides_entries.clone(gpa);
-    errdefer provides_entries.deinit(gpa);
-
-    var external_decls = try self.external_decls.clone(gpa);
-    errdefer external_decls.deinit(gpa);
-
-    var imports = try self.imports.clone(gpa);
-    errdefer imports.deinit(gpa);
-
-    var store = try self.store.clone(gpa);
-    errdefer store.deinit();
-
-    var deferred_numeric_literals = try self.deferred_numeric_literals.clone(gpa);
-    errdefer deferred_numeric_literals.deinit(gpa);
-
-    var import_mapping = types_mod.import_mapping.ImportMapping.init(gpa);
-    errdefer import_mapping.deinit();
-    {
-        var it = self.import_mapping.iterator();
-        while (it.next()) |entry| {
-            try import_mapping.put(entry.key_ptr.*, entry.value_ptr.*);
-        }
-    }
-
-    var method_idents = try self.method_idents.clone(gpa);
-    errdefer method_idents.deinit(gpa);
-
-    var rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){};
-    errdefer rigid_vars.deinit(gpa);
-    {
-        var it = self.rigid_vars.iterator();
-        while (it.next()) |entry| {
-            try rigid_vars.put(gpa, entry.key_ptr.*, entry.value_ptr.*);
-        }
-    }
-
-    var evaluation_order: ?*DependencyGraph.EvaluationOrder = null;
-    if (self.evaluation_order) |order| {
-        const cloned_order = try gpa.create(DependencyGraph.EvaluationOrder);
-        cloned_order.* = try order.clone(gpa);
-        errdefer cloned_order.deinit();
-        errdefer gpa.destroy(cloned_order);
-        evaluation_order = cloned_order;
-    }
-
-    return Self{
-        .gpa = gpa,
-        .common = common,
-        .types = types,
-        .module_kind = self.module_kind,
-        .all_defs = self.all_defs,
-        .all_statements = self.all_statements,
-        .exports = self.exports,
-        .requires_types = requires_types,
-        .for_clause_aliases = for_clause_aliases,
-        .provides_entries = provides_entries,
-        .rigid_vars = rigid_vars,
-        .builtin_statements = self.builtin_statements,
-        .external_decls = external_decls,
-        .imports = imports,
-        .module_name = self.module_name,
-        .display_module_name_idx = self.display_module_name_idx,
-        .qualified_module_ident = self.qualified_module_ident,
-        .diagnostics = self.diagnostics,
-        .store = store,
-        .evaluation_order = evaluation_order,
-        .idents = CommonIdents.find(&common),
-        .deferred_numeric_literals = deferred_numeric_literals,
-        .import_mapping = import_mapping,
-        .method_idents = method_idents,
-        .defer_numeric_defaults = self.defer_numeric_defaults,
     };
 }
 
@@ -705,7 +601,6 @@ pub fn deinit(self: *Self) void {
     self.provides_entries.deinit(self.gpa);
     self.rigid_vars.deinit(self.gpa);
     self.imports.deinit(self.gpa);
-    self.deferred_numeric_literals.deinit(self.gpa);
     self.import_mapping.deinit();
     self.method_idents.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
@@ -2593,7 +2488,6 @@ pub const Serialized = extern struct {
     evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
     // Well-known identifier indices (serialized directly, no lookup needed during deserialization)
     idents: CommonIdents,
-    deferred_numeric_literals: DeferredNumericLiteral.SafeList.Serialized,
     import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
     method_idents: MethodIdents.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
@@ -2627,9 +2521,6 @@ pub const Serialized = extern struct {
 
         // Serialize NodeStore
         try self.store.serialize(&env.store, allocator, writer);
-
-        // Serialize deferred numeric literals (will be empty during serialization since it's only used during type checking/evaluation)
-        try self.deferred_numeric_literals.serialize(&env.deferred_numeric_literals, allocator, writer);
 
         // Set gpa, module_name, evaluation_order_reserved to zeros;
         // these are runtime-only and will be set during deserialization.
@@ -2688,7 +2579,6 @@ pub const Serialized = extern struct {
             .store = self.store.deserializeInto(base_addr, gpa),
             .evaluation_order = null, // Not serialized, will be recomputed if needed
             .idents = self.idents,
-            .deferred_numeric_literals = self.deferred_numeric_literals.deserializeInto(base_addr),
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
             .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
@@ -2735,7 +2625,6 @@ pub const Serialized = extern struct {
             .store = try self.store.deserializeWithCopy(base_addr, gpa),
             .evaluation_order = null,
             .idents = self.idents,
-            .deferred_numeric_literals = self.deferred_numeric_literals.deserializeInto(base_addr),
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
             .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},

@@ -75,6 +75,7 @@ const TypeCheckedResult = messages.TypeCheckedResult;
 const DiscoveredLocalImport = messages.DiscoveredLocalImport;
 const DiscoveredExternalImport = messages.DiscoveredExternalImport;
 const CacheHitResult = messages.CacheHitResult;
+const OwnedSemanticModuleData = messages.OwnedSemanticModuleData;
 
 const Channel = channel.Channel;
 const Io = @import("io").Io;
@@ -147,8 +148,9 @@ pub const ModuleState = struct {
     name: []const u8,
     /// Filesystem path to the .roc file
     path: []const u8,
-    /// Module environment (owned, null until parsed)
-    env: ?*ModuleEnv,
+    /// Owned semantic module payload. Earlier phases populate only `module_env`;
+    /// type checking later fills in `comptime_values`.
+    semantic: ?OwnedSemanticModuleData = null,
     /// Cached AST from parsing (owned, null after canonicalization)
     cached_ast: ?*AST,
     /// Current compilation phase
@@ -185,7 +187,6 @@ pub const ModuleState = struct {
         return .{
             .name = name,
             .path = path,
-            .env = null,
             .cached_ast = null,
             .phase = .Parse,
             .imports = std.ArrayList(ModuleId).empty,
@@ -199,11 +200,53 @@ pub const ModuleState = struct {
         };
     }
 
+    fn moduleEnv(self: *ModuleState) ?*ModuleEnv {
+        return if (self.semantic) |*semantic| semantic.module_env else null;
+    }
+
+    fn comptimeValues(self: *ModuleState) ?*eval.comptime_value.Store {
+        if (self.semantic) |*semantic| {
+            if (semantic.comptime_values) |*values| return values;
+        }
+        return null;
+    }
+
+    fn semanticData(self: *ModuleState) ?compile_package.SemanticModuleData {
+        const env = self.moduleEnv() orelse return null;
+        return .{
+            .env = env,
+            .comptime_values = self.comptimeValues(),
+        };
+    }
+
+    fn replaceModuleEnv(self: *ModuleState, env: *ModuleEnv) void {
+        if (self.semantic) |*semantic| {
+            semantic.module_env = env;
+        } else {
+            self.semantic = .{
+                .module_env = env,
+                .comptime_values = null,
+            };
+        }
+    }
+
+    fn replaceComptimeValues(self: *ModuleState, values: eval.comptime_value.Store) void {
+        if (self.semantic) |*semantic| {
+            if (semantic.comptime_values) |*existing| existing.deinit();
+            semantic.comptime_values = values;
+            return;
+        }
+        std.debug.panic("compile.coordinator.ModuleState.replaceComptimeValues missing module env for {s}", .{self.name});
+    }
+
     pub fn deinit(self: *ModuleState, gpa: Allocator, owns_module_data: bool) void {
+        if (self.semantic) |*semantic| {
+            if (semantic.comptime_values) |*values| values.deinit();
+        }
         if (comptime trace_build) {
-            std.debug.print("[MOD DEINIT] {s}: starting, env={}, ast={}, owns={}\n", .{
+            std.debug.print("[MOD DEINIT] {s}: starting, semantic={}, ast={}, owns={}\n", .{
                 self.name,
-                if (self.env != null) @as(u8, 1) else @as(u8, 0),
+                if (self.semantic != null) @as(u8, 1) else @as(u8, 0),
                 if (self.cached_ast != null) @as(u8, 1) else @as(u8, 0),
                 if (owns_module_data) @as(u8, 1) else @as(u8, 0),
             });
@@ -218,7 +261,7 @@ pub const ModuleState = struct {
 
         // Free module env if present (only if we own module data)
         if (owns_module_data) {
-            if (self.env) |env| {
+            if (self.moduleEnv()) |env| {
                 // IMPORTANT: env stores its own allocator (env.gpa) which was used to create it.
                 // We must use env.gpa for cleanup, not the passed-in gpa, because in multi-threaded
                 // mode, env.gpa is page_allocator while gpa is the coordinator's allocator.
@@ -359,12 +402,11 @@ pub const PackageState = struct {
         return self.module_names.get(name);
     }
 
-    /// Get module env if done
-    pub fn getEnvIfDone(self: *PackageState, name: []const u8) ?*ModuleEnv {
+    pub fn getSemanticDataIfDone(self: *PackageState, name: []const u8) ?compile_package.SemanticModuleData {
         const id = self.module_names.get(name) orelse return null;
         const mod = &self.modules.items[id];
         if (mod.phase != .Done) return null;
-        return mod.env;
+        return mod.semanticData();
     }
 
     /// Check if a module is done (regardless of whether it has an env).
@@ -374,6 +416,50 @@ pub const PackageState = struct {
         const id = self.module_names.get(name) orelse return false;
         const mod = &self.modules.items[id];
         return mod.phase == .Done;
+    }
+
+    pub fn findPath(self: *PackageState, gpa: Allocator, start: ModuleId, target: ModuleId) !?[]const ModuleId {
+        var visited = std.bit_set.DynamicBitSetUnmanaged{};
+        defer visited.deinit(gpa);
+        try visited.resize(gpa, self.modules.items.len, false);
+
+        const Frame = struct { id: ModuleId, next_idx: usize };
+        var frames = std.ArrayList(Frame).empty;
+        defer frames.deinit(gpa);
+
+        var stack_ids = std.ArrayList(ModuleId).empty;
+        defer stack_ids.deinit(gpa);
+
+        visited.set(start);
+        try frames.append(gpa, .{ .id = start, .next_idx = 0 });
+        try stack_ids.append(gpa, start);
+
+        while (frames.items.len > 0) {
+            var top = &frames.items[frames.items.len - 1];
+            if (top.id == target) {
+                const out = try gpa.alloc(ModuleId, stack_ids.items.len);
+                std.mem.copyForwards(ModuleId, out, stack_ids.items);
+                return out;
+            }
+
+            const st = &self.modules.items[top.id];
+            if (top.next_idx >= st.imports.items.len) {
+                visited.unset(top.id);
+                _ = stack_ids.pop();
+                _ = frames.pop();
+                continue;
+            }
+
+            const child = st.imports.items[top.next_idx];
+            top.next_idx += 1;
+
+            if (!visited.isSet(child)) {
+                visited.set(child);
+                try frames.append(gpa, .{ .id = child, .next_idx = 0 });
+                try stack_ids.append(gpa, child);
+            }
+        }
+        return null;
     }
 };
 
@@ -910,7 +996,7 @@ pub const Coordinator = struct {
         }
 
         // Take ownership of module env and AST
-        mod.env = result.module_env;
+        mod.replaceModuleEnv(result.module_env);
         mod.cached_ast = result.cached_ast;
 
         // Append reports - we take ownership, so clear result.reports after copying
@@ -928,32 +1014,68 @@ pub const Coordinator = struct {
         self.total_parse_ns += result.parse_ns;
         mod.compile_time_ns += result.parse_ns;
 
-        // Transition to Canonicalize phase
-        mod.phase = .Canonicalize;
+        for (result.discovered_local_imports.items) |imp| {
+            const child_id = try pkg.ensureModule(self.gpa, imp.module_name, imp.path);
+            const current_mod = pkg.getModule(result.module_id) orelse {
+                self.bugReport("BUG: module id={} not found in package '{s}' after ensureModule in parsed handler (module={s})\n", .{
+                    result.module_id, result.package_name, result.module_name,
+                });
+                unreachable;
+            };
+            try current_mod.imports.append(self.gpa, child_id);
 
-        // Enqueue canonicalization task
-        try self.enqueueTask(.{
-            .canonicalize = .{
-                .package_name = result.package_name,
-                .module_id = result.module_id,
-                .module_name = mod.name,
-                .path = mod.path,
-                .depth = mod.depth,
-                .module_env = mod.env.?,
-                .cached_ast = mod.cached_ast.?,
-                .root_dir = pkg.root_dir,
-            },
-        });
+            const child = pkg.getModule(child_id).?;
+            try child.dependents.append(self.gpa, result.module_id);
+            const new_depth = current_mod.depth +| 1;
+            if (new_depth < child.depth) {
+                child.depth = new_depth;
+            }
+
+            if (child_id == result.module_id or (try pkg.findPath(self.gpa, child_id, result.module_id)) != null) {
+                try self.handleCycleInline(pkg, result.module_id, child_id);
+                return;
+            }
+
+            if (child.phase == .Parse) {
+                pkg.remaining_modules += 1;
+                self.total_remaining += 1;
+                try self.enqueueParseTask(result.package_name, child_id);
+            }
+        }
+
+        const mod_after_imports = pkg.getModule(result.module_id) orelse {
+            self.bugReport("BUG: module id={} not found in package '{s}' after local parse imports (module={s})\n", .{
+                result.module_id, result.package_name, result.module_name,
+            });
+            unreachable;
+        };
+
+        for (result.discovered_external_imports.items) |ext_imp| {
+            try mod_after_imports.external_imports.append(self.gpa, try self.gpa.dupe(u8, ext_imp.import_name));
+            try self.scheduleExternalImport(result.package_name, ext_imp.import_name);
+
+            const qualified = base.module_path.parseQualifiedImport(ext_imp.import_name) orelse continue;
+            const target_pkg_name = pkg.shorthands.get(qualified.qualifier) orelse continue;
+            const target_pkg = self.packages.get(target_pkg_name) orelse continue;
+            const target_module_id = target_pkg.module_names.get(qualified.module) orelse continue;
+            try self.registerCrossPackageDependent(
+                target_pkg_name,
+                target_module_id,
+                result.package_name,
+                result.module_id,
+            );
+        }
+
+        mod_after_imports.phase = .WaitingOnImports;
+        try self.tryUnblock(pkg, result.module_id);
     }
 
     /// Handle a successful canonicalization result
     fn handleCanonicalized(self: *Coordinator, result: *CanonicalizedResult) !void {
         if (comptime trace_build) {
-            std.debug.print("[COORD] CANONICALIZED: pkg={s} module={s} local_imports={} ext_imports={} result_reports={}\n", .{
+            std.debug.print("[COORD] CANONICALIZED: pkg={s} module={s} result_reports={}\n", .{
                 result.package_name,
                 result.module_name,
-                result.discovered_local_imports.items.len,
-                result.discovered_external_imports.items.len,
                 result.reports.items.len,
             });
         }
@@ -975,14 +1097,14 @@ pub const Coordinator = struct {
         }
 
         // Take ownership of module env
-        mod.env = result.module_env;
+        mod.replaceModuleEnv(result.module_env);
         mod.cached_ast = null; // AST was consumed during canonicalization
 
         // Run hosted compiler transformation if enabled (for IPC mode)
         // This converts e_anno_only expressions to e_hosted_lambda in platform modules
         // Must be done AFTER canonicalization but BEFORE type checking
         if (self.enable_hosted_transform) {
-            if (mod.env) |env| {
+            if (mod.moduleEnv()) |env| {
                 // Only run for platform modules (packages other than "app")
                 // The app package doesn't need hosted lambdas
                 if (!std.mem.eql(u8, result.package_name, "app")) {
@@ -1026,95 +1148,18 @@ pub const Coordinator = struct {
         self.total_canonicalize_ns += result.canonicalize_ns;
         self.total_canonicalize_diag_ns += result.canonicalize_diagnostics_ns;
         mod.compile_time_ns += result.canonicalize_ns + result.canonicalize_diagnostics_ns;
-
-        // Mark as gray (visiting) for cycle detection
-        mod.visit_color = .gray;
-
-        // Process discovered local imports
-        // NOTE: We must refresh the mod pointer after each ensureModule call because
-        // ensureModule can resize the modules array, invalidating pointers.
-        for (result.discovered_local_imports.items) |imp| {
-            const child_id = try pkg.ensureModule(self.gpa, imp.module_name, imp.path);
-            // Refresh mod pointer after potential resize
-            const current_mod = pkg.getModule(result.module_id) orelse {
-                self.bugReport("BUG: module id={} not found in package '{s}' after ensureModule in canonicalized handler (module={s})\n", .{
-                    result.module_id, result.package_name, result.module_name,
-                });
-                unreachable;
-            };
-            try current_mod.imports.append(self.gpa, child_id);
-
-            const child = pkg.getModule(child_id).?;
-            try child.dependents.append(self.gpa, result.module_id);
-
-            // Set depth - use saturating addition to prevent overflow when depth is
-            // maxInt (uninitialized, e.g. for modules created via external imports)
-            const new_depth = current_mod.depth +| 1;
-            if (new_depth < child.depth) {
-                child.depth = new_depth;
-            }
-
-            // Cycle detection
-            if (child.visit_color == .gray or child_id == result.module_id) {
-                // Cycle detected - handle it
-                try self.handleCycleInline(pkg, result.module_id, child_id);
-                return;
-            }
-
-            // Queue parse for new modules
-            if (child.phase == .Parse) {
-                pkg.remaining_modules += 1;
-                self.total_remaining += 1;
-                try self.enqueueParseTask(result.package_name, child_id);
-            }
-        }
-
-        // Refresh mod pointer after potential resizes from local imports
-        const mod_after_imports = pkg.getModule(result.module_id) orelse {
-            self.bugReport("BUG: module id={} not found in package '{s}' after local imports in canonicalized handler (module={s})\n", .{
-                result.module_id, result.package_name, result.module_name,
-            });
-            unreachable;
-        };
-
-        // Process discovered external imports
-        for (result.discovered_external_imports.items) |ext_imp| {
-            // Parse the qualified import name (e.g., "pf.Stdout" -> { .qualifier = "pf", .module = "Stdout" })
-            const qualified = base.module_path.parseQualifiedImport(ext_imp.import_name) orelse continue;
-
-            // Only add to external_imports if the shorthand resolves to a valid package.
-            // If the shorthand doesn't exist, the import is invalid and should not block
-            // this module - the error will be caught during type-checking when the
-            // pending lookup for this import cannot be resolved.
-            const target_pkg_name = pkg.shorthands.get(qualified.qualifier) orelse continue;
-            const target_pkg = self.packages.get(target_pkg_name) orelse continue;
-
-            // Valid shorthand - add to external imports and schedule
-            try mod_after_imports.external_imports.append(self.gpa, try self.gpa.dupe(u8, ext_imp.import_name));
-            try self.scheduleExternalImport(result.package_name, ext_imp.import_name);
-
-            // Register this module as a cross-package dependent of the target
-            const target_module_id = target_pkg.module_names.get(qualified.module) orelse continue;
-
-            try self.registerCrossPackageDependent(
-                target_pkg_name,
-                target_module_id,
-                result.package_name,
-                result.module_id,
-            );
-        }
-
-        // Mark as black (done visiting) to avoid false cycle detection
-        // This is necessary because multiple modules can be processed in sequence,
-        // and we don't want a module that finished canonicalization to look like
-        // it's "currently being visited" when another module imports it.
-        mod_after_imports.visit_color = .black;
-
-        // Transition to WaitingOnImports
-        mod_after_imports.phase = .WaitingOnImports;
-
-        // Try to unblock immediately
-        try self.tryUnblock(pkg, result.module_id);
+        mod.phase = .TypeCheck;
+        mod.visit_color = .black;
+        try self.enqueueTask(.{
+            .type_check = .{
+                .package_name = pkg.name,
+                .module_id = result.module_id,
+                .module_name = mod.name,
+                .path = mod.path,
+                .module_env = mod.moduleEnv().?,
+                .imported_envs = try self.buildTypecheckImportedEnvs(pkg, mod),
+            },
+        });
     }
 
     /// Handle a successful type-check result
@@ -1139,8 +1184,15 @@ pub const Coordinator = struct {
             std.debug.print("[COORD] TYPE_CHECKED: mod.reports BEFORE append: len={} cap={}\n", .{ mod.reports.items.len, mod.reports.capacity });
         }
 
-        // Take ownership of module env
-        mod.env = result.module_env;
+        // Take ownership of semantic module data
+        mod.replaceModuleEnv(result.semantic.module_env);
+        if (result.semantic.comptime_values) |values| {
+            mod.replaceComptimeValues(values);
+        } else if (mod.semantic) |*semantic| {
+            if (semantic.comptime_values) |*existing| existing.deinit();
+            semantic.comptime_values = null;
+        }
+        result.semantic.comptime_values = null;
 
         // Append reports - we take ownership, so clear result.reports after copying
         for (result.reports.items) |rep| {
@@ -1175,7 +1227,7 @@ pub const Coordinator = struct {
 
         // Store to cache
         if (self.cache_manager) |cache| {
-            if (mod.env) |env| {
+            if (mod.moduleEnv()) |env| {
                 // Compute source hash for metadata
                 const source_hash = CacheManager.computeSourceHash(env.common.source);
 
@@ -1265,11 +1317,22 @@ pub const Coordinator = struct {
                     }
                 }
 
-                // Store metadata for fast path lookup
-                cache.storeMetadata(source_hash, full_cache_key, imports.items, error_count, warning_count) catch {};
-
-                // Store full cache
-                cache.store(full_cache_key, env, error_count, warning_count) catch {};
+                const has_comptime_bindings = if (mod.comptimeValues()) |values| !values.isEmpty() else false;
+                const comptime_values = if (mod.comptimeValues()) |values|
+                    @as(?*const eval.comptime_value.Store, values)
+                else
+                    null;
+                if (cache.store(full_cache_key, env, comptime_values, error_count, warning_count)) |_| {
+                    // Store metadata for fast path lookup only after the full semantic cache is written.
+                    cache.storeMetadata(
+                        source_hash,
+                        full_cache_key,
+                        has_comptime_bindings,
+                        imports.items,
+                        error_count,
+                        warning_count,
+                    ) catch {};
+                } else |_| {}
 
                 // imports are freed by the defer block above
             }
@@ -1308,7 +1371,7 @@ pub const Coordinator = struct {
 
         // Store partial env if available
         if (result.partial_env) |env| {
-            mod.env = env;
+            mod.replaceModuleEnv(env);
         }
 
         // Append reports - we take ownership, so clear result.reports after copying
@@ -1350,7 +1413,7 @@ pub const Coordinator = struct {
         };
 
         // Take ownership of module env
-        mod.env = result.module_env;
+        mod.replaceModuleEnv(result.module_env);
 
         // Append reports - we take ownership, so clear result.reports after copying
         for (result.reports.items) |rep| {
@@ -1394,8 +1457,15 @@ pub const Coordinator = struct {
         // It will be freed when the coordinator is deinitialized
         try self.cache_buffers.append(self.gpa, result.cache_data);
 
-        // Set module from cache - mark as Done immediately since env is complete
-        mod.env = result.module_env;
+        // Set module from cache - mark as Done immediately since semantic data is complete
+        mod.replaceModuleEnv(result.semantic.module_env);
+        if (result.semantic.comptime_values) |values| {
+            mod.replaceComptimeValues(values);
+        } else if (mod.semantic) |*semantic| {
+            if (semantic.comptime_values) |*existing| existing.deinit();
+            semantic.comptime_values = null;
+        }
+        result.semantic.comptime_values = null;
         mod.was_cache_hit = true;
         mod.phase = .Done;
         mod.visit_color = .black;
@@ -1589,6 +1659,7 @@ pub const Coordinator = struct {
             meta.full_cache_key,
             source,
             mod.name,
+            meta.has_comptime_bindings,
         );
 
         if (cache_result != .hit) {
@@ -1614,12 +1685,18 @@ pub const Coordinator = struct {
         // 6. Apply cache hit - set module state
         // Note: The module_env stores a reference to source, so we do NOT free source here.
         // The source will be freed when the module is deinitialized.
-        mod.env = cache_result.hit.module_env;
+        mod.replaceModuleEnv(cache_result.hit.module_env);
+        if (cache_result.hit.comptime_values) |values| {
+            mod.replaceComptimeValues(values);
+        } else if (mod.semantic) |*semantic| {
+            if (semantic.comptime_values) |*existing| existing.deinit();
+            semantic.comptime_values = null;
+        }
 
         // Override qualified_module_ident for cache correctness.
         // The cache is keyed by file content, so the serialized value may be
         // from a different package alias (e.g., "pf.Color" vs "platform.Color").
-        if (mod.env) |env| {
+        if (mod.moduleEnv()) |env| {
             // Enable runtime inserts on the deserialized interner so we can add the qualified name.
             env.common.idents.interner.enableRuntimeInserts(self.gpa) catch {};
             var qualified_buf: [256]u8 = undefined;
@@ -1723,6 +1800,112 @@ pub const Coordinator = struct {
         }
     }
 
+    fn buildCanonicalizeImports(
+        self: *Coordinator,
+        pkg: *PackageState,
+        mod: *ModuleState,
+    ) ![]const CanonicalizeImport {
+        var imports = std.ArrayList(CanonicalizeImport).empty;
+        errdefer imports.deinit(self.gpa);
+
+        for (mod.imports.items) |imp_id| {
+            const imp = pkg.getModule(imp_id).?;
+            const env = imp.moduleEnv() orelse
+                std.debug.panic("compile.coordinator.buildCanonicalizeImports missing local env for {s}", .{imp.name});
+            try imports.append(self.gpa, .{
+                .import_name = imp.name,
+                .module_env = env,
+            });
+        }
+        for (mod.external_imports.items) |ext_name| {
+            const ext_env = self.getExternalEnv(pkg.name, ext_name) orelse
+                std.debug.panic("compile.coordinator.buildCanonicalizeImports missing external env for {s}", .{ext_name});
+            try imports.append(self.gpa, .{
+                .import_name = ext_name,
+                .module_env = ext_env,
+            });
+        }
+
+        return try imports.toOwnedSlice(self.gpa);
+    }
+
+    fn buildTypecheckImportedEnvs(
+        self: *Coordinator,
+        pkg: *PackageState,
+        mod: *ModuleState,
+    ) ![]const *ModuleEnv {
+        const expected_capacity = 1 + mod.imports.items.len + mod.external_imports.items.len;
+        var imported_envs = try std.ArrayList(*ModuleEnv).initCapacity(self.gpa, expected_capacity);
+        errdefer imported_envs.deinit(self.gpa);
+
+        try imported_envs.append(self.gpa, self.builtin_modules.builtin_module.env);
+        mod.moduleEnv().?.imports.clearResolvedModules();
+
+        const direct_imports = mod.moduleEnv().?.imports.imports.items.items;
+        for (direct_imports, 0..) |str_idx, i| {
+            const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
+            const import_name = mod.moduleEnv().?.getString(str_idx);
+
+            if (std.mem.eql(u8, import_name, "Builtin")) {
+                mod.moduleEnv().?.imports.setResolvedModule(import_idx, 0);
+                continue;
+            }
+
+            if (pkg.module_names.get(import_name)) |imp_id| {
+                const imp = pkg.getModule(imp_id).?;
+                if (imp.moduleEnv()) |env| {
+                    const resolved_module_idx: u32 = @intCast(imported_envs.items.len);
+                    try imported_envs.append(self.gpa, env);
+                    mod.moduleEnv().?.imports.setResolvedModule(import_idx, resolved_module_idx);
+                }
+                continue;
+            }
+
+            if (self.getExternalEnv(pkg.name, import_name)) |ext_env| {
+                const resolved_module_idx: u32 = @intCast(imported_envs.items.len);
+                try imported_envs.append(self.gpa, ext_env);
+                mod.moduleEnv().?.imports.setResolvedModule(import_idx, resolved_module_idx);
+            }
+        }
+
+        var seen_modules = std.StringHashMap(void).init(self.gpa);
+        defer seen_modules.deinit();
+
+        for (imported_envs.items) |env| {
+            try seen_modules.put(env.module_name, {});
+        }
+
+        for (mod.external_imports.items) |ext_name| {
+            const ext_env = self.getExternalEnv(pkg.name, ext_name) orelse continue;
+            if (!seen_modules.contains(ext_env.module_name)) {
+                try imported_envs.append(self.gpa, ext_env);
+                try seen_modules.put(ext_env.module_name, {});
+            }
+
+            const qualified = base.module_path.parseQualifiedImport(ext_name) orelse continue;
+            const target_pkg_name = pkg.shorthands.get(qualified.qualifier) orelse continue;
+            const target_pkg = self.packages.get(target_pkg_name) orelse continue;
+
+            for (ext_env.imports.imports.items.items) |trans_str_idx| {
+                const trans_name = ext_env.getString(trans_str_idx);
+                if (seen_modules.contains(trans_name)) continue;
+                if (target_pkg.getSemanticDataIfDone(trans_name)) |semantic| {
+                    try imported_envs.append(self.gpa, semantic.env);
+                    try seen_modules.put(trans_name, {});
+                }
+            }
+        }
+
+        if (builtin.mode == .Debug) {
+            for (mod.imports.items) |imp_id| {
+                const imp = pkg.getModule(imp_id).?;
+                std.debug.assert(imp.phase == .Done);
+            }
+        }
+
+        return try imported_envs.toOwnedSlice(self.gpa);
+    }
+
     /// Try to unblock a module waiting on imports
     fn tryUnblock(self: *Coordinator, pkg: *PackageState, module_id: ModuleId) !void {
         const mod = pkg.getModule(module_id) orelse return;
@@ -1750,84 +1933,23 @@ pub const Coordinator = struct {
         }
 
         if (comptime trace_build) {
-            std.debug.print("[COORD] UNBLOCK: pkg={s} module={s} -> TypeCheck\n", .{ pkg.name, mod.name });
+            std.debug.print("[COORD] UNBLOCK: pkg={s} module={s} -> Canonicalize\n", .{ pkg.name, mod.name });
         }
 
-        // All imports ready - transition to TypeCheck
-        mod.phase = .TypeCheck;
+        mod.phase = .Canonicalize;
         mod.visit_color = .black;
-
-        // Build imported_envs array
-        // Pre-allocate with expected capacity: 1 (builtin) + local imports + external imports
-        const expected_capacity = 1 + mod.imports.items.len + mod.external_imports.items.len;
-        var imported_envs = try std.ArrayList(*ModuleEnv).initCapacity(self.gpa, expected_capacity);
-        defer imported_envs.deinit(self.gpa);
-
-        // Always include builtin first
-        try imported_envs.append(self.gpa, self.builtin_modules.builtin_module.env);
-
-        // Add local imports
-        for (mod.imports.items) |imp_id| {
-            const imp = pkg.getModule(imp_id).?;
-            if (imp.env) |env| {
-                try imported_envs.append(self.gpa, env);
-            }
-        }
-
-        // Use a StringHashMap for O(1) duplicate detection when adding transitive deps
-        var seen_modules = std.StringHashMap(void).init(self.gpa);
-        defer seen_modules.deinit();
-
-        // Mark already-added imports as seen (builtin + local imports)
-        for (imported_envs.items) |env| {
-            try seen_modules.put(env.module_name, {});
-        }
-
-        // Add external imports and their transitive dependencies in one pass.
-        // Transitive deps ensure we have access to module environments for types
-        // used in where clauses even when not directly imported by this module.
-        for (mod.external_imports.items) |ext_name| {
-            const ext_env = self.getExternalEnv(pkg.name, ext_name) orelse continue;
-            try imported_envs.append(self.gpa, ext_env);
-
-            // Parse "pf.Wrapper" -> { .qualifier = "pf", .module = "Wrapper" }
-            const qualified = base.module_path.parseQualifiedImport(ext_name) orelse continue;
-            const target_pkg_name = pkg.shorthands.get(qualified.qualifier) orelse continue;
-            const target_pkg = self.packages.get(target_pkg_name) orelse continue;
-
-            // Add transitive dependencies from this external module
-            for (ext_env.imports.imports.items.items) |trans_str_idx| {
-                const trans_name = ext_env.getString(trans_str_idx);
-
-                // Skip if already seen (O(1) lookup)
-                if (seen_modules.contains(trans_name)) continue;
-
-                // Resolve the transitive import from the same target package
-                if (target_pkg.getEnvIfDone(trans_name)) |trans_env| {
-                    try imported_envs.append(self.gpa, trans_env);
-                    try seen_modules.put(trans_name, {});
-                }
-            }
-        }
-
-        // DEBUG: Verify all imports are completed before type-checking.
-        // This ensures we're not passing pointers to still-being-modified modules.
-        if (builtin.mode == .Debug) {
-            for (mod.imports.items) |imp_id| {
-                const imp = pkg.getModule(imp_id).?;
-                std.debug.assert(imp.phase == .Done);
-            }
-        }
-
-        // Enqueue type-check task
+        const imported_modules = try self.buildCanonicalizeImports(pkg, mod);
         try self.enqueueTask(.{
-            .type_check = .{
+            .canonicalize = .{
                 .package_name = pkg.name,
                 .module_id = module_id,
                 .module_name = mod.name,
                 .path = mod.path,
-                .module_env = mod.env.?,
-                .imported_envs = try imported_envs.toOwnedSlice(self.gpa),
+                .module_env = mod.moduleEnv().?,
+                .cached_ast = mod.cached_ast orelse
+                    std.debug.panic("compile.coordinator.tryUnblock missing cached AST for {s}", .{mod.name}),
+                .depth = mod.depth,
+                .imported_modules = imported_modules,
             },
         });
     }
@@ -1963,7 +2085,10 @@ pub const Coordinator = struct {
         const target_pkg_name = source.shorthands.get(qualified.qualifier) orelse return null;
         const target_pkg = self.packages.get(target_pkg_name) orelse return null;
 
-        return target_pkg.getEnvIfDone(qualified.module);
+        return if (target_pkg.getSemanticDataIfDone(qualified.module)) |semantic|
+            semantic.env
+        else
+            null;
     }
 
     /// Get build statistics for this compilation
@@ -2113,6 +2238,8 @@ pub const Coordinator = struct {
                     .path = task.path,
                     .module_env = env,
                     .cached_ast = undefined, // Will be handled in error case
+                    .discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty,
+                    .discovered_external_imports = std.ArrayList(DiscoveredExternalImport).empty,
                     .reports = reports,
                     .parse_ns = if (threads_available) @intCast(end_time - start_time) else 0,
                 },
@@ -2132,6 +2259,50 @@ pub const Coordinator = struct {
             reports.append(worker_alloc, rep) catch {};
         }
 
+        var discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty;
+        errdefer {
+            for (discovered_local_imports.items) |imp| {
+                worker_alloc.free(imp.module_name);
+                worker_alloc.free(imp.path);
+            }
+            discovered_local_imports.deinit(worker_alloc);
+        }
+        const local_import_names = module_discovery.extractImportsFromAST(parse_ast, worker_alloc) catch &[_][]const u8{};
+        defer {
+            for (local_import_names) |name| worker_alloc.free(name);
+            worker_alloc.free(local_import_names);
+        }
+        const module_dir = std.fs.path.dirname(task.path) orelse "";
+        for (local_import_names) |module_name| {
+            const path = self.resolveModulePath(module_dir, module_name) catch continue;
+            discovered_local_imports.append(worker_alloc, .{
+                .module_name = worker_alloc.dupe(u8, module_name) catch {
+                    worker_alloc.free(path);
+                    continue;
+                },
+                .path = path,
+            }) catch |err| {
+                _ = err;
+                worker_alloc.free(path);
+            };
+        }
+
+        var discovered_external_imports = std.ArrayList(DiscoveredExternalImport).empty;
+        errdefer {
+            for (discovered_external_imports.items) |imp| worker_alloc.free(imp.import_name);
+            discovered_external_imports.deinit(worker_alloc);
+        }
+        const qualified_import_names = module_discovery.extractQualifiedImportsFromAST(parse_ast, worker_alloc) catch &[_][]const u8{};
+        defer {
+            for (qualified_import_names) |name| worker_alloc.free(name);
+            worker_alloc.free(qualified_import_names);
+        }
+        for (qualified_import_names) |import_name| {
+            discovered_external_imports.append(worker_alloc, .{
+                .import_name = worker_alloc.dupe(u8, import_name) catch continue,
+            }) catch {};
+        }
+
         const end_time = if (threads_available) std.time.nanoTimestamp() else 0;
 
         return .{
@@ -2142,6 +2313,8 @@ pub const Coordinator = struct {
                 .path = task.path,
                 .module_env = env,
                 .cached_ast = parse_ast,
+                .discovered_local_imports = discovered_local_imports,
+                .discovered_external_imports = discovered_external_imports,
                 .reports = reports,
                 .parse_ns = if (threads_available) @intCast(end_time - start_time) else 0,
             },
@@ -2154,44 +2327,20 @@ pub const Coordinator = struct {
 
         const env = task.module_env;
         const ast = task.cached_ast;
-
-        // Extract qualified imports from AST to set up placeholders for external modules
-        // Use worker allocator for temporary allocations during canonicalization (thread-safe)
         const canon_alloc = self.getWorkerAllocator();
-        const qualified_imports = module_discovery.extractQualifiedImportsFromAST(ast, canon_alloc) catch &[_][]const u8{};
-        defer {
-            for (qualified_imports) |qi| canon_alloc.free(qi);
-            canon_alloc.free(qualified_imports);
-        }
-
-        // Build KnownModule entries for qualified imports so they get placeholders
-        var known_modules = std.ArrayList(compile_package.PackageEnv.KnownModule).empty;
-        defer known_modules.deinit(canon_alloc);
-        for (qualified_imports) |qi| {
-            known_modules.append(canon_alloc, .{
-                .qualified_name = qi,
-                .import_name = qi,
-            }) catch {};
-        }
-
-        // Canonicalize using the PackageEnv shared function with sibling awareness
-        // This sets up placeholders for external imports that will be resolved during type-checking
-        // Use worker allocator for thread safety in multi-threaded mode
         var allocators: base.Allocators = undefined;
         allocators.initInPlace(canon_alloc);
         defer allocators.deinit();
-        compile_package.PackageEnv.canonicalizeModuleWithSiblings(
+        compile_package.PackageEnv.canonicalizeModuleWithImports(
             &allocators,
             env,
             ast,
             self.builtin_modules.builtin_module.env,
             self.builtin_modules.builtin_indices,
-            task.root_dir,
-            task.package_name,
-            null, // Coordinator handles import resolution separately
-            known_modules.items,
-            self.io,
+            task.imported_modules,
+            std.fs.path.dirname(task.path) orelse "",
         ) catch {};
+        self.gpa.free(task.imported_modules);
 
         const canon_end = if (threads_available) std.time.nanoTimestamp() else 0;
 
@@ -2211,54 +2360,6 @@ pub const Coordinator = struct {
         }
         const diag_end = if (threads_available) std.time.nanoTimestamp() else 0;
 
-        // Discover imports from env.imports
-        // Pre-allocate to reduce allocation contention in multi-threaded mode
-        var local_imports = std.ArrayList(DiscoveredLocalImport).initCapacity(worker_alloc, 16) catch std.ArrayList(DiscoveredLocalImport).empty;
-        var external_imports = std.ArrayList(DiscoveredExternalImport).initCapacity(worker_alloc, 16) catch std.ArrayList(DiscoveredExternalImport).empty;
-
-        const import_count = env.imports.imports.items.items.len;
-        for (env.imports.imports.items.items[0..import_count]) |str_idx| {
-            const mod_name = env.getString(str_idx);
-
-            if (std.mem.eql(u8, mod_name, "Builtin")) continue;
-
-            // Check if qualified (external) import
-            if (std.mem.indexOfScalar(u8, mod_name, '.') != null) {
-                external_imports.append(worker_alloc, .{
-                    .import_name = worker_alloc.dupe(u8, mod_name) catch continue,
-                }) catch {};
-            } else {
-                // Local import - but first check if this is a shorthand alias for an external module
-                // Type annotations can use unqualified names (like "Builder" instead of "pf.Builder")
-                // which adds both the qualified and unqualified import to the list.
-                // Skip the unqualified one if we already have the qualified version.
-                var is_external_alias = false;
-                for (external_imports.items) |ext| {
-                    // Check if any external import ends with .mod_name
-                    // e.g., "pf.Builder" ends with ".Builder"
-                    if (std.mem.endsWith(u8, ext.import_name, mod_name)) {
-                        const dot_idx = ext.import_name.len - mod_name.len - 1;
-                        if (dot_idx < ext.import_name.len and ext.import_name[dot_idx] == '.') {
-                            is_external_alias = true;
-                            break;
-                        }
-                    }
-                }
-                if (is_external_alias) continue;
-
-                const path = self.resolveModulePathWithAllocator(task.root_dir, mod_name, worker_alloc) catch continue;
-                local_imports.append(worker_alloc, .{
-                    .module_name = worker_alloc.dupe(u8, mod_name) catch {
-                        worker_alloc.free(path);
-                        continue;
-                    },
-                    .path = path,
-                }) catch {
-                    worker_alloc.free(path);
-                };
-            }
-        }
-
         // Free AST - deinit now handles both internal cleanup and self-destruction
         ast.deinit();
 
@@ -2269,8 +2370,8 @@ pub const Coordinator = struct {
                 .module_name = task.module_name,
                 .path = task.path,
                 .module_env = env,
-                .discovered_local_imports = local_imports,
-                .discovered_external_imports = external_imports,
+                .discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty,
+                .discovered_external_imports = std.ArrayList(DiscoveredExternalImport).empty,
                 .reports = reports,
                 .canonicalize_ns = if (threads_available) @intCast(canon_end - start_time) else 0,
                 .canonicalize_diagnostics_ns = if (threads_available) @intCast(diag_end - diag_start) else 0,
@@ -2284,13 +2385,11 @@ pub const Coordinator = struct {
 
         const env = task.module_env;
 
-        // Resolve imports
-        env.imports.resolveImports(env, task.imported_envs);
         env.store.resolvePendingLookups(env, task.imported_envs);
 
         // Type check - use worker allocator for thread safety
         const check_alloc = self.getWorkerAllocator();
-        var checker = compile_package.PackageEnv.typeCheckModule(
+        var typecheck_output = compile_package.PackageEnv.typeCheckModule(
             check_alloc,
             env,
             self.builtin_modules.builtin_module.env,
@@ -2304,14 +2403,17 @@ pub const Coordinator = struct {
                     .module_id = task.module_id,
                     .module_name = task.module_name,
                     .path = task.path,
-                    .module_env = env,
+                    .semantic = .{
+                        .module_env = env,
+                        .comptime_values = null,
+                    },
                     .reports = std.ArrayList(Report).empty,
                     .type_check_ns = 0,
                     .check_diagnostics_ns = 0,
                 },
             };
         };
-        defer checker.deinit();
+        defer typecheck_output.deinit();
 
         const check_end = if (threads_available) std.time.nanoTimestamp() else 0;
 
@@ -2327,12 +2429,12 @@ pub const Coordinator = struct {
             worker_alloc,
             env,
             env,
-            &checker.snapshots,
-            &checker.problems,
+            &typecheck_output.checker.snapshots,
+            &typecheck_output.checker.problems,
             task.path,
             task.imported_envs,
-            &checker.import_mapping,
-            &checker.regions,
+            &typecheck_output.checker.import_mapping,
+            &typecheck_output.checker.regions,
         ) catch {
             // On allocation failure, return result with empty reports
             self.gpa.free(task.imported_envs);
@@ -2342,7 +2444,10 @@ pub const Coordinator = struct {
                     .module_id = task.module_id,
                     .module_name = task.module_name,
                     .path = task.path,
-                    .module_env = env,
+                    .semantic = .{
+                        .module_env = env,
+                        .comptime_values = null,
+                    },
                     .reports = reports,
                     .type_check_ns = 0,
                     .check_diagnostics_ns = 0,
@@ -2351,7 +2456,7 @@ pub const Coordinator = struct {
         };
         defer rb.deinit();
 
-        for (checker.problems.problems.items) |prob| {
+        for (typecheck_output.checker.problems.problems.items) |prob| {
             const rep = rb.build(prob) catch continue;
             reports.append(worker_alloc, rep) catch {};
         }
@@ -2361,13 +2466,18 @@ pub const Coordinator = struct {
         // Free imported_envs slice (owned by coordinator)
         self.gpa.free(task.imported_envs);
 
+        const comptime_values = typecheck_output.takeComptimeValues();
+
         return .{
             .type_checked = .{
                 .package_name = task.package_name,
                 .module_id = task.module_id,
                 .module_name = task.module_name,
                 .path = task.path,
-                .module_env = env,
+                .semantic = .{
+                    .module_env = env,
+                    .comptime_values = comptime_values,
+                },
                 .reports = reports,
                 .type_check_ns = if (threads_available) @intCast(check_end - start_time) else 0,
                 .check_diagnostics_ns = if (threads_available) @intCast(diag_end - diag_start) else 0,

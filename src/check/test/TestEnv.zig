@@ -93,7 +93,6 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .store = serialized_ptr.store.deserializeInto(base_ptr, gpa),
         .evaluation_order = null,
         .idents = ModuleEnv.CommonIdents.find(&common),
-        .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
         .import_mapping = types.import_mapping.ImportMapping.init(gpa),
         .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
         .rigid_vars = std.AutoHashMapUnmanaged(base.Ident.Idx, types.Var){},
@@ -250,7 +249,8 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     }
 
     // Resolve imports - map each import to its index in imported_envs
-    module_env.imports.resolveImports(module_env, imported_envs.items);
+    module_env.imports.clearResolvedModules();
+    module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs.items);
 
     // Type Check - Pass all imported modules
     var checker = try Check.init(
@@ -360,7 +360,8 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     try imported_envs.append(gpa, builtin_module.env);
 
     // Resolve imports - map each import to its index in imported_envs
-    module_env.imports.resolveImports(module_env, imported_envs.items);
+    module_env.imports.clearResolvedModules();
+    module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs.items);
 
     // Type Check - Pass the imported modules in other_modules parameter
     var checker = try Check.init(

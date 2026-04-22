@@ -497,6 +497,7 @@ const Lowerer = struct {
                     .data = .{ .call = .{
                         .func = try self.lowerExprInto(&lowered.lifted_defs, venv, call.func),
                         .args = try self.lowerExprSpan(&lowered.lifted_defs, venv, call.args),
+                        .call_constraint_ty = call.call_constraint_ty,
                     } },
                 });
             },
@@ -512,6 +513,7 @@ const Lowerer = struct {
                     .data = .{ .low_level = .{
                         .op = ll.op,
                         .args = try self.lowerExprSpan(&lowered.lifted_defs, venv, ll.args),
+                        .source_constraint_ty = ll.source_constraint_ty,
                     } },
                 });
             },

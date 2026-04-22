@@ -25,7 +25,7 @@ const Node = @import("Node.zig");
 
 /// Information about an auto-imported module type
 pub const AutoImportedType = struct {
-    env: *const ModuleEnv,
+    env: ?*const ModuleEnv,
     /// Optional statement index for types (e.g., Builtin.Bool, Builtin.Num.U8)
     /// When set, this points directly to the type declaration, avoiding string lookups
     statement_idx: ?CIR.Statement.Idx = null,
@@ -38,6 +38,10 @@ pub const AutoImportedType = struct {
     /// Whether this is a placeholder entry for a module that hasn't been compiled yet.
     /// When true, member lookup failures are not errors - they'll be validated during type checking.
     is_placeholder: bool = false,
+
+    pub fn requireEnv(self: @This()) *const ModuleEnv {
+        return self.env orelse @panic("canonicalize.AutoImportedType missing module env");
+    }
 };
 
 /// Builtin module information required to auto-install builtin type bindings.
@@ -500,7 +504,7 @@ pub fn setupAutoImportedBuiltinTypes(
         const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
         if (self.builtin_auto_imported_types.get(type_ident)) |type_entry| {
             const target_node_idx = if (type_entry.statement_idx) |stmt_idx|
-                type_entry.env.getExposedNodeIndexByStatementIdx(stmt_idx)
+                type_entry.requireEnv().getExposedNodeIndexByStatementIdx(stmt_idx)
             else
                 null;
 
@@ -2067,7 +2071,7 @@ fn processAssociatedItemsFirstPass(
                 if (self.scopeLookupTypeDecl(fully_qualified_ident_idx)) |type_decl_idx| {
                     // Register nested type for cross-module import so copy_import can find it.
                     // Register with both the fully qualified name AND the bare type name,
-                    // since pending lookup resolution searches by bare name via findIdent.
+                    // so cross-module type lookup can resolve either spelling directly.
                     const node_idx_u16: u16 = @intCast(@intFromEnum(type_decl_idx));
                     try self.env.setExposedNodeIndexById(fully_qualified_ident_idx, node_idx_u16);
                     try self.env.setExposedNodeIndexById(nested_type_ident, node_idx_u16);
@@ -4471,7 +4475,7 @@ fn introduceItemsAliased(
             return;
         }
 
-        const module_env = module_entry.env;
+        const module_env = module_entry.requireEnv();
 
         // Auto-expose the module's main type for type modules
         switch (module_env.module_kind) {
@@ -4576,7 +4580,7 @@ fn introduceItemsUnaliased(
             }
             return;
         };
-        const module_env = module_entry.env;
+        const module_env = module_entry.requireEnv();
 
         // No auto-expose of main type - only process explicitly exposed items
         for (exposed_items_slice) |exposed_item_idx| {
@@ -5163,7 +5167,7 @@ pub fn canonicalizeExpr(
                                 // we need to look up the method in the Builtin module, not current scope
                                 if (is_auto_imported_type) {
                                     if (self.lookupAvailableModuleEnv(module_alias)) |auto_imported_type_env| {
-                                        const module_env = auto_imported_type_env.env;
+                                        const module_env = auto_imported_type_env.requireEnv();
 
                                         // Build the FULLY qualified method name using qualified_type_ident
                                         // e.g., for I32.decode: "Builtin.Num.I32" + "decode" -> "Builtin.Num.I32.decode"
@@ -5250,7 +5254,7 @@ pub fn canonicalizeExpr(
                             // For package-qualified imports (pf.Stdout), use the qualified name as-is
                             // For placeholder modules, use the original module text (not the placeholder's env.module_name)
                             const lookup_module_name = if (auto_imported_type_info) |info|
-                                if (info.is_placeholder) module_text else if (info.is_package_qualified) module_text else info.env.module_name
+                                if (info.is_placeholder) module_text else if (info.is_package_qualified) module_text else info.requireEnv().module_name
                             else
                                 module_text;
 
@@ -5261,7 +5265,7 @@ pub fn canonicalizeExpr(
                                     // For placeholders, use the original module text
                                     // For auto-imported nested types (like Bool, Str), import the parent module (Builtin)
                                     // For package-qualified imports (pf.Stdout), use the qualified name
-                                    const actual_module_name = if (info.is_placeholder) module_text else if (info.is_package_qualified) module_text else info.env.module_name;
+                                    const actual_module_name = if (info.is_placeholder) module_text else if (info.is_package_qualified) module_text else info.requireEnv().module_name;
                                     break :blk try self.getOrCreateAutoImport(actual_module_name);
                                 }
 
@@ -5305,7 +5309,7 @@ pub fn canonicalizeExpr(
                             } else field_text;
 
                             const target_node_idx_opt: ?u16 = if (auto_imported_type_info) |info| blk: {
-                                const module_env = info.env;
+                                const module_env = info.requireEnv();
 
                                 // For auto-imported types with statement_idx (builtin types and platform modules),
                                 // build the full qualified name using qualified_type_ident.
@@ -5483,7 +5487,7 @@ pub fn canonicalizeExpr(
                             const field_text = self.env.getIdent(exposed_info.original_name);
                             const target_node_idx_opt: ?u16 = blk: {
                                 if (self.lookupAvailableModuleEnv(exposed_info.module_name)) |auto_imported_type| {
-                                    const module_env = auto_imported_type.env;
+                                    const module_env = auto_imported_type.requireEnv();
                                     if (module_env.common.findIdent(field_text)) |target_ident| {
                                         break :blk module_env.getExposedNodeIndexById(target_ident);
                                     } else {
@@ -8197,7 +8201,8 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                     };
                 };
                 if (imported_module.statement_idx) |stmt_idx| {
-                    break :blk imported_module.env.getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
+                    const module_env = imported_module.requireEnv();
+                    break :blk module_env.getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
                         return CanonicalizedExpr{
                             .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                                 .module_name = module_name,
@@ -8209,11 +8214,13 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                     };
                 }
 
-                if (findNominalDeclNodeIdxByText(imported_module.env, self.env.getIdent(tag_name))) |node_idx| {
+                const module_env = imported_module.requireEnv();
+
+                if (findNominalDeclNodeIdxByText(module_env, self.env.getIdent(tag_name))) |node_idx| {
                     break :blk node_idx;
                 }
 
-                const target_ident = imported_module.env.common.findIdent(self.env.getIdent(tag_name)) orelse {
+                const target_ident = module_env.common.findIdent(self.env.getIdent(tag_name)) orelse {
                     return CanonicalizedExpr{
                         .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                             .module_name = module_name,
@@ -8224,7 +8231,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                     };
                 };
 
-                break :blk imported_module.env.getExposedNodeIndexById(target_ident) orelse {
+                break :blk module_env.getExposedNodeIndexById(target_ident) orelse {
                     return CanonicalizedExpr{
                         .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                             .module_name = module_name,
@@ -8299,10 +8306,10 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
             // Regular module imports and primitive types (Str) don't have statement_idx
             if (auto_imported_type.statement_idx) |stmt_idx| {
                 // This is an auto-imported type with a statement_idx - create the import and return e_nominal_external
-                const module_name_text = auto_imported_type.env.module_name;
+                const module_name_text = auto_imported_type.requireEnv().module_name;
                 const import_idx = try self.getOrCreateAutoImport(module_name_text);
 
-                const target_node_idx = auto_imported_type.env.getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
+                const target_node_idx = auto_imported_type.requireEnv().getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
                     // Failed to find exposed node - return malformed expression with diagnostic
                     const module_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
                     const malformed = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .nested_type_not_found = .{
@@ -8359,7 +8366,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                     } }), .free_vars = DataSpan.empty() };
                 };
                 const original_name_text = self.env.getIdent(exposed_info.original_name);
-                const target_ident = auto_imported_type.env.common.findIdent(original_name_text) orelse {
+                const target_ident = auto_imported_type.requireEnv().common.findIdent(original_name_text) orelse {
                     // Type identifier doesn't exist in the target module
                     return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                         .module_name = module_name,
@@ -8367,7 +8374,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                         .region = type_tok_region,
                     } }), .free_vars = DataSpan.empty() };
                 };
-                break :blk auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse {
+                break :blk auto_imported_type.requireEnv().getExposedNodeIndexById(target_ident) orelse {
                     // Type is not exposed by the imported module
                     return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                         .module_name = module_name,
@@ -8524,7 +8531,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                 break :blk 0;
             };
 
-            const target_ident = auto_imported_type.env.common.findIdent(type_name) orelse {
+            const target_ident = auto_imported_type.requireEnv().common.findIdent(type_name) orelse {
                 // Type is not exposed by the imported file
                 return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
@@ -8533,7 +8540,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                 } }), .free_vars = DataSpan.empty() };
             };
 
-            const other_module_node_id = auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse {
+            const other_module_node_id = auto_imported_type.requireEnv().getExposedNodeIndexById(target_ident) orelse {
                 // Type is not exposed by the imported file
                 return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
@@ -9329,7 +9336,7 @@ pub fn canonicalizePattern(
                         break :blk .{ 0, Content.err };
                     };
 
-                    const target_ident = auto_imported_type.env.common.findIdent(type_tok_text) orelse {
+                    const target_ident = auto_imported_type.requireEnv().common.findIdent(type_tok_text) orelse {
                         // Type is not exposed by the module
                         return try self.env.pushMalformed(Pattern.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                             .module_name = module_name,
@@ -9338,7 +9345,7 @@ pub fn canonicalizePattern(
                         } });
                     };
 
-                    const other_module_node_id = auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse {
+                    const other_module_node_id = auto_imported_type.requireEnv().getExposedNodeIndexById(target_ident) orelse {
                         // Type is not exposed by the module
                         return try self.env.pushMalformed(Pattern.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                             .module_name = module_name,
@@ -10443,7 +10450,7 @@ fn canonicalizeTypeAnnoBasicType(
 
                 // This is an auto-imported type like Bool or Try
                 // We need to create an import for it and return the type annotation
-                const module_name_text = auto_imported_type.env.module_name;
+                const module_name_text = auto_imported_type.requireEnv().module_name;
                 const import_idx = try self.getOrCreateAutoImport(module_name_text);
 
                 // Get the target node index using the pre-computed statement_idx
@@ -10458,7 +10465,7 @@ fn canonicalizeTypeAnnoBasicType(
                         .region = region,
                     } });
                 };
-                const target_node_idx = auto_imported_type.env.getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
+                const target_node_idx = auto_imported_type.requireEnv().getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
                     // Failed to find exposed node - return malformed type annotation with diagnostic
                     const module_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
                     return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .nested_type_not_found = .{
@@ -10485,7 +10492,7 @@ fn canonicalizeTypeAnnoBasicType(
                     if (self.lookupAvailableModuleEnv(exposed_info.module_name)) |auto_imported_type| {
                         // Convert identifier from current module to target module's interner
                         const original_name_text = self.env.getIdent(exposed_info.original_name);
-                        const target_ident = auto_imported_type.env.common.findIdent(original_name_text) orelse {
+                        const target_ident = auto_imported_type.requireEnv().common.findIdent(original_name_text) orelse {
                             // Type identifier doesn't exist in the target module
                             return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                                 .module_name = exposed_info.module_name,
@@ -10493,7 +10500,7 @@ fn canonicalizeTypeAnnoBasicType(
                                 .region = type_name_region,
                             } });
                         };
-                        const target_node_idx = auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse {
+                        const target_node_idx = auto_imported_type.requireEnv().getExposedNodeIndexById(target_ident) orelse {
                             // Type is not exposed by the imported module
                             return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                                 .module_name = exposed_info.module_name,
@@ -10607,7 +10614,7 @@ fn canonicalizeTypeAnnoBasicType(
                 } } } }, region);
             }
 
-            const target_ident = auto_imported_type.env.common.findIdent(type_name_text) orelse {
+            const target_ident = auto_imported_type.requireEnv().common.findIdent(type_name_text) orelse {
                 // Type is not exposed by the module
                 return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
@@ -10616,7 +10623,7 @@ fn canonicalizeTypeAnnoBasicType(
                 } });
             };
 
-            const other_module_node_id = auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse {
+            const other_module_node_id = auto_imported_type.requireEnv().getExposedNodeIndexById(target_ident) orelse {
                 // Type is not exposed by the module
                 return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
@@ -13664,7 +13671,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
             // This is an auto-imported module (like Bool, Try, Str, List, etc.)
             // Use the ACTUAL module name from the environment, not the alias
             // This ensures all auto-imported types from the same module share the same Import.Idx
-            const actual_module_name = auto_imported_type.env.module_name;
+            const actual_module_name = auto_imported_type.requireEnv().module_name;
             break :blk try self.getOrCreateAutoImport(actual_module_name);
         }
 
@@ -13735,10 +13742,10 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
             // This is an auto-imported nominal type with a statement index
             // Treat field access as tag access (e.g., Bool.True)
             // Create e_nominal_external to properly track the module origin
-            const module_name_text = auto_imported_type.env.module_name;
+            const module_name_text = auto_imported_type.requireEnv().module_name;
             const auto_import_idx = try self.getOrCreateAutoImport(module_name_text);
 
-            const target_node_idx = auto_imported_type.env.getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
+            const target_node_idx = auto_imported_type.requireEnv().getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
                 // Failed to find exposed node - return malformed expression with diagnostic
                 const module_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
                 return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .nested_type_not_found = .{
@@ -13774,7 +13781,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     const field_text = self.env.getIdent(field_name);
     const target_node_idx_opt: ?u16 = blk: {
         if (self.lookupAvailableModuleEnv(module_name)) |auto_imported_type| {
-            const module_env = auto_imported_type.env;
+            const module_env = auto_imported_type.requireEnv();
             if (module_env.common.findIdent(field_text)) |target_ident| {
                 // Found the identifier in the module - check if it's exposed
                 break :blk module_env.getExposedNodeIndexById(target_ident);
@@ -13796,7 +13803,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
         } });
     };
 
-    const target_module_env = (self.lookupAvailableModuleEnv(module_name) orelse unreachable).env;
+    const target_module_env = (self.lookupAvailableModuleEnv(module_name) orelse unreachable).requireEnv();
     const target_node_tag = target_module_env.store.nodes.get(@enumFromInt(@as(u32, target_node_idx))).tag;
     if (target_node_tag == .statement_nominal_decl) {
         const tag_expr_idx = try self.env.addExpr(CIR.Expr{
@@ -14130,9 +14137,9 @@ fn getExternalTypeBase(self: *Self, type_ident: Ident.Idx) std.mem.Allocator.Err
     // Fallback: try auto-imported types from explicitly imported or builtin modules.
     if (self.lookupAvailableModuleEnv(type_ident)) |auto_imported_type| {
         if (auto_imported_type.statement_idx) |stmt_idx| {
-            const module_name_text = auto_imported_type.env.module_name;
+            const module_name_text = auto_imported_type.requireEnv().module_name;
             const import_idx = try self.getOrCreateAutoImport(module_name_text);
-            if (auto_imported_type.env.getExposedNodeIndexByStatementIdx(stmt_idx)) |target_node_idx| {
+            if (auto_imported_type.requireEnv().getExposedNodeIndexByStatementIdx(stmt_idx)) |target_node_idx| {
                 return TypeAnno.LocalOrExternal{ .external = .{
                     .module_idx = import_idx,
                     .target_node_idx = target_node_idx,
