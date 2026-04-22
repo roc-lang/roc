@@ -39,6 +39,7 @@ pub const Pending = struct {
     summary_exact_fn_ty: ?TypeVarId = null,
     summary_seeded: bool = false,
     exec_capture_ty: ?type_mod.TypeId = null,
+    capture_exact_symbols: ?[]const Symbol = null,
     exec_args_tys: ?[]type_mod.TypeId = null,
     exec_ret_ty: ?type_mod.TypeId = null,
 };
@@ -73,6 +74,9 @@ pub const Queue = struct {
             }
             if (item.exec_args_tys) |args| {
                 if (args.len != 0) self.allocator.free(args);
+            }
+            if (item.capture_exact_symbols) |exacts| {
+                if (exacts.len != 0) self.allocator.free(exacts);
             }
             self.allocator.free(item.key_bytes);
         }
@@ -176,6 +180,7 @@ pub fn specializeFnWithExecArgs(
     requested_ty: TypeVarId,
     exec_types: ?*type_mod.Store,
     exec_capture_ty: ?type_mod.TypeId,
+    capture_exact_symbols: ?[]const Symbol,
     exec_arg_tys: []const type_mod.TypeId,
     exec_ret_ty: ?type_mod.TypeId,
 ) std.mem.Allocator.Error!Symbol {
@@ -189,6 +194,7 @@ pub fn specializeFnWithExecArgs(
         requested_ty,
         exec_types,
         exec_capture_ty,
+        capture_exact_symbols,
         exec_arg_tys,
         exec_ret_ty,
     );
@@ -214,6 +220,10 @@ pub fn specializeFnWithExecArgs(
         .key_bytes = key,
         .specialized_symbol = specialized_symbol,
         .exec_capture_ty = exec_capture_ty,
+        .capture_exact_symbols = if (capture_exact_symbols) |symbols_slice|
+            try queue.allocator.dupe(Symbol, symbols_slice)
+        else
+            null,
         .exec_args_tys = try queue.allocator.dupe(type_mod.TypeId, exec_arg_tys),
         .exec_ret_ty = exec_ret_ty,
     });
@@ -231,6 +241,7 @@ pub fn specializeHostedWithExecArgs(
     hosted_fn: solved.Ast.HostedFnDef,
     exec_types: ?*type_mod.Store,
     exec_capture_ty: ?type_mod.TypeId,
+    capture_exact_symbols: ?[]const Symbol,
     exec_arg_tys: []const type_mod.TypeId,
     exec_ret_ty: ?type_mod.TypeId,
 ) std.mem.Allocator.Error!Symbol {
@@ -242,6 +253,7 @@ pub fn specializeHostedWithExecArgs(
         requested_ty,
         exec_types,
         exec_capture_ty,
+        capture_exact_symbols,
         exec_arg_tys,
         exec_ret_ty,
     );
@@ -267,6 +279,10 @@ pub fn specializeHostedWithExecArgs(
         .key_bytes = key,
         .specialized_symbol = specialized_symbol,
         .exec_capture_ty = exec_capture_ty,
+        .capture_exact_symbols = if (capture_exact_symbols) |symbols_slice|
+            try queue.allocator.dupe(Symbol, symbols_slice)
+        else
+            null,
         .exec_args_tys = try queue.allocator.dupe(type_mod.TypeId, exec_arg_tys),
         .exec_ret_ty = exec_ret_ty,
     });
@@ -427,6 +443,7 @@ fn makeKey(
     requested_ty: TypeVarId,
     exec_types: ?*type_mod.Store,
     exec_capture_ty: ?type_mod.TypeId,
+    capture_exact_symbols: ?[]const Symbol,
     exec_arg_tys: []const type_mod.TypeId,
     exec_ret_ty: ?type_mod.TypeId,
 ) std.mem.Allocator.Error![]const u8 {
@@ -454,6 +471,15 @@ fn makeKey(
         const capture_key_len: u32 = @intCast(capture_key.len);
         try key.appendSlice(allocator, std.mem.asBytes(&capture_key_len));
         try key.appendSlice(allocator, capture_key);
+    }
+
+    const capture_exact_count: u32 = @intCast(if (capture_exact_symbols) |symbols_slice| symbols_slice.len else 0);
+    try key.appendSlice(allocator, std.mem.asBytes(&capture_exact_count));
+    if (capture_exact_symbols) |symbols_slice| {
+        for (symbols_slice) |exact_symbol| {
+            const raw: u32 = exact_symbol.raw();
+            try key.appendSlice(allocator, std.mem.asBytes(&raw));
+        }
     }
 
     const exec_arg_count: u32 = @intCast(exec_arg_tys.len);

@@ -581,6 +581,7 @@ const Lowerer = struct {
         repr_mode: specializations.Pending.ReprMode,
         requested_ty: TypeVarId,
         capture_exec_ty: ?type_mod.TypeId,
+        capture_exact_symbols: ?[]const Symbol,
     ) std.mem.Allocator.Error!SpecializedCallableSummary {
         const pending_symbol = try self.queueCallableSpecializationWithExplicitSignature(
             solved_types,
@@ -589,6 +590,7 @@ const Lowerer = struct {
             repr_mode,
             requested_ty,
             capture_exec_ty,
+            capture_exact_symbols,
         );
         const pending = self.lookupPendingBySpecializedSymbol(pending_symbol) orelse
             debugPanic("lambdamono.lower.ensureQueuedCallableSpecializedForRequestedType missing queued specialization");
@@ -603,6 +605,7 @@ const Lowerer = struct {
         requested_name: Symbol,
         requested_ty: TypeVarId,
         capture_exec_ty: ?type_mod.TypeId,
+        capture_exact_symbols: ?[]const Symbol,
     ) std.mem.Allocator.Error!SpecializedCallableSummary {
         return try self.ensureQueuedCallableSpecializedForRequestedType(
             solved_types,
@@ -611,6 +614,7 @@ const Lowerer = struct {
             self.exactCallableReprMode(requested_name),
             requested_ty,
             capture_exec_ty,
+            capture_exact_symbols,
         );
     }
 
@@ -2039,6 +2043,7 @@ const Lowerer = struct {
         defer inst.deinit();
         var mono_cache = lower_type.MonoCache.init(self.allocator);
         defer mono_cache.deinit();
+        try self.preRefineExprSourceTypes(&inst, &mono_cache, &.{}, expr_id);
         const lowered = try self.lowerBindingBody(
             &inst,
             &mono_cache,
@@ -2145,6 +2150,253 @@ const Lowerer = struct {
         };
     }
 
+    fn preRefineBindingInEnv(
+        self: *Lowerer,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        venv: []const EnvEntry,
+        bind: solved.Ast.TypedSymbol,
+        body_expr_id: solved.Ast.ExprId,
+    ) std.mem.Allocator.Error!EnvEntry {
+        try self.preRefineExprSourceTypes(inst, mono_cache, venv, body_expr_id);
+        const bind_ty = try self.cloneInstType(inst, bind.ty);
+        const body_source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, body_expr_id);
+        try self.unifyIn(inst.types, bind_ty, body_source_ty);
+        return .{
+            .symbol = bind.symbol,
+            .ty = bind_ty,
+            .exec_ty = try self.lowerExecutableTypeFromSolvedIn(inst.types, mono_cache, bind_ty),
+            .exact_fn_symbol = self.directCallableSymbol(self.input.store.getExpr(body_expr_id)),
+        };
+    }
+
+    fn preRefineStmtSourceTypes(
+        self: *Lowerer,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        venv: []const EnvEntry,
+        stmt_id: solved.Ast.StmtId,
+    ) std.mem.Allocator.Error![]EnvEntry {
+        const stmt = self.input.store.getStmt(stmt_id);
+        return switch (stmt) {
+            .decl => |decl| {
+                const entry = try self.preRefineBindingInEnv(inst, mono_cache, venv, decl.bind, decl.body);
+                return try self.extendEnv(venv, entry);
+            },
+            .var_decl => |decl| {
+                const entry = try self.preRefineBindingInEnv(inst, mono_cache, venv, decl.bind, decl.body);
+                return try self.extendEnv(venv, entry);
+            },
+            .reassign => |reassign| {
+                try self.preRefineExprSourceTypes(inst, mono_cache, venv, reassign.body);
+                if (self.lookupEnvEntry(venv, reassign.target)) |target_entry| {
+                    const body_source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, reassign.body);
+                    try self.unifyIn(inst.types, target_entry.ty, body_source_ty);
+                }
+                return try self.cloneEnv(venv);
+            },
+            .expr => |expr_id| {
+                try self.preRefineExprSourceTypes(inst, mono_cache, venv, expr_id);
+                return try self.cloneEnv(venv);
+            },
+            .debug => |expr_id| {
+                try self.preRefineExprSourceTypes(inst, mono_cache, venv, expr_id);
+                return try self.cloneEnv(venv);
+            },
+            .expect => |expr_id| {
+                try self.preRefineExprSourceTypes(inst, mono_cache, venv, expr_id);
+                return try self.cloneEnv(venv);
+            },
+            .return_ => |expr_id| {
+                try self.preRefineExprSourceTypes(inst, mono_cache, venv, expr_id);
+                return try self.cloneEnv(venv);
+            },
+            .for_ => |for_stmt| {
+                try self.preRefineExprSourceTypes(inst, mono_cache, venv, for_stmt.iterable);
+                const source_pat = self.input.store.getPat(for_stmt.patt);
+                const pat_ty = try self.cloneInstType(inst, source_pat.ty);
+                const iterable_ty = try self.instantiatedSourceTypeForExpr(inst, venv, for_stmt.iterable);
+                const elem_ty = self.solvedListElemType(inst.types, iterable_ty) orelse
+                    debugPanic("lambdamono.lower.preRefineStmtSourceTypes expected list iterable source type");
+                try self.unifyIn(inst.types, pat_ty, elem_ty);
+                const additions = try self.collectPatBindingsAtSourceTy(inst, mono_cache, source_pat, pat_ty);
+                defer self.allocator.free(additions);
+                const body_env = try self.concatEnv(venv, additions);
+                defer self.allocator.free(body_env);
+                try self.preRefineExprSourceTypes(inst, mono_cache, body_env, for_stmt.body);
+                return try self.cloneEnv(venv);
+            },
+            .while_ => |while_stmt| {
+                try self.preRefineExprSourceTypes(inst, mono_cache, venv, while_stmt.cond);
+                try self.preRefineExprSourceTypes(inst, mono_cache, venv, while_stmt.body);
+                return try self.cloneEnv(venv);
+            },
+            .crash, .break_ => try self.cloneEnv(venv),
+        };
+    }
+
+    fn preRefineBlockSourceTypes(
+        self: *Lowerer,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        incoming_env: []const EnvEntry,
+        block: @FieldType(solved.Ast.Expr.Data, "block"),
+    ) std.mem.Allocator.Error!void {
+        var env = try self.cloneEnv(incoming_env);
+        defer self.allocator.free(env);
+
+        const stmts = self.input.store.sliceStmtSpan(block.stmts);
+        for (stmts) |stmt_id| {
+            const next_env = try self.preRefineStmtSourceTypes(inst, mono_cache, env, stmt_id);
+            self.allocator.free(env);
+            env = next_env;
+        }
+
+        try self.preRefineExprSourceTypes(inst, mono_cache, env, block.final_expr);
+    }
+
+    fn preRefineExprSourceTypes(
+        self: *Lowerer,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        venv: []const EnvEntry,
+        expr_id: solved.Ast.ExprId,
+    ) std.mem.Allocator.Error!void {
+        const expr = self.input.store.getExpr(expr_id);
+        switch (expr.data) {
+            .var_, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bool_lit, .unit => {},
+            .inspect => |value_expr_id| try self.preRefineExprSourceTypes(inst, mono_cache, venv, value_expr_id),
+            .tag => |tag| {
+                for (self.input.store.sliceExprSpan(tag.args)) |arg_expr_id| {
+                    try self.preRefineExprSourceTypes(inst, mono_cache, venv, arg_expr_id);
+                }
+            },
+            .record => |fields| {
+                for (self.input.store.sliceFieldExprSpan(fields)) |field| {
+                    try self.preRefineExprSourceTypes(inst, mono_cache, venv, field.value);
+                }
+            },
+            .access => |access| try self.preRefineExprSourceTypes(inst, mono_cache, venv, access.record),
+            .tuple_access => |access| try self.preRefineExprSourceTypes(inst, mono_cache, venv, access.tuple),
+            .tag_payload => |tag_payload| try self.preRefineExprSourceTypes(inst, mono_cache, venv, tag_payload.tag_union),
+            .tuple => |elems| {
+                for (self.input.store.sliceExprSpan(elems)) |elem_expr_id| {
+                    try self.preRefineExprSourceTypes(inst, mono_cache, venv, elem_expr_id);
+                }
+            },
+            .list => |items| {
+                for (self.input.store.sliceExprSpan(items)) |item_expr_id| {
+                    try self.preRefineExprSourceTypes(inst, mono_cache, venv, item_expr_id);
+                }
+            },
+            .return_ => |ret_expr_id| try self.preRefineExprSourceTypes(inst, mono_cache, venv, ret_expr_id),
+            .runtime_error => {},
+            .for_ => |for_expr| {
+                try self.preRefineExprSourceTypes(inst, mono_cache, venv, for_expr.iterable);
+                const source_pat = self.input.store.getPat(for_expr.patt);
+                const pat_ty = try self.cloneInstType(inst, source_pat.ty);
+                const iterable_ty = try self.instantiatedSourceTypeForExpr(inst, venv, for_expr.iterable);
+                const elem_ty = self.solvedListElemType(inst.types, iterable_ty) orelse
+                    debugPanic("lambdamono.lower.preRefineExprSourceTypes expected list iterable source type");
+                try self.unifyIn(inst.types, pat_ty, elem_ty);
+                const additions = try self.collectPatBindingsAtSourceTy(inst, mono_cache, source_pat, pat_ty);
+                defer self.allocator.free(additions);
+                const body_env = try self.concatEnv(venv, additions);
+                defer self.allocator.free(body_env);
+                try self.preRefineExprSourceTypes(inst, mono_cache, body_env, for_expr.body);
+            },
+            .let_ => |let_expr| {
+                const entry = try self.preRefineBindingInEnv(inst, mono_cache, venv, let_expr.bind, let_expr.body);
+                const rest_env = try self.extendEnv(venv, entry);
+                defer self.allocator.free(rest_env);
+                try self.preRefineExprSourceTypes(inst, mono_cache, rest_env, let_expr.rest);
+            },
+            .call => |call| {
+                try self.preRefineExprSourceTypes(inst, mono_cache, venv, call.func);
+                const arg_expr_ids = self.input.store.sliceExprSpan(call.args);
+                for (arg_expr_ids) |arg_expr_id| {
+                    try self.preRefineExprSourceTypes(inst, mono_cache, venv, arg_expr_id);
+                }
+                const current_result_ty = try self.instantiatedSourceTypeForExpr(inst, venv, expr_id);
+                const call_relation_ty = try self.instantiateConstraintFnTypeForExprs(
+                    inst,
+                    venv,
+                    arg_expr_ids,
+                    call.call_constraint_ty,
+                    current_result_ty,
+                );
+                const current_func_ty = try self.instantiatedSourceTypeForExpr(inst, venv, call.func);
+                const refined_func_ty = try self.refinedSourceTypeForExpr(inst, venv, call.func, current_func_ty);
+                try self.unifyIn(inst.types, current_func_ty, refined_func_ty);
+                try self.unifyIn(inst.types, refined_func_ty, call_relation_ty);
+            },
+            .structural_eq => |eq| {
+                try self.preRefineExprSourceTypes(inst, mono_cache, venv, eq.lhs);
+                try self.preRefineExprSourceTypes(inst, mono_cache, venv, eq.rhs);
+                const lhs_ty = try self.instantiatedSourceTypeForExpr(inst, venv, eq.lhs);
+                const rhs_ty = try self.instantiatedSourceTypeForExpr(inst, venv, eq.rhs);
+                try self.unifyIn(inst.types, lhs_ty, rhs_ty);
+                const refined_lhs_ty = try self.refinedSourceTypeForExpr(inst, venv, eq.lhs, lhs_ty);
+                try self.unifyIn(inst.types, lhs_ty, refined_lhs_ty);
+                const refined_rhs_ty = try self.refinedSourceTypeForExpr(inst, venv, eq.rhs, rhs_ty);
+                try self.unifyIn(inst.types, rhs_ty, refined_rhs_ty);
+                try self.unifyIn(inst.types, lhs_ty, rhs_ty);
+            },
+            .method_eq => |eq| {
+                try self.preRefineExprSourceTypes(inst, mono_cache, venv, eq.lhs);
+                try self.preRefineExprSourceTypes(inst, mono_cache, venv, eq.rhs);
+                const current_result_ty = try self.instantiatedSourceTypeForExpr(inst, venv, expr_id);
+                const dispatch_arg_exprs = [_]solved.Ast.ExprId{ eq.lhs, eq.rhs };
+                _ = try self.instantiateConstraintFnTypeForExprs(
+                    inst,
+                    venv,
+                    &dispatch_arg_exprs,
+                    eq.dispatch_constraint_ty,
+                    current_result_ty,
+                );
+            },
+            .dispatch_call => |method_call| {
+                try self.preRefineExprSourceTypes(inst, mono_cache, venv, method_call.receiver);
+                for (self.input.store.sliceExprSpan(method_call.args)) |arg_expr_id| {
+                    try self.preRefineExprSourceTypes(inst, mono_cache, venv, arg_expr_id);
+                }
+            },
+            .type_dispatch_call => |method_call| {
+                for (self.input.store.sliceExprSpan(method_call.args)) |arg_expr_id| {
+                    try self.preRefineExprSourceTypes(inst, mono_cache, venv, arg_expr_id);
+                }
+            },
+            .low_level => |ll| {
+                for (self.input.store.sliceExprSpan(ll.args)) |arg_expr_id| {
+                    try self.preRefineExprSourceTypes(inst, mono_cache, venv, arg_expr_id);
+                }
+            },
+            .when => |when_expr| {
+                try self.preRefineExprSourceTypes(inst, mono_cache, venv, when_expr.cond);
+                const cond_source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, when_expr.cond);
+                for (self.input.store.sliceBranchSpan(when_expr.branches)) |branch_id| {
+                    const branch = self.input.store.getBranch(branch_id);
+                    const branch_pat = self.input.store.getPat(branch.pat);
+                    const additions = try self.collectPatBindingsAtSourceTy(inst, mono_cache, branch_pat, cond_source_ty);
+                    defer self.allocator.free(additions);
+                    const branch_env = try self.concatEnv(venv, additions);
+                    defer self.allocator.free(branch_env);
+                    try self.preRefineExprSourceTypes(inst, mono_cache, branch_env, branch.body);
+                }
+            },
+            .if_ => |if_expr| {
+                try self.preRefineExprSourceTypes(inst, mono_cache, venv, if_expr.cond);
+                try self.preRefineExprSourceTypes(inst, mono_cache, venv, if_expr.then_body);
+                try self.preRefineExprSourceTypes(inst, mono_cache, venv, if_expr.else_body);
+            },
+            .block => |block| try self.preRefineBlockSourceTypes(inst, mono_cache, venv, block),
+        }
+
+        const current_source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, expr_id);
+        const refined_source_ty = try self.refinedSourceTypeForExpr(inst, venv, expr_id, current_source_ty);
+        try self.unifyIn(inst.types, current_source_ty, refined_source_ty);
+    }
+
     fn refineCallArgSourceTypesIn(
         self: *Lowerer,
         inst: *InstScope,
@@ -2159,13 +2411,19 @@ const Lowerer = struct {
         while (changed) {
             changed = false;
             for (arg_expr_ids, expected_arg_tys) |arg_expr_id, expected_arg_ty| {
-                const expected_id = inst.types.unlinkPreservingNominalConst(expected_arg_ty);
-                switch (inst.types.getNode(expected_id)) {
-                    .content => |content| switch (content) {
-                        .func => {},
-                        else => continue,
-                    },
-                    else => continue,
+                const arg_expr = self.input.store.getExpr(arg_expr_id);
+                if (arg_expr.data == .var_) {
+                    const symbol = arg_expr.data.var_;
+                    const binding_exact = self.exactCallableSymbolForBinding(symbol);
+                    const env_exact = if (self.lookupEnvEntry(venv, symbol)) |entry| entry.exact_fn_symbol else null;
+                    const symbol_name = if (self.input.symbols.get(symbol).name.isNone())
+                        "<none>"
+                    else
+                        self.input.idents.getText(self.input.symbols.get(symbol).name);
+                    std.debug.print(
+                        "ARG_VAR symbol={s} binding_exact={any} env_exact={any}\n",
+                        .{ symbol_name, binding_exact, env_exact },
+                    );
                 }
                 const before = try inst.types.structuralKeyOwned(expected_arg_ty);
                 defer inst.types.allocator.free(before);
@@ -2176,6 +2434,21 @@ const Lowerer = struct {
                     expected_arg_ty,
                 );
                 try self.unifyIn(inst.types, expected_arg_ty, refined_arg_ty);
+                if (self.directCallableSymbolFromExpr(venv, self.input.store.getExpr(arg_expr_id))) |exact_symbol| {
+                    if (specializations.lookupFnExact(self.fenv, exact_symbol)) |exact_entry| {
+                        const symbol_name = if (self.input.symbols.get(exact_symbol).name.isNone())
+                            "<none>"
+                        else
+                            self.input.idents.getText(self.input.symbols.get(exact_symbol).name);
+                        std.debug.print("EXACT_ARG_UNIFY symbol={s}\n", .{symbol_name});
+                        const exact_source_ty = try self.cloneTypeIntoInstFromStore(
+                            inst,
+                            &self.input.types,
+                            exact_entry.fn_ty,
+                        );
+                        try self.unifyIn(inst.types, expected_arg_ty, exact_source_ty);
+                    }
+                }
                 const after = try inst.types.structuralKeyOwned(expected_arg_ty);
                 defer inst.types.allocator.free(after);
                 if (!std.mem.eql(u8, before, after)) {
@@ -2721,6 +2994,7 @@ const Lowerer = struct {
                                 &[_]EnvEntry{},
                             );
                             defer self.allocator.free(body_env);
+                            try self.preRefineExprSourceTypes(&inst, &mono_cache, body_env, fn_body);
                             const body_expr = self.input.store.getExpr(fn_body);
                             const lowered_body = try self.specializeExprWithDefaultTyAndSourceTy(
                                 &inst,
@@ -2758,6 +3032,7 @@ const Lowerer = struct {
                             capture_env,
                         );
                         defer self.allocator.free(body_env);
+                        try self.preRefineExprSourceTypes(&inst, &mono_cache, body_env, fn_body);
 
                         const body_expr = self.input.store.getExpr(fn_body);
                         const lowered_body = try self.specializeExprWithDefaultTyAndSourceTy(
@@ -2821,6 +3096,7 @@ const Lowerer = struct {
                             capture_env,
                         );
                         defer self.allocator.free(body_env);
+                        try self.preRefineExprSourceTypes(&inst, &mono_cache, body_env, fn_body);
 
                         const body_expr = self.input.store.getExpr(fn_body);
                         const lowered_body = try self.specializeExprWithDefaultTyAndSourceTy(
@@ -3013,6 +3289,13 @@ const Lowerer = struct {
         const exec_arg_tys = try self.allocator.alloc(type_mod.TypeId, arg_source_tys.len);
         defer self.allocator.free(exec_arg_tys);
         for (arg_source_tys, 0..) |arg_ty, i| {
+            if (self.sourceTypeIsAbstract(solved_types, arg_ty)) {
+                const symbol_name = if (self.input.symbols.get(symbol).name.isNone())
+                    "<none>"
+                else
+                    self.input.idents.getText(self.input.symbols.get(symbol).name);
+                std.debug.print("ABSTRACT_QUEUE_ARG symbol={s} index={d}\n", .{ symbol_name, i });
+            }
             exec_arg_tys[i] = self.requireConcreteExecutableType(switch (repr_mode) {
                 .natural => try self.lowerExecutableTypeFromSolvedIn(solved_types, mono_cache, arg_ty),
                 .erased_boundary => try self.lowerErasedBoundaryExecutableTypeIn(solved_types, mono_cache, arg_ty),
@@ -5119,6 +5402,21 @@ const Lowerer = struct {
         return expr_id;
     }
 
+    fn unifyExactCallableSourceType(
+        self: *Lowerer,
+        inst: *InstScope,
+        exact_fn_ty: TypeVarId,
+        current_ty: TypeVarId,
+    ) std.mem.Allocator.Error!TypeVarId {
+        const source_fn_ty = try self.cloneTypeIntoInstFromStore(
+            inst,
+            &self.input.types,
+            exact_fn_ty,
+        );
+        try self.unifyIn(inst.types, source_fn_ty, current_ty);
+        return source_fn_ty;
+    }
+
     fn lookupTagNameBytes(self: *Lowerer, tag_name: type_mod.TagName) []const u8 {
         return switch (tag_name) {
             .ctor => |ident| blk: {
@@ -5142,7 +5440,7 @@ const Lowerer = struct {
         default_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!SpecializedExprLowering {
         const solved_types = inst.types;
-        const refined_source_ty = instantiated_ty;
+        var refined_source_ty = instantiated_ty;
         if (self.isHostedTopLevelSymbol(symbol)) {
             const specialized = try self.ensureQueuedCallableSpecializedForRequestedType(
                 solved_types,
@@ -5171,6 +5469,7 @@ const Lowerer = struct {
         }
 
         if (specializations.lookupFnExact(self.fenv, symbol)) |entry| {
+            refined_source_ty = try self.unifyExactCallableSourceType(inst, entry.fn_ty, refined_source_ty);
             return try self.lowerExactCallableVarExpr(
                 inst,
                 mono_cache,
@@ -5218,6 +5517,7 @@ const Lowerer = struct {
             if (exact_symbol != symbol) {
                 const exact_entry = specializations.lookupFnExact(self.fenv, exact_symbol) orelse
                     debugPanic("lambdamono.lower.specializeVarExpr top-level exact callable alias missing source definition");
+                refined_source_ty = try self.unifyExactCallableSourceType(inst, exact_entry.fn_ty, refined_source_ty);
                 if (self.envHasAllCaptureSymbols(venv, exact_entry.capture_symbols)) {
                     return try self.lowerExactCallableVarExpr(
                         inst,
@@ -5538,7 +5838,8 @@ const Lowerer = struct {
             const field_info = self.recordFieldByName(capture_record_ty, capture_name) orelse
                 debugPanic("lambdamono.lower.captureBindingsFromCaptures missing capture field");
             const exact_fn_symbol = self.singletonExactCallableSymbolForExecutableType(field_info.ty) orelse
-                self.singletonExactCallableSymbolForSourceType(solved_types, capture.ty);
+                self.singletonExactCallableSymbolForSourceType(solved_types, capture.ty) orelse
+                self.exactCallableSymbolForBinding(capture.symbol);
             out[i] = .{
                 .symbol = capture.symbol,
                 .ty = capture.ty,
@@ -5588,6 +5889,7 @@ const Lowerer = struct {
     fn exactCallableSymbolForBinding(self: *const Lowerer, symbol: Symbol) ?Symbol {
         if (self.input.exact_callable_aliases.get(symbol)) |exact| return exact;
         const root_symbol = self.rootSourceSymbol(symbol);
+        if (self.input.exact_callable_aliases.get(root_symbol)) |exact| return exact;
         const source = self.top_level_values.get(root_symbol) orelse return null;
         return switch (source) {
             .fn_, .hosted_fn => root_symbol,
