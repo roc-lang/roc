@@ -767,6 +767,7 @@ fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
 /// Wrapper for the harness ProcessPool: runs a single test, captures timing,
 /// and serializes via the eval wire protocol.
 fn runTestForPool(allocator: std.mem.Allocator, tc: TestCase) TestResult {
+    std.debug.print("RUN  {s}\n", .{tc.name});
     var timer = Timer.start() catch unreachable;
     const outcome = runSingleTest(allocator, tc);
     const duration = timer.read();

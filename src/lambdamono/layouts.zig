@@ -51,12 +51,7 @@ fn containsLayoutAbstractLeafVisited(
         .placeholder, .unbd => true,
         .link => unreachable,
         .primitive => false,
-        .nominal => |nominal| blk: {
-            for (nominal.args) |arg| {
-                if (try containsLayoutAbstractLeafVisited(mono_types, arg, visited)) break :blk true;
-            }
-            break :blk try containsLayoutAbstractLeafVisited(mono_types, nominal.backing, visited);
-        },
+        .nominal => |nominal| try containsLayoutAbstractLeafVisited(mono_types, nominal.backing, visited),
         .list => |elem| try containsLayoutAbstractLeafVisited(mono_types, elem, visited),
         .box => |elem| try containsLayoutAbstractLeafVisited(mono_types, elem, visited),
         .erased_fn => |erased_fn| blk: {

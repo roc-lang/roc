@@ -4959,6 +4959,7 @@ pub const Lowerer = struct {
             .ty = payload_ty,
             .data = .{ .tag_payload = .{
                 .tag_union = scrutinee_expr,
+                .tag_name = tag.name,
                 .tag_discriminant = self.requirePatternTagDiscriminant(module_idx, type_scope, pattern_idx),
                 .payload_index = @intCast(payload_index),
             } },

@@ -558,6 +558,7 @@ const Lowerer = struct {
                     .ty = expr.ty,
                     .data = .{ .tag_payload = .{
                         .tag_union = try self.lowerExprInto(&lowered.lifted_defs, venv, tag_payload.tag_union),
+                        .tag_name = tag_payload.tag_name,
                         .tag_discriminant = tag_payload.tag_discriminant,
                         .payload_index = tag_payload.payload_index,
                     } },

@@ -470,6 +470,7 @@ const Lowerer = struct {
             .tuple => |tuple| .{ .tuple = try self.instantiateExprSpan(tuple) },
             .tag_payload => |tag_payload| .{ .tag_payload = .{
                 .tag_union = try self.instantiateExpr(tag_payload.tag_union),
+                .tag_name = tag_payload.tag_name,
                 .tag_discriminant = tag_payload.tag_discriminant,
                 .payload_index = tag_payload.payload_index,
             } },
@@ -1774,6 +1775,7 @@ const Lowerer = struct {
                 const cond_ty = try self.inferExpr(venv, when_expr.cond);
                 for (self.output.sliceBranchSpan(when_expr.branches)) |branch_id| {
                     const branch = self.output.getBranch(branch_id);
+                    if (!self.patPossibleAtTy(self.output.getPat(branch.pat), cond_ty)) continue;
                     const pat_result = try self.inferPat(venv, branch.pat);
                     defer self.allocator.free(pat_result.additions);
                     try self.unify(cond_ty, pat_result.ty);
@@ -1830,26 +1832,6 @@ const Lowerer = struct {
                 const union_ty = try self.inferExpr(venv, tag_payload.tag_union);
                 const subject_ty = self.output.getExpr(tag_payload.tag_union).ty;
                 try self.unify(union_ty, subject_ty);
-                const subject_root = self.types.unlinkErasingNominal(subject_ty);
-                const subject_node = self.types.getNode(subject_root);
-                const payload_ty = switch (subject_node) {
-                    .content => |content| switch (content) {
-                        .tag_union => |tag_union| blk_payload: {
-                            const tags = self.types.sliceTags(tag_union.tags);
-                            if (tag_payload.tag_discriminant >= tags.len) {
-                                return debugPanic("lambdasolved.tag_payload invariant violated: tag discriminant out of bounds", .{});
-                            }
-                            const args = self.types.sliceTypeVarSpan(tags[tag_payload.tag_discriminant].args);
-                            if (tag_payload.payload_index >= args.len) {
-                                return debugPanic("lambdasolved.tag_payload invariant violated: payload index out of bounds", .{});
-                            }
-                            break :blk_payload args[tag_payload.payload_index];
-                        },
-                        else => return debugPanic("lambdasolved.tag_payload invariant violated: subject is not a tag union", .{}),
-                    },
-                    else => return debugPanic("lambdasolved.tag_payload invariant violated: subject tag union type is unresolved", .{}),
-                };
-                try self.unify(target_ty, payload_ty);
                 break :blk target_ty;
             },
             .tuple_access => |tuple_access| blk: {
@@ -1920,6 +1902,26 @@ const Lowerer = struct {
         expr.ty = expected_ty;
         expr.data = .{ .runtime_error = msg };
         self.output.exprs.items[idx] = expr;
+    }
+
+    fn patPossibleAtTy(self: *Lowerer, pat: ast.Pat, ty: TypeVarId) bool {
+        return switch (pat.data) {
+            .var_, .bool_lit => true,
+            .tag => |tag| blk: {
+                const arg_tys = self.tagArgTypesByName(ty, tag.name) orelse
+                    break :blk false;
+                const arg_pats = self.output.slicePatSpan(tag.args);
+                if (arg_tys.len != arg_pats.len) {
+                    debugPanic("lambdasolved.patPossibleAtTy tag arg count mismatch", .{});
+                }
+                for (arg_pats, arg_tys) |arg_pat_id, arg_ty| {
+                    if (!self.patPossibleAtTy(self.output.getPat(arg_pat_id), arg_ty)) {
+                        break :blk false;
+                    }
+                }
+                break :blk true;
+            },
+        };
     }
 
     fn typesCompatible(self: *Lowerer, left: TypeVarId, right: TypeVarId) bool {

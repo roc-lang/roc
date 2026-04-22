@@ -146,6 +146,7 @@ pub const Expr = struct {
         tuple: Span(ExprId),
         tag_payload: struct {
             tag_union: ExprId,
+            tag_name: base.Ident.Idx,
             tag_discriminant: u16,
             payload_index: u16,
         },
