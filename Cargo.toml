@@ -128,7 +128,7 @@ pulldown-cmark = { version = "0.9.2", default-features = false }
 quickcheck = "1.0.3" # update roc_std/Cargo.toml on change
 quickcheck_macros = "1.0.0" # update roc_std/Cargo.toml on change
 quote = "1.0.23"
-rand = "0.8.5"
+rand = "0.8.6"
 regex = "1.7.1"
 remove_dir_all = "0.8.1"
 reqwest = { version = "0.11.23", default-features = false, features = [
