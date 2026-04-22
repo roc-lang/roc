@@ -1314,9 +1314,10 @@ const ProcLowerer = struct {
             return try self.lowerTagUnionIntoSingletonTagUnion(source_local, target_local, next, .{ .canonical = .zst });
         }
 
-        if (target.tag == .box) {
+        if (target_is_box) {
             const boxed_child_ref = self.physicalBoxChildLayoutRef(target_ref);
-            const boxed_child_local = try self.freshLocalWithLayoutAndRef(target.data.box, boxed_child_ref);
+            const boxed_child_layout = try self.parent.lowerLayoutId(boxed_child_ref);
+            const boxed_child_local = try self.freshLocalWithLayoutAndRef(boxed_child_layout, boxed_child_ref);
             const box_args = try self.parent.store.addLocalSpan(&.{boxed_child_local});
             const box_stmt = try self.parent.store.addCFStmt(.{ .assign_low_level = .{
                 .target = target_local,
@@ -1329,9 +1330,10 @@ const ProcLowerer = struct {
             return try self.lowerExplicitBridgeIntoLocal(source_local, boxed_child_local, box_stmt);
         }
 
-        if (actual.tag == .box) {
+        if (actual_is_box) {
             const unboxed_ref = self.physicalBoxChildLayoutRef(actual_ref);
-            const unboxed_local = try self.freshLocalWithLayoutAndRef(actual.data.box, unboxed_ref);
+            const unboxed_layout = try self.parent.lowerLayoutId(unboxed_ref);
+            const unboxed_local = try self.freshLocalWithLayoutAndRef(unboxed_layout, unboxed_ref);
             const bridged = try self.lowerExplicitBridgeIntoLocal(unboxed_local, target_local, next);
             const unbox_args = try self.parent.store.addLocalSpan(&.{source_local});
             return try self.parent.store.addCFStmt(.{ .assign_low_level = .{

@@ -36,6 +36,7 @@ pub const Pending = struct {
     specialized: ?ast.DefVal = null,
     summary_types: ?*solved.Type.Store = null,
     summary_fn_ty: ?TypeVarId = null,
+    summary_exact_fn_ty: ?TypeVarId = null,
     summary_seeded: bool = false,
     exec_capture_ty: ?type_mod.TypeId = null,
     exec_args_tys: ?[]type_mod.TypeId = null,

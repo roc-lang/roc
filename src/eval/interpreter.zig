@@ -2209,7 +2209,7 @@ pub const Interpreter = struct {
                 .base_layout = .zst,
             },
             .box_of_zst => return .{
-                .outer = Value.zst,
+                .outer = try self.allocBoxOfZstValue(struct_layout),
                 .base = Value.zst,
                 .base_layout = .zst,
             },
@@ -2861,7 +2861,7 @@ pub const Interpreter = struct {
                 }
                 return boxed;
             },
-            .box_of_zst => return Value.zst,
+            .box_of_zst => return try self.allocBoxOfZstValue(ret_layout),
             else => {
                 const val = try self.alloc(ret_layout);
                 @memcpy(val.ptr[0..@sizeOf(RocList)], std.mem.asBytes(&rl));
@@ -4937,6 +4937,17 @@ pub const Interpreter = struct {
         return @ptrFromInt(raw_ptr);
     }
 
+    fn allocBoxOfZstValue(self: *LirInterpreter, layout_idx: layout_mod.Idx) Error!Value {
+        const boxed = try self.alloc(layout_idx);
+        const target_usize = self.layout_store.targetUsize();
+        if (target_usize.size() == 8) {
+            boxed.write(usize, 0);
+        } else {
+            boxed.write(u32, 0);
+        }
+        return boxed;
+    }
+
     const ResolvedTagUnionBase = struct {
         value: Value,
         layout: layout_mod.Idx,
@@ -5106,6 +5117,10 @@ pub const Interpreter = struct {
                 );
             }
         }
+        const expected_layout_val = self.layout_store.getLayout(expected_layout);
+        if (expected_layout_val.tag == .box_of_zst) {
+            return try self.allocBoxOfZstValue(expected_layout);
+        }
         return value;
     }
 
@@ -5156,7 +5171,7 @@ pub const Interpreter = struct {
     fn evalBoxBox(self: *LirInterpreter, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
         const ret_layout_val = self.layout_store.getLayout(ret_layout);
         switch (ret_layout_val.tag) {
-            .box_of_zst => return Value.zst,
+            .box_of_zst => return try self.allocBoxOfZstValue(ret_layout),
             .box => {
                 const box_info = self.layout_store.getBoxInfo(ret_layout_val);
                 const elem_size = box_info.elem_size;
