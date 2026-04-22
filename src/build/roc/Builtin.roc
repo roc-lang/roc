@@ -13,6 +13,7 @@ Builtin :: [].{
 
 		is_empty : Str -> Bool
 		is_empty = |str| Str.count_utf8_bytes(str) == 0
+
 		## Concatenates two strings together.
 		## ```roc
 		## expect Str.concat("ab", "cd") == "abcd"
@@ -20,6 +21,7 @@ Builtin :: [].{
 		## expect Str.concat("", "") == ""
 		## ```
 		concat : Str, Str -> Str
+
 		## Determines whether or not the first Str contains the second.
 		## ```roc
 		## expect Str.contains("foobarbaz", "bar")
@@ -27,22 +29,26 @@ Builtin :: [].{
 		## expect Str.contains("anything", "")
 		## ```
 		contains : Str, Str -> Bool
+
 		## Return the [Str] with all whitespace removed from both the beginning
 		## as well as the end.
 		## ```roc
 		## expect Str.trim("   Hello      \n\n") == "Hello"
 		## ```
 		trim : Str -> Str
+
 		## Return the [Str] with all whitespace removed from the beginning.
 		## ```roc
 		## expect Str.trim_start("   Hello      \n\n") == "Hello      \n\n"
 		## ```
 		trim_start : Str -> Str
+
 		## Return the [Str] with all whitespace removed from the end.
 		## ```roc
 		## expect Str.trim_end("   Hello      \n\n") == "   Hello"
 		## ```
 		trim_end : Str -> Str
+
 		## Returns `True` if all the [ASCII characters](https://en.wikipedia.org/wiki/ASCII) in the string are the same
 		## when ignoring differences in capitalization.
 		## Non-ASCII characters must all be exactly the same,
@@ -75,6 +81,7 @@ Builtin :: [].{
 		## To convert a string's ASCII characters to uppercase or lowercase, you can use [Str.with_ascii_uppercased]
 		## or [Str.with_ascii_lowercased].
 		caseless_ascii_equals : Str, Str -> Bool
+
 		## Returns a version of the string with all [ASCII characters](https://en.wikipedia.org/wiki/ASCII) lowercased.
 		## Non-ASCII characters are left unmodified. For example:
 		##
@@ -98,6 +105,7 @@ Builtin :: [].{
 		## To do a case-insensitive comparison of the ASCII characters in a string,
 		## you can use [Str.caseless_ascii_equals].
 		with_ascii_lowercased : Str -> Str
+
 		## Returns a version of the string with all [ASCII characters](https://en.wikipedia.org/wiki/ASCII) uppercased.
 		## Non-ASCII characters are left unmodified. For example:
 		##
@@ -123,18 +131,21 @@ Builtin :: [].{
 		## To do a case-insensitive comparison of the ASCII characters in a string,
 		## you can use [Str.caseless_ascii_equals].
 		with_ascii_uppercased : Str -> Str
+
 		## Check if the given [Str] starts with a value.
 		## ```roc
 		## expect Str.starts_with("ABC", "A") == Bool.true
 		## expect Str.starts_with("ABC", "X") == Bool.false
 		## ```
 		starts_with : Str, Str -> Bool
+
 		## Check if the given [Str] ends with a value.
 		## ```roc
 		## expect Str.ends_with("ABC", "C") == Bool.true
 		## expect Str.ends_with("ABC", "X") == Bool.false
 		## ```
 		ends_with : Str, Str -> Bool
+
 		## Repeats a string the given number of times.
 		## ```roc
 		## expect Str.repeat("z", 3) == "zzz"
@@ -146,12 +157,14 @@ Builtin :: [].{
 		## expect Str.repeat("anything", 0) == ""
 		## ```
 		repeat : Str, U64 -> Str
+
 		## Adds a prefix to the given [Str].
 		## ```roc
 		## expect Str.with_prefix("Awesome", "Roc") == "RocAwesome"
 		## ```
 		with_prefix : Str, Str -> Str
 		with_prefix = |string, prefix| Str.concat(prefix, string)
+
 		## Drops the given prefix [Str] from the start of a [Str]
 		## If the prefix is not found, returns the original string.
 		##
@@ -160,6 +173,7 @@ Builtin :: [].{
 		## expect Str.drop_prefix("foobar", "foo") == "bar"
 		## ```
 		drop_prefix : Str, Str -> Str
+
 		## Drops the given suffix [Str] from the end of a [Str]
 		## If the suffix is not found, returns the original string.
 		##
@@ -168,11 +182,13 @@ Builtin :: [].{
 		## expect Str.drop_suffix("barfoo", "foo") == "bar"
 		## ```
 		drop_suffix : Str, Str -> Str
+
 		## Gives the number of bytes in a [Str] value.
 		## ```roc
 		## expect Str.count_utf8_bytes("Hello World") == 11
 		## ```
 		count_utf8_bytes : Str -> U64
+
 		## Returns a string of the specified capacity without any content.
 		##
 		## This is a performance optimization tool that's like calling [Str.reserve] on an empty string.
@@ -198,6 +214,7 @@ Builtin :: [].{
 		##
 		## For more details on how the performance optimization works, see [Str.reserve].
 		with_capacity : U64 -> Str
+
 		## Increase a string's capacity by at least the given number of additional bytes.
 		##
 		## This can improve the performance of string concatenation operations like [Str.concat] by
@@ -255,9 +272,11 @@ Builtin :: [].{
 		##
 		## If you plan to use [Str.reserve] on an empty string, it's generally better to use [Str.with_capacity] instead.
 		reserve : Str, U64 -> Str
+
 		## Shrink the memory footprint of a str such that its capacity and length are equal.
 		## Note: This will also convert seamless slices to regular lists.
 		release_excess_capacity : Str -> Str
+
 		## Returns a [List] of the string's [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit).
 		## (To split the string into a [List] of smaller [Str] values instead of [U8] values,
 		## see [Str.split_on].)
@@ -268,6 +287,7 @@ Builtin :: [].{
 		## expect Str.to_utf8("🐦") == [240, 159, 144, 166]
 		## ```
 		to_utf8 : Str -> List(U8)
+
 		## Converts a [List] of [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit) to a string.
 		## Any grouping of invalid byte sequences are replaced with a single unicode replacement character '�'.
 		##
@@ -285,6 +305,7 @@ Builtin :: [].{
 		## expect (Str.from_utf8_lossy [82, 0xED, 0xA0, 0xBD, 99]) == "R�c"
 		## ```
 		from_utf8_lossy : List(U8) -> Str
+
 		## Converts a [List] of [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit) to a string.
 		##
 		## Returns `Err` if the given bytes are invalid UTF-8, and returns `Ok ""` when given `[]`.
@@ -297,6 +318,7 @@ Builtin :: [].{
 		## expect Str.from_utf8([255]) |> Result.is_err
 		## ```
 		from_utf8 : List(U8) -> Try(Str, [BadUtf8({ problem : Str.Utf8Problem, index : U64 }), ..])
+
 		## Split a string around a separator.
 		##
 		## Passing `""` for the separator is not useful;
@@ -306,6 +328,7 @@ Builtin :: [].{
 		## expect Str.split_on("1,2,3", "") == ["1,2,3"]
 		## ```
 		split_on : Str, Str -> List(Str)
+
 		## Combines a [List] of strings into a single string, with a separator
 		## string in between each.
 		## ```roc
@@ -334,11 +357,13 @@ Builtin :: [].{
 	}
 
 	List(_item) :: [ProvidedByCompiler].{
+
 		## Returns the length of the list - the number of elements it contains.
 		##
 		## One [List] can store up to `Num.max_i64` elements on 64-bit targets and `Num.max_i32` on 32-bit targets like wasm.
 		## This means the #U64 this function returns can always be safely converted to #I64 or #I32, depending on the target.
 		len : List(_item) -> U64
+
 		##  Check if the list is empty.
 		## ```roc
 		## List.is_empty([1, 2, 3])
@@ -347,6 +372,7 @@ Builtin :: [].{
 		## ```
 		is_empty : List(_item) -> Bool
 		is_empty = |list| List.len(list) == 0
+
 		## Put two lists together.
 		## ```roc
 		## List.concat([1, 2, 3], [4, 5])
@@ -355,8 +381,10 @@ Builtin :: [].{
 		##     |> List.concat([3, 4])
 		## ```
 		concat : List(item), List(item) -> List(item)
+
 		## Create a list with space for at least capacity elements
 		with_capacity : U64 -> List(item)
+
 		## Sort with a custom comparison function
 		sort_with : List(item), (item, item -> [LT, EQ, GT]) -> List(item)
 
@@ -733,6 +761,7 @@ Builtin :: [].{
 	}
 
 	Bool := [False, True].{
+
 		## Returns `Bool.false` when given `Bool.true`, and vice versa. This is
 		## equivalent to the logic [NOT](https://en.wikipedia.org/wiki/Negation)
 		## gate. The operator `!` can also be used as shorthand for `Bool.not`.
@@ -779,6 +808,7 @@ Builtin :: [].{
 	}
 
 	Try(ok, err) := [Ok(ok), Err(err)].{
+
 		## Returns `Bool.true` if the result indicates a success, else returns `Bool.false`.
 		## ```roc
 		## Result.is_ok(Ok(5))

@@ -2593,6 +2593,7 @@ const Formatter = struct {
 
     fn flushComments(fmt: *Formatter, between_text: []const u8) !bool {
         var newline_count: usize = 0;
+        var prev_was_comment: bool = false;
         var i: usize = 0;
         while (i < between_text.len) {
             if (between_text[i] == '#') {
@@ -2601,6 +2602,15 @@ const Formatter = struct {
                 var comment_end = comment_start;
                 while (comment_end < between_text.len and between_text[comment_end] != '\n' and between_text[comment_end] != '\r') {
                     comment_end += 1;
+                }
+
+                // Check if it's a doc comment
+                const is_doc_comment = comment_start < between_text.len and between_text[comment_start] == '#';
+                // If a doc comment directly follows code (only one \n between them,
+                // and the previous 'thing' wasn't another comment), add a blank line.
+                if (is_doc_comment and newline_count == 1 and !prev_was_comment) {
+                    try fmt.newline();
+                    newline_count += 1;
                 }
 
                 if (newline_count > 0 or fmt.has_newline) {
@@ -2617,6 +2627,7 @@ const Formatter = struct {
                 try fmt.pushAll(comment_text);
                 try fmt.newline();
                 newline_count = 1; // reset count to allow an additional newline after a comment
+                prev_was_comment = true;
                 i = comment_end + 1;
             } else if (between_text[i] == '\n') {
                 if (newline_count < 2) {
@@ -3071,4 +3082,32 @@ test "issue 8989: platform header targets section is preserved" {
     defer std.testing.allocator.free(result);
     // The targets section must be preserved in the output
     try std.testing.expect(std.mem.indexOf(u8, result, "targets:") != null);
+}
+
+test "blank line inserted between function with doc comments" {
+    const input =
+        \\foo = 1
+        \\## doc
+        \\## doc
+        \\bar = 2
+        \\## doc
+        \\## doc
+        \\foobar = 12
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+
+    const expected =
+        \\foo = 1
+        \\
+        \\## doc
+        \\## doc
+        \\bar = 2
+        \\
+        \\## doc
+        \\## doc
+        \\foobar = 12
+        \\
+    ;
+    try std.testing.expectEqualStrings(expected, result);
 }
