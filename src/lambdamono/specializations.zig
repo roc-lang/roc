@@ -511,7 +511,17 @@ fn makeKey(
         }
     }
 
-    _ = exec_ret_ty;
+    const has_exec_ret: u8 = if (exec_ret_ty != null) 1 else 0;
+    try key.append(allocator, has_exec_ret);
+    if (exec_ret_ty) |ret_ty| {
+        const exec_store = exec_types orelse
+            debugPanic("lambdamono.specializations.makeKey missing executable type store for executable return key");
+        const ret_key = try exec_store.structuralKeyOwned(ret_ty);
+        defer exec_store.allocator.free(ret_key);
+        const ret_key_len: u32 = @intCast(ret_key.len);
+        try key.appendSlice(allocator, std.mem.asBytes(&ret_key_len));
+        try key.appendSlice(allocator, ret_key);
+    }
 
     return try key.toOwnedSlice(allocator);
 }

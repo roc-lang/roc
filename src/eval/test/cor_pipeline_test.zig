@@ -717,8 +717,8 @@ fn debugPrintIrBridges(ir_result: *const ir.Lower.Result) void {
                             let_stmt.bind.symbol.raw(),
                         });
                         debugPrintIrLayoutRef(&ir_result.layouts, let_stmt.bind.layout);
-                        std.debug.print(" source_sym={d} source_layout=", .{source.symbol.raw()});
-                        debugPrintIrLayoutRef(&ir_result.layouts, source.layout);
+                        std.debug.print(" source_sym={d} source_layout=", .{source.value.symbol.raw()});
+                        debugPrintIrLayoutRef(&ir_result.layouts, source.value.layout);
                         std.debug.print("\n", .{});
                     },
                     else => {},
@@ -872,6 +872,39 @@ fn expectErasedLoweringProgram(
     try testing.expectEqual(expected_lir_erased_calls, lir_erased_calls);
 }
 
+fn expectNoErasedLoweringProgram(
+    source_kind: helpers.SourceKind,
+    source: []const u8,
+    imports: []const helpers.ModuleSource,
+    expected: []const u8,
+) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const arena_allocator = arena.allocator();
+    var executable = try compileExecutableProgram(arena_allocator, source_kind, source, imports);
+    defer executable.deinit(arena_allocator);
+
+    const executable_erased_calls = countExecutableErasedCalls(&executable.executable);
+    const executable_packed = countExecutablePackedFns(&executable.executable);
+    const executable_erased = countExecutableErasedFnTypes(&executable.executable);
+
+    var compiled = if (source_kind == .expr and imports.len == 0)
+        try helpers.compileInspectedExpr(arena_allocator, source)
+    else
+        try helpers.compileProgram(arena_allocator, source_kind, source, imports);
+    defer compiled.deinit(arena_allocator);
+
+    const actual = try helpers.lirInterpreterInspectedStr(arena_allocator, &compiled.lowered);
+    const lir_erased_calls = countErasedCalls(&compiled);
+
+    try testing.expectEqualStrings(expected, actual);
+    try testing.expectEqual(@as(usize, 0), executable_erased_calls);
+    try testing.expectEqual(@as(usize, 0), executable_packed);
+    try testing.expectEqual(@as(usize, 0), executable_erased);
+    try testing.expectEqual(@as(usize, 0), lir_erased_calls);
+}
+
 const DirectCallCase = struct {
     name: []const u8,
     source_kind: helpers.SourceKind = .module,
@@ -974,6 +1007,35 @@ const record_field_closure_extraction_source =
     \\        add_a = rec.add_a
     \\        add_a(32.I64)
     \\    }
+;
+
+const nonboxed_polymorphic_closure_round_trip_source =
+    \\{
+    \\    make_const = |value| |_| value
+    \\    num_f = make_const(41)
+    \\    str_f = make_const("ok")
+    \\    { n: num_f({}), s: str_f({}) }
+    \\}
+;
+
+const nonboxed_polymorphic_closure_helper_round_trip_source =
+    \\{
+    \\    make_const = |value| |_| value
+    \\    keep = |f| f
+    \\    num_f = keep(make_const(41))
+    \\    str_f = keep(make_const("ok"))
+    \\    { n: num_f({}), s: str_f({}) }
+    \\}
+;
+
+const boxed_lambda_helper_chain_source =
+    \\{
+    \\    make = |n| |x| x + n
+    \\    wrap = |boxed| { value: boxed }
+    \\    unwrap = |record| record.value
+    \\    f = Box.unbox(unwrap(wrap(Box.box(make(5)))))
+    \\    f(1) + f(2)
+    \\}
 ;
 
 const opaque_function_field_lookup_source =
@@ -2150,6 +2212,34 @@ test "cor pipeline - debug bridge shapes boxed lambda stored in tag union" {
     );
 }
 
+test "cor pipeline - boxed polymorphic const closure round trip keeps erased captures" {
+    const source =
+        \\{
+        \\    make_const = |value| |_| value
+        \\    num_f = Box.unbox(Box.box(make_const(41)))
+        \\    str_f = Box.unbox(Box.box(make_const("ok")))
+        \\    { n: num_f({}), s: str_f({}) }
+        \\}
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const arena_allocator = arena.allocator();
+    var executable = try compileExecutableProgram(arena_allocator, .expr, source, &.{});
+    defer executable.deinit(arena_allocator);
+    try testing.expectEqual(@as(usize, 0), countExecutableBridgeNodes(&executable.executable));
+
+    var ir_program = try compileIrProgram(arena_allocator, .expr, source, &.{});
+    defer ir_program.deinit(arena_allocator);
+    try testing.expectEqual(@as(usize, 0), countIrBridgeNodes(&ir_program.ir_result));
+
+    var compiled = try helpers.compileInspectedExpr(arena_allocator, source);
+    defer compiled.deinit(arena_allocator);
+    const actual = try helpers.lirInterpreterInspectedStr(arena_allocator, &compiled.lowered);
+    try testing.expectEqualStrings("{ n: 41.0, s: \"ok\" }", actual);
+}
+
 test "cor pipeline - debug bridge shapes list concat utf8 issue 8618" {
     try debugPrintBridgeShapesForSource(
         .expr,
@@ -2165,6 +2255,21 @@ test "cor pipeline - debug bridge shapes list concat utf8 issue 8618" {
     ,
         &.{},
     );
+}
+
+test "cor pipeline - boxed lambda helper chain keeps erased captures" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const arena_allocator = arena.allocator();
+    var compiled = try helpers.compileInspectedExpr(arena_allocator, boxed_lambda_helper_chain_source);
+    defer compiled.deinit(arena_allocator);
+
+    const actual = try helpers.lirInterpreterInspectedStr(arena_allocator, &compiled.lowered);
+    try testing.expectEqualStrings("13.0", actual);
+    try testing.expect(countErasedCalls(&compiled) >= 1);
+    try testing.expect(countLowLevelOp(&compiled, .box_box) >= 1);
+    try testing.expect(countLowLevelOp(&compiled, .box_unbox) >= 1);
 }
 
 
@@ -2199,6 +2304,24 @@ test "cor pipeline - boxed lambda lowering uses erased-call path" {
         boxed_lambda_round_trip_erased_case.expected_executable_packed_fns,
         boxed_lambda_round_trip_erased_case.expected_executable_erased_fn_types,
         boxed_lambda_round_trip_erased_case.expected_lir_erased_calls,
+    );
+}
+
+test "cor pipeline - non-boxed polymorphic closure round trip does not erase" {
+    try expectNoErasedLoweringProgram(
+        .expr,
+        nonboxed_polymorphic_closure_round_trip_source,
+        &.{},
+        "{ n: 41.0, s: \"ok\" }",
+    );
+}
+
+test "cor pipeline - non-boxed polymorphic closure helper round trip does not erase" {
+    try expectNoErasedLoweringProgram(
+        .expr,
+        nonboxed_polymorphic_closure_helper_round_trip_source,
+        &.{},
+        "{ n: 41.0, s: \"ok\" }",
     );
 }
 
