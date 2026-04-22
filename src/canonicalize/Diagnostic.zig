@@ -727,7 +727,7 @@ pub const Diagnostic = union(enum) {
         var report = Report.init(allocator, "INVALID INTERPOLATION", .runtime_error);
         try report.document.addReflowingText("This string interpolation is not valid.");
         try report.document.addLineBreak();
-        try report.document.addReflowingText("String interpolation should use the format: \"text $(expression) more text\"");
+        try report.document.addReflowingText("String interpolation should use the format: \"text ${expression} more text\"");
         return report;
     }
 
