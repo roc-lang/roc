@@ -699,6 +699,7 @@ const DeadFilesDetector = struct {
         const entry_points: []const []const u8 = &.{
             "main.zig", // CLI, playground_wasm, interpreter_shim, etc.
             "static_lib.zig", // Builtins static library
+            "shim_io.zig", // Minimal std.Io impl for shims; imported as named module via build.zig
             "tracy.zig", // Profiler module (added via b.addModule)
             "tracy_stub.zig", // No-op tracy stub for standalone static library builds (added via b.addModule)
             "fuzz_sort.zig", // Fuzzing entry point

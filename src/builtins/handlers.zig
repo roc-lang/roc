@@ -235,19 +235,15 @@ fn handleExceptionWindows(exception_info: *EXCEPTION_POINTERS) callconv(.winapi)
 }
 
 /// The POSIX SIGSEGV/SIGBUS signal handler function
-fn handleSegvSignal(_: posix.SIG, info: *const posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {
+fn handleSegvSignal(_: posix.SIG, info: *const posix.siginfo_t, context: ?*anyopaque) callconv(.c) void {
     // Get the fault address - access differs by platform
     const fault_addr: usize = getFaultAddress(info);
 
-    // Get the current stack pointer to help determine if this is a stack overflow
-    var current_sp: usize = 0;
-    asm volatile (""
-        : [sp] "={sp}" (current_sp),
-    );
+    // Use the original (faulting) stack pointer from the signal context rather than the
+    // current sp, which points to the alt-stack and is far from the main stack.
+    const faulting_sp = getContextSp(context);
 
-    // A stack overflow typically occurs when the fault address is near the stack pointer
-    // or below the stack (stacks grow downward on most architectures)
-    const likely_stack_overflow = isLikelyStackOverflow(fault_addr, current_sp);
+    const likely_stack_overflow = isLikelyStackOverflow(fault_addr, faulting_sp);
 
     if (likely_stack_overflow) {
         if (stack_overflow_callback) |callback| {
@@ -299,6 +295,43 @@ fn getFaultAddress(info: *const posix.siginfo_t) usize {
         // Fallback: return 0 if we can't determine the address
         return 0;
     }
+}
+
+/// Extract the stack pointer that was active when the signal fired from the signal
+/// context (third argument to a SA_SIGINFO handler).  The handler itself runs on
+/// the alt-stack, so reading `sp` via inline asm gives the alt-stack pointer —
+/// which is far from the main stack and breaks the proximity heuristic.  Reading
+/// the register directly from the saved context gives the correct value.
+fn getContextSp(context: ?*anyopaque) usize {
+    if (comptime builtin.os.tag == .linux) {
+        if (context) |ctx| {
+            const bytes: [*]const u8 = @ptrCast(ctx);
+            if (comptime builtin.cpu.arch == .x86_64) {
+                // Linux x86_64 ucontext_t layout (kernel ABI, stable since 2.6):
+                //   0: uc_flags (usize)
+                //   8: uc_link  (?*ucontext_t)
+                //  16: uc_stack (stack_t: sp[8] flags[4] _pad[4] size[8] = 24 bytes)
+                //  40: uc_mcontext: r8 r9 r10 r11 r12 r13 r14 r15 rdi rsi rbp rbx rdx rax rcx rsp rip
+                const rsp_offset = 40 + 15 * 8; // 160
+                return @as(*const u64, @ptrCast(@alignCast(bytes + rsp_offset))).*;
+            } else if (comptime builtin.cpu.arch == .aarch64) {
+                // Linux aarch64 ucontext_t layout (kernel ABI):
+                //   0: uc_flags (8), uc_link (8), uc_stack (24), uc_sigmask (8), _unused (120) = 168
+                // 168->176: 8-byte padding to align uc_mcontext to 16
+                // 176: uc_mcontext: fault_address[8 align16], x[30×8=240], lr[8], sp[8], pc[8]
+                const sp_offset = 176 + 8 + 30 * 8 + 8; // 432
+                return @as(*const u64, @ptrCast(@alignCast(bytes + sp_offset))).*;
+            }
+        }
+    }
+    // Fallback (non-Linux or unrecognised arch): current sp.  On the alt-stack
+    // this is wrong for stack-overflow detection; captureStackBounds + the bounds
+    // check handle it on platforms where pthread is available.
+    var sp: usize = 0;
+    asm volatile (""
+        : [sp] "={sp}" (sp),
+    );
+    return sp;
 }
 
 /// Try to discover the main thread's stack address range from the OS.
