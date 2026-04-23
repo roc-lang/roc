@@ -2469,12 +2469,13 @@ pub const Lowerer = struct {
             },
             .e_binop => |binop| blk: {
                 if (binop.op == .ne) {
+                    const operand_var = try self.exprResultVar(module_idx, type_scope, env, binop.lhs);
                     const eq_args = try self.lowerHomogeneousBinopArgs(
                         module_idx,
                         type_scope,
                         env,
                         try self.requireExprType(module_idx, type_scope, binop.lhs),
-                        null,
+                        operand_var,
                         binop.lhs,
                         binop.rhs,
                     );
@@ -2535,12 +2536,13 @@ pub const Lowerer = struct {
                     .add, .sub, .mul, .div, .rem, .div_trunc, .lt, .gt, .le, .ge, .eq => try self.requireExprType(module_idx, type_scope, binop.lhs),
                     else => unreachable,
                 };
+                const operand_var = try self.exprResultVar(module_idx, type_scope, env, binop.lhs);
                 const lowered_args = try self.lowerHomogeneousBinopArgs(
                     module_idx,
                     type_scope,
                     env,
                     operand_ty,
-                    null,
+                    operand_var,
                     binop.lhs,
                     binop.rhs,
                 );
@@ -6117,6 +6119,9 @@ pub const Lowerer = struct {
         const target_ty = blk: {
             const expected_kind = self.ctx.types.getType(expected_ty);
             if (expected_kind != .placeholder and expected_kind != .unbd) break :blk expected_ty;
+            if (expected_var) |var_| {
+                break :blk try self.instantiateVarType(module_idx, type_scope, var_);
+            }
             break :blk try self.requireExprType(module_idx, type_scope, expr.idx);
         };
 
