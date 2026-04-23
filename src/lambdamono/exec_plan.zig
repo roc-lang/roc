@@ -435,11 +435,19 @@ const Planner = struct {
             null;
         const target_origin = self.input.symbols.get(target).origin;
         const actual_origin = if (actual_target) |symbol| self.input.symbols.get(symbol).origin else null;
+        const expr_symbol: ?Symbol = switch (expr.data) {
+            .var_ => |symbol| symbol,
+            else => null,
+        };
+        const expr_origin = if (expr_symbol) |symbol| self.input.symbols.get(symbol).origin else null;
         debugPanicFmt(
-            "lambdamono.exec_plan.callableCapturesForExprFact missing matching callable fact expr={d} tag={s} ty={d} ty_tag={s} target={d} target_origin={s} actual_target={?d} actual_origin={?s}",
+            "lambdamono.exec_plan.callableCapturesForExprFact missing matching callable fact expr={d} tag={s} expr_symbol={?d} expr_origin={?s} specializing={?d} ty={d} ty_tag={s} target={d} target_origin={s} actual_target={?d} actual_origin={?s}",
             .{
                 @intFromEnum(expr_id),
                 @tagName(expr.data),
+                if (expr_symbol) |symbol| symbol.raw() else null,
+                if (expr_origin) |origin| @tagName(origin) else null,
+                if (self.current_specializing_symbol) |symbol| symbol.raw() else null,
                 @intFromEnum(expr.ty),
                 @tagName(self.types.getTypePreservingNominal(expr.ty)),
                 target.raw(),
@@ -2151,8 +2159,12 @@ const Planner = struct {
             null;
         const actual_arg_exec_tys = try self.allocator.alloc(type_mod.TypeId, arg_exprs.len);
         defer if (actual_arg_exec_tys.len != 0) self.allocator.free(actual_arg_exec_tys);
+        const actual_arg_facts = try self.allocator.alloc(ValueFactId, arg_exprs.len);
+        defer if (actual_arg_facts.len != 0) self.allocator.free(actual_arg_facts);
         for (arg_exprs, 0..) |arg_expr, i| {
             actual_arg_exec_tys[i] = self.output.getExpr(arg_expr).ty;
+            actual_arg_facts[i] = self.valueFactForExpr(arg_expr) orelse
+                try self.addValueFact(Symbol.none, arg_source_tys[i], actual_arg_exec_tys[i], null);
         }
         if (exec_call_sig.args.len != arg_exprs.len) {
             debugPanic("lambdamono.exec_plan.applyCallableValueCall callable executable arg arity mismatch");
@@ -2180,7 +2192,7 @@ const Planner = struct {
                                 call_relation_ty,
                                 capture_facts,
                                 func_capture_ty,
-                                &.{},
+                                actual_arg_facts,
                             );
                             if (specialized.exec_capture_ty != func_capture_ty) {
                                 const binding_summary = try self.debugExecutableSymbolBindingsSummary(
@@ -2221,7 +2233,7 @@ const Planner = struct {
                                     call_relation_ty,
                                     &.{},
                                     func_capture_ty,
-                                    &.{},
+                                    actual_arg_facts,
                                 );
                                 if (specialized.exec_capture_ty != func_capture_ty) {
                                     const binding_summary = try self.debugExecutableSymbolBindingsSummary(
@@ -2359,7 +2371,7 @@ const Planner = struct {
                         call_relation_ty,
                         branch_capture_facts,
                         lambda_member.capture_ty,
-                        &.{},
+                        actual_arg_facts,
                         actual_arg_exec_tys,
                         requested_exec_ret_ty,
                     );
@@ -8492,57 +8504,63 @@ const Planner = struct {
                     .lset => {},
                     .erased => debugPanic("lambdamono.exec_plan.lowerExactCallableVarExpr erased callable lowered to natural executable type"),
                 }
-                const specialized = try self.ensureQueuedCallableSpecializedWithExecSignature(
+                const lambda_member = self.exactExecutableLambdaMember(
                     solved_types,
-                    target_symbol,
-                    .natural,
                     refined_source_ty,
-                    required_capture_facts,
-                    current_capture.ty,
-                    &.{},
-                    expected_call_sig.args,
-                    expected_call_sig.ret,
+                    concrete_required_exec_ty,
+                    target_symbol,
                 );
-                const authoritative_call_sig: type_mod.CallableSig = .{
-                    .args = try self.types.dupeTypeIds(specialized.exec_args_tys),
-                    .ret = specialized.exec_ret_ty,
-                };
-                defer if (authoritative_call_sig.args.len != 0) self.allocator.free(authoritative_call_sig.args);
+                const required_capture_ty = lambda_member.capture_ty;
                 if (capture_symbols.len == 0) {
-                    if (specialized.exec_capture_ty != null) {
+                    if (required_capture_ty != null) {
                         debugPanic("lambdamono.exec_plan.lowerExactCallableVarExpr unexpected natural capture payload for captureless exact callable");
                     }
+                    const fact = try self.addCallableValueFact(
+                        target_symbol,
+                        refined_source_ty,
+                        concrete_required_exec_ty,
+                        target_symbol,
+                        .natural,
+                        null,
+                        &.{},
+                        expected_call_sig,
+                    );
                     return .{
-                        .ty = try self.makeSingletonExecutableLambdaType(target_symbol, null, authoritative_call_sig),
+                        .ty = concrete_required_exec_ty,
                         .data = .{ .tag = .{
-                            .name = lower_type.lambdaTagKey(target_symbol),
-                            .discriminant = 0,
+                            .name = lower_type.lambdaTagKey(lambda_member.symbol),
+                            .discriminant = lambda_member.discriminant,
                             .args = ast.Span(ast.ExprId).empty(),
                         } },
                         .source_ty = refined_source_ty,
-                        .fact = specialized.value_fact,
+                        .fact = fact,
                     };
                 }
-                const precise_capture_ty = specialized.exec_capture_ty orelse
+                const precise_capture_ty = required_capture_ty orelse
                     debugPanic("lambdamono.exec_plan.lowerExactCallableVarExpr missing natural capture payload type");
-                const precise_ty = try self.makeSingletonExecutableLambdaType(
-                    target_symbol,
-                    precise_capture_ty,
-                    authoritative_call_sig,
-                );
                 const capture_record = try self.specializeCaptureRecord(inst, mono_cache, current_capture.env, precise_capture_ty);
                 const args = try self.allocator.alloc(ast.ExprId, 1);
                 defer self.allocator.free(args);
                 args[0] = capture_record;
+                const fact = try self.addCallableValueFact(
+                    target_symbol,
+                    refined_source_ty,
+                    concrete_required_exec_ty,
+                    target_symbol,
+                    .natural,
+                    precise_capture_ty,
+                    required_capture_facts,
+                    expected_call_sig,
+                );
                 return .{
-                    .ty = precise_ty,
+                    .ty = concrete_required_exec_ty,
                     .data = .{ .tag = .{
-                        .name = lower_type.lambdaTagKey(target_symbol),
-                        .discriminant = 0,
+                        .name = lower_type.lambdaTagKey(lambda_member.symbol),
+                        .discriminant = lambda_member.discriminant,
                         .args = try self.output.addExprSpan(args),
                     } },
                     .source_ty = refined_source_ty,
-                    .fact = specialized.value_fact,
+                    .fact = fact,
                 };
             },
             .erased_fn => {
