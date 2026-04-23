@@ -559,15 +559,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .region = store.getRegionAt(node_idx),
             } };
         },
-        .expr_pending_lookup => {
-            const p = payload.expr_pending_lookup;
-            // Handle pending lookups (deferred external)
-            return CIR.Expr{ .e_lookup_pending = .{
-                .module_idx = @enumFromInt(p.module_idx),
-                .ident_idx = @bitCast(p.ident_idx),
-                .region = store.getRegionAt(node_idx),
-            } };
-        },
         .expr_required_lookup => {
             const p = payload.expr_required_lookup;
             // Handle required lookups (platform requires clause)
@@ -1972,14 +1963,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .ident_idx = @bitCast(e.ident_idx),
             } });
         },
-        .e_lookup_pending => |e| {
-            // For pending lookups (deferred external), store the module index and ident
-            node.tag = .expr_pending_lookup;
-            node.setPayload(.{ .expr_pending_lookup = .{
-                .module_idx = @intFromEnum(e.module_idx),
-                .ident_idx = @bitCast(e.ident_idx),
-            } });
-        },
         .e_lookup_required => |e| {
             // For required lookups (platform requires clause), store the index
             node.tag = .expr_required_lookup;
@@ -2408,10 +2391,9 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
     }
 
     const node_idx = try store.nodes.append(store.gpa, node);
-    // For e_lookup_external and e_lookup_pending, use the region from the expression itself
+    // External lookups carry their source region explicitly.
     const actual_region = switch (expr) {
         .e_lookup_external => |e| e.region,
-        .e_lookup_pending => |e| e.region,
         else => region,
     };
     _ = try store.regions.append(store.gpa, actual_region);
@@ -4440,142 +4422,6 @@ pub const Serialized = extern struct {
         };
     }
 };
-
-/// Resolve all pending lookups in this store.
-/// Called before type-checking, when all dependencies are canonicalized.
-/// This converts expr_pending_lookup to expr_external_lookup (or leaves as-is for error).
-/// Import resolution must already have populated `env.imports.resolved_modules`.
-pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []const *const @TypeOf(env.*)) void {
-    const trace_pending = @import("build_options").trace_build;
-
-    const nodes_len = store.nodes.len();
-
-    if (comptime trace_pending) {
-        std.debug.print("[PENDING] resolvePendingLookups: module={s} nodes_len={} imported_envs.len={}\n", .{ env.module_name, nodes_len, imported_envs.len });
-        for (imported_envs) |ie| {
-            std.debug.print("[PENDING]   imported: {s}\n", .{ie.module_name});
-        }
-    }
-
-    // Iterate through all nodes to find pending lookups
-    var i: usize = 0;
-    while (i < nodes_len) : (i += 1) {
-        const node_idx: Node.Idx = @enumFromInt(@as(u32, @intCast(i)));
-        const node = store.nodes.get(node_idx);
-
-        if (node.tag == .expr_pending_lookup) {
-            const payload = node.getPayload().expr_pending_lookup;
-            const import_idx: CIR.Import.Idx = @enumFromInt(payload.module_idx);
-            const ident_idx: Ident.Idx = @bitCast(payload.ident_idx);
-            const resolved_module_idx = env.imports.getResolvedModule(import_idx) orelse continue;
-            if (resolved_module_idx >= imported_envs.len) continue;
-
-            const import_str_idx = env.imports.imports.items.items[@intFromEnum(import_idx)];
-            const import_name = env.getString(import_str_idx);
-            const member_name = env.getIdent(ident_idx);
-            const target_env = imported_envs[resolved_module_idx];
-
-            if (comptime trace_pending) {
-                std.debug.print("[PENDING] Found pending lookup: import={s} member={s} resolved_module_idx={d} target_module={s}\n", .{
-                    import_name,
-                    member_name,
-                    resolved_module_idx,
-                    target_env.module_name,
-                });
-            }
-
-            if (target_env.common.findIdent(member_name)) |target_ident| {
-                if (target_env.getExposedNodeIndexById(target_ident)) |target_node_idx| {
-                    var new_node = Node.init(.expr_external_lookup);
-                    new_node.setPayload(.{ .expr_external_lookup = .{
-                        .module_idx = payload.module_idx,
-                        .target_node_idx = target_node_idx,
-                        .ident_idx = payload.ident_idx,
-                    } });
-                    store.nodes.set(node_idx, new_node);
-                }
-            }
-        } else if (node.tag == .ty_apply) {
-            // Check if this type apply has a pending base
-            const payload = node.getPayload().ty_apply;
-            const apply_data = store.type_apply_data.items.items[payload.type_apply_data_idx];
-            const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @enumFromInt(apply_data.base_tag);
-
-            if (base_enum == .pending) {
-                const module_idx: CIR.Import.Idx = @enumFromInt(apply_data.value1);
-                const type_name_ident: Ident.Idx = @bitCast(apply_data.value2);
-                const resolved_module_idx = env.imports.getResolvedModule(module_idx) orelse continue;
-                if (resolved_module_idx >= imported_envs.len) continue;
-
-                const import_str_idx = env.imports.imports.items.items[@intFromEnum(module_idx)];
-                const import_name = env.getString(import_str_idx);
-                const type_name = env.getIdent(type_name_ident);
-                const target_env = imported_envs[resolved_module_idx];
-
-                if (comptime trace_pending) {
-                    std.debug.print("[PENDING] Found pending ty_apply: import={s} type={s} resolved_module_idx={d} target_module={s}\n", .{
-                        import_name,
-                        type_name,
-                        resolved_module_idx,
-                        target_env.module_name,
-                    });
-                }
-
-                if (target_env.common.findIdent(type_name)) |type_ident| {
-                    if (target_env.getExposedNodeIndexById(type_ident)) |target_node_idx| {
-                        store.type_apply_data.items.items[payload.type_apply_data_idx] = .{
-                            .args_len = apply_data.args_len,
-                            .base_tag = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.external),
-                            .value1 = apply_data.value1,
-                            .value2 = target_node_idx,
-                        };
-                    }
-                }
-            }
-        } else if (node.tag == .ty_lookup) {
-            // Check if this type lookup has a pending base
-            const payload = node.getPayload().ty_lookup;
-            const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @enumFromInt(payload.base);
-
-            if (base_enum == .pending) {
-                const base_data = store.span2_data.items.items[payload.base_span2_idx];
-                const module_idx: CIR.Import.Idx = @enumFromInt(base_data.start);
-                const type_name_ident: Ident.Idx = @bitCast(base_data.len);
-                const resolved_module_idx = env.imports.getResolvedModule(module_idx) orelse continue;
-                if (resolved_module_idx >= imported_envs.len) continue;
-
-                const import_str_idx = env.imports.imports.items.items[@intFromEnum(module_idx)];
-                const import_name = env.getString(import_str_idx);
-                const type_name = env.getIdent(type_name_ident);
-                const target_env = imported_envs[resolved_module_idx];
-
-                if (comptime trace_pending) {
-                    std.debug.print("[PENDING] Found pending ty_lookup: import={s} type={s} resolved_module_idx={d} target_module={s}\n", .{
-                        import_name,
-                        type_name,
-                        resolved_module_idx,
-                        target_env.module_name,
-                    });
-                }
-
-                if (target_env.common.findIdent(type_name)) |type_ident| {
-                    if (target_env.getExposedNodeIndexById(type_ident)) |target_node_idx| {
-                        var new_payload = payload;
-                        new_payload.base = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.external);
-                        var new_node = node;
-                        new_node.setPayload(.{ .ty_lookup = new_payload });
-                        store.nodes.set(node_idx, new_node);
-
-                        store.span2_data.items.items[payload.base_span2_idx] = .{
-                            .start = base_data.start,
-                            .len = target_node_idx,
-                        };
-                    }
-                }
-            }
-        }
-    }
-}
 
 test "NodeStore empty CompactWriter roundtrip" {
     const testing = std.testing;

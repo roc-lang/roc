@@ -711,7 +711,7 @@ const ProcLowerer = struct {
         }
     }
 
-    fn resolvedListElemLayoutRef(self: *ProcLowerer, ref: ir.Layout.Ref) ?ir.Layout.Ref {
+    fn explicitListElemLayoutRef(self: *ProcLowerer, ref: ir.Layout.Ref) ir.Layout.Ref {
         var current = ref;
         while (true) {
             switch (current) {
@@ -720,19 +720,13 @@ const ProcLowerer = struct {
                     switch (layout_val.tag) {
                         .list => return .{ .canonical = layout_val.data.list },
                         .list_of_zst => return .{ .canonical = .zst },
-                        .box => {
-                            current = .{ .canonical = layout_val.data.box };
-                            continue;
-                        },
-                        .box_of_zst => return null,
-                        else => return null,
+                        else => debugPanic("lir.from_ir expected explicit list element layout ref"),
                     }
                 },
                 .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
                     .nominal => |nominal| current = nominal,
-                    .box => |child| current = child,
                     .list => |elem| return elem,
-                    else => return null,
+                    else => debugPanic("lir.from_ir expected explicit list element layout ref"),
                 },
             }
         }
@@ -765,85 +759,6 @@ const ProcLowerer = struct {
 
     fn isBoxLayout(layout_val: layout_mod.Layout) bool {
         return layout_val.tag == .box or layout_val.tag == .box_of_zst;
-    }
-
-    fn layoutRuntimeEquivalent(self: *const ProcLowerer, left: layout_mod.Idx, right: layout_mod.Idx) bool {
-        if (left == right) return true;
-        const ls = &self.parent.layouts;
-        const left_val = ls.getLayout(left);
-        const right_val = ls.getLayout(right);
-        if (isListLayout(left_val) and isListLayout(right_val)) return true;
-        if (isBoxLayout(left_val) and isBoxLayout(right_val)) return true;
-        return false;
-    }
-
-    const LayoutPair = struct {
-        left: layout_mod.Idx,
-        right: layout_mod.Idx,
-    };
-
-    fn layoutsStructurallyEqual(self: *const ProcLowerer, left: layout_mod.Idx, right: layout_mod.Idx) std.mem.Allocator.Error!bool {
-        var seen = std.ArrayList(LayoutPair).empty;
-        defer seen.deinit(self.parent.allocator);
-        return self.layoutsStructurallyEqualRec(left, right, &seen);
-    }
-
-    fn layoutsStructurallyEqualRec(
-        self: *const ProcLowerer,
-        left: layout_mod.Idx,
-        right: layout_mod.Idx,
-        seen: *std.ArrayList(LayoutPair),
-    ) std.mem.Allocator.Error!bool {
-        if (left == right) return true;
-        for (seen.items) |pair| {
-            if (pair.left == left and pair.right == right) return true;
-        }
-        try seen.append(self.parent.allocator, .{ .left = left, .right = right });
-
-        const ls = &self.parent.layouts;
-        const left_val = ls.getLayout(left);
-        const right_val = ls.getLayout(right);
-        if (left_val.tag != right_val.tag) return false;
-
-        return switch (left_val.tag) {
-            .scalar => left_val.eql(right_val),
-            .zst, .box_of_zst, .list_of_zst => true,
-            .box => try self.layoutsStructurallyEqualRec(left_val.data.box, right_val.data.box, seen),
-            .list => try self.layoutsStructurallyEqualRec(left_val.data.list, right_val.data.list, seen),
-            .closure => try self.layoutsStructurallyEqualRec(
-                left_val.data.closure.captures_layout_idx,
-                right_val.data.closure.captures_layout_idx,
-                seen,
-            ),
-            .struct_ => blk: {
-                const left_info = ls.getStructInfo(left_val);
-                const right_info = ls.getStructInfo(right_val);
-                if (left_info.fields.len != right_info.fields.len) break :blk false;
-                for (0..left_info.fields.len) |i| {
-                    const left_field = left_info.fields.get(@intCast(i));
-                    const right_field = right_info.fields.get(@intCast(i));
-                    if (left_field.index != right_field.index) break :blk false;
-                    if (!try self.layoutsStructurallyEqualRec(left_field.layout, right_field.layout, seen)) {
-                        break :blk false;
-                    }
-                }
-                break :blk true;
-            },
-            .tag_union => blk: {
-                const left_info = ls.getTagUnionInfo(left_val);
-                const right_info = ls.getTagUnionInfo(right_val);
-                if (left_info.variants.len != right_info.variants.len) break :blk false;
-                if (left_info.data.discriminant_size != right_info.data.discriminant_size) break :blk false;
-                for (0..left_info.variants.len) |i| {
-                    const left_variant = left_info.variants.get(@intCast(i));
-                    const right_variant = right_info.variants.get(@intCast(i));
-                    if (!try self.layoutsStructurallyEqualRec(left_variant.payload_layout, right_variant.payload_layout, seen)) {
-                        break :blk false;
-                    }
-                }
-                break :blk true;
-            },
-        };
     }
 
     fn structFieldLayoutRef(
@@ -971,86 +886,6 @@ const ProcLowerer = struct {
         }
     }
 
-    fn singletonZeroSizedTagUnionDiscriminant(
-        self: *ProcLowerer,
-        ref: ir.Layout.Ref,
-    ) std.mem.Allocator.Error!?u16 {
-        var current = ref;
-        while (true) {
-            switch (current) {
-                .canonical => |layout_idx| {
-                    const layout_val = self.parent.layouts.getLayout(layout_idx);
-                    switch (layout_val.tag) {
-                        .tag_union => {
-                            const info = self.parent.layouts.getTagUnionInfo(layout_val);
-                            if (info.variants.len != 1) return null;
-                            const payload_layout = info.variants.get(0).payload_layout;
-                            if (!self.parent.layouts.isZeroSized(self.parent.layouts.getLayout(payload_layout))) {
-                                return null;
-                            }
-                            return 0;
-                        },
-                        .box => {
-                            current = .{ .canonical = layout_val.data.box };
-                            continue;
-                        },
-                        else => return null,
-                    }
-                },
-                .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
-                    .nominal => |nominal| current = nominal,
-                    .box => |child| current = child,
-                    .tag_union => |variants| {
-                        const refs = self.parent.input.layouts.getRefs(variants);
-                        if (refs.len != 1) return null;
-                        const payload_layout = try self.parent.lowerLayoutId(refs[0]);
-                        if (!self.parent.layouts.isZeroSized(self.parent.layouts.getLayout(payload_layout))) {
-                            return null;
-                        }
-                        return 0;
-                    },
-                    else => return null,
-                },
-            }
-        }
-    }
-
-    fn singletonTagUnionPayloadRef(
-        self: *ProcLowerer,
-        ref: ir.Layout.Ref,
-    ) ?ir.Layout.Ref {
-        var current = ref;
-        while (true) {
-            switch (current) {
-                .canonical => |layout_idx| {
-                    const layout_val = self.parent.layouts.getLayout(layout_idx);
-                    switch (layout_val.tag) {
-                        .tag_union => {
-                            const info = self.parent.layouts.getTagUnionInfo(layout_val);
-                            if (info.variants.len != 1) return null;
-                            return .{ .canonical = info.variants.get(0).payload_layout };
-                        },
-                        .box => {
-                            current = .{ .canonical = layout_val.data.box };
-                            continue;
-                        },
-                        else => return null,
-                    }
-                },
-                .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
-                    .nominal => |nominal| current = nominal,
-                    .box => |child| current = child,
-                    .tag_union => |variants| {
-                        const refs = self.parent.input.layouts.getRefs(variants);
-                        if (refs.len != 1) return null;
-                        return refs[0];
-                    },
-                    else => return null,
-                },
-            }
-        }
-    }
-
     fn lowerSingletonTagUnionIntoTagUnion(
         self: *ProcLowerer,
         source_local: LIR.LocalId,
@@ -1058,6 +893,7 @@ const ProcLowerer = struct {
         next: LIR.CFStmtId,
         source_payload_ref: ir.Layout.Ref,
         target_discriminant: u16,
+        payload_plan: ?ir.Ast.BridgePlanId,
     ) std.mem.Allocator.Error!LIR.CFStmtId {
         const target_layout = self.localLayout(target_local);
         const target_ref = self.localLayoutRef(target_local);
@@ -1091,7 +927,12 @@ const ProcLowerer = struct {
             .payload = target_payload_local,
             .next = next,
         } });
-        const bridged_payload = try self.lowerExplicitBridgeIntoLocal(source_payload_local, target_payload_local, assign_tag);
+        const bridged_payload = try self.lowerPlannedBridgeIntoLocal(
+            source_payload_local,
+            target_payload_local,
+            assign_tag,
+            payload_plan orelse debugPanic("lir.from_ir singleton tag bridge missing payload plan"),
+        );
         return try self.addAssignRef(source_payload_local, .fresh, .{ .tag_payload_struct = .{
             .source = source_local,
             .tag_discriminant = 0,
@@ -1105,6 +946,7 @@ const ProcLowerer = struct {
         next: LIR.CFStmtId,
         target_payload_ref: ir.Layout.Ref,
         source_discriminant: u16,
+        payload_plan: ?ir.Ast.BridgePlanId,
     ) std.mem.Allocator.Error!LIR.CFStmtId {
         const actual_layout = self.localLayout(source_local);
         const actual_ref = self.localLayoutRef(source_local);
@@ -1134,7 +976,12 @@ const ProcLowerer = struct {
                     .payload = target_payload_local,
                     .next = next,
                 } });
-            const bridged_payload = try self.lowerExplicitBridgeIntoLocal(actual_payload_local, target_payload_local, assign_tag);
+            const bridged_payload = try self.lowerPlannedBridgeIntoLocal(
+                actual_payload_local,
+                target_payload_local,
+                assign_tag,
+                payload_plan orelse debugPanic("lir.from_ir singleton tag bridge missing payload plan"),
+            );
             break :blk try self.addAssignRef(actual_payload_local, .fresh, .{ .tag_payload_struct = .{
                 .source = source_local,
                 .tag_discriminant = source_discriminant,
@@ -1160,305 +1007,91 @@ const ProcLowerer = struct {
         target_local: LIR.LocalId,
         next: LIR.CFStmtId,
     ) std.mem.Allocator.Error!LIR.CFStmtId {
-        return self.lowerExplicitBridgeIntoLocalWithSingletonDiscriminant(
-            source_local,
-            target_local,
-            next,
-            null,
-        );
+        _ = self;
+        _ = source_local;
+        _ = target_local;
+        _ = next;
+        debugPanic("lir.from_ir missing explicit bridge plan");
     }
 
-    fn lowerExplicitBridgeIntoLocalWithSingletonDiscriminant(
+    fn lowerPlannedBridgeIntoLocal(
         self: *ProcLowerer,
         source_local: LIR.LocalId,
         target_local: LIR.LocalId,
         next: LIR.CFStmtId,
-        singleton_tag_discriminant: ?u16,
+        plan_id: ir.Ast.BridgePlanId,
     ) std.mem.Allocator.Error!LIR.CFStmtId {
         const actual_layout = self.localLayout(source_local);
         const target_layout = self.localLayout(target_local);
-        const actual_ref = self.localLayoutRef(source_local);
-        const target_ref = self.localLayoutRef(target_local);
         const ls = &self.parent.layouts;
         const actual = ls.getLayout(actual_layout);
         const target = ls.getLayout(target_layout);
 
-        if (target.tag == .zst) {
-            return next;
-        }
-
-        if (actual_layout == target_layout) {
-            return try self.addAssignRef(target_local, .fresh, .{ .local = source_local }, next);
-        }
-
-        if (ls.isZeroSized(actual) and ls.isZeroSized(target)) {
-            return next;
-        }
-
-        if (isListLayout(actual) and isListLayout(target)) {
-            const actual_elem_layout = self.lowerListElemLayout(actual_layout);
-            const target_elem_layout = self.lowerListElemLayout(target_layout);
-            var can_reinterpret = actual_elem_layout == target_elem_layout or
-                (ls.isZeroSized(ls.getLayout(actual_elem_layout)) and
-                    ls.isZeroSized(ls.getLayout(target_elem_layout))) or
-                self.layoutRuntimeEquivalent(actual_elem_layout, target_elem_layout) or
-                try self.layoutsStructurallyEqual(actual_elem_layout, target_elem_layout);
-
-            if (!can_reinterpret) {
-                if (self.resolvedListElemLayoutRef(actual_ref)) |actual_elem_ref| {
-                    if (self.resolvedListElemLayoutRef(target_ref)) |target_elem_ref| {
-                        const actual_elem_backing_ref = self.unwrapNominalRef(actual_elem_ref);
-                        const target_elem_backing_ref = self.unwrapNominalRef(target_elem_ref);
-                        can_reinterpret = layoutRefsEqual(actual_elem_ref, target_elem_ref) or
-                            layoutRefsEqual(actual_elem_backing_ref, target_elem_backing_ref);
-                    }
+        return switch (self.parent.input.store.getBridgePlan(plan_id)) {
+            .zst => next,
+            .direct => blk: {
+                if (target.tag == .zst) break :blk next;
+                if (actual_layout != target_layout and !(ls.isZeroSized(actual) and ls.isZeroSized(target))) {
+                    debugPanic("lir.from_ir direct bridge plan shape mismatch");
                 }
-            }
-
-            if (can_reinterpret) {
-                return try self.addAssignRef(target_local, .fresh, .{ .list_reinterpret = .{ .backing_ref = source_local } }, next);
-            }
-        }
-
-        const actual_backing_ref = self.unwrapNominalRef(actual_ref);
-        const target_backing_ref = self.unwrapNominalRef(target_ref);
-        const actual_is_box = actual.tag == .box or actual.tag == .box_of_zst;
-        const target_is_box = target.tag == .box or target.tag == .box_of_zst;
-
-        if (!layoutRefsEqual(actual_ref, target_ref) and
-            layoutRefsEqual(actual_backing_ref, target_backing_ref) and
-            actual_is_box == target_is_box and
-            !isListLayout(actual) and
-            !isListLayout(target))
-        {
-            return try self.addAssignRef(target_local, .fresh, .{ .nominal = .{ .backing_ref = source_local } }, next);
-        }
-
-        if (actual_is_box and target_is_box and try self.layoutsStructurallyEqual(actual_layout, target_layout)) {
-            return try self.addAssignRef(target_local, .fresh, .{ .nominal = .{ .backing_ref = source_local } }, next);
-        }
-
-        if (actual_is_box and target.tag == .scalar and target.data.scalar.tag == .opaque_ptr) {
-            return try self.addAssignRef(target_local, .fresh, .{ .nominal = .{ .backing_ref = source_local } }, next);
-        }
-
-        if (actual.tag == .scalar and actual.data.scalar.tag == .opaque_ptr) {
-            const args = try self.parent.store.addLocalSpan(&.{source_local});
-            return try self.parent.store.addCFStmt(.{ .assign_low_level = .{
-                .target = target_local,
-                .result = lowLevelResultSemantics(.box_unbox, &.{source_local}),
-                .ownership = try self.lowLevelOwnership(.box_unbox, &.{source_local}),
-                .op = .box_unbox,
-                .args = args,
-                .next = next,
-            } });
-        }
-
-        if (actual.tag == .box and actual.data.box == target_layout) {
-            const args = try self.parent.store.addLocalSpan(&.{source_local});
-            return try self.parent.store.addCFStmt(.{ .assign_low_level = .{
-                .target = target_local,
-                .result = lowLevelResultSemantics(.box_unbox, &.{source_local}),
-                .ownership = try self.lowLevelOwnership(.box_unbox, &.{source_local}),
-                .op = .box_unbox,
-                .args = args,
-                .next = next,
-            } });
-        }
-
-        if (target.tag == .box and target.data.box == actual_layout) {
-            const args = try self.parent.store.addLocalSpan(&.{source_local});
-            return try self.parent.store.addCFStmt(.{ .assign_low_level = .{
-                .target = target_local,
-                .result = lowLevelResultSemantics(.box_box, &.{source_local}),
-                .ownership = try self.lowLevelOwnership(.box_box, &.{source_local}),
-                .op = .box_box,
-                .args = args,
-                .next = next,
-            } });
-        }
-
-        if (actual.tag == .struct_ and target.tag == .struct_) {
-            return try self.bridgeStructIntoLocal(source_local, target_local, next);
-        }
-
-        const actual_singleton_payload_ref = self.singletonTagUnionPayloadRef(actual_ref);
-        const target_singleton_payload_ref = self.singletonTagUnionPayloadRef(target_ref);
-
-        if (target.tag == .tag_union) {
-            if (actual_singleton_payload_ref) |source_payload_ref| {
-                const discriminant = if (target_singleton_payload_ref != null)
-                    @as(u16, 0)
-                else
-                    singleton_tag_discriminant orelse debugPanic(
-                        "lir.from_ir missing explicit singleton tag discriminant for singleton->tag_union bridge",
-                    );
-                return try self.lowerSingletonTagUnionIntoTagUnion(
-                    source_local,
-                    target_local,
-                    next,
-                    source_payload_ref,
-                    discriminant,
-                );
-            }
-        }
-
-        if (actual.tag == .zst and target.tag == .tag_union) {
-            if (target_singleton_payload_ref) |target_payload_ref| {
-                const target_payload_layout = try self.parent.lowerLayoutId(target_payload_ref);
-                if (self.parent.layouts.isZeroSized(self.parent.layouts.getLayout(target_payload_layout))) {
-                    return try self.lowerSingletonTagUnionIntoTagUnion(
-                        source_local,
-                        target_local,
-                        next,
-                        target_payload_ref,
-                        0,
-                    );
+                break :blk try self.addAssignRef(target_local, .fresh, .{ .local = source_local }, next);
+            },
+            .list_reinterpret => blk: {
+                if (!isListLayout(actual) or !isListLayout(target)) {
+                    debugPanic("lir.from_ir list bridge plan shape mismatch");
                 }
-            }
-            _ = try self.singletonZeroSizedTagUnionDiscriminant(actual_ref) orelse if (builtin.mode == .Debug)
-                std.debug.panic(
-                    "lir.from_ir invariant violated: zst->tag_union bridge source ref is not a singleton zero-sized tag union",
-                    .{},
-                )
-            else
-                unreachable;
-            return try self.lowerSingletonTagUnionIntoTagUnion(
+                break :blk try self.addAssignRef(target_local, .fresh, .{ .list_reinterpret = .{ .backing_ref = source_local } }, next);
+            },
+            .nominal_reinterpret => try self.addAssignRef(target_local, .fresh, .{ .nominal = .{ .backing_ref = source_local } }, next),
+            .box_unbox => |child_plan| blk: {
+                const unboxed_ref = self.physicalBoxChildLayoutRef(self.localLayoutRef(source_local));
+                const unboxed_layout = try self.parent.lowerLayoutId(unboxed_ref);
+                const unboxed_local = try self.freshLocalWithLayoutAndRef(unboxed_layout, unboxed_ref);
+                const bridged = try self.lowerPlannedBridgeIntoLocal(unboxed_local, target_local, next, child_plan);
+                const unbox_args = try self.parent.store.addLocalSpan(&.{source_local});
+                break :blk try self.parent.store.addCFStmt(.{ .assign_low_level = .{
+                    .target = unboxed_local,
+                    .result = lowLevelResultSemantics(.box_unbox, &.{source_local}),
+                    .ownership = try self.lowLevelOwnership(.box_unbox, &.{source_local}),
+                    .op = .box_unbox,
+                    .args = unbox_args,
+                    .next = bridged,
+                } });
+            },
+            .box_box => |child_plan| blk: {
+                const boxed_child_ref = self.physicalBoxChildLayoutRef(self.localLayoutRef(target_local));
+                const boxed_child_layout = try self.parent.lowerLayoutId(boxed_child_ref);
+                const boxed_child_local = try self.freshLocalWithLayoutAndRef(boxed_child_layout, boxed_child_ref);
+                const box_args = try self.parent.store.addLocalSpan(&.{boxed_child_local});
+                const box_stmt = try self.parent.store.addCFStmt(.{ .assign_low_level = .{
+                    .target = target_local,
+                    .result = lowLevelResultSemantics(.box_box, &.{boxed_child_local}),
+                    .ownership = try self.lowLevelOwnership(.box_box, &.{boxed_child_local}),
+                    .op = .box_box,
+                    .args = box_args,
+                    .next = next,
+                } });
+                break :blk try self.lowerPlannedBridgeIntoLocal(source_local, boxed_child_local, box_stmt, child_plan);
+            },
+            .struct_ => |field_plans| try self.bridgeStructIntoLocal(source_local, target_local, next, field_plans),
+            .tag_union => |variant_plans| try self.bridgeTagUnionIntoLocal(source_local, target_local, next, variant_plans),
+            .singleton_to_tag_union => |plan| try self.lowerSingletonTagUnionIntoTagUnion(
                 source_local,
                 target_local,
                 next,
-                .{ .canonical = .zst },
-                singleton_tag_discriminant orelse debugPanic(
-                    "lir.from_ir missing explicit singleton tag discriminant for zst->tag_union bridge",
-                ),
-            );
-        }
-
-        if (actual.tag == .tag_union and target.tag == .tag_union) {
-            if (actual_singleton_payload_ref) |source_payload_ref| {
-                const discriminant = if (target_singleton_payload_ref != null)
-                    @as(u16, 0)
-                else
-                    singleton_tag_discriminant orelse debugPanic(
-                        "lir.from_ir missing explicit singleton tag discriminant for singleton tag_union bridge",
-                    );
-                return try self.lowerSingletonTagUnionIntoTagUnion(
-                    source_local,
-                    target_local,
-                    next,
-                    source_payload_ref,
-                    discriminant,
-                );
-            }
-            if (target_singleton_payload_ref) |payload_ref| {
-                const discriminant = if (actual_singleton_payload_ref != null)
-                    @as(u16, 0)
-                else
-                    singleton_tag_discriminant orelse debugPanic(
-                        "lir.from_ir missing explicit singleton tag discriminant for tag_union->singleton bridge",
-                    );
-                return try self.lowerTagUnionIntoSingletonTagUnion(
-                    source_local,
-                    target_local,
-                    next,
-                    payload_ref,
-                    discriminant,
-                );
-            }
-            return try self.bridgeTagUnionIntoLocal(source_local, target_local, next);
-        }
-
-        if (actual.tag == .tag_union and target.tag == .zst) {
-            _ = try self.singletonZeroSizedTagUnionDiscriminant(target_ref) orelse if (builtin.mode == .Debug)
-                std.debug.panic(
-                    "lir.from_ir invariant violated: tag_union->zst bridge target ref is not a singleton zero-sized tag union",
-                    .{},
-                )
-            else
-                unreachable;
-            return try self.lowerTagUnionIntoSingletonTagUnion(
+                plan.source_payload,
+                plan.target_discriminant,
+                plan.payload_plan,
+            ),
+            .tag_union_to_singleton => |plan| try self.lowerTagUnionIntoSingletonTagUnion(
                 source_local,
                 target_local,
                 next,
-                .{ .canonical = .zst },
-                if (actual_singleton_payload_ref != null)
-                    0
-                else
-                    singleton_tag_discriminant orelse debugPanic(
-                        "lir.from_ir missing explicit singleton tag discriminant for tag_union->zst bridge",
-                    ),
-            );
-        }
-
-        if (target_is_box) {
-            const boxed_child_ref = self.physicalBoxChildLayoutRef(target_ref);
-            const boxed_child_layout = try self.parent.lowerLayoutId(boxed_child_ref);
-            const boxed_child_local = try self.freshLocalWithLayoutAndRef(boxed_child_layout, boxed_child_ref);
-            const box_args = try self.parent.store.addLocalSpan(&.{boxed_child_local});
-            const box_stmt = try self.parent.store.addCFStmt(.{ .assign_low_level = .{
-                .target = target_local,
-                .result = lowLevelResultSemantics(.box_box, &.{boxed_child_local}),
-                .ownership = try self.lowLevelOwnership(.box_box, &.{boxed_child_local}),
-                .op = .box_box,
-                .args = box_args,
-                .next = next,
-            } });
-            return try self.lowerExplicitBridgeIntoLocalWithSingletonDiscriminant(
-                source_local,
-                boxed_child_local,
-                box_stmt,
-                singleton_tag_discriminant,
-            );
-        }
-
-        if (actual_is_box) {
-            const unboxed_ref = self.physicalBoxChildLayoutRef(actual_ref);
-            const unboxed_layout = try self.parent.lowerLayoutId(unboxed_ref);
-            const unboxed_local = try self.freshLocalWithLayoutAndRef(unboxed_layout, unboxed_ref);
-            const bridged = try self.lowerExplicitBridgeIntoLocalWithSingletonDiscriminant(
-                unboxed_local,
-                target_local,
-                next,
-                singleton_tag_discriminant,
-            );
-            const unbox_args = try self.parent.store.addLocalSpan(&.{source_local});
-            return try self.parent.store.addCFStmt(.{ .assign_low_level = .{
-                .target = unboxed_local,
-                .result = lowLevelResultSemantics(.box_unbox, &.{source_local}),
-                .ownership = try self.lowLevelOwnership(.box_unbox, &.{source_local}),
-                .op = .box_unbox,
-                .args = unbox_args,
-                .next = bridged,
-            } });
-        }
-
-        if (builtin.mode == .Debug) {
-            const proc_symbol = self.parent.store.getProcSpec(self.proc_id).name;
-            const proc_origin = self.parent.input.symbols.entries.items[@intCast(proc_symbol.raw())].origin;
-            const proc_source_symbol_raw: u32 = switch (proc_origin) {
-                .specialized_top_level_def => |data| data.source_symbol,
-                .specialized_local_fn => |data| data.source_symbol,
-                .lifted_local_fn => |data| data.source_symbol,
-                .lifted_local_fn_alias => |data| data.source_symbol,
-                else => std.math.maxInt(u32),
-            };
-            std.debug.panic(
-                "lir.from_ir invariant violated: proc={d} symbol={d} origin={s} source_symbol={d} no explicit bridge from layout {d} ({s}) ref={any} to layout {d} ({s}) ref={any}",
-                .{
-                    @intFromEnum(self.proc_id),
-                    proc_symbol.raw(),
-                    @tagName(proc_origin),
-                    proc_source_symbol_raw,
-                    @intFromEnum(actual_layout),
-                    @tagName(ls.getLayout(actual_layout).tag),
-                    actual_ref,
-                    @intFromEnum(target_layout),
-                    @tagName(ls.getLayout(target_layout).tag),
-                    target_ref,
-                },
-            );
-        }
-        unreachable;
+                plan.target_payload,
+                plan.source_discriminant,
+                plan.payload_plan,
+            ),
+        };
     }
 
     fn bridgeStructIntoLocal(
@@ -1466,6 +1099,7 @@ const ProcLowerer = struct {
         source_local: LIR.LocalId,
         target_local: LIR.LocalId,
         next: LIR.CFStmtId,
+        field_plan_span: ir.Ast.Span(ir.Ast.BridgePlanId),
     ) std.mem.Allocator.Error!LIR.CFStmtId {
         const ls = &self.parent.layouts;
         const actual_layout = self.localLayout(source_local);
@@ -1476,8 +1110,12 @@ const ProcLowerer = struct {
         const actual_ref = self.localLayoutRef(source_local);
         const target_ref = self.localLayoutRef(target_local);
         const target_info = ls.getStructInfo(ls.getLayout(target_layout));
+        const field_plans = self.parent.input.store.sliceBridgePlanSpan(field_plan_span);
 
         const field_count = target_info.fields.len;
+        if (field_plans.len != field_count) {
+            debugPanic("lir.from_ir struct bridge plan arity mismatch");
+        }
         const source_fields = try self.parent.allocator.alloc(LIR.LocalId, field_count);
         defer self.parent.allocator.free(source_fields);
         const target_fields = try self.parent.allocator.alloc(LIR.LocalId, field_count);
@@ -1510,7 +1148,7 @@ const ProcLowerer = struct {
             const source_field = source_fields[bridge_i];
             const target_field = target_fields[bridge_i];
             if (source_field == target_field) continue;
-            cursor = try self.lowerExplicitBridgeIntoLocal(source_field, target_field, cursor);
+            cursor = try self.lowerPlannedBridgeIntoLocal(source_field, target_field, cursor, field_plans[bridge_i]);
         }
 
         var i = field_count;
@@ -1530,6 +1168,7 @@ const ProcLowerer = struct {
         source_local: LIR.LocalId,
         target_local: LIR.LocalId,
         next: LIR.CFStmtId,
+        variant_plan_span: ir.Ast.Span(ir.Ast.BridgePlanId),
     ) std.mem.Allocator.Error!LIR.CFStmtId {
         const ls = &self.parent.layouts;
         const actual_layout = self.localLayout(source_local);
@@ -1538,6 +1177,7 @@ const ProcLowerer = struct {
         const target_ref = self.localLayoutRef(target_local);
         const actual_info = ls.getTagUnionInfo(ls.getLayout(actual_layout));
         const target_info = ls.getTagUnionInfo(ls.getLayout(target_layout));
+        const variant_plans = self.parent.input.store.sliceBridgePlanSpan(variant_plan_span);
 
         if (builtin.mode == .Debug and actual_info.variants.len != target_info.variants.len) {
             std.debug.panic(
@@ -1549,6 +1189,9 @@ const ProcLowerer = struct {
         const default_branch = try self.parent.store.addCFStmt(.runtime_error);
         const branches = try self.parent.allocator.alloc(LIR.CFSwitchBranch, actual_info.variants.len);
         defer self.parent.allocator.free(branches);
+        if (variant_plans.len != actual_info.variants.len) {
+            debugPanic("lir.from_ir tag-union bridge plan arity mismatch");
+        }
 
         for (0..actual_info.variants.len) |i| {
             const discriminant: u16 = @intCast(i);
@@ -1582,7 +1225,12 @@ const ProcLowerer = struct {
                     .payload = target_payload_local,
                     .next = next,
                 } });
-                const bridged_payload = try self.lowerExplicitBridgeIntoLocal(actual_payload_local, target_payload_local, assign_tag);
+                const bridged_payload = try self.lowerPlannedBridgeIntoLocal(
+                    actual_payload_local,
+                    target_payload_local,
+                    assign_tag,
+                    variant_plans[i],
+                );
                 break :blk try self.addAssignRef(actual_payload_local, .fresh, .{ .tag_payload_struct = .{
                     .source = source_local,
                     .tag_discriminant = discriminant,
@@ -1693,8 +1341,7 @@ const ProcLowerer = struct {
                 defer _ = self.loop_break_targets.pop();
                 const iterable_local = try self.lowerVar(for_stmt.iterable);
                 const body_elem_local = try self.lowerVar(for_stmt.elem);
-                const iterable_elem_ref = self.resolvedListElemLayoutRef(self.localLayoutRef(iterable_local)) orelse
-                    debugPanic("lir.from_ir.for_list missing iterable element layout ref");
+                const iterable_elem_ref = self.explicitListElemLayoutRef(self.localLayoutRef(iterable_local));
                 const iterable_elem_layout = self.lowerListElemLayout(self.localLayout(iterable_local));
                 const raw_elem_local = if (self.localMatchesShape(body_elem_local, iterable_elem_layout, iterable_elem_ref))
                     body_elem_local
@@ -1825,11 +1472,11 @@ const ProcLowerer = struct {
         return switch (expr) {
             .bridge => |value| blk: {
                 const source = try self.lowerVar(value.value);
-                break :blk try self.lowerExplicitBridgeIntoLocalWithSingletonDiscriminant(
+                break :blk try self.lowerPlannedBridgeIntoLocal(
                     source,
                     target,
                     next,
-                    value.singleton_tag_discriminant,
+                    value.plan,
                 );
             },
             .var_ => |value| blk: {
@@ -2004,8 +1651,7 @@ const ProcLowerer = struct {
             .make_list => |elems| blk: {
                 const source_locals = try self.lowerVarSpan(self.parent.input.store.sliceVarSpan(elems));
                 defer self.parent.allocator.free(source_locals);
-                const elem_ref = self.resolvedListElemLayoutRef(self.localLayoutRef(target)) orelse
-                    debugPanic("lir.from_ir expected explicit logical list element layout ref");
+                const elem_ref = self.explicitListElemLayoutRef(self.localLayoutRef(target));
                 const elem_layout = self.lowerListElemLayout(self.localLayout(target));
                 const elem_locals = try self.parent.allocator.alloc(LIR.LocalId, source_locals.len);
                 defer self.parent.allocator.free(elem_locals);
@@ -2147,8 +1793,7 @@ const ProcLowerer = struct {
                     if (locals.len == 0) {
                         debugPanic("lir.from_ir list element low-level missing list argument");
                     }
-                    const elem_ref = self.resolvedListElemLayoutRef(self.localLayoutRef(locals[0])) orelse
-                        debugPanic("lir.from_ir list element low-level missing explicit element layout ref");
+                    const elem_ref = self.explicitListElemLayoutRef(self.localLayoutRef(locals[0]));
                     const elem_layout = self.lowerListElemLayout(self.localLayout(locals[0]));
                     self.requireLocalMatchesShape(target, elem_layout, elem_ref, "call_low_level list result");
                 }

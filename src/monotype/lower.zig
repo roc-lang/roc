@@ -7302,7 +7302,6 @@ pub const Lowerer = struct {
             .e_bytes_literal,
             .e_lookup_local,
             .e_lookup_external,
-            .e_lookup_pending,
             .e_lookup_required,
             .e_empty_list,
             .e_empty_record,

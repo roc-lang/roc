@@ -6,7 +6,7 @@
 //! - explicit top-level binding entries pointing at `(schema_id, value_id)`
 //!
 //! No compile-time path is allowed to treat raw runtime addresses as the
-//! authoritative fact, and no compile-time path is allowed to rebuild CIR
+//! authoritative fact, and no compile-time path is allowed to construct CIR
 //! syntax from runtime results.
 
 const std = @import("std");

@@ -722,48 +722,253 @@ const Lowerer = struct {
     ) std.mem.Allocator.Error!ast.ExprId {
         return try self.output.addExpr(.{ .bridge = .{
             .value = value,
-            .singleton_tag_discriminant = self.singletonTagDiscriminantForBridge(
-                source_ty,
-                target_ty,
-            ),
+            .plan = try self.bridgePlanForTypes(source_ty, target_ty),
         } });
     }
 
-    fn singletonTagDiscriminantForBridge(
+    const BridgeTypePair = struct {
+        source: lambdamono.Type.TypeId,
+        target: lambdamono.Type.TypeId,
+    };
+
+    fn bridgePlanForTypes(
         self: *Lowerer,
         source_ty: lambdamono.Type.TypeId,
         target_ty: lambdamono.Type.TypeId,
-    ) ?u16 {
-        const source_tag_union = switch (self.input.types.getType(source_ty)) {
-            .tag_union => |tag_union| tag_union,
-            else => return null,
-        };
-        const target_tag_union = switch (self.input.types.getType(target_ty)) {
-            .tag_union => |tag_union| tag_union,
-            else => return null,
-        };
+    ) std.mem.Allocator.Error!ast.BridgePlanId {
+        var active = std.ArrayList(BridgeTypePair).empty;
+        defer active.deinit(self.allocator);
+        return try self.bridgePlanForTypesRec(source_ty, target_ty, &active);
+    }
 
-        if (source_tag_union.tags.len == 1 and target_tag_union.tags.len > 1) {
-            return self.findTagDiscriminant(target_tag_union.tags, source_tag_union.tags[0].name) orelse if (builtin.mode == .Debug)
-                std.debug.panic(
-                    "ir.lower missing singleton source tag in bridge target source={any} target={any}",
-                    .{ source_tag_union.tags[0].name, target_tag_union.tags },
-                )
-            else
-                unreachable;
+    fn bridgePlanForTypesRec(
+        self: *Lowerer,
+        source_ty: lambdamono.Type.TypeId,
+        target_ty: lambdamono.Type.TypeId,
+        active: *std.ArrayList(BridgeTypePair),
+    ) std.mem.Allocator.Error!ast.BridgePlanId {
+        if (self.input.types.equalIds(source_ty, target_ty)) {
+            return try self.output.addBridgePlan(.direct);
         }
 
-        if (target_tag_union.tags.len == 1 and source_tag_union.tags.len > 1) {
-            return self.findTagDiscriminant(source_tag_union.tags, target_tag_union.tags[0].name) orelse if (builtin.mode == .Debug)
-                std.debug.panic(
-                    "ir.lower missing singleton target tag in bridge source source={any} target={any}",
-                    .{ source_tag_union.tags, target_tag_union.tags[0].name },
-                )
-            else
-                unreachable;
+        const source_layout = self.input.layouts.layoutForType(source_ty);
+        const target_layout = self.input.layouts.layoutForType(target_ty);
+        if (std.meta.eql(source_layout, target_layout)) {
+            return try self.output.addBridgePlan(.direct);
+        }
+        if (self.layoutRefIsZst(target_layout)) {
+            return try self.output.addBridgePlan(.zst);
         }
 
-        return null;
+        for (active.items) |pair| {
+            if (pair.source == source_ty and pair.target == target_ty) {
+                return try self.output.addBridgePlan(.nominal_reinterpret);
+            }
+        }
+        try active.append(self.allocator, .{ .source = source_ty, .target = target_ty });
+        defer _ = active.pop();
+
+        if (self.sameNonListBackingLayout(source_layout, target_layout)) {
+            return try self.output.addBridgePlan(.nominal_reinterpret);
+        }
+
+        const source_preserved = self.input.types.getTypePreservingNominal(source_ty);
+        const target_preserved = self.input.types.getTypePreservingNominal(target_ty);
+        const source = self.input.types.getType(source_ty);
+        const target = self.input.types.getType(target_ty);
+
+        if (source == .primitive and source.primitive == .opaque_ptr) {
+            const child_plan = try self.output.addBridgePlan(.direct);
+            _ = child_plan;
+            return try self.output.addBridgePlan(.{ .box_unbox = try self.output.addBridgePlan(.direct) });
+        }
+
+        if (source_preserved == .box) {
+            return try self.output.addBridgePlan(.{ .box_unbox = try self.bridgePlanForTypesRec(
+                source_preserved.box,
+                target_ty,
+                active,
+            ) });
+        }
+
+        if (target_preserved == .box) {
+            return try self.output.addBridgePlan(.{ .box_box = try self.bridgePlanForTypesRec(
+                source_ty,
+                target_preserved.box,
+                active,
+            ) });
+        }
+
+        if (source == .list and target == .list) {
+            const elem_plan = try self.bridgePlanForTypesRec(source.list, target.list, active);
+            if (!self.bridgePlanCanListReinterpret(elem_plan)) {
+                debugPanic("ir.lower list bridge element plan is not representable as a list reinterpret");
+            }
+            return try self.output.addBridgePlan(.list_reinterpret);
+        }
+
+        if (source == .tuple and target == .tuple) {
+            return try self.structBridgePlanFromTypeSpans(source.tuple, target.tuple, active);
+        }
+
+        if (source == .record and target == .record) {
+            const source_fields = source.record.fields;
+            const target_fields = target.record.fields;
+            if (source_fields.len != target_fields.len) {
+                debugPanic("ir.lower record bridge field arity mismatch");
+            }
+            const ids = try self.allocator.alloc(ast.BridgePlanId, source_fields.len);
+            defer self.allocator.free(ids);
+            for (source_fields, target_fields, 0..) |source_field, target_field, i| {
+                if (source_field.name != target_field.name) {
+                    debugPanic("ir.lower record bridge field name mismatch");
+                }
+                ids[i] = try self.bridgePlanForTypesRec(source_field.ty, target_field.ty, active);
+            }
+            return try self.output.addBridgePlan(.{ .struct_ = try self.output.addBridgePlanSpan(ids) });
+        }
+
+        if (source == .tag_union and target == .tag_union) {
+            return try self.tagUnionBridgePlan(
+                source.tag_union.tags,
+                target.tag_union.tags,
+                source_layout,
+                target_layout,
+                active,
+            );
+        }
+
+        if (target_preserved == .primitive and target_preserved.primitive == .opaque_ptr) {
+            return try self.output.addBridgePlan(.nominal_reinterpret);
+        }
+
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "ir.lower invariant violated: no explicit bridge plan from {s} to {s}",
+                .{ @tagName(source), @tagName(target) },
+            );
+        }
+        unreachable;
+    }
+
+    fn structBridgePlanFromTypeSpans(
+        self: *Lowerer,
+        source_items: []const lambdamono.Type.TypeId,
+        target_items: []const lambdamono.Type.TypeId,
+        active: *std.ArrayList(BridgeTypePair),
+    ) std.mem.Allocator.Error!ast.BridgePlanId {
+        if (source_items.len != target_items.len) {
+            debugPanic("ir.lower struct bridge arity mismatch");
+        }
+        const ids = try self.allocator.alloc(ast.BridgePlanId, source_items.len);
+        defer self.allocator.free(ids);
+        for (source_items, target_items, 0..) |source_item, target_item, i| {
+            ids[i] = try self.bridgePlanForTypesRec(source_item, target_item, active);
+        }
+        return try self.output.addBridgePlan(.{ .struct_ = try self.output.addBridgePlanSpan(ids) });
+    }
+
+    fn tagUnionBridgePlan(
+        self: *Lowerer,
+        source_tags: []const type_mod.Tag,
+        target_tags: []const type_mod.Tag,
+        source_layout: ir_layout.Ref,
+        target_layout: ir_layout.Ref,
+        active: *std.ArrayList(BridgeTypePair),
+    ) std.mem.Allocator.Error!ast.BridgePlanId {
+        if (source_tags.len == 1 and target_tags.len > 1) {
+            const target_discriminant = self.findTagDiscriminant(target_tags, source_tags[0].name) orelse
+                debugPanic("ir.lower singleton bridge source tag missing in target union");
+            return try self.output.addBridgePlan(.{ .singleton_to_tag_union = .{
+                .source_payload = try self.input.layouts.payloadLayoutForUnionLayout(source_layout, 0),
+                .target_discriminant = target_discriminant,
+                .payload_plan = try self.payloadBridgePlan(source_tags[0].args, target_tags[target_discriminant].args, active),
+            } });
+        }
+
+        if (target_tags.len == 1 and source_tags.len > 1) {
+            const source_discriminant = self.findTagDiscriminant(source_tags, target_tags[0].name) orelse
+                debugPanic("ir.lower singleton bridge target tag missing in source union");
+            return try self.output.addBridgePlan(.{ .tag_union_to_singleton = .{
+                .target_payload = try self.input.layouts.payloadLayoutForUnionLayout(target_layout, 0),
+                .source_discriminant = source_discriminant,
+                .payload_plan = try self.payloadBridgePlan(source_tags[source_discriminant].args, target_tags[0].args, active),
+            } });
+        }
+
+        if (source_tags.len != target_tags.len) {
+            debugPanic("ir.lower tag-union bridge variant arity mismatch");
+        }
+        const ids = try self.allocator.alloc(ast.BridgePlanId, source_tags.len);
+        defer self.allocator.free(ids);
+        for (source_tags, target_tags, 0..) |source_tag, target_tag, i| {
+            if (!tagNamesEqual(source_tag.name, target_tag.name)) {
+                debugPanic("ir.lower tag-union bridge variant name mismatch");
+            }
+            ids[i] = (try self.payloadBridgePlan(source_tag.args, target_tag.args, active)) orelse
+                try self.output.addBridgePlan(.zst);
+        }
+        return try self.output.addBridgePlan(.{ .tag_union = try self.output.addBridgePlanSpan(ids) });
+    }
+
+    fn payloadBridgePlan(
+        self: *Lowerer,
+        source_args: []const lambdamono.Type.TypeId,
+        target_args: []const lambdamono.Type.TypeId,
+        active: *std.ArrayList(BridgeTypePair),
+    ) std.mem.Allocator.Error!?ast.BridgePlanId {
+        if (source_args.len == 0 and target_args.len == 0) return null;
+        return try self.structBridgePlanFromTypeSpans(source_args, target_args, active);
+    }
+
+    fn bridgePlanCanListReinterpret(self: *const Lowerer, plan_id: ast.BridgePlanId) bool {
+        return switch (self.output.getBridgePlan(plan_id)) {
+            .direct, .zst, .nominal_reinterpret => true,
+            else => false,
+        };
+    }
+
+    fn layoutRefIsZst(self: *const Lowerer, ref: ir_layout.Ref) bool {
+        _ = self;
+        return switch (ref) {
+            .canonical => |idx| idx == .zst,
+            .local => false,
+        };
+    }
+
+    fn sameNonListBackingLayout(self: *Lowerer, source: ir_layout.Ref, target: ir_layout.Ref) bool {
+        if (std.meta.eql(source, target)) return true;
+        const source_backing = self.unwrapNominalLayoutRef(source);
+        const target_backing = self.unwrapNominalLayoutRef(target);
+        if (!std.meta.eql(source_backing, target_backing)) return false;
+        return !self.layoutRefIsList(source) and !self.layoutRefIsList(target);
+    }
+
+    fn unwrapNominalLayoutRef(self: *Lowerer, ref: ir_layout.Ref) ir_layout.Ref {
+        var current = ref;
+        while (true) {
+            switch (current) {
+                .canonical => return current,
+                .local => |node_id| switch (self.input.layouts.graph.getNode(node_id)) {
+                    .nominal => |backing| current = backing,
+                    else => return current,
+                },
+            }
+        }
+    }
+
+    fn layoutRefIsList(self: *Lowerer, ref: ir_layout.Ref) bool {
+        var current = ref;
+        while (true) {
+            switch (current) {
+                .canonical => return false,
+                .local => |node_id| switch (self.input.layouts.graph.getNode(node_id)) {
+                    .nominal => |backing| current = backing,
+                    .list => return true,
+                    else => return false,
+                },
+            }
+        }
     }
 
     fn findTagDiscriminant(

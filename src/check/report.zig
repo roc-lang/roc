@@ -575,7 +575,7 @@ pub const ReportBuilder = struct {
                     }, self, report);
                 },
                 .fields_missing => |fm| {
-                    // Reconstruct slice from range
+                    // Materialize slice from range
                     const fields = self.diff_fields.sliceRange(fm.fields).items(.name);
                     if (fields.len == 1) {
                         try D.renderSlice(&.{

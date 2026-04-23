@@ -24,6 +24,8 @@ pub const BlockId = enum(u32) { _ };
 pub const BranchId = enum(u32) { _ };
 /// Identifier for a lowered IR definition.
 pub const DefId = enum(u32) { _ };
+/// Identifier for an explicit bridge plan.
+pub const BridgePlanId = enum(u32) { _ };
 
 /// Slice metadata for contiguous ids stored in side arrays.
 pub fn Span(comptime _: type) type {
@@ -54,6 +56,28 @@ pub const Lit = union(enum) {
     bool: bool,
 };
 
+/// Explicit bridge operation chosen before IR is lowered into LIR.
+pub const BridgePlan = union(enum) {
+    direct,
+    zst,
+    list_reinterpret,
+    nominal_reinterpret,
+    box_unbox: BridgePlanId,
+    box_box: BridgePlanId,
+    struct_: Span(BridgePlanId),
+    tag_union: Span(BridgePlanId),
+    singleton_to_tag_union: struct {
+        source_payload: LayoutRef,
+        target_discriminant: u16,
+        payload_plan: ?BridgePlanId,
+    },
+    tag_union_to_singleton: struct {
+        target_payload: LayoutRef,
+        source_discriminant: u16,
+        payload_plan: ?BridgePlanId,
+    },
+};
+
 /// Lowered IR expression node.
 pub const Expr = union(enum) {
     var_: Var,
@@ -77,7 +101,7 @@ pub const Expr = union(enum) {
     },
     bridge: struct {
         value: Var,
-        singleton_tag_discriminant: ?u16 = null,
+        plan: BridgePlanId,
     },
     layout_size: LayoutRef,
     call_direct: struct {
@@ -168,6 +192,8 @@ pub const Store = struct {
     expr_ids: std.ArrayList(ExprId),
     stmt_ids: std.ArrayList(StmtId),
     branch_ids: std.ArrayList(BranchId),
+    bridge_plans: std.ArrayList(BridgePlan),
+    bridge_plan_ids: std.ArrayList(BridgePlanId),
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
@@ -181,10 +207,14 @@ pub const Store = struct {
             .expr_ids = .empty,
             .stmt_ids = .empty,
             .branch_ids = .empty,
+            .bridge_plans = .empty,
+            .bridge_plan_ids = .empty,
         };
     }
 
     pub fn deinit(self: *Store) void {
+        self.bridge_plan_ids.deinit(self.allocator);
+        self.bridge_plans.deinit(self.allocator);
         self.exprs.deinit(self.allocator);
         self.stmts.deinit(self.allocator);
         self.blocks.deinit(self.allocator);
@@ -194,6 +224,28 @@ pub const Store = struct {
         self.expr_ids.deinit(self.allocator);
         self.stmt_ids.deinit(self.allocator);
         self.branch_ids.deinit(self.allocator);
+    }
+
+    pub fn addBridgePlan(self: *Store, plan: BridgePlan) std.mem.Allocator.Error!BridgePlanId {
+        const idx: u32 = @intCast(self.bridge_plans.items.len);
+        try self.bridge_plans.append(self.allocator, plan);
+        return @enumFromInt(idx);
+    }
+
+    pub fn getBridgePlan(self: *const Store, id: BridgePlanId) BridgePlan {
+        return self.bridge_plans.items[@intFromEnum(id)];
+    }
+
+    pub fn addBridgePlanSpan(self: *Store, ids: []const BridgePlanId) std.mem.Allocator.Error!Span(BridgePlanId) {
+        if (ids.len == 0) return Span(BridgePlanId).empty();
+        const start: u32 = @intCast(self.bridge_plan_ids.items.len);
+        try self.bridge_plan_ids.appendSlice(self.allocator, ids);
+        return .{ .start = start, .len = @intCast(ids.len) };
+    }
+
+    pub fn sliceBridgePlanSpan(self: *const Store, span: Span(BridgePlanId)) []const BridgePlanId {
+        if (span.len == 0) return &.{};
+        return self.bridge_plan_ids.items[span.start..][0..span.len];
     }
 
     pub fn addExpr(self: *Store, expr: Expr) std.mem.Allocator.Error!ExprId {

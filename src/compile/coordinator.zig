@@ -2385,8 +2385,6 @@ pub const Coordinator = struct {
 
         const env = task.module_env;
 
-        env.store.resolvePendingLookups(env, task.imported_envs);
-
         // Type check - use worker allocator for thread safety
         const check_alloc = self.getWorkerAllocator();
         var typecheck_output = compile_package.PackageEnv.typeCheckModule(

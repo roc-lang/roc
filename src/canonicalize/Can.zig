@@ -25,7 +25,7 @@ const Node = @import("Node.zig");
 
 /// Information about an auto-imported module type
 pub const AutoImportedType = struct {
-    env: ?*const ModuleEnv,
+    env: *const ModuleEnv,
     /// Optional statement index for types (e.g., Builtin.Bool, Builtin.Num.U8)
     /// When set, this points directly to the type declaration, avoiding string lookups
     statement_idx: ?CIR.Statement.Idx = null,
@@ -35,12 +35,9 @@ pub const AutoImportedType = struct {
     /// Whether this is a package-qualified import (e.g., "pf.Stdout" vs "Bool")
     /// Used to determine the correct module name for auto-imports
     is_package_qualified: bool = false,
-    /// Whether this is a placeholder entry for a module that hasn't been compiled yet.
-    /// When true, member lookup failures are not errors - they'll be validated during type checking.
-    is_placeholder: bool = false,
 
     pub fn requireEnv(self: @This()) *const ModuleEnv {
-        return self.env orelse @panic("canonicalize.AutoImportedType missing module env");
+        return self.env;
     }
 };
 
@@ -639,13 +636,13 @@ fn ensureTypeDeclPlaceholderOnly(
 
     if (self.scopeLookupTypeDecl(qualified_name_idx)) |existing_stmt_idx| {
         const existing_stmt = self.env.store.getStatement(existing_stmt_idx);
-        const is_placeholder = switch (existing_stmt) {
+        const is_decl_reservation = switch (existing_stmt) {
             .s_alias_decl => |alias| alias.anno == .placeholder,
             .s_nominal_decl => |nominal| nominal.anno == .placeholder,
             else => false,
         };
 
-        if (!is_placeholder) {
+        if (!is_decl_reservation) {
             const original_region = self.env.store.getStatementRegion(existing_stmt_idx);
             try self.env.pushDiagnostic(Diagnostic{
                 .type_redeclared = .{
@@ -853,13 +850,13 @@ fn processTypeDeclFirstPass(
     const type_decl_stmt_idx = if (self.scopeLookupTypeDecl(qualified_name_idx)) |existing_stmt_idx| blk: {
         // Type was already introduced - check if it's a placeholder (anno = 0) or a real declaration
         const existing_stmt = self.env.store.getStatement(existing_stmt_idx);
-        const is_placeholder = switch (existing_stmt) {
+        const is_decl_reservation = switch (existing_stmt) {
             .s_alias_decl => |alias| alias.anno == .placeholder,
             .s_nominal_decl => |nominal| nominal.anno == .placeholder,
             else => false,
         };
 
-        if (is_placeholder) {
+        if (is_decl_reservation) {
             // It's a placeholder from Phase 1.5.8 - we'll update it
             break :blk existing_stmt_idx;
         } else {
@@ -3309,7 +3306,7 @@ fn createAnnoOnlyDef(
             .not_found => {
                 // Placeholder is tracked but not found in current scope chain.
                 // This can happen if the placeholder was created in a scope that's
-                // not an ancestor of the current scope. Create a new pattern as fallback;
+                // not an ancestor of the current scope. Create a new pattern for this scope;
                 // any actual errors will be caught later during definition checking.
                 const pattern = Pattern{
                     .assign = .{
@@ -4102,7 +4099,7 @@ fn canonicalizeImportStatement(
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // 1. Reconstruct the full module name (e.g., "json.Json")
+    // 1. Build the full module name (e.g., "json.Json")
     const module_name = blk: {
         if (self.parse_ir.tokens.resolveIdentifier(import_stmt.module_name_tok) == null) {
             const region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
@@ -4459,21 +4456,6 @@ fn introduceItemsAliased(
             }
             return;
         };
-
-        // If module is a placeholder (not yet compiled), skip validation and introduce items directly
-        // This matches the behavior in type annotation canonicalization where placeholders create pending lookups
-        if (module_entry.is_placeholder) {
-            for (exposed_items_slice) |exposed_item_idx| {
-                const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
-                const item_name = exposed_item.alias orelse exposed_item.name;
-                const item_info = Scope.ExposedItemInfo{
-                    .module_name = module_name,
-                    .original_name = exposed_item.name,
-                };
-                try self.scopeIntroduceExposedItem(item_name, item_info, import_region);
-            }
-            return;
-        }
 
         const module_env = module_entry.requireEnv();
 
@@ -5252,9 +5234,8 @@ pub fn canonicalizeExpr(
                             // Check if this module is imported in the current scope
                             // For auto-imported nested types (Bool, Str), use the parent module name (Builtin)
                             // For package-qualified imports (pf.Stdout), use the qualified name as-is
-                            // For placeholder modules, use the original module text (not the placeholder's env.module_name)
                             const lookup_module_name = if (auto_imported_type_info) |info|
-                                if (info.is_placeholder) module_text else if (info.is_package_qualified) module_text else info.requireEnv().module_name
+                                if (info.is_package_qualified) module_text else info.requireEnv().module_name
                             else
                                 module_text;
 
@@ -5262,10 +5243,9 @@ pub fn canonicalizeExpr(
                             const import_idx = self.scopeLookupImportedModule(lookup_module_name) orelse blk: {
                                 // Check if this is an auto-imported module
                                 if (auto_imported_type_info) |info| {
-                                    // For placeholders, use the original module text
                                     // For auto-imported nested types (like Bool, Str), import the parent module (Builtin)
                                     // For package-qualified imports (pf.Stdout), use the qualified name
-                                    const actual_module_name = if (info.is_placeholder) module_text else if (info.is_package_qualified) module_text else info.requireEnv().module_name;
+                                    const actual_module_name = if (info.is_package_qualified) module_text else info.requireEnv().module_name;
                                     break :blk try self.getOrCreateAutoImport(actual_module_name);
                                 }
 
@@ -5364,36 +5344,6 @@ pub fn canonicalizeExpr(
                                     // Module import failed, don't generate redundant error
                                     // Fall through to normal identifier lookup
                                     break :blk_qualified;
-                                }
-
-                                // If this is a placeholder module (not yet compiled), create a pending lookup
-                                // that will be resolved after all modules are canonicalized.
-                                if (auto_imported_type_info.?.is_placeholder) {
-                                    const info = auto_imported_type_info.?;
-                                    // Build the fully qualified member name like we do for non-placeholder modules.
-                                    // For builtin types with statement_idx, use qualified_type_ident + field_text
-                                    // e.g., for Message.msg: "Message" + "msg" -> "Message.msg"
-                                    // For nested module access (qualifier_tokens.len > 1), use module_name + nested_path
-                                    // e.g., for Outer.Inner.inner: "Outer" + "Inner.inner" -> "Outer.Inner.inner"
-                                    // For simple access (qualifier_tokens.len == 1), just use field_text
-                                    // e.g., for A.main!: just "main!" (not "A.main!")
-                                    const qualified_ident_idx: Ident.Idx = if (info.statement_idx != null) idx_blk: {
-                                        const qualified_text = self.env.getIdent(info.qualified_type_ident);
-                                        break :idx_blk try self.env.insertQualifiedIdent(qualified_text, field_text);
-                                    } else if (qualifier_tokens.len > 1)
-                                        try self.env.insertQualifiedIdent(self.env.getIdent(module_name), nested_path)
-                                    else
-                                        ident;
-
-                                    const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_pending = .{
-                                        .module_idx = import_idx,
-                                        .ident_idx = qualified_ident_idx,
-                                        .region = region,
-                                    } }, region);
-                                    return CanonicalizedExpr{
-                                        .idx = expr_idx,
-                                        .free_vars = DataSpan.empty(),
-                                    };
                                 }
 
                                 // Generate a more helpful error for auto-imported types (List, Bool, Try, etc.)
@@ -7337,10 +7287,10 @@ fn canonicalizeExprOrMalformed(
 }
 
 /// Canonicalize the `??` (double question) operator.
-/// Desugars `expr ?? fallback` into:
+/// Desugars `expr ?? rhs` into:
 ///   match expr {
 ///       Ok(#ok) => #ok,
-///       Err(_) => fallback,
+///       Err(_) => rhs,
 ///   }
 fn canonicalizeDoubleQuestionOp(
     self: *Self,
@@ -7450,7 +7400,7 @@ fn canonicalizeDoubleQuestionOp(
         try self.env.store.addScratchMatchBranch(ok_branch_idx);
     }
 
-    // === Branch 2: Err(_) => fallback ===
+    // === Branch 2: Err(_) => rhs ===
     {
         // Enter a new scope for this branch
         try self.scopeEnter(self.env.gpa, false);
@@ -7497,7 +7447,7 @@ fn canonicalizeDoubleQuestionOp(
         try self.env.store.addScratchMatchBranchPattern(err_branch_pattern_idx);
         const err_branch_pat_span = try self.env.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
 
-        // Branch value is the fallback expression (already canonicalized as can_rhs)
+        // Branch value is the right-hand expression (already canonicalized as can_rhs)
         const branch_value_idx = can_rhs.idx;
 
         // Create the Err branch
@@ -10331,7 +10281,7 @@ fn canonicalizeTypeAnnoBasicType(
         }
 
         // Unqualified type annotations obey scope first. Builtins are only the
-        // auto-imported fallback when no local/associated/imported type binding
+        // auto-imported builtin path when no local/associated/imported type binding
         // with the same user-visible name is in scope.
         if (self.scopeLookupTypeBinding(type_name_ident)) |binding_location| {
             const binding = binding_location.binding.*;
@@ -10433,21 +10383,6 @@ fn canonicalizeTypeAnnoBasicType(
         } else {
             // Check if this is an auto-imported type from module_envs
             if (self.lookupAvailableModuleEnv(type_name_ident)) |auto_imported_type| {
-                // If this is a placeholder module (not yet compiled), create a pending lookup
-                // that will be resolved after all modules are canonicalized.
-                if (auto_imported_type.is_placeholder) {
-                    // Get or create import for the placeholder module
-                    const module_name_text = self.env.getIdent(type_name_ident);
-                    const import_idx = try self.getOrCreateAutoImport(module_name_text);
-                    return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
-                        .name = type_name_ident,
-                        .base = .{ .pending = .{
-                            .module_idx = import_idx,
-                            .type_name = type_name_ident,
-                        } },
-                    } }, region);
-                }
-
                 // This is an auto-imported type like Bool or Try
                 // We need to create an import for it and return the type annotation
                 const module_name_text = auto_imported_type.requireEnv().module_name;
@@ -10604,15 +10539,6 @@ fn canonicalizeTypeAnnoBasicType(
             const auto_imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
                 break :blk 0;
             };
-
-            // If this is a placeholder module (not yet compiled), create a pending lookup
-            // that will be resolved after all modules are canonicalized.
-            if (auto_imported_type.is_placeholder) {
-                return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{ .name = type_name_ident, .base = .{ .pending = .{
-                    .module_idx = import_idx,
-                    .type_name = type_name_ident,
-                } } } }, region);
-            }
 
             const target_ident = auto_imported_type.requireEnv().common.findIdent(type_name_text) orelse {
                 // Type is not exposed by the module
@@ -13685,7 +13611,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     };
 
     // This IS a module-qualified lookup - we must handle it completely here.
-    // After this point, returning null would cause incorrect fallback to regular field access.
+    // After this point, returning null would incorrectly continue to regular field access.
     const right_expr = self.parse_ir.store.getExpr(field_access.right);
     const region = self.parse_ir.tokenizedRegionToRegion(field_access.region);
 
@@ -13953,12 +13879,12 @@ fn parseFieldAccessRight(self: *Self, field_access: AST.BinOp) std.mem.Allocator
         },
         else => .{
             try self.createUnknownIdent(),
-            self.parse_ir.tokenizedRegionToRegion(field_access.region), // fallback to whole region
+            self.parse_ir.tokenizedRegionToRegion(field_access.region), // use whole region
         },
     };
 }
 
-/// Resolve an identifier token or return a fallback "unknown" identifier.
+/// Resolve an identifier token or return a synthetic "unknown" identifier.
 ///
 /// This helps maintain the "inform don't block" philosophy - even if we can't
 /// resolve an identifier (due to malformed input), we continue compilation.
@@ -13974,7 +13900,7 @@ fn resolveIdentOrFallback(self: *Self, token: Token.Idx) std.mem.Allocator.Error
     }
 }
 
-/// Create an "unknown" identifier for fallback cases.
+/// Create an "unknown" identifier for malformed syntax.
 ///
 /// Used when we encounter malformed or unexpected syntax but want to continue
 /// compilation instead of stopping. This supports the compiler's "inform don't block" approach.
@@ -14134,7 +14060,7 @@ fn getExternalTypeBase(self: *Self, type_ident: Ident.Idx) std.mem.Allocator.Err
             else => {},
         }
     }
-    // Fallback: try auto-imported types from explicitly imported or builtin modules.
+    // Then try auto-imported types from explicitly imported or builtin modules.
     if (self.lookupAvailableModuleEnv(type_ident)) |auto_imported_type| {
         if (auto_imported_type.statement_idx) |stmt_idx| {
             const module_name_text = auto_imported_type.requireEnv().module_name;
@@ -14287,7 +14213,7 @@ fn reportTypeModuleOrDefaultAppError(self: *Self) std.mem.Allocator.Error!void {
     const module_name_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
     const file_region = self.parse_ir.tokenizedRegionToRegion(file.region);
 
-    // Use heuristic: if there are types declared, assume type module, else assume default-app
+    // Use declaration presence: if there are types declared, assume type module, else assume default-app
     if (self.hasAnyTypeDeclarations()) {
         // Assume user wanted type module
         try self.env.pushDiagnostic(.{

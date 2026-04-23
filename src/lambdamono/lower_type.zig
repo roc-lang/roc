@@ -311,47 +311,6 @@ fn lowerLambdaSetTags(
     return try mono_types.dupeTags(out);
 }
 
-fn commonErasedCaptureType(
-    types: *solved.Type.Store,
-    mono_types: *mono.Store,
-    mono_cache: *MonoCache,
-    lambdas: []const solved.Type.Lambda,
-    symbols: *const symbol_mod.Store,
-) std.mem.Allocator.Error!?mono.TypeId {
-    return try commonErasedCaptureTypeMode(types, mono_types, mono_cache, lambdas, symbols, .erased_boundary);
-}
-
-fn commonErasedCaptureTypeMode(
-    types: *solved.Type.Store,
-    mono_types: *mono.Store,
-    mono_cache: *MonoCache,
-    lambdas: []const solved.Type.Lambda,
-    symbols: *const symbol_mod.Store,
-    mode: LowerMode,
-) std.mem.Allocator.Error!?mono.TypeId {
-    var common: ?mono.TypeId = null;
-    for (lambdas) |lambda| {
-        const captures = types.sliceCaptures(lambda.captures);
-        const next: ?mono.TypeId = if (captures.len == 0)
-            null
-        else
-            try lowerCapturesMode(types, mono_types, mono_cache, captures, symbols, mode);
-        if (common == null) {
-            common = next;
-            continue;
-        }
-        if (common == null and next == null) continue;
-        if (common == null or next == null or common.? != next.?) {
-            @branchHint(.cold);
-            std.debug.panic(
-                "lambdamono.lower_type boxed callable variants require a common capture type",
-                .{},
-            );
-        }
-    }
-    return common;
-}
-
 fn lowerBoxPayloadType(
     types: *solved.Type.Store,
     mono_types: *mono.Store,
@@ -363,12 +322,7 @@ fn lowerBoxPayloadType(
         const fn_id = requireFunctionType(types, elem);
         const call_sig = try lowerCallableSig(types, mono_types, mono_cache, fn_id, symbols, .erased_boundary);
         return switch (repr) {
-            .lset => |lambdas| try mono_types.internResolved(.{
-                .erased_fn = .{
-                    .capture = try commonErasedCaptureType(types, mono_types, mono_cache, lambdas, symbols),
-                    .call = call_sig,
-                },
-            }),
+            .lset => std.debug.panic("lambdamono.lower_type boxed lambda set missing explicit erased capture type", .{}),
             .erased => try mono_types.internResolved(.{ .erased_fn = .{
                 .capture = null,
                 .call = call_sig,
@@ -465,14 +419,7 @@ fn lowerFunctionType(
         } },
         .erased_boundary => .{ .erased_fn = .{
             .capture = switch (types.lambdaRepr(fn_ty)) {
-                .lset => |lambdas| try commonErasedCaptureTypeMode(
-                    types,
-                    mono_types,
-                    mono_cache,
-                    lambdas,
-                    symbols,
-                    .erased_boundary,
-                ),
+                .lset => std.debug.panic("lambdamono.lower_type erased lambda set missing explicit capture type", .{}),
                 .erased => null,
             },
             .call = call_sig,

@@ -1386,10 +1386,6 @@ pub const PackageEnv = struct {
             }
         }
 
-        // Resolve pending lookups that were deferred during canonicalization
-        // This converts e_lookup_pending to e_lookup_external now that all dependencies are available
-        env.store.resolvePendingLookups(env, imported_envs.items);
-
         const check_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
         var typecheck_output = try typeCheckModule(
             self.gpa,

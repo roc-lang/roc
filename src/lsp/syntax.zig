@@ -945,25 +945,6 @@ pub const SyntaxChecker = struct {
                     }
                 }
             },
-            .e_lookup_pending => {
-                // Pending lookups can still be resolved for hover by symbol text.
-                const lookup_region = store.getExprRegion(expr_idx);
-                const region_text = module_env.getSource(lookup_region);
-
-                // Try local resolution first (covers local functions/values).
-                if (findDocInModule(self.allocator, module_env, region_text)) |doc| {
-                    return doc;
-                }
-
-                // If the pending lookup is qualified, try external module docs.
-                if (std.mem.indexOfScalar(u8, region_text, '.')) |dot_pos| {
-                    const module_name = region_text[0..dot_pos];
-                    const function_name = region_text[dot_pos + 1 ..];
-                    if (findExternalModuleEnv(env, module_name)) |external_env| {
-                        return findDocInModule(self.allocator, external_env, function_name);
-                    }
-                }
-            },
             .e_method_call => |method_call| {
                 // Attached method call - resolve receiver type to find the providing module
                 const method_name = module_env.getIdentText(method_call.method_name);
@@ -1380,29 +1361,6 @@ pub const SyntaxChecker = struct {
                         return self.findModuleByName(module_name);
                     }
                     self.logDebug(.build, "[DEF] e_lookup_external: could not extract module name from '{s}'", .{region_text});
-                    return null;
-                },
-                .e_lookup_pending => {
-                    // Resolve pending lookup by source text. This keeps
-                    // go-to-definition/hover robust in partially-resolved states.
-                    const lookup_region = module_env.store.getExprRegion(expr_idx);
-                    const region_text = module_env.getSource(lookup_region);
-
-                    if (module_lookup.findDefinitionByUnqualifiedName(module_env, region_text)) |def_info| {
-                        const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(def_info.pattern_idx));
-                        const def_region = module_env.store.getRegionAt(pattern_node_idx);
-                        const range = cir_queries.regionToRange(module_env, def_region) orelse return null;
-                        return DefinitionResult{
-                            .uri = current_uri,
-                            .range = range,
-                        };
-                    }
-
-                    if (std.mem.indexOfScalar(u8, region_text, '.')) |dot_pos| {
-                        const module_name = region_text[0..dot_pos];
-                        return self.findModuleByName(module_name);
-                    }
-
                     return null;
                 },
                 .e_method_call => |method_call| {
