@@ -94,7 +94,10 @@ pub const Expr = union(enum) {
         tag_discriminant: u16,
     },
     make_struct: Span(Var),
-    make_list: Span(Var),
+    make_list: struct {
+        elems: Span(Var),
+        elem_bridge_plans: Span(BridgePlanId),
+    },
     get_struct_field: struct {
         record: Var,
         field_index: u16,
@@ -163,6 +166,7 @@ pub const Stmt = union(enum) {
         elem: Var,
         iterable: Var,
         body: BlockId,
+        elem_bridge_plan: BridgePlanId,
     },
     while_: struct {
         cond: BlockId,

@@ -1351,7 +1351,12 @@ const ProcLowerer = struct {
                 const body = if (raw_elem_local == body_elem_local)
                     body_core
                 else
-                    try self.lowerExplicitBridgeIntoLocal(raw_elem_local, body_elem_local, body_core);
+                    try self.lowerPlannedBridgeIntoLocal(
+                        raw_elem_local,
+                        body_elem_local,
+                        body_core,
+                        for_stmt.elem_bridge_plan,
+                    );
                 break :blk try self.parent.store.addCFStmt(.{ .for_list = .{
                     .elem = raw_elem_local,
                     .elem_result = .fresh,
@@ -1648,8 +1653,13 @@ const ProcLowerer = struct {
                     .next = next,
                 } });
             },
-            .make_list => |elems| blk: {
-                const source_locals = try self.lowerVarSpan(self.parent.input.store.sliceVarSpan(elems));
+            .make_list => |list| blk: {
+                const source_vars = self.parent.input.store.sliceVarSpan(list.elems);
+                const elem_plans = self.parent.input.store.sliceBridgePlanSpan(list.elem_bridge_plans);
+                if (source_vars.len != elem_plans.len) {
+                    debugPanic("lir.from_ir make_list bridge plan arity mismatch");
+                }
+                const source_locals = try self.lowerVarSpan(source_vars);
                 defer self.parent.allocator.free(source_locals);
                 const elem_ref = self.explicitListElemLayoutRef(self.localLayoutRef(target));
                 const elem_layout = self.lowerListElemLayout(self.localLayout(target));
@@ -1673,10 +1683,11 @@ const ProcLowerer = struct {
                 while (bridge_i > 0) {
                     bridge_i -= 1;
                     if (elem_locals[bridge_i] != source_locals[bridge_i]) {
-                        cursor = try self.lowerExplicitBridgeIntoLocal(
+                        cursor = try self.lowerPlannedBridgeIntoLocal(
                             source_locals[bridge_i],
                             elem_locals[bridge_i],
                             cursor,
+                            elem_plans[bridge_i],
                         );
                     }
                 }

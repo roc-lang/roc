@@ -373,7 +373,22 @@ const Lowerer = struct {
             .list => |items| {
                 const lowered_items = try self.lowerValueSpan(&block, env, items);
                 if (lowered_items == null) return if (block.has_term) block else debugPanic("ir.lower list missing terminator");
-                try self.emitLeafExpr(&block, expr.ty, "list", .{ .make_list = lowered_items.? });
+                const item_exprs = self.input.store.sliceExprSpan(items);
+                const list_elem_ty = self.listTypeElem(expr.ty) orelse
+                    debugPanic("ir.lower list expression missing explicit list element type");
+                const storage_elem_ty = self.storageTypeForListElement(list_elem_ty);
+                const elem_plans = try self.allocator.alloc(ast.BridgePlanId, item_exprs.len);
+                defer self.allocator.free(elem_plans);
+                for (item_exprs, 0..) |item_expr, i| {
+                    elem_plans[i] = try self.bridgePlanForTypes(
+                        self.input.store.getExpr(item_expr).ty,
+                        storage_elem_ty,
+                    );
+                }
+                try self.emitLeafExpr(&block, expr.ty, "list", .{ .make_list = .{
+                    .elems = lowered_items.?,
+                    .elem_bridge_plans = try self.output.addBridgePlanSpan(elem_plans),
+                } });
             },
             .tag => |tag| {
                 const lowered_args = try self.lowerValueSpan(&block, env, tag.args);
@@ -777,9 +792,7 @@ const Lowerer = struct {
         const source = self.input.types.getType(source_ty);
         const target = self.input.types.getType(target_ty);
 
-        if (source == .primitive and source.primitive == .opaque_ptr) {
-            const child_plan = try self.output.addBridgePlan(.direct);
-            _ = child_plan;
+        if (self.layoutRefIsOpaquePtr(source_layout)) {
             return try self.output.addBridgePlan(.{ .box_unbox = try self.output.addBridgePlan(.direct) });
         }
 
@@ -838,7 +851,7 @@ const Lowerer = struct {
             );
         }
 
-        if (target_preserved == .primitive and target_preserved.primitive == .opaque_ptr) {
+        if (self.layoutRefIsOpaquePtr(target_layout)) {
             return try self.output.addBridgePlan(.nominal_reinterpret);
         }
 
@@ -932,6 +945,14 @@ const Lowerer = struct {
         _ = self;
         return switch (ref) {
             .canonical => |idx| idx == .zst,
+            .local => false,
+        };
+    }
+
+    fn layoutRefIsOpaquePtr(self: *const Lowerer, ref: ir_layout.Ref) bool {
+        _ = self;
+        return switch (ref) {
+            .canonical => |idx| idx == .opaque_ptr,
             .local => false,
         };
     }
@@ -1180,6 +1201,27 @@ const Lowerer = struct {
             .nominal => |nominal| self.tupleTypeElems(nominal.backing),
             .tuple => |tuple| tuple,
             else => null,
+        };
+    }
+
+    fn listTypeElem(
+        self: *Lowerer,
+        list_ty: type_mod.TypeId,
+    ) ?type_mod.TypeId {
+        return switch (self.input.types.getTypePreservingNominal(list_ty)) {
+            .nominal => |nominal| self.listTypeElem(nominal.backing),
+            .list => |elem| elem,
+            else => null,
+        };
+    }
+
+    fn storageTypeForListElement(
+        self: *Lowerer,
+        elem_ty: type_mod.TypeId,
+    ) type_mod.TypeId {
+        return switch (self.input.types.getTypePreservingNominal(elem_ty)) {
+            .nominal => |nominal| self.storageTypeForListElement(nominal.backing),
+            else => elem_ty,
         };
     }
 
@@ -1567,12 +1609,18 @@ const Lowerer = struct {
         const iterable = try self.lowerSubexprValue(block, env, iterable_expr);
         if (iterable == null) return;
 
+        const iterable_ty = self.input.store.getExpr(iterable_expr).ty;
+        const iterable_elem_ty = self.listTypeElem(iterable_ty) orelse
+            debugPanic("ir.lower lowerForLoop expected explicit list iterable type");
+        const iterable_storage_elem_ty = self.storageTypeForListElement(iterable_elem_ty);
+        const body_elem_ty = self.input.store.getPat(patt).ty;
         const elem = try self.freshVarWithLayout(self.input.layouts.patLayout(patt), "for_elem");
         const body_block = try self.lowerPatternBranchBlock(env, elem, patt, body_expr, null, null);
         try block.stmts.append(self.allocator, .{ .for_list = .{
             .elem = elem,
             .iterable = iterable.?,
             .body = body_block,
+            .elem_bridge_plan = try self.bridgePlanForTypes(iterable_storage_elem_ty, body_elem_ty),
         } });
     }
 

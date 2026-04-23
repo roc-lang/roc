@@ -43,7 +43,7 @@ pub const Pending = struct {
     exec_capture_ty: ?type_mod.TypeId = null,
     capture_exact_symbols: ?[]const Symbol = null,
     exec_args_tys: ?[]type_mod.TypeId = null,
-    exec_ret_ty: ?type_mod.TypeId = null,
+    exec_ret_ty: type_mod.TypeId,
 };
 
 pub const SourceDef = union(enum) {
@@ -109,8 +109,7 @@ pub const Queue = struct {
             try out.append(allocator, .{
                 .bind = item.specialized_symbol,
                 .result_ty = switch (specialized) {
-                    .fn_, .hosted_fn => item.exec_ret_ty orelse
-                        debugPanic("lambdamono.specializations.solvedDefs specialization missing executable return type"),
+                    .fn_, .hosted_fn => item.exec_ret_ty,
                     .val, .run => debugPanic("lambdamono.specializations.solvedDefs unexpected non-callable specialization"),
                 },
                 .value = specialized,
@@ -195,7 +194,7 @@ pub fn specializeFnWithExecArgs(
     exec_capture_ty: ?type_mod.TypeId,
     capture_exact_symbols: ?[]const Symbol,
     exec_arg_tys: []const type_mod.TypeId,
-    exec_ret_ty: ?type_mod.TypeId,
+    exec_ret_ty: type_mod.TypeId,
 ) std.mem.Allocator.Error!Symbol {
     const entry = lookupFnExact(fenv, requested_name) orelse
         debugPanic("lambdamono.specializations.specializeFn missing function");
@@ -257,7 +256,7 @@ pub fn specializeHostedWithExecArgs(
     exec_capture_ty: ?type_mod.TypeId,
     capture_exact_symbols: ?[]const Symbol,
     exec_arg_tys: []const type_mod.TypeId,
-    exec_ret_ty: ?type_mod.TypeId,
+    exec_ret_ty: type_mod.TypeId,
 ) std.mem.Allocator.Error!Symbol {
     const key = try makeKey(
         queue.allocator,
@@ -460,7 +459,7 @@ fn makeKey(
     exec_capture_ty: ?type_mod.TypeId,
     capture_exact_symbols: ?[]const Symbol,
     exec_arg_tys: []const type_mod.TypeId,
-    exec_ret_ty: ?type_mod.TypeId,
+    exec_ret_ty: type_mod.TypeId,
 ) std.mem.Allocator.Error![]const u8 {
     const ty_key = try solved_types.structuralKeyOwned(requested_ty);
     defer allocator.free(ty_key);
@@ -511,17 +510,13 @@ fn makeKey(
         }
     }
 
-    const has_exec_ret: u8 = if (exec_ret_ty != null) 1 else 0;
-    try key.append(allocator, has_exec_ret);
-    if (exec_ret_ty) |ret_ty| {
-        const exec_store = exec_types orelse
-            debugPanic("lambdamono.specializations.makeKey missing executable type store for executable return key");
-        const ret_key = try exec_store.structuralKeyOwned(ret_ty);
-        defer exec_store.allocator.free(ret_key);
-        const ret_key_len: u32 = @intCast(ret_key.len);
-        try key.appendSlice(allocator, std.mem.asBytes(&ret_key_len));
-        try key.appendSlice(allocator, ret_key);
-    }
+    const exec_store = exec_types orelse
+        debugPanic("lambdamono.specializations.makeKey missing executable type store for executable return key");
+    const ret_key = try exec_store.structuralKeyOwned(exec_ret_ty);
+    defer exec_store.allocator.free(ret_key);
+    const ret_key_len: u32 = @intCast(ret_key.len);
+    try key.appendSlice(allocator, std.mem.asBytes(&ret_key_len));
+    try key.appendSlice(allocator, ret_key);
 
     return try key.toOwnedSlice(allocator);
 }
