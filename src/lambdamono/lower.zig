@@ -441,6 +441,33 @@ const Lowerer = struct {
                 &active,
             );
         }
+        if (std.mem.eql(u8, context, "specializeExpr(tag result)")) {
+            for (source_arg_tys, exec_arg_tys, 0..) |source_arg_ty, exec_arg_ty, i| {
+                const src_summary = self.debugSolvedTypeSummary(solved_types, source_arg_ty);
+                defer src_summary.deinit(self.allocator);
+                const exec_summary = self.debugExecutableTypeSummary(exec_arg_ty);
+                defer exec_summary.deinit(self.allocator);
+                std.debug.print(
+                    "call relation arg[{d}] src_id={d} src={s} exec={s}\n",
+                    .{
+                        i,
+                        @intFromEnum(solved_types.unlinkPreservingNominalConst(source_arg_ty)),
+                        src_summary.text,
+                        exec_summary.text,
+                    },
+                );
+            }
+            for (bindings.items, 0..) |binding, i| {
+                const src_summary = self.debugSolvedTypeSummary(solved_types, binding.source);
+                defer src_summary.deinit(self.allocator);
+                const exec_summary = self.debugExecutableTypeSummary(binding.exec);
+                defer exec_summary.deinit(self.allocator);
+                std.debug.print(
+                    "call relation binding[{d}] src_id={d} src={s} exec={s}\n",
+                    .{ i, @intFromEnum(binding.source), src_summary.text, exec_summary.text },
+                );
+            }
+        }
         const lowered = try self.lowerExecutableTypeFromSolvedWithBindings(
             solved_types,
             mono_cache,
@@ -449,6 +476,13 @@ const Lowerer = struct {
             repr_mode,
             .normal,
         );
+        if (std.mem.eql(u8, context, "specializeExpr(tag result)")) {
+            const ret_summary = self.debugSolvedTypeSummary(solved_types, source_ret_ty);
+            defer ret_summary.deinit(self.allocator);
+            const lowered_summary = self.debugExecutableTypeSummary(lowered);
+            defer lowered_summary.deinit(self.allocator);
+            std.debug.print("call relation ret src={s} lowered={s}\n", .{ ret_summary.text, lowered_summary.text });
+        }
         return self.requireConcreteExecutableType(lowered, context);
     }
 
@@ -4851,17 +4885,36 @@ const Lowerer = struct {
                     );
                     lowered_args[i] = lowered;
                     actual_arg_tys[i] = self.output.getExpr(lowered).ty;
+                    if (std.mem.eql(u8, self.input.idents.getText(tag.name), "Ok")) {
+                        const src_summary = self.debugSolvedTypeSummary(inst.types, solved_tag_arg_tys[i]);
+                        defer src_summary.deinit(self.allocator);
+                        const expected_summary = self.debugExecutableTypeSummary(expected_arg_ty);
+                        defer expected_summary.deinit(self.allocator);
+                        const actual_summary = self.debugExecutableTypeSummary(actual_arg_tys[i]);
+                        defer actual_summary.deinit(self.allocator);
+                        std.debug.print(
+                            "tag Ok arg source={s} expected={s} actual={s}\n",
+                            .{ src_summary.text, expected_summary.text, actual_summary.text },
+                        );
+                    }
                 }
                 const result_ty = if (source_args.len != 0)
-                    try self.lowerRequestedExecutableReturnTypeFromCallRelation(
-                        inst.types,
-                        mono_cache,
-                        solved_tag_arg_tys,
-                        actual_arg_tys,
-                        ty,
-                        .natural,
-                        "specializeExpr(tag result)",
-                    )
+                    blk_result: {
+                        if (std.mem.eql(u8, self.input.idents.getText(tag.name), "Ok")) {
+                            const result_source = self.debugSolvedTypeSummary(inst.types, ty);
+                            defer result_source.deinit(self.allocator);
+                            std.debug.print("tag Ok result source={s}\n", .{result_source.text});
+                        }
+                        break :blk_result try self.lowerRequestedExecutableReturnTypeFromCallRelation(
+                            inst.types,
+                            mono_cache,
+                            solved_tag_arg_tys,
+                            actual_arg_tys,
+                            ty,
+                            .natural,
+                            "specializeExpr(tag result)",
+                        );
+                    }
                 else if (stable_tag_ty) |tag_ty|
                     tag_ty
                 else if (requested_tag_ty) |tag_ty|
@@ -9366,6 +9419,22 @@ const Lowerer = struct {
                         repr_mode,
                         "specializeCallExpr(direct exact ret)",
                     );
+                    if (self.input.symbols.get(exact_symbol).name != base.Ident.Idx.NONE and
+                        std.mem.eql(u8, self.input.idents.getText(self.input.symbols.get(exact_symbol).name), "list_get_unsafe"))
+                    {
+                        const arg0_src = self.debugSolvedTypeSummary(inst.types, requested_call_arg_tys[0]);
+                        defer arg0_src.deinit(self.allocator);
+                        const arg0_exec = self.debugExecutableTypeSummary(direct_exec_arg_tys[0]);
+                        defer arg0_exec.deinit(self.allocator);
+                        const ret_src = self.debugSolvedTypeSummary(inst.types, requested_call_shape.ret);
+                        defer ret_src.deinit(self.allocator);
+                        const ret_exec = self.debugExecutableTypeSummary(direct_exec_ret_ty);
+                        defer ret_exec.deinit(self.allocator);
+                        std.debug.print(
+                            "list_get_unsafe request arg0_src={s} arg0_exec={s} ret_src={s} ret_exec={s}\n",
+                            .{ arg0_src.text, arg0_exec.text, ret_src.text, ret_exec.text },
+                        );
+                    }
                     const specialized = try self.ensureQueuedCallableSpecializedWithExecSignature(
                         inst.types,
                         exact_symbol,
@@ -10637,13 +10706,13 @@ const Lowerer = struct {
 
     fn debugExecutableTypeSummary(self: *const Lowerer, ty: type_mod.TypeId) DebugTypeText {
         var out = std.ArrayList(u8).empty;
-        self.debugWriteExecutableTypeSummary(&out, ty, 3) catch return .{ .text = "<oom>", .owned = false };
+        self.debugWriteExecutableTypeSummary(&out, ty, 8) catch return .{ .text = "<oom>", .owned = false };
         return .{ .text = out.toOwnedSlice(self.allocator) catch return .{ .text = "<oom>", .owned = false }, .owned = true };
     }
 
     fn debugSolvedTypeSummary(self: *const Lowerer, solved_types: *const solved.Type.Store, ty: TypeVarId) DebugTypeText {
         var out = std.ArrayList(u8).empty;
-        self.debugWriteSolvedTypeSummary(&out, solved_types, ty, 3) catch return .{ .text = "<oom>", .owned = false };
+        self.debugWriteSolvedTypeSummary(&out, solved_types, ty, 8) catch return .{ .text = "<oom>", .owned = false };
         return .{ .text = out.toOwnedSlice(self.allocator) catch return .{ .text = "<oom>", .owned = false }, .owned = true };
     }
 
