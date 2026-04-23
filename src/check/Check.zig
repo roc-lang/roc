@@ -475,57 +475,92 @@ fn unify(self: *Self, a: Var, b: Var, env: *Env) std.mem.Allocator.Error!unifier
     return self.unifyInContext(a, b, env, .none);
 }
 
-/// Unify two types where `a` is the expected type and `b` is the actual type
-/// Accepts a full unifier config for fine-grained control
+/// Context builder for unifyBuildingContext that wraps an already-constructed context value.
+/// Use this when the context is cheap to build upfront and no lazy evaluation is needed.
+const EagerContextBuilder = struct {
+    ctx: problem.Context,
+    fn build(self: @This()) std.mem.Allocator.Error!problem.Context {
+        return self.ctx;
+    }
+};
+
+/// Context builder for unifyBuildingContext when checking dot access on a record.
+/// Lazily checks whether the field name is actually a method on a nominal type,
+/// so the expensive isMethodOnNominalType lookup only runs on unification failure.
+const RecordAccessContextBuilder = struct {
+    checker: *Self,
+    field_name: Ident.Idx,
+    field_region: base.Region,
+    receiver_var: Var,
+    fn build(self: @This()) std.mem.Allocator.Error!problem.Context {
+        const is_method = try self.checker.isMethodOnNominalType(self.receiver_var, self.field_name);
+        return .{ .record_access = .{
+            .field_name = self.field_name,
+            .field_region = self.field_region,
+            .is_method = is_method,
+        } };
+    }
+};
+
+/// Unify two types where `a` is the expected type and `b` is the actual type.
+/// Delegates to unifyBuildingContext (not unifier.unifyInContext — Check uses unifyRaw
+/// directly so it can control when vars are clobbered and problems are recorded).
+/// For lazy context construction (e.g. to skip expensive lookups on the success path),
+/// use unifyBuildingContext instead.
 fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
+    return self.unifyBuildingContext(a, b, env, EagerContextBuilder{ .ctx = ctx });
+}
+
+/// Like unifyInContext, but the context is built lazily via a callback, only if unification
+/// fails. This avoids expensive context computation on the success path.
+///
+/// `ctx_builder` must have a `build() !problem.Context` method. It is only called on failure,
+/// while the type variables are still live (before they are clobbered to `.err`).
+fn unifyBuildingContext(self: *Self, a: Var, b: Var, env: *Env, ctx_builder: anytype) std.mem.Allocator.Error!unifier.Result {
+    comptime {
+        const T = @TypeOf(ctx_builder);
+        if (!@hasDecl(T, "build")) @compileError(@typeName(T) ++ " must have a `build() !problem.Context` method");
+    }
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // Unify
-    const result = try unifier.unifyInContext(
+    const raw = try unifier.unifyRaw(
         self.cir,
         self.types,
-        &self.problems,
         &self.snapshots,
         &self.type_writer,
         &self.unify_scratch,
         &self.occurs_scratch,
         a,
         b,
-        ctx,
     );
 
-    // Set regions and add to the current rank all variables created during unification.
-    //
-    // We assign all fresh variables the region of `b` (the "actual" type), since `a` is
-    // typically the "expected" type from an annotation. This heuristic works well for
-    // most cases but can be imprecise for deeply nested unifications where fresh variables
-    // are created for sub-components (e.g., record fields, tag payloads). In those cases,
-    // error messages may point to the outer expression rather than the specific field.
-    //
-    // A more precise solution would track the origin of each fresh variable during
-    // unification and propagate that back, but the current approach is sufficient for
-    // typical error reporting scenarios.
+    // Process fresh vars and deferred constraints regardless of success or failure.
     const region = self.getRegionAt(b);
     for (self.unify_scratch.fresh_vars.items.items) |fresh_var| {
-        // Set the rank
         const fresh_rank = self.types.resolveVar(fresh_var).desc.rank;
         try env.var_pool.addVarToRank(fresh_var, fresh_rank);
-
-        // Set the region
         try self.fillInRegionsThrough(fresh_var);
         self.setRegionAt(fresh_var, region);
     }
-
-    // Copy any constraints created during unification into our own array
     for (self.unify_scratch.deferred_constraints.items.items) |deferred_constraint| {
         _ = try env.deferred_static_dispatch_constraints.append(self.gpa, deferred_constraint);
     }
-
-    // Ensure arrays are in sync
     self.debugAssertArraysInSync();
 
-    return result;
+    switch (raw) {
+        .ok => return .ok,
+        .mismatch => |types_pair| {
+            // Vars are still live here — build the context before clobbering them.
+            const context = try ctx_builder.build();
+            const problem_idx = try self.problems.appendProblem(self.cir.gpa, .{ .type_mismatch = .{
+                .types = types_pair,
+                .context = context,
+            } });
+            self.types.union_(a, b, .{ .content = .err, .rank = Rank.generalized });
+            return .{ .problem = problem_idx };
+        },
+    }
 }
 
 /// Check if a variable contains an infinite type after solving a definition.
@@ -4805,11 +4840,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     .record = .{ .fields = record_field_range, .ext = record_ext_var },
                 } }, env, expr_region);
 
-                // Then, unify the actual receiver type with the expected record
-                _ = try self.unifyInContext(record_being_accessed, receiver_var, env, .{ .record_access = .{
+                // Use unifyBuildingContext so the is_method check only runs on failure,
+                // while receiver_var is still live (not yet clobbered to .err).
+                _ = try self.unifyBuildingContext(record_being_accessed, receiver_var, env, RecordAccessContextBuilder{
+                    .checker = self,
                     .field_name = dot_access.field_name,
                     .field_region = dot_access.field_name_region,
-                } });
+                    .receiver_var = receiver_var,
+                });
                 _ = try self.unify(expr_var, record_field_var, env);
             }
         },
@@ -6476,6 +6514,44 @@ fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         }
     }
     self.constraints.items.clearRetainingCapacity();
+}
+
+/// Returns true if `method_ident` is a known method on the nominal type of `receiver_var`.
+/// Used to detect when a user writes `receiver.method` (missing parentheses) instead of
+/// `receiver.method()`.
+fn isMethodOnNominalType(self: *Self, receiver_var: Var, method_ident: Ident.Idx) std.mem.Allocator.Error!bool {
+    const nominal = switch (self.types.resolveVar(receiver_var).desc.content) {
+        .structure => |s| switch (s) {
+            .nominal_type => |n| n,
+            else => return false,
+        },
+        else => return false,
+    };
+
+    const origin_module_ident = nominal.origin_module;
+    // Find the module env that owns the type's method definitions.
+    const original_env: *const ModuleEnv = blk: {
+        // Type is defined in the module we're currently compiling.
+        if (origin_module_ident == self.builtin_ctx.module_name) break :blk self.cir;
+        // Type is defined in the Builtin module (and we're not compiling it).
+        if (origin_module_ident == self.cir.idents.builtin_module) {
+            break :blk if (self.builtin_ctx.builtin_module) |builtin_env| builtin_env else self.cir;
+        }
+        // Type is defined in an imported module; find it by matching idents.
+        // insertIdent converts the module name string to an Ident.Idx for
+        // index-based comparison (same approach as checkStaticDispatchConstraints).
+        for (self.imported_modules) |imported_env| {
+            const imported_name = if (!imported_env.qualified_module_ident.isNone())
+                imported_env.getIdent(imported_env.qualified_module_ident)
+            else
+                imported_env.module_name;
+            const imported_module_ident = try self.cir.insertIdent(base.Ident.for_text(imported_name));
+            if (imported_module_ident == origin_module_ident) break :blk imported_env;
+        }
+        return false; // Origin module not found; cannot determine if it's a method.
+    };
+
+    return original_env.lookupMethodIdentFromEnvConst(self.cir, nominal.ident.ident_idx, method_ident) != null;
 }
 
 /// Check static dispatch constraints
