@@ -410,6 +410,7 @@ const Lowerer = struct {
                 .name = tag.name,
                 .discriminant = tag.discriminant,
                 .args = try self.instantiateExprSpan(tag.args),
+                .constructor_ty = try self.instantiateTypeIsolated(tag.constructor_ty),
             } },
             .record => |fields| .{ .record = try self.instantiateFieldSpan(fields) },
             .access => |access| .{ .access = .{
@@ -616,9 +617,19 @@ const Lowerer = struct {
         if (self.current_instantiate_cache) |cache| {
             return try self.instantiateTypeRec(ty, cache);
         }
+        return try self.instantiateTypeIsolated(ty);
+    }
+
+    fn instantiateTypeIsolated(self: *Lowerer, ty: LiftedType.TypeId) std.mem.Allocator.Error!TypeVarId {
         var cache = std.AutoHashMap(LiftedType.TypeId, TypeVarId).init(self.allocator);
         defer cache.deinit();
         return try self.instantiateTypeRec(ty, &cache);
+    }
+
+    fn cloneSolvedType(self: *Lowerer, ty: TypeVarId) std.mem.Allocator.Error!TypeVarId {
+        var cache = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
+        defer cache.deinit();
+        return try self.cloneSolvedTypeRec(ty, &cache);
     }
 
     fn instantiateTypeRec(
@@ -721,6 +732,125 @@ const Lowerer = struct {
         };
 
         self.types.setNode(placeholder, lowered);
+        return placeholder;
+    }
+
+    fn cloneSolvedTypeRec(
+        self: *Lowerer,
+        ty: TypeVarId,
+        cache: *std.AutoHashMap(TypeVarId, TypeVarId),
+    ) std.mem.Allocator.Error!TypeVarId {
+        const source_root = self.types.unlinkPreservingNominal(ty);
+        if (cache.get(source_root)) |cached| return cached;
+
+        const placeholder = try self.types.freshUnbd();
+        try cache.put(source_root, placeholder);
+
+        const cloned = switch (self.types.getNode(source_root)) {
+            .link => unreachable,
+            .unbd => type_mod.Node.unbd,
+            .for_a => type_mod.Node.for_a,
+            .flex_for_a => type_mod.Node.flex_for_a,
+            .nominal => |nominal| blk: {
+                const source_args = self.types.sliceTypeVarSpan(nominal.args);
+                const cloned_args = try self.allocator.alloc(TypeVarId, source_args.len);
+                defer self.allocator.free(cloned_args);
+                for (source_args, 0..) |arg_ty, i| {
+                    cloned_args[i] = try self.cloneSolvedTypeRec(arg_ty, cache);
+                }
+                break :blk type_mod.Node{ .nominal = .{
+                    .module_idx = nominal.module_idx,
+                    .ident = nominal.ident,
+                    .is_opaque = nominal.is_opaque,
+                    .args = try self.types.addTypeVarSpan(cloned_args),
+                    .backing = try self.cloneSolvedTypeRec(nominal.backing, cache),
+                } };
+            },
+            .content => |content| switch (content) {
+                .primitive => |prim| type_mod.Node{ .content = .{ .primitive = prim } },
+                .list => |elem| type_mod.Node{ .content = .{ .list = try self.cloneSolvedTypeRec(elem, cache) } },
+                .box => |elem| type_mod.Node{ .content = .{ .box = try self.cloneSolvedTypeRec(elem, cache) } },
+                .tuple => |tuple| blk: {
+                    const source_elems = self.types.sliceTypeVarSpan(tuple);
+                    const cloned_elems = try self.allocator.alloc(TypeVarId, source_elems.len);
+                    defer self.allocator.free(cloned_elems);
+                    for (source_elems, 0..) |elem_ty, i| {
+                        cloned_elems[i] = try self.cloneSolvedTypeRec(elem_ty, cache);
+                    }
+                    break :blk type_mod.Node{ .content = .{ .tuple = try self.types.addTypeVarSpan(cloned_elems) } };
+                },
+                .record => |record| blk: {
+                    const source_fields = self.types.sliceFields(record.fields);
+                    const cloned_fields = try self.allocator.alloc(type_mod.Field, source_fields.len);
+                    defer self.allocator.free(cloned_fields);
+                    for (source_fields, 0..) |field, i| {
+                        cloned_fields[i] = .{
+                            .name = field.name,
+                            .ty = try self.cloneSolvedTypeRec(field.ty, cache),
+                        };
+                    }
+                    break :blk type_mod.Node{ .content = .{ .record = .{
+                        .fields = try self.types.addFields(cloned_fields),
+                    } } };
+                },
+                .tag_union => |tag_union| blk: {
+                    const source_tags = self.types.sliceTags(tag_union.tags);
+                    const cloned_tags = try self.allocator.alloc(type_mod.Tag, source_tags.len);
+                    defer self.allocator.free(cloned_tags);
+                    for (source_tags, 0..) |tag, i| {
+                        const source_args = self.types.sliceTypeVarSpan(tag.args);
+                        const cloned_args = try self.allocator.alloc(TypeVarId, source_args.len);
+                        defer self.allocator.free(cloned_args);
+                        for (source_args, 0..) |arg_ty, arg_i| {
+                            cloned_args[arg_i] = try self.cloneSolvedTypeRec(arg_ty, cache);
+                        }
+                        cloned_tags[i] = .{
+                            .name = tag.name,
+                            .args = try self.types.addTypeVarSpan(cloned_args),
+                        };
+                    }
+                    break :blk type_mod.Node{ .content = .{ .tag_union = .{
+                        .tags = try self.types.addTags(cloned_tags),
+                    } } };
+                },
+                .func => |func| blk: {
+                    const source_args = self.types.sliceTypeVarSpan(func.args);
+                    const cloned_args = try self.allocator.alloc(TypeVarId, source_args.len);
+                    defer self.allocator.free(cloned_args);
+                    for (source_args, 0..) |arg_ty, i| {
+                        cloned_args[i] = try self.cloneSolvedTypeRec(arg_ty, cache);
+                    }
+                    break :blk type_mod.Node{ .content = .{ .func = .{
+                        .args = try self.types.addTypeVarSpan(cloned_args),
+                        .lset = try self.cloneSolvedTypeRec(func.lset, cache),
+                        .ret = try self.cloneSolvedTypeRec(func.ret, cache),
+                    } } };
+                },
+                .lambda_set => |span| blk: {
+                    const source_lambdas = self.types.sliceLambdas(span);
+                    const cloned_lambdas = try self.allocator.alloc(type_mod.Lambda, source_lambdas.len);
+                    defer self.allocator.free(cloned_lambdas);
+                    for (source_lambdas, 0..) |lambda, i| {
+                        const source_captures = self.types.sliceCaptures(lambda.captures);
+                        const cloned_captures = try self.allocator.alloc(type_mod.Capture, source_captures.len);
+                        defer self.allocator.free(cloned_captures);
+                        for (source_captures, 0..) |capture, capture_i| {
+                            cloned_captures[capture_i] = .{
+                                .symbol = capture.symbol,
+                                .ty = try self.cloneSolvedTypeRec(capture.ty, cache),
+                            };
+                        }
+                        cloned_lambdas[i] = .{
+                            .symbol = lambda.symbol,
+                            .captures = try self.types.addCaptures(cloned_captures),
+                        };
+                    }
+                    break :blk type_mod.Node{ .content = .{ .lambda_set = try self.types.addLambdas(cloned_lambdas) } };
+                },
+            },
+        };
+
+        self.types.setNode(placeholder, cloned);
         return placeholder;
     }
 
@@ -1525,18 +1655,34 @@ const Lowerer = struct {
                     }
                     break :blk target_ty;
                 }
+                const constructor_ty = try self.cloneSolvedType(tag.constructor_ty);
                 const arg_tys = try self.allocator.alloc(TypeVarId, args.len);
                 defer self.allocator.free(arg_tys);
                 for (args, 0..) |arg, i| {
                     arg_tys[i] = try self.inferExpr(venv, arg);
                 }
-                const wanted = try self.types.freshContent(.{ .tag_union = .{
-                    .tags = try self.types.addTags(&.{.{
-                        .name = tag.name,
-                        .args = try self.types.addTypeVarSpan(arg_tys),
-                    }}),
-                } });
-                try self.unifyTargetWithWantedPreservingNominal(target_ty, wanted);
+                const constructor_root = self.types.unlink(constructor_ty);
+                const constructor_tag = switch (self.types.getNode(constructor_root)) {
+                    .content => |content| switch (content) {
+                        .tag_union => |tag_union| blk_tag: {
+                            const tags = self.types.sliceTags(tag_union.tags);
+                            if (tags.len != 1) {
+                                return debugPanic("lambdasolved.tag constructor invariant violated: expected singleton constructor tag union", .{});
+                            }
+                            break :blk_tag tags[0];
+                        },
+                        else => return debugPanic("lambdasolved.tag constructor invariant violated: expected tag union", .{}),
+                    },
+                    else => return debugPanic("lambdasolved.tag constructor invariant violated: expected content node", .{}),
+                };
+                const constructor_args = self.types.sliceTypeVarSpan(constructor_tag.args);
+                if (constructor_args.len != arg_tys.len) {
+                    return debugPanic("lambdasolved.tag constructor invariant violated: arg count mismatch", .{});
+                }
+                for (constructor_args, arg_tys) |constructor_arg_ty, arg_ty| {
+                    try self.unify(constructor_arg_ty, arg_ty);
+                }
+                try self.unifyTargetWithWantedPreservingNominal(target_ty, constructor_ty);
                 break :blk target_ty;
             },
             .record => |fields| blk: {

@@ -6514,6 +6514,8 @@ pub const Lowerer = struct {
         const arg_exprs = self.ctx.typedCirModule(module_idx).sliceExpr(args_span);
         const lowered_args = try self.allocator.alloc(ast.ExprId, arg_exprs.len);
         defer self.allocator.free(lowered_args);
+        const constructor_arg_tys = try self.allocator.alloc(type_mod.TypeId, arg_exprs.len);
+        defer self.allocator.free(constructor_arg_tys);
         for (arg_exprs, 0..) |arg_expr_idx, i| {
             lowered_args[i] = try self.lowerExprWithExpectedType(
                 module_idx,
@@ -6523,11 +6525,19 @@ pub const Lowerer = struct {
                 try self.requireExprType(module_idx, type_scope, arg_expr_idx),
                 try self.exprResultVar(module_idx, type_scope, env, arg_expr_idx),
             );
+            constructor_arg_tys[i] = self.program.store.getExpr(lowered_args[i]).ty;
         }
+        const constructor_ty = try self.ctx.types.addType(.{ .tag_union = .{
+            .tags = try self.ctx.types.dupeTags(&.{.{
+                .name = try self.ctx.copyExecutableIdent(module_idx, tag_name),
+                .args = constructor_arg_tys,
+            }}),
+        } });
         return .{ .tag = .{
             .name = try self.ctx.copyExecutableIdent(module_idx, tag_name),
             .discriminant = try self.requireExprTagDiscriminant(module_idx, type_scope, expr_idx),
             .args = try self.program.store.addExprSpan(lowered_args),
+            .constructor_ty = constructor_ty,
         } };
     }
 

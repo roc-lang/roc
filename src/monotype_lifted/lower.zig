@@ -333,6 +333,7 @@ const Lowerer = struct {
                         .name = tag.name,
                         .discriminant = tag.discriminant,
                         .args = try self.lowerExprSpan(&lowered.lifted_defs, venv, tag.args),
+                        .constructor_ty = tag.constructor_ty,
                     } },
                 });
             },

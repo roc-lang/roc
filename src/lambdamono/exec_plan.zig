@@ -1214,6 +1214,14 @@ const Planner = struct {
                 }
                 return null;
             },
+            .tag => {
+                const explicit_source_ty = try self.explicitExprSourceType(inst, venv, expr_id);
+                return try self.lowerExecutableTypeFromSolvedIn(
+                    inst.types,
+                    mono_cache,
+                    explicit_source_ty,
+                );
+            },
             .access => |access| {
                 const record_source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, access.record);
                 const record_exec_ty = if (try self.explicitProjectedExecutableTypeForExpr(
@@ -1329,6 +1337,7 @@ const Planner = struct {
         self: *Planner,
         pending: *specializations.Pending,
     ) std.mem.Allocator.Error![]const type_mod.TypeId {
+        try self.refreshPendingExecutableArgTypesFromSummary(pending);
         const exec_args = pending.exec_args_tys orelse
             debugPanic("lambdamono.exec_plan.ensurePendingExecutableArgTypes missing executable arg signature");
         for (exec_args) |arg_ty| {
@@ -1453,9 +1462,48 @@ const Planner = struct {
             .hosted_fn => {},
             .fn_ => try self.refreshPendingExecutableCaptureTypeFromSummary(pending),
         }
+        try self.refreshPendingExecutableArgTypesFromSummary(pending);
 
         self.validatePendingExecutableSignature(pending);
         pending.summary_seeded = true;
+    }
+
+    fn refreshPendingExecutableArgTypesFromSummary(
+        self: *Planner,
+        pending: *specializations.Pending,
+    ) std.mem.Allocator.Error!void {
+        const exec_args = pending.exec_args_tys orelse
+            debugPanic("lambdamono.exec_plan.refreshPendingExecutableArgTypesFromSummary missing executable arg signature");
+        var needs_refresh = false;
+        for (exec_args) |arg_ty| {
+            if (self.executableTypeIsAbstract(arg_ty)) {
+                needs_refresh = true;
+                break;
+            }
+        }
+        if (!needs_refresh) return;
+
+        const summary_types = pending.summary_types orelse
+            debugPanic("lambdamono.exec_plan.refreshPendingExecutableArgTypesFromSummary missing specialization summary store");
+        const summary_fn_ty = pending.summary_fn_ty orelse
+            debugPanic("lambdamono.exec_plan.refreshPendingExecutableArgTypesFromSummary missing specialization summary type");
+        const summary_shape = summary_types.fnShape(summary_fn_ty);
+        const summary_args = summary_types.sliceTypeVarSpan(summary_shape.args);
+        if (summary_args.len != exec_args.len) {
+            debugPanic("lambdamono.exec_plan.refreshPendingExecutableArgTypesFromSummary arg arity mismatch");
+        }
+
+        var mono_cache = lower_type.MonoCache.init(self.allocator);
+        defer mono_cache.deinit();
+        for (summary_args, 0..) |summary_arg_ty, i| {
+            if (!self.executableTypeIsAbstract(exec_args[i])) continue;
+            exec_args[i] = try self.executableTypeFromSourceWithNumericDefault(
+                summary_types,
+                &mono_cache,
+                summary_arg_ty,
+                pending.repr_mode,
+            );
+        }
     }
 
     fn refreshPendingExecutableReturnTypeFromSummary(
@@ -1849,8 +1897,14 @@ const Planner = struct {
                     tag_payload.payload_index,
                 ) orelse debugPanic("lambdamono.exec_plan.explicitExprSourceType missing solved tag payload");
             },
+            .tag => |tag| try self.exactTagSourceTypeForExpr(
+                inst,
+                venv,
+                tag.name,
+                self.input.store.sliceExprSpan(tag.args),
+            ),
             .int_lit, .dec_lit => try self.cloneInstType(inst, expr.ty),
-            .list, .record, .tag => {
+            .list, .record => {
                 const current_ty = try self.cloneInstType(inst, expr.ty);
                 return try self.refinedSourceTypeForExpr(inst, venv, expr_id, current_ty);
             },
@@ -4086,6 +4140,10 @@ const Planner = struct {
         expr_id: solved.Ast.ExprId,
         method_name: base.Ident.Idx,
     ) std.mem.Allocator.Error!AttachedMethodOwner {
+        const declared_expr_ty = try self.cloneInstType(inst, self.input.store.getExpr(expr_id).ty);
+        if (self.maybeAttachedMethodOwnerForType(inst.types, declared_expr_ty)) |owner| {
+            return owner;
+        }
         const expr_ty = try self.instantiatedSourceTypeForExpr(inst, venv, expr_id);
         if (self.maybeAttachedMethodOwnerForType(inst.types, expr_ty)) |owner| {
             return owner;
@@ -4923,7 +4981,7 @@ const Planner = struct {
         inst: *InstScope,
         mono_cache: *lower_type.MonoCache,
         venv: []const EnvEntry,
-        _: solved.Ast.ExprId,
+        expr_id: solved.Ast.ExprId,
         expr: solved.Ast.Expr,
         ty: TypeVarId,
         required_exec_ty: type_mod.TypeId,
@@ -4964,6 +5022,7 @@ const Planner = struct {
             },
             .unit => .{ .ty = required_exec_ty, .data = .unit },
             .tag => |tag| blk: {
+                const tag_source_ty = try self.explicitExprSourceType(inst, venv, expr_id);
                 const source_args = self.input.store.sliceExprSpan(tag.args);
                 const lowered_args = try self.allocator.alloc(ast.ExprId, source_args.len);
                 defer self.allocator.free(lowered_args);
@@ -4971,13 +5030,13 @@ const Planner = struct {
                 const solved_tag_arg_tys = try self.tagArgSourceTypesForExpr(
                     inst,
                     venv,
-                    ty,
+                    tag_source_ty,
                     tag.name,
                     source_args,
                 );
                 defer if (solved_tag_arg_tys.len != 0) self.allocator.free(solved_tag_arg_tys);
-                const requested_tag_ty = if (!self.sourceTypeIsAbstract(inst.types, ty)) blk_tag_ty: {
-                    const lowered_source_tag_ty = try self.lowerExecutableTypeFromSolvedIn(inst.types, mono_cache, ty);
+                const requested_tag_ty = if (!self.sourceTypeIsAbstract(inst.types, tag_source_ty)) blk_tag_ty: {
+                    const lowered_source_tag_ty = try self.lowerExecutableTypeFromSolvedIn(inst.types, mono_cache, tag_source_ty);
                     if (!self.executableTypeIsAbstract(lowered_source_tag_ty)) {
                         break :blk_tag_ty self.requireConcreteExecutableType(
                             lowered_source_tag_ty,
@@ -4985,7 +5044,7 @@ const Planner = struct {
                         );
                     }
                     break :blk_tag_ty self.requireConcreteExecutableType(
-                        try self.lowerErasedBoundaryExecutableTypeIn(inst.types, mono_cache, ty),
+                        try self.lowerErasedBoundaryExecutableTypeIn(inst.types, mono_cache, tag_source_ty),
                         "planExpr(tag source erased boundary)",
                     );
                 } else if (!self.executableTypeIsAbstract(required_exec_ty))
@@ -5057,7 +5116,7 @@ const Planner = struct {
                         mono_cache,
                         solved_tag_arg_tys,
                         actual_arg_tys,
-                        ty,
+                        tag_source_ty,
                         .natural,
                     )
                 else if (stable_tag_ty) |tag_ty|
@@ -5090,7 +5149,7 @@ const Planner = struct {
                         .discriminant = final_tag_info.discriminant,
                         .args = try self.output.addExprSpan(lowered_args),
                     } },
-                    .source_ty = ty,
+                    .source_ty = tag_source_ty,
                 };
             },
             .record => |fields| blk: {
@@ -8193,6 +8252,7 @@ const Planner = struct {
                     tag_payload.payload_index,
                 ) orelse debugPanic("lambdamono.exec_plan.instantiatedSourceTypeForExpr missing solved tag payload");
             },
+            .tag => try self.cloneInstType(inst, expr.ty),
             .call, .dispatch_call, .type_dispatch_call, .low_level => try self.refinedSourceTypeForExpr(
                 inst,
                 venv,
@@ -8202,6 +8262,26 @@ const Planner = struct {
             .record => try self.cloneInstType(inst, expr.ty),
             else => try self.cloneInstType(inst, expr.ty),
         };
+    }
+
+    fn exactTagSourceTypeForExpr(
+        self: *Planner,
+        inst: *InstScope,
+        venv: []const EnvEntry,
+        tag_name: base.Ident.Idx,
+        arg_expr_ids: []const solved.Ast.ExprId,
+    ) std.mem.Allocator.Error!TypeVarId {
+        const arg_tys = try self.allocator.alloc(TypeVarId, arg_expr_ids.len);
+        defer self.allocator.free(arg_tys);
+        for (arg_expr_ids, 0..) |arg_expr_id, i| {
+            arg_tys[i] = try self.explicitExprSourceType(inst, venv, arg_expr_id);
+        }
+        return try inst.types.freshContent(.{ .tag_union = .{
+            .tags = try inst.types.addTags(&.{.{
+                .name = tag_name,
+                .args = try inst.types.addTypeVarSpan(arg_tys),
+            }}),
+        } });
     }
 
     fn tagArgSourceTypesForExpr(
@@ -8311,11 +8391,18 @@ const Planner = struct {
                 ) orelse debugPanic("lambdamono.exec_plan.refinedSourceTypeForExpr tag_payload missing explicit payload type");
             },
             .tag => |tag| blk: {
+                const explicit_result_ty = try self.exactTagSourceTypeForExpr(
+                    inst,
+                    venv,
+                    tag.name,
+                    self.input.store.sliceExprSpan(tag.args),
+                );
+                try self.unifyIn(inst.types, current_source_ty, explicit_result_ty);
                 const source_args = self.input.store.sliceExprSpan(tag.args);
                 const tag_arg_tys = try self.tagArgSourceTypesForExpr(
                     inst,
                     venv,
-                    current_source_ty,
+                    explicit_result_ty,
                     tag.name,
                     source_args,
                 );
@@ -8329,7 +8416,7 @@ const Planner = struct {
                     );
                     try self.unifyIn(inst.types, tag_arg_tys[i], refined_arg_ty);
                 }
-                break :blk current_source_ty;
+                break :blk explicit_result_ty;
             },
             .call => |call| blk: {
                 const arg_expr_ids = self.input.store.sliceExprSpan(call.args);
@@ -9378,6 +9465,8 @@ const Planner = struct {
                     defer if (capture_exact_symbols) |symbols| self.allocator.free(symbols);
                     const direct_exec_arg_tys = try self.allocator.alloc(type_mod.TypeId, arg_expr_ids.len);
                     defer if (direct_exec_arg_tys.len != 0) self.allocator.free(direct_exec_arg_tys);
+                    const direct_explicit_arg_tys = try self.allocator.alloc(?type_mod.TypeId, arg_expr_ids.len);
+                    defer if (direct_explicit_arg_tys.len != 0) self.allocator.free(direct_explicit_arg_tys);
                     const direct_arg_exprs = try self.allocator.alloc(ast.ExprId, arg_expr_ids.len);
                     defer self.allocator.free(direct_arg_exprs);
                     var direct_bindings = std.ArrayList(PlannedExecBinding).empty;
@@ -9394,17 +9483,15 @@ const Planner = struct {
                         arg_expr_ids,
                         requested_call_arg_tys,
                     );
-                    for (arg_expr_ids, requested_call_arg_tys) |arg_expr_id, requested_arg_ty| {
-                        const explicit_arg_ty = if (try self.explicitProjectedExecutableTypeForExpr(
+                    for (arg_expr_ids, requested_call_arg_tys, 0..) |arg_expr_id, requested_arg_ty, i| {
+                        direct_explicit_arg_tys[i] = try self.explicitProjectedExecutableTypeForExpr(
                             inst,
                             mono_cache,
                             venv,
                             arg_expr_id,
                             requested_arg_ty,
-                        )) |projected|
-                            projected
-                        else
-                            continue;
+                        );
+                        const explicit_arg_ty = direct_explicit_arg_tys[i] orelse continue;
                         if (!self.executableTypeIsAbstract(explicit_arg_ty)) {
                             try self.collectPlannedExecBindings(
                                 inst.types,
@@ -9424,6 +9511,13 @@ const Planner = struct {
                             repr_mode,
                             .normal,
                         );
+                        const required_arg_exec_ty = if (direct_explicit_arg_tys[i]) |explicit_arg_ty|
+                            if (!self.executableTypeIsAbstract(explicit_arg_ty))
+                                explicit_arg_ty
+                            else
+                                provisional_exec_ty
+                        else
+                            provisional_exec_ty;
                         const arg_expr = self.input.store.getExpr(arg_expr_id);
                         const lowered_arg = try self.planExprWithRequiredExecTy(
                             inst,
@@ -9432,7 +9526,7 @@ const Planner = struct {
                             arg_expr_id,
                             arg_expr,
                             requested_arg_ty,
-                            provisional_exec_ty,
+                            required_arg_exec_ty,
                         );
                         const authoritative_arg = self.authoritativeCallableValue(lowered_arg);
                         direct_arg_exprs[i] = authoritative_arg.expr;

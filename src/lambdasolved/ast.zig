@@ -85,6 +85,7 @@ pub const Expr = struct {
             name: base.Ident.Idx,
             discriminant: u16,
             args: Span(ExprId),
+            constructor_ty: TypeVarId,
         },
         record: Span(FieldExpr),
         access: struct {
