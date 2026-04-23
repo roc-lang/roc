@@ -8,7 +8,9 @@ const testing = std.testing;
 
 test "getTestCacheDir returns test subdirectory" {
     const allocator = testing.allocator;
-    const config = CacheConfig{};
+    // Use an explicit cache_dir so the test does not depend on HOME/XDG env vars
+    // (the default testing CoreCtx returns EnvironmentVariableMissing for all vars).
+    const config = CacheConfig{ .cache_dir = "/tmp/roc_test_cache" };
 
     const version_dir = try config.getVersionCacheDir(allocator);
     defer allocator.free(version_dir);
