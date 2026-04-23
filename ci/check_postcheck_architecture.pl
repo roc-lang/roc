@@ -10,6 +10,18 @@ use File::Spec;
 
 my $ROOT = realpath(File::Spec->catdir($Bin, '..'));
 
+sub ident {
+    my (@parts) = @_;
+    my $name = join('_', @parts);
+    return qr/\b\Q$name\E\b/;
+}
+
+sub camel {
+    my (@parts) = @_;
+    my $name = join('', @parts);
+    return qr/\b\Q$name\E\b/;
+}
+
 my @RULES = (
     { category => 'publication', regex => qr/\bcanonicalizePublished(?:Inner)?\b/, allowed => {} },
     { category => 'resolved-canonicalization', regex => qr/\bcanonicalizeResolved(?:Inner)?\b/, allowed => {} },
@@ -41,6 +53,29 @@ my @RULES = (
     { category => 'monotype-source-fn-ret-walk', regex => qr/\blookupFunctionRetVarInStore\(typed_cir_module\.typeStoreConst\(\),/, allowed => {} },
     { category => 'monotype-source-fn-arity-walk', regex => qr/\bfunctionArgCountInStore\(typed_cir_module\.typeStoreConst\(\),/, allowed => {} },
     { category => 'monotype-source-curried-result-walk', regex => qr/\blookupCurriedFunctionResultVarInStore\(typed_cir_module\.typeStoreConst\(\),/, allowed => {} },
+    { category => 'callable-owner-retired-carrier', regex => ident(qw(exact fn symbol)), allowed => {} },
+    { category => 'callable-owner-retired-carrier', regex => ident(qw(capture exact symbols)), allowed => {} },
+    { category => 'callable-owner-retired-carrier', regex => ident(qw(arg exact symbols)), allowed => {} },
+    { category => 'callable-owner-retired-carrier', regex => ident(qw(requested capture source tys)), allowed => {} },
+    { category => 'callable-owner-retired-carrier', regex => ident(qw(capture source tys)), allowed => {} },
+    { category => 'callable-owner-retired-carrier', regex => ident(qw(exact callable capture symbols)), allowed => {} },
+    { category => 'callable-owner-retired-carrier', regex => ident(qw(exact callable capture symbols by symbol)), allowed => {} },
+    { category => 'callable-owner-retired-carrier', regex => ident(qw(scoped exact callable capture symbols)), allowed => {} },
+    { category => 'callable-owner-retired-carrier', regex => camel(qw(current Exact Callable Capture Symbols)), allowed => {} },
+    { category => 'callable-owner-retired-carrier', regex => camel(qw(current Capture Payload From Symbols)), allowed => {} },
+    { category => 'callable-owner-retired-carrier', regex => camel(qw(lookup Exact Callable Capture Symbols)), allowed => {} },
+    { category => 'callable-owner-retired-carrier', regex => camel(qw(capture Exact Symbols From Env)), allowed => {} },
+    { category => 'callable-owner-retired-carrier', regex => camel(qw(exact Callable Symbol From Source Type)), allowed => {} },
+    { category => 'callable-owner-retired-carrier', regex => camel(qw(exact Callable Symbol For Bound Expr)), allowed => {} },
+    { category => 'callable-owner-retired-carrier', regex => camel(qw(exact Callable Capture Count)), allowed => {} },
+    { category => 'callable-owner-retired-carrier', regex => camel(qw(exact Callable Capture Symbols)), allowed => {} },
+    { category => 'callable-owner-retired-carrier', regex => camel(qw(callable Facts For Solved Args)), allowed => {} },
+    { category => 'callable-owner-retired-carrier', regex => camel(qw(register Scoped Exact Callable Capture Symbols)), allowed => {} },
+    { category => 'investigation-trace', regex => qr/\bTRACE\b/, allowed => {} },
+    { category => 'source-exec-retired-carrier', regex => qr/\bPlannedExec[A-Za-z0-9_]*\b/, allowed => {} },
+    { category => 'source-exec-retired-carrier', regex => camel(qw(collect Planned Exec Bindings)), allowed => {} },
+    { category => 'source-exec-retired-carrier', regex => camel(qw(plan Executable Type From Solved With Bindings)), allowed => {} },
+    { category => 'source-exec-retired-carrier', regex => camel(qw(current Required Return Exec Ty)), allowed => {} },
 );
 
 sub iter_zig_files {

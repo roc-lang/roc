@@ -864,9 +864,6 @@ pub const PackageEnv = struct {
         // NOTE: allocators is not freed here - cleanup happens in doCanonicalize
         const parse_ast = parse.parse(&allocators, &st.moduleEnv().?.common) catch {
             // If parsing fails, proceed to canonicalization to report errors
-            if (comptime trace_build) {
-                std.debug.print("[TRACE-CACHE] PHASE: {s} Parse->Canonicalize (parse error)\n", .{st.name});
-            }
             st.phase = .Canonicalize;
             try self.enqueue(module_id);
             return;
@@ -978,13 +975,6 @@ pub const PackageEnv = struct {
             }
         }
 
-        if (comptime trace_build) {
-            std.debug.print("[TRACE-CACHE] PHASE: {s} Parse->WaitingOnImports (imports={d}, external={d})\n", .{
-                st.name,
-                st.imports.items.len,
-                st.external_imports.items.len,
-            });
-        }
         st.phase = .WaitingOnImports;
         if (any_new) {
             for (st.imports.items) |imp| try self.enqueue(imp);
@@ -1081,9 +1071,6 @@ pub const PackageEnv = struct {
             self.total_canonicalize_diagnostics_ns += @intCast(canon_diag_end - canon_diag_start);
         }
 
-        if (comptime trace_build) {
-            std.debug.print("[TRACE-CACHE] PHASE: {s} Canonicalize->TypeCheck\n", .{st.name});
-        }
         st.phase = .TypeCheck;
         try self.enqueue(module_id);
     }
@@ -1119,9 +1106,6 @@ pub const PackageEnv = struct {
         }
 
         if (ready) {
-            if (comptime trace_build) {
-                std.debug.print("[TRACE-CACHE] PHASE: {s} WaitingOnImports->Canonicalize\n", .{st.name});
-            }
             st.phase = .Canonicalize;
             // Mark as finished (black) when all children done
             st.visit_color = 2;
@@ -1436,12 +1420,6 @@ pub const PackageEnv = struct {
         // to ModuleEnv instances stored in the modules ArrayList, not to heap-allocated copies.
 
         // Done
-        if (comptime trace_build) {
-            std.debug.print("[TRACE-CACHE] PHASE: {s} TypeCheck->Done (dependents={d})\n", .{
-                st.name,
-                st.dependents.items.len,
-            });
-        }
         st.phase = .Done;
         self.remaining_modules -= 1;
 

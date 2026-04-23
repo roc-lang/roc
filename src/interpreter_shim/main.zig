@@ -7,7 +7,6 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const build_options = @import("build_options");
 const builtins = @import("builtins");
 const base = @import("base");
 const can = @import("can");
@@ -24,24 +23,6 @@ const lambdasolved = @import("lambdasolved");
 const lambdamono = @import("lambdamono");
 const ir = @import("ir");
 const lir = @import("lir");
-// Module tracing flag - enabled via `zig build -Dtrace-modules`
-const trace_modules = if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
-
-// Helper to emit trace messages when trace_modules is enabled.
-// On native platforms, uses std.debug.print. On WASM, uses roc_ops.dbg().
-fn traceDbg(roc_ops: *RocOps, comptime fmt: []const u8, args: anytype) void {
-    if (comptime trace_modules) {
-        if (comptime builtin.cpu.arch == .wasm32) {
-            // WASM: use roc_ops.dbg() since std.debug.print is unavailable
-            var buf: [512]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "[TRACE-MODULES] " ++ fmt ++ "\n", args) catch "[TRACE-MODULES] (message too long)\n";
-            roc_ops.dbg(msg);
-        } else {
-            // Native: use std.debug.print
-            std.debug.print("[TRACE-MODULES] " ++ fmt ++ "\n", args);
-        }
-    }
-}
 
 // Platform detection
 const is_wasm32 = builtin.cpu.arch == .wasm32;
@@ -452,19 +433,15 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
     const env_ptr = setup_result.primary_env;
     const app_env = setup_result.app_env;
 
-    traceDbg(roc_ops, "Resolving imports for primary env \"{s}\"", .{env_ptr.module_name});
     env_ptr.imports.clearResolvedModules();
     env_ptr.imports.resolveImportsByExactModuleName(env_ptr, full_imported_envs);
 
     if (app_env != env_ptr) {
-        traceDbg(roc_ops, "Resolving imports for app env \"{s}\"", .{app_env.module_name});
         app_env.imports.clearResolvedModules();
         app_env.imports.resolveImportsByExactModuleName(app_env, full_imported_envs);
     }
 
-    traceDbg(roc_ops, "Re-resolving imports for all imported modules", .{});
     for (full_imported_envs) |imp_env| {
-        traceDbg(roc_ops, "  Re-resolving for \"{s}\"", .{imp_env.module_name});
         @constCast(imp_env).imports.clearResolvedModules();
         @constCast(imp_env).imports.resolveImportsByExactModuleName(imp_env, full_imported_envs);
     }

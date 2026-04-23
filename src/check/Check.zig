@@ -1280,7 +1280,7 @@ fn unifyWith(self: *Self, target_var: Var, content: types_mod.Content, env: *Env
     const resolved_target = self.types.resolveVar(target_var);
     if (resolved_target.is_root and resolved_target.desc.rank == env.rank() and resolved_target.desc.content == .flex) {
         // The vast majority of the time, we call unify with on a placeholder
-        // CIR var. In this case, we can safely override the type descriptor
+        // CIR var. In this case, we can safely replace the type descriptor
         // directly, saving a typeslot and unifcation run
         var desc = resolved_target.desc;
         desc.content = content;

@@ -1207,7 +1207,7 @@ fn pushTagUnionWork(gpa: std.mem.Allocator, type_store: *TypeStore, work_list: *
 
     if (num_tags == 0) {
         // No tags - result depends only on whether extension is open
-        // Push false, then check_open_extension will override if extension is open
+        // Push false, then check_open_extension records true when the extension is open
         try work_list.append(gpa, .{ .check_open_extension = final_ext });
         try work_list.append(gpa, .{ .or_combine = 0 }); // Empty OR = false
     } else {

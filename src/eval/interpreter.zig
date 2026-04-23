@@ -2929,8 +2929,6 @@ pub const Interpreter = struct {
         ctx.interp.performBuiltinInternalRc("interpreter.listElementDecref", .decref, .{ .ptr = element.? }, ctx.elem_layout, 1);
     }
 
-    // ── Builtin call with crash recovery ──
-
     fn callBuiltinStr1(self: *LirInterpreter, comptime func: anytype, a: RocStr, ret_layout: layout_mod.Idx) Error!Value {
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();

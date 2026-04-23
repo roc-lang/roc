@@ -2681,7 +2681,7 @@ test "Coordinator isComplete logic" {
     try std.testing.expect(coord.isComplete());
 }
 
-test "Coordinator isComplete with multi_threaded max_threads=0 (inline fallback)" {
+test "Coordinator isComplete with multi_threaded max_threads=0 (inline execution)" {
     // max_threads == 0 with multi_threaded mode should fall back to inline
     // execution (no workers). Inflight must NOT be incremented by enqueueTask
     // in this configuration, otherwise isComplete() would never return true.

@@ -9,7 +9,6 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const build_options = @import("build_options");
 const builtins = @import("builtins");
 const base = @import("base");
 const can = @import("can");
@@ -29,15 +28,6 @@ const monotype = @import("monotype");
 const monotype_lifted = @import("monotype_lifted");
 const symbol = @import("symbol");
 const ExecutableMemoryInitError = @typeInfo(@typeInfo(@TypeOf(backend.ExecutableMemory.initWithEntryOffset)).@"fn".return_type.?).error_union.error_set;
-
-// Module tracing flag - enabled via `zig build -Dtrace-modules`
-const trace_modules = if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
-
-fn traceDbg(comptime fmt: []const u8, args: anytype) void {
-    if (comptime trace_modules) {
-        std.debug.print("[TRACE-MODULES] " ++ fmt ++ "\n", args);
-    }
-}
 
 const ipc = @import("ipc");
 
@@ -372,19 +362,15 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
     const env_ptr = setup_result.primary_env;
     const app_env = setup_result.app_env;
 
-    traceDbg("Resolving imports for primary env \"{s}\"", .{env_ptr.module_name});
     env_ptr.imports.clearResolvedModules();
     env_ptr.imports.resolveImportsByExactModuleName(env_ptr, full_imported_envs);
 
     if (app_env != env_ptr) {
-        traceDbg("Resolving imports for app env \"{s}\"", .{app_env.module_name});
         app_env.imports.clearResolvedModules();
         app_env.imports.resolveImportsByExactModuleName(app_env, full_imported_envs);
     }
 
-    traceDbg("Re-resolving imports for all imported modules", .{});
     for (full_imported_envs) |imp_env| {
-        traceDbg("  Re-resolving for \"{s}\"", .{imp_env.module_name});
         @constCast(imp_env).imports.clearResolvedModules();
         @constCast(imp_env).imports.resolveImportsByExactModuleName(imp_env, full_imported_envs);
     }

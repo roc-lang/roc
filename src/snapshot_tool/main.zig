@@ -44,7 +44,7 @@ fn panicHandler(msg: []const u8, ret_addr: ?usize) noreturn {
     if (panic_jmp) |jmp| {
         panic_msg = msg;
         if (verbose_log) {
-            std.debug.print("  PANIC TRACE: {s}\n", .{msg});
+            std.debug.print("  PANIC STACK: {s}\n", .{msg});
             if (ret_addr) |addr| {
                 std.debug.print("  return address: 0x{x}\n", .{addr});
             }

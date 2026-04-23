@@ -46,7 +46,7 @@ pub const CacheConfig = struct {
     /// - Falls back to ~/.cache/roc on Unix and %APPDATA%\Roc on Windows
     /// - Uses "roc" on Unix and "Roc" on Windows as the cache dir name
     pub fn getDefaultCacheDir(self: Self, allocator: Allocator) ![]u8 {
-        // ROC_CACHE_DIR overrides all platform defaults.
+        // ROC_CACHE_DIR selects the cache root ahead of platform defaults.
         // Useful for test isolation and CI on any OS.
         if (self.io.getEnvVar("ROC_CACHE_DIR", allocator)) |roc_dir| {
             return roc_dir;

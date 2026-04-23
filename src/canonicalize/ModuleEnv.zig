@@ -542,7 +542,7 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) !void {
     self.imports = CIR.Import.Store.init();
     self.module_name = module_name;
     self.display_module_name_idx = try self.insertIdent(Ident.for_text(module_name));
-    self.qualified_module_ident = self.display_module_name_idx; // Default to bare name; coordinator overrides with package-qualified name
+    self.qualified_module_ident = self.display_module_name_idx; // Default to bare name; coordinator later records the package-qualified name
     self.diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
     // Note: self.store already exists from ModuleEnv.init(), so we don't create a new one
     self.evaluation_order = null; // Will be set after canonicalization completes

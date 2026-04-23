@@ -1,341 +1,125 @@
-# Plan: Normal Lambda-Set Callables, Explicit Structural Equality
+# Guarded Eval And Glue Stabilization Plan
 
-This file is a migration plan for getting from the current implementation to the target architecture discussed in `design.md`.
+## Goals
 
-It is intentionally strict:
+The goal is to get eval tests passing first, then glue tests passing, while preserving the long-term architecture:
 
-- no workarounds
-- no fallbacks
-- no heuristics
-- no recovery/reconstruction in later stages
-- exact callable information must travel through the normal callable representation, not a side channel
+- Lambdamono has one executable representation truth after planning.
+- Callable and capture truth are owned by the planner/queue fact handles, not by env side fields, expression metadata side tables, or source-type rediscovery helpers.
+- Each compiler stage consumes explicit facts produced earlier.
+- No fix may reintroduce reconstruction, fallback, heuristic inference, local rebuilding, best-effort recovery, competing source/executable carriers, or semantic side channels.
+- If a test failure exposes missing information, the fix is to thread the explicit fact from the stage that actually knows it.
+- If a test failure exposes old cruft, delete it before continuing with test debugging.
 
-## Core Decisions
+## Hard Command Rule
 
-These are the design choices this plan assumes.
+Every Zig invocation must go through the guard script:
 
-### 1. Exact callables use normal lambda-set machinery
+```sh
+ci/guarded_zig.sh zig ...
+```
 
-We do **not** want a second long-term callable representation such as:
+Do not run `zig ...` directly.
 
-- `exact_symbol`
-- exact-target side tables
-- special callable payloads outside the normal solved callable representation
+The wrapper runs all checked-in guardrails before the requested Zig command:
 
-The normal representation is:
+- all `ci/*.pl` Perl checks, including `ci/semantic_audit.pl` and `ci/check_postcheck_architecture.pl`
+- `ci/check_ownership_boundaries.py`
+- `bash ci/check_debug_vars.sh`
+- `zig build check-fmt`
+- `zig run ci/zig_lints.zig`
+- `zig run ci/tidy.zig`
+- `zig run ci/check_test_wiring.zig`
 
-- a solved function type
-- whose lambda-set contains exactly one member when the callable is exact
+If the wrapper precheck fails, stop the test loop and fix the architectural/lint/audit failure first. Do not bypass or weaken the wrapper.
 
-That is what `cor/lss` does for ordinary exact callables:
+## Stabilization Order
 
-- `infer_fn` creates a `TFn(arg, lset, ret)`
-- the `lset` is `LSet(SymbolMap.singleton lambda captures)`
+1. Run the gate itself first:
 
-So the target here is:
+```sh
+ci/guarded_zig.sh zig build check-semantic-audit
+```
 
-- exact callable identity must become an ordinary singleton lambda set in `lambdasolved`
-- every later stage uses ordinary lambda-set machinery only
+2. Fix any compile/lint/audit failures under the explicit-facts architecture only.
 
-### 2. Structural equality is not an ordinary method call
+3. Run targeted eval tests before broad eval:
 
-The language still supports:
+```sh
+ci/guarded_zig.sh zig build test-eval -- --test-filter '<targeted eval name>'
+```
 
-- user-defined `is_eq` methods on nominals
-- implicit structural equality when no user-defined `is_eq` exists and the type supports equality
+Start with tests covering:
 
-Those are different semantics.
+- ordinary dispatch specialization
+- polymorphic specialization
+- closure early returns
+- boxed erasure boundaries
+- non-Box values containing zero erased nodes
+- aggregate literals with explicit executable result types
+- empty-list typing/defaulting
+- compile-time constants and expect execution
 
-So after the checker decides which one applies, that distinction must become explicit:
+4. Run broader eval checks:
 
-- real user method -> ordinary resolved method call
-- implicit structural equality -> explicit `structural_eq` node
+```sh
+ci/guarded_zig.sh zig build test-cor-pipeline
+ci/guarded_zig.sh zig build test-eval
+```
 
-We do **not** want:
+5. Only after eval is green, move to glue:
 
-- `implicit_eq` as a permanent special method-call tag in later lowering stages
-- later stages re-deciding whether `is_eq` is structural or method dispatch
+```sh
+ci/guarded_zig.sh zig build test-glue -- --test-filter 'glue regression: ZigGlue interpreter succeeds on fx platform'
+ci/guarded_zig.sh zig build test-glue
+```
 
-### 3. Method resolution stays after solving and inside specialization
+## Failure Handling Rules
 
-We do **not** want post-specialization method lookup.
+For every failure:
 
-We do want:
+- Inspect the failing stage and identify the explicit fact that should have existed.
+- Add or thread that fact from the earliest stage that owns it.
+- Keep the emitter/backend/interpreter mechanically dumb; they consume planned facts and descriptors only.
+- Rerun `perl ci/semantic_audit.pl` immediately after any semantic lowering/eval/glue/bridge/specialization change, or rerun through `ci/guarded_zig.sh` if the next step is a Zig command.
 
-1. checker produces explicit callable information for method calls
-2. specialization clones a local solved world
-3. specialization unifies that local world with the method-call site facts
-4. the refined solved callable fact becomes exact there
-5. `lambdamono` reads the exact target directly from the refined solved callable fact
+Forbidden fixes:
 
-No attached-method index search should survive after that point.
+- reintroducing source lookup recovery
+- rebuilding callable shape from args/receiver/result
+- storing callable/capture truth in env entries
+- adding side tables keyed by expression or symbol for semantic truth
+- deriving executable callable signatures outside `ExecPlan` or queue summaries
+- merging/strengthening executable types after planning
+- using body-derived bind refinement as a source of truth
+- adding `fallback`, `recover`, `heuristic`, `reconstruct`, `best effort`, or `override` logic in semantic compiler/eval/lowering paths
+- adding debug trace prints or investigation diagnostics
+- weakening audits or allowlisting a real semantic violation
 
-### 4. `lambdamono` specializes from frozen solved worlds
+## Audit Loop
 
-For each specialization:
-
-1. clone the relevant solved graph
-2. unify it completely up front
-3. freeze it
-4. lower executable types and exprs from that frozen world only
-
-That means:
-
-- no `self.unify(...)` during executable lowering
-- no cache invalidation because solved vars changed meaning mid-lowering
-- no late bridge-as-repair
-
-## Migration Plan
-
-## Phase 1: Fix the current blocker correctly
-
-Current blocker:
-
-- exact callable identity is being lost at the monotype -> lambdasolved handoff
-- later `lambdamono` then sees a non-exact method callable and wants to recover/search
-
-The correct fix is **not** to invent a new permanent callable representation.
-
-The correct fix is:
-
-1. identify the earlier explicit exact-callee information that already exists for method calls and exact aliases
-2. preserve that explicit information through instantiation
-3. materialize it in `lambdasolved` as an ordinary singleton lambda set
-
-Concretely:
-
-- when instantiating a function type that is already known to denote one exact callable, `lambdasolved` must not drop that exactness to `freshUnbd()`
-- instead, it must create the ordinary solved lambda-set value containing that one callable
-
-Important constraint:
-
-- this must be driven by explicit earlier-stage information
-- not by later receiver-type search or “if it looks exact enough” logic
-
-## Phase 2: Split structural equality from ordinary method calls
-
-This is the first representation cleanup that should happen, because it simplifies everything else.
-
-### Checker
-
-Keep the current semantic policy:
-
-- if a real `is_eq` method exists, resolve to that
-- else if the type supports equality, resolve to structural equality
-- else report an error
-
-### Typed CIR
-
-Add an explicit structural-equality expression.
-
-Something in spirit like:
-
-- `e_structural_eq { lhs, rhs }`
-
-Then remove the current “implicit eq method call” side table/state:
-
-- no `implicit_eq_method_calls`
-- no `methodCallIsImplicitEq`
-
-### Lowering stages
-
-Propagate that explicit split:
-
-- `method_call` remains only for real method dispatch
-- `structural_eq` becomes its own node in monotype, monotype_lifted, and lambdasolved
-
-Then `lambdamono` lowers:
-
-- real method calls through ordinary method-call specialization
-- structural equality through a dedicated structural-equality lowering path
-
-This removes the current fake “method call, except not really” shape.
-
-## Phase 3: Move exact callable transport onto normal lambda-set machinery
-
-Once structural equality is no longer entangled with method-call lowering, make the callable path normal.
-
-### `lambdasolved`
-
-Make `lambdasolved` the only owner of callable truth after solving.
-
-For exact callables:
-
-- exactness must appear as a singleton lambda set
-- not as a side tag on a later AST node
-- not as a monotype-only callable payload
-
-This should follow the `cor/lss` shape:
-
-- function inference builds singleton lambda sets for exact defs
-- call specialization consumes solved lambda sets directly
-
-### Alias tracking
-
-Port the `exact_callable_aliases` idea from `fix-currying`, but use it only as explicit propagation of exact callable identity into the solved callable world.
-
-Use it for:
-
-- direct value aliases of exact callables
-- direct local aliases of exact callables
-- transported method callable facts that are already known explicitly earlier
-
-Do **not** use it as a recovery mechanism.
-
-Its job is:
-
-- preserve exact callable identity long enough for `lambdasolved` to materialize the right normal lambda set
-
-## Phase 4: Port whole-wanted-function unification
-
-Port the relevant `fix-currying` call-solving improvement:
-
-- calls unify against one full wanted function type
-- not step-by-step reconstructed arg/result chains
-
-Apply that to:
-
-- ordinary calls
-- method calls
-- type-method calls
-
-The result should be:
-
-- call semantics determined by one explicit callable shape
-- fewer transported “step result” helper facts
-- less reconstruction later
-
-This should also let us delete:
-
-- curried-step-specific call reconstruction paths
-- extra call-shape bookkeeping that exists only because calls are being re-derived piecemeal
-
-## Phase 5: Port N-ary function/call representation
-
-Port the relevant `fix-currying` N-ary representation changes.
-
-Target shape:
-
-- function types use arg spans, not unary chaining
-- function defs use arg spans
-- calls use arg spans
-
-This should be done through:
-
-- monotype
-- monotype_lifted
-- lambdasolved
-- lambdamono
-
-The goal is:
-
-- later stages stop rebuilding multi-arg calls from curried internal chains
-- whole-wanted-function unification becomes the natural representation
-
-Obsolete pieces to delete after this lands:
-
-- curried call reconstruction helpers
-- `CurriedFnShape`-style machinery
-- stepwise arg/result bookkeeping that only exists because of unary internal representation
-
-## Phase 6: Remove late method-target search
-
-After exact callable identity is preserved properly in normal lambda-set form, remove the remaining late search helpers from `lambdamono`.
-
-Things that should disappear:
-
-- attached-method target search by receiver type
-- tag-union-specific method target search
-- nominal-backing-based target recovery
-- any “find the method target from scraps” logic
-
-What should remain:
-
-- read the refined solved callable fact
-- if it is exact, use that target
-- if it is a multi-lambda set, branch over those explicit alternatives
-- if it is erased, lower the erased path
-- if it is none of the above, that is a compiler bug
-
-## Phase 7: Finish the frozen-solved-world specialization model
-
-Make `lambdamono` match the desired `cor/lss` shape fully.
-
-### Specialization
-
-For each specialization:
-
-- fresh cloned solved graph
-- fresh instantiation map
-- fresh specialization-local type cache
-- fresh specialization-local executable lowering cache
-
-Then:
-
-- unify once up front
-- freeze
-- lower only from that frozen world
-
-### Delete mutable-world executable lowering
-
-Remove:
-
-- `self.unify(...)` during executable lowering
-- cache invalidation hooks caused by mid-lowering unification
-- any late executable repair path that exists because the solved world was still mutating
-
-## Phase 8: Tighten bridges
-
-Keep explicit bridge nodes, but only for real representation changes planned upstream.
-
-Allowed bridge planning sites:
-
-- nominal/backing conversions
-- explicit box/erased boundaries
-- aggregate boundaries with known representation differences
-- explicit control-flow/function boundaries with known source vs target representation differences
-
-Forbidden:
-
-- bridge as generic “expected != actual, so repair it”
-- late IR/LIR mismatch discovery that invents a bridge
-
-`FromIr` should only lower explicit bridge nodes.
-
-## Phase 9: Delete obsolete machinery
-
-After the new architecture is in place, do a full deletion audit.
-
-Delete all remnants of:
-
-- `implicit_eq` as a later-stage method-call special case
-- exact method target side channels
-- curried call reconstruction
-- partial call/result reconstruction helpers
-- late method target search
-- mutable-solved-world executable lowering
-- bridge-as-repair
-
-This phase is complete only when later stages are consuming explicit earlier-stage information directly and nothing else.
-
-## Specific Non-Goals
-
-This plan does **not** include:
-
-- merging `fix-currying` wholesale
-- inventing a second permanent exact-callable representation outside normal lambda sets
-- leaving `implicit_eq` as a permanent special method-call kind
-- any late recovery from missing exact callable information
-
-## Final Validation Criteria
-
-The design is only done when all of the following are true:
-
-1. exact callables are represented through ordinary lambda-set machinery
-2. structural equality is an explicit node, not a fake method-call subtype
-3. real nominal `is_eq` methods still override structural equality
-4. method resolution after solving is just reading refined solved callable information
-5. `lambdamono` lowers from frozen specialization-local solved worlds
-6. `FromIr` lowers only explicit bridges
-7. no late search/recovery/reconstruction remains in later compilation stages
-
+After every meaningful fix batch, run:
+
+```sh
+perl ci/semantic_audit.pl
+perl ci/check_postcheck_architecture.pl
+```
+
+Also use targeted grep checks for any newly suspicious family. If the audit finds anything, the task becomes deleting that family and strengthening the audit so it cannot return.
+
+The stabilization is not complete until:
+
+- `ci/guarded_zig.sh zig build test-eval` passes
+- `ci/guarded_zig.sh zig build test-glue` passes
+- all wrapper prechecks pass
+- the semantic audits remain clean
+- no known reconstruction/fallback/heuristic/duplicate-truth pattern has been reintroduced
+
+## Pitfalls To Avoid
+
+- Do not confuse making tests green with making the compiler correct. Correctness means preserving one explicit source of truth.
+- Do not add temporary compatibility paths. Temporary paths become permanent duplicate truths.
+- Do not make the queue optional. Queued callable summaries and executable signatures are the post-queue truth.
+- Do not infer erasure from containers. Only `Box.box` and explicit erased boundaries create erased executable nodes.
+- Do not let compile-time eval inspect semantic values to reconstruct compiler constants. Use LIR execution plus schema/constant graph facts.
+- Do not let glue-specific fixes bypass eval invariants. Glue uses the same semantic architecture.

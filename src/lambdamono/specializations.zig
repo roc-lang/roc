@@ -9,6 +9,9 @@ const symbol_mod = @import("symbol");
 const Symbol = symbol_mod.Symbol;
 const TypeVarId = solved.Type.TypeVarId;
 
+/// Opaque planner-owned fact handle retained by queued specializations.
+pub const FactId = enum(u32) { _ };
+
 /// Pending specialization work item keyed by source symbol and solved function type.
 pub const Pending = struct {
     /// Controls whether the specialization uses the natural or erased-boundary representation.
@@ -37,13 +40,13 @@ pub const Pending = struct {
     specialized: ?ast.DefVal = null,
     summary_types: ?*solved.Type.Store = null,
     summary_fn_ty: ?TypeVarId = null,
-    summary_exact_fn_ty: ?TypeVarId = null,
-    summary_exact_captures: ?[]const solved.Type.Capture = null,
+    summary_fn_source_ty: ?TypeVarId = null,
+    summary_captures: ?[]const solved.Type.Capture = null,
     summary_seeded: bool = false,
-    requested_capture_source_tys: ?[]const TypeVarId = null,
+    callable: FactId,
     exec_capture_ty: ?type_mod.TypeId = null,
-    capture_exact_symbols: ?[]const Symbol = null,
-    arg_exact_symbols: ?[]const Symbol = null,
+    capture_facts: []const FactId = &.{},
+    arg_facts: []const FactId = &.{},
     exec_args_tys: ?[]type_mod.TypeId = null,
     exec_ret_ty: type_mod.TypeId,
 };
@@ -80,20 +83,17 @@ pub const Queue = struct {
             if (item.source_captures.len != 0) {
                 self.allocator.free(item.source_captures);
             }
-            if (item.summary_exact_captures) |captures| {
+            if (item.summary_captures) |captures| {
                 if (captures.len != 0) self.allocator.free(captures);
-            }
-            if (item.requested_capture_source_tys) |capture_tys| {
-                if (capture_tys.len != 0) self.allocator.free(capture_tys);
             }
             if (item.exec_args_tys) |args| {
                 if (args.len != 0) self.allocator.free(args);
             }
-            if (item.capture_exact_symbols) |exacts| {
-                if (exacts.len != 0) self.allocator.free(exacts);
+            if (item.capture_facts.len != 0) {
+                self.allocator.free(item.capture_facts);
             }
-            if (item.arg_exact_symbols) |exacts| {
-                if (exacts.len != 0) self.allocator.free(exacts);
+            if (item.arg_facts.len != 0) {
+                self.allocator.free(item.arg_facts);
             }
             self.allocator.free(item.key_bytes);
         }
@@ -183,7 +183,7 @@ pub fn deinitFEnv(allocator: std.mem.Allocator, fenv: []const FEnvEntry) void {
     if (fenv.len != 0) allocator.free(fenv);
 }
 
-/// Look up a source function definition by its exact symbol.
+/// Look up a source function definition by its callable target.
 pub fn lookupFnExact(fenv: []const FEnvEntry, name: Symbol) ?FEnvEntry {
     for (fenv) |entry| {
         if (entry.name == name) return entry;
@@ -201,10 +201,10 @@ pub fn specializeFnWithExecArgs(
     repr_mode: Pending.ReprMode,
     requested_ty: TypeVarId,
     exec_types: ?*type_mod.Store,
-    capture_source_tys: ?[]const TypeVarId,
+    callable: FactId,
     exec_capture_ty: ?type_mod.TypeId,
-    capture_exact_symbols: ?[]const Symbol,
-    arg_exact_symbols: ?[]const Symbol,
+    capture_facts: []const FactId,
+    arg_facts: []const FactId,
     exec_arg_tys: []const type_mod.TypeId,
     exec_ret_ty: type_mod.TypeId,
 ) std.mem.Allocator.Error!Symbol {
@@ -217,10 +217,10 @@ pub fn specializeFnWithExecArgs(
         repr_mode,
         requested_ty,
         exec_types,
-        capture_source_tys,
+        callable,
         exec_capture_ty,
-        capture_exact_symbols,
-        arg_exact_symbols,
+        capture_facts,
+        arg_facts,
         exec_arg_tys,
         exec_ret_ty,
     );
@@ -241,21 +241,6 @@ pub fn specializeFnWithExecArgs(
         &mapping,
         requested_ty,
     );
-    const requested_capture_source_tys = if (capture_source_tys) |source_tys| blk: {
-        const out = try queue.allocator.alloc(TypeVarId, source_tys.len);
-        errdefer queue.allocator.free(out);
-        for (source_tys, 0..) |source_ty, i| {
-            out[i] = try cloneTypeRec(
-                queue.allocator,
-                solved_types,
-                &requested_types,
-                &mapping,
-                source_ty,
-            );
-        }
-        break :blk out;
-    } else null;
-
     const source_entry = symbols.get(requested_name);
     const specialized_symbol = try symbols.add(source_entry.name, specializedOrigin(source_entry.origin, requested_name));
     try queue.items.append(queue.allocator, .{
@@ -268,16 +253,10 @@ pub fn specializeFnWithExecArgs(
         .requested_ty = requested_ty_copy,
         .key_bytes = key,
         .specialized_symbol = specialized_symbol,
-        .requested_capture_source_tys = requested_capture_source_tys,
+        .callable = callable,
         .exec_capture_ty = exec_capture_ty,
-        .capture_exact_symbols = if (capture_exact_symbols) |symbols_slice|
-            try queue.allocator.dupe(Symbol, symbols_slice)
-        else
-            null,
-        .arg_exact_symbols = if (arg_exact_symbols) |symbols_slice|
-            try queue.allocator.dupe(Symbol, symbols_slice)
-        else
-            null,
+        .capture_facts = try queue.allocator.dupe(FactId, capture_facts),
+        .arg_facts = try queue.allocator.dupe(FactId, arg_facts),
         .exec_args_tys = try queue.allocator.dupe(type_mod.TypeId, exec_arg_tys),
         .exec_ret_ty = exec_ret_ty,
     });
@@ -295,10 +274,10 @@ pub fn specializeHostedWithExecArgs(
     requested_ty: TypeVarId,
     hosted_fn: solved.Ast.HostedFnDef,
     exec_types: ?*type_mod.Store,
-    capture_source_tys: ?[]const TypeVarId,
+    callable: FactId,
     exec_capture_ty: ?type_mod.TypeId,
-    capture_exact_symbols: ?[]const Symbol,
-    arg_exact_symbols: ?[]const Symbol,
+    capture_facts: []const FactId,
+    arg_facts: []const FactId,
     exec_arg_tys: []const type_mod.TypeId,
     exec_ret_ty: type_mod.TypeId,
 ) std.mem.Allocator.Error!Symbol {
@@ -309,10 +288,10 @@ pub fn specializeHostedWithExecArgs(
         repr_mode,
         requested_ty,
         exec_types,
-        capture_source_tys,
+        callable,
         exec_capture_ty,
-        capture_exact_symbols,
-        arg_exact_symbols,
+        capture_facts,
+        arg_facts,
         exec_arg_tys,
         exec_ret_ty,
     );
@@ -333,21 +312,6 @@ pub fn specializeHostedWithExecArgs(
         &mapping,
         requested_ty,
     );
-    const requested_capture_source_tys = if (capture_source_tys) |source_tys| blk: {
-        const out = try queue.allocator.alloc(TypeVarId, source_tys.len);
-        errdefer queue.allocator.free(out);
-        for (source_tys, 0..) |source_ty, i| {
-            out[i] = try cloneTypeRec(
-                queue.allocator,
-                solved_types,
-                &requested_types,
-                &mapping,
-                source_ty,
-            );
-        }
-        break :blk out;
-    } else null;
-
     const source_entry = symbols.get(requested_name);
     const specialized_symbol = try symbols.add(source_entry.name, specializedOrigin(source_entry.origin, requested_name));
     try queue.items.append(queue.allocator, .{
@@ -360,16 +324,10 @@ pub fn specializeHostedWithExecArgs(
         .requested_ty = requested_ty_copy,
         .key_bytes = key,
         .specialized_symbol = specialized_symbol,
-        .requested_capture_source_tys = requested_capture_source_tys,
+        .callable = callable,
         .exec_capture_ty = exec_capture_ty,
-        .capture_exact_symbols = if (capture_exact_symbols) |symbols_slice|
-            try queue.allocator.dupe(Symbol, symbols_slice)
-        else
-            null,
-        .arg_exact_symbols = if (arg_exact_symbols) |symbols_slice|
-            try queue.allocator.dupe(Symbol, symbols_slice)
-        else
-            null,
+        .capture_facts = try queue.allocator.dupe(FactId, capture_facts),
+        .arg_facts = try queue.allocator.dupe(FactId, arg_facts),
         .exec_args_tys = try queue.allocator.dupe(type_mod.TypeId, exec_arg_tys),
         .exec_ret_ty = exec_ret_ty,
     });
@@ -518,10 +476,10 @@ fn makeKey(
     repr_mode: Pending.ReprMode,
     requested_ty: TypeVarId,
     exec_types: ?*type_mod.Store,
-    capture_source_tys: ?[]const TypeVarId,
+    callable: FactId,
     exec_capture_ty: ?type_mod.TypeId,
-    capture_exact_symbols: ?[]const Symbol,
-    arg_exact_symbols: ?[]const Symbol,
+    capture_facts: []const FactId,
+    arg_facts: []const FactId,
     exec_arg_tys: []const type_mod.TypeId,
     exec_ret_ty: type_mod.TypeId,
 ) std.mem.Allocator.Error![]const u8 {
@@ -539,17 +497,7 @@ fn makeKey(
     try key.appendSlice(allocator, std.mem.asBytes(&ty_len));
     try key.appendSlice(allocator, ty_key);
 
-    const capture_source_count: u32 = @intCast(if (capture_source_tys) |source_tys| source_tys.len else 0);
-    try key.appendSlice(allocator, std.mem.asBytes(&capture_source_count));
-    if (capture_source_tys) |source_tys| {
-        for (source_tys) |source_ty| {
-            const capture_ty_key = try solved_types.structuralKeyOwned(source_ty);
-            defer allocator.free(capture_ty_key);
-            const capture_ty_len: u32 = @intCast(capture_ty_key.len);
-            try key.appendSlice(allocator, std.mem.asBytes(&capture_ty_len));
-            try key.appendSlice(allocator, capture_ty_key);
-        }
-    }
+    try key.appendSlice(allocator, std.mem.asBytes(&callable));
 
     const has_exec_capture: u8 = if (exec_capture_ty != null) 1 else 0;
     try key.append(allocator, has_exec_capture);
@@ -563,22 +511,16 @@ fn makeKey(
         try key.appendSlice(allocator, capture_key);
     }
 
-    const capture_exact_count: u32 = @intCast(if (capture_exact_symbols) |symbols_slice| symbols_slice.len else 0);
-    try key.appendSlice(allocator, std.mem.asBytes(&capture_exact_count));
-    if (capture_exact_symbols) |symbols_slice| {
-        for (symbols_slice) |exact_symbol| {
-            const raw: u32 = exact_symbol.raw();
-            try key.appendSlice(allocator, std.mem.asBytes(&raw));
-        }
+    const capture_fact_count: u32 = @intCast(capture_facts.len);
+    try key.appendSlice(allocator, std.mem.asBytes(&capture_fact_count));
+    for (capture_facts) |fact| {
+        try key.appendSlice(allocator, std.mem.asBytes(&fact));
     }
 
-    const arg_exact_count: u32 = @intCast(if (arg_exact_symbols) |symbols_slice| symbols_slice.len else 0);
-    try key.appendSlice(allocator, std.mem.asBytes(&arg_exact_count));
-    if (arg_exact_symbols) |symbols_slice| {
-        for (symbols_slice) |exact_symbol| {
-            const raw: u32 = exact_symbol.raw();
-            try key.appendSlice(allocator, std.mem.asBytes(&raw));
-        }
+    const arg_fact_count: u32 = @intCast(arg_facts.len);
+    try key.appendSlice(allocator, std.mem.asBytes(&arg_fact_count));
+    for (arg_facts) |fact| {
+        try key.appendSlice(allocator, std.mem.asBytes(&fact));
     }
 
     const exec_arg_count: u32 = @intCast(exec_arg_tys.len);

@@ -16,6 +16,18 @@ my @roots = qw(
     src/monotype_lifted
 );
 
+sub ident {
+    my (@parts) = @_;
+    my $name = join('_', @parts);
+    return qr/\b\Q$name\E\b/;
+}
+
+sub camel {
+    my (@parts) = @_;
+    my $name = join('', @parts);
+    return qr/\b\Q$name\E\b/;
+}
+
 my @forbidden = (
     [qr/\bResolvedMethodTarget\b/, "old resolved method target transport"],
     [qr/\bmethodCallResolvedTargets\b/, "old resolved method target transport"],
@@ -63,6 +75,30 @@ my @forbidden = (
     [qr/\bcall_ret_rt_var\b/, "old comptime return type fallback"],
     [qr/\bexpected_rt_var\b/, "old comptime expected type fallback"],
     [qr/\bcomptime_interpreter\b/, "old semantic comptime executor"],
+
+    [ident(qw(exact fn symbol)), "retired callable carrier"],
+    [ident(qw(capture exact symbols)), "retired callable carrier"],
+    [ident(qw(arg exact symbols)), "retired callable carrier"],
+    [ident(qw(requested capture source tys)), "retired callable carrier"],
+    [ident(qw(capture source tys)), "retired callable carrier"],
+    [ident(qw(exact callable capture symbols)), "retired callable carrier"],
+    [ident(qw(exact callable capture symbols by symbol)), "retired callable carrier"],
+    [ident(qw(scoped exact callable capture symbols)), "retired callable carrier"],
+    [camel(qw(current Exact Callable Capture Symbols)), "retired callable carrier"],
+    [camel(qw(current Capture Payload From Symbols)), "retired callable carrier"],
+    [camel(qw(lookup Exact Callable Capture Symbols)), "retired callable carrier"],
+    [camel(qw(capture Exact Symbols From Env)), "retired callable carrier"],
+    [camel(qw(exact Callable Symbol From Source Type)), "retired callable source-type reconstruction"],
+    [camel(qw(exact Callable Symbol For Bound Expr)), "retired callable source-type reconstruction"],
+    [camel(qw(exact Callable Capture Count)), "retired callable capture reconstruction"],
+    [camel(qw(exact Callable Capture Symbols)), "retired callable capture reconstruction"],
+    [camel(qw(callable Facts For Solved Args)), "retired callable arg reconstruction"],
+    [camel(qw(register Scoped Exact Callable Capture Symbols)), "retired callable capture side registration"],
+    [qr/\bTRACE\b/, "committed semantic investigation trace"],
+    [qr/\bPlannedExec[A-Za-z0-9_]*\b/, "retired source/executable binding carrier"],
+    [camel(qw(collect Planned Exec Bindings)), "retired source/executable binding carrier"],
+    [camel(qw(plan Executable Type From Solved With Bindings)), "retired source/executable binding carrier"],
+    [camel(qw(current Required Return Exec Ty)), "retired ambient executable return carrier"],
 );
 
 my @emit_forbidden = (
