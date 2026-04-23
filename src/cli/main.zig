@@ -5484,6 +5484,91 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) glue.GlueError!void {
     }, temp_dir, ctx.io.std_io);
 }
 
+/// Run a compiled Roc entrypoint through the dev backend (native code generation).
+/// Resolves entrypoint layouts, JIT-compiles CIR to native code via DevEvaluator,
+/// and executes via the RocCall ABI.
+fn runViaDev(
+    gpa: std.mem.Allocator,
+    platform_env: *ModuleEnv,
+    all_module_envs: []*ModuleEnv,
+    app_module_env: ?*ModuleEnv,
+    entrypoint_expr: can.CIR.Expr.Idx,
+    roc_ops: *echo_platform.host_abi.RocOps,
+    args_ptr: ?*anyopaque,
+    result_ptr: *anyopaque,
+) !void {
+    const types = @import("types");
+    const DevEvaluator = eval.DevEvaluator;
+    const ExecutableMemory = eval.ExecutableMemory;
+
+    var dev_eval = DevEvaluator.init(gpa, null) catch {
+        return error.DevEvaluatorFailed;
+    };
+    defer dev_eval.deinit();
+
+    // Resolve entrypoint layouts from the CIR expression's type
+    const layout_store_ptr = try dev_eval.ensureGlobalLayoutStore(all_module_envs);
+    const module_idx: u32 = for (all_module_envs, 0..) |env, i| {
+        if (env == platform_env) break @intCast(i);
+    } else return error.DevEvaluatorFailed;
+
+    const expr_type_var = ModuleEnv.varFrom(entrypoint_expr);
+    const resolved_type = platform_env.types.resolveVar(expr_type_var);
+    const maybe_func = resolved_type.desc.content.unwrapFunc();
+
+    var arg_layouts_buf: [16]layout.Idx = undefined;
+    var arg_layouts_len: usize = 0;
+    var ret_layout: layout.Idx = undefined;
+
+    if (maybe_func) |func| {
+        const arg_vars = platform_env.types.sliceVars(func.args);
+        var type_scope = types.TypeScope.init(gpa);
+        defer type_scope.deinit();
+        for (arg_vars, 0..) |arg_var, i| {
+            arg_layouts_buf[i] = layout_store_ptr.fromTypeVar(module_idx, arg_var, &type_scope, null) catch return error.DevEvaluatorFailed;
+        }
+        arg_layouts_len = arg_vars.len;
+        ret_layout = layout_store_ptr.fromTypeVar(module_idx, func.ret, &type_scope, null) catch return error.DevEvaluatorFailed;
+    } else {
+        var type_scope = types.TypeScope.init(gpa);
+        defer type_scope.deinit();
+        ret_layout = layout_store_ptr.fromTypeVar(module_idx, expr_type_var, &type_scope, null) catch return error.DevEvaluatorFailed;
+    }
+
+    const arg_layouts: []const layout.Idx = arg_layouts_buf[0..arg_layouts_len];
+
+    // Generate native code using the RocCall ABI entrypoint wrapper
+    var code_result = dev_eval.generateEntrypointCode(
+        platform_env,
+        entrypoint_expr,
+        all_module_envs,
+        app_module_env,
+        arg_layouts,
+        ret_layout,
+    ) catch {
+        return error.DevEvaluatorFailed;
+    };
+    defer code_result.deinit();
+
+    if (code_result.code.len == 0) {
+        return error.DevEvaluatorFailed;
+    }
+
+    // Make the generated code executable and run it
+    var executable = ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch {
+        return error.DevEvaluatorFailed;
+    };
+    defer executable.deinit();
+
+    // Pass the original roc_ops (which carries echo_env as .env) directly to
+    // the JIT code.  Using dev_eval.roc_ops would supply DevRocEnv as .env,
+    // which echoHostedFn misinterprets as *EchoEnv and crashes (SIGSEGV at
+    // 0x6e).  For the CLI echo platform exit-on-crash is acceptable; the
+    // global SIGSEGV handler in stack_overflow.zig handles native segfaults.
+    executable.callRocABI(@ptrCast(@constCast(roc_ops)), result_ptr, args_ptr);
+}
+
+
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.
 /// Recurses into directories to search for Roc files.
 fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) !void {
