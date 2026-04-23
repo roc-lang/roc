@@ -291,6 +291,52 @@ const Planner = struct {
         return @enumFromInt(index);
     }
 
+    fn addCallableValueFact(
+        self: *Planner,
+        symbol: Symbol,
+        source_ty: TypeVarId,
+        exec_ty: type_mod.TypeId,
+        target: Symbol,
+        repr_mode: specializations.Pending.ReprMode,
+        capture_ty: ?type_mod.TypeId,
+        captures: []const ValueFactId,
+        call_sig: type_mod.CallableSig,
+    ) std.mem.Allocator.Error!ValueFactId {
+        const callable = try self.addCallableFact(
+            target,
+            repr_mode,
+            source_ty,
+            exec_ty,
+            capture_ty,
+            captures,
+            call_sig,
+        );
+        return try self.addValueFact(symbol, source_ty, exec_ty, callable);
+    }
+
+    fn addValueFactFromQueuedFact(
+        self: *Planner,
+        symbol: Symbol,
+        source_ty: TypeVarId,
+        exec_ty: type_mod.TypeId,
+        queued_fact_id: ValueFactId,
+    ) std.mem.Allocator.Error!ValueFactId {
+        const queued_fact = self.valueFact(queued_fact_id);
+        const callable = if (queued_fact.callable) |queued_callable_id| blk: {
+            const queued_callable = self.callableFact(queued_callable_id);
+            break :blk try self.addCallableFact(
+                queued_callable.target,
+                queued_callable.repr_mode,
+                source_ty,
+                exec_ty,
+                queued_callable.capture_ty,
+                queued_callable.captures,
+                queued_callable.call_sig,
+            );
+        } else null;
+        return try self.addValueFact(symbol, source_ty, exec_ty, callable);
+    }
+
     fn callableFact(self: *const Planner, id: CallableFactId) CallableFact {
         return self.callable_facts.items[@intFromEnum(id)];
     }
@@ -495,8 +541,6 @@ const Planner = struct {
         if (source_arg_tys.len != exec_arg_tys.len) {
             debugPanic("lambdamono.exec_plan.executableReturnTypeFromCallRelation arg arity mismatch");
         }
-        _ = source_arg_tys;
-        _ = exec_arg_tys;
         return switch (repr_mode) {
             .natural => try self.lowerExecutableTypeFromSolvedIn(solved_types, mono_cache, source_ret_ty),
             .erased_boundary => try self.lowerErasedBoundaryExecutableTypeIn(solved_types, mono_cache, source_ret_ty),
@@ -1039,6 +1083,7 @@ const Planner = struct {
 
     const SpecializedCallableSummary = struct {
         symbol: Symbol,
+        value_fact: ValueFactId,
         summary_types: *solved.Type.Store,
         summary_fn_ty: TypeVarId,
         exec_capture_ty: ?type_mod.TypeId,
@@ -1211,22 +1256,18 @@ const Planner = struct {
                     pending.summary_captures = &.{};
                 } else {
                     const summary_captures = try self.allocator.alloc(solved.Type.Capture, pending.source_captures.len);
-                    const queued_capture_facts = pending.capture_facts;
-                    if (queued_capture_facts.len != 0 and queued_capture_facts.len != pending.source_captures.len) {
+                    if (pending.capture_facts.len != 0 and pending.capture_facts.len != pending.source_captures.len) {
                         debugPanic("lambdamono.exec_plan.preparePendingSummary queued capture fact arity mismatch");
                     }
                     for (pending.source_captures, 0..) |capture, i| {
                         summary_captures[i] = .{
                             .symbol = capture.symbol,
-                            .ty = if (queued_capture_facts.len != 0)
-                                self.valueFact(queued_capture_facts[i]).source_ty
-                            else
-                                try self.cloneTypeFromStoreRec(
-                                    summary_types,
-                                    &self.input.types,
-                                    &exact_mapping,
-                                    capture.ty,
-                                ),
+                            .ty = try self.cloneTypeFromStoreRec(
+                                summary_types,
+                                &self.input.types,
+                                &exact_mapping,
+                                capture.ty,
+                            ),
                         };
                     }
                     pending.summary_captures = summary_captures;
@@ -1429,6 +1470,7 @@ const Planner = struct {
                 self.validatePendingExecutableSignature(pending);
                 return .{
                     .symbol = pending_symbol,
+                    .value_fact = pending.callable,
                     .summary_types = pending.summary_types orelse
                         debugPanic("lambdamono.exec_plan.ensureQueuedCallableSpecialized specialization missing summary store"),
                     .summary_fn_ty = pending.summary_fn_ty orelse
@@ -1446,6 +1488,7 @@ const Planner = struct {
                 const exec_ret_ty = try self.ensurePendingExecutableReturnType(updated);
                 return .{
                     .symbol = pending_symbol,
+                    .value_fact = updated.callable,
                     .summary_types = updated.summary_types orelse
                         debugPanic("lambdamono.exec_plan.ensureQueuedCallableSpecialized completed specialization missing summary store"),
                     .summary_fn_ty = updated.summary_fn_ty orelse
@@ -1518,10 +1561,9 @@ const Planner = struct {
                         entry_symbol,
                         .natural,
                         entry.fn_ty,
+                        &.{},
                         null,
-                        null,
-                        null,
-                        null,
+                        &.{},
                     );
                 },
             }
@@ -1741,10 +1783,9 @@ const Planner = struct {
                         entry_symbol,
                         .natural,
                         entry.fn_ty,
+                        &.{},
                         null,
-                        null,
-                        null,
-                        null,
+                        &.{},
                     );
                 }
                 continue;
@@ -1789,10 +1830,9 @@ const Planner = struct {
                     entry_symbol,
                     .natural,
                     entry_fn_ty,
+                    &.{},
                     null,
-                    null,
-                    null,
-                    null,
+                    &.{},
                 );
                 var inst = InstScope.borrow(self.allocator, &self.input.types);
                 defer inst.deinit();
@@ -2107,10 +2147,9 @@ const Planner = struct {
                         specialization_symbol,
                         .natural,
                         call_relation_ty,
-                        null,
-                        lambda_member.capture_ty,
                         branch_capture_facts,
-                        null,
+                        lambda_member.capture_ty,
+                        &.{},
                         actual_arg_exec_tys,
                         requested_exec_ret_ty,
                     );
@@ -4064,8 +4103,7 @@ const Planner = struct {
                     &mono_cache,
                     target_symbol,
                     dispatch_constraint_ty,
-                    null,
-                    null,
+                    &.{},
                     null,
                 );
                 const imported = try self.importCallableSummaryIntoInst(
@@ -4122,8 +4160,7 @@ const Planner = struct {
                     &mono_cache,
                     target_symbol,
                     dispatch_constraint_ty,
-                    null,
-                    null,
+                    &.{},
                     null,
                 );
                 const imported = try self.importCallableSummaryIntoInst(
@@ -4598,7 +4635,15 @@ const Planner = struct {
                 }
             }
             out[i] = if (arg_facts.len != 0)
-                .{ .symbol = arg.symbol, .fact = arg_facts[i] }
+                .{
+                    .symbol = arg.symbol,
+                    .fact = try self.addValueFactFromQueuedFact(
+                        arg.symbol,
+                        arg_ty,
+                        arg_exec_ty,
+                        arg_facts[i],
+                    ),
+                }
             else
                 try self.addEnvEntry(arg.symbol, arg_ty, arg_exec_ty, null);
         }
@@ -4793,11 +4838,12 @@ const Planner = struct {
             .erased_boundary => try self.makeErasedFnType(normalized_capture_exec_ty, exec_call_sig),
             .natural => try self.makeSingletonExecutableLambdaType(symbol, normalized_capture_exec_ty, exec_call_sig),
         };
-        const callable = try self.addCallableFact(
+        const callable = try self.addCallableValueFact(
             symbol,
-            repr_mode,
             requested_ty,
             callable_exec_ty,
+            symbol,
+            repr_mode,
             normalized_capture_exec_ty,
             capture_facts,
             exec_call_sig,
@@ -4813,8 +4859,8 @@ const Planner = struct {
                 requested_ty,
                 &self.types,
                 callable,
-                capture_facts,
                 normalized_capture_exec_ty,
+                capture_facts,
                 arg_facts,
                 exec_arg_tys,
                 exec_ret_ty,
@@ -4833,8 +4879,8 @@ const Planner = struct {
                 hosted_fn,
                 &self.types,
                 callable,
-                capture_facts,
                 normalized_capture_exec_ty,
+                capture_facts,
                 arg_facts,
                 exec_arg_tys,
                 exec_ret_ty,
@@ -6736,6 +6782,7 @@ const Planner = struct {
                         callable.ty,
                         lambda_member,
                         erased_capture_ty,
+                        self.callableCapturesForExprFact(callable_id, lambda_member.symbol),
                     );
                 }
                 break :blk try self.output.addExpr(.{
@@ -7275,6 +7322,7 @@ const Planner = struct {
         callable_ty: type_mod.TypeId,
         lambda_member: LambdaMemberInfo,
         erased_capture_ty: ?type_mod.TypeId,
+        capture_facts: []const ValueFactId,
     ) std.mem.Allocator.Error!ast.Branch {
         return if (lambda_member.capture_ty == null) .{
             .pat = try self.output.addPat(.{
@@ -7292,7 +7340,7 @@ const Planner = struct {
                 lambda_member.symbol,
                 null,
                 erased_capture_ty,
-                null,
+                capture_facts,
             ),
         } else blk: {
             const capture_ty = erased_capture_ty orelse lambda_member.capture_ty.?;
@@ -7321,7 +7369,7 @@ const Planner = struct {
                     lambda_member.symbol,
                     capture_expr,
                     capture_ty,
-                    null,
+                    capture_facts,
                 ),
             };
         };
@@ -7640,8 +7688,8 @@ const Planner = struct {
                 ),
             };
             if (source_repr == .erased) {
-                const capture_facts = try self.valueFactsForSymbols(capture_symbols, current_capture.env);
-                defer if (capture_facts.len != 0) self.allocator.free(capture_facts);
+                const erased_capture_facts = try self.valueFactsForSymbols(capture_symbols, current_capture.env);
+                defer if (erased_capture_facts.len != 0) self.allocator.free(erased_capture_facts);
                 var authoritative_capture_ty = if (capture_symbols.len == 0)
                     null
                 else
@@ -7660,7 +7708,7 @@ const Planner = struct {
                     target_symbol,
                     .erased_boundary,
                     refined_source_ty,
-                    capture_facts,
+                    erased_capture_facts,
                     authoritative_capture_ty,
                     &.{},
                     abstract_call_sig.args,
@@ -7694,18 +7742,30 @@ const Planner = struct {
                         .capture_ty = authoritative_capture_ty,
                     } },
                     .source_ty = refined_source_ty,
+                    .fact = specialized.value_fact,
                 };
             }
             if (capture_symbols.len == 0) {
+                const exec_ty = try self.makeSingletonExecutableLambdaType(target_symbol, null, abstract_call_sig);
+                const fact = try self.addCallableValueFact(
+                    target_symbol,
+                    refined_source_ty,
+                    exec_ty,
+                    target_symbol,
+                    .natural,
+                    null,
+                    &.{},
+                    abstract_call_sig,
+                );
                 return .{
-                    .ty = try self.makeSingletonExecutableLambdaType(target_symbol, null, abstract_call_sig),
+                    .ty = exec_ty,
                     .data = .{ .tag = .{
                         .name = lower_type.lambdaTagKey(target_symbol),
                         .discriminant = 0,
                         .args = ast.Span(ast.ExprId).empty(),
                     } },
                     .source_ty = refined_source_ty,
-                    .exact_callable_symbol = target_symbol,
+                    .fact = fact,
                 };
             }
             const capture_ty = current_capture.ty orelse
@@ -7714,17 +7774,28 @@ const Planner = struct {
             const args = try self.allocator.alloc(ast.ExprId, 1);
             defer self.allocator.free(args);
             args[0] = capture_record;
-            const owned_capture_facts = try self.valueFactsForSymbols(capture_symbols, current_capture.env);
+            const exact_capture_facts = try self.valueFactsForSymbols(capture_symbols, current_capture.env);
+            defer if (exact_capture_facts.len != 0) self.allocator.free(exact_capture_facts);
+            const exec_ty = try self.makeSingletonExecutableLambdaType(target_symbol, capture_ty, abstract_call_sig);
+            const fact = try self.addCallableValueFact(
+                target_symbol,
+                refined_source_ty,
+                exec_ty,
+                target_symbol,
+                .natural,
+                capture_ty,
+                exact_capture_facts,
+                abstract_call_sig,
+            );
             return .{
-                .ty = try self.makeSingletonExecutableLambdaType(target_symbol, capture_ty, abstract_call_sig),
+                .ty = exec_ty,
                 .data = .{ .tag = .{
                     .name = lower_type.lambdaTagKey(target_symbol),
                     .discriminant = 0,
                     .args = try self.output.addExprSpan(args),
                 } },
                 .source_ty = refined_source_ty,
-                .exact_callable_symbol = target_symbol,
-                .capture_facts = owned_capture_facts,
+                .fact = fact,
             };
         }
         const concrete_required_exec_ty = self.requireConcreteExecutableType(
@@ -7735,8 +7806,8 @@ const Planner = struct {
             concrete_required_exec_ty,
             "lowerExactCallableVarExpr",
         );
-        const capture_facts = try self.valueFactsForSymbols(capture_symbols, current_capture.env);
-        defer if (capture_facts.len != 0) self.allocator.free(capture_facts);
+        const required_capture_facts = try self.valueFactsForSymbols(capture_symbols, current_capture.env);
+        defer if (required_capture_facts.len != 0) self.allocator.free(required_capture_facts);
         switch (self.types.getTypePreservingNominal(concrete_required_exec_ty)) {
             .tag_union => |tag_union| {
                 if (!self.tagUnionIsInternalLambdaSet(tag_union.tags)) {
@@ -7751,7 +7822,7 @@ const Planner = struct {
                     target_symbol,
                     .natural,
                     refined_source_ty,
-                    capture_facts,
+                    required_capture_facts,
                     current_capture.ty,
                     &.{},
                     expected_call_sig.args,
@@ -7774,7 +7845,7 @@ const Planner = struct {
                             .args = ast.Span(ast.ExprId).empty(),
                         } },
                         .source_ty = refined_source_ty,
-                        .exact_callable_symbol = target_symbol,
+                        .fact = specialized.value_fact,
                     };
                 }
                 const precise_capture_ty = specialized.exec_capture_ty orelse
@@ -7796,8 +7867,7 @@ const Planner = struct {
                         .args = try self.output.addExprSpan(args),
                     } },
                     .source_ty = refined_source_ty,
-                    .exact_callable_symbol = target_symbol,
-                    .capture_facts = try self.allocator.dupe(ValueFactId, capture_facts),
+                    .fact = specialized.value_fact,
                 };
             },
             .erased_fn => {
@@ -7819,7 +7889,7 @@ const Planner = struct {
                     target_symbol,
                     .erased_boundary,
                     refined_source_ty,
-                    capture_facts,
+                    required_capture_facts,
                     authoritative_capture_ty,
                     &.{},
                     expected_call_sig.args,
@@ -7853,6 +7923,7 @@ const Planner = struct {
                         .capture_ty = authoritative_capture_ty,
                     } },
                     .source_ty = refined_source_ty,
+                    .fact = specialized.value_fact,
                 };
             },
             else => debugPanic("lambdamono.exec_plan.lowerExactCallableVarExpr expected callable executable type"),
@@ -8050,10 +8121,14 @@ const Planner = struct {
             const field_info = self.recordFieldByName(capture_record_ty, capture_name) orelse
                 debugPanic("lambdamono.exec_plan.captureBindingsFromCaptures missing capture field");
             _ = solved_types;
-            _ = field_info;
             out[i] = .{
                 .symbol = capture.symbol,
-                .fact = capture_facts[i],
+                .fact = try self.addValueFactFromQueuedFact(
+                    capture.symbol,
+                    capture.ty,
+                    field_info.ty,
+                    capture_facts[i],
+                ),
             };
         }
         return out;
@@ -8910,8 +8985,7 @@ const Planner = struct {
             mono_cache,
             target_symbol,
             dispatch_constraint_ty,
-            null,
-            null,
+            &.{},
             null,
         );
         const imported = try self.importCallableSummaryIntoInst(
@@ -9090,10 +9164,9 @@ const Planner = struct {
             target_symbol,
             repr_mode,
             exact_requested_ty,
+            &.{},
             null,
-            null,
-            null,
-            null,
+            &.{},
             requested_exec_arg_tys,
             requested_exec_ret_ty,
         );
@@ -9233,10 +9306,9 @@ const Planner = struct {
             target_symbol,
             repr_mode,
             dispatch_constraint_ty,
+            &.{},
             null,
-            null,
-            null,
-            null,
+            &.{},
             requested_exec_arg_tys,
             requested_exec_ret_ty,
         );
