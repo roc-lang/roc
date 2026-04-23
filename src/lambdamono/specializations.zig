@@ -12,6 +12,12 @@ const TypeVarId = solved.Type.TypeVarId;
 /// Opaque planner-owned fact handle retained by queued specializations.
 pub const FactId = enum(u32) { _ };
 
+/// Positional fact identity that contributes semantic callable truth to a specialization key.
+pub const FactKey = struct {
+    index: u32,
+    fact: FactId,
+};
+
 /// Pending specialization work item keyed by source symbol and solved function type.
 pub const Pending = struct {
     /// Controls whether the specialization uses the natural or erased-boundary representation.
@@ -204,7 +210,9 @@ pub fn specializeFnWithExecArgs(
     callable: FactId,
     exec_capture_ty: ?type_mod.TypeId,
     capture_facts: []const FactId,
+    capture_key_facts: []const FactKey,
     arg_facts: []const FactId,
+    arg_key_facts: []const FactKey,
     exec_arg_tys: []const type_mod.TypeId,
     exec_ret_ty: type_mod.TypeId,
 ) std.mem.Allocator.Error!Symbol {
@@ -219,8 +227,8 @@ pub fn specializeFnWithExecArgs(
         exec_types,
         callable,
         exec_capture_ty,
-        capture_facts,
-        arg_facts,
+        capture_key_facts,
+        arg_key_facts,
         exec_arg_tys,
         exec_ret_ty,
     );
@@ -277,7 +285,9 @@ pub fn specializeHostedWithExecArgs(
     callable: FactId,
     exec_capture_ty: ?type_mod.TypeId,
     capture_facts: []const FactId,
+    capture_key_facts: []const FactKey,
     arg_facts: []const FactId,
+    arg_key_facts: []const FactKey,
     exec_arg_tys: []const type_mod.TypeId,
     exec_ret_ty: type_mod.TypeId,
 ) std.mem.Allocator.Error!Symbol {
@@ -290,8 +300,8 @@ pub fn specializeHostedWithExecArgs(
         exec_types,
         callable,
         exec_capture_ty,
-        capture_facts,
-        arg_facts,
+        capture_key_facts,
+        arg_key_facts,
         exec_arg_tys,
         exec_ret_ty,
     );
@@ -476,10 +486,10 @@ fn makeKey(
     repr_mode: Pending.ReprMode,
     requested_ty: TypeVarId,
     exec_types: ?*type_mod.Store,
-    callable: FactId,
+    _: FactId,
     exec_capture_ty: ?type_mod.TypeId,
-    capture_facts: []const FactId,
-    arg_facts: []const FactId,
+    capture_key_facts: []const FactKey,
+    arg_key_facts: []const FactKey,
     exec_arg_tys: []const type_mod.TypeId,
     exec_ret_ty: type_mod.TypeId,
 ) std.mem.Allocator.Error![]const u8 {
@@ -497,8 +507,6 @@ fn makeKey(
     try key.appendSlice(allocator, std.mem.asBytes(&ty_len));
     try key.appendSlice(allocator, ty_key);
 
-    try key.appendSlice(allocator, std.mem.asBytes(&callable));
-
     const has_exec_capture: u8 = if (exec_capture_ty != null) 1 else 0;
     try key.append(allocator, has_exec_capture);
     if (exec_capture_ty) |capture_ty| {
@@ -511,16 +519,18 @@ fn makeKey(
         try key.appendSlice(allocator, capture_key);
     }
 
-    const capture_fact_count: u32 = @intCast(capture_facts.len);
+    const capture_fact_count: u32 = @intCast(capture_key_facts.len);
     try key.appendSlice(allocator, std.mem.asBytes(&capture_fact_count));
-    for (capture_facts) |fact| {
-        try key.appendSlice(allocator, std.mem.asBytes(&fact));
+    for (capture_key_facts) |fact_key| {
+        try key.appendSlice(allocator, std.mem.asBytes(&fact_key.index));
+        try key.appendSlice(allocator, std.mem.asBytes(&fact_key.fact));
     }
 
-    const arg_fact_count: u32 = @intCast(arg_facts.len);
+    const arg_fact_count: u32 = @intCast(arg_key_facts.len);
     try key.appendSlice(allocator, std.mem.asBytes(&arg_fact_count));
-    for (arg_facts) |fact| {
-        try key.appendSlice(allocator, std.mem.asBytes(&fact));
+    for (arg_key_facts) |fact_key| {
+        try key.appendSlice(allocator, std.mem.asBytes(&fact_key.index));
+        try key.appendSlice(allocator, std.mem.asBytes(&fact_key.fact));
     }
 
     const exec_arg_count: u32 = @intCast(exec_arg_tys.len);

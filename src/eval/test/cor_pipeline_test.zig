@@ -611,36 +611,6 @@ fn expectDirectOnlyLoweringProgram(
     try testing.expectEqual(@as(usize, 0), lir_erased_calls);
 }
 
-fn expectErasedLoweringProgram(
-    source_kind: helpers.SourceKind,
-    source: []const u8,
-    imports: []const helpers.ModuleSource,
-    expected_executable_erased_calls: usize,
-    expected_executable_packed_fns: usize,
-    expected_executable_erased_fn_types: usize,
-    expected_lir_erased_calls: usize,
-) !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-
-    const arena_allocator = arena.allocator();
-    var executable = try compileExecutableProgram(arena_allocator, source_kind, source, imports);
-    defer executable.deinit(arena_allocator);
-
-    const executable_erased_calls = countExecutableErasedCalls(&executable.executable);
-    const executable_packed = countExecutablePackedFns(&executable.executable);
-    const executable_erased = countExecutableErasedFnTypes(&executable.executable);
-
-    var compiled = try helpers.compileProgram(arena_allocator, source_kind, source, imports);
-    defer compiled.deinit(arena_allocator);
-
-    const lir_erased_calls = countErasedCalls(&compiled);
-    try testing.expectEqual(expected_executable_erased_calls, executable_erased_calls);
-    try testing.expectEqual(expected_executable_packed_fns, executable_packed);
-    try testing.expectEqual(expected_executable_erased_fn_types, executable_erased);
-    try testing.expectEqual(expected_lir_erased_calls, lir_erased_calls);
-}
-
 fn expectNoErasedLoweringProgram(
     source_kind: helpers.SourceKind,
     source: []const u8,
@@ -1029,32 +999,6 @@ const direct_call_cases = [_]DirectCallCase{
         .source = record_field_closure_extraction_source,
         .expected = "42",
     },
-};
-
-const ErasedCallCase = struct {
-    source_kind: helpers.SourceKind,
-    source: []const u8,
-    imports: []const helpers.ModuleSource = &.{},
-    expected_executable_erased_calls: usize,
-    expected_executable_packed_fns: usize,
-    expected_executable_erased_fn_types: usize,
-    expected_lir_erased_calls: usize,
-};
-
-const boxed_lambda_round_trip_erased_case = ErasedCallCase{
-    .source_kind = .expr,
-    .source =
-    \\{
-    \\    wrap = |boxed| { value: boxed }
-    \\    unwrap = |record| record.value
-    \\    f = Box.unbox(unwrap(wrap(Box.box(|x| x + 1.I64))))
-    \\    f(41.I64)
-    \\}
-    ,
-    .expected_executable_erased_calls = 2,
-    .expected_executable_packed_fns = 1,
-    .expected_executable_erased_fn_types = 1,
-    .expected_lir_erased_calls = 3,
 };
 
 fn countHostedProcSpecs(compiled: *const helpers.CompiledProgram) usize {
@@ -1945,7 +1889,7 @@ test "cor pipeline - boxed lambda helper chain keeps erased captures" {
     try testing.expect(countLowLevelOp(&compiled, .box_unbox) >= 1);
 }
 
-test "cor pipeline - boxed lambda lowering uses erased-call path" {
+test "cor pipeline - boxed captureless lambda round trip keeps exact callable facts" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
@@ -1965,18 +1909,9 @@ test "cor pipeline - boxed lambda lowering uses erased-call path" {
     const actual = try helpers.lirInterpreterInspectedStr(arena_allocator, &compiled.lowered);
     try testing.expectEqualStrings("42", actual);
 
-    try testing.expect(countErasedCalls(&compiled) >= 1);
+    try testing.expectEqual(@as(usize, 0), countErasedCalls(&compiled));
     try testing.expect(countLowLevelOp(&compiled, .box_box) >= 1);
     try testing.expect(countLowLevelOp(&compiled, .box_unbox) >= 1);
-    try expectErasedLoweringProgram(
-        boxed_lambda_round_trip_erased_case.source_kind,
-        boxed_lambda_round_trip_erased_case.source,
-        boxed_lambda_round_trip_erased_case.imports,
-        boxed_lambda_round_trip_erased_case.expected_executable_erased_calls,
-        boxed_lambda_round_trip_erased_case.expected_executable_packed_fns,
-        boxed_lambda_round_trip_erased_case.expected_executable_erased_fn_types,
-        boxed_lambda_round_trip_erased_case.expected_lir_erased_calls,
-    );
 }
 
 test "cor pipeline - non-boxed polymorphic closure round trip does not erase" {

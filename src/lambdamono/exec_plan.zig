@@ -76,11 +76,18 @@ const Planner = struct {
     const ValueFactId = specializations.FactId;
     const CallableFactId = enum(u32) { _ };
 
+    const RecordFieldFact = struct {
+        name: base.Ident.Idx,
+        fact: ValueFactId,
+    };
+
     const ValueFact = struct {
         symbol: Symbol,
         source_ty: TypeVarId,
         exec_ty: type_mod.TypeId,
         callable: ?CallableFactId = null,
+        boxed: ?ValueFactId = null,
+        record_fields: []const RecordFieldFact = &.{},
     };
 
     const CallableFact = struct {
@@ -171,6 +178,9 @@ const Planner = struct {
             if (fact.call_sig.args.len != 0) self.allocator.free(fact.call_sig.args);
         }
         self.callable_facts.deinit(self.allocator);
+        for (self.value_facts.items) |fact| {
+            if (fact.record_fields.len != 0) self.allocator.free(fact.record_fields);
+        }
         self.value_facts.deinit(self.allocator);
         self.expr_facts.deinit();
         self.top_level_values.deinit();
@@ -215,6 +225,47 @@ const Planner = struct {
         bind.ty = try self.internExecutableType(bind.ty);
     }
 
+    fn addValueFactFull(
+        self: *Planner,
+        symbol: Symbol,
+        source_ty: TypeVarId,
+        exec_ty: type_mod.TypeId,
+        callable: ?CallableFactId,
+        record_fields: []const RecordFieldFact,
+    ) std.mem.Allocator.Error!ValueFactId {
+        const owned_record_fields = try self.allocator.dupe(RecordFieldFact, record_fields);
+        errdefer if (owned_record_fields.len != 0) self.allocator.free(owned_record_fields);
+        const index: u32 = @intCast(self.value_facts.items.len);
+        try self.value_facts.append(self.allocator, .{
+            .symbol = symbol,
+            .source_ty = source_ty,
+            .exec_ty = exec_ty,
+            .callable = callable,
+            .boxed = null,
+            .record_fields = owned_record_fields,
+        });
+        return @enumFromInt(index);
+    }
+
+    fn addBoxedValueFact(
+        self: *Planner,
+        symbol: Symbol,
+        source_ty: TypeVarId,
+        exec_ty: type_mod.TypeId,
+        payload: ValueFactId,
+    ) std.mem.Allocator.Error!ValueFactId {
+        const index: u32 = @intCast(self.value_facts.items.len);
+        try self.value_facts.append(self.allocator, .{
+            .symbol = symbol,
+            .source_ty = source_ty,
+            .exec_ty = exec_ty,
+            .callable = null,
+            .boxed = payload,
+            .record_fields = &.{},
+        });
+        return @enumFromInt(index);
+    }
+
     fn addValueFact(
         self: *Planner,
         symbol: Symbol,
@@ -222,14 +273,17 @@ const Planner = struct {
         exec_ty: type_mod.TypeId,
         callable: ?CallableFactId,
     ) std.mem.Allocator.Error!ValueFactId {
-        const index: u32 = @intCast(self.value_facts.items.len);
-        try self.value_facts.append(self.allocator, .{
-            .symbol = symbol,
-            .source_ty = source_ty,
-            .exec_ty = exec_ty,
-            .callable = callable,
-        });
-        return @enumFromInt(index);
+        return try self.addValueFactFull(symbol, source_ty, exec_ty, callable, &.{});
+    }
+
+    fn addRecordValueFact(
+        self: *Planner,
+        symbol: Symbol,
+        source_ty: TypeVarId,
+        exec_ty: type_mod.TypeId,
+        record_fields: []const RecordFieldFact,
+    ) std.mem.Allocator.Error!ValueFactId {
+        return try self.addValueFactFull(symbol, source_ty, exec_ty, null, record_fields);
     }
 
     fn valueFact(self: *const Planner, id: ValueFactId) ValueFact {
@@ -314,6 +368,11 @@ const Planner = struct {
         return try self.addValueFact(symbol, source_ty, exec_ty, callable);
     }
 
+    fn valueFactCarriesSemanticInfo(self: *const Planner, id: ValueFactId) bool {
+        const fact = self.valueFact(id);
+        return fact.callable != null or fact.boxed != null or fact.record_fields.len != 0;
+    }
+
     fn addValueFactFromQueuedFact(
         self: *Planner,
         symbol: Symbol,
@@ -334,7 +393,24 @@ const Planner = struct {
                 queued_callable.call_sig,
             );
         } else null;
-        return try self.addValueFact(symbol, source_ty, exec_ty, callable);
+        const fact = try self.addValueFactFull(symbol, source_ty, exec_ty, callable, queued_fact.record_fields);
+        self.value_facts.items[@intFromEnum(fact)].boxed = queued_fact.boxed;
+        return fact;
+    }
+
+    fn addValueFactFromExprFact(
+        self: *Planner,
+        symbol: Symbol,
+        source_ty: TypeVarId,
+        exec_ty: type_mod.TypeId,
+        expr_id: ast.ExprId,
+    ) std.mem.Allocator.Error!ValueFactId {
+        if (self.valueFactForExpr(expr_id)) |fact_id| {
+            if (self.valueFactCarriesSemanticInfo(fact_id)) {
+                return try self.addValueFactFromQueuedFact(symbol, source_ty, exec_ty, fact_id);
+            }
+        }
+        return try self.addValueFact(symbol, source_ty, exec_ty, null);
     }
 
     fn callableFact(self: *const Planner, id: CallableFactId) CallableFact {
@@ -346,24 +422,79 @@ const Planner = struct {
         expr_id: ast.ExprId,
         target: Symbol,
     ) []const ValueFactId {
+        if (self.callableCapturesForExprFactOrNull(expr_id, target)) |captures| {
+            return captures;
+        }
+        const expr = self.output.getExpr(expr_id);
+        const actual_target: ?Symbol = if (self.valueFactForExpr(expr_id)) |fact_id|
+            if (self.valueFact(fact_id).callable) |callable_id|
+                self.callableFact(callable_id).target
+            else
+                null
+        else
+            null;
+        const target_origin = self.input.symbols.get(target).origin;
+        const actual_origin = if (actual_target) |symbol| self.input.symbols.get(symbol).origin else null;
+        debugPanicFmt(
+            "lambdamono.exec_plan.callableCapturesForExprFact missing matching callable fact expr={d} tag={s} ty={d} ty_tag={s} target={d} target_origin={s} actual_target={?d} actual_origin={?s}",
+            .{
+                @intFromEnum(expr_id),
+                @tagName(expr.data),
+                @intFromEnum(expr.ty),
+                @tagName(self.types.getTypePreservingNominal(expr.ty)),
+                target.raw(),
+                @tagName(target_origin),
+                if (actual_target) |symbol| symbol.raw() else null,
+                if (actual_origin) |origin| @tagName(origin) else null,
+            },
+        );
+    }
+
+    fn callableCapturesForExprFactOrNull(
+        self: *const Planner,
+        expr_id: ast.ExprId,
+        target: Symbol,
+    ) ?[]const ValueFactId {
         var current = expr_id;
         while (true) {
             const expr = self.output.getExpr(current);
             switch (expr.data) {
                 .bridge => |inner| current = inner,
+                .block => |block| current = block.final_expr,
+                .when => |when_expr| {
+                    for (self.output.sliceBranchSpan(when_expr.branches)) |branch_id| {
+                        const branch = self.output.getBranch(branch_id);
+                        if (self.callableCapturesForExprFactOrNull(branch.body, target)) |captures| {
+                            return captures;
+                        }
+                    }
+                    return null;
+                },
                 else => {
-                    const value_id = self.expr_facts.get(current) orelse
-                        debugPanic("lambdamono.exec_plan.callableCapturesForExprFact missing value fact");
-                    const callable_id = self.valueFact(value_id).callable orelse
-                        debugPanic("lambdamono.exec_plan.callableCapturesForExprFact expected callable value fact");
+                    const value_id = self.expr_facts.get(current) orelse return null;
+                    const callable_id = self.valueFact(value_id).callable orelse return null;
                     const callable = self.callableFact(callable_id);
-                    if (callable.target != target) {
-                        debugPanic("lambdamono.exec_plan.callableCapturesForExprFact target mismatch");
+                    if (callable.target != target and
+                        self.rootSourceSymbol(callable.target) != self.rootSourceSymbol(target))
+                    {
+                        return null;
                     }
                     return callable.captures;
                 },
             }
         }
+    }
+
+    fn callableTargetForOutputExprFact(self: *const Planner, expr_id: ast.ExprId) ?Symbol {
+        const value_id = self.valueFactForExpr(expr_id) orelse return null;
+        const callable_id = self.valueFact(value_id).callable orelse return null;
+        return self.callableFact(callable_id).target;
+    }
+
+    fn callableSourceTypeForOutputExprFact(self: *const Planner, expr_id: ast.ExprId) ?TypeVarId {
+        const value_id = self.valueFactForExpr(expr_id) orelse return null;
+        const callable_id = self.valueFact(value_id).callable orelse return null;
+        return self.callableFact(callable_id).source_ty;
     }
 
     fn valueFactForExpr(self: *const Planner, expr_id: ast.ExprId) ?ValueFactId {
@@ -375,6 +506,19 @@ const Planner = struct {
                 else => return self.expr_facts.get(current),
             }
         }
+    }
+
+    fn recordFieldFactForExpr(
+        self: *const Planner,
+        expr_id: ast.ExprId,
+        field_name: base.Ident.Idx,
+    ) ?ValueFactId {
+        const record_fact_id = self.valueFactForExpr(expr_id) orelse return null;
+        const record_fact = self.valueFact(record_fact_id);
+        for (record_fact.record_fields) |field_fact| {
+            if (field_fact.name == field_name) return field_fact.fact;
+        }
+        return null;
     }
 
     fn finalizeExpr(self: *Planner, expr: *ast.Expr, _: usize) std.mem.Allocator.Error!void {
@@ -1084,6 +1228,7 @@ const Planner = struct {
     const SpecializedCallableSummary = struct {
         symbol: Symbol,
         value_fact: ValueFactId,
+        return_fact: ?ValueFactId,
         summary_types: *solved.Type.Store,
         summary_fn_ty: TypeVarId,
         exec_capture_ty: ?type_mod.TypeId,
@@ -1212,12 +1357,7 @@ const Planner = struct {
             pending.exec_ret_ty = body_ty;
             return;
         }
-        const current = self.types.getTypePreservingNominal(current_ret_ty);
-        const body = self.types.getTypePreservingNominal(body_ty);
-        if (current == .erased_fn and body == .erased_fn and
-            current.erased_fn.capture == null and body.erased_fn.capture != null and
-            self.executableCallableSigsEqual(current.erased_fn.call, body.erased_fn.call))
-        {
+        if (self.executableTypeHasMoreSpecificErasedCallableShape(body_ty, current_ret_ty)) {
             pending.exec_ret_ty = body_ty;
             return;
         }
@@ -1471,6 +1611,7 @@ const Planner = struct {
                 return .{
                     .symbol = pending_symbol,
                     .value_fact = pending.callable,
+                    .return_fact = self.pendingReturnFact(pending),
                     .summary_types = pending.summary_types orelse
                         debugPanic("lambdamono.exec_plan.ensureQueuedCallableSpecialized specialization missing summary store"),
                     .summary_fn_ty = pending.summary_fn_ty orelse
@@ -1489,6 +1630,7 @@ const Planner = struct {
                 return .{
                     .symbol = pending_symbol,
                     .value_fact = updated.callable,
+                    .return_fact = self.pendingReturnFact(updated),
                     .summary_types = updated.summary_types orelse
                         debugPanic("lambdamono.exec_plan.ensureQueuedCallableSpecialized completed specialization missing summary store"),
                     .summary_fn_ty = updated.summary_fn_ty orelse
@@ -1499,6 +1641,56 @@ const Planner = struct {
                 };
             },
         }
+    }
+
+    fn pendingReturnFact(self: *const Planner, pending: *const specializations.Pending) ?ValueFactId {
+        const specialized = pending.specialized orelse return null;
+        return switch (specialized) {
+            .fn_ => |fn_def| self.valueFactForExpr(fn_def.body),
+            .hosted_fn, .val, .run => null,
+        };
+    }
+
+    fn attachCallReturnFact(
+        self: *Planner,
+        expr_id: ast.ExprId,
+        source_ret_ty: TypeVarId,
+        exec_ret_ty: type_mod.TypeId,
+        return_fact: ?ValueFactId,
+    ) std.mem.Allocator.Error!void {
+        const fact_id = return_fact orelse {
+            if (self.isExecutableCallableType(exec_ret_ty)) {
+                debugPanicFmt(
+                    "lambdamono.exec_plan.attachCallReturnFact missing callable return fact expr={d} exec_ty={d} tag={s}",
+                    .{
+                        @intFromEnum(expr_id),
+                        @intFromEnum(exec_ret_ty),
+                        @tagName(self.types.getTypePreservingNominal(exec_ret_ty)),
+                    },
+                );
+            }
+            return;
+        };
+        if (!self.valueFactCarriesSemanticInfo(fact_id)) {
+            if (self.isExecutableCallableType(exec_ret_ty)) {
+                debugPanicFmt(
+                    "lambdamono.exec_plan.attachCallReturnFact callable return fact lacks semantic info expr={d} fact={d} exec_ty={d}",
+                    .{
+                        @intFromEnum(expr_id),
+                        @intFromEnum(fact_id),
+                        @intFromEnum(exec_ret_ty),
+                    },
+                );
+            }
+            return;
+        }
+        const expr_fact = try self.addValueFactFromQueuedFact(
+            Symbol.none,
+            source_ret_ty,
+            exec_ret_ty,
+            fact_id,
+        );
+        try self.expr_facts.put(expr_id, expr_fact);
     }
 
     fn finishPendingSpecialization(
@@ -1969,6 +2161,7 @@ const Planner = struct {
             .erased_fn => blk: {
                 const func_capture_ty = self.erasedFnCaptureType(func_exec_ty);
                 var authoritative_call_sig: ?type_mod.CallableSig = null;
+                var authoritative_return_fact: ?ValueFactId = null;
                 defer if (authoritative_call_sig) |call_sig| {
                     if (call_sig.args.len != 0) self.allocator.free(call_sig.args);
                 };
@@ -2017,6 +2210,7 @@ const Planner = struct {
                                 .args = try self.types.dupeTypeIds(specialized.exec_args_tys),
                                 .ret = specialized.exec_ret_ty,
                             };
+                            authoritative_return_fact = specialized.return_fact;
                         } else {
                             for (lambda_members) |lambda_member| {
                                 const specialized = try self.ensureQueuedCallableSpecializedForRequestedType(
@@ -2104,6 +2298,12 @@ const Planner = struct {
                         .capture_ty = self.erasedFnCaptureType(func_exec_ty),
                     } },
                 });
+                try self.attachCallReturnFact(
+                    call_expr,
+                    fn_shape.ret,
+                    call_ret_ty,
+                    authoritative_return_fact,
+                );
                 if (concrete_result_exec_ty) |result_ty| {
                     if (!self.types.equalIds(call_ret_ty, result_ty)) {
                         call_expr = try self.emitExplicitBridgeExpr(call_expr, result_ty);
@@ -2116,7 +2316,13 @@ const Planner = struct {
                     debugPanic("lambdamono.exec_plan.applyCallableValueCall expected callable executable type");
                 }
 
-                const lambda_members = try self.collectExecutableLambdaMembers(solved_types, func_source_ty, func_exec_ty);
+                const exact_callable_target = self.callableTargetForOutputExprFact(func_call_expr);
+                const lambda_members = if (exact_callable_target) |target|
+                    try self.allocator.dupe(LambdaMemberInfo, &.{
+                        self.exactExecutableLambdaMember(solved_types, func_source_ty, func_exec_ty, target),
+                    })
+                else
+                    try self.collectExecutableLambdaMembers(solved_types, func_source_ty, func_exec_ty);
                 defer self.allocator.free(lambda_members);
                 const requested_exec_ret_ty = if (concrete_result_exec_ty) |result_ty|
                     result_ty
@@ -2133,9 +2339,13 @@ const Planner = struct {
                 defer self.allocator.free(specialized_branches);
                 var common_exec_arg_tys: ?[]const type_mod.TypeId = null;
                 var common_exec_ret_ty: ?type_mod.TypeId = concrete_result_exec_ty;
+                const fact_callable_target = if (lambda_members.len == 1)
+                    self.callableTargetForOutputExprFact(func_call_expr)
+                else
+                    null;
                 for (lambda_members, 0..) |lambda_member, i| {
                     const specialization_symbol = if (lambda_members.len == 1)
-                        callable_target orelse lambda_member.symbol
+                        callable_target orelse fact_callable_target orelse lambda_member.symbol
                     else
                         lambda_member.symbol;
                     const branch_capture_facts = self.callableCapturesForExprFact(
@@ -2186,7 +2396,7 @@ const Planner = struct {
 
                 for (lambda_members, 0..) |lambda_member, i| {
                     const specialization_symbol = if (lambda_members.len == 1)
-                        callable_target orelse lambda_member.symbol
+                        callable_target orelse fact_callable_target orelse lambda_member.symbol
                     else
                         lambda_member.symbol;
                     const current_member = solved_types.requireLambdaMember(func_source_ty, specialization_symbol);
@@ -2202,6 +2412,12 @@ const Planner = struct {
                                 .args = try self.output.addExprSpan(branch_call_args),
                             } },
                         });
+                        try self.attachCallReturnFact(
+                            body_expr,
+                            fn_shape.ret,
+                            specialized.exec_ret_ty,
+                            specialized.return_fact,
+                        );
                         if (concrete_result_exec_ty) |result_ty| {
                             if (!self.types.equalIds(specialized.exec_ret_ty, result_ty)) {
                                 body_expr = try self.emitExplicitBridgeExpr(body_expr, result_ty);
@@ -2247,6 +2463,12 @@ const Planner = struct {
                                 .args = try self.output.addExprSpan(call_args_with_capture),
                             } },
                         });
+                        try self.attachCallReturnFact(
+                            body_expr,
+                            fn_shape.ret,
+                            specialized.exec_ret_ty,
+                            specialized.return_fact,
+                        );
                         if (concrete_result_exec_ty) |result_ty| {
                             if (!self.types.equalIds(specialized.exec_ret_ty, result_ty)) {
                                 body_expr = try self.emitExplicitBridgeExpr(body_expr, result_ty);
@@ -2259,13 +2481,23 @@ const Planner = struct {
                     }
                 }
 
-                break :blk try self.output.addExpr(.{
-                    .ty = common_exec_ret_ty orelse requested_exec_ret_ty,
+                const result_ty = common_exec_ret_ty orelse requested_exec_ret_ty;
+                const result_expr = try self.output.addExpr(.{
+                    .ty = result_ty,
                     .data = .{ .when = .{
                         .cond = func_call_expr,
                         .branches = try self.output.addBranchSpan(branches),
                     } },
                 });
+                if (specialized_branches.len == 1) {
+                    try self.attachCallReturnFact(
+                        result_expr,
+                        fn_shape.ret,
+                        result_ty,
+                        specialized_branches[0].return_fact,
+                    );
+                }
+                break :blk result_expr;
             },
             else => debugPanic("lambdamono.exec_plan.applyCallableValueCall expected callable executable type"),
         };
@@ -4707,6 +4939,23 @@ const Planner = struct {
         return out;
     }
 
+    fn semanticFactKeys(
+        self: *Planner,
+        facts: []const ValueFactId,
+    ) std.mem.Allocator.Error![]const specializations.FactKey {
+        if (facts.len == 0) return &.{};
+        var out = std.ArrayList(specializations.FactKey).empty;
+        errdefer out.deinit(self.allocator);
+        for (facts, 0..) |fact_id, i| {
+            if (!self.valueFactCarriesSemanticInfo(fact_id)) continue;
+            try out.append(self.allocator, .{
+                .index = @intCast(i),
+                .fact = fact_id,
+            });
+        }
+        return try out.toOwnedSlice(self.allocator);
+    }
+
     fn callableCapturesForTarget(
         self: *Planner,
         target: Symbol,
@@ -4848,6 +5097,10 @@ const Planner = struct {
             capture_facts,
             exec_call_sig,
         );
+        const capture_key_facts = try self.semanticFactKeys(capture_facts);
+        defer if (capture_key_facts.len != 0) self.allocator.free(capture_key_facts);
+        const arg_key_facts = try self.semanticFactKeys(arg_facts);
+        defer if (arg_key_facts.len != 0) self.allocator.free(arg_key_facts);
         if (specializations.lookupFnExact(self.fenv, symbol) != null) {
             return try specializations.specializeFnWithExecArgs(
                 &self.queue,
@@ -4861,7 +5114,9 @@ const Planner = struct {
                 callable,
                 normalized_capture_exec_ty,
                 capture_facts,
+                capture_key_facts,
                 arg_facts,
+                arg_key_facts,
                 exec_arg_tys,
                 exec_ret_ty,
             );
@@ -4881,7 +5136,9 @@ const Planner = struct {
                 callable,
                 normalized_capture_exec_ty,
                 capture_facts,
+                capture_key_facts,
                 arg_facts,
+                arg_key_facts,
                 exec_arg_tys,
                 exec_ret_ty,
             ),
@@ -4947,6 +5204,220 @@ const Planner = struct {
         expr: ast.ExprId,
         source_ty: TypeVarId,
     };
+
+    fn currentFunctionReturnExecutableType(self: *Planner) std.mem.Allocator.Error!type_mod.TypeId {
+        const symbol = self.current_specializing_symbol orelse
+            debugPanic("lambdamono.exec_plan.currentFunctionReturnExecutableType missing current function specialization");
+        const pending = self.lookupPendingBySpecializedSymbol(symbol) orelse
+            debugPanic("lambdamono.exec_plan.currentFunctionReturnExecutableType missing pending specialization");
+        return try self.currentPendingExecutableReturnType(pending);
+    }
+
+    fn planReturnValueExpr(
+        self: *Planner,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        venv: []const EnvEntry,
+        expr_id: solved.Ast.ExprId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        const expr = self.input.store.getExpr(expr_id);
+        const source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, expr_id);
+        const ret_ty = try self.currentFunctionReturnExecutableType();
+        var lowered = try self.planExprWithRequiredExecTy(
+            inst,
+            mono_cache,
+            venv,
+            expr_id,
+            expr,
+            source_ty,
+            ret_ty,
+        );
+        if (!self.types.equalIds(self.output.getExpr(lowered).ty, ret_ty)) {
+            lowered = try self.retargetOrEmitExplicitBridgeExpr(lowered, ret_ty);
+        }
+        return lowered;
+    }
+
+    fn makeUnitExpr(self: *Planner) std.mem.Allocator.Error!ast.ExprId {
+        return try self.output.addExpr(.{
+            .ty = try self.makeUnitType(),
+            .data = .unit,
+        });
+    }
+
+    fn discardExprResult(self: *Planner, expr: ast.ExprId) std.mem.Allocator.Error!ast.ExprId {
+        const unit_ty = try self.makeUnitType();
+        if (self.types.equalIds(self.output.getExpr(expr).ty, unit_ty)) {
+            return expr;
+        }
+        const stmt = try self.output.addStmt(.{ .expr = expr });
+        return try self.output.addExpr(.{
+            .ty = unit_ty,
+            .data = .{ .block = .{
+                .stmts = try self.output.addStmtSpan(&.{stmt}),
+                .final_expr = try self.makeUnitExpr(),
+            } },
+        });
+    }
+
+    fn planIgnoredExpr(
+        self: *Planner,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        venv: []const EnvEntry,
+        expr_id: solved.Ast.ExprId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        const expr = self.input.store.getExpr(expr_id);
+        const unit_ty = try self.makeUnitType();
+        switch (expr.data) {
+            .return_ => |ret_expr| {
+                const lowered_ret = try self.planReturnValueExpr(inst, mono_cache, venv, ret_expr);
+                return try self.output.addExpr(.{
+                    .ty = unit_ty,
+                    .data = .{ .return_ = lowered_ret },
+                });
+            },
+            .if_ => |if_expr| {
+                const cond = try self.planExpr(inst, mono_cache, venv, if_expr.cond);
+                const then_body = try self.planIgnoredExpr(inst, mono_cache, venv, if_expr.then_body);
+                const else_body = try self.planIgnoredExpr(inst, mono_cache, venv, if_expr.else_body);
+                return try self.output.addExpr(.{
+                    .ty = unit_ty,
+                    .data = .{ .if_ = .{
+                        .cond = cond,
+                        .then_body = then_body,
+                        .else_body = else_body,
+                    } },
+                });
+            },
+            .when => |when_expr| {
+                const cond_source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, when_expr.cond);
+                const cond = try self.planExprAtSourceTy(
+                    inst,
+                    mono_cache,
+                    venv,
+                    when_expr.cond,
+                    cond_source_ty,
+                );
+                const input_branch_ids = self.input.store.sliceBranchSpan(when_expr.branches);
+                var lowered_branches = std.ArrayList(ast.Branch).empty;
+                defer lowered_branches.deinit(self.allocator);
+                try lowered_branches.ensureTotalCapacity(self.allocator, input_branch_ids.len);
+                var all_remaining_covered = false;
+                for (input_branch_ids) |branch_id| {
+                    if (all_remaining_covered) break;
+                    const branch = self.input.store.getBranch(branch_id);
+                    const branch_pat = self.input.store.getPat(branch.pat);
+                    if (!self.patPossibleAtExecutableTy(branch_pat, self.output.getExpr(cond).ty)) {
+                        continue;
+                    }
+                    const branch_pat_source_ty = try self.cloneTypeIntoInstFromStore(
+                        inst,
+                        inst.types,
+                        cond_source_ty,
+                    );
+                    const pat_result = try self.specializePatAtSourceAndExecutableTy(
+                        inst,
+                        mono_cache,
+                        branch_pat,
+                        branch_pat_source_ty,
+                        self.output.getExpr(cond).ty,
+                    );
+                    defer self.allocator.free(pat_result.additions);
+                    const branch_env = try self.concatEnv(venv, pat_result.additions);
+                    defer self.allocator.free(branch_env);
+                    try lowered_branches.append(self.allocator, .{
+                        .pat = pat_result.pat,
+                        .body = try self.planIgnoredExpr(inst, mono_cache, branch_env, branch.body),
+                    });
+                    if (self.patExhaustsExecutableTy(branch_pat, self.output.getExpr(cond).ty)) {
+                        all_remaining_covered = true;
+                    }
+                }
+                if (lowered_branches.items.len == 0) {
+                    debugPanic("lambdamono.exec_plan.planIgnoredExpr(when) removed all branches");
+                }
+                return try self.output.addExpr(.{
+                    .ty = unit_ty,
+                    .data = .{ .when = .{
+                        .cond = cond,
+                        .branches = try self.output.addBranchSpan(lowered_branches.items),
+                    } },
+                });
+            },
+            .let_ => |let_expr| {
+                const refined_entry = try self.preRefineBindingInEnv(
+                    inst,
+                    mono_cache,
+                    venv,
+                    let_expr.bind,
+                    let_expr.body,
+                );
+                const refined_rest_env = try self.extendEnv(venv, refined_entry);
+                defer self.allocator.free(refined_rest_env);
+                try self.preRefineExprSourceTypes(inst, mono_cache, refined_rest_env, let_expr.rest);
+
+                var lowered_binding = try self.lowerBindingBody(
+                    inst,
+                    mono_cache,
+                    venv,
+                    let_expr.bind,
+                    let_expr.body,
+                    "planIgnoredExpr(let_)",
+                );
+                const refined_source_ty = self.envSourceType(refined_entry);
+                if (!self.sourceTypeIsAbstract(inst.types, refined_source_ty)) {
+                    lowered_binding.source_ty = refined_source_ty;
+                    lowered_binding.exec_ty = self.requireConcreteExecutableType(
+                        lowered_binding.exec_ty,
+                        "planIgnoredExpr(let_ refined)",
+                    );
+                }
+                const rest_fact = try self.addValueFactFromExprFact(
+                    let_expr.bind.symbol,
+                    lowered_binding.source_ty,
+                    lowered_binding.exec_ty,
+                    lowered_binding.body,
+                );
+                const rest_env = try self.extendEnv(venv, .{
+                    .symbol = let_expr.bind.symbol,
+                    .fact = rest_fact,
+                });
+                defer self.allocator.free(rest_env);
+                const rest = try self.planIgnoredExpr(inst, mono_cache, rest_env, let_expr.rest);
+                return try self.output.addExpr(.{
+                    .ty = unit_ty,
+                    .data = .{ .let_ = .{
+                        .bind = .{
+                            .ty = lowered_binding.exec_ty,
+                            .symbol = let_expr.bind.symbol,
+                        },
+                        .body = lowered_binding.body,
+                        .rest = rest,
+                    } },
+                });
+            },
+            .block => |block| {
+                return try self.specializeIgnoredBlockExpr(inst, mono_cache, venv, block);
+            },
+            .for_ => |for_expr| {
+                return try self.output.addExpr(.{
+                    .ty = unit_ty,
+                    .data = .{ .for_ = try self.specializeForExpr(inst, mono_cache, venv, for_expr) },
+                });
+            },
+            .runtime_error => |msg| {
+                return try self.output.addExpr(.{
+                    .ty = unit_ty,
+                    .data = .{ .runtime_error = msg },
+                });
+            },
+            else => {
+                const lowered = try self.planExpr(inst, mono_cache, venv, expr_id);
+                return try self.discardExprResult(lowered);
+            },
+        }
+    }
 
     fn planExprAtSourceTy(
         self: *Planner,
@@ -5155,6 +5626,8 @@ const Planner = struct {
                 const source_fields = self.input.store.sliceFieldExprSpan(fields);
                 const lowered = try self.allocator.alloc(ast.FieldExpr, source_fields.len);
                 defer self.allocator.free(lowered);
+                var record_field_facts = std.ArrayList(RecordFieldFact).empty;
+                defer record_field_facts.deinit(self.allocator);
                 const concrete_record_ty = self.stableConcreteExpectedExecutableType(
                     required_exec_ty,
                     "planExpr(record)",
@@ -5186,14 +5659,33 @@ const Planner = struct {
                         .name = field.name,
                         .value = value,
                     };
+                    if (self.valueFactForExpr(value)) |field_fact| {
+                        if (self.valueFactCarriesSemanticInfo(field_fact)) {
+                            try record_field_facts.append(self.allocator, .{
+                                .name = field.name,
+                                .fact = field_fact,
+                            });
+                        }
+                    }
                 }
+                var record_uses_actual_field_types = false;
                 if (concrete_record_ty) |record_ty| {
                     for (lowered) |*field| {
                         const source_field_ty = self.solvedRecordFieldByName(inst.types, ty, field.name) orelse
                             debugPanic("lambdamono.exec_plan.record missing solved record field during final bridge");
                         const expected_field = self.recordFieldByName(record_ty, field.name) orelse
                             debugPanic("lambdamono.exec_plan.record missing executable record field");
-                        if (!self.types.equalIds(self.output.getExpr(field.value).ty, expected_field.ty)) {
+                        const field_exec_ty = self.output.getExpr(field.value).ty;
+                        if (!self.types.equalIds(field_exec_ty, expected_field.ty)) {
+                            if (self.valueFactForExpr(field.value)) |field_fact| {
+                                if (self.valueFactCarriesSemanticInfo(field_fact) and self.executableTypesHaveErasedCallableShapeMismatch(
+                                    field_exec_ty,
+                                    expected_field.ty,
+                                )) {
+                                    record_uses_actual_field_types = true;
+                                    continue;
+                                }
+                            }
                             field.value = try self.bridgeExprAtSolvedTypeToExpectedExecutableType(
                                 inst,
                                 mono_cache,
@@ -5205,12 +5697,23 @@ const Planner = struct {
                     }
                 }
                 const lowered_fields = try self.output.addFieldExprSpan(lowered);
-                const result_ty = if (concrete_record_ty) |record_ty|
-                    record_ty
-                else
-                    try self.recordTypeFromFieldValues(lowered);
+                const result_ty = if (concrete_record_ty) |record_ty| blk_result: {
+                    if (record_uses_actual_field_types) {
+                        break :blk_result try self.recordTypeFromFieldValues(lowered);
+                    }
+                    break :blk_result record_ty;
+                } else try self.recordTypeFromFieldValues(lowered);
                 const ordered_fields = try self.orderedRecordFields(result_ty, lowered_fields);
-                break :blk .{ .ty = result_ty, .data = .{ .record = ordered_fields } };
+                const record_fact = if (record_field_facts.items.len == 0)
+                    null
+                else
+                    try self.addRecordValueFact(Symbol.none, ty, result_ty, record_field_facts.items);
+                break :blk .{
+                    .ty = result_ty,
+                    .data = .{ .record = ordered_fields },
+                    .source_ty = ty,
+                    .fact = record_fact,
+                };
             },
             .access => |access| blk: {
                 const record = try self.planExpr(inst, mono_cache, venv, access.record);
@@ -5222,10 +5725,19 @@ const Planner = struct {
                     required_exec_ty,
                     "planExpr(access)",
                 );
-                const result_ty = if (expected_access_ty) |expected_ty|
+                const requested_result_ty = if (expected_access_ty) |expected_ty|
                     expected_ty
                 else
                     field_ty;
+                const field_fact = self.recordFieldFactForExpr(record, access.field);
+                const result_ty = if (field_fact) |fact|
+                    if (self.valueFactCarriesSemanticInfo(fact) and
+                        self.executableTypeHasMoreSpecificErasedCallableShape(field_ty, requested_result_ty))
+                        field_ty
+                    else
+                        requested_result_ty
+                else
+                    requested_result_ty;
                 const access_expr = try self.output.addExpr(.{
                     .ty = field_ty,
                     .data = .{ .access = .{
@@ -5234,8 +5746,20 @@ const Planner = struct {
                         .field_index = field_info.index,
                     } },
                 });
+                const access_fact = if (field_fact) |fact|
+                    try self.addValueFactFromQueuedFact(Symbol.none, ty, result_ty, fact)
+                else
+                    null;
+                if (access_fact) |fact| {
+                    try self.expr_facts.put(access_expr, fact);
+                }
                 if (self.types.equalIds(field_ty, result_ty)) {
-                    break :blk .{ .ty = field_ty, .data = self.output.getExpr(access_expr).data };
+                    break :blk .{
+                        .ty = field_ty,
+                        .data = self.output.getExpr(access_expr).data,
+                        .source_ty = ty,
+                        .fact = access_fact,
+                    };
                 }
                 const bridged = try self.bridgeExprAtSolvedTypeToExpectedExecutableType(
                     inst,
@@ -5244,7 +5768,11 @@ const Planner = struct {
                     access_expr,
                     result_ty,
                 );
-                break :blk .{ .ty = result_ty, .data = self.output.getExpr(bridged).data };
+                break :blk .{
+                    .ty = result_ty,
+                    .data = self.output.getExpr(bridged).data,
+                    .source_ty = ty,
+                };
             },
             .let_ => |let_expr| blk: {
                 const refined_entry = try self.preRefineBindingInEnv(
@@ -5274,11 +5802,11 @@ const Planner = struct {
                         "planExpr(let_ refined)",
                     );
                 }
-                const rest_fact = try self.addValueFact(
+                const rest_fact = try self.addValueFactFromExprFact(
                     let_expr.bind.symbol,
                     lowered_binding.source_ty,
                     lowered_binding.exec_ty,
-                    null,
+                    lowered_binding.body,
                 );
                 const rest_env = try self.extendEnv(venv, .{
                     .symbol = let_expr.bind.symbol,
@@ -5457,6 +5985,18 @@ const Planner = struct {
                     },
                     else => constraint_shape.ret,
                 };
+                const result_fact = switch (ll.op) {
+                    .box_box, .box_unbox => blk_fact: {
+                        if (args.len != 1) debugPanic("lambdamono.exec_plan.planExpr box op expected one lowered arg");
+                        break :blk_fact try self.boxBoundaryResultFact(
+                            ll.op,
+                            source_result_ty,
+                            result_ty,
+                            args[0],
+                        );
+                    },
+                    else => null,
+                };
                 break :blk .{
                     .ty = result_ty,
                     .data = .{ .low_level = .{
@@ -5464,6 +6004,7 @@ const Planner = struct {
                         .args = lowered_args,
                     } },
                     .source_ty = source_result_ty,
+                    .fact = result_fact,
                 };
             },
             .when => |when_expr| blk: {
@@ -5597,13 +6138,23 @@ const Planner = struct {
                     mono_cache,
                     ty,
                 );
-                const concrete_result_ty = self.stableBranchJoinExecutableType(
-                    explicit_result_ty,
-                    "planExpr(if_ result)",
-                ) orelse self.stableBranchJoinExecutableType(
-                    required_exec_ty,
-                    "planExpr(if_)",
-                );
+                const return_join_ty = if (self.exprContainsReturn(expr_id))
+                    self.stableBranchJoinExecutableType(
+                        required_exec_ty,
+                        "planExpr(if_ return)",
+                    )
+                else
+                    null;
+                const concrete_result_ty = if (return_join_ty) |join_ty|
+                    join_ty
+                else
+                    self.stableBranchJoinExecutableType(
+                        explicit_result_ty,
+                        "planExpr(if_ result)",
+                    ) orelse self.stableBranchJoinExecutableType(
+                        required_exec_ty,
+                        "planExpr(if_)",
+                    );
                 const branch_required_exec_ty = concrete_result_ty orelse explicit_result_ty;
                 const then_lowered = try self.planExprWithRequiredExecTyAndSourceTy(
                     inst,
@@ -5942,12 +6493,7 @@ const Planner = struct {
                 break :blk .{ .ty = result_ty, .data = .{ .list = try self.output.addExprSpan(lowered) } };
             },
             .return_ => |ret_expr| blk: {
-                var lowered_ret = try self.planExpr(inst, mono_cache, venv, ret_expr);
-                if (!self.executableTypeIsAbstract(required_exec_ty) and
-                    !self.types.equalIds(self.output.getExpr(lowered_ret).ty, required_exec_ty))
-                {
-                    lowered_ret = try self.retargetOrEmitExplicitBridgeExpr(lowered_ret, required_exec_ty);
-                }
+                const lowered_ret = try self.planReturnValueExpr(inst, mono_cache, venv, ret_expr);
                 break :blk .{
                     .ty = required_exec_ty,
                     .data = .{ .return_ = lowered_ret },
@@ -6210,6 +6756,10 @@ const Planner = struct {
             .runtime_error => |msg| try self.output.addExpr(.{
                 .ty = result_ty,
                 .data = .{ .runtime_error = msg },
+            }),
+            .return_ => |ret_expr| try self.output.addExpr(.{
+                .ty = result_ty,
+                .data = .{ .return_ = ret_expr },
             }),
             .block => |block| if (try self.retypeDivergingExpr(block.final_expr, result_ty)) |final_expr| try self.output.addExpr(.{
                 .ty = result_ty,
@@ -6697,6 +7247,39 @@ const Planner = struct {
         }
     }
 
+    fn boxBoundaryResultFact(
+        self: *Planner,
+        op: base.LowLevel,
+        source_result_ty: TypeVarId,
+        result_exec_ty: type_mod.TypeId,
+        lowered_arg: ast.ExprId,
+    ) std.mem.Allocator.Error!?ValueFactId {
+        return switch (op) {
+            .box_box => blk: {
+                const payload_fact = self.valueFactForExpr(lowered_arg) orelse break :blk null;
+                if (!self.valueFactCarriesSemanticInfo(payload_fact)) break :blk null;
+                break :blk try self.addBoxedValueFact(
+                    Symbol.none,
+                    source_result_ty,
+                    result_exec_ty,
+                    payload_fact,
+                );
+            },
+            .box_unbox => blk: {
+                const boxed_fact = self.valueFactForExpr(lowered_arg) orelse break :blk null;
+                const payload_fact = self.valueFact(boxed_fact).boxed orelse break :blk null;
+                if (!self.valueFactCarriesSemanticInfo(payload_fact)) break :blk null;
+                break :blk try self.addValueFactFromQueuedFact(
+                    Symbol.none,
+                    source_result_ty,
+                    result_exec_ty,
+                    payload_fact,
+                );
+            },
+            else => null,
+        };
+    }
+
     fn lowerBoxBoundaryExpr(
         self: *Planner,
         inst: *InstScope,
@@ -6706,7 +7289,11 @@ const Planner = struct {
         lowered_expr: ast.ExprId,
     ) std.mem.Allocator.Error!ast.ExprId {
         const lowered = self.output.getExpr(lowered_expr);
-        const source_repr = inst.types.maybeLambdaRepr(source_ty) orelse return lowered_expr;
+        const callable_source_ty = if (inst.types.maybeLambdaRepr(source_ty) != null)
+            source_ty
+        else
+            self.callableSourceTypeForOutputExprFact(lowered_expr) orelse return lowered_expr;
+        const source_repr = inst.types.maybeLambdaRepr(callable_source_ty) orelse return lowered_expr;
         switch (source_repr) {
             .lset => {
                 switch (self.types.getType(lowered.ty)) {
@@ -6716,7 +7303,7 @@ const Planner = struct {
                 return try self.lowerConcreteCallableAsErased(
                     inst,
                     mono_cache,
-                    source_ty,
+                    callable_source_ty,
                     lowered_expr,
                     null,
                 );
@@ -6840,6 +7427,54 @@ const Planner = struct {
         return false;
     }
 
+    fn executableTypeHasMoreSpecificErasedCallableShape(
+        self: *Planner,
+        actual_ty: type_mod.TypeId,
+        expected_ty: type_mod.TypeId,
+    ) bool {
+        if (self.types.equalIds(actual_ty, expected_ty)) return false;
+        const actual = self.types.getTypePreservingNominal(actual_ty);
+        const expected = self.types.getTypePreservingNominal(expected_ty);
+        if (actual == .erased_fn and expected == .erased_fn) {
+            return expected.erased_fn.capture == null and
+                actual.erased_fn.capture != null and
+                self.executableCallableSigsEqual(actual.erased_fn.call, expected.erased_fn.call);
+        }
+        if (actual == .box and expected == .box) {
+            return self.executableTypeHasMoreSpecificErasedCallableShape(actual.box, expected.box);
+        }
+        if (actual == .list and expected == .list) {
+            return self.executableTypeHasMoreSpecificErasedCallableShape(actual.list, expected.list);
+        }
+        if (actual == .tuple and expected == .tuple) {
+            if (actual.tuple.len != expected.tuple.len) return false;
+            for (actual.tuple, expected.tuple) |actual_elem, expected_elem| {
+                if (self.executableTypeHasMoreSpecificErasedCallableShape(actual_elem, expected_elem)) return true;
+            }
+            return false;
+        }
+        if (actual == .record and expected == .record) {
+            if (actual.record.fields.len != expected.record.fields.len) return false;
+            for (actual.record.fields, expected.record.fields) |actual_field, expected_field| {
+                if (actual_field.name != expected_field.name) return false;
+                if (self.executableTypeHasMoreSpecificErasedCallableShape(actual_field.ty, expected_field.ty)) return true;
+            }
+            return false;
+        }
+        if (actual == .tag_union and expected == .tag_union) {
+            if (actual.tag_union.tags.len != expected.tag_union.tags.len) return false;
+            for (actual.tag_union.tags, expected.tag_union.tags) |actual_tag, expected_tag| {
+                if (!std.meta.eql(actual_tag.name, expected_tag.name)) return false;
+                if (actual_tag.args.len != expected_tag.args.len) return false;
+                for (actual_tag.args, expected_tag.args) |actual_arg, expected_arg| {
+                    if (self.executableTypeHasMoreSpecificErasedCallableShape(actual_arg, expected_arg)) return true;
+                }
+            }
+            return false;
+        }
+        return false;
+    }
+
     fn emitExplicitBridgeExpr(
         self: *Planner,
         expr_id: ast.ExprId,
@@ -6952,7 +7587,27 @@ const Planner = struct {
         var expr = self.output.exprs.items[expr_idx];
         switch (expr.data) {
             .tag => |tag| {
-                const tag_exec_info = self.executableTagInfoByTagName(expected_ty, tag.name) orelse return false;
+                var tag_name = tag.name;
+                const tag_exec_info = self.executableTagInfoByTagName(expected_ty, tag.name) orelse blk_info: {
+                    if (self.callableTargetForOutputExprFact(expr_id) == null) return false;
+                    const expected_tag_union = switch (self.types.getTypePreservingNominal(expected_ty)) {
+                        .tag_union => |tag_union| tag_union,
+                        else => return false,
+                    };
+                    if (!self.tagUnionIsInternalLambdaSet(expected_tag_union.tags) or expected_tag_union.tags.len != 1) {
+                        return false;
+                    }
+                    const expected_tag = expected_tag_union.tags[0];
+                    const actual_args = self.output.sliceExprSpan(tag.args);
+                    if (expected_tag.args.len != actual_args.len) {
+                        return false;
+                    }
+                    tag_name = expected_tag.name;
+                    break :blk_info ExecutableTagInfo{
+                        .discriminant = 0,
+                        .args = expected_tag.args,
+                    };
+                };
                 const tag_args = self.output.sliceExprSpan(tag.args);
                 const updated_args = try self.allocator.alloc(ast.ExprId, tag_args.len);
                 defer self.allocator.free(updated_args);
@@ -6966,7 +7621,7 @@ const Planner = struct {
                 }
                 expr.ty = expected_ty;
                 expr.data = .{ .tag = .{
-                    .name = tag.name,
+                    .name = tag_name,
                     .discriminant = tag_exec_info.discriminant,
                     .args = try self.output.addExprSpan(updated_args),
                 } };
@@ -7183,7 +7838,7 @@ const Planner = struct {
             .args = try self.types.dupeTypeIds(specialized.exec_args_tys),
             .ret = specialized.exec_ret_ty,
         };
-        return try self.output.addExpr(.{
+        const packed_expr = try self.output.addExpr(.{
             .ty = try self.makeErasedFnType(capture_ty, authoritative_call_sig),
             .data = .{ .packed_fn = .{
                 .lambda = specialized.symbol,
@@ -7191,6 +7846,8 @@ const Planner = struct {
                 .capture_ty = capture_ty,
             } },
         });
+        try self.expr_facts.put(packed_expr, specialized.value_fact);
+        return packed_expr;
     }
 
     fn lowerExactExecutableCallableAsErased(
@@ -7394,10 +8051,23 @@ const Planner = struct {
         source_ty: TypeVarId,
         current_exec_ty: type_mod.TypeId,
         required_exec_ty: type_mod.TypeId,
+        fact: ?ValueFactId,
     ) std.mem.Allocator.Error!SpecializedExprLowering {
         const var_expr = try self.makeVarExpr(current_exec_ty, symbol);
-        const lowered_expr = if (self.executableTypeIsAbstract(required_exec_ty) or
-            self.types.equalIds(current_exec_ty, required_exec_ty))
+        if (fact) |fact_id| {
+            try self.expr_facts.put(var_expr, fact_id);
+        }
+        const effective_required_ty = if (fact) |fact_id|
+            if (self.valueFactCarriesSemanticInfo(fact_id) and
+                !self.executableTypeIsAbstract(required_exec_ty) and
+                self.executableTypesHaveErasedCallableShapeMismatch(current_exec_ty, required_exec_ty))
+                current_exec_ty
+            else
+                required_exec_ty
+        else
+            required_exec_ty;
+        const lowered_expr = if (self.executableTypeIsAbstract(effective_required_ty) or
+            self.types.equalIds(current_exec_ty, effective_required_ty))
             var_expr
         else
             try self.bridgeExprAtSolvedTypeToExpectedExecutableType(
@@ -7405,13 +8075,14 @@ const Planner = struct {
                 mono_cache,
                 source_ty,
                 var_expr,
-                required_exec_ty,
+                effective_required_ty,
             );
         const lowered = self.output.getExpr(lowered_expr);
         return .{
             .ty = lowered.ty,
             .data = lowered.data,
             .source_ty = source_ty,
+            .fact = if (lowered_expr == var_expr) fact else null,
         };
     }
 
@@ -7560,6 +8231,7 @@ const Planner = struct {
                         refined_source_ty,
                         current_exec_ty,
                         required_exec_ty,
+                        entry.fact,
                     );
                 }
                 const current_exec_summary = self.debugExecutableTypeSummary(current_exec_ty);
@@ -7599,6 +8271,7 @@ const Planner = struct {
                 refined_source_ty,
                 current_exec_ty,
                 required_exec_ty,
+                if (self.valueFactCarriesSemanticInfo(entry.fact)) entry.fact else null,
             );
         }
 
@@ -7628,6 +8301,7 @@ const Planner = struct {
                 refined_source_ty,
                 top_level_ty,
                 required_exec_ty,
+                null,
             );
         }
         const entry = self.input.symbols.get(symbol);
@@ -7687,6 +8361,7 @@ const Planner = struct {
                     },
                 ),
             };
+            defer if (abstract_call_sig.args.len != 0) self.allocator.free(abstract_call_sig.args);
             if (source_repr == .erased) {
                 const erased_capture_facts = try self.valueFactsForSymbols(capture_symbols, current_capture.env);
                 defer if (erased_capture_facts.len != 0) self.allocator.free(erased_capture_facts);
@@ -8083,16 +8758,69 @@ const Planner = struct {
         return out;
     }
 
+    fn exactExecutableLambdaMember(
+        self: *Planner,
+        solved_types: *solved.Type.Store,
+        requested_ty: TypeVarId,
+        callable_exec_ty: type_mod.TypeId,
+        exact_target: Symbol,
+    ) LambdaMemberInfo {
+        const tag_union = switch (self.types.getTypePreservingNominal(callable_exec_ty)) {
+            .tag_union => |tag_union| tag_union,
+            else => debugPanic("lambdamono.exec_plan.exactExecutableLambdaMember expected executable lambda-set type"),
+        };
+        if (!self.tagUnionIsInternalLambdaSet(tag_union.tags)) {
+            debugPanic("lambdamono.exec_plan.exactExecutableLambdaMember expected internal lambda-set tags");
+        }
+        if (tag_union.tags.len != 1) {
+            const lambdas = switch (solved_types.lambdaRepr(requested_ty)) {
+                .erased => debugPanic("lambdamono.exec_plan.exactExecutableLambdaMember expected concrete lambda-set"),
+                .lset => |lset| lset,
+            };
+            for (lambdas, 0..) |lambda, i| {
+                if (lambda.symbol == exact_target) {
+                    return .{
+                        .symbol = exact_target,
+                        .discriminant = @intCast(i),
+                        .capture_ty = self.executableCaptureTypeForLambdaMember(callable_exec_ty, exact_target),
+                    };
+                }
+            }
+            debugPanic("lambdamono.exec_plan.exactExecutableLambdaMember exact target missing from executable lambda-set");
+        }
+        const tag = tag_union.tags[0];
+        const tag_symbol = switch (tag.name) {
+            .lambda => |symbol| symbol,
+            .ctor => debugPanic("lambdamono.exec_plan.exactExecutableLambdaMember expected lambda tag"),
+        };
+        if (solved_types.maybeLambdaMember(requested_ty, exact_target) == null and
+            solved_types.maybeLambdaMember(requested_ty, tag_symbol) == null)
+        {
+            debugPanic("lambdamono.exec_plan.exactExecutableLambdaMember target missing from solved lambda-set");
+        }
+        const capture_ty = switch (tag.args.len) {
+            0 => null,
+            1 => tag.args[0],
+            else => debugPanic("lambdamono.exec_plan.exactExecutableLambdaMember expected at most one capture payload"),
+        };
+        return .{
+            .symbol = tag_symbol,
+            .discriminant = 0,
+            .capture_ty = capture_ty,
+        };
+    }
+
     fn makeSingletonExecutableLambdaType(
         self: *Planner,
         symbol: Symbol,
         capture_ty: ?type_mod.TypeId,
         call_sig: type_mod.CallableSig,
     ) std.mem.Allocator.Error!type_mod.TypeId {
-        const args = if (capture_ty) |ty|
-            try self.types.dupeTypeIds(&.{ty})
-        else
-            &.{};
+        var capture_args: [1]type_mod.TypeId = undefined;
+        const args: []const type_mod.TypeId = if (capture_ty) |ty| blk: {
+            capture_args[0] = ty;
+            break :blk capture_args[0..];
+        } else &.{};
         const tags = try self.types.dupeTags(&.{.{
             .name = lower_type.lambdaTagKey(symbol),
             .args = args,
@@ -8808,7 +9536,28 @@ const Planner = struct {
                         debugPanic("lambdamono.exec_plan.assertCallableExprMatchesSolvedType expected internal lambda-set expr");
                     }
                     if (tag_union.tags.len != lambdas.len) {
-                        debugPanic("lambdamono.exec_plan.assertCallableExprMatchesSolvedType lambda count mismatch");
+                        const exact_target = self.callableTargetForOutputExprFact(func_expr) orelse
+                            debugPanic("lambdamono.exec_plan.assertCallableExprMatchesSolvedType lambda count mismatch without exact callable fact");
+                        if (tag_union.tags.len != 1) {
+                            debugPanic("lambdamono.exec_plan.assertCallableExprMatchesSolvedType exact callable fact expected singleton executable lambda-set");
+                        }
+                        const tag = tag_union.tags[0];
+                        const lambda_symbol = switch (tag.name) {
+                            .lambda => |symbol| symbol,
+                            .ctor => debugPanic("lambdamono.exec_plan.assertCallableExprMatchesSolvedType expected lambda tag"),
+                        };
+                        const lambda = solved_types.maybeLambdaMember(current_fn_ty, lambda_symbol) orelse
+                            solved_types.maybeLambdaMember(current_fn_ty, exact_target) orelse
+                            debugPanic("lambdamono.exec_plan.assertCallableExprMatchesSolvedType exact callable fact target missing from solved lambda-set");
+                        const expected_capture_count = lambda.captures.len;
+                        if (expected_capture_count == 0) {
+                            if (tag.args.len != 0) {
+                                debugPanic("lambdamono.exec_plan.assertCallableExprMatchesSolvedType unexpected exact capture payload");
+                            }
+                        } else if (tag.args.len != 1) {
+                            debugPanic("lambdamono.exec_plan.assertCallableExprMatchesSolvedType missing exact capture payload");
+                        }
+                        return;
                     }
                     for (tag_union.tags, lambdas) |tag, lambda| {
                         const expected_capture_count = solved_types.sliceCaptures(lambda.captures).len;
@@ -9151,11 +9900,53 @@ const Planner = struct {
                 repr_mode,
             );
         }
+        const lowered_args = try self.allocator.alloc(ast.ExprId, exact_requested_arg_tys.len);
+        defer self.allocator.free(lowered_args);
+        const actual_exec_arg_tys = try self.allocator.alloc(type_mod.TypeId, exact_requested_arg_tys.len);
+        defer self.allocator.free(actual_exec_arg_tys);
+        const arg_facts = try self.allocator.alloc(ValueFactId, exact_requested_arg_tys.len);
+        defer if (arg_facts.len != 0) self.allocator.free(arg_facts);
+        const receiver_expr = self.input.store.getExpr(method_call.receiver);
+        lowered_args[0] = try self.planExprWithRequiredExecTy(
+            inst,
+            mono_cache,
+            venv,
+            method_call.receiver,
+            receiver_expr,
+            exact_requested_arg_tys[0],
+            requested_exec_arg_tys[0],
+        );
+        if (try self.retypeDivergingExpr(lowered_args[0], required_exec_ty)) |diverging| {
+            return .{
+                .ty = self.output.getExpr(diverging).ty,
+                .data = self.output.getExpr(diverging).data,
+            };
+        }
+        actual_exec_arg_tys[0] = self.output.getExpr(lowered_args[0]).ty;
+        arg_facts[0] = self.valueFactForExpr(lowered_args[0]) orelse
+            try self.addValueFact(Symbol.none, exact_requested_arg_tys[0], actual_exec_arg_tys[0], null);
+
+        for (method_args, 0..) |arg_expr_id, i| {
+            const arg_expr = self.input.store.getExpr(arg_expr_id);
+            const arg_index = i + 1;
+            lowered_args[arg_index] = try self.planExprWithRequiredExecTy(
+                inst,
+                mono_cache,
+                venv,
+                arg_expr_id,
+                arg_expr,
+                exact_requested_arg_tys[arg_index],
+                requested_exec_arg_tys[arg_index],
+            );
+            actual_exec_arg_tys[arg_index] = self.output.getExpr(lowered_args[arg_index]).ty;
+            arg_facts[arg_index] = self.valueFactForExpr(lowered_args[arg_index]) orelse
+                try self.addValueFact(Symbol.none, exact_requested_arg_tys[arg_index], actual_exec_arg_tys[arg_index], null);
+        }
         const requested_exec_ret_ty = try self.executableReturnTypeFromCallRelation(
             inst.types,
             mono_cache,
             exact_requested_arg_tys,
-            requested_exec_arg_tys,
+            actual_exec_arg_tys,
             exact_requested_shape.ret,
             repr_mode,
         );
@@ -9166,8 +9957,8 @@ const Planner = struct {
             exact_requested_ty,
             &.{},
             null,
-            &.{},
-            requested_exec_arg_tys,
+            arg_facts,
+            actual_exec_arg_tys,
             requested_exec_ret_ty,
         );
         const imported = try self.importCallableSummaryIntoInst(
@@ -9192,36 +9983,13 @@ const Planner = struct {
             fn_arg_tys[1..],
         );
 
-        const lowered_args = try self.allocator.alloc(ast.ExprId, fn_arg_tys.len);
-        defer self.allocator.free(lowered_args);
-        const receiver_expr = self.input.store.getExpr(method_call.receiver);
-        lowered_args[0] = try self.planExprWithRequiredExecTy(
-            inst,
-            mono_cache,
-            venv,
-            method_call.receiver,
-            receiver_expr,
-            fn_arg_tys[0],
-            specialized.exec_args_tys[0],
-        );
-        if (try self.retypeDivergingExpr(lowered_args[0], required_exec_ty)) |diverging| {
-            return .{
-                .ty = self.output.getExpr(diverging).ty,
-                .data = self.output.getExpr(diverging).data,
-            };
-        }
-
-        for (method_args, 0..) |arg_expr_id, i| {
-            const arg_expr = self.input.store.getExpr(arg_expr_id);
-            lowered_args[i + 1] = try self.planExprWithRequiredExecTy(
-                inst,
-                mono_cache,
-                venv,
-                arg_expr_id,
-                arg_expr,
-                fn_arg_tys[i + 1],
-                specialized.exec_args_tys[i + 1],
-            );
+        for (lowered_args, specialized.exec_args_tys, actual_exec_arg_tys, 0..) |lowered_arg, final_arg_ty, actual_arg_ty, i| {
+            try self.unifyIn(inst.types, fn_arg_tys[i], exact_requested_arg_tys[i]);
+            if (!self.types.equalIds(actual_arg_ty, final_arg_ty) or
+                !self.types.equalIds(self.output.getExpr(lowered_arg).ty, final_arg_ty))
+            {
+                debugPanic("lambdamono.exec_plan.specializeDispatchCallExpr queued arg signature drift");
+            }
         }
         const result_expr = try self.applyExactTopLevelFunctionCall(
             inst,
@@ -9410,10 +10178,17 @@ const Planner = struct {
                 },
                 else => unreachable,
             };
+            const result_fact = try self.boxBoundaryResultFact(
+                op,
+                source_result_ty,
+                lowered.ty,
+                lowered_arg,
+            );
             return .{
                 .ty = lowered.ty,
                 .data = lowered.data,
                 .source_ty = source_result_ty,
+                .fact = result_fact,
             };
         }
 
@@ -9612,11 +10387,25 @@ const Planner = struct {
                         capture_expr,
                         specialized.exec_ret_ty,
                     );
+                    try self.attachCallReturnFact(
+                        result_expr,
+                        exact_shape.ret,
+                        specialized.exec_ret_ty,
+                        specialized.return_fact,
+                    );
                     const lowered = self.output.getExpr(result_expr);
+                    const result_fact = self.valueFactForExpr(result_expr);
+                    if (result_fact == null and self.isExecutableCallableType(lowered.ty)) {
+                        debugPanicFmt(
+                            "lambdamono.exec_plan.specializeCallExpr direct callable result missing fact expr={d} ty={d}",
+                            .{ @intFromEnum(result_expr), @intFromEnum(lowered.ty) },
+                        );
+                    }
                     return .{
                         .ty = lowered.ty,
                         .data = lowered.data,
                         .source_ty = exact_shape.ret,
+                        .fact = result_fact,
                     };
                 }
             }
@@ -9746,6 +10535,7 @@ const Planner = struct {
             .ty = lowered.ty,
             .data = lowered.data,
             .source_ty = call_relation_shape.ret,
+            .fact = self.valueFactForExpr(result_expr),
         };
     }
 
@@ -9897,6 +10687,56 @@ const Planner = struct {
         };
     }
 
+    fn specializeIgnoredBlockExpr(
+        self: *Planner,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        incoming_env: []const EnvEntry,
+        block: @FieldType(solved.Ast.Expr.Data, "block"),
+    ) std.mem.Allocator.Error!ast.ExprId {
+        var block_refined_env = try self.cloneEnv(incoming_env);
+        defer self.allocator.free(block_refined_env);
+
+        const stmts = self.input.store.sliceStmtSpan(block.stmts);
+        for (stmts) |stmt_id| {
+            const next_env = try self.preRefineStmtSourceTypes(
+                inst,
+                mono_cache,
+                block_refined_env,
+                stmt_id,
+            );
+            self.allocator.free(block_refined_env);
+            block_refined_env = next_env;
+        }
+
+        var env = try self.cloneEnv(incoming_env);
+        defer self.allocator.free(env);
+
+        const out = try self.allocator.alloc(ast.StmtId, stmts.len);
+        defer self.allocator.free(out);
+
+        for (stmts, 0..) |stmt_id, i| {
+            const result = try self.specializeStmt(
+                inst,
+                mono_cache,
+                env,
+                block_refined_env,
+                stmt_id,
+            );
+            out[i] = result.stmt;
+            self.allocator.free(env);
+            env = result.env;
+        }
+
+        return try self.output.addExpr(.{
+            .ty = try self.makeUnitType(),
+            .data = .{ .block = .{
+                .stmts = try self.output.addStmtSpan(out),
+                .final_expr = try self.planIgnoredExpr(inst, mono_cache, env, block.final_expr),
+            } },
+        });
+    }
+
     fn specializeForExpr(
         self: *Planner,
         inst: *InstScope,
@@ -9919,7 +10759,7 @@ const Planner = struct {
         defer self.allocator.free(finalized_pat.additions);
         const body_env = try self.concatEnv(venv, finalized_pat.additions);
         defer self.allocator.free(body_env);
-        const body = try self.planExpr(inst, mono_cache, body_env, for_expr.body);
+        const body = try self.planIgnoredExpr(inst, mono_cache, body_env, for_expr.body);
         return .{
             .patt = finalized_pat.pat,
             .iterable = iterable,
@@ -10157,11 +10997,11 @@ const Planner = struct {
                         "specializeStmt(decl refined)",
                     );
                 }
-                const binding_fact = try self.addValueFact(
+                const binding_fact = try self.addValueFactFromExprFact(
                     decl.bind.symbol,
                     lowered_binding.source_ty,
                     lowered_binding.exec_ty,
-                    null,
+                    lowered_binding.body,
                 );
                 break :blk .{
                     .stmt = try self.output.addStmt(.{
@@ -10206,11 +11046,11 @@ const Planner = struct {
                         "specializeStmt(var_decl refined)",
                     );
                 }
-                const binding_fact = try self.addValueFact(
+                const binding_fact = try self.addValueFactFromExprFact(
                     decl.bind.symbol,
                     lowered_binding.source_ty,
                     lowered_binding.exec_ty,
-                    null,
+                    lowered_binding.body,
                 );
                 break :blk .{
                     .stmt = try self.output.addStmt(.{
@@ -10240,7 +11080,7 @@ const Planner = struct {
                 .env = try self.cloneEnv(venv),
             },
             .expr => |expr| .{
-                .stmt = try self.output.addStmt(.{ .expr = try self.planExpr(inst, mono_cache, venv, expr) }),
+                .stmt = try self.output.addStmt(.{ .expr = try self.planIgnoredExpr(inst, mono_cache, venv, expr) }),
                 .env = try self.cloneEnv(venv),
             },
             .debug => |expr| .{
@@ -10256,7 +11096,7 @@ const Planner = struct {
                 .env = try self.cloneEnv(venv),
             },
             .return_ => |expr| blk: {
-                const lowered = try self.planExpr(inst, mono_cache, venv, expr);
+                const lowered = try self.planReturnValueExpr(inst, mono_cache, venv, expr);
                 break :blk .{
                     .stmt = try self.output.addStmt(.{ .return_ = lowered }),
                     .env = try self.cloneEnv(venv),
@@ -10282,7 +11122,7 @@ const Planner = struct {
                 defer self.allocator.free(finalized_pat.additions);
                 const body_env = try self.concatEnv(venv, finalized_pat.additions);
                 defer self.allocator.free(body_env);
-                const body = try self.planExpr(inst, mono_cache, body_env, for_stmt.body);
+                const body = try self.planIgnoredExpr(inst, mono_cache, body_env, for_stmt.body);
                 break :blk .{
                     .stmt = try self.output.addStmt(.{ .for_ = .{
                         .patt = finalized_pat.pat,
@@ -10295,7 +11135,7 @@ const Planner = struct {
             .while_ => |while_stmt| .{
                 .stmt = try self.output.addStmt(.{ .while_ = .{
                     .cond = try self.planExpr(inst, mono_cache, venv, while_stmt.cond),
-                    .body = try self.planExpr(inst, mono_cache, venv, while_stmt.body),
+                    .body = try self.planIgnoredExpr(inst, mono_cache, venv, while_stmt.body),
                 } }),
                 .env = try self.cloneEnv(venv),
             },

@@ -214,14 +214,6 @@ pub fn expectErasedNodeInvariantAfterLowering(
         );
         return error.UnexpectedErasedNodesWithoutBoxBox;
     }
-
-    if (box_box_calls > 0 and erased_nodes == 0) {
-        std.debug.print(
-            "eval lowering erased-node invariant failed: source has {d} Box.box calls but lowered program has no erased nodes\n",
-            .{box_box_calls},
-        );
-        return error.ExpectedErasedNodesForBoxBox;
-    }
 }
 
 fn countNeedle(haystack: []const u8, needle: []const u8) usize {
