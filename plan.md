@@ -11,6 +11,9 @@ The goal is to get eval tests passing first, then glue tests passing, while pres
 - If a test failure exposes missing information, the fix is to thread the explicit fact from the stage that actually knows it.
 - If a test failure exposes old cruft, delete it before continuing with test debugging.
 
+Implementing this plan means driving all the way to both `test-eval` and `test-glue` passing in this worktree, including fixing unrelated wrapper precheck failures when they appear.
+When existing tests conflict with this architecture, the architecture wins and the tests must be updated accordingly.
+
 ## Hard Command Rule
 
 Every Zig invocation must go through the guard script:
@@ -32,6 +35,7 @@ The wrapper runs all checked-in guardrails before the requested Zig command:
 - `zig run ci/check_test_wiring.zig`
 
 If the wrapper precheck fails, stop the test loop and fix the architectural/lint/audit failure first. Do not bypass or weaken the wrapper.
+This applies even when the precheck failure appears unrelated to the eval or glue test currently being targeted.
 
 ## Stabilization Order
 
@@ -60,6 +64,8 @@ Start with tests covering:
 - empty-list typing/defaulting
 - compile-time constants and expect execution
 
+Search the test suite to choose the concrete targeted test filters for these areas.
+
 4. Run broader eval checks:
 
 ```sh
@@ -80,8 +86,12 @@ For every failure:
 
 - Inspect the failing stage and identify the explicit fact that should have existed.
 - Add or thread that fact from the earliest stage that owns it.
+- Infer fact ownership from the existing module boundaries, stage responsibilities, and established patterns in the codebase.
+- Update tests and audits when the correct fix requires adding an eval regression, correcting an obsolete expectation, or strengthening a guardrail.
 - Keep the emitter/backend/interpreter mechanically dumb; they consume planned facts and descriptors only.
 - Rerun `perl ci/semantic_audit.pl` immediately after any semantic lowering/eval/glue/bridge/specialization change, or rerun through `ci/guarded_zig.sh` if the next step is a Zig command.
+- If a glue failure exposes a missing eval invariant, add or fix the eval regression first, make eval green, and only then return to glue.
+- Temporary local debug instrumentation is allowed during investigation, but debug trace prints or investigation diagnostics must not be committed or left in the final diff.
 
 Forbidden fixes:
 
@@ -105,7 +115,14 @@ perl ci/semantic_audit.pl
 perl ci/check_postcheck_architecture.pl
 ```
 
-Also use targeted grep checks for any newly suspicious family. If the audit finds anything, the task becomes deleting that family and strengthening the audit so it cannot return.
+Also use targeted grep checks for any newly suspicious family. If the audit finds anything, the task becomes deleting that family and strengthening the audit so it cannot return. When old cruft or an obsolete pattern is clear, remove the whole family immediately rather than limiting the deletion to the failing path.
+Always prioritize cleanups and deletions over forward progress on tests. After deleting an obsolete family, do not return to test debugging until targeted searches and relevant audits verify that the deletion is complete and no stragglers remain.
+
+## Commit Discipline
+
+Commit as work progresses.
+Each commit should contain a coherent architectural cleanup, fact-threading change, test/audit correction, or stabilization step.
+Do not mix unrelated changes into a commit.
 
 The stabilization is not complete until:
 
