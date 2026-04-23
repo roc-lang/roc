@@ -170,20 +170,19 @@ test "ModuleEnv.Serialized roundtrip" {
     // Verify that the map was repopulated correctly
     try testing.expectEqual(@as(usize, 2), env.imports.map.count());
 
-    // Test that deduplication still works after deserialization
-    // Use arena allocator for these operations to avoid memory issues
+    // Test that deduplication still works after deserialization for existing keys.
+    // Note: the deserialized StringLiteral.Store points into the cache buffer and
+    // cannot be grown (SafeList.deserializeInto contract), so we only test lookup
+    // of already-serialized strings here.
     var test_arena = std.heap.ArenaAllocator.init(gpa);
     defer test_arena.deinit();
     const test_alloc = test_arena.allocator();
 
     const import4 = try env.imports.getOrPut(test_alloc, &env.common.strings, "json.Json");
-    const import5 = try env.imports.getOrPut(test_alloc, &env.common.strings, "new.Module");
 
-    // Should find existing json.Json
+    // Should find existing json.Json (deduplication)
     try testing.expectEqual(@as(u32, 0), @intFromEnum(import4));
-    // Should create new entry for new.Module
-    try testing.expectEqual(@as(u32, 2), @intFromEnum(import5));
-    try testing.expectEqual(@as(usize, 3), env.imports.imports.len());
+    try testing.expectEqual(@as(usize, 2), env.imports.imports.len());
 }
 
 // test "ModuleEnv with types CompactWriter roundtrip" {
