@@ -1091,6 +1091,7 @@ pub fn replaceExprWithStructuralEq(
     store.nodes.set(node_idx, node);
 }
 
+/// Replaces an existing expression with a call node carrying its checker relation.
 pub fn replaceExprWithCallConstraint(
     store: *NodeStore,
     expr_idx: CIR.Expr.Idx,
@@ -1115,6 +1116,7 @@ pub fn replaceExprWithCallConstraint(
     store.nodes.set(node_idx, node);
 }
 
+/// Replaces an existing expression with explicit method-equality metadata.
 pub fn replaceExprWithMethodEq(
     store: *NodeStore,
     expr_idx: CIR.Expr.Idx,
@@ -1134,6 +1136,7 @@ pub fn replaceExprWithMethodEq(
     store.nodes.set(node_idx, node);
 }
 
+/// Replaces an existing expression with unresolved receiver dispatch metadata.
 pub fn replaceExprWithDispatchCall(
     store: *NodeStore,
     expr_idx: CIR.Expr.Idx,
@@ -1158,6 +1161,7 @@ pub fn replaceExprWithDispatchCall(
     store.nodes.set(node_idx, node);
 }
 
+/// Replaces an existing expression with unresolved type dispatch metadata.
 pub fn replaceExprWithTypeDispatchCall(
     store: *NodeStore,
     expr_idx: CIR.Expr.Idx,

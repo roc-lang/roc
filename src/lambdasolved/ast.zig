@@ -3,7 +3,6 @@
 
 const std = @import("std");
 const base = @import("base");
-const lifted = @import("monotype_lifted");
 const types = @import("types");
 const symbol_mod = @import("symbol");
 const type_mod = @import("type.zig");

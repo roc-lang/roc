@@ -27,6 +27,7 @@ const RocStr = builtins.str.RocStr;
 const RocList = builtins.list.RocList;
 const Value = runtime_value.Value;
 
+/// Errors produced while constructing or reading compile-time value data.
 pub const Error = error{
     OutOfMemory,
     UnsupportedLayout,
@@ -35,24 +36,29 @@ pub const Error = error{
     SchemaLayoutMismatch,
 };
 
+/// Errors produced while deserializing compile-time value data.
 pub const SerializationError = Error || error{
     InvalidFormat,
     UnsupportedVersion,
 };
 
+/// Stable id of a schema node in `SchemaStore`.
 pub const SchemaId = enum(u32) {
     _,
 };
 
+/// Stable id of a constant node in `ConstantStore`.
 pub const ValueId = enum(u32) {
     _,
 };
 
+/// Top-level binding to a reified compile-time constant.
 pub const Binding = struct {
     schema_id: SchemaId,
     value_id: ValueId,
 };
 
+/// Schema metadata for alias or nominal wrappers.
 pub const WrappedSchema = struct {
     name: []u8,
     origin_module: []u8,
@@ -60,16 +66,19 @@ pub const WrappedSchema = struct {
     is_opaque: bool = false,
 };
 
+/// Schema metadata for one record field.
 pub const FieldSchema = struct {
     name: []u8,
     schema_id: SchemaId,
 };
 
+/// Schema metadata for one tag-union variant.
 pub const VariantSchema = struct {
     name: []u8,
     payload_schemas: []SchemaId,
 };
 
+/// Reification schema for converting runtime bytes into constants.
 pub const Schema = union(enum) {
     pending,
     zst,
@@ -85,11 +94,13 @@ pub const Schema = union(enum) {
     nominal: WrappedSchema,
 };
 
+/// Constant payload for a tag-union variant.
 pub const VariantValue = struct {
     tag_index: u32,
     payloads: []ValueId,
 };
 
+/// Reified compile-time constant graph node.
 pub const Constant = union(enum) {
     zst,
     int_bytes: [16]u8,
@@ -106,16 +117,19 @@ pub const Constant = union(enum) {
     nominal: ValueId,
 };
 
+/// Store of reification schemas produced during semantic lowering.
 pub const SchemaStore = struct {
     allocator: std.mem.Allocator,
     schemas: std.ArrayListUnmanaged(Schema) = .{},
 
+    /// Initialize an empty schema store.
     pub fn init(allocator: std.mem.Allocator) SchemaStore {
         return .{
             .allocator = allocator,
         };
     }
 
+    /// Release all schemas and schema-owned memory.
     pub fn deinit(self: *SchemaStore) void {
         for (self.schemas.items) |*schema| {
             self.deinitSchema(schema);
@@ -149,38 +163,45 @@ pub const SchemaStore = struct {
         }
     }
 
+    /// Reserve a schema id before the full schema is known.
     pub fn addPending(self: *SchemaStore) Error!SchemaId {
         const idx: u32 = @intCast(self.schemas.items.len);
         try self.schemas.append(self.allocator, .pending);
         return @enumFromInt(idx);
     }
 
+    /// Add a fully-known schema.
     pub fn add(self: *SchemaStore, schema: Schema) Error!SchemaId {
         const idx: u32 = @intCast(self.schemas.items.len);
         try self.schemas.append(self.allocator, schema);
         return @enumFromInt(idx);
     }
 
+    /// Replace a reserved schema with its final schema.
     pub fn overwrite(self: *SchemaStore, id: SchemaId, schema: Schema) void {
         self.deinitSchema(&self.schemas.items[@intFromEnum(id)]);
         self.schemas.items[@intFromEnum(id)] = schema;
     }
 
+    /// Read a schema by id.
     pub fn get(self: *const SchemaStore, id: SchemaId) Schema {
         return self.schemas.items[@intFromEnum(id)];
     }
 };
 
+/// Store of reified compile-time constants.
 pub const ConstantStore = struct {
     allocator: std.mem.Allocator,
     values: std.ArrayListUnmanaged(Constant) = .{},
 
+    /// Initialize an empty constant store.
     pub fn init(allocator: std.mem.Allocator) ConstantStore {
         return .{
             .allocator = allocator,
         };
     }
 
+    /// Release all constants and constant-owned memory.
     pub fn deinit(self: *ConstantStore) void {
         for (self.values.items) |*value| {
             self.deinitConstant(value);
@@ -199,44 +220,53 @@ pub const ConstantStore = struct {
         }
     }
 
+    /// Add a reified constant node.
     pub fn add(self: *ConstantStore, constant: Constant) Error!ValueId {
         const idx: u32 = @intCast(self.values.items.len);
         try self.values.append(self.allocator, constant);
         return @enumFromInt(idx);
     }
 
+    /// Read a constant by id.
     pub fn get(self: *const ConstantStore, id: ValueId) Constant {
         return self.values.items[@intFromEnum(id)];
     }
 };
 
+/// Lookup table from top-level pattern ids to compile-time constants.
 pub const TopLevelBindings = struct {
     bindings: std.AutoHashMap(u32, Binding),
 
+    /// Initialize an empty top-level binding map.
     pub fn init(allocator: std.mem.Allocator) TopLevelBindings {
         return .{
             .bindings = std.AutoHashMap(u32, Binding).init(allocator),
         };
     }
 
+    /// Release top-level binding map memory.
     pub fn deinit(self: *TopLevelBindings) void {
         self.bindings.deinit();
     }
 
+    /// Associate a top-level pattern with a reified constant.
     pub fn bind(self: *TopLevelBindings, pattern_idx: u32, binding: Binding) Error!void {
         try self.bindings.put(pattern_idx, binding);
     }
 
+    /// Look up a reified top-level constant by pattern id.
     pub fn lookup(self: *const TopLevelBindings, pattern_idx: u32) ?Binding {
         return self.bindings.get(pattern_idx);
     }
 };
 
+/// Complete compile-time value graph retained by semantic compilation.
 pub const Store = struct {
     schemas: SchemaStore,
     constants: ConstantStore,
     bindings: TopLevelBindings,
 
+    /// Initialize an empty compile-time value graph.
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
             .schemas = SchemaStore.init(allocator),
@@ -245,16 +275,19 @@ pub const Store = struct {
         };
     }
 
+    /// Release all compile-time value graph state.
     pub fn deinit(self: *Store) void {
         self.bindings.deinit();
         self.constants.deinit();
         self.schemas.deinit();
     }
 
+    /// Associate a top-level pattern with a reified constant.
     pub fn bind(self: *Store, pattern_idx: u32, binding: Binding) Error!void {
         try self.bindings.bind(pattern_idx, binding);
     }
 
+    /// Look up a retained compile-time binding by pattern id.
     pub fn lookupBinding(self: *const Store, pattern_idx: u32) ?Binding {
         return self.bindings.lookup(pattern_idx);
     }

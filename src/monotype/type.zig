@@ -8,7 +8,9 @@ const symbol_mod = @import("symbol");
 pub const TypeId = enum(u32) { _ };
 /// Public value `TypeIds`.
 pub const TypeIds = []const TypeId;
+/// Binding symbol used by monotype function and lambda-set types.
 pub const Symbol = symbol_mod.Symbol;
+/// Dense slice of binding symbols.
 pub const Symbols = []const Symbol;
 
 /// Public enum `Prim`.

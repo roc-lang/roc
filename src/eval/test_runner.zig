@@ -86,16 +86,19 @@ fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c)
 
 const Evaluation = enum { passed, failed };
 
+/// Classification for an `expect` failure.
 pub const FailureType = enum {
     simple_failure,
     eval_error,
 };
 
+/// Additional failure data captured for an `expect`.
 pub const FailureInfo = union(FailureType) {
     simple_failure,
     eval_error: EvalError,
 };
 
+/// Result of executing one source-level `expect`.
 pub const TestResult = struct {
     passed: bool,
     region: base.Region,
@@ -108,6 +111,7 @@ const TestSummary = struct {
     failed: u32,
 };
 
+/// Executes lowered expect procs through the LIR interpreter.
 pub const TestRunner = struct {
     allocator: Allocator,
     env: *ModuleEnv,

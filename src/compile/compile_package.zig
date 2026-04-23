@@ -293,11 +293,13 @@ const ModuleState = struct {
     }
 };
 
+/// Semantic facts retained for a checked module.
 pub const SemanticModuleData = struct {
     env: *ModuleEnv,
     comptime_values: ?*const eval.comptime_value.Store,
 };
 
+/// Owned output from type checking before module state takes retained facts.
 pub const TypeCheckOutput = struct {
     checker: Check,
     comptime_values: ?eval.comptime_value.Store = null,

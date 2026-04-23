@@ -752,22 +752,6 @@ const Lowerer = struct {
         return try self.instantiateOccurrenceTypeRec(ty, &mapping);
     }
 
-    fn instantiateOccurrenceTypedSymbolsWithMapping(
-        self: *Lowerer,
-        values: []const ast.TypedSymbol,
-        mapping: *std.AutoHashMap(TypeVarId, TypeVarId),
-    ) std.mem.Allocator.Error![]ast.TypedSymbol {
-        const out = try self.allocator.alloc(ast.TypedSymbol, values.len);
-        errdefer self.allocator.free(out);
-        for (values, 0..) |value, i| {
-            out[i] = .{
-                .symbol = value.symbol,
-                .ty = try self.instantiateOccurrenceTypeRec(value.ty, mapping),
-            };
-        }
-        return out;
-    }
-
     fn instantiateOccurrenceTypeRec(
         self: *Lowerer,
         ty: TypeVarId,
@@ -915,21 +899,6 @@ const Lowerer = struct {
         defer self.allocator.free(out);
         for (tys_copy, 0..) |inner_ty, i| {
             out[i] = try self.instantiateOccurrenceTypeRec(inner_ty, mapping);
-        }
-        return try self.types.addTypeVarSpan(out);
-    }
-
-    fn snapshotTypeVarSpanWithMapping(
-        self: *Lowerer,
-        tys: []const TypeVarId,
-        mapping: *std.AutoHashMap(TypeVarId, TypeVarId),
-    ) std.mem.Allocator.Error!type_mod.Span(TypeVarId) {
-        if (tys.len == 0) return type_mod.Span(TypeVarId).empty();
-
-        const out = try self.allocator.alloc(TypeVarId, tys.len);
-        defer self.allocator.free(out);
-        for (tys, 0..) |ty, i| {
-            out[i] = try self.snapshotTypeRec(ty, mapping);
         }
         return try self.types.addTypeVarSpan(out);
     }
@@ -1099,17 +1068,6 @@ const Lowerer = struct {
             arg_tys[i] = arg_ty;
         }
         return arg_tys;
-    }
-
-    fn inferCallArgExprs(
-        self: *Lowerer,
-        venv: []const EnvEntry,
-        arg_exprs: []const ast.ExprId,
-    ) std.mem.Allocator.Error!void {
-        for (arg_exprs) |arg| {
-            const arg_ty = try self.inferExpr(venv, arg);
-            self.output.exprs.items[@intFromEnum(arg)].ty = arg_ty;
-        }
     }
 
     fn buildSolvedFunctionType(
@@ -1402,39 +1360,6 @@ const Lowerer = struct {
         }
 
         try self.fn_infer_states.put(symbol, .done);
-    }
-
-    fn requireCallableTypeForSymbol(
-        self: *Lowerer,
-        venv: []const EnvEntry,
-        symbol: Symbol,
-    ) std.mem.Allocator.Error!TypeVarId {
-        if (symbol.isNone()) {
-            debugPanic("lambdasolved.requireCallableTypeForSymbol missing symbol", .{});
-        }
-        if (builtin.mode == .Debug) {
-            if (self.current_def_symbol) |current_def_symbol| {
-                if (symbol == current_def_symbol) {
-                    const entry = self.input.symbols.get(symbol);
-                    std.debug.panic(
-                        "lambdasolved.requireCallableTypeForSymbol unexpectedly resolved current def symbol {s} ({d}) as an exact method target",
-                        .{
-                            if (entry.name.isNone()) "<none>" else self.input.idents.getText(entry.name),
-                            symbol.raw(),
-                        },
-                    );
-                }
-            }
-        }
-        if (self.needsLexicalFnInference(symbol)) {
-            try self.ensureFnInferred(venv, symbol);
-        }
-        if (self.lookupEnv(venv, symbol)) |env_ty| return try self.instantiateGeneralized(env_ty);
-        const def_id = self.def_id_by_symbol.get(symbol) orelse debugPanic(
-            "lambdasolved.requireCallableTypeForSymbol missing def for explicit callable symbol",
-            .{},
-        );
-        return try self.instantiateGeneralized(self.output.getDef(def_id).bind.ty);
     }
 
     fn inferFn(self: *Lowerer, venv: []const EnvEntry, fn_entry: EnvEntry, fn_def: ast.FnDef) std.mem.Allocator.Error!TypeVarId {
@@ -2470,13 +2395,6 @@ const Lowerer = struct {
         };
     }
 
-    fn exprIsFlexibleNumericLiteral(self: *Lowerer, expr_id: ast.ExprId) bool {
-        return switch (self.output.getExpr(expr_id).data) {
-            .int_lit, .dec_lit => true,
-            else => false,
-        };
-    }
-
     fn propagateErasure(self: *Lowerer) std.mem.Allocator.Error!void {
         var top_env: []EnvEntry = &.{};
         defer if (top_env.len != 0) self.allocator.free(top_env);
@@ -2581,10 +2499,28 @@ const Lowerer = struct {
                 if (record_fields.len != field_values.len) {
                     return debugPanic("lambdasolved.propagateExprErasure record field arity mismatch", .{});
                 }
-                for (record_fields, field_values) |record_field, field_value| {
-                    if (record_field.name != field_value.name or record_field.ty != self.output.getExpr(field_value.value).ty) {
-                        return debugPanic("lambdasolved.propagateExprErasure record field type mismatch", .{});
+                const updated_fields = try self.allocator.alloc(type_mod.Field, field_values.len);
+                defer self.allocator.free(updated_fields);
+                var changed = false;
+                for (record_fields, field_values, 0..) |record_field, field_value, i| {
+                    if (record_field.name != field_value.name) {
+                        return debugPanic("lambdasolved.propagateExprErasure record field name mismatch", .{});
                     }
+                    const field_expr_ty = self.output.getExpr(field_value.value).ty;
+                    const updated_ty = try self.overlayErasureTemplate(field_expr_ty, record_field.ty);
+                    if (!self.types.equalIds(updated_ty, field_expr_ty)) {
+                        return debugPanic("lambdasolved.propagateExprErasure record field type mismatch outside erasure overlay", .{});
+                    }
+                    if (!self.types.equalIds(updated_ty, record_field.ty)) changed = true;
+                    updated_fields[i] = .{
+                        .name = record_field.name,
+                        .ty = updated_ty,
+                    };
+                }
+                if (changed) {
+                    expr.ty = try self.types.freshContent(.{ .record = .{
+                        .fields = try self.types.addFields(updated_fields),
+                    } });
                 }
             },
             .access => |access| try self.propagateExprErasure(access.record, venv),
@@ -2743,10 +2679,22 @@ const Lowerer = struct {
                 if (tuple_elems.len != elem_values.len) {
                     return debugPanic("lambdasolved.propagateExprErasure tuple arity mismatch", .{});
                 }
-                for (tuple_elems, elem_values) |tuple_elem, elem_value| {
-                    if (tuple_elem != self.output.getExpr(elem_value).ty) {
-                        return debugPanic("lambdasolved.propagateExprErasure tuple element type mismatch", .{});
+                const updated_elems = try self.allocator.alloc(TypeVarId, elem_values.len);
+                defer self.allocator.free(updated_elems);
+                var changed = false;
+                for (tuple_elems, elem_values, 0..) |tuple_elem, elem_value, i| {
+                    const elem_expr_ty = self.output.getExpr(elem_value).ty;
+                    const updated_ty = try self.overlayErasureTemplate(elem_expr_ty, tuple_elem);
+                    if (!self.types.equalIds(updated_ty, elem_expr_ty)) {
+                        return debugPanic("lambdasolved.propagateExprErasure tuple element type mismatch outside erasure overlay", .{});
                     }
+                    if (!self.types.equalIds(updated_ty, tuple_elem)) changed = true;
+                    updated_elems[i] = updated_ty;
+                }
+                if (changed) {
+                    expr.ty = try self.types.freshContent(.{
+                        .tuple = try self.types.addTypeVarSpan(updated_elems),
+                    });
                 }
             },
             .tag_payload => |tag_payload| try self.propagateExprErasure(tag_payload.tag_union, venv),
@@ -3467,7 +3415,6 @@ const Lowerer = struct {
             },
         }
     }
-
 
     fn lookupDenseIndex(self: *Lowerer, ids: []const ast.DefId, symbol: Symbol) ?usize {
         for (ids, 0..) |def_id, i| {

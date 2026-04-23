@@ -46,6 +46,7 @@ pub const Pending = struct {
     exec_ret_ty: type_mod.TypeId,
 };
 
+/// Source definition carried by a queued callable specialization.
 pub const SourceDef = union(enum) {
     fn_: solved.Ast.FnDef,
     hosted_fn: solved.Ast.HostedFnDef,
@@ -165,6 +166,7 @@ pub fn buildFEnv(allocator: std.mem.Allocator, input: *const solved.Lower.Result
     return try out.toOwnedSlice(allocator);
 }
 
+/// Release a function-environment table built by `buildFEnv`.
 pub fn deinitFEnv(allocator: std.mem.Allocator, fenv: []const FEnvEntry) void {
     for (fenv) |entry| {
         if (entry.captures.len != 0) allocator.free(entry.captures);
@@ -244,6 +246,7 @@ pub fn specializeFnWithExecArgs(
     return specialized_symbol;
 }
 
+/// Queue or reuse a specialization for a hosted source function.
 pub fn specializeHostedWithExecArgs(
     queue: *Queue,
     solved_types: *const solved.Type.Store,

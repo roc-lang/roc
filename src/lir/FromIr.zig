@@ -757,10 +757,6 @@ const ProcLowerer = struct {
         return layout_val.tag == .list or layout_val.tag == .list_of_zst;
     }
 
-    fn isBoxLayout(layout_val: layout_mod.Layout) bool {
-        return layout_val.tag == .box or layout_val.tag == .box_of_zst;
-    }
-
     fn structFieldLayoutRef(
         self: *ProcLowerer,
         ref: ir.Layout.Ref,

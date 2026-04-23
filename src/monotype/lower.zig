@@ -3253,41 +3253,6 @@ pub const Lowerer = struct {
         return try self.lowerAnonymousClosure(module_idx, type_scope, env, source_expr_idx, closure_ty, lambda_expr.e_lambda.args, lambda_expr.e_lambda.body);
     }
 
-    fn lowerIfExpr(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeScope,
-        env: BindingEnv,
-        if_expr: anytype,
-    ) std.mem.Allocator.Error!@FieldType(ast.Expr.Data, "if_") {
-        const typed_cir_module = self.ctx.typedCirModule(module_idx);
-        const branch_ids = typed_cir_module.sliceIfBranches(if_expr.branches);
-        if (branch_ids.len == 0) debugPanic("monotype invariant violated: if expression missing branches", .{});
-
-        var else_body = try self.lowerExpr(module_idx, type_scope, env, if_expr.final_else);
-        var idx = branch_ids.len;
-        while (idx > 1) {
-            idx -= 1;
-            const branch = typed_cir_module.getIfBranch(branch_ids[idx]);
-            else_body = try self.program.store.addExpr(.{
-                .ty = self.program.store.getExpr(else_body).ty,
-                .data = .{ .if_ = .{
-                    .cond = try self.lowerExpr(module_idx, type_scope, env, branch.cond),
-                    .then_body = try self.lowerExpr(module_idx, type_scope, env, branch.body),
-                    .else_body = else_body,
-                } },
-            });
-        }
-
-        const branch = typed_cir_module.getIfBranch(branch_ids[0]);
-
-        return .{
-            .cond = try self.lowerExpr(module_idx, type_scope, env, branch.cond),
-            .then_body = try self.lowerExpr(module_idx, type_scope, env, branch.body),
-            .else_body = else_body,
-        };
-    }
-
     fn lowerMatchExprData(
         self: *Lowerer,
         module_idx: u32,
@@ -9368,18 +9333,6 @@ pub const Lowerer = struct {
                 .ret = ret_id,
             },
         };
-    }
-
-    fn stampCallableTarget(
-        self: *Lowerer,
-        _: u32,
-        fn_ty: type_mod.TypeId,
-        target_symbol: Symbol,
-    ) std.mem.Allocator.Error!type_mod.TypeId {
-        const fn_shape = self.requireFunctionType(fn_ty);
-        return try self.ctx.types.addType(
-            try self.buildFunctionType(fn_shape.args, fn_shape.ret, &.{target_symbol}),
-        );
     }
 
     fn requireFunctionType(self: *Lowerer, fn_ty: type_mod.TypeId) @FieldType(type_mod.Content, "func") {

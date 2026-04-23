@@ -95,6 +95,8 @@ pub fn compileProgram(
         var lowered_mut = wasm_lowered;
         lowered_mut.deinit();
     }
+    try expectErasedNodeInvariantAfterLowering(source, imports, &lowered);
+    try expectErasedNodeInvariantAfterLowering(source, imports, &wasm_lowered);
 
     return .{
         .resources = resources,
@@ -133,6 +135,8 @@ pub fn compileInspectedProgram(
         var lowered_mut = wasm_lowered;
         lowered_mut.deinit();
     }
+    try expectErasedNodeInvariantAfterLowering(source, imports, &lowered);
+    try expectErasedNodeInvariantAfterLowering(source, imports, &wasm_lowered);
 
     return .{
         .resources = resources,
@@ -171,6 +175,63 @@ pub fn lowerTypedCIRToLir(
     module_envs: []const *const ModuleEnv,
 ) !LoweredProgram {
     return pipeline.lowerTypedCIRToLir(allocator, typed_cir_modules, module_envs);
+}
+
+/// Counts source-level `Box.box` calls across the primary eval source and imports.
+pub fn countSourceBoxBoxCalls(source: []const u8, imports: []const ModuleSource) usize {
+    var count = countNeedle(source, "Box.box");
+    for (imports) |import| {
+        count += countNeedle(import.source, "Box.box");
+    }
+    return count;
+}
+
+/// Counts erased call nodes in a lowered eval program.
+pub fn countLoweredErasedNodes(lowered: *const LoweredProgram) usize {
+    var count: usize = 0;
+    for (lowered.lir_result.store.cf_stmts.items) |stmt| {
+        switch (stmt) {
+            .assign_call_erased => count += 1,
+            else => {},
+        }
+    }
+    return count;
+}
+
+/// Enforces that eval lowering only emits erased nodes for sources that call `Box.box`.
+pub fn expectErasedNodeInvariantAfterLowering(
+    source: []const u8,
+    imports: []const ModuleSource,
+    lowered: *const LoweredProgram,
+) !void {
+    const box_box_calls = countSourceBoxBoxCalls(source, imports);
+    const erased_nodes = countLoweredErasedNodes(lowered);
+
+    if (box_box_calls == 0 and erased_nodes != 0) {
+        std.debug.print(
+            "eval lowering erased-node invariant failed: source has no Box.box calls but lowered program has {d} erased nodes\n",
+            .{erased_nodes},
+        );
+        return error.UnexpectedErasedNodesWithoutBoxBox;
+    }
+
+    if (box_box_calls > 0 and erased_nodes == 0) {
+        std.debug.print(
+            "eval lowering erased-node invariant failed: source has {d} Box.box calls but lowered program has no erased nodes\n",
+            .{box_box_calls},
+        );
+        return error.ExpectedErasedNodesForBoxBox;
+    }
+}
+
+fn countNeedle(haystack: []const u8, needle: []const u8) usize {
+    var count: usize = 0;
+    var cursor: usize = 0;
+    while (std.mem.indexOfPos(u8, haystack, cursor, needle)) |idx| {
+        count += 1;
+        cursor = idx + needle.len;
+    }
+    return count;
 }
 
 /// Public function `mainProcArgLayouts`.
@@ -398,8 +459,7 @@ pub fn wasmEvaluatorInspectedStr(
 }
 
 test "dev evaluator repro: F32.to_str" {
-    var compiled = try compileInspectedExpr(
-        std.testing.allocator,
+    var compiled = try compileInspectedExpr(std.testing.allocator,
         \\{
         \\a : F32
         \\a = 3.14.F32

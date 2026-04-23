@@ -203,5 +203,4 @@ pub const ExecPlan = struct {
             self.store.allocator.free(self.entrypoint_wrappers);
         }
     }
-
 };

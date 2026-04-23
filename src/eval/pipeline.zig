@@ -113,7 +113,7 @@ pub const ParsedResources = struct {
     }
 };
 
-/// Public struct `LoweredProgram`.
+/// LIR program plus root proc selected for interpreter execution.
 pub const LoweredProgram = struct {
     lir_result: FromIr.Result,
     main_proc: lir.LIR.LirProcSpecId,
@@ -124,6 +124,7 @@ pub const LoweredProgram = struct {
     }
 };
 
+/// Compile-time top-level binding lowered to a proc and reification schema.
 pub const SemanticEvalTopLevelRoot = struct {
     def_idx: CIR.Def.Idx,
     pattern_idx: CIR.Pattern.Idx,
@@ -134,12 +135,14 @@ pub const SemanticEvalTopLevelRoot = struct {
     init_eval_index: ?u32 = null,
 };
 
+/// Source-level expect lowered to an executable proc root.
 pub const SemanticEvalExpectRoot = struct {
     statement_idx: CIR.Statement.Idx,
     expr_idx: CIR.Expr.Idx,
     proc_id: lir.LIR.LirProcSpecId,
 };
 
+/// Shared LIR program plus schema metadata for semantic evaluation.
 pub const SemanticEvalProgram = struct {
     lowered: LoweredProgram,
     schemas: comptime_value.SchemaStore,
@@ -542,6 +545,7 @@ pub fn lowerTypedCIRToLirForTarget(
     };
 }
 
+/// Lower typed CIR to the default-target semantic-eval LIR program.
 pub fn lowerTypedCIRToSemanticEvalProgram(
     allocator: std.mem.Allocator,
     typed_cir_modules: *check.TypedCIR.Modules,
@@ -763,6 +767,7 @@ fn synthesizeSemanticEvalComptimeInitProc(
     };
 }
 
+/// Lower typed CIR to a target-specific semantic-eval LIR program.
 pub fn lowerTypedCIRToSemanticEvalProgramForTarget(
     allocator: std.mem.Allocator,
     typed_cir_modules: *check.TypedCIR.Modules,

@@ -78,16 +78,6 @@ const Planner = struct {
         exact_fn_symbol: ?Symbol = null,
     };
 
-    const CallSpecialization = struct {
-        args_tys: []type_mod.TypeId,
-        ret_ty: type_mod.TypeId,
-        capture_ty: ?type_mod.TypeId,
-
-        fn deinit(self: *const @This(), allocator: std.mem.Allocator) void {
-            if (self.args_tys.len != 0) allocator.free(self.args_tys);
-        }
-    };
-
     const TopLevelValueSource = union(enum) {
         fn_: solved.Ast.FnDef,
         hosted_fn: solved.Ast.HostedFnDef,
@@ -346,29 +336,6 @@ const Planner = struct {
         var visited = std.AutoHashMap(type_mod.TypeId, void).init(self.allocator);
         defer visited.deinit();
         return self.executableTypeHasLayoutAbstractLeafVisited(ty, &visited) catch true;
-    }
-
-    fn lowerRequestedExecutableReturnTypeFromSource(
-        self: *Planner,
-        solved_types: *solved.Type.Store,
-        mono_cache: *lower_type.MonoCache,
-        source_ty: TypeVarId,
-        repr_mode: specializations.Pending.ReprMode,
-        comptime context: []const u8,
-    ) std.mem.Allocator.Error!type_mod.TypeId {
-        const lowered = switch (repr_mode) {
-            .natural => try self.lowerExecutableTypeFromSolvedIn(
-                solved_types,
-                mono_cache,
-                source_ty,
-            ),
-            .erased_boundary => try self.lowerErasedBoundaryExecutableTypeIn(
-                solved_types,
-                mono_cache,
-                source_ty,
-            ),
-        };
-        return self.requireConcreteExecutableType(lowered, context);
     }
 
     const PlannedExecBinding = struct {
@@ -1992,21 +1959,6 @@ const Planner = struct {
         }
     }
 
-    fn lowerErasedBoundaryNominalArgs(
-        self: *Planner,
-        solved_types: *solved.Type.Store,
-        mono_cache: *lower_type.MonoCache,
-        args_span: solved.Type.Span(TypeVarId),
-    ) std.mem.Allocator.Error![]const type_mod.TypeId {
-        const args = solved_types.sliceTypeVarSpan(args_span);
-        const lowered_args = try self.allocator.alloc(type_mod.TypeId, args.len);
-        defer self.allocator.free(lowered_args);
-        for (args, 0..) |arg, i| {
-            lowered_args[i] = try self.lowerErasedBoundaryExecutableTypeIn(solved_types, mono_cache, arg);
-        }
-        return try self.types.dupeTypeIds(lowered_args);
-    }
-
     fn lowerErasedBoundaryExecutableTypeIn(
         self: *Planner,
         solved_types: *solved.Type.Store,
@@ -2020,20 +1972,6 @@ const Planner = struct {
             ty,
             &self.input.symbols,
         ));
-    }
-
-    fn lowerExecutableCaptureTypeForLambdaMember(
-        self: *Planner,
-        solved_types: *solved.Type.Store,
-        mono_cache: *lower_type.MonoCache,
-        current_fn_ty: TypeVarId,
-        symbol: Symbol,
-    ) std.mem.Allocator.Error!?type_mod.TypeId {
-        const captures = solved_types.requireLambdaCaptures(current_fn_ty, symbol);
-        if (captures.len == 0) return null;
-        return try self.internExecutableType(
-            try self.lowerCaptureRecordTypeFromSolved(solved_types, mono_cache, captures),
-        );
     }
 
     fn boxBoundaryBuiltinOp(self: *const Planner, requested_name: Symbol) ?base.LowLevel {
@@ -2481,18 +2419,6 @@ const Planner = struct {
         return try self.internExecutableType(try self.types.internResolved(.{
             .record = .{ .fields = try self.types.dupeFields(record_fields) },
         }));
-    }
-
-    fn executableCallableSigEqual(
-        self: *Planner,
-        left: type_mod.CallableSig,
-        right: type_mod.CallableSig,
-    ) bool {
-        if (left.args.len != right.args.len) return false;
-        for (left.args, right.args) |left_arg, right_arg| {
-            if (!self.types.equalIds(left_arg, right_arg)) return false;
-        }
-        return self.types.equalIds(left.ret, right.ret);
     }
 
     fn executableTagArgsEqual(
@@ -3180,16 +3106,14 @@ const Planner = struct {
                 "<none>";
             const body_arg0_summary = if (body_expr_debug.data == .low_level and
                 self.input.store.sliceExprSpan(body_expr_debug.data.low_level.args).len != 0)
-                blk_arg0: {
-                    const arg0_ty = self.instantiatedSourceTypeForExpr(
-                        inst,
-                        venv,
-                        self.input.store.sliceExprSpan(body_expr_debug.data.low_level.args)[0],
-                    ) catch break :blk_arg0 null;
-                    break :blk_arg0 self.debugSolvedTypeSummary(inst.types, arg0_ty);
-                }
-            else
-                null;
+            blk_arg0: {
+                const arg0_ty = self.instantiatedSourceTypeForExpr(
+                    inst,
+                    venv,
+                    self.input.store.sliceExprSpan(body_expr_debug.data.low_level.args)[0],
+                ) catch break :blk_arg0 null;
+                break :blk_arg0 self.debugSolvedTypeSummary(inst.types, arg0_ty);
+            } else null;
             defer if (body_arg0_summary) |summary| summary.deinit(self.allocator);
             debugPanicFmt(
                 "lambdamono.exec_plan.{s} abstract executable binding bind={s} body_tag={s} body_op={s} body_arg0={s} source={s} body_source={s} body_exec={s}",
@@ -3591,38 +3515,6 @@ const Planner = struct {
         ty: TypeVarId,
     ) std.mem.Allocator.Error!TypeVarId {
         return try self.cloneTypeFromStoreRec(inst.types, source_types, mapping, ty);
-    }
-
-    fn cloneEnvIntoInstFromStoreWithMapping(
-        self: *Planner,
-        inst: *InstScope,
-        mono_cache: *lower_type.MonoCache,
-        source_types: *const solved.Type.Store,
-        mapping: *std.AutoHashMap(TypeVarId, TypeVarId),
-        venv: []const EnvEntry,
-    ) std.mem.Allocator.Error![]EnvEntry {
-        const out = try self.allocator.alloc(EnvEntry, venv.len);
-        errdefer self.allocator.free(out);
-        for (venv, 0..) |entry, i| {
-            const cloned_ty = try self.cloneTypeIntoInstFromStoreWithMapping(inst, source_types, mapping, entry.ty);
-            out[i] = .{
-                .symbol = entry.symbol,
-                .ty = cloned_ty,
-                .exec_ty = try self.currentEnvEntryExecutableType(
-                    inst.types,
-                    mono_cache,
-                    .{
-                        .symbol = entry.symbol,
-                        .ty = cloned_ty,
-                        .exec_ty = entry.exec_ty,
-                        .exact_fn_symbol = entry.exact_fn_symbol,
-                    },
-                    "cloneEnvIntoInstFromStoreWithMapping",
-                ),
-                .exact_fn_symbol = entry.exact_fn_symbol,
-            };
-        }
-        return out;
     }
 
     fn cloneTypeFromStoreRec(
@@ -4370,14 +4262,14 @@ const Planner = struct {
                             body = try self.bindCaptureLets(captures_symbol, captures_ty.?, capture_env, body);
                             break :blk .{
                                 .args = blk_args: {
-                                const lowered_args = try self.allocator.alloc(ast.TypedSymbol, fn_args.len + 1);
-                                defer self.allocator.free(lowered_args);
-                                for (fn_args, proc_arg_exec_tys, 0..) |arg, exec_ty, i| {
-                                    lowered_args[i] = .{
-                                        .ty = exec_ty,
-                                        .symbol = arg.symbol,
-                                    };
-                                }
+                                    const lowered_args = try self.allocator.alloc(ast.TypedSymbol, fn_args.len + 1);
+                                    defer self.allocator.free(lowered_args);
+                                    for (fn_args, proc_arg_exec_tys, 0..) |arg, exec_ty, i| {
+                                        lowered_args[i] = .{
+                                            .ty = exec_ty,
+                                            .symbol = arg.symbol,
+                                        };
+                                    }
                                     lowered_args[fn_args.len] = .{
                                         .ty = captures_ty.?,
                                         .symbol = captures_symbol,
@@ -4389,14 +4281,14 @@ const Planner = struct {
                         }
                         break :blk .{
                             .args = blk_args: {
-                            const lowered_args = try self.allocator.alloc(ast.TypedSymbol, fn_args.len);
-                            defer self.allocator.free(lowered_args);
-                            for (fn_args, proc_arg_exec_tys, 0..) |arg, exec_ty, i| {
-                                lowered_args[i] = .{
-                                    .ty = exec_ty,
-                                    .symbol = arg.symbol,
-                                };
-                            }
+                                const lowered_args = try self.allocator.alloc(ast.TypedSymbol, fn_args.len);
+                                defer self.allocator.free(lowered_args);
+                                for (fn_args, proc_arg_exec_tys, 0..) |arg, exec_ty, i| {
+                                    lowered_args[i] = .{
+                                        .ty = exec_ty,
+                                        .symbol = arg.symbol,
+                                    };
+                                }
                                 break :blk_args try self.output.addTypedSymbolSpan(lowered_args);
                             },
                             .body = body,
@@ -5282,21 +5174,19 @@ const Planner = struct {
                 }
 
                 const first_branch_ty = self.output.getExpr(lowered_branches.items[0].body).ty;
-                const result_ty = if (concrete_result_ty) |concrete|
-                    blk_result: {
-                        var use_branch_ty = self.executableTypesHaveErasedCallableShapeMismatch(first_branch_ty, concrete);
-                        for (lowered_branches.items[1..]) |branch| {
-                            const branch_ty = self.output.getExpr(branch.body).ty;
-                            if (self.executableTypesHaveErasedCallableShapeMismatch(branch_ty, concrete)) {
-                                use_branch_ty = true;
-                            }
-                            if (use_branch_ty and !self.types.equalIds(first_branch_ty, branch_ty)) {
-                                debugPanic("lambdamono.exec_plan.planExpr(when) branch erased callable executable types disagree");
-                            }
+                const result_ty = if (concrete_result_ty) |concrete| blk_result: {
+                    var use_branch_ty = self.executableTypesHaveErasedCallableShapeMismatch(first_branch_ty, concrete);
+                    for (lowered_branches.items[1..]) |branch| {
+                        const branch_ty = self.output.getExpr(branch.body).ty;
+                        if (self.executableTypesHaveErasedCallableShapeMismatch(branch_ty, concrete)) {
+                            use_branch_ty = true;
                         }
-                        break :blk_result if (use_branch_ty) first_branch_ty else concrete;
+                        if (use_branch_ty and !self.types.equalIds(first_branch_ty, branch_ty)) {
+                            debugPanic("lambdamono.exec_plan.planExpr(when) branch erased callable executable types disagree");
+                        }
                     }
-                else blk_result: {
+                    break :blk_result if (use_branch_ty) first_branch_ty else concrete;
+                } else blk_result: {
                     for (lowered_branches.items[1..]) |branch| {
                         const branch_ty = self.output.getExpr(branch.body).ty;
                         if (!self.types.equalIds(first_branch_ty, branch_ty)) {
@@ -5370,19 +5260,17 @@ const Planner = struct {
                 var else_body = else_lowered.expr;
                 const then_ty = self.output.getExpr(then_body).ty;
                 const else_ty = self.output.getExpr(else_body).ty;
-                const result_ty = if (concrete_result_ty) |concrete|
-                    blk_result: {
-                        if (self.executableTypesHaveErasedCallableShapeMismatch(then_ty, concrete) or
-                            self.executableTypesHaveErasedCallableShapeMismatch(else_ty, concrete))
-                        {
-                            if (!self.types.equalIds(then_ty, else_ty)) {
-                                debugPanic("lambdamono.exec_plan.planExpr(if_) branch erased callable executable types disagree");
-                            }
-                            break :blk_result then_ty;
+                const result_ty = if (concrete_result_ty) |concrete| blk_result: {
+                    if (self.executableTypesHaveErasedCallableShapeMismatch(then_ty, concrete) or
+                        self.executableTypesHaveErasedCallableShapeMismatch(else_ty, concrete))
+                    {
+                        if (!self.types.equalIds(then_ty, else_ty)) {
+                            debugPanic("lambdamono.exec_plan.planExpr(if_) branch erased callable executable types disagree");
                         }
-                        break :blk_result concrete;
+                        break :blk_result then_ty;
                     }
-                else blk_result: {
+                    break :blk_result concrete;
+                } else blk_result: {
                     if (!self.types.equalIds(then_ty, else_ty)) {
                         debugPanic("lambdamono.exec_plan.planExpr(if_) branch executable types disagree without an explicit result type");
                     }
@@ -6526,25 +6414,6 @@ const Planner = struct {
                 });
             },
         };
-    }
-
-    fn requireExecutableType(
-        self: *Planner,
-        actual_ty: type_mod.TypeId,
-        expected_ty: type_mod.TypeId,
-        comptime context: []const u8,
-    ) void {
-        if (self.types.equalIds(actual_ty, expected_ty)) return;
-        debugPanicFmt(
-            "lambdamono.exec_plan.{s} executable type mismatch actual={s}#{d} expected={s}#{d}",
-            .{
-                context,
-                @tagName(self.types.getTypePreservingNominal(actual_ty)),
-                @intFromEnum(actual_ty),
-                @tagName(self.types.getTypePreservingNominal(expected_ty)),
-                @intFromEnum(expected_ty),
-            },
-        );
     }
 
     fn executableTypesHaveErasedCallableShapeMismatch(
@@ -7743,26 +7612,6 @@ const Planner = struct {
             }
         }
         debugPanic("lambdamono.exec_plan.executableCaptureTypeForLambdaMember missing lambda tag in executable callable type");
-    }
-
-    fn collectSolvedLambdaMembers(
-        self: *Planner,
-        solved_types: *solved.Type.Store,
-        requested_ty: TypeVarId,
-    ) std.mem.Allocator.Error![]LambdaMemberInfo {
-        const lambdas = switch (solved_types.lambdaRepr(requested_ty)) {
-            .erased => debugPanic("lambdamono.exec_plan.collectLsetLambdaMembers expected concrete lambda-set"),
-            .lset => |lset| lset,
-        };
-        const out = try self.allocator.alloc(LambdaMemberInfo, lambdas.len);
-        for (lambdas, 0..) |lambda, i| {
-            out[i] = .{
-                .symbol = lambda.symbol,
-                .discriminant = @intCast(i),
-                .capture_ty = null,
-            };
-        }
-        return out;
     }
 
     fn collectExecutableLambdaMembers(
@@ -9550,28 +9399,6 @@ const Planner = struct {
         additions: []EnvEntry,
     };
 
-    fn specializePat(
-        self: *Planner,
-        inst: *InstScope,
-        mono_cache: *lower_type.MonoCache,
-        pat_id: solved.Ast.PatId,
-    ) std.mem.Allocator.Error!PatResult {
-        const pat = self.input.store.getPat(pat_id);
-        const ty = try self.cloneInstType(inst, pat.ty);
-        return try self.specializePatAtSourceTy(inst, mono_cache, pat, ty);
-    }
-
-    fn specializePatAtSourceTy(
-        self: *Planner,
-        inst: *InstScope,
-        mono_cache: *lower_type.MonoCache,
-        pat: solved.Ast.Pat,
-        ty: TypeVarId,
-    ) std.mem.Allocator.Error!PatResult {
-        const lowered_ty = try self.lowerPatternTypeAtSourceTy(inst, mono_cache, ty);
-        return try self.specializePatAtSourceAndExecutableTy(inst, mono_cache, pat, ty, lowered_ty);
-    }
-
     fn collectPatBindingsAtSourceTy(
         self: *Planner,
         inst: *InstScope,
@@ -9941,22 +9768,6 @@ const Planner = struct {
                 .env = try self.cloneEnv(venv),
             },
         };
-    }
-
-    fn specializeExprSpan(
-        self: *Planner,
-        inst: *InstScope,
-        mono_cache: *lower_type.MonoCache,
-        venv: []const EnvEntry,
-        span: solved.Ast.Span(solved.Ast.ExprId),
-    ) std.mem.Allocator.Error!ast.Span(ast.ExprId) {
-        const source = self.input.store.sliceExprSpan(span);
-        const out = try self.allocator.alloc(ast.ExprId, source.len);
-        defer self.allocator.free(out);
-        for (source, 0..) |expr_id, i| {
-            out[i] = try self.planExpr(inst, mono_cache, venv, expr_id);
-        }
-        return try self.output.addExprSpan(out);
     }
 
     fn cloneInstType(self: *Planner, inst: *InstScope, ty: TypeVarId) std.mem.Allocator.Error!TypeVarId {
@@ -10522,28 +10333,6 @@ const Planner = struct {
             if (entry.symbol == symbol) return entry;
         }
         return null;
-    }
-
-    fn assertSortedFields(idents: *const base.Ident.Store, fields: []const type_mod.Field) void {
-        if (fields.len <= 1) return;
-
-        var prev = fields[0];
-        for (fields[1..]) |field| {
-            switch (std.mem.order(
-                u8,
-                idents.getText(prev.name),
-                idents.getText(field.name),
-            )) {
-                .lt => prev = field,
-                .eq => debugPanicFmt("lambdamono lowered duplicate record field {s}", .{
-                    idents.getText(field.name),
-                }),
-                .gt => debugPanicFmt("lambdamono lowered record fields were not pre-sorted: {s} then {s}", .{
-                    idents.getText(prev.name),
-                    idents.getText(field.name),
-                }),
-            }
-        }
     }
 
     fn lookupTopLevelValueType(self: *const Planner, symbol: Symbol) ?type_mod.TypeId {

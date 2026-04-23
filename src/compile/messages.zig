@@ -38,6 +38,7 @@ pub const DiscoveredExternalImport = struct {
     import_name: []const u8,
 };
 
+/// Ready imported module data passed into canonicalization.
 pub const CanonicalizeImport = struct {
     /// The direct import name for canonicalization lookup
     import_name: []const u8,

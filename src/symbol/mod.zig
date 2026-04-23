@@ -36,6 +36,7 @@ pub const AttachedMethodKey = struct {
 /// Public value `AttachedMethodIndex`.
 pub const AttachedMethodIndex = std.AutoHashMap(AttachedMethodKey, Symbol);
 
+/// Interned owner idents for builtin attached-method lookup.
 pub const PrimitiveMethodOwnerIdents = extern struct {
     bool: base.Ident.Idx,
     str: base.Ident.Idx,

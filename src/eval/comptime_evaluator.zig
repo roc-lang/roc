@@ -30,7 +30,6 @@ const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 const ProblemStore = check_mod.problem.Store;
 
-const EvalError = eval_mod.Interpreter.Error;
 const CrashContext = eval_mod.CrashContext;
 const BuiltinTypes = eval_mod.BuiltinTypes;
 
@@ -89,11 +88,13 @@ fn comptimeRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv
     evaluator.crash.recordCrash(msg_slice) catch @panic("failed to record comptime crash");
 }
 
+/// Summary of compile-time top-level evaluation.
 pub const EvalSummary = struct {
     evaluated: u32,
     crashed: u32,
 };
 
+/// Drives schema-based compile-time evaluation through the LIR interpreter.
 pub const ComptimeEvaluator = struct {
     allocator: Allocator,
     env: *ModuleEnv,

@@ -766,8 +766,3 @@ fn debugPanic(comptime msg: []const u8) noreturn {
     @branchHint(.cold);
     std.debug.panic("{s}", .{msg});
 }
-
-fn debugPanicFmt(comptime fmt: []const u8, args: anytype) noreturn {
-    @branchHint(.cold);
-    std.debug.panic(fmt, args);
-}

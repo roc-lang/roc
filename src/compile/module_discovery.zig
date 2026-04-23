@@ -4,7 +4,6 @@
 //! to ensure consistent behavior when discovering and loading sibling modules.
 
 const std = @import("std");
-const base = @import("base");
 const parse = @import("parse");
 
 const Allocator = std.mem.Allocator;
