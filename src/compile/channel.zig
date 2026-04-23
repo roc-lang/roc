@@ -145,30 +145,36 @@ pub fn Channel(comptime T: type) type {
         /// Returns error.Timeout if the operation times out.
         /// Returns error.Closed if the channel has been closed.
         pub fn sendTimeout(self: *Self, item: T, timeout_ns: u64) ChannelError!void {
-            self.mutex.lockUncancelable(self.std_io);
-            defer self.mutex.unlock(self.std_io);
-
             const deadline_ns = std.Io.Timestamp.now(self.std_io, .real).nanoseconds + @as(i96, @intCast(timeout_ns));
 
-            // Wait while channel is full and not closed
-            while (self.count >= self.buffer.len and !self.closed) {
+            while (true) {
+                self.mutex.lockUncancelable(self.std_io);
+
+                if (self.count < self.buffer.len or self.closed) break;
+
                 const now_ns = std.Io.Timestamp.now(self.std_io, .real).nanoseconds;
                 if (now_ns >= deadline_ns) {
+                    self.mutex.unlock(self.std_io);
                     return error.Timeout;
                 }
-                self.not_full.waitUncancelable(self.std_io, &self.mutex);
-            }
 
-            if (self.closed) {
-                return error.Closed;
-            }
+                self.mutex.unlock(self.std_io);
 
-            // Add item to buffer
+                // Sleep for up to 1ms, waking early if deadline arrives.
+                // std.Io.Condition has no waitTimeout; polling is the simplest
+                // correct approach for the coordinator's coarse timeouts.
+                if (comptime !threading.is_freestanding) {
+                    const remaining: i96 = deadline_ns - now_ns;
+                    std.Io.sleep(self.std_io, .{ .nanoseconds = @min(remaining, 1_000_000) }, .real) catch {};
+                }
+            }
+            defer self.mutex.unlock(self.std_io);
+
+            if (self.closed) return error.Closed;
+
             self.buffer[self.write_pos] = item;
             self.write_pos = (self.write_pos + 1) % self.buffer.len;
             self.count += 1;
-
-            // Signal that channel is non-empty
             self.not_empty.signal(self.std_io);
         }
 
@@ -194,25 +200,29 @@ pub fn Channel(comptime T: type) type {
         /// Receive an item with a timeout (in nanoseconds).
         /// Returns null if the operation times out or channel is closed and empty.
         pub fn recvTimeout(self: *Self, timeout_ns: u64) ?T {
-            self.mutex.lockUncancelable(self.std_io);
-            defer self.mutex.unlock(self.std_io);
-
             const deadline_ns = std.Io.Timestamp.now(self.std_io, .real).nanoseconds + @as(i96, @intCast(timeout_ns));
 
-            // Wait while channel is empty and not closed
-            while (self.count == 0 and !self.closed) {
+            while (true) {
+                self.mutex.lockUncancelable(self.std_io);
+
+                if (self.count > 0 or self.closed) break;
+
                 const now_ns = std.Io.Timestamp.now(self.std_io, .real).nanoseconds;
                 if (now_ns >= deadline_ns) {
-                    return null; // Timeout
+                    self.mutex.unlock(self.std_io);
+                    return null;
                 }
-                self.not_empty.waitUncancelable(self.std_io, &self.mutex);
-            }
 
-            // If empty and closed, return null
-            if (self.count == 0) {
-                return null;
-            }
+                self.mutex.unlock(self.std_io);
 
+                if (comptime !threading.is_freestanding) {
+                    const remaining: i96 = deadline_ns - now_ns;
+                    std.Io.sleep(self.std_io, .{ .nanoseconds = @min(remaining, 1_000_000) }, .real) catch {};
+                }
+            }
+            defer self.mutex.unlock(self.std_io);
+
+            if (self.count == 0) return null;
             return self.recvLocked();
         }
 
