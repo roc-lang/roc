@@ -101,6 +101,7 @@ pub const Expr = union(enum) {
     get_struct_field: struct {
         record: Var,
         field_index: u16,
+        field_bridge_plan: BridgePlanId,
     },
     bridge: struct {
         value: Var,

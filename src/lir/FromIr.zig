@@ -1697,19 +1697,24 @@ const ProcLowerer = struct {
                 const logical_field_ref = self.structFieldLayoutRef(self.localLayoutRef(source), field.field_index);
                 const logical_field_layout = try self.parent.lowerLayoutId(logical_field_ref);
                 const physical_field_layout = self.lowerPhysicalStructFieldLayout(self.localLayout(source), field.field_index);
-                const access = if (physical_field_layout == logical_field_layout) blk_access: {
-                    self.requireLocalMatchesShape(target, logical_field_layout, logical_field_ref, "get_struct_field");
+                const can_assign_directly = physical_field_layout == logical_field_layout and
+                    self.localMatchesShape(target, logical_field_layout, logical_field_ref);
+                const access = if (can_assign_directly) blk_access: {
                     break :blk_access try self.addAssignRef(target, .fresh, .{ .field = .{
                         .source = source,
                         .field_idx = field.field_index,
                     } }, next);
                 } else blk_access: {
-                    self.requireLocalMatchesShape(target, logical_field_layout, logical_field_ref, "get_struct_field");
                     const raw_field = try self.freshLocalWithLayoutAndRef(
                         physical_field_layout,
                         logical_field_ref,
                     );
-                    const bridged = try self.lowerExplicitBridgeIntoLocal(raw_field, target, next);
+                    const bridged = try self.lowerPlannedBridgeIntoLocal(
+                        raw_field,
+                        target,
+                        next,
+                        field.field_bridge_plan,
+                    );
                     break :blk_access try self.addAssignRef(raw_field, .fresh, .{ .field = .{
                         .source = source,
                         .field_idx = field.field_index,

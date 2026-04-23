@@ -150,6 +150,7 @@ const Lowerer = struct {
     }
 
     fn deinit(self: *Lowerer) void {
+        if (self.current_call_context) |ctx| self.freeDebugCallContext(ctx);
         self.def_id_by_symbol.deinit();
         self.lifted_fn_capture_spans.deinit();
         self.exact_callable_aliases.deinit();
@@ -1084,11 +1085,11 @@ const Lowerer = struct {
     }
 
     fn freeDebugCallContext(self: *Lowerer, ctx: DebugCallContext) void {
-        if (std.mem.eql(u8, ctx.func_expr, "<none>") or std.mem.eql(u8, ctx.func_expr, "<pending>")) {} else self.allocator.free(ctx.func_expr);
-        if (std.mem.eql(u8, ctx.arg_expr, "<none>") or std.mem.eql(u8, ctx.arg_expr, "<pending>")) {} else self.allocator.free(ctx.arg_expr);
-        if (std.mem.eql(u8, ctx.func_ty, "<none>") or std.mem.eql(u8, ctx.func_ty, "<pending>")) {} else self.allocator.free(ctx.func_ty);
-        if (std.mem.eql(u8, ctx.arg_ty, "<none>") or std.mem.eql(u8, ctx.arg_ty, "<pending>")) {} else self.allocator.free(ctx.arg_ty);
-        if (std.mem.eql(u8, ctx.target_ty, "<none>") or std.mem.eql(u8, ctx.target_ty, "<pending>")) {} else self.allocator.free(ctx.target_ty);
+        self.allocator.free(ctx.func_expr);
+        self.allocator.free(ctx.arg_expr);
+        self.allocator.free(ctx.func_ty);
+        self.allocator.free(ctx.arg_ty);
+        self.allocator.free(ctx.target_ty);
     }
 
     fn restoreCallDebugContext(self: *Lowerer, previous: ?DebugCallContext) void {
@@ -1125,7 +1126,6 @@ const Lowerer = struct {
         } else DebugTypeText{ .text = "<none>", .owned = false };
         defer if (arg_ty_summary.owned) self.allocator.free(arg_ty_summary.text);
 
-        if (self.current_call_context) |ctx| self.freeDebugCallContext(ctx);
         self.current_call_context = .{
             .func_expr = try self.allocator.dupe(u8, func_expr_summary.text),
             .arg_expr = try self.allocator.dupe(u8, arg_expr_summary.text),

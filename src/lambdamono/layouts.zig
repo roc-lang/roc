@@ -223,8 +223,130 @@ pub const Layouts = struct {
         idents: *const base.Ident.Store,
         ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!void {
+        try self.ensureTypeLayout(allocator, mono_types, idents, ty);
+        try self.recordListStorageElemType(allocator, mono_types, idents, ty);
+        var visited = std.AutoHashMap(type_mod.TypeId, void).init(allocator);
+        defer visited.deinit();
+        try self.recordAggregateStorageTypes(allocator, mono_types, idents, ty, &visited);
+    }
+
+    fn ensureTypeLayout(
+        self: *Layouts,
+        allocator: std.mem.Allocator,
+        mono_types: *type_mod.Store,
+        idents: *const base.Ident.Store,
+        ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!void {
+        if (self.type_layouts.contains(ty)) return;
         const layout_ref = try self.layoutForExecutableType(allocator, mono_types, idents, ty);
         try self.type_layouts.put(ty, layout_ref);
+    }
+
+    fn recordListStorageElemType(
+        self: *Layouts,
+        allocator: std.mem.Allocator,
+        mono_types: *type_mod.Store,
+        idents: *const base.Ident.Store,
+        ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!void {
+        const elem_ty = listElemType(mono_types, ty) orelse return;
+        const storage_ty = storageTypeForListElement(mono_types, elem_ty);
+        if (storage_ty == elem_ty) return;
+        const layout_ref = try self.layoutForExecutableType(allocator, mono_types, idents, storage_ty);
+        try self.type_layouts.put(storage_ty, layout_ref);
+    }
+
+    fn recordAggregateStorageTypes(
+        self: *Layouts,
+        allocator: std.mem.Allocator,
+        mono_types: *type_mod.Store,
+        idents: *const base.Ident.Store,
+        ty: type_mod.TypeId,
+        visited: *std.AutoHashMap(type_mod.TypeId, void),
+    ) std.mem.Allocator.Error!void {
+        if (visited.contains(ty)) return;
+        try visited.put(ty, {});
+
+        switch (mono_types.getTypePreservingNominal(ty)) {
+            .nominal => |nominal| {
+                try self.ensureTypeLayout(allocator, mono_types, idents, nominal.backing);
+                try self.recordAggregateStorageTypes(allocator, mono_types, idents, nominal.backing, visited);
+            },
+            .list => |elem| {
+                const storage_ty = storageTypeForListElement(mono_types, elem);
+                try self.ensureTypeLayout(allocator, mono_types, idents, storage_ty);
+                try self.recordAggregateStorageTypes(allocator, mono_types, idents, elem, visited);
+                if (storage_ty != elem) {
+                    try self.recordAggregateStorageTypes(allocator, mono_types, idents, storage_ty, visited);
+                }
+            },
+            .box => |elem| try self.recordAggregateStorageTypes(allocator, mono_types, idents, elem, visited),
+            .tuple => |elems| {
+                for (elems) |elem| {
+                    try self.recordAggregateFieldStorageType(allocator, mono_types, idents, elem, visited);
+                }
+            },
+            .record => |record| {
+                for (record.fields) |field| {
+                    try self.recordAggregateFieldStorageType(allocator, mono_types, idents, field.ty, visited);
+                }
+            },
+            .tag_union => |tag_union| {
+                for (tag_union.tags) |tag| {
+                    for (tag.args) |arg| {
+                        try self.recordAggregateFieldStorageType(allocator, mono_types, idents, arg, visited);
+                    }
+                }
+            },
+            .placeholder, .unbd, .link, .primitive, .erased_fn => {},
+        }
+    }
+
+    fn recordAggregateFieldStorageType(
+        self: *Layouts,
+        allocator: std.mem.Allocator,
+        mono_types: *type_mod.Store,
+        idents: *const base.Ident.Store,
+        field_ty: type_mod.TypeId,
+        visited: *std.AutoHashMap(type_mod.TypeId, void),
+    ) std.mem.Allocator.Error!void {
+        const storage_ty = storageTypeForAggregateField(mono_types, field_ty);
+        try self.ensureTypeLayout(allocator, mono_types, idents, storage_ty);
+        try self.recordAggregateStorageTypes(allocator, mono_types, idents, field_ty, visited);
+        if (storage_ty != field_ty) {
+            try self.recordAggregateStorageTypes(allocator, mono_types, idents, storage_ty, visited);
+        }
+    }
+
+    fn listElemType(
+        mono_types: *type_mod.Store,
+        ty: type_mod.TypeId,
+    ) ?type_mod.TypeId {
+        return switch (mono_types.getTypePreservingNominal(ty)) {
+            .nominal => |nominal| listElemType(mono_types, nominal.backing),
+            .list => |elem| elem,
+            else => null,
+        };
+    }
+
+    fn storageTypeForListElement(
+        mono_types: *type_mod.Store,
+        elem_ty: type_mod.TypeId,
+    ) type_mod.TypeId {
+        return switch (mono_types.getTypePreservingNominal(elem_ty)) {
+            .nominal => |nominal| storageTypeForListElement(mono_types, nominal.backing),
+            else => elem_ty,
+        };
+    }
+
+    fn storageTypeForAggregateField(
+        mono_types: *type_mod.Store,
+        field_ty: type_mod.TypeId,
+    ) type_mod.TypeId {
+        return switch (mono_types.getTypePreservingNominal(field_ty)) {
+            .nominal => |nominal| storageTypeForAggregateField(mono_types, nominal.backing),
+            else => field_ty,
+        };
     }
 
     pub fn recordExpr(
@@ -444,6 +566,98 @@ pub const Layouts = struct {
                 .struct_ => |fields| self.unwrapNominalRef(self.graph.getFields(fields)[field_index].child),
                 else => debugPanic("lambdamono.layouts.structFieldLayout expected struct layout"),
             },
+        };
+    }
+
+    pub fn slotEdgeIsRecursivelyBoxed(
+        self: *const Layouts,
+        allocator: std.mem.Allocator,
+        parent_ref: layout_mod.GraphRef,
+        child_ref: layout_mod.GraphRef,
+    ) std.mem.Allocator.Error!bool {
+        const parent_id = self.resolveSlotParent(parent_ref) orelse return false;
+        const child_id = switch (child_ref) {
+            .canonical => return false,
+            .local => |id| id,
+        };
+        if (!try self.graphNodeReaches(allocator, child_id, parent_id)) return false;
+
+        return switch (self.graph.getNode(parent_id)) {
+            .struct_ => true,
+            .tag_union => switch (self.graph.getNode(child_id)) {
+                .struct_ => false,
+                .pending, .nominal, .box, .list, .closure, .tag_union => true,
+            },
+            .pending, .nominal, .box, .list, .closure => false,
+        };
+    }
+
+    fn resolveSlotParent(
+        self: *const Layouts,
+        ref: layout_mod.GraphRef,
+    ) ?layout_mod.GraphNodeId {
+        var current = ref;
+        while (true) {
+            switch (current) {
+                .canonical => return null,
+                .local => |node_id| switch (self.graph.getNode(node_id)) {
+                    .nominal => |nominal| current = nominal,
+                    else => return node_id,
+                },
+            }
+        }
+    }
+
+    fn graphNodeReaches(
+        self: *const Layouts,
+        allocator: std.mem.Allocator,
+        from: layout_mod.GraphNodeId,
+        target: layout_mod.GraphNodeId,
+    ) std.mem.Allocator.Error!bool {
+        var visited = std.AutoHashMap(layout_mod.GraphNodeId, void).init(allocator);
+        defer visited.deinit();
+        return try self.graphNodeReachesRec(allocator, from, target, &visited);
+    }
+
+    fn graphNodeReachesRec(
+        self: *const Layouts,
+        allocator: std.mem.Allocator,
+        current: layout_mod.GraphNodeId,
+        target: layout_mod.GraphNodeId,
+        visited: *std.AutoHashMap(layout_mod.GraphNodeId, void),
+    ) std.mem.Allocator.Error!bool {
+        if (current == target) return true;
+        if (visited.contains(current)) return false;
+        try visited.put(current, {});
+
+        return switch (self.graph.getNode(current)) {
+            .nominal => |child| try self.graphRefReaches(allocator, child, target, visited),
+            .struct_ => |fields| blk: {
+                for (self.graph.getFields(fields)) |field| {
+                    if (try self.graphRefReaches(allocator, field.child, target, visited)) break :blk true;
+                }
+                break :blk false;
+            },
+            .tag_union => |refs| blk: {
+                for (self.graph.getRefs(refs)) |child| {
+                    if (try self.graphRefReaches(allocator, child, target, visited)) break :blk true;
+                }
+                break :blk false;
+            },
+            .pending, .box, .list, .closure => false,
+        };
+    }
+
+    fn graphRefReaches(
+        self: *const Layouts,
+        allocator: std.mem.Allocator,
+        ref: layout_mod.GraphRef,
+        target: layout_mod.GraphNodeId,
+        visited: *std.AutoHashMap(layout_mod.GraphNodeId, void),
+    ) std.mem.Allocator.Error!bool {
+        return switch (ref) {
+            .canonical => false,
+            .local => |node_id| try self.graphNodeReachesRec(allocator, node_id, target, visited),
         };
     }
 

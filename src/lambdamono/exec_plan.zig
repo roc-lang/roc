@@ -348,6 +348,12 @@ const Planner = struct {
         exec: type_mod.TypeId,
     };
 
+    const PlannedExecTypeKey = struct {
+        source: TypeVarId,
+        repr_mode: specializations.Pending.ReprMode,
+        position: SourceExecPosition,
+    };
+
     fn lowerRequestedExecutableReturnTypeFromCallRelation(
         self: *Planner,
         solved_types: *solved.Type.Store,
@@ -543,114 +549,174 @@ const Planner = struct {
         repr_mode: specializations.Pending.ReprMode,
         position: SourceExecPosition,
     ) std.mem.Allocator.Error!type_mod.TypeId {
+        var planned = std.AutoHashMap(PlannedExecTypeKey, type_mod.TypeId).init(self.allocator);
+        defer planned.deinit();
+        const raw = try self.planExecutableTypeFromSolvedWithBindingsRec(
+            solved_types,
+            mono_cache,
+            source_ty,
+            bindings,
+            repr_mode,
+            position,
+            &planned,
+        );
+        return try self.internExecutableType(raw);
+    }
+
+    fn planExecutableTypeFromSolvedWithBindingsRec(
+        self: *Planner,
+        solved_types: *solved.Type.Store,
+        mono_cache: *lower_type.MonoCache,
+        source_ty: TypeVarId,
+        bindings: []const PlannedExecBinding,
+        repr_mode: specializations.Pending.ReprMode,
+        position: SourceExecPosition,
+        planned: *std.AutoHashMap(PlannedExecTypeKey, type_mod.TypeId),
+    ) std.mem.Allocator.Error!type_mod.TypeId {
         if (self.lookupPlannedExecBinding(solved_types, source_ty, bindings)) |exec_ty| {
             return exec_ty;
         }
         const source_root = solved_types.unlinkPreservingNominal(source_ty);
+        const key: PlannedExecTypeKey = .{
+            .source = source_root,
+            .repr_mode = repr_mode,
+            .position = position,
+        };
+        if (planned.get(key)) |exec_ty| return exec_ty;
+
         return switch (solved_types.getNode(source_root)) {
             .nominal => |nominal| blk: {
-                const lowered_backing = try self.planExecutableTypeFromSolvedWithBindings(
+                const placeholder = try self.types.addType(.placeholder);
+                try planned.put(key, placeholder);
+                const lowered_backing = try self.planExecutableTypeFromSolvedWithBindingsRec(
                     solved_types,
                     mono_cache,
                     nominal.backing,
                     bindings,
                     repr_mode,
                     position,
+                    planned,
                 );
-                break :blk try self.internExecutableType(try self.types.internResolved(.{ .nominal = .{
+                self.types.setType(placeholder, .{ .nominal = .{
                     .module_idx = nominal.module_idx,
                     .ident = nominal.ident,
                     .is_opaque = nominal.is_opaque,
                     .args = try self.lowerSolvedNominalArgs(solved_types, mono_cache, nominal.args),
                     .backing = lowered_backing,
-                } }));
+                } });
+                break :blk placeholder;
             },
             .content => |content| switch (content) {
-                .list => |elem| try self.internExecutableType(try self.types.internResolved(.{
-                    .list = try self.planExecutableTypeFromSolvedWithBindings(
+                .list => |elem| blk: {
+                    const placeholder = try self.types.addType(.placeholder);
+                    try planned.put(key, placeholder);
+                    const lowered_elem = try self.planExecutableTypeFromSolvedWithBindingsRec(
                         solved_types,
                         mono_cache,
                         elem,
                         bindings,
                         repr_mode,
                         .normal,
-                    ),
-                })),
-                .box => |elem| try self.internExecutableType(try self.types.internResolved(.{
-                    .box = try self.planExecutableTypeFromSolvedWithBindings(
+                        planned,
+                    );
+                    self.types.setType(placeholder, .{ .list = lowered_elem });
+                    break :blk placeholder;
+                },
+                .box => |elem| blk: {
+                    const placeholder = try self.types.addType(.placeholder);
+                    try planned.put(key, placeholder);
+                    const lowered_elem = try self.planExecutableTypeFromSolvedWithBindingsRec(
                         solved_types,
                         mono_cache,
                         elem,
                         bindings,
                         repr_mode,
                         .box_payload,
-                    ),
-                })),
+                        planned,
+                    );
+                    self.types.setType(placeholder, .{ .box = lowered_elem });
+                    break :blk placeholder;
+                },
                 .tuple => |span| blk: {
+                    const placeholder = try self.types.addType(.placeholder);
+                    try planned.put(key, placeholder);
                     const elems = solved_types.sliceTypeVarSpan(span);
                     const lowered = try self.allocator.alloc(type_mod.TypeId, elems.len);
                     defer self.allocator.free(lowered);
                     for (elems, 0..) |elem, i| {
-                        lowered[i] = try self.planExecutableTypeFromSolvedWithBindings(
+                        lowered[i] = try self.planExecutableTypeFromSolvedWithBindingsRec(
                             solved_types,
                             mono_cache,
                             elem,
                             bindings,
                             repr_mode,
                             .normal,
+                            planned,
                         );
                     }
-                    break :blk try self.internExecutableType(try self.types.internResolved(.{
-                        .tuple = try self.types.dupeTypeIds(lowered),
-                    }));
+                    self.types.setType(placeholder, .{ .tuple = try self.types.dupeTypeIds(lowered) });
+                    break :blk placeholder;
                 },
                 .record => |record| blk: {
+                    const placeholder = try self.types.addType(.placeholder);
+                    try planned.put(key, placeholder);
                     const fields = solved_types.sliceFields(record.fields);
                     const lowered = try self.allocator.alloc(type_mod.Field, fields.len);
                     defer self.allocator.free(lowered);
                     for (fields, 0..) |field, i| {
                         lowered[i] = .{
                             .name = field.name,
-                            .ty = try self.planExecutableTypeFromSolvedWithBindings(
+                            .ty = try self.planExecutableTypeFromSolvedWithBindingsRec(
                                 solved_types,
                                 mono_cache,
                                 field.ty,
                                 bindings,
                                 repr_mode,
                                 .normal,
+                                planned,
                             ),
                         };
                     }
-                    break :blk try self.internExecutableType(try self.types.internResolved(.{
-                        .record = .{ .fields = try self.types.dupeFields(lowered) },
-                    }));
+                    self.types.setType(placeholder, .{ .record = .{ .fields = try self.types.dupeFields(lowered) } });
+                    break :blk placeholder;
                 },
                 .tag_union => |tag_union| blk: {
+                    const placeholder = try self.types.addType(.placeholder);
+                    try planned.put(key, placeholder);
                     const source_tags = solved_types.sliceTags(tag_union.tags);
                     const lowered = try self.allocator.alloc(type_mod.Tag, source_tags.len);
-                    defer self.allocator.free(lowered);
+                    var lowered_count: usize = 0;
+                    defer {
+                        for (lowered[0..lowered_count]) |tag| {
+                            if (tag.args.len > 0) self.types.allocator.free(tag.args);
+                        }
+                        self.allocator.free(lowered);
+                    }
                     for (source_tags, 0..) |tag, i| {
                         const args = solved_types.sliceTypeVarSpan(tag.args);
                         const lowered_args = try self.allocator.alloc(type_mod.TypeId, args.len);
                         defer self.allocator.free(lowered_args);
                         for (args, 0..) |arg, j| {
-                            lowered_args[j] = try self.planExecutableTypeFromSolvedWithBindings(
+                            lowered_args[j] = try self.planExecutableTypeFromSolvedWithBindingsRec(
                                 solved_types,
                                 mono_cache,
                                 arg,
                                 bindings,
                                 repr_mode,
                                 .normal,
+                                planned,
                             );
                         }
                         lowered[i] = .{
                             .name = .{ .ctor = tag.name },
                             .args = try self.types.dupeTypeIds(lowered_args),
                         };
+                        lowered_count += 1;
                     }
-                    break :blk try self.internExecutableType(try self.types.internResolved(.{
-                        .tag_union = .{ .tags = try self.types.dupeTags(lowered) },
-                    }));
+                    self.types.setType(placeholder, .{ .tag_union = .{
+                        .tags = try self.types.dupeTags(lowered),
+                    } });
+                    break :blk placeholder;
                 },
                 .func => switch (repr_mode) {
                     .erased_boundary => try self.lowerErasedBoundaryExecutableTypeIn(solved_types, mono_cache, source_root),
@@ -685,6 +751,25 @@ const Planner = struct {
         const concrete = self.requireConcreteExecutableType(ty, context);
         if (self.isExecutableCallableType(concrete)) return null;
         return concrete;
+    }
+
+    fn concreteExecutableTypeForLiteral(
+        self: *Planner,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        source_ty: TypeVarId,
+        required_exec_ty: type_mod.TypeId,
+        comptime context: []const u8,
+    ) std.mem.Allocator.Error!type_mod.TypeId {
+        if (!self.executableTypeIsAbstract(required_exec_ty)) {
+            return self.requireConcreteExecutableType(required_exec_ty, context);
+        }
+        const source_exec_ty = try self.lowerExecutableTypeFromSolvedIn(
+            inst.types,
+            mono_cache,
+            source_ty,
+        );
+        return self.requireConcreteExecutableType(source_exec_ty, context);
     }
 
     fn executableTypeHasLayoutAbstractLeafVisited(
@@ -861,6 +946,15 @@ const Planner = struct {
         repr_mode: specializations.Pending.ReprMode,
     ) std.mem.Allocator.Error!type_mod.TypeId {
         const expr = self.input.store.getExpr(expr_id);
+        if (try self.emptyListLiteralExecutableTypeForSource(
+            inst.types,
+            mono_cache,
+            expr,
+            source_ty,
+            repr_mode,
+        )) |empty_list_ty| {
+            return empty_list_ty;
+        }
         if (expr.data == .var_) {
             if (self.lookupEnvEntry(venv, expr.data.var_)) |entry| {
                 const entry_exec_ty = try self.currentEnvEntryExecutableType(
@@ -892,7 +986,90 @@ const Planner = struct {
         };
         if (!self.executableTypeIsAbstract(lowered)) return lowered;
         if (self.isExecutableCallableType(lowered)) return lowered;
-        debugPanic("lambdamono.exec_plan.lowerRequestedExecutableArgTypeFromExpr abstract executable arg type");
+        const source_summary = self.debugSolvedTypeSummary(inst.types, source_ty);
+        defer source_summary.deinit(self.allocator);
+        const exec_summary = self.debugExecutableTypeSummary(lowered);
+        defer exec_summary.deinit(self.allocator);
+        debugPanicFmt(
+            "lambdamono.exec_plan.lowerRequestedExecutableArgTypeFromExpr abstract executable arg type expr={s} source={s} exec={s}",
+            .{ @tagName(expr.data), source_summary.text, exec_summary.text },
+        );
+    }
+
+    fn emptyListLiteralExecutableTypeForSource(
+        self: *Planner,
+        solved_types: *solved.Type.Store,
+        mono_cache: *lower_type.MonoCache,
+        expr: solved.Ast.Expr,
+        source_ty: TypeVarId,
+        repr_mode: specializations.Pending.ReprMode,
+    ) std.mem.Allocator.Error!?type_mod.TypeId {
+        if (expr.data != .list) return null;
+        if (self.input.store.sliceExprSpan(expr.data.list).len != 0) return null;
+        const source_elem_ty = self.solvedListElemType(solved_types, source_ty) orelse return null;
+        const elem_exec_ty = try self.absentListElementExecutableTypeFromSource(
+            solved_types,
+            mono_cache,
+            source_elem_ty,
+            repr_mode,
+        );
+        return try self.types.internResolved(.{ .list = elem_exec_ty });
+    }
+
+    fn absentListElementExecutableTypeFromSource(
+        self: *Planner,
+        solved_types: *solved.Type.Store,
+        mono_cache: *lower_type.MonoCache,
+        source_ty: TypeVarId,
+        repr_mode: specializations.Pending.ReprMode,
+    ) std.mem.Allocator.Error!type_mod.TypeId {
+        const lowered = switch (repr_mode) {
+            .natural => try self.lowerExecutableTypeFromSolvedIn(
+                solved_types,
+                mono_cache,
+                source_ty,
+            ),
+            .erased_boundary => try self.lowerErasedBoundaryExecutableTypeIn(
+                solved_types,
+                mono_cache,
+                source_ty,
+            ),
+        };
+        if (!self.executableTypeIsAbstract(lowered)) return lowered;
+
+        const source_root = solved_types.unlinkPreservingNominal(source_ty);
+        switch (solved_types.getNode(source_root)) {
+            .content => |content| switch (content) {
+                .list => |elem_ty| {
+                    const elem_exec_ty = try self.absentListElementExecutableTypeFromSource(
+                        solved_types,
+                        mono_cache,
+                        elem_ty,
+                        repr_mode,
+                    );
+                    return try self.types.internResolved(.{ .list = elem_exec_ty });
+                },
+                else => {},
+            },
+            .nominal => |nominal| {
+                const backing_exec_ty = try self.absentListElementExecutableTypeFromSource(
+                    solved_types,
+                    mono_cache,
+                    nominal.backing,
+                    repr_mode,
+                );
+                return try self.internExecutableType(try self.types.internResolved(.{ .nominal = .{
+                    .module_idx = nominal.module_idx,
+                    .ident = nominal.ident,
+                    .is_opaque = nominal.is_opaque,
+                    .args = try self.lowerSolvedNominalArgs(solved_types, mono_cache, nominal.args),
+                    .backing = backing_exec_ty,
+                } }));
+            },
+            else => {},
+        }
+
+        return try self.makeUnitType();
     }
 
     fn explicitProjectedExecutableTypeForExpr(
@@ -904,6 +1081,15 @@ const Planner = struct {
         source_ty: TypeVarId,
     ) std.mem.Allocator.Error!?type_mod.TypeId {
         const expr = self.input.store.getExpr(expr_id);
+        if (try self.emptyListLiteralExecutableTypeForSource(
+            inst.types,
+            mono_cache,
+            expr,
+            source_ty,
+            .natural,
+        )) |empty_list_ty| {
+            return empty_list_ty;
+        }
         return switch (expr.data) {
             .var_ => |symbol| {
                 if (self.lookupEnvEntry(venv, symbol)) |entry| {
@@ -917,7 +1103,6 @@ const Planner = struct {
                 if (self.lookupTopLevelValueType(symbol)) |top_level_ty| {
                     return top_level_ty;
                 }
-                _ = source_ty;
                 return null;
             },
             .access => |access| {
@@ -937,7 +1122,6 @@ const Planner = struct {
                         record_source_ty,
                     );
                 const field = self.recordFieldByName(record_exec_ty, access.field) orelse return null;
-                _ = source_ty;
                 return field.ty;
             },
             .tuple_access => |access| {
@@ -958,34 +1142,10 @@ const Planner = struct {
                     );
                 const elems = self.tupleElemTypes(tuple_exec_ty) orelse return null;
                 if (access.elem_index >= elems.len) return null;
-                _ = source_ty;
                 return elems[access.elem_index];
             },
-            else => {
-                _ = source_ty;
-                return null;
-            },
+            else => return null,
         };
-    }
-
-    fn emptyListExecutableTypeForCallArg(
-        self: *Planner,
-        inst: *InstScope,
-        expr_id: solved.Ast.ExprId,
-        source_ty: TypeVarId,
-        all_arg_tys: []const TypeVarId,
-    ) std.mem.Allocator.Error!?type_mod.TypeId {
-        const expr = self.input.store.getExpr(expr_id);
-        if (expr.data != .list) return null;
-        if (self.input.store.sliceExprSpan(expr.data.list).len != 0) return null;
-        const elem_ty = self.solvedListElemType(inst.types, source_ty) orelse return null;
-        const elem_root = inst.types.unlinkPreservingNominalConst(elem_ty);
-        for (all_arg_tys) |arg_ty| {
-            if (inst.types.unlinkPreservingNominalConst(arg_ty) == elem_root) return null;
-        }
-        return try self.types.internResolved(.{
-            .list = try self.makeUnitType(),
-        });
     }
 
     const SpecializedCallableSummary = struct {
@@ -3951,9 +4111,6 @@ const Planner = struct {
         defer self.current_specializing_symbol = previous_specializing;
         switch (source_def) {
             .hosted_fn => |hosted_fn| {
-                if (repr_mode != .erased_boundary) {
-                    debugPanic("lambdamono.exec_plan.specializeFn hosted specialization must use erased boundary representation");
-                }
                 const proc_arg_exec_tys = try self.ensurePendingExecutableArgTypes(pending);
                 const hosted_args = self.input.store.sliceTypedSymbolSpan(hosted_fn.args);
                 if (hosted_args.len != proc_arg_exec_tys.len) {
@@ -4616,12 +4773,30 @@ const Planner = struct {
             .var_ => |symbol| blk: {
                 break :blk try self.specializeVarExpr(inst, mono_cache, venv, symbol, ty, required_exec_ty);
             },
-            .int_lit => |value| .{ .ty = required_exec_ty, .data = try self.specializeIntLiteral(required_exec_ty, value) },
-            .frac_f32_lit => |value| .{ .ty = required_exec_ty, .data = try self.specializeF32Literal(required_exec_ty, value) },
-            .frac_f64_lit => |value| .{ .ty = required_exec_ty, .data = try self.specializeF64Literal(required_exec_ty, value) },
-            .dec_lit => |value| .{ .ty = required_exec_ty, .data = try self.specializeDecLiteral(required_exec_ty, value) },
-            .str_lit => |value| .{ .ty = required_exec_ty, .data = .{ .str_lit = value } },
-            .bool_lit => |value| .{ .ty = required_exec_ty, .data = .{ .bool_lit = value } },
+            .int_lit => |value| blk: {
+                const literal_ty = try self.concreteExecutableTypeForLiteral(inst, mono_cache, ty, required_exec_ty, "planExpr(int_lit)");
+                break :blk .{ .ty = literal_ty, .data = try self.specializeIntLiteral(literal_ty, value) };
+            },
+            .frac_f32_lit => |value| blk: {
+                const literal_ty = try self.concreteExecutableTypeForLiteral(inst, mono_cache, ty, required_exec_ty, "planExpr(frac_f32_lit)");
+                break :blk .{ .ty = literal_ty, .data = try self.specializeF32Literal(literal_ty, value) };
+            },
+            .frac_f64_lit => |value| blk: {
+                const literal_ty = try self.concreteExecutableTypeForLiteral(inst, mono_cache, ty, required_exec_ty, "planExpr(frac_f64_lit)");
+                break :blk .{ .ty = literal_ty, .data = try self.specializeF64Literal(literal_ty, value) };
+            },
+            .dec_lit => |value| blk: {
+                const literal_ty = try self.concreteExecutableTypeForLiteral(inst, mono_cache, ty, required_exec_ty, "planExpr(dec_lit)");
+                break :blk .{ .ty = literal_ty, .data = try self.specializeDecLiteral(literal_ty, value) };
+            },
+            .str_lit => |value| blk: {
+                const literal_ty = try self.concreteExecutableTypeForLiteral(inst, mono_cache, ty, required_exec_ty, "planExpr(str_lit)");
+                break :blk .{ .ty = literal_ty, .data = .{ .str_lit = value } };
+            },
+            .bool_lit => |value| blk: {
+                const literal_ty = try self.concreteExecutableTypeForLiteral(inst, mono_cache, ty, required_exec_ty, "planExpr(bool_lit)");
+                break :blk .{ .ty = literal_ty, .data = .{ .bool_lit = value } };
+            },
             .unit => .{ .ty = required_exec_ty, .data = .unit },
             .tag => |tag| blk: {
                 const source_args = self.input.store.sliceExprSpan(tag.args);
@@ -7090,54 +7265,15 @@ const Planner = struct {
         const solved_types = inst.types;
         var refined_source_ty = instantiated_ty;
         if (self.isHostedTopLevelSymbol(symbol)) {
-            const hosted_exec_ty = blk: {
-                if (!self.executableTypeIsAbstract(required_exec_ty)) {
-                    const concrete = self.requireConcreteExecutableType(
-                        required_exec_ty,
-                        "specializeVarExpr(hosted)",
-                    );
-                    if (self.types.getTypePreservingNominal(concrete) == .erased_fn) {
-                        break :blk concrete;
-                    }
-                }
-                break :blk self.requireConcreteExecutableType(
-                    try self.lowerErasedBoundaryExecutableTypeIn(
-                        solved_types,
-                        mono_cache,
-                        refined_source_ty,
-                    ),
-                    "specializeVarExpr(hosted derived)",
-                );
-            };
-            if (self.types.getTypePreservingNominal(hosted_exec_ty) != .erased_fn) {
-                debugPanic("lambdamono.exec_plan.specializeVarExpr hosted symbol expected erased callable executable type");
-            }
-            const hosted_call_sig = self.requireExecutableCallableSig(
-                hosted_exec_ty,
-                "specializeVarExpr(hosted)",
-            );
-            const specialized = try self.ensureQueuedCallableSpecializedWithExecSignature(
-                solved_types,
+            return try self.lowerExactCallableVarExpr(
+                inst,
+                mono_cache,
+                venv,
                 symbol,
-                .erased_boundary,
-                instantiated_ty,
-                null,
-                null,
-                hosted_call_sig.args,
-                hosted_call_sig.ret,
+                &.{},
+                refined_source_ty,
+                required_exec_ty,
             );
-            if (specialized.exec_capture_ty != null) {
-                debugPanic("lambdamono.exec_plan.specializeVarExpr hosted function had captures");
-            }
-            return .{
-                .ty = hosted_exec_ty,
-                .data = .{ .packed_fn = .{
-                    .lambda = specialized.symbol,
-                    .captures = null,
-                    .capture_ty = null,
-                } },
-                .source_ty = refined_source_ty,
-            };
         }
 
         if (specializations.lookupFnExact(self.fenv, symbol)) |entry| {
@@ -7763,7 +7899,9 @@ const Planner = struct {
     }
 
     fn exactCallableReprMode(self: *const Planner, symbol: Symbol) specializations.Pending.ReprMode {
-        return if (self.isHostedTopLevelSymbol(symbol)) .erased_boundary else .natural;
+        _ = self;
+        _ = symbol;
+        return .natural;
     }
 
     fn exactCallableSymbolForBoundExpr(
@@ -9089,12 +9227,7 @@ const Planner = struct {
                         )) |projected|
                             projected
                         else
-                            try self.emptyListExecutableTypeForCallArg(
-                                inst,
-                                arg_expr_id,
-                                requested_arg_ty,
-                                requested_call_arg_tys,
-                            ) orelse continue;
+                            continue;
                         if (!self.executableTypeIsAbstract(explicit_arg_ty)) {
                             try self.collectPlannedExecBindings(
                                 inst.types,
@@ -9106,7 +9239,7 @@ const Planner = struct {
                         }
                     }
                     for (arg_expr_ids, requested_call_arg_tys, 0..) |arg_expr_id, requested_arg_ty, i| {
-                        var provisional_exec_ty = try self.planExecutableTypeFromSolvedWithBindings(
+                        const provisional_exec_ty = try self.planExecutableTypeFromSolvedWithBindings(
                             inst.types,
                             mono_cache,
                             requested_arg_ty,
@@ -9114,19 +9247,6 @@ const Planner = struct {
                             repr_mode,
                             .normal,
                         );
-                        if (self.executableTypeIsAbstract(provisional_exec_ty)) {
-                            const arg_expr = self.input.store.getExpr(arg_expr_id);
-                            if (arg_expr.data != .list) {
-                                provisional_exec_ty = try self.lowerRequestedExecutableArgTypeFromExpr(
-                                    inst,
-                                    mono_cache,
-                                    venv,
-                                    arg_expr_id,
-                                    requested_arg_ty,
-                                    repr_mode,
-                                );
-                            }
-                        }
                         const arg_expr = self.input.store.getExpr(arg_expr_id);
                         const lowered_arg = try self.planExprWithRequiredExecTy(
                             inst,

@@ -274,7 +274,7 @@ pub fn zeroedEntrypointArgBuffer(
     allocator: std.mem.Allocator,
     lowered: *const LoweredProgram,
     arg_layouts: []const layout_mod.Idx,
-) !?[]u8 {
+) !?[]align(collections.max_roc_alignment.toByteUnits()) u8 {
     const EntrypointArgOrder = struct {
         index: usize,
         alignment: u32,

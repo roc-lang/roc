@@ -192,9 +192,10 @@ pub const Store = struct {
         if (tags.len == 0) return &.{};
 
         const out = try self.allocator.alloc(Tag, tags.len);
+        var initialized: usize = 0;
         errdefer {
             var i: usize = 0;
-            while (i < tags.len) : (i += 1) {
+            while (i < initialized) : (i += 1) {
                 if (out[i].args.len > 0) self.allocator.free(out[i].args);
             }
             self.allocator.free(out);
@@ -205,6 +206,7 @@ pub const Store = struct {
                 .name = tag.name,
                 .args = try self.dupeTypeIds(tag.args),
             };
+            initialized += 1;
         }
 
         return out;

@@ -351,7 +351,6 @@ const Lowerer = struct {
                     payload_layout,
                     "tag_payload",
                 );
-                const actual_field_layout = self.input.layouts.exprFieldLayout(expr_id);
                 const source_field_ty = self.tagUnionArgs(
                     self.input.store.getExpr(tag_payload.tag_union).ty,
                     tag_payload.tag_discriminant,
@@ -363,7 +362,6 @@ const Lowerer = struct {
                     &block,
                     payload_var,
                     tag_payload.payload_index,
-                    actual_field_layout,
                     source_field_ty[tag_payload.payload_index],
                     expr.ty,
                     "tag_payload_field",
@@ -433,12 +431,10 @@ const Lowerer = struct {
             .access => |access| {
                 const record = try self.lowerSubexprValue(&block, env, access.record);
                 if (record == null) return if (block.has_term) block else debugPanic("ir.lower access missing terminator");
-                const actual_field_layout = self.input.layouts.exprFieldLayout(expr_id);
                 const temp = try self.emitStructFieldValue(
                     &block,
                     record.?,
                     access.field_index,
-                    actual_field_layout,
                     self.fieldTypeAt(self.input.store.getExpr(access.record).ty, access.field_index) orelse
                         debugPanic("ir.lower access missing source field type"),
                     expr.ty,
@@ -450,12 +446,10 @@ const Lowerer = struct {
                 const tuple = try self.lowerSubexprValue(&block, env, tuple_access.tuple);
                 if (tuple == null) return if (block.has_term) block else debugPanic("ir.lower tuple_access missing terminator");
                 const field_index: u16 = @intCast(tuple_access.elem_index);
-                const actual_field_layout = self.input.layouts.exprFieldLayout(expr_id);
                 const temp = try self.emitStructFieldValue(
                     &block,
                     tuple.?,
                     field_index,
-                    actual_field_layout,
                     self.fieldTypeAt(self.input.store.getExpr(tuple_access.tuple).ty, field_index) orelse
                         debugPanic("ir.lower tuple_access missing source element type"),
                     expr.ty,
@@ -1009,17 +1003,21 @@ const Lowerer = struct {
         block: *LoweredBlock,
         record: ast.Var,
         field_index: u16,
-        actual_layout: ir_layout.Ref,
         source_field_ty: lambdamono.Type.TypeId,
         result_ty: lambdamono.Type.TypeId,
         comptime label: []const u8,
     ) std.mem.Allocator.Error!ast.Var {
-        const actual_field = try self.freshVarWithLayout(actual_layout, label);
+        const actual_field = try self.freshVar(source_field_ty, label);
         try block.stmts.append(self.allocator, .{ .let_ = .{
             .bind = actual_field,
             .expr = try self.output.addExpr(.{ .get_struct_field = .{
                 .record = record,
                 .field_index = field_index,
+                .field_bridge_plan = try self.aggregateFieldBridgePlan(
+                    record.layout,
+                    field_index,
+                    source_field_ty,
+                ),
             } }),
         } });
 
@@ -1223,6 +1221,31 @@ const Lowerer = struct {
             .nominal => |nominal| self.storageTypeForListElement(nominal.backing),
             else => elem_ty,
         };
+    }
+
+    fn storageTypeForAggregateField(
+        self: *Lowerer,
+        field_ty: type_mod.TypeId,
+    ) type_mod.TypeId {
+        return switch (self.input.types.getTypePreservingNominal(field_ty)) {
+            .nominal => |nominal| self.storageTypeForAggregateField(nominal.backing),
+            else => field_ty,
+        };
+    }
+
+    fn aggregateFieldBridgePlan(
+        self: *Lowerer,
+        aggregate_layout: ir_layout.Ref,
+        field_index: u16,
+        field_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!ast.BridgePlanId {
+        const storage_ty = self.storageTypeForAggregateField(field_ty);
+        const child_ref = try self.input.layouts.structFieldLayout(aggregate_layout, field_index);
+        const child_plan = try self.bridgePlanForTypes(storage_ty, field_ty);
+        if (try self.input.layouts.slotEdgeIsRecursivelyBoxed(self.allocator, aggregate_layout, child_ref)) {
+            return try self.output.addBridgePlan(.{ .box_unbox = child_plan });
+        }
+        return child_plan;
     }
 
     fn tagUnionArgs(
@@ -1700,25 +1723,26 @@ const Lowerer = struct {
                 );
 
                 for (args, 0..) |arg_pat_id, i| {
-                    const field_layout = self.input.layouts.patSourceLayout(arg_pat_id);
-                    const actual_field_var = try self.freshVarWithLayout(
-                        field_layout,
-                        "pat_field",
-                    );
-                    try prefix.append(self.allocator, .{ .let_ = .{
-                        .bind = actual_field_var,
-                        .expr = try self.output.addExpr(.{ .get_struct_field = .{
-                            .record = payload_var,
-                            .field_index = @intCast(i),
-                        } }),
-                    } });
                     const arg_pat = self.input.store.getPat(arg_pat_id);
-                    const expected_layout = self.input.layouts.layoutForType(arg_pat.ty);
                     const source_field_ty = self.tagUnionArgs(pat.ty, tag.discriminant) orelse
                         debugPanic("ir.lower destructurePattern missing source payload types");
                     if (i >= source_field_ty.len) {
                         debugPanic("ir.lower destructurePattern payload index out of bounds");
                     }
+                    const actual_field_var = try self.freshVar(source_field_ty[i], "pat_field");
+                    try prefix.append(self.allocator, .{ .let_ = .{
+                        .bind = actual_field_var,
+                        .expr = try self.output.addExpr(.{ .get_struct_field = .{
+                            .record = payload_var,
+                            .field_index = @intCast(i),
+                            .field_bridge_plan = try self.aggregateFieldBridgePlan(
+                                payload_var.layout,
+                                @intCast(i),
+                                source_field_ty[i],
+                            ),
+                        } }),
+                    } });
+                    const expected_layout = self.input.layouts.layoutForType(arg_pat.ty);
                     const field_var = if (std.meta.eql(actual_field_var.layout, expected_layout))
                         actual_field_var
                     else blk: {
