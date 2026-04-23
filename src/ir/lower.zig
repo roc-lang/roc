@@ -607,12 +607,12 @@ const Lowerer = struct {
                 if (value == null) return if (block.has_term) block else debugPanic("ir.lower return missing terminator");
                 const ret_layout = self.current_def_ret_layout orelse
                     debugPanic("ir.lower return missing current function return layout");
-                const ret_ty = self.current_def_ret_ty orelse
-                    debugPanic("ir.lower return missing current function return type");
-                const ret_value = if (self.input.types.equalIds(self.input.store.getExpr(ret_expr).ty, ret_ty))
+                const ret_value = if (std.meta.eql(value.?.layout, ret_layout))
                     value.?
                 else blk: {
                     const bridged = try self.freshVarWithLayout(ret_layout, "return");
+                    const ret_ty = self.current_def_ret_ty orelse
+                        debugPanic("ir.lower return missing current function return type");
                     try block.stmts.append(self.allocator, .{ .let_ = .{
                         .bind = bridged,
                         .expr = try self.makeBridgeExpr(
@@ -714,11 +714,12 @@ const Lowerer = struct {
         target_ty: lambdamono.Type.TypeId,
         comptime label: []const u8,
     ) std.mem.Allocator.Error!void {
-        if (self.input.types.equalIds(source_ty, target_ty)) return;
         const value = switch (block.term) {
             .value => |value| value,
             else => return,
         };
+        const target_layout = self.input.layouts.layoutForType(target_ty);
+        if (std.meta.eql(value.layout, target_layout)) return;
 
         const bridged = try self.freshVar(target_ty, label);
         try block.stmts.append(self.allocator, .{ .let_ = .{
@@ -761,12 +762,11 @@ const Lowerer = struct {
         target_ty: lambdamono.Type.TypeId,
         active: *std.ArrayList(BridgeTypePair),
     ) std.mem.Allocator.Error!ast.BridgePlanId {
-        if (self.input.types.equalIds(source_ty, target_ty)) {
-            return try self.output.addBridgePlan(.direct);
-        }
-
         const source_layout = self.input.layouts.layoutForType(source_ty);
         const target_layout = self.input.layouts.layoutForType(target_ty);
+        if (std.meta.eql(source_layout, target_layout)) {
+            return try self.output.addBridgePlan(.direct);
+        }
         if (self.layoutRefIsZst(target_layout)) {
             return try self.output.addBridgePlan(.zst);
         }
@@ -885,6 +885,17 @@ const Lowerer = struct {
         target_layout: ir_layout.Ref,
         active: *std.ArrayList(BridgeTypePair),
     ) std.mem.Allocator.Error!ast.BridgePlanId {
+        if (source_tags.len == 1 and target_tags.len == 1) {
+            const source_is_zst = self.layoutRefIsZst(source_layout);
+            const target_is_zst = self.layoutRefIsZst(target_layout);
+            if (source_is_zst or target_is_zst) {
+                if (source_is_zst and target_is_zst) {
+                    return try self.output.addBridgePlan(.zst);
+                }
+                debugPanic("ir.lower singleton tag bridge zst mismatch");
+            }
+        }
+
         if (source_tags.len == 1 and target_tags.len > 1) {
             const target_discriminant = self.findTagDiscriminant(target_tags, source_tags[0].name) orelse
                 debugPanic("ir.lower singleton bridge source tag missing in target union");
@@ -938,10 +949,24 @@ const Lowerer = struct {
     }
 
     fn layoutRefIsZst(self: *const Lowerer, ref: ir_layout.Ref) bool {
-        _ = self;
         return switch (ref) {
             .canonical => |idx| idx == .zst,
-            .local => false,
+            .local => |node_id| switch (self.input.layouts.graph.getNode(node_id)) {
+                .pending => debugPanic("ir.lower layoutRefIsZst pending layout"),
+                .nominal => |backing| self.layoutRefIsZst(backing),
+                .box, .list, .closure => false,
+                .struct_ => |fields| blk: {
+                    for (self.input.layouts.graph.getFields(fields)) |field| {
+                        if (!self.layoutRefIsZst(field.child)) break :blk false;
+                    }
+                    break :blk true;
+                },
+                .tag_union => |variants| blk: {
+                    const variant_refs = self.input.layouts.graph.getRefs(variants);
+                    if (variant_refs.len != 1) break :blk false;
+                    break :blk self.layoutRefIsZst(variant_refs[0]);
+                },
+            },
         };
     }
 

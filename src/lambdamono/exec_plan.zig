@@ -790,6 +790,16 @@ const Planner = struct {
         return concrete;
     }
 
+    fn stableBranchJoinExecutableType(
+        self: *const Planner,
+        ty: type_mod.TypeId,
+        comptime context: []const u8,
+    ) ?type_mod.TypeId {
+        if (self.executableTypeHasLayoutAbstractLeaf(ty)) return null;
+        if (self.isExecutableCallableType(ty)) return ty;
+        return self.requireConcreteExecutableType(ty, context);
+    }
+
     fn concreteExecutableTypeForLiteral(
         self: *Planner,
         inst: *InstScope,
@@ -5444,10 +5454,10 @@ const Planner = struct {
                     mono_cache,
                     ty,
                 );
-                const concrete_result_ty = self.stableConcreteExpectedExecutableType(
+                const concrete_result_ty = self.stableBranchJoinExecutableType(
                     explicit_result_ty,
                     "planExpr(when result)",
-                ) orelse self.stableConcreteExpectedExecutableType(
+                ) orelse self.stableBranchJoinExecutableType(
                     required_exec_ty,
                     "planExpr(when)",
                 );
@@ -5524,7 +5534,7 @@ const Planner = struct {
                     }
                     break :blk_result first_branch_ty;
                 };
-                if (!self.executableTypeIsAbstract(result_ty)) {
+                if (!self.executableTypeHasLayoutAbstractLeaf(result_ty)) {
                     for (lowered_branches.items) |*branch| {
                         const branch_body_ty = self.output.getExpr(branch.body).ty;
                         if (!self.types.equalIds(branch_body_ty, result_ty)) {
@@ -5559,10 +5569,10 @@ const Planner = struct {
                     mono_cache,
                     ty,
                 );
-                const concrete_result_ty = self.stableConcreteExpectedExecutableType(
+                const concrete_result_ty = self.stableBranchJoinExecutableType(
                     explicit_result_ty,
                     "planExpr(if_ result)",
-                ) orelse self.stableConcreteExpectedExecutableType(
+                ) orelse self.stableBranchJoinExecutableType(
                     required_exec_ty,
                     "planExpr(if_)",
                 );
@@ -5605,7 +5615,7 @@ const Planner = struct {
                     }
                     break :blk_result then_ty;
                 };
-                if (!self.executableTypeIsAbstract(result_ty)) {
+                if (!self.executableTypeHasLayoutAbstractLeaf(result_ty)) {
                     if (!self.types.equalIds(then_ty, result_ty)) {
                         if (!try self.retargetExprToExpectedExecutableType(then_body, result_ty)) {
                             then_body = try self.emitExplicitBridgeExpr(then_body, result_ty);
@@ -6901,16 +6911,6 @@ const Planner = struct {
     ) std.mem.Allocator.Error!bool {
         const expr_idx = @intFromEnum(expr_id);
         var expr = self.output.exprs.items[expr_idx];
-        if (self.isExecutableCallableType(expr.ty) and
-            self.isExecutableCallableType(expected_ty) and
-            !self.executableTypeHasLayoutAbstractLeaf(expr.ty) and
-            !self.executableTypeHasLayoutAbstractLeaf(expected_ty) and
-            self.isNaturalExecutableCallableType(expr.ty) == self.isNaturalExecutableCallableType(expected_ty))
-        {
-            expr.ty = expected_ty;
-            self.output.exprs.items[expr_idx] = expr;
-            return true;
-        }
         switch (expr.data) {
             .tag => |tag| {
                 const tag_exec_info = self.executableTagInfoByTagName(expected_ty, tag.name) orelse return false;
@@ -7077,8 +7077,21 @@ const Planner = struct {
                 self.output.exprs.items[expr_idx] = expr;
                 return true;
             },
-            else => return false,
+            else => {},
         }
+
+        if (self.isExecutableCallableType(expr.ty) and
+            self.isExecutableCallableType(expected_ty) and
+            !self.executableTypeHasLayoutAbstractLeaf(expr.ty) and
+            !self.executableTypeHasLayoutAbstractLeaf(expected_ty) and
+            self.isNaturalExecutableCallableType(expr.ty) == self.isNaturalExecutableCallableType(expected_ty))
+        {
+            expr.ty = expected_ty;
+            self.output.exprs.items[expr_idx] = expr;
+            return true;
+        }
+
+        return false;
     }
 
     fn makeErasedPackedFnExpr(
