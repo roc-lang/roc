@@ -5023,6 +5023,28 @@ const Planner = struct {
                     );
                 }
             }
+            if (original_entry.exact_fn_symbol) |exact_symbol| {
+                const nested_capture_exact_symbols = try self.currentExactCallableCaptureSymbols(exact_symbol, venv);
+                defer if (nested_capture_exact_symbols) |symbols| {
+                    if (symbols.len != 0) self.allocator.free(symbols);
+                };
+                if (self.current_specializing_symbol) |scope_symbol| {
+                    if (nested_capture_exact_symbols) |symbols| {
+                        try self.registerScopedExactCallableCaptureSymbols(
+                            scope_symbol,
+                            capture_symbol,
+                            symbols,
+                        );
+                        if (capture_symbol != exact_symbol) {
+                            try self.registerScopedExactCallableCaptureSymbols(
+                                scope_symbol,
+                                exact_symbol,
+                                symbols,
+                            );
+                        }
+                    }
+                }
+            }
             const current_exec_ty = if (original_entry.exact_fn_symbol) |exact_symbol|
                 try self.exactCallableExecutableTypeFromEnvEntry(
                     solved_types,
@@ -8637,6 +8659,25 @@ const Planner = struct {
         return null;
     }
 
+    fn currentExactCallableCaptureSymbols(
+        self: *Planner,
+        exact_symbol: Symbol,
+        venv: []const EnvEntry,
+    ) std.mem.Allocator.Error!?[]const Symbol {
+        if (self.current_specializing_symbol) |scope_symbol| {
+            if (self.scoped_exact_callable_capture_symbols.get(.{
+                .scope_symbol = scope_symbol,
+                .exact_symbol = exact_symbol,
+            })) |symbols| {
+                return try self.allocator.dupe(Symbol, symbols);
+            }
+        }
+        if (self.exact_callable_capture_symbols_by_symbol.get(exact_symbol)) |entry| {
+            return try self.allocator.dupe(Symbol, entry.capture_exact_symbols);
+        }
+        return try self.captureExactSymbolsForExactCallableInEnv(exact_symbol, venv);
+    }
+
     fn executableCaptureTypeForLambdaMember(
         self: *const Planner,
         callable_exec_ty: type_mod.TypeId,
@@ -8849,9 +8890,18 @@ const Planner = struct {
                             })) |symbols| {
                                 return symbols;
                             }
+                            if (self.scoped_exact_callable_capture_symbols.get(.{
+                                .scope_symbol = scope_symbol,
+                                .exact_symbol = symbol,
+                            })) |symbols| {
+                                return symbols;
+                            }
                         }
                         if (self.exact_callable_capture_symbols_by_symbol.get(expr.data.var_)) |entry| {
                             if (entry.symbol == symbol) return entry.capture_exact_symbols;
+                        }
+                        if (self.exact_callable_capture_symbols_by_symbol.get(symbol)) |entry| {
+                            return entry.capture_exact_symbols;
                         }
                     }
                     return null;
