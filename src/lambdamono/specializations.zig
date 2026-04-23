@@ -40,6 +40,7 @@ pub const Pending = struct {
     summary_exact_fn_ty: ?TypeVarId = null,
     summary_exact_captures: ?[]const solved.Type.Capture = null,
     summary_seeded: bool = false,
+    requested_capture_source_tys: ?[]const TypeVarId = null,
     exec_capture_ty: ?type_mod.TypeId = null,
     capture_exact_symbols: ?[]const Symbol = null,
     arg_exact_symbols: ?[]const Symbol = null,
@@ -81,6 +82,9 @@ pub const Queue = struct {
             }
             if (item.summary_exact_captures) |captures| {
                 if (captures.len != 0) self.allocator.free(captures);
+            }
+            if (item.requested_capture_source_tys) |capture_tys| {
+                if (capture_tys.len != 0) self.allocator.free(capture_tys);
             }
             if (item.exec_args_tys) |args| {
                 if (args.len != 0) self.allocator.free(args);
@@ -197,6 +201,7 @@ pub fn specializeFnWithExecArgs(
     repr_mode: Pending.ReprMode,
     requested_ty: TypeVarId,
     exec_types: ?*type_mod.Store,
+    capture_source_tys: ?[]const TypeVarId,
     exec_capture_ty: ?type_mod.TypeId,
     capture_exact_symbols: ?[]const Symbol,
     arg_exact_symbols: ?[]const Symbol,
@@ -212,6 +217,7 @@ pub fn specializeFnWithExecArgs(
         repr_mode,
         requested_ty,
         exec_types,
+        capture_source_tys,
         exec_capture_ty,
         capture_exact_symbols,
         arg_exact_symbols,
@@ -226,7 +232,29 @@ pub fn specializeFnWithExecArgs(
 
     var requested_types = solved.Type.Store.init(queue.allocator);
     errdefer requested_types.deinit();
-    const requested_ty_copy = try cloneTypeIntoStore(queue.allocator, solved_types, &requested_types, requested_ty);
+    var mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(queue.allocator);
+    defer mapping.deinit();
+    const requested_ty_copy = try cloneTypeRec(
+        queue.allocator,
+        solved_types,
+        &requested_types,
+        &mapping,
+        requested_ty,
+    );
+    const requested_capture_source_tys = if (capture_source_tys) |source_tys| blk: {
+        const out = try queue.allocator.alloc(TypeVarId, source_tys.len);
+        errdefer queue.allocator.free(out);
+        for (source_tys, 0..) |source_ty, i| {
+            out[i] = try cloneTypeRec(
+                queue.allocator,
+                solved_types,
+                &requested_types,
+                &mapping,
+                source_ty,
+            );
+        }
+        break :blk out;
+    } else null;
 
     const source_entry = symbols.get(requested_name);
     const specialized_symbol = try symbols.add(source_entry.name, specializedOrigin(source_entry.origin, requested_name));
@@ -240,6 +268,7 @@ pub fn specializeFnWithExecArgs(
         .requested_ty = requested_ty_copy,
         .key_bytes = key,
         .specialized_symbol = specialized_symbol,
+        .requested_capture_source_tys = requested_capture_source_tys,
         .exec_capture_ty = exec_capture_ty,
         .capture_exact_symbols = if (capture_exact_symbols) |symbols_slice|
             try queue.allocator.dupe(Symbol, symbols_slice)
@@ -266,6 +295,7 @@ pub fn specializeHostedWithExecArgs(
     requested_ty: TypeVarId,
     hosted_fn: solved.Ast.HostedFnDef,
     exec_types: ?*type_mod.Store,
+    capture_source_tys: ?[]const TypeVarId,
     exec_capture_ty: ?type_mod.TypeId,
     capture_exact_symbols: ?[]const Symbol,
     arg_exact_symbols: ?[]const Symbol,
@@ -279,6 +309,7 @@ pub fn specializeHostedWithExecArgs(
         repr_mode,
         requested_ty,
         exec_types,
+        capture_source_tys,
         exec_capture_ty,
         capture_exact_symbols,
         arg_exact_symbols,
@@ -293,7 +324,29 @@ pub fn specializeHostedWithExecArgs(
 
     var requested_types = solved.Type.Store.init(queue.allocator);
     errdefer requested_types.deinit();
-    const requested_ty_copy = try cloneTypeIntoStore(queue.allocator, solved_types, &requested_types, requested_ty);
+    var mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(queue.allocator);
+    defer mapping.deinit();
+    const requested_ty_copy = try cloneTypeRec(
+        queue.allocator,
+        solved_types,
+        &requested_types,
+        &mapping,
+        requested_ty,
+    );
+    const requested_capture_source_tys = if (capture_source_tys) |source_tys| blk: {
+        const out = try queue.allocator.alloc(TypeVarId, source_tys.len);
+        errdefer queue.allocator.free(out);
+        for (source_tys, 0..) |source_ty, i| {
+            out[i] = try cloneTypeRec(
+                queue.allocator,
+                solved_types,
+                &requested_types,
+                &mapping,
+                source_ty,
+            );
+        }
+        break :blk out;
+    } else null;
 
     const source_entry = symbols.get(requested_name);
     const specialized_symbol = try symbols.add(source_entry.name, specializedOrigin(source_entry.origin, requested_name));
@@ -307,6 +360,7 @@ pub fn specializeHostedWithExecArgs(
         .requested_ty = requested_ty_copy,
         .key_bytes = key,
         .specialized_symbol = specialized_symbol,
+        .requested_capture_source_tys = requested_capture_source_tys,
         .exec_capture_ty = exec_capture_ty,
         .capture_exact_symbols = if (capture_exact_symbols) |symbols_slice|
             try queue.allocator.dupe(Symbol, symbols_slice)
@@ -321,17 +375,6 @@ pub fn specializeHostedWithExecArgs(
     });
     try queue.by_key.put(key, queue.items.items.len - 1);
     return specialized_symbol;
-}
-
-fn cloneTypeIntoStore(
-    allocator: std.mem.Allocator,
-    source_types: *const solved.Type.Store,
-    target_types: *solved.Type.Store,
-    ty: TypeVarId,
-) std.mem.Allocator.Error!TypeVarId {
-    var mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(allocator);
-    defer mapping.deinit();
-    return try cloneTypeRec(allocator, source_types, target_types, &mapping, ty);
 }
 
 fn cloneTypeRec(
@@ -475,6 +518,7 @@ fn makeKey(
     repr_mode: Pending.ReprMode,
     requested_ty: TypeVarId,
     exec_types: ?*type_mod.Store,
+    capture_source_tys: ?[]const TypeVarId,
     exec_capture_ty: ?type_mod.TypeId,
     capture_exact_symbols: ?[]const Symbol,
     arg_exact_symbols: ?[]const Symbol,
@@ -494,6 +538,18 @@ fn makeKey(
     const ty_len: u32 = @intCast(ty_key.len);
     try key.appendSlice(allocator, std.mem.asBytes(&ty_len));
     try key.appendSlice(allocator, ty_key);
+
+    const capture_source_count: u32 = @intCast(if (capture_source_tys) |source_tys| source_tys.len else 0);
+    try key.appendSlice(allocator, std.mem.asBytes(&capture_source_count));
+    if (capture_source_tys) |source_tys| {
+        for (source_tys) |source_ty| {
+            const capture_ty_key = try solved_types.structuralKeyOwned(source_ty);
+            defer allocator.free(capture_ty_key);
+            const capture_ty_len: u32 = @intCast(capture_ty_key.len);
+            try key.appendSlice(allocator, std.mem.asBytes(&capture_ty_len));
+            try key.appendSlice(allocator, capture_ty_key);
+        }
+    }
 
     const has_exec_capture: u8 = if (exec_capture_ty != null) 1 else 0;
     try key.append(allocator, has_exec_capture);
