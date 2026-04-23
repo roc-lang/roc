@@ -2143,6 +2143,33 @@ const Planner = struct {
         return switch (self.types.getType(func_exec_ty)) {
             .erased_fn => blk: {
                 const func_capture_ty = self.erasedFnCaptureType(func_exec_ty);
+                if (builtin.mode == .Debug) {
+                    const func_summary = self.debugExecutableTypeSummary(func_exec_ty);
+                    defer func_summary.deinit(self.allocator);
+                    const func_var = if (self.output.getExpr(func_call_expr).data == .var_)
+                        self.output.getExpr(func_call_expr).data.var_
+                    else
+                        Symbol.none;
+                    const func_entry = if (!func_var.isNone())
+                        self.input.symbols.get(func_var)
+                    else
+                        null;
+                    debugPanicFmt(
+                        "TRACE erased callable call expr={d} func_tag={s} func_var={?d} func_name={?s} func_origin={?s} direct={?d} exec={s}",
+                        .{
+                            @intFromEnum(func_call_expr),
+                            @tagName(self.output.getExpr(func_call_expr).data),
+                            if (!func_var.isNone()) func_var.raw() else null,
+                            if (func_entry) |entry|
+                                if (entry.name.isNone()) "<none>" else self.input.idents.getText(entry.name)
+                            else
+                                null,
+                            if (func_entry) |entry| @tagName(entry.origin) else null,
+                            if (direct_func_symbol) |symbol| symbol.raw() else null,
+                            func_summary.text,
+                        },
+                    );
+                }
                 var authoritative_call_sig: ?type_mod.CallableSig = null;
                 defer if (authoritative_call_sig) |call_sig| {
                     if (call_sig.args.len != 0) self.allocator.free(call_sig.args);
@@ -4816,23 +4843,41 @@ const Planner = struct {
         }
         const out = try self.allocator.alloc(EnvEntry, capture_env.len + args.len);
         for (args, arg_tys, arg_exec_tys, 0..) |arg, arg_ty, arg_exec_ty, i| {
-            if (arg_exact_symbols) |exact_symbols| {
-                if (!exact_symbols[i].isNone()) {
-                    const exact_entry = specializations.lookupFnExact(self.fenv, exact_symbols[i]) orelse
-                        debugPanic("lambdamono.exec_plan.buildFnBodyEnv missing exact arg source definition");
-                    if (exact_entry.capture_symbols.len != 0 and
-                        self.types.getTypePreservingNominal(arg_exec_ty) == .erased_fn and
-                        self.erasedFnCaptureType(arg_exec_ty) == null)
-                    {
-                        debugPanicFmt(
-                            "lambdamono.exec_plan.buildFnBodyEnv exact arg missing erased capture type symbol={d} exact={d} arg_exec_ty={d}",
-                            .{
-                                arg.symbol.raw(),
-                                exact_symbols[i].raw(),
-                                @intFromEnum(arg_exec_ty),
-                            },
-                        );
-                    }
+            const arg_exact_symbol = if (arg_exact_symbols) |exact_symbols|
+                if (exact_symbols[i].isNone())
+                    self.exactCallableSymbolFromSourceType(solved_types, arg_ty)
+                else
+                    exact_symbols[i]
+            else
+                self.exactCallableSymbolFromSourceType(solved_types, arg_ty);
+            if (builtin.mode == .Debug and
+                arg_exact_symbol == null and
+                solved_types.maybeLambdaRepr(arg_ty) != null and
+                !arg.symbol.isNone())
+            {
+                const arg_name = self.input.symbols.get(arg.symbol).name;
+                if (!arg_name.isNone() and std.mem.eql(u8, self.input.idents.getText(arg_name), "order")) {
+                    debugPanicFmt(
+                        "TRACE missing exact fn symbol for callable arg symbol={d} ty={d}",
+                        .{ arg.symbol.raw(), @intFromEnum(arg_ty) },
+                    );
+                }
+            }
+            if (arg_exact_symbol) |exact_symbol| {
+                const exact_entry = specializations.lookupFnExact(self.fenv, exact_symbol) orelse
+                    debugPanic("lambdamono.exec_plan.buildFnBodyEnv missing exact arg source definition");
+                if (exact_entry.capture_symbols.len != 0 and
+                    self.types.getTypePreservingNominal(arg_exec_ty) == .erased_fn and
+                    self.erasedFnCaptureType(arg_exec_ty) == null)
+                {
+                    debugPanicFmt(
+                        "lambdamono.exec_plan.buildFnBodyEnv exact arg missing erased capture type symbol={d} exact={d} arg_exec_ty={d}",
+                        .{
+                            arg.symbol.raw(),
+                            exact_symbol.raw(),
+                            @intFromEnum(arg_exec_ty),
+                        },
+                    );
                 }
             }
             if (builtin.mode == .Debug) {
@@ -4847,10 +4892,7 @@ const Planner = struct {
                                 i,
                                 @intFromEnum(arg_exec_ty),
                                 @tagName(self.types.getTypePreservingNominal(arg_exec_ty)),
-                                if (arg_exact_symbols) |exact_symbols|
-                                    if (exact_symbols[i].isNone()) null else exact_symbols[i].raw()
-                                else
-                                    null,
+                                if (arg_exact_symbol) |exact_symbol| exact_symbol.raw() else null,
                             },
                         );
                     }
@@ -4860,10 +4902,7 @@ const Planner = struct {
                 .symbol = arg.symbol,
                 .ty = arg_ty,
                 .exec_ty = arg_exec_ty,
-                .exact_fn_symbol = if (arg_exact_symbols) |exact_symbols|
-                    if (exact_symbols[i].isNone()) null else exact_symbols[i]
-                else
-                    null,
+                .exact_fn_symbol = arg_exact_symbol,
             };
         }
         for (capture_env, 0..) |capture, i| {
@@ -8497,6 +8536,19 @@ const Planner = struct {
                 null;
             const exact_fn_symbol = pending_exact orelse
                 self.exactCallableSymbolForBinding(capture.symbol);
+            if (builtin.mode == .Debug and
+                exact_fn_symbol == null and
+                solved_types.maybeLambdaRepr(capture.ty) != null and
+                !capture.symbol.isNone())
+            {
+                const trace_capture_name = self.input.symbols.get(capture.symbol).name;
+                if (!trace_capture_name.isNone() and std.mem.eql(u8, self.input.idents.getText(trace_capture_name), "order")) {
+                    debugPanicFmt(
+                        "TRACE missing exact fn symbol for callable capture symbol={d} ty={d}",
+                        .{ capture.symbol.raw(), @intFromEnum(capture.ty) },
+                    );
+                }
+            }
             if (exact_fn_symbol) |exact_symbol| {
                 if (self.exactCallableCaptureSymbols(exact_symbol).len != 0 and
                     self.packagedCaptureTypeForExecutableCallable(field_info.ty, exact_symbol) == null)
@@ -8599,6 +8651,18 @@ const Planner = struct {
         return .natural;
     }
 
+    fn exactCallableSymbolFromSourceType(
+        self: *const Planner,
+        solved_types: *const solved.Type.Store,
+        ty: TypeVarId,
+    ) ?Symbol {
+        _ = self;
+        return switch (solved_types.maybeLambdaRepr(ty) orelse return null) {
+            .erased => null,
+            .lset => |members| if (members.len == 1) members[0].symbol else null,
+        };
+    }
+
     fn exactCallableSymbolForBoundExpr(
         self: *const Planner,
         bind_symbol: Symbol,
@@ -8606,7 +8670,8 @@ const Planner = struct {
     ) ?Symbol {
         if (self.input.exact_callable_aliases.get(bind_symbol)) |exact| return exact;
         if (self.exactCallableSymbolForBinding(bind_symbol)) |exact| return exact;
-        return self.directCallableSymbol(self.input.store.getExpr(body_expr_id));
+        return self.directCallableSymbol(self.input.store.getExpr(body_expr_id)) orelse
+            self.exactCallableSymbolFromSourceType(&self.input.types, self.input.store.getExpr(body_expr_id).ty);
     }
 
     fn lookupCaptureEnvEntry(
@@ -9877,7 +9942,7 @@ const Planner = struct {
             arg_expr_ids,
             call_arg_tys,
         );
-        const direct_func_symbol = self.directCallableSymbolFromExpr(venv, base_func_source);
+        const initial_direct_func_symbol = self.directCallableSymbolFromExpr(venv, base_func_source);
         const initial_func_source_ty = try self.instantiatedSourceTypeForExpr(
             inst,
             venv,
@@ -9890,6 +9955,8 @@ const Planner = struct {
             initial_func_source_ty,
         );
         try self.unifyIn(inst.types, func_source_ty, call_relation_ty);
+        const direct_func_symbol = initial_direct_func_symbol orelse
+            self.exactCallableSymbolFromSourceType(inst.types, func_source_ty);
         if (direct_func_symbol) |exact_symbol| {
             const exact_source_entry = specializations.lookupFnExact(self.fenv, exact_symbol);
             const exact_capture_symbols: []const Symbol = if (exact_source_entry) |exact_entry|
@@ -9961,10 +10028,35 @@ const Planner = struct {
                         requested_call_arg_tys,
                     );
                     for (arg_expr_ids, requested_call_arg_tys, 0..) |arg_expr_id, requested_arg_ty, i| {
-                        direct_arg_exact_symbols[i] = self.directCallableSymbolFromExpr(
+                        const actual_arg_source_ty = try self.instantiatedSourceTypeForExpr(
+                            inst,
+                            venv,
+                            arg_expr_id,
+                        );
+                        const refined_arg_source_ty = try self.refinedSourceTypeForExpr(
+                            inst,
+                            venv,
+                            arg_expr_id,
+                            actual_arg_source_ty,
+                        );
+                        direct_arg_exact_symbols[i] = (self.directCallableSymbolFromExpr(
                             venv,
                             self.input.store.getExpr(arg_expr_id),
-                        ) orelse Symbol.none;
+                        ) orelse self.exactCallableSymbolFromSourceType(inst.types, refined_arg_source_ty) orelse Symbol.none);
+                        if (builtin.mode == .Debug and
+                            direct_arg_exact_symbols[i].isNone() and
+                            inst.types.maybeLambdaRepr(refined_arg_source_ty) != null)
+                        {
+                            const arg_expr = self.input.store.getExpr(arg_expr_id);
+                            debugPanicFmt(
+                                "TRACE missing direct exact arg expr={d} tag={s} ty={d}",
+                                .{
+                                    @intFromEnum(arg_expr_id),
+                                    @tagName(arg_expr.data),
+                                    @intFromEnum(refined_arg_source_ty),
+                                },
+                            );
+                        }
                         direct_explicit_arg_tys[i] = if (!direct_arg_exact_symbols[i].isNone())
                             null
                         else
@@ -10433,7 +10525,7 @@ const Planner = struct {
                     .symbol = symbol,
                     .ty = ty,
                     .exec_ty = lowered_ty,
-                    .exact_fn_symbol = null,
+                    .exact_fn_symbol = self.exactCallableSymbolFromSourceType(inst.types, ty),
                 }});
             },
             .bool_lit => try self.allocator.dupe(EnvEntry, &.{}),
@@ -10545,7 +10637,7 @@ const Planner = struct {
                 .additions = if (symbol.isNone())
                     try self.allocator.dupe(EnvEntry, &.{})
                 else
-                    try self.allocator.dupe(EnvEntry, &.{.{ .symbol = symbol, .ty = ty, .exec_ty = lowered_ty, .exact_fn_symbol = null }}),
+                    try self.allocator.dupe(EnvEntry, &.{.{ .symbol = symbol, .ty = ty, .exec_ty = lowered_ty, .exact_fn_symbol = self.exactCallableSymbolFromSourceType(inst.types, ty) }}),
             },
             .bool_lit => |value| .{
                 .pat = try self.output.addPat(.{
