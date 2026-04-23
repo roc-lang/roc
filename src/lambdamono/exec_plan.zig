@@ -369,6 +369,12 @@ const Planner = struct {
         return self.executableTypeHasLayoutAbstractLeafVisited(ty, &visited) catch true;
     }
 
+    fn executableTypeHasErasedLeaf(self: *const Planner, ty: type_mod.TypeId) bool {
+        var visited = std.AutoHashMap(type_mod.TypeId, void).init(self.allocator);
+        defer visited.deinit();
+        return self.executableTypeHasErasedLeafVisited(ty, &visited) catch false;
+    }
+
     const PlannedExecBinding = struct {
         source: TypeVarId,
         exec: type_mod.TypeId,
@@ -471,6 +477,7 @@ const Planner = struct {
 
     fn appendPlannedExecBinding(
         self: *const Planner,
+        solved_types: *const solved.Type.Store,
         bindings: *std.ArrayList(PlannedExecBinding),
         source_ty: TypeVarId,
         exec_ty: type_mod.TypeId,
@@ -479,17 +486,66 @@ const Planner = struct {
         for (bindings.items) |binding| {
             if (binding.source == source_ty) {
                 if (!self.types.equalIds(binding.exec, exec_ty)) {
+                    const source = self.debugSolvedTypeSummary(solved_types, source_ty);
+                    defer source.deinit(self.allocator);
                     const left = self.debugExecutableTypeSummary(binding.exec);
                     defer left.deinit(self.allocator);
                     const right = self.debugExecutableTypeSummary(exec_ty);
                     defer right.deinit(self.allocator);
+                    const scope_name = if (self.current_specializing_symbol) |scope_symbol| blk: {
+                        const entry = self.input.symbols.get(scope_symbol);
+                        break :blk if (entry.name.isNone())
+                            "<none>"
+                        else
+                            self.input.idents.getText(entry.name);
+                    } else null;
+                    const scope_root = if (self.current_specializing_symbol) |scope_symbol|
+                        self.rootSourceSymbol(scope_symbol)
+                    else
+                        null;
+                    const scope_root_name = if (scope_root) |scope_symbol| blk: {
+                        const entry = self.input.symbols.get(scope_symbol);
+                        break :blk if (entry.name.isNone())
+                            "<none>"
+                        else
+                            self.input.idents.getText(entry.name);
+                    } else null;
                     debugPanicFmt(
-                        "lambdamono.exec_plan.appendPlannedExecBinding executable type disagreement source={d} left={s} right={s}",
-                        .{ @intFromEnum(source_ty), left.text, right.text },
+                        "lambdamono.exec_plan.appendPlannedExecBinding executable type disagreement scope={?d} scope_name={?s} scope_root={?d} scope_root_name={?s} scope_root_origin={?s} source={d} summary={s} left={s} right={s}",
+                        .{
+                            if (self.current_specializing_symbol) |scope_symbol| scope_symbol.raw() else null,
+                            scope_name,
+                            if (scope_root) |scope_symbol| scope_symbol.raw() else null,
+                            scope_root_name,
+                            if (scope_root) |scope_symbol|
+                                @tagName(self.input.symbols.get(scope_symbol).origin)
+                            else
+                                null,
+                            @intFromEnum(source_ty),
+                            source.text,
+                            left.text,
+                            right.text,
+                        },
                     );
                 }
                 return;
             }
+        }
+        if (builtin.mode == .Debug and
+            solved_types.getNode(source_ty) == .content and
+            solved_types.getNode(source_ty).content == .primitive and
+            solved_types.getNode(source_ty).content.primitive == .dec and
+            self.types.getTypePreservingNominal(exec_ty) == .primitive and
+            self.types.getTypePreservingNominal(exec_ty).primitive == .erased)
+        {
+            debugPanicFmt(
+                "TRACE first dec->erased binding scope={?d} scope_root={?d} source={d}",
+                .{
+                    if (self.current_specializing_symbol) |scope_symbol| scope_symbol.raw() else null,
+                    if (self.current_specializing_symbol) |scope_symbol| self.rootSourceSymbol(scope_symbol).raw() else null,
+                    @intFromEnum(source_ty),
+                },
+            );
         }
         try bindings.append(self.allocator, .{ .source = source_ty, .exec = exec_ty });
     }
@@ -504,7 +560,7 @@ const Planner = struct {
     ) std.mem.Allocator.Error!void {
         const source_root = solved_types.unlinkPreservingNominal(source_ty);
         const exec_root = try self.types.keyId(exec_ty);
-        try self.appendPlannedExecBinding(bindings, source_root, exec_root);
+        try self.appendPlannedExecBinding(solved_types, bindings, source_root, exec_root);
         for (active.items) |pair| {
             if (pair.source == source_root and pair.exec == exec_root) return;
         }
@@ -575,6 +631,32 @@ const Planner = struct {
                 },
                 .func => |source_func| {
                     const exec_call_sig = self.executableCallableSig(exec_root) orelse return;
+                    for (exec_call_sig.args) |exec_arg| {
+                        if (self.executableTypeHasLayoutAbstractLeaf(exec_arg) or
+                            self.executableTypeHasErasedLeaf(exec_arg))
+                        {
+                            try self.collectPlannedExecBindings(
+                                solved_types,
+                                source_func.lset,
+                                exec_root,
+                                bindings,
+                                active,
+                            );
+                            return;
+                        }
+                    }
+                    if (self.executableTypeHasLayoutAbstractLeaf(exec_call_sig.ret) or
+                        self.executableTypeHasErasedLeaf(exec_call_sig.ret))
+                    {
+                        try self.collectPlannedExecBindings(
+                            solved_types,
+                            source_func.lset,
+                            exec_root,
+                            bindings,
+                            active,
+                        );
+                        return;
+                    }
                     const source_args = solved_types.sliceTypeVarSpan(source_func.args);
                     if (source_args.len != exec_call_sig.args.len) return;
                     for (source_args, exec_call_sig.args) |source_arg, exec_arg| {
@@ -954,6 +1036,64 @@ const Planner = struct {
                 for (tag_union.tags) |tag| {
                     for (tag.args) |arg| {
                         if (try self.executableTypeHasLayoutAbstractLeafVisited(arg, visited)) break :blk true;
+                    }
+                }
+                break :blk false;
+            },
+        };
+    }
+
+    fn executableTypeHasErasedLeafVisited(
+        self: *const Planner,
+        ty: type_mod.TypeId,
+        visited: *std.AutoHashMap(type_mod.TypeId, void),
+    ) std.mem.Allocator.Error!bool {
+        var root = ty;
+        while (true) switch (self.types.types.items[@intFromEnum(root)]) {
+            .link => |next| root = next,
+            else => break,
+        };
+        if (visited.contains(root)) return false;
+        try visited.put(root, {});
+
+        return switch (self.types.types.items[@intFromEnum(root)]) {
+            .placeholder, .unbd => false,
+            .link => unreachable,
+            .primitive => |prim| prim == .erased,
+            .nominal => |nominal| try self.executableTypeHasErasedLeafVisited(nominal.backing, visited),
+            .list => |elem| try self.executableTypeHasErasedLeafVisited(elem, visited),
+            .box => |elem| try self.executableTypeHasErasedLeafVisited(elem, visited),
+            .erased_fn => |erased_fn| blk: {
+                if (erased_fn.capture) |capture| {
+                    if (try self.executableTypeHasErasedLeafVisited(capture, visited)) break :blk true;
+                }
+                for (erased_fn.call.args) |arg| {
+                    if (try self.executableTypeHasErasedLeafVisited(arg, visited)) break :blk true;
+                }
+                break :blk try self.executableTypeHasErasedLeafVisited(erased_fn.call.ret, visited);
+            },
+            .tuple => |tuple| blk: {
+                for (tuple) |elem| {
+                    if (try self.executableTypeHasErasedLeafVisited(elem, visited)) break :blk true;
+                }
+                break :blk false;
+            },
+            .record => |record| blk: {
+                for (record.fields) |field| {
+                    if (try self.executableTypeHasErasedLeafVisited(field.ty, visited)) break :blk true;
+                }
+                break :blk false;
+            },
+            .tag_union => |tag_union| blk: {
+                if (tag_union.call) |call| {
+                    for (call.args) |arg| {
+                        if (try self.executableTypeHasErasedLeafVisited(arg, visited)) break :blk true;
+                    }
+                    if (try self.executableTypeHasErasedLeafVisited(call.ret, visited)) break :blk true;
+                }
+                for (tag_union.tags) |tag| {
+                    for (tag.args) |arg| {
+                        if (try self.executableTypeHasErasedLeafVisited(arg, visited)) break :blk true;
                     }
                 }
                 break :blk false;
@@ -1599,6 +1739,7 @@ const Planner = struct {
         requested_ty: TypeVarId,
         capture_exec_ty: ?type_mod.TypeId,
         capture_exact_symbols: ?[]const Symbol,
+        arg_exact_symbols: ?[]const Symbol,
     ) std.mem.Allocator.Error!SpecializedCallableSummary {
         const pending_symbol = try self.queueCallableSpecializationWithExplicitSignature(
             solved_types,
@@ -1608,7 +1749,7 @@ const Planner = struct {
             requested_ty,
             capture_exec_ty,
             capture_exact_symbols,
-            null,
+            arg_exact_symbols,
         );
         const pending = self.lookupPendingBySpecializedSymbol(pending_symbol) orelse
             debugPanic("lambdamono.exec_plan.ensureQueuedCallableSpecializedForRequestedType missing queued specialization");
@@ -1662,6 +1803,7 @@ const Planner = struct {
             requested_ty,
             capture_exec_ty,
             capture_exact_symbols,
+            null,
         );
     }
 
@@ -2039,6 +2181,7 @@ const Planner = struct {
                     entry_fn_ty,
                     null,
                     null,
+                    null,
                 );
                 var inst = InstScope.borrow(self.allocator, &self.input.types);
                 defer inst.deinit();
@@ -2174,33 +2317,6 @@ const Planner = struct {
         return switch (self.types.getType(func_exec_ty)) {
             .erased_fn => blk: {
                 const func_capture_ty = self.erasedFnCaptureType(func_exec_ty);
-                if (builtin.mode == .Debug) {
-                    const func_summary = self.debugExecutableTypeSummary(func_exec_ty);
-                    defer func_summary.deinit(self.allocator);
-                    const func_var = if (self.output.getExpr(func_call_expr).data == .var_)
-                        self.output.getExpr(func_call_expr).data.var_
-                    else
-                        Symbol.none;
-                    const func_entry = if (!func_var.isNone())
-                        self.input.symbols.get(func_var)
-                    else
-                        null;
-                    debugPanicFmt(
-                        "TRACE erased callable call expr={d} func_tag={s} func_var={?d} func_name={?s} func_origin={?s} direct={?d} exec={s}",
-                        .{
-                            @intFromEnum(func_call_expr),
-                            @tagName(self.output.getExpr(func_call_expr).data),
-                            if (!func_var.isNone()) func_var.raw() else null,
-                            if (func_entry) |entry|
-                                if (entry.name.isNone()) "<none>" else self.input.idents.getText(entry.name)
-                            else
-                                null,
-                            if (func_entry) |entry| @tagName(entry.origin) else null,
-                            if (direct_func_symbol) |symbol| symbol.raw() else null,
-                            func_summary.text,
-                        },
-                    );
-                }
                 var authoritative_call_sig: ?type_mod.CallableSig = null;
                 defer if (authoritative_call_sig) |call_sig| {
                     if (call_sig.args.len != 0) self.allocator.free(call_sig.args);
@@ -2208,6 +2324,10 @@ const Planner = struct {
                 switch (solved_types.lambdaRepr(func_source_ty)) {
                     .lset => |lambda_members| {
                         if (direct_func_symbol) |exact_symbol| {
+                            const capture_exact_symbols = self.lookupExactCallableCaptureSymbols(
+                                func_call_expr,
+                                exact_symbol,
+                            );
                             const specialized = try self.ensureQueuedCallableSpecializedForRequestedType(
                                 solved_types,
                                 mono_cache,
@@ -2215,6 +2335,7 @@ const Planner = struct {
                                 .erased_boundary,
                                 call_relation_ty,
                                 func_capture_ty,
+                                capture_exact_symbols,
                                 null,
                             );
                             if (specialized.exec_capture_ty != func_capture_ty) {
@@ -2254,6 +2375,7 @@ const Planner = struct {
                                     .erased_boundary,
                                     call_relation_ty,
                                     func_capture_ty,
+                                    null,
                                     null,
                                 );
                                 if (specialized.exec_capture_ty != func_capture_ty) {
@@ -5078,6 +5200,7 @@ const Planner = struct {
             };
             var entry = original_entry;
             entry.ty = source_ty;
+            entry.exec_ty = current_exec_ty;
             capture_env[i] = entry;
             capture_bindings[i] = .{
                 .symbol = capture_symbol,
@@ -5124,45 +5247,33 @@ const Planner = struct {
 
     fn exactCallableExecutableTypeFromPackagedCapture(
         self: *Planner,
-        solved_types: *solved.Type.Store,
-        mono_cache: *lower_type.MonoCache,
-        source_ty: TypeVarId,
+        current_exec_ty: type_mod.TypeId,
         exact_symbol: Symbol,
         capture_ty: ?type_mod.TypeId,
-        repr_mode: specializations.Pending.ReprMode,
     ) std.mem.Allocator.Error!type_mod.TypeId {
-        const exact_repr_mode: specializations.Pending.ReprMode = switch (solved_types.lambdaRepr(source_ty)) {
-            .lset => .natural,
-            .erased => .erased_boundary,
-        };
-        const callable_exec_ty = try self.executableTypeFromSourceWithNumericDefault(
-            solved_types,
-            mono_cache,
-            source_ty,
-            exact_repr_mode,
-        );
         const call_sig = self.requireExecutableCallableSig(
-            callable_exec_ty,
+            current_exec_ty,
             "exactCallableExecutableTypeFromPackagedCapture",
         );
-        const normalized_capture_ty = if (exact_repr_mode == .erased_boundary)
+        const current_exec = self.types.getTypePreservingNominal(current_exec_ty);
+        const normalized_capture_ty = if (current_exec == .erased_fn)
             if (capture_ty) |ty|
                 if (self.isEmptyRecordType(ty)) null else ty
             else
                 null
         else
             capture_ty;
-        _ = repr_mode;
-        return switch (exact_repr_mode) {
-            .natural => try self.makeSingletonExecutableLambdaType(
+        return switch (current_exec) {
+            .tag_union => try self.makeSingletonExecutableLambdaType(
                 exact_symbol,
                 normalized_capture_ty,
                 call_sig,
             ),
-            .erased_boundary => try self.makeErasedFnType(
+            .erased_fn => try self.makeErasedFnType(
                 normalized_capture_ty,
                 call_sig,
             ),
+            else => debugPanic("lambdamono.exec_plan.exactCallableExecutableTypeFromPackagedCapture expected callable executable type"),
         };
     }
 
@@ -5175,6 +5286,8 @@ const Planner = struct {
         exact_symbol: Symbol,
         repr_mode: specializations.Pending.ReprMode,
     ) std.mem.Allocator.Error!type_mod.TypeId {
+        _ = source_ty;
+        _ = repr_mode;
         const current_exec_ty = try self.currentEnvEntryExecutableType(
             solved_types,
             mono_cache,
@@ -5209,12 +5322,9 @@ const Planner = struct {
             );
         }
         return try self.exactCallableExecutableTypeFromPackagedCapture(
-            solved_types,
-            mono_cache,
-            source_ty,
+            current_exec_ty,
             exact_symbol,
             packaged_capture_ty,
-            repr_mode,
         );
     }
 
@@ -5866,6 +5976,25 @@ const Planner = struct {
                                 arg_source_ty,
                             )) |arg_exec_ty| {
                                 if (!self.executableTypeIsAbstract(arg_exec_ty)) {
+                                    if (builtin.mode == .Debug and
+                                        inst.types.getNode(arg_source_ty) == .content and
+                                        inst.types.getNode(arg_source_ty).content == .primitive and
+                                        inst.types.getNode(arg_source_ty).content.primitive == .dec and
+                                        self.types.getTypePreservingNominal(arg_exec_ty) == .primitive and
+                                        self.types.getTypePreservingNominal(arg_exec_ty).primitive == .erased)
+                                    {
+                                        const arg_expr = self.input.store.getExpr(arg_id);
+                                        debugPanicFmt(
+                                            "TRACE low-level dec->erased op={s} arg_expr={d} arg_tag={s} scope={?d} scope_root={?d}",
+                                            .{
+                                                @tagName(ll.op),
+                                                @intFromEnum(arg_id),
+                                                @tagName(arg_expr.data),
+                                                if (self.current_specializing_symbol) |scope_symbol| scope_symbol.raw() else null,
+                                                if (self.current_specializing_symbol) |scope_symbol| self.rootSourceSymbol(scope_symbol).raw() else null,
+                                            },
+                                        );
+                                    }
                                     try self.collectPlannedExecBindings(
                                         inst.types,
                                         arg_source_ty,
@@ -7250,7 +7379,12 @@ const Planner = struct {
         callable_id: ast.ExprId,
         forced_capture_ty: ?type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.ExprId {
+        _ = mono_cache;
         const callable = self.output.getExpr(callable_id);
+        const erased_call_sig = self.requireExecutableCallableSig(
+            callable.ty,
+            "lowerConcreteCallableAsErased",
+        );
         const lambda_members = try self.collectExecutableLambdaMembers(inst.types, source_ty, callable.ty);
         defer self.allocator.free(lambda_members);
 
@@ -7267,8 +7401,8 @@ const Planner = struct {
                 };
                 break :blk try self.makeErasedPackedFnExpr(
                     inst,
-                    mono_cache,
                     source_ty,
+                    erased_call_sig,
                     lambda_members[tag.discriminant].symbol,
                     capture_expr,
                     forced_capture_ty,
@@ -7279,17 +7413,13 @@ const Planner = struct {
             else => blk: {
                 const erased_capture_ty = forced_capture_ty orelse
                     debugPanic("lambdamono.exec_plan.lowerConcreteCallableAsErased missing explicit erased capture type");
-                const erased_call_sig = self.requireExecutableCallableSig(
-                    callable.ty,
-                    "lowerConcreteCallableAsErased",
-                );
                 const branches = try self.allocator.alloc(ast.Branch, lambda_members.len);
                 defer self.allocator.free(branches);
                 for (lambda_members, 0..) |lambda_member, i| {
                     branches[i] = try self.makeErasedCallableBranch(
                         inst,
-                        mono_cache,
                         source_ty,
+                        erased_call_sig,
                         callable.ty,
                         lambda_member,
                         erased_capture_ty,
@@ -7635,8 +7765,8 @@ const Planner = struct {
     fn makeErasedPackedFnExpr(
         self: *Planner,
         inst: *InstScope,
-        mono_cache: *lower_type.MonoCache,
         requested_ty: TypeVarId,
+        erased_call_sig: type_mod.CallableSig,
         symbol: Symbol,
         capture_expr: ?ast.ExprId,
         forced_capture_ty: ?type_mod.TypeId,
@@ -7676,24 +7806,26 @@ const Planner = struct {
         if (capture_ty == null and capture_count != 0) {
             debugPanic("lambdamono.exec_plan.makeErasedPackedFnExpr missing capture type for captured lambda");
         }
-        const specialized = try self.ensureQueuedCallableSpecializedForRequestedType(
+        const specialized = try self.ensureQueuedCallableSpecializedWithExecSignature(
             inst.types,
-            mono_cache,
             symbol,
             .erased_boundary,
             requested_ty,
             capture_ty,
             capture_exact_symbols,
+            null,
+            erased_call_sig.args,
+            erased_call_sig.ret,
         );
         if (specialized.exec_capture_ty != capture_ty) {
             debugPanic("lambdamono.exec_plan.makeErasedPackedFnExpr queued erased capture type drift");
         }
-        const erased_call_sig: type_mod.CallableSig = .{
+        const authoritative_call_sig: type_mod.CallableSig = .{
             .args = try self.types.dupeTypeIds(specialized.exec_args_tys),
             .ret = specialized.exec_ret_ty,
         };
         return try self.output.addExpr(.{
-            .ty = try self.makeErasedFnType(capture_ty, erased_call_sig),
+            .ty = try self.makeErasedFnType(capture_ty, authoritative_call_sig),
             .data = .{ .packed_fn = .{
                 .lambda = specialized.symbol,
                 .captures = capture_expr_opt,
@@ -7705,13 +7837,17 @@ const Planner = struct {
     fn lowerExactExecutableCallableAsErased(
         self: *Planner,
         inst: *InstScope,
-        mono_cache: *lower_type.MonoCache,
         source_ty: TypeVarId,
         callable_id: ast.ExprId,
+        expected_ty: type_mod.TypeId,
         forced_capture_ty: ?type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.ExprId {
         const callable = self.output.getExpr(callable_id);
         const callable_ty = callable.ty;
+        const erased_call_sig = self.requireExecutableCallableSig(
+            expected_ty,
+            "lowerExactExecutableCallableAsErased",
+        );
         const tag_union = switch (self.types.getTypePreservingNominal(callable_ty)) {
             .tag_union => |tag_union| tag_union,
             else => debugPanic("lambdamono.exec_plan.lowerExactExecutableCallableAsErased expected executable lambda-set type"),
@@ -7734,8 +7870,8 @@ const Planner = struct {
                 };
                 break :blk try self.makeErasedPackedFnExpr(
                     inst,
-                    mono_cache,
                     source_ty,
+                    erased_call_sig,
                     lambda_symbol,
                     capture_expr,
                     forced_capture_ty,
@@ -7745,10 +7881,6 @@ const Planner = struct {
             else => blk: {
                 const erased_capture_ty = forced_capture_ty orelse
                     debugPanic("lambdamono.exec_plan.lowerExactExecutableCallableAsErased missing explicit erased capture type");
-                const erased_call_sig = self.requireExecutableCallableSig(
-                    try self.lowerErasedBoundaryExecutableTypeIn(inst.types, mono_cache, source_ty),
-                    "lowerExactExecutableCallableAsErased",
-                );
                 const branches = try self.allocator.alloc(ast.Branch, tag_union.tags.len);
                 defer self.allocator.free(branches);
                 for (tag_union.tags, 0..) |tag_info, i| {
@@ -7769,8 +7901,8 @@ const Planner = struct {
                             }),
                             .body = try self.makeErasedPackedFnExpr(
                                 inst,
-                                mono_cache,
                                 source_ty,
+                                erased_call_sig,
                                 lambda_symbol,
                                 null,
                                 erased_capture_ty,
@@ -7818,8 +7950,8 @@ const Planner = struct {
                             }),
                             .body = try self.makeErasedPackedFnExpr(
                                 inst,
-                                mono_cache,
                                 source_ty,
+                                erased_call_sig,
                                 lambda_symbol,
                                 capture_expr,
                                 erased_capture_ty,
@@ -7842,8 +7974,8 @@ const Planner = struct {
     fn makeErasedCallableBranch(
         self: *Planner,
         inst: *InstScope,
-        mono_cache: *lower_type.MonoCache,
         requested_ty: TypeVarId,
+        erased_call_sig: type_mod.CallableSig,
         callable_ty: type_mod.TypeId,
         lambda_member: LambdaMemberInfo,
         erased_capture_ty: ?type_mod.TypeId,
@@ -7859,8 +7991,8 @@ const Planner = struct {
             }),
             .body = try self.makeErasedPackedFnExpr(
                 inst,
-                mono_cache,
                 requested_ty,
+                erased_call_sig,
                 lambda_member.symbol,
                 null,
                 erased_capture_ty,
@@ -7888,8 +8020,8 @@ const Planner = struct {
                 }),
                 .body = try self.makeErasedPackedFnExpr(
                     inst,
-                    mono_cache,
                     requested_ty,
+                    erased_call_sig,
                     lambda_member.symbol,
                     capture_expr,
                     capture_ty,
@@ -8968,6 +9100,41 @@ const Planner = struct {
             self.exactCallableSymbolFromSourceType(&self.input.types, self.input.store.getExpr(body_expr_id).ty);
     }
 
+    fn exactCallableSymbolsForSolvedArgs(
+        self: *Planner,
+        inst: *InstScope,
+        venv: []const EnvEntry,
+        arg_expr_ids: []const solved.Ast.ExprId,
+    ) std.mem.Allocator.Error!?[]const Symbol {
+        const exact_symbols = try self.allocator.alloc(Symbol, arg_expr_ids.len);
+        errdefer self.allocator.free(exact_symbols);
+        var any_exact = false;
+        for (arg_expr_ids, 0..) |arg_expr_id, i| {
+            const actual_arg_source_ty = try self.instantiatedSourceTypeForExpr(
+                inst,
+                venv,
+                arg_expr_id,
+            );
+            const refined_arg_source_ty = try self.refinedSourceTypeForExpr(
+                inst,
+                venv,
+                arg_expr_id,
+                actual_arg_source_ty,
+            );
+            const exact_symbol = self.directCallableSymbolFromExpr(
+                venv,
+                self.input.store.getExpr(arg_expr_id),
+            ) orelse self.exactCallableSymbolFromSourceType(inst.types, refined_arg_source_ty) orelse Symbol.none;
+            exact_symbols[i] = exact_symbol;
+            if (!exact_symbol.isNone()) any_exact = true;
+        }
+        if (!any_exact) {
+            self.allocator.free(exact_symbols);
+            return null;
+        }
+        return exact_symbols;
+    }
+
     fn lookupCaptureEnvEntry(
         self: *Planner,
         captures: []const EnvEntry,
@@ -9472,9 +9639,9 @@ const Planner = struct {
                 .tag_union => |tag_union| if (self.tagUnionIsInternalLambdaSet(tag_union.tags)) {
                     const lowered = try self.lowerExactExecutableCallableAsErased(
                         inst,
-                        mono_cache,
                         source_ty,
                         expr_id,
+                        expected_ty,
                         self.erasedFnCaptureType(expected_ty),
                     );
                     if (self.types.equalIds(self.output.getExpr(lowered).ty, expected_ty)) {
@@ -10373,17 +10540,20 @@ const Planner = struct {
                         }
                     }
                     for (arg_expr_ids, requested_call_arg_tys, 0..) |arg_expr_id, requested_arg_ty, i| {
+                        const provisional_exec_ty = try self.planExecutableTypeFromSolvedWithBindings(
+                            inst.types,
+                            mono_cache,
+                            requested_arg_ty,
+                            direct_bindings.items,
+                            repr_mode,
+                            .normal,
+                        );
                         const required_arg_exec_ty = if (!direct_arg_exact_symbols[i].isNone())
-                            try self.freshAbstractExecutableType()
+                            if (!self.executableTypeIsAbstract(provisional_exec_ty))
+                                provisional_exec_ty
+                            else
+                                try self.freshAbstractExecutableType()
                         else blk: {
-                            const provisional_exec_ty = try self.planExecutableTypeFromSolvedWithBindings(
-                                inst.types,
-                                mono_cache,
-                                requested_arg_ty,
-                                direct_bindings.items,
-                                repr_mode,
-                                .normal,
-                            );
                             break :blk if (direct_explicit_arg_tys[i]) |explicit_arg_ty|
                                 if (!self.executableTypeIsAbstract(explicit_arg_ty))
                                     explicit_arg_ty
@@ -10570,6 +10740,13 @@ const Planner = struct {
                 .tag_union => self.executableCaptureTypeForLambdaMember(lowered_func_exec_ty, exact_symbol),
                 else => null,
             };
+            const capture_exact_symbols = self.lookupExactCallableCaptureSymbols(lowered_func, exact_symbol);
+            const arg_exact_symbols = try self.exactCallableSymbolsForSolvedArgs(
+                inst,
+                venv,
+                arg_expr_ids,
+            );
+            defer if (arg_exact_symbols) |symbols| self.allocator.free(symbols);
             const specialized = try self.ensureQueuedCallableSpecializedForRequestedType(
                 inst.types,
                 mono_cache,
@@ -10577,7 +10754,8 @@ const Planner = struct {
                 exact_repr_mode,
                 call_relation_ty,
                 capture_ty,
-                null,
+                capture_exact_symbols,
+                arg_exact_symbols,
             );
             authoritative_exec_call_sig = .{
                 .args = try self.types.dupeTypeIds(specialized.exec_args_tys),
