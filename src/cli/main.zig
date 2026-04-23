@@ -6187,22 +6187,12 @@ fn runViaDev(
     };
     defer executable.deinit();
 
-    // Use the DevEvaluator's RocOps (with setjmp/longjmp crash protection)
-    // so roc_crashed returns an error rather than calling std.process.exit(1).
-    dev_eval.roc_ops.hosted_fns = roc_ops.hosted_fns;
-
-    dev_eval.callRocABIWithCrashProtection(&executable, result_ptr, args_ptr) catch |err| switch (err) {
-        error.RocCrashed => return error.DevEvaluatorFailed,
-        error.Segfault => return error.DevEvaluatorFailed,
-    };
-
-    // Inline `expect` failures during dev execution report to DevRocEnv's own
-    // RocOps env. Propagate that back to the host's env so the outer process
-    // can exit with a non-zero status.
-    if (dev_eval.roc_env.inline_expect_failed) {
-        const default_env: *echo_platform.DefaultRocOpsEnv = @ptrCast(@alignCast(roc_ops.env));
-        default_env.inline_expect_failed = true;
-    }
+    // Pass the original roc_ops (which carries echo_env as .env) directly to
+    // the JIT code.  Using dev_eval.roc_ops would supply DevRocEnv as .env,
+    // which echoHostedFn misinterprets as *EchoEnv and crashes (SIGSEGV at
+    // 0x6e).  For the CLI echo platform exit-on-crash is acceptable; the
+    // global SIGSEGV handler in stack_overflow.zig handles native segfaults.
+    executable.callRocABI(@ptrCast(@constCast(roc_ops)), result_ptr, args_ptr);
 }
 
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.
