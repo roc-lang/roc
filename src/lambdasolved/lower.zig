@@ -2548,7 +2548,8 @@ const Lowerer = struct {
         for (self.root_defs.items) |def_id| {
             const def = &self.output.defs.items[@intFromEnum(def_id)];
             switch (def.value) {
-                .fn_ => |fn_def| {
+                .fn_ => |*fn_def| {
+                    fn_def.args = try self.rewriteFunctionArgSymbols(fn_def.args, def.bind.ty);
                     var fn_env = top_env;
                     const fn_args = self.output.sliceTypedSymbolSpan(fn_def.args);
                     for (fn_args) |arg| {
@@ -2571,6 +2572,7 @@ const Lowerer = struct {
                     }
                     try self.propagateExprErasure(fn_def.body, fn_env);
                     def.bind.ty = try self.rewriteFunctionRetType(def.bind.ty, self.output.getExpr(fn_def.body).ty);
+                    fn_def.args = try self.rewriteFunctionArgSymbols(fn_def.args, def.bind.ty);
                 },
                 .hosted_fn => {},
                 .val => |expr_id| {
@@ -2944,6 +2946,32 @@ const Lowerer = struct {
             },
             else => debugPanic("lambdasolved.rewriteFunctionRetType expected function", .{}),
         };
+    }
+
+    fn rewriteFunctionArgSymbols(
+        self: *Lowerer,
+        args_span: ast.Span(ast.TypedSymbol),
+        fn_ty: TypeVarId,
+    ) std.mem.Allocator.Error!ast.Span(ast.TypedSymbol) {
+        const current_args = self.output.sliceTypedSymbolSpan(args_span);
+        const expected_args = self.types.sliceTypeVarSpan(self.types.fnShape(fn_ty).args);
+        if (current_args.len != expected_args.len) {
+            debugPanic("lambdasolved.rewriteFunctionArgSymbols arg arity mismatch", .{});
+        }
+
+        var changed = false;
+        const rewritten = try self.allocator.alloc(ast.TypedSymbol, current_args.len);
+        defer self.allocator.free(rewritten);
+        for (current_args, expected_args, 0..) |arg, expected_ty, i| {
+            const updated_ty = try self.overlayErasureTemplate(expected_ty, arg.ty);
+            if (!self.types.equalIds(updated_ty, arg.ty)) changed = true;
+            rewritten[i] = .{
+                .symbol = arg.symbol,
+                .ty = updated_ty,
+            };
+        }
+        if (!changed) return args_span;
+        return try self.output.addTypedSymbolSpan(rewritten);
     }
 
     fn rewriteFunctionLsetType(self: *Lowerer, ty: TypeVarId, new_lset: TypeVarId) std.mem.Allocator.Error!TypeVarId {

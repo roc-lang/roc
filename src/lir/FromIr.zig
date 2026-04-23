@@ -1028,7 +1028,15 @@ const ProcLowerer = struct {
             .direct => blk: {
                 if (target.tag == .zst) break :blk next;
                 if (actual_layout != target_layout and !(ls.isZeroSized(actual) and ls.isZeroSized(target))) {
-                    debugPanic("lir.from_ir direct bridge plan shape mismatch");
+                    std.debug.panic(
+                        "lir.from_ir direct bridge plan shape mismatch actual_layout={d} target_layout={d} actual_ref={any} target_ref={any}",
+                        .{
+                            @intFromEnum(actual_layout),
+                            @intFromEnum(target_layout),
+                            self.localLayoutRef(source_local),
+                            self.localLayoutRef(target_local),
+                        },
+                    );
                 }
                 break :blk try self.addAssignRef(target_local, .fresh, .{ .local = source_local }, next);
             },

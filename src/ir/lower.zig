@@ -1171,6 +1171,24 @@ const Lowerer = struct {
         for (fields, 0..) |field, i| {
             const value = try self.lowerSubexprValue(block, env, field.value);
             if (value == null) return null;
+            const expected_layout = self.input.layouts.layoutForType(self.input.store.getExpr(field.value).ty);
+            if (!std.meta.eql(value.?.layout, expected_layout)) {
+                const source_expr = self.input.store.getExpr(field.value);
+                std.debug.panic(
+                    "ir.lower field value layout mismatch field={d} expr={d} expr_tag={s} expr_ty={d} expr_ty_tag={s} symbol={?d} origin={?s} actual_layout={any} expected_layout={any}",
+                    .{
+                        @as(u32, field.name.idx),
+                        @intFromEnum(field.value),
+                        @tagName(source_expr.data),
+                        @intFromEnum(source_expr.ty),
+                        @tagName(self.input.types.getTypePreservingNominal(source_expr.ty)),
+                        if (source_expr.data == .var_) source_expr.data.var_.raw() else null,
+                        if (source_expr.data == .var_) @tagName(self.input.symbols.get(source_expr.data.var_).origin) else null,
+                        value.?.layout,
+                        expected_layout,
+                    },
+                );
+            }
             lowered_values[i] = value.?;
         }
 
