@@ -266,9 +266,16 @@ fn readLineSimple(outlive: Allocator, std_io: std.Io, prompt: []const u8, out: *
     var read_buffer: [1]u8 = undefined;
 
     while (true) {
-        const bytes_read = try in.readStreaming(std_io, &.{&read_buffer});
+        const bytes_read = in.readStreaming(std_io, &.{&read_buffer}) catch |err| switch (err) {
+            // std.Io streaming returns error.EndOfStream on EOF rather than returning 0 bytes.
+            error.EndOfStream => {
+                line_buffer.deinit(outlive);
+                return try outlive.dupe(u8, "exit");
+            },
+            else => return err,
+        };
         if (bytes_read == 0) {
-            // EOF - return "exit" to signal REPL should exit
+            // Belt-and-suspenders: treat a zero-byte read as EOF as well.
             line_buffer.deinit(outlive);
             return try outlive.dupe(u8, "exit");
         }

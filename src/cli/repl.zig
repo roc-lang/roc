@@ -187,8 +187,11 @@ pub fn run(ctx: *CliCtx, backend: Backend) !void {
     while (true) : ({
         ctx.io.flush();
     }) {
-        // Read line
-        const line = try repl_line.readLine(ctx.arena, ctx.io.std_io, "» ", std.Io.File.stdin());
+        // Read line (EOF on stdin exits the REPL gracefully)
+        const line = repl_line.readLine(ctx.arena, ctx.io.std_io, "» ", std.Io.File.stdin()) catch |err| switch (err) {
+            error.EndOfStream => break,
+            else => return err,
+        };
         defer ctx.arena.free(line);
         // add line to history
         try repl_line.history.append(line);
