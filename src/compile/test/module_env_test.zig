@@ -351,11 +351,16 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
 
     try env.pushTypesToSExprTree(expr_idx, &tree);
 
+    // Convert tree to string.
+    // fromArrayList takes ownership of the ArrayList buffer immediately, so
+    // we must call toArrayList() explicitly before inspecting the result.
     var result = std.ArrayList(u8).empty;
     defer result.deinit(gpa);
-    var aw: std.Io.Writer.Allocating = .fromArrayList(gpa, &result);
-    defer result = aw.toArrayList();
-    try tree.toStringPretty(&aw.writer, .include_linecol);
+    {
+        var aw: std.Io.Writer.Allocating = .fromArrayList(gpa, &result);
+        try tree.toStringPretty(&aw.writer, .include_linecol);
+        result = aw.toArrayList();
+    }
 
     // Verify the output contains the type information
     const result_str = result.items;
