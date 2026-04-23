@@ -618,7 +618,7 @@ pub fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, ex
     // Keep module order aligned with resolveImports/getResolvedModule indices.
     const all_module_envs = [_]*ModuleEnv{ @constCast(builtin_module_env), module_env };
 
-    var wasm_result = wasm_eval.generateWasm(module_env, expr_idx, &all_module_envs) catch {
+    var wasm_result = wasm_eval.generateWasm(module_env, expr_idx, &all_module_envs, WasmEvaluator.default_entrypoint_name) catch {
         return error.WasmGenerateCodeFailed;
     };
     defer wasm_result.deinit();
@@ -753,6 +753,14 @@ pub fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, ex
             hostRocCrashed,
             null,
         ) catch {
+            return error.WasmExecFailed;
+        };
+
+        // Compiler-rt intrinsics needed by merged builtins
+        env_imports.addHostFunction("__multi3", &[_]bytebox.ValType{ .I32, .I64, .I64, .I64, .I64 }, &[_]bytebox.ValType{}, hostMulti3, null) catch {
+            return error.WasmExecFailed;
+        };
+        env_imports.addHostFunction("__muloti4", &[_]bytebox.ValType{ .I32, .I64, .I64, .I64, .I64, .I32 }, &[_]bytebox.ValType{}, hostMuloti4, null) catch {
             return error.WasmExecFailed;
         };
 
@@ -1834,6 +1842,41 @@ fn hostRocCrashed(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
         const msg = buffer[msg_ptr..][0..msg_len];
         std.debug.print("Roc crashed: {s}\n", .{msg});
     }
+}
+
+/// __multi3: 128-bit signed multiply. result_ptr = a * b (truncating to 128 bits).
+fn hostMulti3(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const result_ptr: usize = @intCast(params[0].I32);
+    const a_lo: u64 = @bitCast(params[1].I64);
+    const a_hi: u64 = @bitCast(params[2].I64);
+    const b_lo: u64 = @bitCast(params[3].I64);
+    const b_hi: u64 = @bitCast(params[4].I64);
+    const a: i128 = @bitCast(@as(u128, a_hi) << 64 | @as(u128, a_lo));
+    const b: i128 = @bitCast(@as(u128, b_hi) << 64 | @as(u128, b_lo));
+    const result = i128h.mul_i128(a, b);
+    const result_u128: u128 = @bitCast(result);
+    std.mem.writeInt(u64, buffer[result_ptr..][0..8], @truncate(result_u128), .little);
+    std.mem.writeInt(u64, buffer[result_ptr + 8 ..][0..8], @truncate(result_u128 >> 64), .little);
+}
+
+/// __muloti4: 128-bit signed multiply with overflow detection.
+fn hostMuloti4(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const result_ptr: usize = @intCast(params[0].I32);
+    const a_lo: u64 = @bitCast(params[1].I64);
+    const a_hi: u64 = @bitCast(params[2].I64);
+    const b_lo: u64 = @bitCast(params[3].I64);
+    const b_hi: u64 = @bitCast(params[4].I64);
+    const overflow_ptr: usize = @intCast(params[5].I32);
+    const a: i128 = @bitCast(@as(u128, a_hi) << 64 | @as(u128, a_lo));
+    const b: i128 = @bitCast(@as(u128, b_hi) << 64 | @as(u128, b_lo));
+    const result = i128h.mul_i128(a, b);
+    const overflow: i32 = if (b != 0 and @divTrunc(result, b) != a) 1 else 0;
+    const result_u128: u128 = @bitCast(result);
+    std.mem.writeInt(u64, buffer[result_ptr..][0..8], @truncate(result_u128), .little);
+    std.mem.writeInt(u64, buffer[result_ptr + 8 ..][0..8], @truncate(result_u128 >> 64), .little);
+    std.mem.writeInt(i32, buffer[overflow_ptr..][0..4], overflow, .little);
 }
 
 // --- String operation host function helpers ---
@@ -7472,4 +7515,144 @@ test "parse diagnostic reporting crashes if module name is uninitialized" {
         var report = try parse_ast.parseDiagnosticToReport(&module_env.common, diag, test_allocator, filename);
         defer report.deinit();
     }
+}
+
+// Phase 7a: Entrypoint ABI Migration — Structural Tests
+//
+// These verify the generated wasm module has the correct exports and
+// function signatures. Behavioral correctness is validated by the
+// 1289 eval tests which exercise the eval wrapper ("main") end-to-end.
+//
+// Full integration tests (calling roc__main_for_host_1_exposed from a
+// surgically-linked host) will be added in Phase 12 when the eval
+// pipeline switches to surgical linking.
+
+const WasmModule = backend.wasm.WasmModule;
+const ExportKind = WasmModule.ExportKind;
+
+/// Generate wasm bytes for a source expression and parse the module structure.
+fn generateAndParseWasmModule(source: []const u8) !struct {
+    module: WasmModule,
+    wasm_result: eval_mod.WasmCodeResult,
+    wasm_eval: eval_mod.WasmEvaluator,
+    parse_resources: ParsedExprResources,
+
+    fn deinit(self: *@This()) void {
+        self.module.deinit();
+        self.wasm_result.deinit();
+        self.wasm_eval.deinit();
+        cleanupParseAndCanonical(test_allocator, self.parse_resources);
+    }
+} {
+    const resources = try parseAndCanonicalizeExpr(test_allocator, source);
+    errdefer cleanupParseAndCanonical(test_allocator, resources);
+
+    var wasm_eval = WasmEvaluator.init(test_allocator) catch return error.WasmEvaluatorInitFailed;
+    errdefer wasm_eval.deinit();
+
+    // Wrap in Str.inspect for consistency with eval pipeline
+    const str_inspect_idx = try wrapInStrInspect(resources.module_env, resources.expr_idx);
+    const all_module_envs = [_]*ModuleEnv{ @constCast(resources.builtin_module.env), resources.module_env };
+
+    var wasm_result = wasm_eval.generateWasm(resources.module_env, str_inspect_idx, &all_module_envs, WasmEvaluator.default_entrypoint_name) catch {
+        return error.WasmGenerateCodeFailed;
+    };
+    errdefer wasm_result.deinit();
+
+    if (wasm_result.wasm_bytes.len == 0) return error.WasmGenerateCodeFailed;
+
+    // Re-parse the encoded bytes to inspect module structure
+    const module = WasmModule.preload(test_allocator, @constCast(wasm_result.wasm_bytes), false) catch {
+        return error.WasmGenerateCodeFailed;
+    };
+
+    return .{
+        .module = module,
+        .wasm_result = wasm_result,
+        .wasm_eval = wasm_eval,
+        .parse_resources = resources,
+    };
+}
+
+fn findExport(exports: []const WasmModule.Export, name: []const u8) ?WasmModule.Export {
+    for (exports) |exp| {
+        if (std.mem.eql(u8, exp.name, name)) return exp;
+    }
+    return null;
+}
+
+test "app entrypoint — exports both RocCall entrypoint and main" {
+    var ctx = try generateAndParseWasmModule("42");
+    defer ctx.deinit();
+
+    const exports = ctx.module.exports.items;
+
+    // RocCall entrypoint must exist as a function export
+    const roc_call_export = findExport(exports, WasmEvaluator.default_entrypoint_name);
+    try std.testing.expect(roc_call_export != null);
+    try std.testing.expectEqual(ExportKind.func, roc_call_export.?.kind);
+
+    // main (eval wrapper) must exist as a function export
+    const main_export = findExport(exports, "main");
+    try std.testing.expect(main_export != null);
+    try std.testing.expectEqual(ExportKind.func, main_export.?.kind);
+
+    // memory must be exported
+    const mem_export = findExport(exports, "memory");
+    try std.testing.expect(mem_export != null);
+    try std.testing.expectEqual(ExportKind.memory, mem_export.?.kind);
+}
+
+test "app entrypoint — RocCall entrypoint has type (i32, i32, i32) → void" {
+    var ctx = try generateAndParseWasmModule("42");
+    defer ctx.deinit();
+
+    const roc_call_export = findExport(ctx.module.exports.items, WasmEvaluator.default_entrypoint_name).?;
+
+    // Function index in export points past imports into defined functions.
+    // Look up its type index.
+    const import_count = ctx.module.importCount();
+    const local_fn_idx = roc_call_export.idx - import_count;
+    const type_idx = ctx.module.func_type_indices.items[local_fn_idx];
+
+    // Verify RocCall signature: 3 params (i32, i32, i32), no results
+    const func_type = ctx.module.func_types.items[type_idx];
+    try std.testing.expectEqual(@as(usize, 3), func_type.params.len);
+    try std.testing.expectEqual(WasmModule.ValType.i32, func_type.params[0]);
+    try std.testing.expectEqual(WasmModule.ValType.i32, func_type.params[1]);
+    try std.testing.expectEqual(WasmModule.ValType.i32, func_type.params[2]);
+    // Return type: void (null)
+    const result_vt = ctx.module.func_type_results.items[type_idx];
+    try std.testing.expectEqual(@as(?WasmModule.ValType, null), result_vt);
+}
+
+test "app entrypoint — main (eval wrapper) returns a value, not void" {
+    var ctx = try generateAndParseWasmModule("42");
+    defer ctx.deinit();
+
+    const main_export = findExport(ctx.module.exports.items, "main").?;
+
+    const import_count = ctx.module.importCount();
+    const local_fn_idx = main_export.idx - import_count;
+    const type_idx = ctx.module.func_type_indices.items[local_fn_idx];
+
+    // Eval wrapper takes 1 param (env_ptr: i32)
+    const func_type = ctx.module.func_types.items[type_idx];
+    try std.testing.expectEqual(@as(usize, 1), func_type.params.len);
+    try std.testing.expectEqual(WasmModule.ValType.i32, func_type.params[0]);
+
+    // Returns a value (not void) — Str.inspect result is i32 pointer
+    const result_vt = ctx.module.func_type_results.items[type_idx];
+    try std.testing.expect(result_vt != null);
+}
+
+test "app entrypoint — roc__main and main are distinct functions" {
+    var ctx = try generateAndParseWasmModule("42");
+    defer ctx.deinit();
+
+    const roc_call = findExport(ctx.module.exports.items, WasmEvaluator.default_entrypoint_name).?;
+    const main = findExport(ctx.module.exports.items, "main").?;
+
+    // They must be different function indices
+    try std.testing.expect(roc_call.idx != main.idx);
 }

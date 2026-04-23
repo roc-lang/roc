@@ -28,22 +28,25 @@ const RocDbg = builtins.host_abi.RocDbg;
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocCrashed = builtins.host_abi.RocCrashed;
 
-// Import functions from the host environment
-extern "env" fn roc_panic(ptr: [*]const u8, len: usize) noreturn;
-extern "env" fn roc_dbg(ptr: [*]const u8, len: usize) void;
-extern "env" fn roc_expect_failed(ptr: [*]const u8, len: usize) void;
+// Import functions from the host environment.
+const env_imports = struct {
+    extern "env" fn roc_panic(ptr: [*]const u8, len: usize) noreturn;
+    extern "env" fn roc_dbg(ptr: [*]const u8, len: usize) void;
+    extern "env" fn roc_expect_failed(ptr: [*]const u8, len: usize) void;
+    extern "env" fn echo(ptr: [*]const u8, len: usize) void;
+};
 
 // Use Zig's standard WASM allocator for proper memory management
 const wasm_allocator = std.heap.wasm_allocator;
 
-// Direct exports for the interpreter shim's memory allocation
+// Raw exports for the interpreter shim's memory allocation
 // (The interpreter shim's wasmAlloc calls these directly)
 //
 // IMPORTANT: Since roc_dealloc doesn't receive the allocation size, but Zig's WasmAllocator
 // needs it to determine the correct size class, we store the size at the beginning of each
 // allocation and return a pointer past it. This adds @sizeOf(usize) overhead per allocation.
 
-export fn roc_alloc(size: usize, alignment: u32) callconv(.c) ?*anyopaque {
+export fn roc_alloc_raw(size: usize, alignment: u32) callconv(.c) ?*anyopaque {
     const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, alignment));
 
     // Header size must be at least alignment to ensure returned pointer is properly aligned
@@ -61,7 +64,7 @@ export fn roc_alloc(size: usize, alignment: u32) callconv(.c) ?*anyopaque {
     return @ptrCast(result + header_size);
 }
 
-export fn roc_dealloc(ptr: *anyopaque, alignment: u32) callconv(.c) void {
+export fn roc_dealloc_raw(ptr: *anyopaque, alignment: u32) callconv(.c) void {
     const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, alignment));
 
     // Calculate header size (must match roc_alloc)
@@ -80,7 +83,7 @@ export fn roc_dealloc(ptr: *anyopaque, alignment: u32) callconv(.c) void {
     wasm_allocator.rawFree(base_ptr[0..total_size], align_log2, @returnAddress());
 }
 
-export fn roc_realloc(ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.c) ?*anyopaque {
+export fn roc_realloc_raw(ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.c) ?*anyopaque {
     const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, alignment));
 
     // Calculate header size (must match roc_alloc)
@@ -110,11 +113,11 @@ export fn roc_realloc(ptr: *anyopaque, new_size: usize, old_size: usize, alignme
     return @ptrCast(new_user_ptr);
 }
 
-// RocOps callback implementations
-// These use the same size-header approach as the exported roc_alloc/roc_dealloc,
+// Canonical RocOps callback implementations.
+// These use the same size-header approach as the raw roc_alloc/dealloc exports,
 // because RocDealloc doesn't provide the length (by design for seamless slices).
 
-fn rocAllocFn(alloc_req: *RocAlloc, _: *anyopaque) callconv(.c) void {
+fn roc_alloc(alloc_req: *RocAlloc, _: *anyopaque) callconv(.c) void {
     const alignment: u32 = @intCast(alloc_req.alignment);
     const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, alignment));
 
@@ -132,14 +135,14 @@ fn rocAllocFn(alloc_req: *RocAlloc, _: *anyopaque) callconv(.c) void {
     alloc_req.answer = @ptrCast(result + header_size);
 }
 
-fn rocDeallocFn(dealloc_req: *RocDealloc, _: *anyopaque) callconv(.c) void {
+fn roc_dealloc(dealloc_req: *RocDealloc, _: *anyopaque) callconv(.c) void {
     const alignment: u32 = @intCast(dealloc_req.alignment);
     const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, alignment));
 
-    // Calculate header size (must match rocAllocFn)
+    // Calculate header size (must match roc_alloc)
     const header_size = @max(alignment, @sizeOf(usize));
 
-    // Get the base pointer (before the header we stored in rocAllocFn)
+    // Get the base pointer (before the header we stored in roc_alloc)
     const byte_ptr: [*]u8 = @ptrCast(dealloc_req.ptr);
     const base_ptr = byte_ptr - header_size;
 
@@ -152,7 +155,7 @@ fn rocDeallocFn(dealloc_req: *RocDealloc, _: *anyopaque) callconv(.c) void {
     wasm_allocator.rawFree(base_ptr[0..total_size], align_log2, @returnAddress());
 }
 
-fn rocReallocFn(realloc_req: *RocRealloc, _: *anyopaque) callconv(.c) void {
+fn roc_realloc(realloc_req: *RocRealloc, _: *anyopaque) callconv(.c) void {
     // RocRealloc provides new_length but we need to allocate with size header
     const alignment: u32 = @intCast(realloc_req.alignment);
     const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, alignment));
@@ -171,26 +174,34 @@ fn rocReallocFn(realloc_req: *RocRealloc, _: *anyopaque) callconv(.c) void {
     realloc_req.answer = @ptrCast(result + header_size);
 }
 
-fn rocDbgFn(roc_dbg_arg: *const RocDbg, _: *anyopaque) callconv(.c) void {
-    roc_dbg(roc_dbg_arg.utf8_bytes, roc_dbg_arg.len);
+fn roc_dbg(roc_dbg_arg: *const RocDbg, _: *anyopaque) callconv(.c) void {
+    env_imports.roc_dbg(roc_dbg_arg.utf8_bytes, roc_dbg_arg.len);
 }
 
-fn rocExpectFailedFn(roc_expect: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {
-    roc_expect_failed(roc_expect.utf8_bytes, roc_expect.len);
+fn roc_expect_failed(roc_expect: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {
+    env_imports.roc_expect_failed(roc_expect.utf8_bytes, roc_expect.len);
 }
 
-fn rocCrashedFn(roc_crashed: *const RocCrashed, _: *anyopaque) callconv(.c) noreturn {
-    roc_panic(roc_crashed.utf8_bytes, roc_crashed.len);
+fn roc_crashed(crash_args: *const RocCrashed, _: *anyopaque) callconv(.c) noreturn {
+    env_imports.roc_panic(crash_args.utf8_bytes, crash_args.len);
 }
+
+// Hosted function: Stdout.line! (index 0)
+// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
+fn hostedStdoutLine(_: *anyopaque, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
+    const s = args.str.asSlice();
+    env_imports.echo(s.ptr, s.len);
+}
+
+const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
+    builtins.host_abi.hostedFn(&hostedStdoutLine), // Stdout.line! (index 0)
+};
 
 // External Roc entrypoint
 extern fn roc__main(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 
 // Dummy env for RocOps (not used in WASM)
 var dummy_env: u8 = 0;
-
-// Empty hosted functions array (this platform has no hosted effects)
-const empty_hosted_fns = [_]builtins.host_abi.HostedFn{};
 
 // Store the last result for wasm_result_len()
 var last_result: RocStr = undefined;
@@ -200,15 +211,15 @@ var last_result: RocStr = undefined;
 export fn wasm_main() [*]const u8 {
     var roc_ops = RocOps{
         .env = @ptrCast(&dummy_env),
-        .roc_alloc = rocAllocFn,
-        .roc_dealloc = rocDeallocFn,
-        .roc_realloc = rocReallocFn,
-        .roc_dbg = rocDbgFn,
-        .roc_expect_failed = rocExpectFailedFn,
-        .roc_crashed = rocCrashedFn,
+        .roc_alloc = roc_alloc,
+        .roc_dealloc = roc_dealloc,
+        .roc_realloc = roc_realloc,
+        .roc_dbg = roc_dbg,
+        .roc_expect_failed = roc_expect_failed,
+        .roc_crashed = roc_crashed,
         .hosted_fns = .{
-            .count = 0,
-            .fns = @constCast(&empty_hosted_fns),
+            .count = hosted_function_ptrs.len,
+            .fns = @constCast(&hosted_function_ptrs),
         },
     };
 

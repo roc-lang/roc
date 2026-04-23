@@ -1839,6 +1839,38 @@ fn buildAndCopyTestPlatformHostLib(
     return &copy_step.step;
 }
 
+/// Build the wasm test platform host as a relocatable .wasm object (not an archive).
+/// Surgical linking operates on a single relocatable object with linking/reloc sections.
+fn buildAndCopyWasmHostObject(
+    b: *std.Build,
+    target: ResolvedTarget,
+    optimize: OptimizeMode,
+    roc_modules: modules.RocModules,
+    strip: bool,
+    omit_frame_pointer: ?bool,
+) *Step {
+    const obj = b.addObject(.{
+        .name = "host",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/wasm/platform/host.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .omit_frame_pointer = omit_frame_pointer,
+            .pic = true,
+        }),
+    });
+    configureBackend(obj, target);
+    obj.root_module.addImport("builtins", roc_modules.builtins);
+    obj.root_module.addImport("build_options", roc_modules.build_options);
+
+    const dest_path = "test/wasm/platform/targets/wasm32/host.wasm";
+    const copy_step = b.addUpdateSourceFiles();
+    copy_step.addCopyFileToSource(obj.getEmittedBin(), dest_path);
+
+    return &copy_step.step;
+}
+
 // Workaround for Zig bug https://codeberg.org/ziglang/zig/issues/30572
 const FixArchivePaddingStep = struct {
     step: Step,
@@ -2044,7 +2076,7 @@ fn setupTestPlatforms(
     strip: bool,
     omit_frame_pointer: ?bool,
     platform_filter: ?[]const u8,
-) void {
+) *Step {
     // Clear the Roc cache when test platforms are rebuilt to ensure stale cached hosts aren't used
     const clear_cache_step = createClearCacheStep(b);
     const native_target_name = roc_target.RocTarget.fromStdTarget(target.result).toName();
@@ -2111,24 +2143,22 @@ fn setupTestPlatforms(
         }
     }
 
-    // Build the wasm test platform host for wasm32-freestanding
-    {
-        const wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
-        const copy_step = buildAndCopyTestPlatformHostLib(
-            b,
-            "wasm",
-            wasm_target,
-            "wasm32",
-            optimize,
-            roc_modules,
-            strip,
-            omit_frame_pointer,
-        );
-        clear_cache_step.dependOn(copy_step);
-    }
+    // Build the wasm test platform host as a relocatable .wasm object for surgical linking
+    const wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
+    const wasm_host_step = buildAndCopyWasmHostObject(
+        b,
+        wasm_target,
+        optimize,
+        roc_modules,
+        strip,
+        omit_frame_pointer,
+    );
+    clear_cache_step.dependOn(wasm_host_step);
 
     b.getInstallStep().dependOn(clear_cache_step);
     test_platforms_step.dependOn(clear_cache_step);
+
+    return wasm_host_step;
 }
 
 pub fn build(b: *std.Build) void {
@@ -2324,8 +2354,38 @@ pub fn build(b: *std.Build) void {
     roc_modules.eval.addImport("bytebox", bytebox.module("bytebox"));
     roc_modules.lsp.addImport("compiled_builtins", compiled_builtins_module);
 
+    // Build wasm32 builtins object at build time so the eval/REPL pipeline can
+    // merge real compiled builtins into WASM modules (instead of using host imports).
+    const wasm32_resolved_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
+    const wasm32_builtins_obj = b.addObject(.{
+        .name = "roc_builtins_wasm32_eval",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/static_lib.zig"),
+            .target = wasm32_resolved_target,
+            .optimize = optimize,
+            .strip = strip,
+            .omit_frame_pointer = omit_frame_pointer,
+            .pic = true,
+        }),
+    });
+    wasm32_builtins_obj.root_module.addImport("tracy", b.addModule("tracy_stub_wasm32_eval", .{
+        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+    }));
+    wasm32_builtins_obj.bundle_compiler_rt = false;
+    configureBackend(wasm32_builtins_obj, wasm32_resolved_target);
+
+    const wasm32_builtins_files = b.addWriteFiles();
+    _ = wasm32_builtins_files.addCopyFile(wasm32_builtins_obj.getEmittedBin(), "roc_builtins.o");
+    const wasm32_builtins_module = b.createModule(.{
+        .root_source_file = wasm32_builtins_files.add("wasm32_builtins.zig",
+            \\pub const bytes = @embedFile("roc_builtins.o");
+            \\
+        ),
+    });
+    roc_modules.eval.addImport("wasm32_builtins", wasm32_builtins_module);
+
     // Setup test platform host libraries
-    setupTestPlatforms(b, target, optimize, roc_modules, test_platforms_step, strip, omit_frame_pointer, platform_filter);
+    const wasm_host_step = setupTestPlatforms(b, target, optimize, roc_modules, test_platforms_step, strip, omit_frame_pointer, platform_filter);
 
     const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, flag_enable_tracy) orelse return;
     roc_modules.addAll(roc_exe);
@@ -2818,9 +2878,10 @@ pub fn build(b: *std.Build) void {
             module_test.test_step.root_module.addImport("bytebox", bytebox.module("bytebox"));
         }
 
-        // Add bytebox to eval tests for wasm backend testing
+        // Add bytebox and wasm32 builtins to eval tests for wasm backend testing
         if (std.mem.eql(u8, module_test.test_step.name, "eval")) {
             module_test.test_step.root_module.addImport("bytebox", bytebox.module("bytebox"));
+            module_test.test_step.root_module.addImport("wasm32_builtins", wasm32_builtins_module);
             const compile_build_module = b.createModule(.{
                 .root_source_file = b.path("src/compile/compile_build.zig"),
             });
@@ -2852,6 +2913,13 @@ pub fn build(b: *std.Build) void {
                 &copy_builtins_bc.step,
                 zstd,
             );
+        }
+
+        // Backend tests need the wasm host object and builtins for WASM linking tests
+        if (std.mem.eql(u8, module_test.test_step.name, "backend")) {
+            module_test.test_step.step.dependOn(wasm_host_step);
+            module_test.test_step.root_module.addImport("wasm32_builtins", wasm32_builtins_module);
+            module_test.test_step.root_module.addImport("bytebox", bytebox.module("bytebox"));
         }
 
         if (std.mem.eql(u8, module_test.test_step.name, "repl")) {
@@ -3623,7 +3691,7 @@ fn addMainExe(
     for (cross_compile_builtins_targets) |cross_target| {
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
 
-        // Build builtins object file for this target
+        // Build builtins object file for this target.
         const cross_builtins_obj = b.addObject(.{
             .name = b.fmt("roc_builtins_{s}", .{cross_target.name}),
             .root_module = b.createModule(.{

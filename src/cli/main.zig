@@ -4158,7 +4158,8 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     else
         null;
 
-    var layout_store = layout.Store.init(all_module_envs, builtin_str, ctx.gpa, base.target.TargetUsize.native) catch {
+    const target_usize: base.target.TargetUsize = if (target_arch == .wasm32) .u32 else base.target.TargetUsize.native;
+    var layout_store = layout.Store.init(all_module_envs, builtin_str, ctx.gpa, target_usize) catch {
         std.log.err("Failed to create layout store", .{});
         return error.LayoutStoreFailed;
     };
@@ -4423,126 +4424,334 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     // Get procedures from the LIR store
     const procs = lir_store.getProcSpecs();
 
-    // Compile to object file
-    std.log.debug("Generating native code...", .{});
-    var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
+    if (target_arch == .wasm32) {
+        // ---- WASM32 Surgical Linking Pipeline ----
+        const WasmModule = backend.wasm.WasmModule;
+        const WasmCodeGen = backend.wasm.WasmCodeGen;
 
-    ensureCompilerCacheDirExists(build_cache_dir) catch |err| {
-        std.log.err("Failed to create compiler build cache dir {s}: {}", .{ build_cache_dir, err });
-        return err;
-    };
+        std.log.debug("WASM32 surgical linking pipeline...", .{});
 
-    const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_{s}.o", .{@tagName(target)});
-    const obj_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, obj_filename });
+        // Step 1: Get host.wasm path from link spec
+        const target_name = @tagName(target);
+        const link_spec = targets_config.getLinkSpec(target, link_type) orelse {
+            return ctx.fail(.{ .linker_failed = .{
+                .err = error.UnsupportedTarget,
+                .target = target_name,
+            } });
+        };
 
-    object_compiler.compileToObjectFileAndWrite(
-        &lir_store,
-        &layout_store,
-        entrypoints.items,
-        procs,
-        target,
-        obj_path,
-    ) catch |err| {
-        std.log.err("Native compilation failed: {}", .{err});
-        return error.NativeCompilationFailed;
-    };
-
-    std.log.debug("Object file generated: {s}", .{obj_path});
-
-    // If --no-link, we're done
-    if (args.no_link) {
-        const stdout = ctx.io.stdout();
-        try stdout.print("Object file generated: {s}\n", .{obj_path});
-        return;
-    }
-
-    // Get link spec and build file lists
-    const target_name = @tagName(target);
-    const link_spec = targets_config.getLinkSpec(target, link_type) orelse {
-        return ctx.fail(.{ .linker_failed = .{
-            .err = error.UnsupportedTarget,
-            .target = target_name,
-        } });
-    };
-
-    const files_dir = targets_config.files_dir orelse "targets";
-    var platform_files_pre = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
-    var platform_files_post = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
-    var hit_app = false;
-
-    for (link_spec.items) |item| {
-        switch (item) {
-            .file_path => |path| {
-                const full_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir, target_name, path });
-
-                std.fs.cwd().access(full_path, .{}) catch {
-                    const result = platform_validation.targets_validator.ValidationResult{
-                        .missing_target_file = .{
-                            .target = target,
-                            .link_type = link_type,
-                            .file_path = path,
-                            .expected_full_path = full_path,
-                        },
+        const files_dir = targets_config.files_dir orelse "targets";
+        var host_wasm_path: ?[]const u8 = null;
+        for (link_spec.items) |item| {
+            switch (item) {
+                .file_path => |path| {
+                    const full_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir, target_name, path });
+                    std.fs.cwd().access(full_path, .{}) catch {
+                        const result = platform_validation.targets_validator.ValidationResult{
+                            .missing_target_file = .{
+                                .target = target,
+                                .link_type = link_type,
+                                .file_path = path,
+                                .expected_full_path = full_path,
+                            },
+                        };
+                        _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                        return error.MissingTargetFile;
                     };
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
-                    return error.MissingTargetFile;
-                };
-
-                if (!hit_app) {
-                    try platform_files_pre.append(full_path);
-                } else {
-                    try platform_files_post.append(full_path);
-                }
-            },
-            .app => {
-                hit_app = true;
-            },
-            .win_gui => {},
+                    // For wasm32, the first file_path before `app` is the host.wasm
+                    if (host_wasm_path == null) {
+                        host_wasm_path = full_path;
+                    }
+                },
+                .app, .win_gui => {},
+            }
         }
+
+        const host_path = host_wasm_path orelse {
+            const stderr = ctx.io.stderr();
+            try stderr.print("Error: No host.wasm found in platform's wasm32 target configuration.\n", .{});
+            return error.MissingTargetFile;
+        };
+        std.log.debug("Host WASM: {s}", .{host_path});
+
+        // Step 2: Read and parse host module
+        const host_bytes = std.fs.cwd().readFileAlloc(ctx.gpa, host_path, 50 * 1024 * 1024) catch |err| {
+            std.log.err("Failed to read host WASM file {s}: {}", .{ host_path, err });
+            return error.MissingTargetFile;
+        };
+        defer ctx.gpa.free(host_bytes);
+
+        var host_module = WasmModule.preload(ctx.gpa, host_bytes, true) catch |err| {
+            std.log.err("Failed to parse host WASM module: {}", .{err});
+            return error.NativeCompilationFailed;
+        };
+
+        // Step 3: Export global host symbols and remove memory/table imports
+        host_module.exportGlobalSymbols();
+        host_module.removeMemoryAndTableImports();
+
+        // Step 4: Merge builtins
+        const builtins_obj_bytes = BuiltinsObjects.forTarget(target);
+        var builtins_module = WasmModule.preload(ctx.gpa, builtins_obj_bytes, true) catch |err| {
+            std.log.err("Failed to parse builtins WASM module: {}", .{err});
+            return error.NativeCompilationFailed;
+        };
+        defer builtins_module.deinit();
+
+        var merge_result = host_module.mergeModule(&builtins_module) catch |err| {
+            std.log.err("Failed to merge builtins into host module: {}", .{err});
+            return error.NativeCompilationFailed;
+        };
+        merge_result.deinit();
+        // Step 5: Build BuiltinSymbols lookup
+        const builtin_syms = WasmModule.BuiltinSymbols.populate(&host_module) catch |err| {
+            std.log.err("Failed to populate builtin symbols: {}", .{err});
+            return error.NativeCompilationFailed;
+        };
+
+        // Step 6: Create code generator with host module
+        var codegen = WasmCodeGen.initWithHostModule(ctx.gpa, &lir_store, &layout_store, host_module, builtin_syms);
+        defer codegen.deinit();
+
+        // Step 7: Register RocOps callbacks from the host module
+        codegen.registerRocOpsFromModule() catch |err| {
+            std.log.err("Failed to register RocOps callbacks: {}", .{err});
+            return error.NativeCompilationFailed;
+        };
+
+        // Record host+builtin function count before app compilation for DCE seeding
+        const host_defined_fn_count = codegen.module.function_offsets.items.len;
+
+        // Step 8: Compile all procedures
+        codegen.compileAllProcSpecs(procs) catch |err| {
+            std.log.err("WASM proc compilation failed: {}", .{err});
+            return error.NativeCompilationFailed;
+        };
+
+        // Step 9: Generate entrypoint wrappers and build host-to-app map
+        var host_to_app_map = try std.ArrayList(WasmModule.HostToAppEntry).initCapacity(ctx.gpa, entrypoints.items.len);
+        defer host_to_app_map.deinit(ctx.gpa);
+
+        for (entrypoints.items) |ep| {
+            const proc_spec = lir_store.getProcSpec(ep.proc);
+            const wrapper_idx = codegen.generateEntrypointWrapper(
+                proc_spec,
+                ep.symbol_name,
+                ep.arg_layouts,
+                ep.ret_layout,
+            ) catch |err| {
+                std.log.err("Failed to generate entrypoint wrapper for {s}: {}", .{ ep.symbol_name, err });
+                return error.NativeCompilationFailed;
+            };
+
+            try host_to_app_map.append(ctx.gpa, .{
+                .name = ep.symbol_name,
+                .fn_index = wrapper_idx,
+            });
+        }
+
+        // Step 10: Transfer app functions to code_bytes representation
+        codegen.module.transferAppFunctions() catch |err| {
+            std.log.err("Failed to transfer app functions: {}", .{err});
+            return error.NativeCompilationFailed;
+        };
+
+        // Step 11: Surgical linking — redirect host imports to app functions
+        codegen.module.linkHostToAppCalls(host_to_app_map.items) catch |err| {
+            std.log.err("Surgical linking failed: {}", .{err});
+            return error.NativeCompilationFailed;
+        };
+
+        // Step 12: Resolve relocations (patches builtin call sites and data references)
+        codegen.module.resolveRelocations();
+
+        // Step 13: Finalize memory and table
+        const wasm_stack_bytes: u32 = 1024 * 1024; // 1MB stack
+        codegen.module.finalizeMemoryAndTable(wasm_stack_bytes) catch |err| {
+            std.log.err("WASM finalization failed: {}", .{err});
+            return error.NativeCompilationFailed;
+        };
+
+        // Step 14: Verify no stale builtin imports
+        codegen.module.verifyNoBuiltinImports() catch |err| {
+            std.log.err("Stale builtin imports found: {}", .{err});
+            return error.NativeCompilationFailed;
+        };
+
+        // Step 15: Dead code elimination
+        const total_fns = codegen.module.import_fn_count + codegen.module.dead_import_dummy_count + @as(u32, @intCast(codegen.module.function_offsets.items.len));
+        var called_fns = try ctx.gpa.alloc(bool, total_fns);
+        defer ctx.gpa.free(called_fns);
+        @memset(called_fns, false);
+
+        // Mark all exported functions as live
+        for (codegen.module.exports.items) |exp| {
+            if (exp.kind == .func and exp.idx < total_fns) {
+                called_fns[exp.idx] = true;
+            }
+        }
+
+        // Mark all app-compiled functions as live.
+        // App code uses direct call instructions (no relocation entries), so
+        // the DCE's relocation-based call tracing can't follow them.
+        const fn_index_min = codegen.module.import_fn_count + codegen.module.dead_import_dummy_count;
+        for (host_defined_fn_count..codegen.module.function_offsets.items.len) |i| {
+            const fn_idx = fn_index_min + @as(u32, @intCast(i));
+            if (fn_idx < total_fns) {
+                called_fns[fn_idx] = true;
+            }
+        }
+
+        codegen.module.eliminateDeadCode(called_fns) catch |err| {
+            std.log.err("Dead code elimination failed: {}", .{err});
+            return error.NativeCompilationFailed;
+        };
+
+        // Step 16: Materialize function bodies from code_bytes
+        codegen.module.materializeFuncBodies() catch |err| {
+            std.log.err("Failed to materialize function bodies: {}", .{err});
+            return error.NativeCompilationFailed;
+        };
+
+        // Step 17: Serialize
+        const final_bytes = codegen.module.encode(ctx.gpa) catch |err| {
+            std.log.err("WASM encoding failed: {}", .{err});
+            return error.NativeCompilationFailed;
+        };
+        defer ctx.gpa.free(final_bytes);
+
+        // Step 15: Write output
+        std.fs.cwd().writeFile(.{
+            .sub_path = final_output_path,
+            .data = final_bytes,
+        }) catch |err| {
+            std.log.err("Failed to write WASM output {s}: {}", .{ final_output_path, err });
+            return error.NativeCompilationFailed;
+        };
+
+        std.log.debug("WASM output: {s} ({} bytes)", .{ final_output_path, final_bytes.len });
+    } else {
+        // ---- Native Compilation + Linking Pipeline ----
+        std.log.debug("Generating native code...", .{});
+        var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
+
+        ensureCompilerCacheDirExists(build_cache_dir) catch |err| {
+            std.log.err("Failed to create compiler build cache dir {s}: {}", .{ build_cache_dir, err });
+            return err;
+        };
+
+        const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_{s}.o", .{@tagName(target)});
+        const obj_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, obj_filename });
+
+        object_compiler.compileToObjectFileAndWrite(
+            &lir_store,
+            &layout_store,
+            entrypoints.items,
+            procs,
+            target,
+            obj_path,
+        ) catch |err| {
+            std.log.err("Native compilation failed: {}", .{err});
+            return error.NativeCompilationFailed;
+        };
+
+        std.log.debug("Object file generated: {s}", .{obj_path});
+
+        // If --no-link, we're done
+        if (args.no_link) {
+            const stdout = ctx.io.stdout();
+            try stdout.print("Object file generated: {s}\n", .{obj_path});
+            return;
+        }
+
+        // Get link spec and build file lists
+        const target_name = @tagName(target);
+        const link_spec = targets_config.getLinkSpec(target, link_type) orelse {
+            return ctx.fail(.{ .linker_failed = .{
+                .err = error.UnsupportedTarget,
+                .target = target_name,
+            } });
+        };
+
+        const files_dir = targets_config.files_dir orelse "targets";
+        var platform_files_pre = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
+        var platform_files_post = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
+        var hit_app = false;
+
+        for (link_spec.items) |item| {
+            switch (item) {
+                .file_path => |path| {
+                    const full_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir, target_name, path });
+
+                    std.fs.cwd().access(full_path, .{}) catch {
+                        const result = platform_validation.targets_validator.ValidationResult{
+                            .missing_target_file = .{
+                                .target = target,
+                                .link_type = link_type,
+                                .file_path = path,
+                                .expected_full_path = full_path,
+                            },
+                        };
+                        _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                        return error.MissingTargetFile;
+                    };
+
+                    if (!hit_app) {
+                        try platform_files_pre.append(full_path);
+                    } else {
+                        try platform_files_post.append(full_path);
+                    }
+                },
+                .app => {
+                    hit_app = true;
+                },
+                .win_gui => {},
+            }
+        }
+
+        // Extract builtins object file for the target and add to link inputs
+        const builtins_bytes = BuiltinsObjects.forTarget(target);
+        const builtins_filename = BuiltinsObjects.filename(target);
+        const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, builtins_filename });
+
+        // Write builtins object to cache
+        std.fs.cwd().writeFile(.{
+            .sub_path = builtins_path,
+            .data = builtins_bytes,
+        }) catch |err| {
+            std.log.err("Failed to write builtins object file: {}", .{err});
+            return error.BuiltinsExtractionFailed;
+        };
+        std.log.debug("Builtins object file: {s}", .{builtins_path});
+
+        // Link the object file with platform files
+        var object_files = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 4);
+        try object_files.append(obj_path);
+        try object_files.append(builtins_path);
+
+        std.log.debug("Linking: {} pre-files, {} object files, {} post-files", .{
+            platform_files_pre.items.len,
+            object_files.items.len,
+            platform_files_post.items.len,
+        });
+
+        linker.link(ctx, .{
+            .target_format = linker.TargetFormat.detectFromOs(target_os),
+            .target_abi = linker.TargetAbi.fromRocTarget(target),
+            .target_os = target_os,
+            .target_arch = target_arch,
+            .output_path = final_output_path,
+            .object_files = object_files.items,
+            .platform_files_pre = platform_files_pre.items,
+            .platform_files_post = platform_files_post.items,
+            .extra_args = &.{},
+        }) catch |err| {
+            return ctx.fail(.{ .linker_failed = .{
+                .err = err,
+                .target = target_name,
+            } });
+        };
     }
-
-    // Extract builtins object file for the target and add to link inputs
-    const builtins_bytes = BuiltinsObjects.forTarget(target);
-    const builtins_filename = BuiltinsObjects.filename(target);
-    const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, builtins_filename });
-
-    // Write builtins object to cache
-    std.fs.cwd().writeFile(.{
-        .sub_path = builtins_path,
-        .data = builtins_bytes,
-    }) catch |err| {
-        std.log.err("Failed to write builtins object file: {}", .{err});
-        return error.BuiltinsExtractionFailed;
-    };
-    std.log.debug("Builtins object file: {s}", .{builtins_path});
-
-    // Link the object file with platform files
-    var object_files = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 4);
-    try object_files.append(obj_path);
-    try object_files.append(builtins_path);
-
-    std.log.debug("Linking: {} pre-files, {} object files, {} post-files", .{
-        platform_files_pre.items.len,
-        object_files.items.len,
-        platform_files_post.items.len,
-    });
-
-    linker.link(ctx, .{
-        .target_format = linker.TargetFormat.detectFromOs(target_os),
-        .target_abi = linker.TargetAbi.fromRocTarget(target),
-        .target_os = target_os,
-        .target_arch = target_arch,
-        .output_path = final_output_path,
-        .object_files = object_files.items,
-        .platform_files_pre = platform_files_pre.items,
-        .platform_files_post = platform_files_post.items,
-        .extra_args = &.{},
-    }) catch |err| {
-        return ctx.fail(.{ .linker_failed = .{
-            .err = err,
-            .target = target_name,
-        } });
-    };
 
     const elapsed_ns = timer.read();
     const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
