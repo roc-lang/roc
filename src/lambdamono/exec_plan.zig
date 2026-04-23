@@ -236,14 +236,6 @@ const Planner = struct {
         return self.value_facts.items[@intFromEnum(id)];
     }
 
-    fn queueFactId(_: *const Planner, id: ValueFactId) specializations.FactId {
-        return @enumFromInt(@intFromEnum(id));
-    }
-
-    fn plannerFactId(_: *const Planner, id: specializations.FactId) ValueFactId {
-        return @enumFromInt(@intFromEnum(id));
-    }
-
     fn envSourceType(self: *const Planner, entry: EnvEntry) TypeVarId {
         return self.valueFact(entry.fact).source_ty;
     }
@@ -491,12 +483,6 @@ const Planner = struct {
         return self.executableTypeHasLayoutAbstractLeafVisited(ty, &visited) catch true;
     }
 
-    fn executableTypeHasErasedLeaf(self: *const Planner, ty: type_mod.TypeId) bool {
-        var visited = std.AutoHashMap(type_mod.TypeId, void).init(self.allocator);
-        defer visited.deinit();
-        return self.executableTypeHasErasedLeafVisited(ty, &visited) catch false;
-    }
-
     fn executableReturnTypeFromCallRelation(
         self: *Planner,
         solved_types: *solved.Type.Store,
@@ -710,64 +696,6 @@ const Planner = struct {
                 for (tag_union.tags) |tag| {
                     for (tag.args) |arg| {
                         if (try self.executableTypeHasLayoutAbstractLeafVisited(arg, visited)) break :blk true;
-                    }
-                }
-                break :blk false;
-            },
-        };
-    }
-
-    fn executableTypeHasErasedLeafVisited(
-        self: *const Planner,
-        ty: type_mod.TypeId,
-        visited: *std.AutoHashMap(type_mod.TypeId, void),
-    ) std.mem.Allocator.Error!bool {
-        var root = ty;
-        while (true) switch (self.types.types.items[@intFromEnum(root)]) {
-            .link => |next| root = next,
-            else => break,
-        };
-        if (visited.contains(root)) return false;
-        try visited.put(root, {});
-
-        return switch (self.types.types.items[@intFromEnum(root)]) {
-            .placeholder, .unbd => false,
-            .link => unreachable,
-            .primitive => |prim| prim == .erased,
-            .nominal => |nominal| try self.executableTypeHasErasedLeafVisited(nominal.backing, visited),
-            .list => |elem| try self.executableTypeHasErasedLeafVisited(elem, visited),
-            .box => |elem| try self.executableTypeHasErasedLeafVisited(elem, visited),
-            .erased_fn => |erased_fn| blk: {
-                if (erased_fn.capture) |capture| {
-                    if (try self.executableTypeHasErasedLeafVisited(capture, visited)) break :blk true;
-                }
-                for (erased_fn.call.args) |arg| {
-                    if (try self.executableTypeHasErasedLeafVisited(arg, visited)) break :blk true;
-                }
-                break :blk try self.executableTypeHasErasedLeafVisited(erased_fn.call.ret, visited);
-            },
-            .tuple => |tuple| blk: {
-                for (tuple) |elem| {
-                    if (try self.executableTypeHasErasedLeafVisited(elem, visited)) break :blk true;
-                }
-                break :blk false;
-            },
-            .record => |record| blk: {
-                for (record.fields) |field| {
-                    if (try self.executableTypeHasErasedLeafVisited(field.ty, visited)) break :blk true;
-                }
-                break :blk false;
-            },
-            .tag_union => |tag_union| blk: {
-                if (tag_union.call) |call| {
-                    for (call.args) |arg| {
-                        if (try self.executableTypeHasErasedLeafVisited(arg, visited)) break :blk true;
-                    }
-                    if (try self.executableTypeHasErasedLeafVisited(call.ret, visited)) break :blk true;
-                }
-                for (tag_union.tags) |tag| {
-                    for (tag.args) |arg| {
-                        if (try self.executableTypeHasErasedLeafVisited(arg, visited)) break :blk true;
                     }
                 }
                 break :blk false;
@@ -1291,7 +1219,7 @@ const Planner = struct {
                         summary_captures[i] = .{
                             .symbol = capture.symbol,
                             .ty = if (queued_capture_facts.len != 0)
-                                self.valueFact(self.plannerFactId(queued_capture_facts[i])).source_ty
+                                self.valueFact(queued_capture_facts[i]).source_ty
                             else
                                 try self.cloneTypeFromStoreRec(
                                     summary_types,
