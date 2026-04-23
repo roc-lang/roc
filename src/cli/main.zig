@@ -5384,6 +5384,7 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) !void {
     const cache_config = CacheConfig{
         .enabled = !args.no_cache,
         .verbose = args.verbose,
+        .roc_ctx = ctx.coreCtx(),
     };
 
     // --- Test cache check (before any compilation) ---

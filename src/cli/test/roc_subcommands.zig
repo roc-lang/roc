@@ -663,9 +663,9 @@ test "roc build executable runs correctly (interpreter)" {
     // 1. Executable ran successfully
     try testing.expect(run_result.term == .exited and run_result.term.exited == 0);
 
-    // 2. Output contains expected success message
-    const has_success = std.mem.find(u8, run_result.stdout, "SUCCESS") != null or
-        std.mem.find(u8, run_result.stdout, "PASSED") != null;
+    // 2. Output contains expected success message (int platform uses std.debug.print → stderr)
+    const has_success = std.mem.find(u8, run_result.stderr, "SUCCESS") != null or
+        std.mem.find(u8, run_result.stderr, "PASSED") != null;
     try testing.expect(has_success);
 }
 
@@ -731,7 +731,8 @@ test "roc build --opt=dev executable runs correctly for test/int/app.roc" {
     defer gpa.free(run_result.stderr);
 
     try testing.expect(run_result.term == .exited and run_result.term.exited == 0);
-    try testing.expect(std.mem.find(u8, run_result.stdout, "ALL TESTS PASSED") != null);
+    // int platform uses std.debug.print which writes to stderr
+    try testing.expect(std.mem.find(u8, run_result.stderr, "ALL TESTS PASSED") != null);
 }
 
 test "roc build fails with file not found error" {
