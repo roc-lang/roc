@@ -8024,42 +8024,10 @@ pub const Lowerer = struct {
     fn debugPanicUnresolvedTypeVar(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *const TypeScope,
+        _: *const TypeScope,
         var_: Var,
     ) noreturn {
         const source_module = self.ctx.typedCirModule(module_idx);
-        const resolved = type_scope.typeStoreConst().resolveVar(var_);
-        switch (resolved.desc.content) {
-            .flex => |flex| {
-                if (comptime builtin.target.os.tag != .freestanding) {
-                    std.debug.print(
-                        "UNRESOLVED flex var={d} root={d} module={d} name={any} constraints_len={d}\n",
-                        .{
-                            @intFromEnum(var_),
-                            @intFromEnum(resolved.var_),
-                            module_idx,
-                            flex.name,
-                            flex.constraints.len(),
-                        },
-                    );
-                }
-            },
-            .rigid => |rigid| {
-                if (comptime builtin.target.os.tag != .freestanding) {
-                    std.debug.print(
-                        "UNRESOLVED rigid var={d} root={d} module={d} name={s} constraints_len={d}\n",
-                        .{
-                            @intFromEnum(var_),
-                            @intFromEnum(resolved.var_),
-                            module_idx,
-                            type_scope.getIdent(rigid.name),
-                            rigid.constraints.len(),
-                        },
-                    );
-                }
-            },
-            else => {},
-        }
         const raw: u32 = @intFromEnum(var_);
         if (raw < source_module.nodeCount()) {
             const node_idx: CIR.Node.Idx = @enumFromInt(raw);

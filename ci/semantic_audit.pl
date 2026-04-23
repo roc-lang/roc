@@ -65,6 +65,57 @@ my @forbidden = (
     [qr/\bcomptime_interpreter\b/, "old semantic comptime executor"],
 );
 
+my @emit_forbidden = (
+    [qr/\@import\("lambdasolved"\)/, "emitter must not import solved source types"],
+    [qr/\@import\("lower_type\.zig"\)/, "emitter must not import source-to-executable type lowering"],
+    [qr/\@import\("specializations\.zig"\)/, "emitter must not import specialization queues"],
+    [qr/\bTypeVarId\b/, "emitter must not mention solved type variables"],
+    [qr/\binternResolved\b/, "emitter must not construct executable semantic types"],
+    [qr/\baddType\b/, "emitter must not construct executable semantic types"],
+    [qr/\bsetType\b/, "emitter must not mutate executable semantic types"],
+    [qr/\blowerExecutableTypeFromSolved[A-Za-z0-9_]*\b/, "emitter must not lower source types"],
+    [qr/\bspecializations\b/, "emitter must not read specialization state"],
+    [qr/\bqueue\b/, "emitter must not read specialization queues"],
+);
+
+my @lower_facade_forbidden = (
+    [qr/\@import\("lambdasolved"\)/, "lower facade must not import solved source types directly"],
+    [qr/\@import\("lower_type\.zig"\)/, "lower facade must not import source-to-executable type lowering"],
+    [qr/\@import\("specializations\.zig"\)/, "lower facade must not import specialization queues"],
+    [qr/\bTypeVarId\b/, "lower facade must not mention solved type variables"],
+    [qr/\bLowerer\b/, "lower facade must not contain semantic lowering state"],
+    [qr/\blowerExecutableTypeFromSolved[A-Za-z0-9_]*\b/, "lower facade must not lower source types"],
+    [qr/\bdefault_ty\b/, "old optional executable result contract"],
+    [qr/\bexpected_exec_ty\b/, "old optional executable result contract"],
+    [qr/\bcurrent_return_exec_ty\b/, "old ambient executable return state"],
+    [qr/\bSourceExecBinding\b/, "old source/executable relation binding helper"],
+    [qr/\bcollectSourceExecBindings\b/, "old source/executable relation binding helper"],
+    [qr/\blowerExecutableTypeFromSolvedWithBindings\b/, "old local executable type relation lowering"],
+);
+
+my @exec_plan_forbidden = (
+    [qr/\bast\.Store\b/, "planner must use ExecPlan store, not final executable AST store"],
+    [qr/\.result_ty\s*=\s*null/, "planner must emit explicit executable result types for defs"],
+    [qr/\bdef\.result_ty\s+orelse\s+self\.output\b/, "planner must not recover def result type from emitted body"],
+);
+
+my @lambdamono_old_contract_forbidden = (
+    [qr/\bpub\s+const\s+LowerType\b/, "source-to-executable type lowering must not be publicly exported"],
+    [qr/\bpub\s+const\s+Specializations\b/, "specialization queues must not be publicly exported"],
+    [qr/\bdefault_ty\b/, "old optional executable result contract"],
+    [qr/\bexpected_exec_ty\b/, "old optional executable result contract"],
+    [qr/\bcurrent_return_exec_ty\b/, "old ambient executable return state"],
+    [qr/\bSourceExecBinding\b/, "old source/executable relation binding helper"],
+    [qr/\bcollectSourceExecBindings\b/, "old source/executable relation binding helper"],
+    [qr/\blowerExecutableTypeFromSolvedWithBindings\b/, "old local executable type relation lowering"],
+    [qr/\bmergedExecutable[A-Za-z0-9_]*\b/, "executable callable merge/reconstruction"],
+    [qr/\bcommonErasedCaptureType[A-Za-z0-9_]*\b/, "erased capture scan/reconstruction"],
+);
+
+my @lowering_debug_print_forbidden = (
+    [qr/\bstd\.debug\.print\b/, "semantic lowering stages must not contain committed debug prints"],
+);
+
 my @comment_words = qw(fallback heuristic recover reconstruct rebuild best-effort best_available best-available);
 
 sub skip_file {
@@ -105,6 +156,51 @@ for my $root (@roots) {
                     my ($pattern, $reason) = @$rule;
                     if ($line =~ /$pattern/) {
                         push @violations, [$path, $line_no, $reason, $line];
+                    }
+                }
+
+                if ($path eq 'src/lambdamono/emit.zig') {
+                    for my $rule (@emit_forbidden) {
+                        my ($pattern, $reason) = @$rule;
+                        if ($line =~ /$pattern/) {
+                            push @violations, [$path, $line_no, $reason, $line];
+                        }
+                    }
+                }
+
+                if ($path eq 'src/lambdamono/lower.zig') {
+                    for my $rule (@lower_facade_forbidden) {
+                        my ($pattern, $reason) = @$rule;
+                        if ($line =~ /$pattern/) {
+                            push @violations, [$path, $line_no, $reason, $line];
+                        }
+                    }
+                }
+
+                if ($path eq 'src/lambdamono/exec_plan.zig') {
+                    for my $rule (@exec_plan_forbidden) {
+                        my ($pattern, $reason) = @$rule;
+                        if ($line =~ /$pattern/) {
+                            push @violations, [$path, $line_no, $reason, $line];
+                        }
+                    }
+                }
+
+                if ($path =~ m{^src/lambdamono/}) {
+                    for my $rule (@lambdamono_old_contract_forbidden) {
+                        my ($pattern, $reason) = @$rule;
+                        if ($line =~ /$pattern/) {
+                            push @violations, [$path, $line_no, $reason, $line];
+                        }
+                    }
+                }
+
+                if ($path =~ m{^src/(lambdamono|lambdasolved|monotype|monotype_lifted)/}) {
+                    for my $rule (@lowering_debug_print_forbidden) {
+                        my ($pattern, $reason) = @$rule;
+                        if ($line =~ /$pattern/) {
+                            push @violations, [$path, $line_no, $reason, $line];
+                        }
                     }
                 }
 

@@ -2578,38 +2578,14 @@ const Lowerer = struct {
                 };
 
                 const record_fields = self.types.sliceFields(record.fields);
-                var needs_rebuild = record_fields.len != field_values.len;
-                if (!needs_rebuild) {
-                    for (record_fields, field_values) |record_field, field_value| {
-                        if (record_field.name != field_value.name or record_field.ty != self.output.getExpr(field_value.value).ty) {
-                            needs_rebuild = true;
-                            break;
-                        }
+                if (record_fields.len != field_values.len) {
+                    return debugPanic("lambdasolved.propagateExprErasure record field arity mismatch", .{});
+                }
+                for (record_fields, field_values) |record_field, field_value| {
+                    if (record_field.name != field_value.name or record_field.ty != self.output.getExpr(field_value.value).ty) {
+                        return debugPanic("lambdasolved.propagateExprErasure record field type mismatch", .{});
                     }
                 }
-
-                if (!needs_rebuild) break :blk;
-
-                const new_fields = try self.allocator.alloc(type_mod.Field, field_values.len);
-                defer self.allocator.free(new_fields);
-                for (field_values, 0..) |field_value, i| {
-                    new_fields[i] = .{
-                        .name = field_value.name,
-                        .ty = self.output.getExpr(field_value.value).ty,
-                    };
-                }
-                std.mem.sort(type_mod.Field, new_fields, &self.input.idents, struct {
-                    fn lessThan(idents: *const base.Ident.Store, a: type_mod.Field, b: type_mod.Field) bool {
-                        return std.mem.lessThan(
-                            u8,
-                            idents.getText(a.name),
-                            idents.getText(b.name),
-                        );
-                    }
-                }.lessThan);
-                expr.ty = try self.types.freshContent(.{ .record = .{
-                    .fields = try self.types.addFields(new_fields),
-                } });
             },
             .access => |access| try self.propagateExprErasure(access.record, venv),
             .structural_eq => |eq| {
@@ -2764,25 +2740,14 @@ const Lowerer = struct {
                     else => break :blk,
                 };
                 const tuple_elems = self.types.sliceTypeVarSpan(tuple_span);
-                var needs_rebuild = tuple_elems.len != elem_values.len;
-                if (!needs_rebuild) {
-                    for (tuple_elems, elem_values) |tuple_elem, elem_value| {
-                        if (tuple_elem != self.output.getExpr(elem_value).ty) {
-                            needs_rebuild = true;
-                            break;
-                        }
+                if (tuple_elems.len != elem_values.len) {
+                    return debugPanic("lambdasolved.propagateExprErasure tuple arity mismatch", .{});
+                }
+                for (tuple_elems, elem_values) |tuple_elem, elem_value| {
+                    if (tuple_elem != self.output.getExpr(elem_value).ty) {
+                        return debugPanic("lambdasolved.propagateExprErasure tuple element type mismatch", .{});
                     }
                 }
-                if (!needs_rebuild) break :blk;
-
-                const new_elems = try self.allocator.alloc(TypeVarId, elem_values.len);
-                defer self.allocator.free(new_elems);
-                for (elem_values, 0..) |elem_value, i| {
-                    new_elems[i] = self.output.getExpr(elem_value).ty;
-                }
-                expr.ty = try self.types.freshContent(.{
-                    .tuple = try self.types.addTypeVarSpan(new_elems),
-                });
             },
             .tag_payload => |tag_payload| try self.propagateExprErasure(tag_payload.tag_union, venv),
             .tuple_access => |tuple_access| try self.propagateExprErasure(tuple_access.tuple, venv),

@@ -101,7 +101,7 @@ pub const Layouts = struct {
     /// Allocate empty layout tables sized for an executable store.
     pub fn initEmpty(
         allocator: std.mem.Allocator,
-        store: *ast.Store,
+        store: anytype,
     ) std.mem.Allocator.Error!Layouts {
         const layouts = Layouts{
             .graph = .{},
@@ -232,7 +232,7 @@ pub const Layouts = struct {
         allocator: std.mem.Allocator,
         mono_types: *type_mod.Store,
         idents: *const base.Ident.Store,
-        store: *ast.Store,
+        store: anytype,
         expr_id: ast.ExprId,
         expr: ast.Expr,
     ) std.mem.Allocator.Error!void {
@@ -347,7 +347,7 @@ pub const Layouts = struct {
         allocator: std.mem.Allocator,
         mono_types: *type_mod.Store,
         idents: *const base.Ident.Store,
-        store: *ast.Store,
+        store: anytype,
         pat_id: ast.PatId,
         pat: ast.Pat,
     ) std.mem.Allocator.Error!void {

@@ -5,8 +5,9 @@ const std = @import("std");
 pub const Type = @import("type.zig");
 pub const Ast = @import("ast.zig");
 pub const Layouts = @import("layouts.zig");
-pub const LowerType = @import("lower_type.zig");
-pub const Specializations = @import("specializations.zig");
+pub const Plan = @import("plan.zig");
+pub const ExecPlan = @import("exec_plan.zig");
+pub const Emit = @import("emit.zig");
 pub const Lower = @import("lower.zig");
 
 test "lambdamono tests" {
@@ -14,7 +15,8 @@ test "lambdamono tests" {
     std.testing.refAllDecls(Type);
     std.testing.refAllDecls(Ast);
     std.testing.refAllDecls(Layouts);
-    std.testing.refAllDecls(LowerType);
-    std.testing.refAllDecls(Specializations);
+    std.testing.refAllDecls(Plan);
+    std.testing.refAllDecls(ExecPlan);
+    std.testing.refAllDecls(Emit);
     std.testing.refAllDecls(Lower);
 }
