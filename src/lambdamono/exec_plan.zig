@@ -354,7 +354,7 @@ const Planner = struct {
         position: SourceExecPosition,
     };
 
-    fn lowerRequestedExecutableReturnTypeFromCallRelation(
+    fn executableReturnTypeFromCallRelation(
         self: *Planner,
         solved_types: *solved.Type.Store,
         mono_cache: *lower_type.MonoCache,
@@ -362,10 +362,9 @@ const Planner = struct {
         exec_arg_tys: []const type_mod.TypeId,
         source_ret_ty: TypeVarId,
         repr_mode: specializations.Pending.ReprMode,
-        comptime context: []const u8,
     ) std.mem.Allocator.Error!type_mod.TypeId {
         if (source_arg_tys.len != exec_arg_tys.len) {
-            debugPanic("lambdamono.exec_plan.lowerRequestedExecutableReturnTypeFromCallRelation arg arity mismatch");
+            debugPanic("lambdamono.exec_plan.executableReturnTypeFromCallRelation arg arity mismatch");
         }
         var bindings = std.ArrayList(PlannedExecBinding).empty;
         defer bindings.deinit(self.allocator);
@@ -380,13 +379,33 @@ const Planner = struct {
                 &active,
             );
         }
-        const lowered = try self.planExecutableTypeFromSolvedWithBindings(
+        return try self.planExecutableTypeFromSolvedWithBindings(
             solved_types,
             mono_cache,
             source_ret_ty,
             bindings.items,
             repr_mode,
             .normal,
+        );
+    }
+
+    fn lowerRequestedExecutableReturnTypeFromCallRelation(
+        self: *Planner,
+        solved_types: *solved.Type.Store,
+        mono_cache: *lower_type.MonoCache,
+        source_arg_tys: []const TypeVarId,
+        exec_arg_tys: []const type_mod.TypeId,
+        source_ret_ty: TypeVarId,
+        repr_mode: specializations.Pending.ReprMode,
+        comptime context: []const u8,
+    ) std.mem.Allocator.Error!type_mod.TypeId {
+        const lowered = try self.executableReturnTypeFromCallRelation(
+            solved_types,
+            mono_cache,
+            source_arg_tys,
+            exec_arg_tys,
+            source_ret_ty,
+            repr_mode,
         );
         return self.requireConcreteExecutableType(lowered, context);
     }
@@ -813,7 +832,7 @@ const Planner = struct {
         }
         const source_root = inst.types.unlinkPreservingNominal(source_ty);
         switch (inst.types.getNode(source_root)) {
-            .for_a, .flex_for_a => return try self.makePrimitiveType(.dec),
+            .for_a, .flex_for_a, .unbd => return try self.makePrimitiveType(.dec),
             else => {},
         }
         return try self.concreteExecutableTypeForLiteral(
@@ -1273,10 +1292,12 @@ const Planner = struct {
     fn validatePendingExecutableSignature(self: *const Planner, pending: *const specializations.Pending) void {
         const signature = self.requirePendingExecutableSignature(pending);
         if (signature.capture_ty) |capture_ty| {
-            _ = self.requireConcreteExecutableType(
-                capture_ty,
-                "validatePendingExecutableSignature(capture)",
-            );
+            if (self.executableTypeHasLayoutAbstractLeaf(capture_ty)) {
+                _ = self.requireConcreteExecutableType(
+                    capture_ty,
+                    "validatePendingExecutableSignature(capture)",
+                );
+            }
         }
         for (signature.args_tys) |arg_ty| {
             if (!self.executableTypeIsAbstract(arg_ty)) {
@@ -1301,7 +1322,7 @@ const Planner = struct {
         const exec_args = pending.exec_args_tys orelse
             debugPanic("lambdamono.exec_plan.ensurePendingExecutableArgTypes missing executable arg signature");
         for (exec_args) |arg_ty| {
-            if (self.executableTypeIsAbstract(arg_ty)) {
+            if (self.executableTypeHasLayoutAbstractLeaf(arg_ty)) {
                 debugPanic("lambdamono.exec_plan.ensurePendingExecutableArgTypes abstract executable arg signature");
             }
         }
@@ -1312,10 +1333,22 @@ const Planner = struct {
         self: *Planner,
         pending: *specializations.Pending,
     ) std.mem.Allocator.Error!type_mod.TypeId {
-        return self.requireConcreteExecutableType(
-            pending.exec_ret_ty,
-            "ensurePendingExecutableReturnType",
-        );
+        try self.refreshPendingExecutableReturnTypeFromSummary(pending);
+        if (self.executableTypeHasLayoutAbstractLeaf(pending.exec_ret_ty)) {
+            return self.requireConcreteExecutableType(
+                pending.exec_ret_ty,
+                "ensurePendingExecutableReturnType",
+            );
+        }
+        return pending.exec_ret_ty;
+    }
+
+    fn currentPendingExecutableReturnType(
+        self: *Planner,
+        pending: *specializations.Pending,
+    ) std.mem.Allocator.Error!type_mod.TypeId {
+        try self.refreshPendingExecutableReturnTypeFromSummary(pending);
+        return pending.exec_ret_ty;
     }
 
     fn executableCallableSigsEqual(
@@ -1339,6 +1372,10 @@ const Planner = struct {
             debugPanic("lambdamono.exec_plan.absorbExplicitBodyReturnExecutableType missing pending specialization");
         const current_ret_ty = pending.exec_ret_ty;
         if (self.types.equalIds(current_ret_ty, body_ty)) return;
+        if (self.executableTypeIsAbstract(current_ret_ty) and !self.executableTypeIsAbstract(body_ty)) {
+            pending.exec_ret_ty = body_ty;
+            return;
+        }
         const current = self.types.getTypePreservingNominal(current_ret_ty);
         const body = self.types.getTypePreservingNominal(body_ty);
         if (current == .erased_fn and body == .erased_fn and
@@ -1411,6 +1448,27 @@ const Planner = struct {
         pending.summary_seeded = true;
     }
 
+    fn refreshPendingExecutableReturnTypeFromSummary(
+        self: *Planner,
+        pending: *specializations.Pending,
+    ) std.mem.Allocator.Error!void {
+        if (!self.executableTypeIsAbstract(pending.exec_ret_ty)) return;
+
+        const summary_types = pending.summary_types orelse
+            debugPanic("lambdamono.exec_plan.refreshPendingExecutableReturnTypeFromSummary missing specialization summary store");
+        const summary_fn_ty = pending.summary_fn_ty orelse
+            debugPanic("lambdamono.exec_plan.refreshPendingExecutableReturnTypeFromSummary missing specialization summary type");
+        var mono_cache = lower_type.MonoCache.init(self.allocator);
+        defer mono_cache.deinit();
+        const summary_shape = summary_types.fnShape(summary_fn_ty);
+        pending.exec_ret_ty = try self.executableTypeFromSourceWithNumericDefault(
+            summary_types,
+            &mono_cache,
+            summary_shape.ret,
+            pending.repr_mode,
+        );
+    }
+
     fn refreshPendingExecutableCaptureTypeFromSummary(
         self: *Planner,
         pending: *specializations.Pending,
@@ -1429,14 +1487,18 @@ const Planner = struct {
 
         var mono_cache = lower_type.MonoCache.init(self.allocator);
         defer mono_cache.deinit();
-        pending.exec_capture_ty = self.requireConcreteExecutableType(
-            try self.lowerCaptureRecordTypeFromSolved(
-                summary_types,
-                &mono_cache,
-                captures,
-            ),
-            "refreshPendingExecutableCaptureTypeFromSummary",
+        const lowered = try self.lowerCaptureRecordTypeFromSolved(
+            summary_types,
+            &mono_cache,
+            captures,
         );
+        pending.exec_capture_ty = if (self.executableTypeHasLayoutAbstractLeaf(lowered))
+            self.requireConcreteExecutableType(
+                lowered,
+                "refreshPendingExecutableCaptureTypeFromSummary",
+            )
+        else
+            lowered;
     }
 
     fn ensureQueuedCallableSpecializedForRequestedType(
@@ -1999,7 +2061,12 @@ const Planner = struct {
                 "applyCallableValueCall",
             )
         else
-            exec_call_sig.ret;
+            null;
+        const actual_arg_exec_tys = try self.allocator.alloc(type_mod.TypeId, arg_exprs.len);
+        defer if (actual_arg_exec_tys.len != 0) self.allocator.free(actual_arg_exec_tys);
+        for (arg_exprs, 0..) |arg_expr, i| {
+            actual_arg_exec_tys[i] = self.output.getExpr(arg_expr).ty;
+        }
         if (exec_call_sig.args.len != arg_exprs.len) {
             debugPanic("lambdamono.exec_plan.applyCallableValueCall callable executable arg arity mismatch");
         }
@@ -2062,8 +2129,10 @@ const Planner = struct {
                         .capture_ty = self.erasedFnCaptureType(func_exec_ty),
                     } },
                 });
-                if (!self.types.equalIds(call_ret_ty, concrete_result_exec_ty)) {
-                    call_expr = try self.emitExplicitBridgeExpr(call_expr, concrete_result_exec_ty);
+                if (concrete_result_exec_ty) |result_ty| {
+                    if (!self.types.equalIds(call_ret_ty, result_ty)) {
+                        call_expr = try self.emitExplicitBridgeExpr(call_expr, result_ty);
+                    }
                 }
                 break :blk call_expr;
             },
@@ -2074,6 +2143,56 @@ const Planner = struct {
 
                 const lambda_members = try self.collectExecutableLambdaMembers(solved_types, func_source_ty, func_exec_ty);
                 defer self.allocator.free(lambda_members);
+                const requested_exec_ret_ty = if (concrete_result_exec_ty) |result_ty|
+                    result_ty
+                else
+                    try self.executableReturnTypeFromCallRelation(
+                        solved_types,
+                        mono_cache,
+                        param_source_tys,
+                        actual_arg_exec_tys,
+                        fn_shape.ret,
+                        .natural,
+                    );
+                const specialized_branches = try self.allocator.alloc(SpecializedCallableSummary, lambda_members.len);
+                defer self.allocator.free(specialized_branches);
+                var common_exec_arg_tys: ?[]const type_mod.TypeId = null;
+                var common_exec_ret_ty: ?type_mod.TypeId = concrete_result_exec_ty;
+                for (lambda_members, 0..) |lambda_member, i| {
+                    const specialization_symbol = if (lambda_members.len == 1)
+                        direct_func_symbol orelse lambda_member.symbol
+                    else
+                        lambda_member.symbol;
+                    specialized_branches[i] = try self.ensureQueuedCallableSpecializedWithExecSignature(
+                        solved_types,
+                        specialization_symbol,
+                        .natural,
+                        call_relation_ty,
+                        lambda_member.capture_ty,
+                        null,
+                        actual_arg_exec_tys,
+                        requested_exec_ret_ty,
+                    );
+                    if (common_exec_arg_tys) |expected_arg_tys| {
+                        if (specialized_branches[i].exec_args_tys.len != expected_arg_tys.len) {
+                            debugPanic("lambdamono.exec_plan.applyCallableValueCall branch arg arity mismatch across specializations");
+                        }
+                        for (specialized_branches[i].exec_args_tys, expected_arg_tys) |actual_arg_ty, expected_arg_ty| {
+                            if (!self.types.equalIds(actual_arg_ty, expected_arg_ty)) {
+                                debugPanic("lambdamono.exec_plan.applyCallableValueCall branch arg executable type mismatch across specializations");
+                            }
+                        }
+                    } else {
+                        common_exec_arg_tys = specialized_branches[i].exec_args_tys;
+                    }
+                    if (common_exec_ret_ty) |expected_ret_ty| {
+                        if (!self.types.equalIds(specialized_branches[i].exec_ret_ty, expected_ret_ty)) {
+                            debugPanic("lambdamono.exec_plan.applyCallableValueCall branch return executable type mismatch across specializations");
+                        }
+                    } else {
+                        common_exec_ret_ty = specialized_branches[i].exec_ret_ty;
+                    }
+                }
                 const branches = try self.allocator.alloc(ast.Branch, lambda_members.len);
                 defer self.allocator.free(branches);
                 const branch_call_args = try self.bridgeCallArgsToExpectedExecutableTypes(
@@ -2081,7 +2200,7 @@ const Planner = struct {
                     mono_cache,
                     arg_source_tys,
                     arg_exprs,
-                    exec_call_sig.args,
+                    common_exec_arg_tys orelse exec_call_sig.args,
                 );
                 defer if (branch_call_args.len != 0) self.allocator.free(branch_call_args);
 
@@ -2094,27 +2213,7 @@ const Planner = struct {
                     if (lambda_member.capture_ty == null and current_member.captures.len != 0) {
                         debugPanic("lambdamono.exec_plan.applyCallableValueCall missing executable capture payload for lambda member");
                     }
-                    const specialized = try self.ensureQueuedCallableSpecializedWithExecSignature(
-                        solved_types,
-                        specialization_symbol,
-                        .natural,
-                        call_relation_ty,
-                        lambda_member.capture_ty,
-                        null,
-                        exec_call_sig.args,
-                        exec_call_sig.ret,
-                    );
-                    if (specialized.exec_args_tys.len != exec_call_sig.args.len) {
-                        debugPanic("lambdamono.exec_plan.applyCallableValueCall branch arg arity mismatch against callable executable signature");
-                    }
-                    for (specialized.exec_args_tys, exec_call_sig.args) |actual_arg_ty, expected_arg_ty| {
-                        if (!self.types.equalIds(actual_arg_ty, expected_arg_ty)) {
-                            debugPanic("lambdamono.exec_plan.applyCallableValueCall branch arg executable type mismatch against callable executable signature");
-                        }
-                    }
-                    if (!self.types.equalIds(specialized.exec_ret_ty, exec_call_sig.ret)) {
-                        debugPanic("lambdamono.exec_plan.applyCallableValueCall branch return executable type mismatch against callable executable signature");
-                    }
+                    const specialized = specialized_branches[i];
                     if (lambda_member.capture_ty == null) {
                         var body_expr = try self.output.addExpr(.{
                             .ty = specialized.exec_ret_ty,
@@ -2123,8 +2222,10 @@ const Planner = struct {
                                 .args = try self.output.addExprSpan(branch_call_args),
                             } },
                         });
-                        if (!self.types.equalIds(specialized.exec_ret_ty, concrete_result_exec_ty)) {
-                            body_expr = try self.emitExplicitBridgeExpr(body_expr, concrete_result_exec_ty);
+                        if (concrete_result_exec_ty) |result_ty| {
+                            if (!self.types.equalIds(specialized.exec_ret_ty, result_ty)) {
+                                body_expr = try self.emitExplicitBridgeExpr(body_expr, result_ty);
+                            }
                         }
                         branches[i] = .{
                             .pat = try self.output.addPat(.{
@@ -2166,8 +2267,10 @@ const Planner = struct {
                                 .args = try self.output.addExprSpan(call_args_with_capture),
                             } },
                         });
-                        if (!self.types.equalIds(specialized.exec_ret_ty, concrete_result_exec_ty)) {
-                            body_expr = try self.emitExplicitBridgeExpr(body_expr, concrete_result_exec_ty);
+                        if (concrete_result_exec_ty) |result_ty| {
+                            if (!self.types.equalIds(specialized.exec_ret_ty, result_ty)) {
+                                body_expr = try self.emitExplicitBridgeExpr(body_expr, result_ty);
+                            }
                         }
                         branches[i] = .{
                             .pat = pat,
@@ -2177,7 +2280,7 @@ const Planner = struct {
                 }
 
                 break :blk try self.output.addExpr(.{
-                    .ty = concrete_result_exec_ty,
+                    .ty = common_exec_ret_ty orelse requested_exec_ret_ty,
                     .data = .{ .when = .{
                         .cond = func_expr,
                         .branches = try self.output.addBranchSpan(branches),
@@ -4235,7 +4338,7 @@ const Planner = struct {
                         const body = blk_body: {
                             const pre_body_pending = self.lookupPendingBySpecializedSymbol(pending_symbol) orelse
                                 debugPanic("lambdamono.exec_plan.specializeFn lost pending specialization before reading natural return signature");
-                            const pre_lower_ret_ty = try self.ensurePendingExecutableReturnType(pre_body_pending);
+                            const pre_lower_ret_ty = try self.currentPendingExecutableReturnType(pre_body_pending);
                             const previous_return_exec_ty = self.current_required_return_exec_ty;
                             self.current_required_return_exec_ty = pre_lower_ret_ty;
                             defer self.current_required_return_exec_ty = previous_return_exec_ty;
@@ -4314,7 +4417,7 @@ const Planner = struct {
                         try self.preRefineExprSourceTypes(&inst, &mono_cache, provisional_body_env, fn_body);
                         const pre_body_pending = self.lookupPendingBySpecializedSymbol(pending_symbol) orelse
                             debugPanic("lambdamono.exec_plan.specializeFn lost pending specialization before reading captured natural return signature");
-                        const pre_lower_ret_ty = try self.ensurePendingExecutableReturnType(pre_body_pending);
+                        const pre_lower_ret_ty = try self.currentPendingExecutableReturnType(pre_body_pending);
                         const previous_return_exec_ty = self.current_required_return_exec_ty;
                         self.current_required_return_exec_ty = pre_lower_ret_ty;
                         defer self.current_required_return_exec_ty = previous_return_exec_ty;
@@ -4413,7 +4516,7 @@ const Planner = struct {
                             capture_env,
                         );
                         defer self.allocator.free(body_env);
-                        const pre_lower_ret_ty = try self.ensurePendingExecutableReturnType(pre_body_pending);
+                        const pre_lower_ret_ty = try self.currentPendingExecutableReturnType(pre_body_pending);
                         const previous_return_exec_ty = self.current_required_return_exec_ty;
                         self.current_required_return_exec_ty = pre_lower_ret_ty;
                         defer self.current_required_return_exec_ty = previous_return_exec_ty;
@@ -4939,14 +5042,13 @@ const Planner = struct {
                     actual_arg_tys[i] = self.output.getExpr(lowered).ty;
                 }
                 const result_ty = if (source_args.len != 0)
-                    try self.lowerRequestedExecutableReturnTypeFromCallRelation(
+                    try self.executableReturnTypeFromCallRelation(
                         inst.types,
                         mono_cache,
                         solved_tag_arg_tys,
                         actual_arg_tys,
                         ty,
                         .natural,
-                        "planExpr(tag result)",
                     )
                 else if (stable_tag_ty) |tag_ty|
                     tag_ty
@@ -5802,7 +5904,9 @@ const Planner = struct {
                 var lowered_ret = try self.planExpr(inst, mono_cache, venv, ret_expr);
                 const expected_ret_ty = self.current_required_return_exec_ty orelse
                     debugPanic("lambdamono.exec_plan.planExpr(return_) missing current executable return type");
-                if (!self.types.equalIds(self.output.getExpr(lowered_ret).ty, expected_ret_ty)) {
+                if (!self.executableTypeIsAbstract(expected_ret_ty) and
+                    !self.types.equalIds(self.output.getExpr(lowered_ret).ty, expected_ret_ty))
+                {
                     lowered_ret = try self.retargetOrEmitExplicitBridgeExpr(lowered_ret, expected_ret_ty);
                 }
                 break :blk .{
@@ -6775,7 +6879,7 @@ const Planner = struct {
             const expr = self.output.getExpr(current);
             switch (expr.data) {
                 .bridge => |inner| {
-                    if (self.isExecutableCallableType(expr.ty) and !self.executableTypeIsAbstract(expr.ty)) {
+                    if (self.isExecutableCallableType(expr.ty) and !self.executableTypeHasLayoutAbstractLeaf(expr.ty)) {
                         return .{ .expr = current, .ty = expr.ty };
                     }
                     const inner_ty = self.output.getExpr(inner).ty;
@@ -6797,6 +6901,16 @@ const Planner = struct {
     ) std.mem.Allocator.Error!bool {
         const expr_idx = @intFromEnum(expr_id);
         var expr = self.output.exprs.items[expr_idx];
+        if (self.isExecutableCallableType(expr.ty) and
+            self.isExecutableCallableType(expected_ty) and
+            !self.executableTypeHasLayoutAbstractLeaf(expr.ty) and
+            !self.executableTypeHasLayoutAbstractLeaf(expected_ty) and
+            self.isNaturalExecutableCallableType(expr.ty) == self.isNaturalExecutableCallableType(expected_ty))
+        {
+            expr.ty = expected_ty;
+            self.output.exprs.items[expr_idx] = expr;
+            return true;
+        }
         switch (expr.data) {
             .tag => |tag| {
                 const tag_exec_info = self.executableTagInfoByTagName(expected_ty, tag.name) orelse return false;
@@ -8916,14 +9030,13 @@ const Planner = struct {
                 repr_mode,
             );
         }
-        const requested_exec_ret_ty = try self.lowerRequestedExecutableReturnTypeFromCallRelation(
+        const requested_exec_ret_ty = try self.executableReturnTypeFromCallRelation(
             inst.types,
             mono_cache,
             exact_requested_arg_tys,
             requested_exec_arg_tys,
             exact_requested_shape.ret,
             repr_mode,
-            "specializeDispatchCallExpr(requested ret)",
         );
         const specialized = try self.ensureQueuedCallableSpecializedWithExecSignature(
             inst.types,
@@ -9058,14 +9171,13 @@ const Planner = struct {
                 repr_mode,
             );
         }
-        const requested_exec_ret_ty = try self.lowerRequestedExecutableReturnTypeFromCallRelation(
+        const requested_exec_ret_ty = try self.executableReturnTypeFromCallRelation(
             inst.types,
             mono_cache,
             initial_arg_tys,
             requested_exec_arg_tys,
             initial_dispatch_shape.ret,
             repr_mode,
-            "specializeTypeDispatchCallExpr(requested ret)",
         );
         const specialized = try self.ensureQueuedCallableSpecializedWithExecSignature(
             inst.types,
@@ -9320,14 +9432,13 @@ const Planner = struct {
                             &direct_active,
                         );
                     }
-                    const direct_exec_ret_ty = try self.lowerRequestedExecutableReturnTypeFromCallRelation(
+                    const direct_exec_ret_ty = try self.executableReturnTypeFromCallRelation(
                         inst.types,
                         mono_cache,
                         requested_call_arg_tys,
                         direct_exec_arg_tys,
                         requested_call_shape.ret,
                         repr_mode,
-                        "specializeCallExpr(direct exact ret)",
                     );
                     const specialized = try self.ensureQueuedCallableSpecializedWithExecSignature(
                         inst.types,
@@ -9410,7 +9521,7 @@ const Planner = struct {
         const authoritative_callable = self.authoritativeCallableValue(lowered_func);
         lowered_func = authoritative_callable.expr;
         const lowered_func_exec_ty = authoritative_callable.ty;
-        if (self.executableTypeIsAbstract(lowered_func_exec_ty)) {
+        if (self.executableTypeHasLayoutAbstractLeaf(lowered_func_exec_ty)) {
             const required_summary = self.debugExecutableTypeSummary(func_required_exec_ty);
             defer required_summary.deinit(self.allocator);
             const lowered_summary = self.debugExecutableTypeSummary(lowered_func_exec_ty);
@@ -9894,7 +10005,9 @@ const Planner = struct {
                 var lowered = try self.planExpr(inst, mono_cache, venv, expr);
                 const expected_ret_ty = self.current_required_return_exec_ty orelse
                     debugPanic("lambdamono.exec_plan.specializeStmt(return_) missing current executable return type");
-                if (!self.types.equalIds(self.output.getExpr(lowered).ty, expected_ret_ty)) {
+                if (!self.executableTypeIsAbstract(expected_ret_ty) and
+                    !self.types.equalIds(self.output.getExpr(lowered).ty, expected_ret_ty))
+                {
                     lowered = try self.retargetOrEmitExplicitBridgeExpr(lowered, expected_ret_ty);
                 }
                 break :blk .{

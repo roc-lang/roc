@@ -382,6 +382,7 @@ pub const Layouts = struct {
                 },
             );
         }
+        try self.recordType(allocator, mono_types, idents, expr.ty);
         self.expr_layouts[i] = try self.layoutForExecutableType(allocator, mono_types, idents, expr.ty);
         self.expr_discriminant_layouts[i] = try self.maybeDiscriminantLayout(self.exprLayout(expr_id));
         switch (expr.data) {

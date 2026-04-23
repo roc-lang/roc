@@ -166,7 +166,7 @@ const Lowerer = struct {
         const saved_ret_ty = self.current_def_ret_ty;
         self.current_def_ret_layout = self.input.layouts.defRetLayout(def_id);
         self.current_def_ret_ty = switch (def.value) {
-            .fn_ => |fn_def| self.input.store.getExpr(fn_def.body).ty,
+            .fn_ => |fn_def| def.result_ty orelse self.input.store.getExpr(fn_def.body).ty,
             .hosted_fn => def.result_ty,
             .val => |expr_id| def.result_ty orelse self.input.store.getExpr(expr_id).ty,
             .run => |run_def| def.result_ty orelse self.input.store.getExpr(run_def.body).ty,
@@ -179,10 +179,11 @@ const Lowerer = struct {
                 const args = try self.lowerTypedSymbolSpan(fn_def.args);
                 const env = try self.envFromVarSpan(args);
                 defer self.allocator.free(env);
+                const body_ty = self.input.store.getExpr(fn_def.body).ty;
                 break :blk .{
                     .name = def.bind,
                     .args = args,
-                    .body = try self.lowerBlock(env, fn_def.body),
+                    .body = try self.lowerBlockExpecting(env, fn_def.body, def.result_ty orelse body_ty, "def_ret"),
                     .ret_layout = self.input.layouts.defRetLayout(def_id),
                 };
             },
@@ -192,18 +193,24 @@ const Lowerer = struct {
                 .ret_layout = self.input.layouts.defRetLayout(def_id),
                 .hosted = hosted_fn.hosted,
             },
-            .val => |expr_id| .{
-                .name = def.bind,
-                .args = try self.output.addVarSpan(&.{}),
-                .body = try self.lowerBlock(&.{}, expr_id),
-                .ret_layout = self.input.layouts.defRetLayout(def_id),
+            .val => |expr_id| blk: {
+                const body_ty = self.input.store.getExpr(expr_id).ty;
+                break :blk .{
+                    .name = def.bind,
+                    .args = try self.output.addVarSpan(&.{}),
+                    .body = try self.lowerBlockExpecting(&.{}, expr_id, def.result_ty orelse body_ty, "def_ret"),
+                    .ret_layout = self.input.layouts.defRetLayout(def_id),
+                };
             },
-            .run => |run_def| .{
-                .name = def.bind,
-                .args = try self.output.addVarSpan(&.{}),
-                .body = try self.lowerBlock(&.{}, run_def.body),
-                .ret_layout = self.input.layouts.defRetLayout(def_id),
-                .entry_ty = run_def.entry_ty,
+            .run => |run_def| blk: {
+                const body_ty = self.input.store.getExpr(run_def.body).ty;
+                break :blk .{
+                    .name = def.bind,
+                    .args = try self.output.addVarSpan(&.{}),
+                    .body = try self.lowerBlockExpecting(&.{}, run_def.body, def.result_ty orelse body_ty, "def_ret"),
+                    .ret_layout = self.input.layouts.defRetLayout(def_id),
+                    .entry_ty = run_def.entry_ty,
+                };
             },
         };
     }
@@ -600,12 +607,12 @@ const Lowerer = struct {
                 if (value == null) return if (block.has_term) block else debugPanic("ir.lower return missing terminator");
                 const ret_layout = self.current_def_ret_layout orelse
                     debugPanic("ir.lower return missing current function return layout");
-                const ret_value = if (std.meta.eql(value.?.layout, ret_layout))
+                const ret_ty = self.current_def_ret_ty orelse
+                    debugPanic("ir.lower return missing current function return type");
+                const ret_value = if (self.input.types.equalIds(self.input.store.getExpr(ret_expr).ty, ret_ty))
                     value.?
                 else blk: {
                     const bridged = try self.freshVarWithLayout(ret_layout, "return");
-                    const ret_ty = self.current_def_ret_ty orelse
-                        debugPanic("ir.lower return missing current function return type");
                     try block.stmts.append(self.allocator, .{ .let_ = .{
                         .bind = bridged,
                         .expr = try self.makeBridgeExpr(
@@ -712,8 +719,6 @@ const Lowerer = struct {
             .value => |value| value,
             else => return,
         };
-        const target_layout = self.input.layouts.layoutForType(target_ty);
-        if (std.meta.eql(value.layout, target_layout)) return;
 
         const bridged = try self.freshVar(target_ty, label);
         try block.stmts.append(self.allocator, .{ .let_ = .{
@@ -762,9 +767,6 @@ const Lowerer = struct {
 
         const source_layout = self.input.layouts.layoutForType(source_ty);
         const target_layout = self.input.layouts.layoutForType(target_ty);
-        if (std.meta.eql(source_layout, target_layout)) {
-            return try self.output.addBridgePlan(.direct);
-        }
         if (self.layoutRefIsZst(target_layout)) {
             return try self.output.addBridgePlan(.zst);
         }
