@@ -84,6 +84,32 @@ explicitly constructs a function value that returns another function.
 The cor prototype uses curried unary functions. This plan borrows cor's
 lambda-set architecture, not cor's function arity model.
 
+Every Roc source snippet in this plan must use Roc syntax, not Haskell syntax
+and not cor prototype syntax.
+
+Valid Roc examples:
+
+```roc
+id : a -> a
+id = |x| x
+
+plus_one : I64 -> I64
+plus_one = |n| n + 1
+
+same_plus_one = id(plus_one)
+four = same_plus_one(3)
+```
+
+Function application is parenthesized and comma-separated:
+
+```roc
+foo(a, b)
+id(foo(1, 2))
+```
+
+Do not use Haskell-style run declarations, backslash-arrow lambdas, or
+whitespace function application in Roc examples.
+
 The executable MIR stage replaces the current `lambdamono` fact planner. It must
 not preserve `ValueFact`, `CallableFact`, expression fact maps, local constructor
 facts, or source/executable duplicate truth.
@@ -2056,6 +2082,11 @@ lowering decisions. Boxed erased-boundary decisions must come from lambda-solved
 
 Forbid any MIR, executable MIR, IR, or LIR operation whose semantic purpose is
 automatic currying or compiler-synthesized partial application.
+
+Forbid invalid Roc syntax in plan examples and tests that are intended to be Roc
+source. In particular, forbid Haskell-style run declarations, backslash-arrow
+lambdas, and whitespace function application. Roc examples must use lambdas like
+`|x| x` and calls like `f(x, y)`.
 
 Forbid bare procedure-symbol `var_` values outside mono MIR and lifted MIR input
 pattern matching.
