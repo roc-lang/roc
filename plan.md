@@ -151,10 +151,10 @@ type names.
 Executable representation lowering does not own source method semantics.
 
 Therefore mono MIR is the exact source-method resolution boundary. Static
-dispatch is checked source structure before mono MIR and an explicit known-callee
-MIR call after mono MIR.
+dispatch is checked source structure before mono MIR and an explicit
+procedure-symbol MIR call after mono MIR.
 
-Known-callee MIR calls are not executable direct calls.
+Procedure-symbol MIR calls are not executable direct calls.
 
 Executable direct calls begin only in executable MIR, after lambda-set solving,
 erasure propagation, capture representation, and executable specialization have
@@ -204,7 +204,7 @@ It owns:
 - top-level specialization requests
 - static dispatch target resolution
 - nominal/custom equality target resolution
-- known-callee emission for resolved static dispatch
+- procedure-symbol call emission for resolved static dispatch
 
 Its input is checked CIR plus the checked type store, checked method registry,
 and specialization roots.
@@ -216,8 +216,8 @@ Mono MIR may still contain:
 - local functions
 - closures
 - value calls through function values
-- known calls to source/MIR procedures
-- known procedure values
+- `call_proc` calls to source/MIR procedures
+- `proc_value` values
 - structural equality
 - source tag names and full monomorphic tag-union types
 
@@ -248,7 +248,8 @@ tree with specialization-indexed side tables.
 
 The identity of a mono MIR expression is scoped to its specialization. If the
 same checked CIR expression appears in two specializations, those are two mono
-MIR expressions with separate mono types and separate resolved known callees.
+MIR expressions with separate mono types and separate resolved procedure-symbol
+callees.
 
 The specialization key is:
 
@@ -277,7 +278,7 @@ It produces dispatch-free lifted MIR where:
 - captures are explicit procedure metadata
 - local-function rename environments are stage-private
 - every expression still has a mandatory type
-- known-call and known-proc-value targets still refer to source/MIR procedure
+- `call_proc` and `proc_value` targets still refer to source/MIR procedure
   symbols, not executable procedures
 
 Lifted MIR must not:
@@ -288,14 +289,14 @@ Lifted MIR must not:
 - reintroduce dispatch nodes
 - infer semantic type facts from expression syntax
 
-If lift changes procedure identities, it must rewrite known-call and
-known-proc-value targets through an explicit procedure-id map. It must not
+If lift changes procedure identities, it must rewrite `call_proc` and
+`proc_value` targets through an explicit procedure-id map. It must not
 recover targets from symbol names.
 
-If a pre-lift known call is allowed to target a local function, lift must rewrite
+If a pre-lift `call_proc` is allowed to target a local function, lift must rewrite
 that target and supply the explicit capture path required by the lifted function.
 
-The preferred invariant is simpler: mono MIR known calls may target only
+The preferred invariant is simpler: mono MIR `call_proc` may target only
 top-level mono-specialized procedures. Local functions and closures remain value
 calls until after lifting has made captures explicit.
 
@@ -327,27 +328,27 @@ It must not:
 Lambda-solved MIR output must make callable metadata explicit in its type and
 procedure metadata. The executable MIR stage must not have to rediscover it.
 
-Known calls must participate in lambda-set inference exactly like an ordinary
+`call_proc` must participate in lambda-set inference exactly like an ordinary
 call whose callee expression is `Var(proc)`.
 
-Known procedure values must participate in lambda-set inference exactly like
+`proc_value` must participate in lambda-set inference exactly like
 `Var(proc)`.
 
-For every known call and every known procedure value, lambda-solved MIR must:
+For every `call_proc` and every `proc_value`, lambda-solved MIR must:
 
-- add an SCC dependency edge to the known target
-- instantiate the known target's callable type
-- unify the known target type with the requested callable type
+- add an SCC dependency edge to the procedure target
+- instantiate the procedure target's callable type
+- unify the procedure target type with the requested callable type
 - fix capture types for the target when the target appears in a lambda set
-- preserve the known target identity for executable MIR
+- preserve the procedure target identity for executable MIR
 
-For every known call, lambda-solved MIR must also unify the call arguments and
-result with the known target type.
+For every `call_proc`, lambda-solved MIR must also unify the call arguments and
+result with the procedure target type.
 
-This rule is mandatory. A known call must not bypass lambda-set solving merely
-because its source target is already known.
+This rule is mandatory. A `call_proc` must not bypass lambda-set solving merely
+because its source procedure target is already explicit.
 
-This is also mandatory for `known_proc_value`. A known procedure value may become
+This is also mandatory for `proc_value`. A `proc_value` may become
 a callable-set value or packed erased function value later, but lambda-solved MIR
 must own that decision.
 
@@ -393,16 +394,16 @@ It must not own:
 
 Executable MIR is the final post-check executable representation consumed by IR.
 
-Executable MIR converts lambda-solved known calls, known procedure values, and
-value calls into executable calls or executable function values. A known
-source/MIR callee may become:
+Executable MIR converts lambda-solved `call_proc`, `proc_value`, and `call_value`
+nodes into executable calls or executable function values. A source/MIR procedure
+target may become:
 
 - `call_direct` when the target executable specialization and argument
   representation are exact
 - `call_erased` when lambda-solved MIR explicitly requires erased representation
 - an explicit bridge plus one of the above when source and executable
   representations differ
-- `callable_set_value` when the known procedure is used as a non-erased value
+- `callable_set_value` when the procedure is used as a non-erased value
 - `packed_erased_fn` when lambda-solved MIR explicitly requires erased function
   representation
 
@@ -507,14 +508,15 @@ checked CIR, method registries, or reference-counting analysis.
 ### Procedure Identity
 
 Each MIR-family stage will use stable `Symbol` values as public procedure
-references for known calls and executable direct calls. A stage may use private
-dense procedure ids internally, but exported call nodes must refer to stable
-symbols.
+references for `call_proc`, `proc_value`, and executable direct calls. A stage
+may use private dense procedure ids internally, but exported call nodes must
+refer to stable symbols.
 
 The required invariant is:
 
 ```text
-known/direct call target identity is stored in the call node
+procedure call target identity is stored in `call_proc`
+executable direct call target identity is stored in `call_direct`
 ```
 
 If a stage rewrites procedure identities, it must carry an explicit map:
@@ -531,29 +533,31 @@ old Symbol -> new Symbol
 
 It must not recover targets from names, expression shapes, or source lookup.
 
-### Known Calls, Direct Calls, And Value Calls
+### Proc Calls, Direct Calls, And Value Calls
 
-MIR must distinguish known source calls, executable direct calls, and value
-calls.
+MIR must distinguish procedure-symbol calls, executable direct calls, and
+function-value calls.
 
-`known` is a MIR contract term, not a `cor` AST concept.
+`call_proc` and `proc_value` are MIR contract terms, not `cor` AST concepts.
 
-In the `cor` prototype, the equivalent of a known source procedure is just a
-`Var(proc)` whose symbol has already been specialized. A call to it remains an
-ordinary `Call(Var(proc), arg)` until lambda-set solving and executable lowering.
+In the `cor` prototype, the equivalent of `proc_value` is just a `Var(proc)`
+whose symbol has already been specialized. The equivalent of `call_proc` is an
+ordinary `Call(Var(proc), arg)`.
 
-The production MIR names this case explicitly so later stages never recover the
-target from environment lookup, expression shape, or source syntax.
+That cor call remains ordinary until lambda-set solving and executable lowering.
+
+Production MIR names this case explicitly so later stages do not recover the
+procedure target from environment lookup, expression shape, or source syntax.
 
 Required pre-executable distinction:
 
 ```zig
-known_proc_value {
+proc_value {
     proc: Symbol,
     fn_ty: TypeId,
 }
 
-call_known {
+call_proc {
     proc: Symbol,
     args: Span(ExprId),
     requested_fn_ty: TypeId,
@@ -566,16 +570,16 @@ call_value {
 }
 ```
 
-`known_proc_value` exists when a known source/MIR procedure is used as a value,
+`proc_value` exists when a source/MIR procedure symbol is used as a value,
 including a resolved method reference that is not immediately called.
 
-`call_known` exists in mono MIR, lifted MIR, and lambda-solved MIR.
+`call_proc` exists in mono MIR, lifted MIR, and lambda-solved MIR.
 
-`call_known.proc` is a source/MIR procedure identity selected by earlier stages.
+`call_proc.proc` is a source/MIR procedure identity selected by earlier stages.
 It is not an executable procedure identity and it does not imply an executable
 argument representation.
 
-`call_known.requested_fn_ty` is the exact stage-local source/callable function
+`call_proc.requested_fn_ty` is the exact stage-local source/callable function
 type used for this call. It is mandatory even though the call expression itself
 also has a result type.
 
@@ -589,8 +593,8 @@ Debug verifiers must assert, as early as possible, that:
 - each call argument expression type is the corresponding requested function
   argument type
 - `call_value.func` has a callable type that unifies with `requested_fn_ty`
-- `call_known.proc` has a callable type that unifies with `requested_fn_ty`
-- `known_proc_value.fn_ty` unifies with the known procedure's callable type
+- `call_proc.proc` has a callable type that unifies with `requested_fn_ty`
+- `proc_value.fn_ty` unifies with the procedure target's callable type
 
 These are debug-only compiler assertions. They should panic loudly on failure in
 debug builds and verifier builds, because failure means a compiler invariant was
@@ -598,10 +602,10 @@ violated. They must not generate runtime checks in user programs, and release
 compiler builds must not pay for them when those checks are unnecessary assuming
 the compiler is correct.
 
-Static dispatch lowers to `call_known` in mono MIR.
+Static dispatch lowers to `call_proc` in mono MIR.
 
 Resolved method references used as first-class values lower to
-`known_proc_value`, not `call_known` and not `call_direct`.
+`proc_value`, not `call_proc` and not `call_direct`.
 
 Calling a first-class function value remains `call_value` until callable solving
 and executable lowering can decide whether it becomes direct, erased,
@@ -683,7 +687,7 @@ procedure.
 
 Mono MIR lowering must pass that source method definition and the exact requested
 mono source function type through the mono specialization queue. The queue
-returns the mono-specialized source/MIR procedure symbol stored in `call_known`.
+returns the mono-specialized source/MIR procedure symbol stored in `call_proc`.
 
 Executable MIR later creates executable specializations from lambda-solved MIR.
 It must not reuse raw method registry symbols as executable direct-call targets.
@@ -824,7 +828,7 @@ mono MIR lowering does:
 5. Request or reserve the target mono specialization at the exact mono source
    constraint function type.
 6. Lower `a` and `b` with expected types `constraint.args[1..]`.
-7. Emit `call_known` with:
+7. Emit `call_proc` with:
    - `proc` equal to the mono-specialized source/MIR procedure symbol
    - `args` equal to the lowered receiver followed by lowered explicit args
    - `requested_fn_ty` equal to the exact mono source constraint function type
@@ -850,7 +854,7 @@ mono MIR lowering does:
 5. Request or reserve the target mono specialization at the exact mono source
    constraint function type.
 6. Lower explicit args.
-7. Emit `call_known` with:
+7. Emit `call_proc` with:
    - `proc` equal to the mono-specialized source/MIR procedure symbol
    - `args` equal to the lowered explicit args
    - `requested_fn_ty` equal to the exact mono source constraint function type
@@ -869,9 +873,9 @@ x != y
 
 mono MIR lowering resolves `is_eq` through the same owner and registry path.
 
-`==` emits `call_known` to the specialized `is_eq`.
+`==` emits `call_proc` to the specialized `is_eq`.
 
-`!=` emits the same `call_known` followed by `bool_not`.
+`!=` emits the same `call_proc` followed by `bool_not`.
 
 Anonymous structural equality remains `structural_eq` and never goes through
 method dispatch.
@@ -914,9 +918,10 @@ Callable and capture metadata must flow as typed MIR data, not side tables.
 
 Mono MIR:
 
-- preserves function values and known source calls distinctly
+- preserves function values and procedure-symbol calls distinctly
 - assigns monomorphic function types to expressions
-- stores the exact requested mono source function type on every known/value call
+- stores the exact requested mono source function type on every `call_proc` and
+  `call_value`
 - does not package erased callables
 
 Lifted MIR:
@@ -924,15 +929,16 @@ Lifted MIR:
 - lifts local functions and closures
 - computes captures
 - stores captures in lifted procedure metadata
-- rewrites known-call and known-proc-value targets only through explicit
-  procedure-id maps
+- rewrites `call_proc` and `proc_value` targets only through explicit procedure-id
+  maps
 
 Lambda-solved MIR:
 
 - determines exact callable sets
 - associates capture types with callable members
 - propagates erasure requirements
-- treats known calls as calls to known `Var(proc)` targets for inference and SCCs
+- treats `call_proc` as calls to specialized `Var(proc)` targets for inference
+  and SCCs
 
 Executable MIR:
 
@@ -1121,8 +1127,8 @@ method_eq
 Add or clarify:
 
 ```text
-known_proc_value
-call_known
+proc_value
+call_proc
 call_value
 structural_eq
 bool_not
@@ -1134,7 +1140,7 @@ Mono MIR lowering from checked CIR must resolve:
 - type dispatch
 - nominal/custom equality
 
-to known source/MIR calls immediately.
+to `call_proc` calls immediately.
 
 Commit when mono MIR verification proves no exported mono MIR dispatch nodes
 exist.
@@ -1146,11 +1152,11 @@ Update lifted MIR to consume dispatch-free mono MIR.
 Delete all dispatch cases from lifted MIR AST and lowering.
 
 If procedure ids or symbols change during lifting, add explicit rewrite maps for
-known-call and known-proc-value targets.
+`call_proc` and `proc_value` targets.
 
 Commit when lifted MIR verification proves:
 
-- all known-call and known-proc-value targets exist
+- all `call_proc` and `proc_value` targets exist
 - all captures are explicit
 - no dispatch terms exist in exported lifted MIR
 
@@ -1173,9 +1179,8 @@ Commit when lambda-solved MIR verification proves:
 - no dispatch terms exist
 - callable members and captures are explicit
 - erased callable requirements are explicit
-- known-call and known-proc-value targets remain explicit
-- known calls and known procedure values participate in callable inference and
-  SCC ordering
+- `call_proc` and `proc_value` targets remain explicit
+- `call_proc` and `proc_value` participate in callable inference and SCC ordering
 
 ### 6. Replace Executable Fact Planner
 
@@ -1195,7 +1200,7 @@ semantic FactId usage
 Executable specialization keys must be:
 
 ```text
-known source/MIR target
+source/MIR procedure target
 + lambda-solved argument and return types
 + exact callable-set capture payload shape or erased capture record shape
 + representation mode
@@ -1215,7 +1220,7 @@ Commit when executable MIR verification proves:
 - callable-set values have explicit member capture payloads
 - finite callable-set calls lower to explicit `when`
 - packed erased functions have explicit captures
-- bridge nodes connect known executable MIR types
+- bridge nodes connect concrete executable MIR types
 
 ### 7. Delete Source-Type Reconstruction
 
@@ -1306,7 +1311,7 @@ Obsolete expectations:
 Replacement expectations:
 
 - checked CIR contains dispatch where appropriate
-- mono MIR contains known calls and no dispatch
+- mono MIR contains `call_proc` and no dispatch
 - lifted MIR contains explicit captures and no dispatch
 - lambda-solved MIR contains explicit callable sets and no dispatch
 - executable MIR contains direct/erased calls, finite callable-set `when`
@@ -1321,19 +1326,19 @@ Mono MIR:
 
 - every expression has a mono type
 - no dispatch nodes exist
-- static dispatch becomes `call_known`
-- nominal/custom equality becomes known `is_eq`
+- static dispatch becomes `call_proc`
+- nominal/custom equality becomes `call_proc` to `is_eq`
 - structural equality remains structural
 - transparent aliases preserve nominal identity
-- known procedure values are distinct from known calls
-- known calls carry exact requested mono source function types
-- known calls are not executable direct calls
+- `proc_value` is distinct from `call_proc`
+- `call_proc` carries exact requested mono source function types
+- `call_proc` is not an executable direct call
 
 Lifted MIR:
 
 - every lifted procedure target exists
 - every capture is explicit
-- known-call and known-proc-value targets are rewritten by explicit maps
+- `call_proc` and `proc_value` targets are rewritten by explicit maps
 - no dispatch nodes exist
 
 Lambda-solved MIR:
@@ -1342,10 +1347,9 @@ Lambda-solved MIR:
 - captures are attached to callable members
 - erasure requirements are explicit
 - no dispatch nodes exist
-- known calls and known procedure values have SCC dependency edges
-- known calls are inferred as calls to their known target procedure types
-- known procedure values are inferred as values of their known target procedure
-  types
+- `call_proc` and `proc_value` have SCC dependency edges
+- `call_proc` is inferred as a call to its procedure target type
+- `proc_value` is inferred as a value of its procedure target type
 
 Executable MIR:
 
@@ -1355,7 +1359,7 @@ Executable MIR:
 - every callable-set value has explicit member capture payload metadata
 - every packed erased function has explicit capture metadata
 - every erased call has an explicit erased function type
-- bridges connect known executable types
+- bridges connect concrete executable types
 - no fact side tables exist
 
 IR/LIR:
@@ -1376,10 +1380,10 @@ Static dispatch:
 - primitive methods resolve through builtin primitive owners
 - list methods resolve through builtin List owner
 - box methods resolve through builtin Box owner
-- custom equality lowers to known `is_eq` before executable MIR and direct
+- custom equality lowers to `call_proc` `is_eq` before executable MIR and direct
   executable `is_eq` after executable MIR
-- inequality lowers to known `is_eq` plus `bool_not` before executable MIR and
-  direct executable `is_eq` plus `bool_not` after executable MIR
+- inequality lowers to `call_proc` `is_eq` plus `bool_not` before executable MIR
+  and direct executable `is_eq` plus `bool_not` after executable MIR
 - anonymous record equality remains structural equality
 - transparent tag-union aliases resolve through nominal identity
 - cross-module attached methods resolve through registry def refs
@@ -1387,8 +1391,8 @@ Static dispatch:
 - hosted/effect/platform methods use explicit method targets or explicit
   intrinsics
 - tag construction never creates singleton source tag-union types
-- method references used as first-class values resolve to explicit known
-  procedure values, not executable direct calls
+- method references used as first-class values resolve to explicit `proc_value`
+  values, not executable direct calls
 
 Callable/capture behavior:
 
@@ -1449,14 +1453,14 @@ The cutover is complete only when all of these are true:
 - no public pipeline imports old top-level post-check modules
 - static dispatch exists only in checked CIR and mono MIR input pattern matching
 - mono MIR output has no dispatch nodes
-- mono MIR output uses `call_known`, not `call_direct`, for resolved static
+- mono MIR output uses `call_proc`, not `call_direct`, for resolved static
   dispatch
 - lifted MIR output has no dispatch nodes
-- lifted MIR rewrites `call_known` and `known_proc_value` targets only through
+- lifted MIR rewrites `call_proc` and `proc_value` targets only through
   explicit maps
 - lambda-solved MIR output has no dispatch nodes
 - lambda-solved MIR has explicit callable/lambda-set/erasure metadata for every
-  known procedure value and known/value call executable MIR consumes
+  `proc_value`, `call_proc`, and `call_value` executable MIR consumes
 - executable MIR output has no dispatch nodes
 - executable MIR is the first stage that emits `call_direct`
 - executable MIR lowers every finite non-erased callable-set call to explicit
