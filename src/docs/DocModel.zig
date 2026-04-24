@@ -246,7 +246,11 @@ pub const DocType = union(enum) {
 
     pub const Record = struct {
         fields: []const Field,
-        ext: ?*const DocType, // extension var for open records { .., name: Str }
+        /// Named extension variable (e.g. `..a` produces `type_var("a")`).
+        /// Null when the record is closed or when it is anonymously open (`..`).
+        ext: ?*const DocType,
+        /// True when the record is open (`..` or `..name`).
+        is_open: bool,
     };
 
     pub const Field = struct {
@@ -256,7 +260,11 @@ pub const DocType = union(enum) {
 
     pub const TagUnion = struct {
         tags: []const Tag,
+        /// Named extension variable (e.g. `..a` produces `type_var("a")`).
+        /// Null when the union is closed or when it is anonymously open (`..`).
         ext: ?*const DocType,
+        /// True when the union is open (`..` or `..name`).
+        is_open: bool,
     };
 
     pub const Tag = struct {
@@ -319,6 +327,7 @@ pub const DocType = union(enum) {
             },
             .record => |rec| {
                 try writer.writeAll("(record");
+                if (rec.is_open) try writer.writeAll(" (open)");
                 if (rec.ext) |ext| {
                     try writer.writeAll(" (ext ");
                     try ext.writeToSExpr(writer, depth);
@@ -335,6 +344,7 @@ pub const DocType = union(enum) {
             },
             .tag_union => |tu| {
                 try writer.writeAll("(tag-union");
+                if (tu.is_open) try writer.writeAll(" (open)");
                 for (tu.tags) |tag| {
                     try writer.writeAll(" (tag \"");
                     try writeEscaped(writer, tag.name);
