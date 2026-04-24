@@ -54,6 +54,22 @@ or best-effort semantic information.
 
 Every post-check stage must consume explicit stage outputs from the previous stage.
 
+All user-facing compiler errors must be reported during checking at the absolute
+latest. After checking completes, every compiler stage must succeed. A violated
+post-check assumption is a compiler bug, not a user-facing error and not a
+recoverable compiler result.
+
+Compiler invariant violations have exactly one implementation shape:
+
+```text
+debug build: debug-only assertion
+release build: unreachable
+```
+
+Post-check stages must not return recoverable semantic errors, emit fallback
+code, silently repair missing data, or add release-build runtime checks for
+compiler invariants.
+
 Backends must not think about reference counting. They lower explicit LIR
 `incref` and `decref` statements only.
 
@@ -136,8 +152,8 @@ ci/guarded_zig.sh zig ...
 
 Do not run `zig ...` directly.
 
-If a wrapper precheck fails, fix the architectural or lint failure first. Do not
-bypass, weaken, or locally skip the wrapper.
+If a wrapper precheck reports an architectural or lint issue, fix that issue
+first. Do not bypass, weaken, or locally skip the wrapper.
 
 ## Commit Discipline
 
@@ -466,8 +482,45 @@ After lifting, local functions and closures are still called through
 This is true even for captureless local functions. Direct-call optimization is
 not a representation invariant.
 
-Recursive local-function groups are lifted by fixed point, not by one-pass
-body scanning.
+Recursive local-function groups are lifted through an explicit
+`LiftedCaptureGraph`, not by one-pass body scanning and not by introducing local
+alias variables that later stages reinterpret as procedure values.
+
+Conceptual graph:
+
+```zig
+const LiftedCaptureGraph = struct {
+    members: Span(LiftedGroupMember),
+    value_edges: Span(CaptureValueEdge),
+    proc_value_edges: Span(CaptureProcValueEdge),
+};
+
+const LiftedGroupMember = struct {
+    source_symbol: Symbol,
+    lifted_proc: Symbol,
+    order_key: ProcOrderKey,
+    args: Span(TypedSymbol),
+    capture_slots: Span(CaptureSlot),
+};
+
+const CaptureValueEdge = struct {
+    from_proc: Symbol,
+    source_symbol: Symbol,
+    source_ty: TypeId,
+};
+
+const CaptureProcValueEdge = struct {
+    from_proc: Symbol,
+    referenced_proc: Symbol,
+};
+```
+
+The exact Zig field names may differ, but the graph responsibilities must not.
+`CaptureValueEdge` records an ordinary external value needed by a member.
+`CaptureProcValueEdge` records that one group member constructs or returns a
+`proc_value` for another group member. The graph stores procedure identity
+directly; it must not depend on generated alias names, environment lookup, or
+source-name reconstruction.
 
 For each recursive local-function group, lifted MIR must:
 
@@ -475,19 +528,28 @@ For each recursive local-function group, lifted MIR must:
    member body.
 2. Assign a stable `ProcOrderKey` to every group member before lowering any
    member body.
-3. Compute each member's `CaptureSlot`s as the least fixed point of:
-   - external values directly referenced by that member body
-   - external values needed to construct any referenced self or sibling
-     `proc_value`
-   - capture slots pulled through references to self or sibling procedures
-4. Rewrite every body reference to a captured value to `capture_ref(slot)`.
-5. Rewrite every self, sibling, local-function, and closure reference to an
+3. Scan member bodies only to build `LiftedCaptureGraph` edges.
+4. Solve each member's `CaptureSlot` set to the least fixed point over:
+   direct external value edges, values required to build referenced
+   `proc_value` nodes, and capture slots required by referenced self or sibling
+   procedures.
+5. Assign deterministic `CaptureSlot.index` values after the fixed point is
+   stable.
+6. Lower each member body after capture slots are known.
+7. Rewrite every body reference to a captured value to `capture_ref(slot)`.
+8. Rewrite every self, sibling, local-function, and closure reference to an
    explicit `proc_value`.
-6. Fill each `proc_value.captures` from values in the current scope or from the
+9. Fill each `proc_value.captures` from values in the current scope or from the
    current procedure's own `CaptureSlot`s.
-7. Iterate until every member's capture-slot set is stable.
 
-Failure to converge is a compiler invariant failure. It is not a fallback path.
+No local declaration may be inserted solely to stand for a lifted local
+procedure value. A source alias like `g = f` may survive only if it becomes an
+ordinary value binding whose body is a `proc_value`; it must not become a bare
+`var_` that later stages interpret as a procedure.
+
+Non-convergence is a compiler invariant violation. In debug builds, the
+debug-only assertion must fire. In release builds, this path is `unreachable`.
+It is not a fallback path.
 
 Capture slot ordering inside a recursive group must be deterministic. The base
 order is lexical capture discovery. Fixed-point additions are appended in
@@ -595,7 +657,7 @@ Unification of two callable sets is exact:
 2. The same procedure member must have the same capture slots.
 3. The same capture slot unifies its capture type pointwise.
 4. Mismatched capture slots for the same procedure member are compiler invariant
-   failures.
+   violations.
 5. A callable set unified with erased callable representation becomes erased.
 
 This algebra is not an optimization. It is the exported lambda-solved contract
@@ -680,12 +742,42 @@ const RepRootId = union(enum) {
 const RepVarId = enum(u32) { _ };
 const RepEdgeId = enum(u32) { _ };
 const RepClassId = enum(u32) { _ };
+const RepRequirementId = enum(u32) { _ };
 
 const RepresentationStore = struct {
     roots: Map(RepRootId, RepVarId),
     vars: Store(RepresentationVar),
     edges: Store(RepresentationEdge),
+    requirements: Store(RepresentationRequirement),
     classes: Store(SolvedRepresentationClass),
+};
+
+const RepresentationEdge = struct {
+    from: RepVarId,
+    to: RepVarId,
+    kind: RepresentationEdgeKind,
+};
+
+const RepresentationEdgeKind = union(enum) {
+    value_alias,
+    value_move,
+    function_arg: u32,
+    function_return,
+    function_callable,
+    record_field: RecordFieldId,
+    tuple_elem: u32,
+    tag_payload: TagPayloadId,
+    list_elem,
+    box_payload,
+    nominal_backing: NominalKey,
+    branch_join,
+    loop_phi,
+    mutable_version,
+};
+
+const RepresentationRequirement = union(enum) {
+    require_box_erased: BoxBoundaryId,
+    require_shape: RepresentationShape,
 };
 ```
 
@@ -698,6 +790,82 @@ requirements are solved. Structural children are also explicit representation
 variables: record fields, tuple elements, tag payloads, `List(T)` elements,
 `Box(T)` payloads, nominal backing slots, function arguments, function returns,
 and callable-representation slots.
+
+Whole fixed-arity function values must have one representation root:
+
+```zig
+const FunctionRepShape = struct {
+    args: Span(RepVarId),
+    ret: RepVarId,
+    callable: RepVarId,
+};
+```
+
+`call_value`, `call_proc`, and `proc_value` each create or reference a
+`requested_fn_root` whose shape is `FunctionRepShape`. There must be no exported
+API that connects only the callable child while skipping the argument and return
+children. The only legal helpers are whole-function helpers:
+
+```zig
+connect_call_value_whole_function(...)
+connect_call_proc_whole_function(...)
+connect_proc_value_whole_function(...)
+```
+
+The helper names may differ, but the contract must not. Each helper creates the
+whole-function edge, each argument edge, the return edge, and the callable child
+edge together.
+
+Representation solving is a deterministic union-find plus worklist:
+
+1. Allocate every `RepRootId` and structural child `RepVarId`.
+2. Append all `RepresentationEdge` values.
+3. Append all `RepresentationRequirement` values.
+4. Union variables connected by value-flow edges.
+5. Merge structural shapes inside each class.
+6. Re-enqueue affected neighboring classes until no class changes.
+7. Apply `require_box_erased` only by following the explicit representation graph
+   reachable from the named `BoxBoundaryId.payload_root`.
+8. Export one `SolvedRepresentationClass` for every class.
+
+The solver may use path compression and dense indexes for compiler performance.
+It must not use logical `TypeId` equality as a shortcut for unioning two roots.
+Logical types are metadata on representation variables, not representation
+identity.
+
+Lambda-solved MIR must build representation edges through a dedicated
+`ValueFlowGraphBuilder`. This builder owns the control-flow-sensitive mapping
+from source symbols to current representation roots.
+
+Conceptual builder state:
+
+```zig
+const ValueFlowGraphBuilder = struct {
+    store: *RepresentationStore,
+    current_proc: Symbol,
+    current_return_root: RepVarId,
+    locals: Map(Symbol, CurrentValueRoot),
+    loop_stack: Stack(LoopValueFlowFrame),
+};
+
+const CurrentValueRoot = union(enum) {
+    immutable: RepVarId,
+    mutable_version: MutableVersionId,
+};
+
+const LoopValueFlowFrame = struct {
+    header_phis: Map(Symbol, RepVarId),
+    backedge_inputs: Map(Symbol, Span(RepVarId)),
+    break_exit_inputs: Map(Symbol, Span(RepVarId)),
+    exit_roots: Map(Symbol, RepVarId),
+};
+```
+
+The builder walks lambda-solved MIR once per specialization and emits the full
+set of roots, edges, loop phi records, branch joins, and boxed-boundary
+requirements. It is the only place that interprets source control flow for
+representation purposes. Executable MIR may verify the exported graph in debug
+builds, but it must not add missing edges.
 
 Semantic source mutation must be converted to SSA before representation solving.
 The representation store must not model a source `var` as a physical mutable
@@ -741,12 +909,13 @@ A boxed use in one specialization must not mutate:
 - another specialization's callable/capture keys
 
 Generalized templates may contain unsolved representation variables while they
-are still templates. Exported executable inputs may not. The verifier must panic
-if any exported `BoxPayloadRepresentationPlan`, `CanonicalCallableSetKey`,
-`CaptureShapeKey`, `ErasedFnSigKey`, `ErasedAdapterKey`, executable MIR type, or
-layout-publication input references a template `TypeId`, a foreign
-specialization's type store, `for_a`, `flex_for_a`, `unbd`, unresolved links, or
-raw checker variables.
+are still templates. Exported executable inputs may not. Debug-only assertions
+must fire if any exported `BoxPayloadRepresentationPlan`,
+`CanonicalCallableSetKey`, `CaptureShapeKey`, `ErasedFnSigKey`,
+`ErasedAdapterKey`, executable MIR type, or layout-publication input references
+a template `TypeId`, a foreign specialization's type store, `for_a`,
+`flex_for_a`, `unbd`, unresolved links, or raw checker variables. In release
+builds, those paths are `unreachable`.
 
 Executable specialization keys must be canonical structural keys after full
 type-link resolution.
@@ -778,12 +947,12 @@ Transform modes include at least natural representation, boxed-erased-payload
 representation, and executable representation.
 
 Canonical key serialization for recursive types and solved representation
-classes must emit stable recursion
-binders and backrefs derived from first encounter order in the explicit
-type/representation graph being serialized. It must not serialize raw `TypeId`,
-pointer identity, allocation order, or hash-map iteration order. Debug
-verifiers must reject any exported key that contains a transient type-store id
-or can recurse forever.
+classes must emit stable recursion binders and backrefs derived from first
+encounter order in the explicit type/representation graph being serialized. It
+must not serialize raw `TypeId`, pointer identity, allocation order, or hash-map
+iteration order. Debug-only assertions must fire if any exported key contains a
+transient type-store id or can recurse forever. In release builds, those paths
+are `unreachable`.
 
 The same rule applies to recursive callable and capture graphs.
 `CanonicalCallableSetKey`, `CaptureShapeKey`, `ErasedAdapterKey`, and any key
@@ -791,6 +960,51 @@ that references captures must serialize recursion with stable binders/backrefs.
 They must not inline callable members or capture records recursively until the
 process bottoms out. A recursive closure that captures a value containing itself
 must produce a finite canonical key.
+
+All exported semantic keys use one shared `CanonicalGraphKeyBuilder`:
+
+```zig
+const CanonicalGraphKeyBuilder = struct {
+    arena: *BumpAllocator,
+    seen_types: Map(CanonicalNodeRef, RecBinderId),
+    seen_reps: Map(RepClassId, RecBinderId),
+    out: ArrayList(u8),
+    next_binder: u32,
+};
+
+const CanonicalNodeRef = union(enum) {
+    lambda_solved_type: TypeId,
+    executable_type: ExecTypeId,
+    representation_class: RepClassId,
+    proc_base: ProcBaseKeyRef,
+    capture_shape: CaptureShapeKeyRef,
+};
+```
+
+The exact Zig field names may differ, but there must be one builder contract
+shared by:
+
+- `MonoSpecializationKey`
+- `ExecutableSpecializationKey`
+- `CanonicalCallableSetKey`
+- `CaptureShapeKey`
+- `ErasedFnSigKey`
+- `ErasedAdapterKey`
+- `BoxPayloadCapabilityKey`
+- `BoxPayloadRepresentationPlan` keys
+- executable layout-publication keys
+
+The builder must emit stable recursion binders on first encounter and backrefs
+on repeated encounter. Procedure references are encoded as `ProcBaseKeyRef`,
+not `Symbol.raw()`. Capture components are encoded in `CaptureSlot.index` order,
+not capture-name order. Row components are encoded with finalized row IDs.
+Children are visited in the canonical order defined by each structural shape.
+
+Debug-only assertions in the builder must catch raw type-store IDs from
+transient clones, generated symbol text, pointer identity, allocation order,
+hash-map iteration order, and expression IDs. In release builds, those paths are
+`unreachable`. There must not be parallel ad hoc serializers for individual key
+families.
 
 Specialization queues must reserve the semantic key and output symbol before
 lowering the procedure body. Re-entering an in-progress specialization returns
@@ -814,20 +1028,43 @@ Lambda-solved MIR must preserve explicit boxed-boundary records for every erased
 The exported lambda-solved type contract includes:
 
 ```text
-erased_box_payload_type(T)
-require_box_erased(payload_root: RepRootId)
+BoxBoundaryId
+erased_box_payload_type(boundary: BoxBoundaryId)
+require_box_erased(boundary: BoxBoundaryId)
 ```
 
-`erased_box_payload_type(T)` may be called only for the payload type of an
-explicit `Box(T)` boundary. It recursively walks that boxed payload type and
+The boxed-boundary table is the only source that can introduce erased callable
+representation:
+
+```zig
+const BoxBoundaryId = enum(u32) { _ };
+
+const BoxBoundary = struct {
+    direction: BoxErasureDirection,
+    input: ExprId,
+    box_root: RepRootId,
+    payload_root: RepRootId,
+    box_ty: TypeId,
+    payload_source_ty: TypeId,
+    payload_boundary_ty: TypeId,
+    payload_plan: BoxPayloadRepresentationPlan,
+};
+```
+
+`erased_box_payload_type(boundary)` may be called only with a `BoxBoundaryId`
+from this table. It recursively walks that boundary's boxed payload type and
 rewrites every reachable function slot to erased callable representation.
 
-`require_box_erased(payload_root)` may be created only for the payload root of
-an explicit `Box(T)` boundary. It is a constraint seed in the
-`RepresentationStore`, not an executable conversion. Solving that seed walks
-the payload root's representation graph and marks every reachable function
-representation slot as erased. The walk follows only explicit representation
-edges already present in the store.
+`require_box_erased(boundary)` may be created only from a `BoxBoundaryId`. It is
+a requirement in the `RepresentationStore`, not an executable conversion.
+Solving that requirement walks the boundary's `payload_root` representation
+graph and marks every reachable function representation slot as erased. The walk
+follows only explicit representation edges already present in the store.
+
+There must be no helper that accepts an arbitrary type, expression, or
+`RepRootId` and makes it erased. Any API that introduces erasure must take a
+`BoxBoundaryId`, and debug verification must prove that the boundary's `box_ty`
+is exactly `Box(payload_boundary_ty)`.
 
 Any recursion through records, tuples, tag unions, `List(T)`, nested `Box(T)`,
 or nominal backing types happens only because those types are inside the payload
@@ -878,9 +1115,11 @@ importer's specialization-local `BoxPayloadRepresentationPlan`.
 Opaque nominals are atomic outside their defining module only when the interface
 exports an explicit `opaque_atomic` capability with a compiler-produced
 `NoReachableCallableSlotsProof`. Otherwise an opaque nominal that appears inside
-a boxed erased payload must be traversed through an imported capability. If no
-capability exists for that exact boundary, compilation must fail before
-executable MIR.
+a boxed erased payload must be traversed through an imported capability.
+Checking must ensure the exact capability or exact `opaque_atomic` proof exists
+before post-check lowering consumes the value. If post-check lowering reaches
+this case without one, that is a compiler invariant violation: debug-only
+assertion in debug builds, `unreachable` in release builds.
 
 `NoReachableCallableSlotsProof` is instantiation-sensitive. It is valid only for
 the exact nominal identity, exact fully resolved type arguments, and exact boxed-payload
@@ -921,9 +1160,31 @@ syntax, display names, or layout shapes to recreate the proof.
 The compiler must not use copied opaque backing details, source syntax, display
 names, or layout inspection as a substitute for the interface capability. If a
 boxed erased boundary would require traversing an imported, opaque, hosted, or
-platform-owned value without an explicit representation record, compilation must
-fail before executable MIR. It must not emit a runtime conversion, generic
-opaque coercion, fallback erased wrapper, or best-effort indirect call.
+platform-owned value without an explicit representation record, checking must
+have reported that before post-check lowering. Reaching post-check lowering in
+that state is a compiler invariant violation. It must not emit a runtime
+conversion, generic opaque coercion, fallback erased wrapper, or best-effort
+indirect call.
+
+Nominal payload traversal uses one algorithm:
+
+1. If the nominal is defined in the current module and is transparent, traverse
+   the checked backing representation from the defining module.
+2. If the nominal is imported and transparent through an exported capability,
+   instantiate that capability with the exact canonical fully resolved type
+   arguments and the exact boxed-payload representation mode for this
+   specialization.
+3. If the nominal is opaque and an `opaque_atomic` proof exists for the exact
+   nominal identity, exact canonical type arguments, and exact boxed-payload
+   representation mode, stop traversal at that nominal.
+4. If the nominal is hosted or platform-owned, consume its explicit hosted or
+   platform representation capability.
+5. Otherwise trigger the post-check compiler-invariant path: debug-only
+   assertion in debug builds, `unreachable` in release builds.
+
+The algorithm returns a `NominalPayloadRepresentation` node. It must not return
+source syntax, copied backing declarations, display names, layout shapes, or a
+request for executable MIR to inspect the value later.
 
 Hosted and platform procedures must declare their callable-containing argument
 and return representations as part of their explicit ABI metadata. A hosted
@@ -1023,13 +1284,13 @@ These edges are lambda-solved records. Executable MIR may verify them in debug
 builds, but it must not add missing edges, rebuild containers, or reinterpret a
 branch/pattern result to satisfy a boxed payload requirement.
 
-`Box.box(payload)` creates a `boxed_erased_boundary` and a
-`require_box_erased(payload_root)` seed. The produced box root's payload child
+`Box.box(payload)` creates a `BoxBoundary` record and a
+`require_box_erased(boundary)` requirement. The produced box root's payload child
 is linked to the solved boxed payload representation class. `Box.unbox(boxed)`
-creates a `boxed_erased_boundary` whose box root is the boxed input and whose
+creates a `BoxBoundary` record whose box root is the boxed input and whose
 payload root is the unboxed expression result. It links the unboxed payload root
-to the explicit boxed payload representation. It does not recover or request
-the original finite callable-set shape.
+to the explicit boxed payload representation. It does not recover or request the
+original finite callable-set shape.
 
 The required callable representation algebra is:
 
@@ -1074,7 +1335,7 @@ Merge rules:
 - `List(T)` merges by merging the element representation.
 - `Box(T)` merges by merging the payload representation. This does not create
   erasure; only an explicit `Box(T)` boundary may create
-  `require_box_erased(payload_root)`.
+  `require_box_erased(boundary)`.
 - transparent nominals merge through their explicit backing representation.
 - imported nominals merge only through an instantiated
   `BoxPayloadCapabilityKey`.
@@ -1099,7 +1360,8 @@ Recursive shapes are solved with placeholders and stable recursion binders. A
 representation solver must allocate the placeholder before merging children and
 must serialize the solved class with stable backrefs. Infinite recursive copies,
 raw pointer identity, allocation order, and hash-map iteration order are
-compiler invariant failures.
+compiler invariant violations handled only by debug-only assertion in debug
+builds and `unreachable` in release builds.
 
 If a shared value flows both to an ordinary use and to `Box(...)`, the explicit
 `Box(T)` boundary is the only source of erasure, but lambda-solved MIR may solve
@@ -1108,10 +1370,10 @@ consume that solved erased representation. Executable MIR must not create a
 runtime `List(T)` map, record rebuild, tuple rebuild, tag rebuild, or nominal
 rebuild to make a previously-produced non-erased container fit the box.
 
-Every boxed erased boundary exports:
+Every boxed erased boundary exports the corresponding `BoxBoundary` record:
 
 ```zig
-boxed_erased_boundary {
+BoxBoundary {
     direction: BoxErasureDirection,
     input: ExprId,
     box_root: RepRootId,
@@ -1212,6 +1474,33 @@ raw type ids, symbol freshening suffixes, or allocation-order-dependent data.
 `ErasedFnSigKey` must include the canonical erased argument types, canonical
 erased return type, fixed Roc arity, and an `ErasedCallAbiPolicyKey`.
 
+`ErasedCallAbiPolicyKey` interns an explicit erased-call ABI policy:
+
+```zig
+ErasedCallAbiPolicy {
+    kind: ErasedCallAbiKind,
+    fixed_arity: u32,
+    packed_function_mode: ErasedValueMode,
+    arg_modes: Span(ErasedValueMode),
+    result_mode: ErasedResultMode,
+    retained_borrows: Span(ErasedBorrowRelation),
+    hosted_owner: ?HostedAbiKey,
+}
+```
+
+The policy describes the erased boundary's required calling convention. It says
+how the packed erased function value is passed, how each fixed-arity Roc
+argument is passed, how the result is materialized, and which retained borrow
+relations the erased ABI promises. `arg_modes.len` must equal `fixed_arity`.
+`hosted_owner` is set only for hosted, platform, or intrinsic ABI policies whose
+ABI is defined outside ordinary Roc boxed-erased calling.
+
+The policy must not contain a future `CallableCallOwnershipKey`, procedure body
+ownership result, expression id, mutable type-store id, source syntax pointer,
+runtime function pointer, capture-layout pointer, or backend-specific layout
+handle. Those belong to later executable ownership records or lower-level ABI
+lowering, not to erased callable identity.
+
 That policy is part of key identity. Exact `ErasedFnSigKey` equality means:
 
 ```text
@@ -1224,9 +1513,10 @@ same ErasedCallAbiPolicyKey
 Same erased arguments and same erased return with a different
 `ErasedCallAbiPolicyKey` is not the same erased callable representation. The
 compiler must either emit an explicit adapter or bridge at a boundary that names
-both policies, or fail before exporting executable MIR. A later stage must not
-repair the mismatch by inspecting an adapter body, capture layout, runtime
-function pointer, hosted symbol, or ownership result.
+both policies. If no explicit adapter or bridge path exists after checking, that
+is a compiler invariant violation. A later stage must not repair the mismatch by
+inspecting an adapter body, capture layout, runtime function pointer, hosted
+symbol, or ownership result.
 
 `ErasedCallAbiPolicyKey` is produced before executable ownership solving. It is
 the erased-call ABI contract for the boundary, not the ownership result of a
@@ -1335,14 +1625,16 @@ specialization queue. It must not inspect checked CIR, method registries, source
 syntax, or expression-derived records.
 
 If executable MIR needs to cross a boxed erased boundary, it consumes the
-lambda-solved `boxed_erased_boundary` node and its
+lambda-solved `BoxBoundary` record and its
 `BoxPayloadRepresentationPlan`. It must not compare executable source and target
 shapes to decide whether erasure repair, adapter synthesis, or pass-through is
 semantically required. Such comparisons are allowed only as debug-only
 verification of the explicit boxed payload representation plan.
 
-Executable MIR must reject any erased-boundary request whose root is not
-`Box(T)`. Non-boxed `List(T)`, records, tuples, tag unions, functions, and
+Executable MIR must only receive erased-boundary requests whose root is
+`Box(T)`. If it receives a non-`Box(T)` root, that is a compiler invariant
+violation handled by debug-only assertion in debug builds and `unreachable` in
+release builds. Non-boxed `List(T)`, records, tuples, tag unions, functions, and
 nominals are not erased-boundary roots.
 
 When executable MIR lowers `call_proc`, it must still reserve or create the
@@ -1376,6 +1668,27 @@ switch. It owns the callable expression, the original argument expressions, the
 callable-set branches, and the required executable result type. Branch bodies
 consume the temporaries created by the node. They must not duplicate, reorder,
 or rediscover the original arguments.
+
+Concrete shape:
+
+```zig
+CallableMatch {
+    id: CallableMatchId,
+    callable_set_key: CanonicalCallableSetKey,
+    func_expr: ExprId,
+    arg_exprs: Span(ExprId),
+    func_tmp: TempId,
+    arg_temps: Span(TempId),
+    branches: Span(CallableBranch),
+    result_ty: ExecTypeId,
+}
+```
+
+`func_expr` and `arg_exprs` are the expressions evaluated exactly once by the
+node. `func_tmp` and `arg_temps` are the temporaries produced by those
+evaluations and consumed by every branch. `arg_temps.len` must equal the fixed
+Roc arity of the requested callable type. No branch may re-evaluate `func_expr`
+or any original argument expression.
 
 Every `callable_match` branch must store:
 
@@ -1550,6 +1863,49 @@ ErasedAdapterOwnershipNode(erased_adapter_key)
 BridgeOwnershipNode(bridge_id)
 ```
 
+Concrete graph record:
+
+```zig
+OwnershipGraph {
+    nodes: IndexSet(OwnershipNode),
+    edges: Span(OwnershipEdge),
+    proc_inputs: Map(ExecutableProcId, ProcOwnershipInput),
+    callable_match_inputs: Map(CallableMatchId, CallableMatchOwnershipInput),
+    bridge_inputs: Map(BridgeId, BridgeOwnershipInput),
+    erased_adapter_inputs: Map(ErasedAdapterKey, ErasedAdapterOwnershipInput),
+    explicit_abi_inputs: ExplicitAbiOwnershipInputs,
+}
+
+OwnershipEdge {
+    from: OwnershipNodeId,
+    to: OwnershipNodeId,
+    reason: OwnershipEdgeReason,
+}
+
+CallableMatchOwnershipInput {
+    callable_match_id: CallableMatchId,
+    callable_set_key: CanonicalCallableSetKey,
+    func_tmp: TempId,
+    arg_temps: Span(TempId),
+    branches: Span(CallableMatchBranchOwnershipInput),
+    result_ty: ExecTypeId,
+}
+
+CallableMatchBranchOwnershipInput {
+    member_proc: Symbol,
+    direct_proc: Symbol,
+    direct_args: Span(ExprId),
+    bridge_ids: Span(BridgeId),
+}
+```
+
+`OwnershipGraph` is built once from executable MIR plus explicit ABI metadata.
+The graph owns the SCC inputs for the fixed point; no solver step may look up a
+procedure body, callable branch, erased adapter body, bridge body, host symbol,
+or layout shape through an independent path after graph construction. The node
+ids above are graph-local ids. Semantic identity remains in `Symbol`,
+`CallableMatchId`, `ErasedAdapterKey`, and `BridgeId`.
+
 Required edges:
 
 - procedure body to every direct callee procedure specialization
@@ -1561,7 +1917,8 @@ Required edges:
 
 The solver computes strongly connected components and iterates each SCC until
 all procedure contracts, callable-match ownership keys, and bridge obligations
-are stable. Failure to converge is a compiler invariant failure.
+are stable. Non-convergence is a compiler invariant violation handled by
+debug-only assertion in debug builds and `unreachable` in release builds.
 
 The ownership lattice is finite and deterministic:
 
@@ -1651,10 +2008,11 @@ ownership contract before LIR:
 - bridge nodes must state whether they are direct aliases, copied values,
   freshly materialized aggregates, or consuming transformations.
 
-Debug verification must panic before backend lowering if any refcounted layout
-value produced by executable MIR or IR lacks ownership semantics needed by LIR,
-or if any backend/imported path branches on refcounted layout shape except while
-executing explicit LIR RC statements.
+Before backend lowering, debug-only assertions must fire if any refcounted
+layout value produced by executable MIR or IR lacks ownership semantics needed
+by LIR, or if any backend/imported path branches on refcounted layout shape
+except while executing explicit LIR RC statements. Release builds use
+`unreachable` for the equivalent compiler-invariant path.
 
 ## Final Data Structures
 
@@ -2011,10 +2369,10 @@ type used for this call. It is mandatory even though the call expression itself
 also has a result type.
 
 `call_proc.args.len` and `call_value.args.len` must exactly equal the arity of
-their `requested_fn_ty`. A missing argument is a compile-time source error before
-MIR export, not a request to synthesize a partial application. Extra arguments
-are likewise invalid unless the source explicitly calls the result of a function
-that returns another function.
+their `requested_fn_ty`. Checking must report missing arguments before MIR
+export; they are not requests to synthesize partial applications. Checking must
+also report extra arguments unless the source explicitly calls the result of a
+function that returns another function.
 
 When mono MIR enters lambda-solved MIR, every mono `requested_fn_ty` is
 transformed into the lambda-solved callable type shape by inserting the
@@ -2038,11 +2396,10 @@ Debug verifiers must assert, as early as possible, that:
   lambda-solved, or executable procedure body
 - no post-lift expression represents a procedure value as bare `var_`
 
-These are debug-only compiler assertions. They should panic loudly on failure in
-debug builds and verifier builds, because failure means a compiler invariant was
-violated. They must not generate runtime checks in user programs, and release
-compiler builds must not pay for them when those checks are unnecessary assuming
-the compiler is correct.
+These are debug-only compiler assertions. They must fire immediately in debug
+builds and verifier builds when a compiler invariant is violated. They must not
+generate runtime checks in user programs, and release compiler builds must not
+pay for them when those checks are unnecessary assuming the compiler is correct.
 
 Verifier checks must not mutate production compiler state.
 
@@ -2083,8 +2440,12 @@ call_erased {
 }
 
 callable_match {
-    func: ExprId,
-    args: Span(ExprId),
+    id: CallableMatchId,
+    callable_set_key: CanonicalCallableSetKey,
+    func_expr: ExprId,
+    arg_exprs: Span(ExprId),
+    func_tmp: TempId,
+    arg_temps: Span(TempId),
     branches: Span(CallableBranch),
     result_ty: ExecTypeId,
 }
@@ -2252,8 +2613,9 @@ erased function
 unresolved builder type
 ```
 
-Forbidden owner cases are compiler invariant failures. They are not fallback
-paths.
+Forbidden owner cases are compiler invariant violations handled only by
+debug-only assertion in debug builds and `unreachable` in release builds. They
+are not fallback paths.
 
 Delete expression-based owner APIs, including the current family represented by:
 
@@ -2324,7 +2686,9 @@ This transform is not a runtime conversion plan. It is a representation
 requirement propagated by lambda-solved MIR. Any structural node in the plan
 exists only to route the boxed payload requirement to nested callable leaves.
 
-Calling this transform on a non-`Box(T)` root is a compiler invariant failure.
+Calling this transform on a non-`Box(T)` root is a compiler invariant violation
+handled only by debug-only assertion in debug builds and `unreachable` in
+release builds.
 
 ### Executable Types
 
@@ -2520,12 +2884,13 @@ Representation merge consumes `RecordFieldId`, `TagId`, and `TagPayloadId`. It
 must not use display names, sorted name order, source expression shape, or
 physical layout position.
 
-Debug verification after row finalization must panic if any row-finalized mono
+Debug verification after row finalization must assert if any row-finalized mono
 MIR node still has a name-only row operation. Debug verification in later stages
-must panic if any record, tag-union, tag constructor, tag payload, pattern, or
+must assert if any record, tag-union, tag constructor, tag payload, pattern, or
 projection reaches representation solving without finalized row IDs. It must
-also panic if a later stage attempts to compute a logical index by sorting names,
-scanning a row, scanning expressions, or inspecting physical layout order.
+also assert if a later stage attempts to compute a logical index by sorting
+names, scanning a row, scanning expressions, or inspecting physical layout
+order. The equivalent release-build compiler-invariant path is `unreachable`.
 
 These verifications are debug-only assertions. They are not part of normal
 release compiler runtime cost, and release builds must still be correct because
@@ -2679,16 +3044,19 @@ Mono MIR lowering uses one algorithm for every `StaticDispatchCallPlan`:
 12. If `result_mode.equality.negated` is true, emit `bool_not` after the custom
     call or structural equality operation.
 
-If lookup fails for `result_mode.value`, or if lookup fails for
+If lookup is missing for `result_mode.value`, or if lookup is missing for
 `result_mode.equality` while `structural_allowed` is false, that is a compiler
-invariant failure. The checker should have rejected invalid dispatch. Mono must
-panic loudly in debug verification rather than inventing a target.
+invariant violation. Checking must have reported invalid dispatch before mono
+MIR begins. Mono debug verification must assert rather than inventing a target;
+the equivalent release-build path is `unreachable`.
 
 If `dispatcher_var` does not fully resolve to one allowed `MethodOwner` after the
 callable arguments and return slot have been connected, that is also a compiler
-invariant failure. A dispatch site whose controlling type cannot be determined
-from the checked callable type and enclosing expression type is ambiguous and
-must not be exported to mono MIR.
+invariant violation. A dispatch site whose controlling type cannot be
+determined from the checked callable type and enclosing expression type is
+ambiguous; checking must have reported it before mono MIR begins. The
+post-check path is debug-only assertion in debug builds and `unreachable` in
+release builds.
 
 No later stage sees the method name as an unresolved call. No stage treats this
 as an executable direct call until executable MIR.
@@ -2824,8 +3192,9 @@ Lambda-solved MIR:
 - determines exact callable sets
 - associates capture types with callable members
 - propagates erasure requirements
-- emits explicit `boxed_erased_boundary` nodes with box type, payload source
-  type, payload boundary type, direction, and `BoxPayloadRepresentationPlan`
+- emits explicit `BoxBoundary` records with box type, payload source type,
+  payload boundary type, direction, representation roots, and
+  `BoxPayloadRepresentationPlan`
 - propagates boxed payload representation requirements through aliases, binders,
   captures, parameters, returns, and expression occurrences
 - propagates boxed payload representation requirements through branch joins,
@@ -3262,15 +3631,16 @@ Preserve and clean up the real responsibilities:
 - instantiate lifted types
 - infer callable sets
 - propagate erasure
-- compute `erased_box_payload_type(T)` plans for explicit `Box(T)` boundaries
+- compute `erased_box_payload_type(boundary)` plans for explicit `Box(T)`
+  boundaries
 - build the specialization-local `RepresentationStore`
 - create distinct representation roots for every expression result, binder,
   pattern binder, procedure parameter, procedure return, capture slot,
   callable requested-function occurrence, mutable variable version, and loop phi
 - consume finalized `RecordShapeId`, `RecordFieldId`, `TagUnionShapeId`, `TagId`,
   and `TagPayloadId` records for records, tag unions, patterns, and projections
-- create `require_box_erased(payload_root)` seeds only from explicit `Box(T)`
-  boundaries
+- create `require_box_erased(boundary)` requirements only from explicit
+  `BoxBoundaryId` values
 - create explicit representation edges that merge every `call_value` callee with
   the whole requested function representation root, plus every argument, return
   slot, and result
@@ -3280,8 +3650,8 @@ Preserve and clean up the real responsibilities:
 - create explicit representation edges from every `proc_value` result and
   capture argument to the whole `proc_value.fn_ty` function root and
   corresponding procedure capture slot
-- preserve explicit `boxed_erased_boundary` box type, payload source type,
-  payload boundary type, direction, representation roots, and payload
+- preserve explicit `BoxBoundary` box type, payload source type, payload
+  boundary type, direction, representation roots, and payload
   `BoxPayloadRepresentationPlan`
 - solve boxed payload representation requirements through aliases, binders,
   captures, function parameters, function returns, and expression occurrences
@@ -3317,8 +3687,8 @@ Commit when lambda-solved MIR verification proves:
 - callable-set member order is canonical
 - each repeated callable member has exactly the same capture slots
 - erased callable requirements are explicit
-- every `boxed_erased_boundary` stores box type, payload source type, payload
-  boundary type, direction, and boxed payload representation plan
+- every `BoxBoundary` stores box type, payload source type, payload boundary
+  type, direction, representation roots, and boxed payload representation plan
 - every function slot reachable through an explicit `Box(T)` erased boundary is
   represented as erased in the exported boxed payload boundary type
 - no structural boxed payload plan node implies runtime traversal, runtime
@@ -3350,8 +3720,8 @@ Commit when lambda-solved MIR verification proves:
   singleton constructor type reconstructed from syntax
 - structural representation merge uses finalized row IDs, never display-name
   sorting or physical layout order
-- every `require_box_erased(payload_root)` seed is owned by an explicit
-  `Box(T)` boundary
+- every `require_box_erased(boundary)` requirement is owned by an explicit
+  `BoxBoundaryId`
 - no executable specialization input contains generalized or unresolved type
   variables
 - canonical type keys and boxed payload transforms are cycle-safe graph
@@ -3505,6 +3875,14 @@ Commit when `rg` finds no old post-check imports or pipeline labels.
 
 Make audits allowlist-based.
 
+Deletion-protection audits are debug, verifier, guarded-test, and CI checks
+only. They must compile out of release compiler builds. Release compiler builds
+must not pay for string scans, allowlist walks, deleted-family checks, or audit
+metadata that is unnecessary assuming the compiler is correct. If a deleted
+family is nevertheless reached in a post-check compiler stage, that is a
+compiler invariant violation handled only by debug-only assertion in debug
+builds and `unreachable` in release builds.
+
 Forbid old stage names outside historical docs if they remain at all:
 
 ```text
@@ -3544,7 +3922,7 @@ Forbid any erased-boundary record whose root is not `Box(T)`.
 
 Forbid executable erased-shape compatibility helpers from making semantic
 lowering decisions. Boxed erased-boundary decisions must come from lambda-solved
-`boxed_erased_boundary` records and `BoxPayloadRepresentationPlan` values. They
+`BoxBoundary` records and `BoxPayloadRepresentationPlan` values. They
 may be rechecked only by debug-only verifiers.
 
 Forbid any MIR, executable MIR, IR, or LIR operation whose semantic purpose is
@@ -3655,10 +4033,10 @@ Lambda-solved MIR:
 - captures are attached to callable members
 - callable-set members are canonical ordered finite maps
 - repeated callable members have identical capture slots
-- mismatched capture slots panic in debug verification
+- mismatched capture slots trigger debug-only assertions
 - erasure requirements are explicit
-- `boxed_erased_boundary` stores box type, payload source type, payload boundary
-  type, direction, representation roots, and `BoxPayloadRepresentationPlan`
+- `BoxBoundary` stores box type, payload source type, payload boundary type,
+  direction, representation roots, and `BoxPayloadRepresentationPlan`
 - boxed payload boundary types structurally rewrite every reachable function
   slot to erased callable representation
 - `RepresentationStore` has distinct roots for every expression result, binder,
@@ -3680,8 +4058,8 @@ Lambda-solved MIR:
   explicit representation edge through a mutable version, join, or loop phi
 - mutable versions, branch joins, loop-carried values, and loop exits are SSA
   records, not physical mutable storage slots
-- every `require_box_erased(payload_root)` seed is attached to an explicit
-  `Box(T)` boundary
+- every `require_box_erased(boundary)` requirement is attached to an explicit
+  `BoxBoundaryId`
 - every exported representation root has a solved representation class
 - every solved representation class has one structural `RepresentationShape`
 - row finalization IDs are present before representation solving
@@ -3750,9 +4128,11 @@ Executable MIR:
   erased adapters
 - executable MIR consumes `BoxPayloadRepresentationPlan` and does not make
   semantic erased-shape compatibility decisions
-- executable MIR rejects erased-boundary roots other than `Box(T)`
-- executable MIR rejects imported, opaque, hosted, and platform-owned boxed
-  payload traversal without explicit representation capabilities
+- checking reports erased-boundary roots other than `Box(T)` before executable
+  MIR; executable MIR only debug-verifies that none reached it
+- checking reports imported, opaque, hosted, and platform-owned boxed payload
+  traversal without explicit representation capabilities before executable MIR;
+  executable MIR only debug-verifies that none reached it
 - every erased capture record has deterministic field ordering
 - every erased call has an explicit erased function type
 - every erased call has an explicit ownership contract from the
@@ -3822,10 +4202,10 @@ Callable/capture behavior:
 - direct top-level function call
 - fixed-arity multi-argument function call, for example a function with type
   `I64, I64 -> I64`
-- missing-argument calls to fixed-arity functions are rejected before MIR export;
-  they do not synthesize partial-application closures
-- extra-argument calls to fixed-arity functions are rejected unless the source
-  explicitly calls a returned function value
+- checking reports missing-argument calls to fixed-arity functions before MIR
+  export; they do not synthesize partial-application closures
+- checking reports extra-argument calls to fixed-arity functions unless the
+  source explicitly calls a returned function value
 - generic top-level function specialization
 - generic top-level function used as a first-class value specializes through
   `proc_value` before lambda-solved MIR
@@ -3879,8 +4259,10 @@ Callable/capture behavior:
   representation into every branch result and pattern binder
 - imported opaque nominal boxed payload traversal succeeds only with an explicit
   exported representation capability
-- imported opaque nominal boxed payload traversal without an exact capability
-  fails before executable MIR
+- imported opaque nominal boxed payload traversal without an exact capability is
+  reported during checking; if it reaches lambda-solved MIR, that path is a
+  compiler invariant violation handled by debug-only assertion in debug builds
+  and `unreachable` in release builds
 - hosted function with callable-containing args or returns consumes explicit ABI
   representation and erased-call ownership metadata
 - finite callable-set call where one branch consumes an argument and another
@@ -3902,16 +4284,17 @@ ci/guarded_zig.sh zig build test-glue
 If the test name `test-cor-pipeline` remains, its contents must be MIR-family
 pipeline tests, not old-stage contract tests.
 
-## Failure Handling
+## Compiler Bug Handling
 
-For every failure:
+For every post-check compiler invariant violation found during development,
+debug verification, or guarded tests:
 
 1. Identify which stage must have owned the missing stage output.
 2. Add that record, plan, table entry, or contract to that stage's explicit
    output.
-3. Delete any old reconstruction or side-channel path exposed by the failure.
-4. Strengthen audits if the failure reveals a family that could return.
-5. Rerun the narrowest guarded test that exercises the failure.
+3. Delete any old reconstruction or side-channel path exposed by the violation.
+4. Strengthen audits if the violation reveals a family that could return.
+5. Rerun the narrowest guarded test that exercises the violation.
 
 Forbidden responses:
 
@@ -3976,14 +4359,14 @@ The cutover is complete only when all of these are true:
 - lambda-solved MIR exports explicit representation edges for every `proc_value`
   result merged with the whole `proc_value.fn_ty` function root, and every
   capture argument
-- lambda-solved MIR uses explicit `boxed_erased_boundary` nodes preserving box
-  type, payload source type, payload boundary type, direction, representation
-  roots, and `BoxPayloadRepresentationPlan`
+- lambda-solved MIR uses explicit `BoxBoundary` records preserving box type,
+  payload source type, payload boundary type, direction, representation roots,
+  and `BoxPayloadRepresentationPlan`
 - lambda-solved MIR exports a specialization-local `RepresentationStore` whose
   roots are expression/binder/parameter/return/capture occurrences, not logical
   type identities
-- lambda-solved MIR creates `require_box_erased(payload_root)` only from
-  explicit `Box(T)` boundaries
+- lambda-solved MIR creates `require_box_erased(boundary)` only from explicit
+  `BoxBoundaryId` values
 - lambda-solved MIR never unifies representation variables merely because their
   logical `TypeId`s are equal
 - lambda-solved MIR structurally rewrites every reachable function slot inside
