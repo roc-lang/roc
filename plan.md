@@ -55,6 +55,11 @@ Every post-check stage must consume explicit stage outputs from the previous sta
 Backends must not think about reference counting. They lower explicit LIR
 `incref` and `decref` statements only.
 
+When this plan says a type is fully resolved, it means all type-store links have
+been chased, all placeholders that must be solved for the current stage are
+solved, and the stage is consuming the actual current type rather than a stale
+variable or unresolved link.
+
 Static dispatch is eliminated in `mono MIR`, the first monomorphic stage. It
 must not survive into lifted MIR, lambda-solved MIR, executable MIR, IR, or LIR.
 
@@ -454,7 +459,7 @@ must not have to rediscover it.
 The lambda-solved type store is the single source of callable representation for
 executable lowering.
 
-Executable MIR must consume the zonked callable representation attached to:
+Executable MIR must consume the fully resolved callable representation attached to:
 
 ```text
 call_value.requested_fn_ty
@@ -519,7 +524,7 @@ Unification of two callable sets is exact:
 This algebra is not an optimization. It is the exported lambda-solved contract
 that executable MIR consumes.
 
-For every `call_value`, lambda-solved MIR must export a complete zonked callable
+For every `call_value`, lambda-solved MIR must export a complete fully resolved callable
 representation through `call_value.requested_fn_ty`.
 
 For every `call_value`, lambda-solved MIR must also create explicit
@@ -562,14 +567,14 @@ finite and erased representation.
 
 Lambda-solved builder internals may use solver links, unbound variables, and
 generalized variables while solving. Exported lambda-solved MIR must expose a
-zonked view for every executable specialization input. Generalized variables may
+fully resolved view for every executable specialization input. Generalized variables may
 remain only in specialization templates that are explicitly instantiated before
 executable lowering consumes them.
 
 Generalized variables may appear only in procedure specialization templates.
 Before executable MIR consumes a procedure, call, or callable value, the
 template must be clone-instantiated into a specialization-local lambda-solved
-type store and zonked. No exported executable specialization key, executable MIR
+type store and fully resolved. No exported executable specialization key, executable MIR
 type, callable-set member, capture type, bridge endpoint, or erased function
 type may contain `for_a`, `flex_for_a`, `unbd`, unresolved links, or raw
 checker variables.
@@ -637,7 +642,7 @@ verification must prove the target and value layouts are exactly identical befor
 lowering continues. A stage after representation solving must not use assignment
 to force two incompatible representations into the same storage slot.
 
-A representation variable may reference a zonked logical `TypeId` as checked
+A representation variable may reference a fully resolved logical `TypeId` as checked
 type metadata, but that `TypeId` is not the representation variable's identity. Two
 different roots with equal logical types remain different representation
 variables until an explicit value-flow edge unifies them. This is required so
@@ -649,7 +654,7 @@ value flow.
 `BoxPayloadRepresentationPlan`, callable representation, capture shape keys,
 erased function signature keys, erased adapter keys, and executable callable
 member keys must be produced only from the specialization-local lambda-solved
-store after clone-instantiation and zonking.
+store after clone-instantiation and full type-link resolution.
 
 A boxed use in one specialization must not mutate:
 
@@ -666,7 +671,8 @@ layout-publication input references a template `TypeId`, a foreign
 specialization's type store, `for_a`, `flex_for_a`, `unbd`, unresolved links, or
 raw checker variables.
 
-Executable specialization keys must be canonical structural keys after zonking.
+Executable specialization keys must be canonical structural keys after full
+type-link resolution.
 They must not contain raw type-store ids from a transient clone. Procedure
 members in those keys are ordered by `ProcOrderKey`. Capture components are
 ordered by `CaptureSlot.index`.
@@ -787,7 +793,7 @@ const NominalPayloadRepresentation = union(enum) {
 
 The defining module owns `BoxPayloadCapabilityTemplate` values for exported
 nominals. An importing module may instantiate a capability template only with
-the exact specialization-local zonked type arguments and boxed-payload
+the exact specialization-local fully resolved type arguments and boxed-payload
 representation mode being compiled. The instantiated capability becomes an
 ordinary `NominalPayloadRepresentation.imported_capability` node inside the
 importer's specialization-local `BoxPayloadRepresentationPlan`.
@@ -800,7 +806,7 @@ capability exists for that exact boundary, compilation must fail before
 executable MIR.
 
 `NoReachableCallableSlotsProof` is instantiation-sensitive. It is valid only for
-the exact nominal identity, exact zonked type arguments, and exact boxed-payload
+the exact nominal identity, exact fully resolved type arguments, and exact boxed-payload
 representation mode it names.
 
 Conceptual shape:
@@ -1044,7 +1050,7 @@ For boxing, `input` is the payload expression. For unboxing, `input` is the boxe
 expression. `box_root` is the representation root of the produced or consumed
 box. `payload_root` is the representation root of the payload expression being
 boxed or the unboxed expression result. `box_ty`, `payload_source_ty`, and
-`payload_boundary_ty` are zonked lambda-solved types. `box_ty` must be exactly
+`payload_boundary_ty` are fully resolved lambda-solved types. `box_ty` must be exactly
 `Box(payload_boundary_ty)`. `payload_boundary_ty` is the explicit erased
 representation of the boxed payload. `direction` records whether this boundary
 boxes or unboxes. `payload_plan` records the compile-time representation
@@ -1264,7 +1270,7 @@ nominals are not erased-boundary roots.
 
 When executable MIR lowers `call_proc`, it must still reserve or create the
 target executable specialization from the lambda-solved procedure target and the
-zonked requested callable type. It must lower and bridge every argument
+fully resolved requested callable type. It must lower and bridge every argument
 explicitly. A `call_proc` may return ordinary data, finite callable-set values,
 or erased callable values; direct-call lowering must not assume the result is
 non-callable.
@@ -1700,7 +1706,7 @@ and capture types.
 or source identities, never generated symbol text.
 
 `ExecutableSpecializationKey` is the semantic key for executable specialization
-deduplication. It contains `ProcBaseKey` and canonical zonked structural type
+deduplication. It contains `ProcBaseKey` and canonical fully resolved structural type
 keys. It must not contain `ProcOrderKey`, raw type-store ids, expression ids,
 side-table ids, or allocation-order-dependent data.
 
@@ -1964,7 +1970,7 @@ the compiler is correct.
 Verifier checks must not mutate production compiler state.
 
 If a verifier needs unification-like logic, it must run on a cloned scratch type
-store or compare already-zonked/canonicalized types. The real stage lowering or
+store or compare already fully resolved/canonicalized types. The real stage lowering or
 inference pass performs the real unifications. A verifier must never repair,
 complete, or mask an invalid type relation in the live store.
 
@@ -2093,7 +2099,7 @@ Mono MIR resolves every static dispatch target from:
 
 ```text
 the checked method registry
-+ the plan's dispatcher type variable after mono instantiation and zonking
++ the plan's dispatcher type variable after mono instantiation and full type-link resolution
 + the plan's method identifier
 ```
 
@@ -2326,8 +2332,8 @@ This finalization is a mono MIR responsibility for each mono specialization.
 Later stages must consume the finalization records; they must not flatten rows,
 sort names, or reconstruct logical indexes from source syntax.
 
-Row finalization consumes the fully clone-instantiated and zonked mono type
-store for one mono specialization. Checked types may provide declaration
+Row finalization consumes the fully clone-instantiated mono type store with all
+type links resolved for one mono specialization. Checked types may provide declaration
 metadata and canonical source-ordering rules, but checked types are not enough
 by themselves because open rows, aliases, and specialized type variables must be
 resolved in the specialization-local mono store before representation solving.
@@ -2423,7 +2429,7 @@ procedure, no separate owner-selection field, and no separate downstream
 representation for ordinary method syntax, type-variable qualified syntax, or
 equality syntax.
 
-`dispatcher_var` is the checked type variable whose mono-zonked type determines
+`dispatcher_var` is the checked type variable whose fully resolved monomorphic type determines
 method lookup. It may come from any part of the checked constraint: the first
 argument, a later argument, the return value, or a variable that appears only in
 the `where` constraint. Mono MIR must consume this explicit variable. It must
@@ -2486,7 +2492,7 @@ A concrete equality expression that checking proves is always structural may be
 rewritten directly to `structural_eq`. A generic equality expression must keep a
 `StaticDispatchCallPlan` with `result_mode.equality.structural_allowed = true`
 so mono decides per specialization after `dispatcher_var` has been instantiated
-and zonked.
+and fully resolved.
 
 ### Method Lookup In Mono
 
@@ -2499,8 +2505,8 @@ Mono MIR lowering uses one algorithm for every `StaticDispatchCallPlan`:
    `dispatcher_var` may be selected from the return position.
 3. Lower all `args` in the normalized order, using the instantiated callable
    argument slots as expected types.
-4. Zonk the instantiated dispatcher type.
-5. Resolve `MethodOwner` from the zonked dispatcher type.
+4. Fully resolve the instantiated dispatcher type.
+5. Resolve `MethodOwner` from the fully resolved dispatcher type.
 6. Look up `(MethodOwner, method_ident)` in the checked method registry.
 7. If a target exists, instantiate the target procedure type into the same mono
    type store.
@@ -2524,7 +2530,7 @@ If lookup fails for `result_mode.value`, or if lookup fails for
 invariant failure. The checker should have rejected invalid dispatch. Mono must
 panic loudly in debug verification rather than inventing a target.
 
-If `dispatcher_var` is not zonkable to one allowed `MethodOwner` after the
+If `dispatcher_var` does not fully resolve to one allowed `MethodOwner` after the
 callable arguments and return slot have been connected, that is also a compiler
 invariant failure. A dispatch site whose controlling type cannot be determined
 from the checked callable type and enclosing expression type is ambiguous and
@@ -2659,12 +2665,13 @@ Lambda-solved MIR:
   source `match` condition/pattern edges, pattern binders, projections, and
   returned values
 - solves boxed payload representation only in the specialization-local
-  lambda-solved type store after clone-instantiation and zonking
+  lambda-solved type store after clone-instantiation and full type-link
+  resolution
 - emits module-interface representation capability templates and instantiated
   capabilities for boxed payload traversal through imported or opaque nominals
 - consumes hosted/platform callable representation metadata instead of inferring
   it from hosted symbol names or layouts
-- exposes zonked callable representations for `call_value.requested_fn_ty`,
+- exposes fully resolved callable representations for `call_value.requested_fn_ty`,
   `call_proc.requested_fn_ty`, and `proc_value.fn_ty`
 - treats `call_proc` as direct procedure calls for inference and SCCs
 - treats `proc_value` as first-class procedure values with explicit captures
@@ -2902,7 +2909,7 @@ constraint.
 A concrete equality expression that checking proves is always structural may be
 rewritten to `structural_eq`. A generic equality expression must keep
 `StaticDispatchCallPlan.result_mode.equality.structural_allowed = true` so mono
-can decide per specialization after instantiating and zonking
+can decide per specialization after instantiation and full type-link resolution of
 `dispatcher_var`.
 
 Then remove downstream `attached_method_index` threading.
@@ -2944,8 +2951,8 @@ position, method name, or module environment lookup.
 For every static-dispatch-produced `call_proc`, mono MIR must instantiate the
 plan's `dispatcher_var` and `callable_var` into the current mono type store,
 connect the callable return slot to the expression's instantiated mono result
-type, lower normalized args through the callable arg slots, zonk the dispatcher
-type, resolve `MethodOwner` from that zonked type, look up `(MethodOwner,
+type, lower normalized args through the callable arg slots, fully resolve the
+dispatcher type, resolve `MethodOwner` from that type, look up `(MethodOwner,
 method_ident)` in the checked method registry, instantiate the target procedure
 type into the current mono type store, unify it with the instantiated callable
 type, use the unified argument and return slots as the call's requested mono
@@ -2966,7 +2973,7 @@ Commit when mono MIR verification proves:
   expression, result position, method name, or environment lookup
 - no mono MIR code path has a separate ordinary-dispatch/type-dispatch/equality
   target model after it has consumed `StaticDispatchCallPlan`
-- every dispatcher's mono type is zonked to exactly one allowed `MethodOwner`
+- every dispatcher's mono type fully resolves to exactly one allowed `MethodOwner`
   after callable args and return slot have been connected
 - every static-dispatch-produced `call_proc.requested_fn_ty` is the unified
   target-procedure type and `StaticDispatchCallPlan.callable_var` type in the
@@ -3066,7 +3073,7 @@ Preserve and clean up the real responsibilities:
   primitives, records, tuples, tag unions, `List(T)`, `Box(T)`, nominals,
   functions, and callable slots
 - solve boxed payload representation requirements only after
-  specialization-local clone-instantiation and zonking
+  specialization-local clone-instantiation and full type-link resolution
 - publish and consume explicit module-interface representation capability
   templates and instantiated capabilities for imported and opaque nominal boxed
   payload traversal
@@ -3075,7 +3082,7 @@ Preserve and clean up the real responsibilities:
 - consume hosted/platform callable representation metadata explicitly
 - order recursive SCCs
 - enforce canonical callable-set unification algebra
-- export zonked callable representations for every executable specialization
+- export fully resolved callable representations for every executable specialization
   input
 - clone-instantiate generalized templates before executable lowering consumes
   them
@@ -3176,7 +3183,7 @@ Executable specialization keys must be:
 ```text
 ProcBaseKey
 + owner mono specialization key for lifted locals
-+ zonked lambda-solved argument and return structural type keys
++ fully resolved lambda-solved argument and return structural type keys
 + finite callable-set member procedure identity when specializing a callable-set
   branch
 + erased adapter key when specializing an erased adapter
@@ -3459,7 +3466,7 @@ Lambda-solved MIR:
   adapter synthesis
 - erased adapter keys include finite callable-set identity, erased function
   signature with `ErasedCallAbiPolicyKey`, and capture shape
-- generalized templates are clone-instantiated and zonked before executable
+- generalized templates are clone-instantiated and fully resolved before executable
   lowering consumes them
 - boxed payload representation plans, callable-set keys, capture-shape keys,
   erased signature keys, and erased adapter keys are computed from the
@@ -3765,7 +3772,7 @@ The cutover is complete only when all of these are true:
   never a singleton constructor type reconstructed from syntax
 - lambda-solved MIR computes boxed payload representation plans and
   callable/capture keys only from specialization-local clone-instantiated and
-  zonked type stores
+  fully resolved type stores
 - lambda-solved MIR requires explicit module-interface representation
   capabilities before traversing imported or opaque nominal boxed payloads
 - opaque nominal atomic traversal requires an explicit
@@ -3773,7 +3780,7 @@ The cutover is complete only when all of these are true:
   instantiated type arguments
 - lambda-solved MIR consumes hosted/platform callable representation metadata
   explicitly
-- lambda-solved MIR exports only zonked executable specialization inputs
+- lambda-solved MIR exports only fully resolved executable specialization inputs
 - lambda-solved MIR enforces canonical callable-set unification algebra
 - canonical type keys and boxed payload transforms are cycle-safe graph
   transforms with stable recursion binders/backrefs
