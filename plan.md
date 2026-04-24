@@ -277,6 +277,7 @@ It produces dispatch-free lifted MIR where:
 
 - closures and local functions have been lifted to procedure definitions
 - captures are explicit `CaptureSlot` procedure metadata
+- references to captured values are explicit `capture_ref` expressions
 - procedure values carry explicit `CaptureArg` payloads in capture-slot order
 - local-function rename environments are stage-private
 - every expression still has a mandatory type
@@ -335,11 +336,12 @@ For each recursive local-function group, lifted MIR must:
    - external values needed to construct any referenced self or sibling
      `proc_value`
    - capture slots pulled through references to self or sibling procedures
-4. Rewrite every self, sibling, local-function, and closure reference to an
+4. Rewrite every body reference to a captured value to `capture_ref(slot)`.
+5. Rewrite every self, sibling, local-function, and closure reference to an
    explicit `proc_value`.
-5. Fill each `proc_value.captures` from values in the current scope or from the
+6. Fill each `proc_value.captures` from values in the current scope or from the
    current procedure's own `CaptureSlot`s.
-6. Iterate until every member's capture-slot set is stable.
+7. Iterate until every member's capture-slot set is stable.
 
 Failure to converge is a compiler invariant failure. It is not a fallback path.
 
@@ -352,6 +354,11 @@ order, pointer identity, or body traversal accidents.
 After lifted MIR, no local alias variable may stand for a procedure value. An
 alias of a local function or closure must be rewritten to an explicit
 `proc_value`, or it must be an ordinary non-procedure value.
+
+After lifted MIR, no captured source symbol may appear as an ordinary `var_`
+inside the lifted procedure body. Captured values are read only through
+`capture_ref(slot)`, where `slot` indexes the current procedure's
+`CaptureSlot` metadata.
 
 ### Lambda-Solved MIR
 
@@ -477,27 +484,63 @@ They must not contain raw type-store ids from a transient clone. Procedure
 members in those keys are ordered by `ProcOrderKey`. Capture components are
 ordered by `CaptureSlot.index`.
 
-Erasure is decided here. Lambda-solved MIR must preserve both sides of every
-erased callable coercion:
+`ProcOrderKey` may define canonical ordering inside a specialization key, but
+it must not be a semantic component of the specialization key itself.
+
+Erasure is decided here. Lambda-solved MIR must preserve explicit structural
+boundary facts for every erased boundary. Erasure is not a callable-only
+operation.
+
+The exported lambda-solved type contract includes:
+
+```text
+erased_boundary_type(T)
+```
+
+`erased_boundary_type(T)` recursively walks `T` and rewrites every reachable
+function slot to erased callable representation. It descends through records,
+tuples, tag unions, lists, boxes, and nominal backing types. Non-callable data
+is preserved structurally.
+
+Every erased boundary exports:
 
 ```zig
-erase_callable {
+erased_boundary {
     value: ExprId,
-    source_callable_ty: TypeId,
-    erased_fn_ty: TypeId,
+    source_ty: TypeId,
+    boundary_ty: TypeId,
+    direction: EraseBoundaryDirection,
+    plan: BoundaryCoercionPlan,
 }
 ```
 
-`source_callable_ty` is the zonked callable representation of the value before
-erasure. `erased_fn_ty` is the explicit erased callable type required by the
-boundary.
+`source_ty` and `boundary_ty` are zonked lambda-solved types. `boundary_ty` is
+the explicit erased-boundary version of the value's type. `direction` records
+whether this boundary came from erase or unerase. `plan` is a structural
+coercion plan from `source_ty` to `boundary_ty`.
 
-Erasure must not overwrite the only callable shape available at the construction
-site. If a finite callable-set value crosses an erased boundary, executable MIR
-must still be able to see the finite source members through
-`source_callable_ty`.
+`BoundaryCoercionPlan` is explicit data, not executable MIR reasoning:
 
-Executable MIR consumes `erase_callable` as follows:
+```zig
+const BoundaryCoercionPlan = union(enum) {
+    identity,
+    record: Span(FieldBoundaryCoercion),
+    tuple: Span(ElemBoundaryCoercion),
+    tag_union: Span(TagBoundaryCoercion),
+    list: *BoundaryCoercionPlan,
+    box: *BoundaryCoercionPlan,
+    nominal: NominalBoundaryCoercion,
+    callable_to_erased: CallableErasePlan,
+    opaque_to_boundary: OpaqueUnerasePlan,
+};
+```
+
+The exact Zig shape may differ, but the semantics must not: structural erased
+boundary coercion is produced by lambda-solved MIR and consumed by executable
+MIR. Executable MIR must not rediscover erased callable shape mismatches by
+comparing executable types.
+
+For erase, executable MIR consumes the boundary plan as follows:
 
 - `proc_value -> erased` packs the explicit procedure member and explicit
   capture payloads.
@@ -506,6 +549,13 @@ Executable MIR consumes `erase_callable` as follows:
   `callable_match`.
 - `already-erased value -> erased` passes through after verifying the erased
   function type matches exactly.
+- structural containers recurse exactly according to `BoundaryCoercionPlan`.
+
+For unerase, executable MIR gives the opaque erased value the explicit
+`boundary_ty` representation. Nested callable slots in that representation are
+erased callable slots. Later field access or call lowering must consume that
+erased callable representation; it must not recover the original finite
+callable-set shape.
 
 Executable MIR must not infer erasure from usage.
 
@@ -538,6 +588,7 @@ It must not own:
 - source/executable fact side tables
 - fallback executable signatures
 - erasure decision
+- erased callable shape compatibility decisions
 - lambda-set inference
 
 Executable MIR is the final post-check executable representation consumed by IR.
@@ -564,6 +615,12 @@ Capture presence alone must never cause erased packing.
 This conversion must use only lambda-solved MIR metadata and executable MIR's own
 specialization queue. It must not inspect checked CIR, method registries, source
 syntax, or expression-derived facts.
+
+If executable MIR needs to cross an erased boundary, it consumes the
+lambda-solved `erased_boundary` node and its `BoundaryCoercionPlan`. It must not
+compare executable source and target shapes to decide whether erasure repair,
+adapter synthesis, or pass-through is semantically required. Such comparisons
+are allowed only as debug-only verification of the explicit boundary plan.
 
 When executable MIR lowers `call_proc`, it must still reserve or create the
 target executable specialization from the lambda-solved procedure target and the
@@ -769,30 +826,57 @@ old Symbol -> new Symbol
 It must not recover targets from names, expression shapes, or source lookup.
 
 Every procedure definition produced by mono MIR or any later MIR-family stage
-must carry an explicit stable order key:
+must carry three distinct identities:
 
 ```zig
-ProcOrderKey {
+ProcBaseKey {
     module_idx: u32,
     source_def_idx: ?CIR.Def.Idx,
     lexical_proc_path: Span(u32),
-    specialization_key: ?CanonicalSpecializationKey,
-    synthetic_kind: SyntheticProcKind,
+    synthetic_origin: SyntheticOrigin,
+}
+
+ExecutableSpecializationKey {
+    base: ProcBaseKey,
+    requested_fn_ty: CanonicalTypeKey,
+    exec_arg_tys: Span(CanonicalExecTypeKey),
+    exec_ret_ty: CanonicalExecTypeKey,
+    callable_repr_mode: CallableReprMode,
+    capture_shape: CaptureShapeKey,
+}
+
+ProcOrderKey {
+    base: ProcBaseKey,
+    specialization_order_component: ?CanonicalOrderComponent,
 }
 ```
 
-`ProcOrderKey` is for deterministic ordering and reproducibility. `Symbol`
-remains the public procedure identity used by call nodes.
+The exact Zig field names may differ, but the separation must not.
 
-`lexical_proc_path` records the stable path to a nested/lifted procedure inside
-its source definition. `specialization_key` is the canonical structural
-specialization key after zonking, not raw type-store ids. `synthetic_kind`
-distinguishes ordinary procedures from compiler-created procedures such as
-lifted locals, erased adapters, intrinsic wrappers, entrypoint wrappers, and
-bridges.
+`ProcBaseKey` is the stable semantic origin of a source, lifted, or synthetic
+procedure. `lexical_proc_path` records the stable path to a nested/lifted
+procedure inside its source definition. `synthetic_origin` distinguishes
+ordinary procedures from compiler-created procedures such as erased adapters,
+intrinsic wrappers, entrypoint wrappers, and bridges.
+
+`ExecutableSpecializationKey` is the semantic key for executable specialization
+deduplication. It contains `ProcBaseKey` and canonical zonked structural type
+keys. It must not contain `ProcOrderKey`, raw type-store ids, expression ids,
+fact ids, or allocation-order-dependent data.
+
+`ProcOrderKey` is for deterministic ordering and reproducibility only. A
+base-only `ProcOrderKey` may exist before executable specialization so lifted
+recursive groups can order members deterministically. When an executable
+specialization exists, the specialization-specific order component is derived
+after the semantic specialization key exists. `Symbol` remains the public
+procedure identity used by call nodes.
 
 Callable-set member ordering, erased adapter ordering, recursive capture
-fixed-point ordering, and generated procedure emission order must use
+fixed-point ordering, generated procedure emission order, and stable printed
+output must use `ProcOrderKey`.
+
+Semantic equality, specialization deduplication, and executable call target
+selection must use `ProcBaseKey` plus canonical type/representation keys, not
 `ProcOrderKey`.
 
 They must not use:
@@ -852,10 +936,21 @@ CaptureArg {
     symbol: Symbol,
     expr: ExprId,
 }
+
+capture_ref {
+    slot: u32,
+    ty: TypeId,
+}
 ```
 
 `CaptureSlot.index` is assigned exactly once during lifting. It is the stable
 field order for callable-set capture payloads and erased capture records.
+
+`capture_ref.slot` indexes the current procedure's `CaptureSlot` metadata. A
+captured value inside a lifted procedure body must be represented by
+`capture_ref`, not by a `var_` expression that later stages reinterpret through
+an environment. Executable MIR lowers `capture_ref(slot)` to a logical field
+read from the current procedure's capture record.
 
 Required pre-executable distinction:
 
@@ -879,8 +974,7 @@ call_value {
 }
 ```
 
-`proc_value` exists when a source/MIR procedure symbol is used as a value,
-including a resolved method reference that is not immediately called.
+`proc_value` exists when a source/MIR procedure symbol is used as a value.
 
 For a top-level source procedure value, `proc_value.captures` is empty.
 
@@ -894,6 +988,12 @@ or reordered payloads immediately.
 `call_proc.proc` is a source/MIR procedure identity selected by earlier stages.
 It is not an executable procedure identity and it does not imply an executable
 argument representation.
+
+Mono MIR emits `call_proc` only when the callee has already been resolved to a
+specific source/MIR procedure and the procedure is being called directly. Static
+dispatch, type dispatch, and nominal equality lower to this form. A procedure
+symbol used as a value lowers to `proc_value`. A call whose callee is any
+non-direct callable expression lowers to `call_value`.
 
 `call_proc` means a direct source/MIR procedure call. It never carries captures.
 It must not be used for local functions or closures after lifting, including
@@ -918,6 +1018,10 @@ Debug verifiers must assert, as early as possible, that:
 - every `proc_value.captures` entry corresponds to the same-index target
   `CaptureSlot`
 - every `CaptureArg.expr` type matches the corresponding `CaptureSlot.ty`
+- every `capture_ref.slot` exists in the current procedure's `CaptureSlot`
+  metadata
+- no captured source symbol appears as ordinary `var_` inside a lifted,
+  lambda-solved, or executable procedure body
 - no post-lift expression represents a procedure value as bare `var_`
 
 These are debug-only compiler assertions. They should panic loudly on failure in
@@ -935,8 +1039,16 @@ complete, or mask an invalid type relation in the live store.
 
 Static dispatch lowers to `call_proc` in mono MIR.
 
-Resolved method references used as first-class values lower to
-`proc_value`, not `call_proc` and not `call_direct`.
+Current Roc checked CIR has no receiver-bound static method value. A dotted
+expression without arguments, such as `x.foo`, is checked field access, not a
+static method reference. Static dispatch inputs are checked `e_dispatch_call`,
+`e_type_dispatch_call`, and `e_method_eq` nodes only.
+
+If future syntax introduces an unbound source method symbol as a value, mono MIR
+must lower that resolved symbol to `proc_value` with empty captures. If future
+syntax introduces a receiver-bound method value, mono MIR must lower it to an
+explicit closure that captures the receiver. It must not encode receiver-bound
+method values as empty-capture `proc_value` nodes.
 
 Calling a first-class function value remains `call_value` until callable solving
 and executable lowering can decide whether it becomes direct, erased,
@@ -979,9 +1091,20 @@ Build an explicit checked method registry before mono MIR lowering.
 Conceptual shape:
 
 ```zig
+const MethodOwner = union(enum) {
+    nominal: NominalOwnerKey,
+    primitive: PrimitiveOwner,
+    list,
+    box,
+};
+
+const NominalOwnerKey = struct {
+    module_idx: u32,
+    nominal_ident: Ident.Idx,
+};
+
 const MethodKey = struct {
-    owner_module_idx: u32,
-    owner_type_ident: Ident.Idx,
+    owner: MethodOwner,
     method_ident: Ident.Idx,
 };
 
@@ -1004,6 +1127,12 @@ The registry maps:
 ```text
 MethodKey -> MethodTarget
 ```
+
+`MethodKey.owner` is semantic owner identity, not a display name and not an
+expression shape. Nominal owners use the defining module and nominal identifier.
+Primitive, `List`, and `Box` owners are explicit builtin owner cases. Type-var
+aliases and transparent aliases must resolve to a `MethodOwner` before registry
+lookup.
 
 The registry is an input to mono MIR only.
 
@@ -1128,12 +1257,21 @@ It must explicitly encode:
 - lambda/callable members
 - captures for each callable member
 - erased callable representation when required
+- erased-boundary structural type transforms for erase and unerase
 
 It must not use ordinary source tag unions as a hidden carrier for unresolved
 static dispatch.
 
 If physical layout later uses a tag-union-like representation for callable
 sets, that is a layout decision derived from explicit callable metadata.
+
+Lambda-solved MIR owns `erased_boundary_type(T)`.
+
+This transform is structural. It recursively rewrites reachable function slots
+to erased callable representation inside records, tuples, tags, lists, boxes,
+and nominal backing types. It is the same contract for erase and unerase
+boundaries. Executable MIR consumes the already-computed boundary type and
+coercion plan.
 
 ### Executable Types
 
@@ -1177,9 +1315,10 @@ Logical indexes include:
 - `CaptureSlot.index`
 - callable-set member capture payload fields
 - erased capture record fields
-- record fields
+- checked type-store record field indexes
 - tuple fields
-- tag payload fields
+- checked type-store tag constructor indexes
+- checked type-store tag payload field indexes
 - compiler-generated struct fields
 
 Executable MIR layout graph nodes must store field identity explicitly:
@@ -1203,7 +1342,23 @@ physical offsets through the layout store.
 No compiler stage may recover a capture field, record field, or tag payload
 position by sorting names, scanning bodies, or relying on physical layout order.
 
+If a source-level family has a canonical order, that order must be stored as an
+explicit checked or MIR fact before layout lowering consumes it. A later stage
+may use source/display names only to look up that explicit index in the owning
+type metadata. It must not sort names to create a new order.
+
 ## Static Dispatch Lowering
+
+Static dispatch lowering only consumes checked static-dispatch nodes:
+
+```text
+e_dispatch_call
+e_type_dispatch_call
+e_method_eq
+```
+
+A dotted expression without arguments is checked field access. It is not an
+unresolved static method value and must not be treated as one later.
 
 ### Ordinary Dispatch
 
@@ -1307,6 +1462,11 @@ Discriminants and payload indexes may be computed from the full mono MIR
 tag-union type. They must not be computed from a singleton type invented from
 syntax.
 
+The full mono MIR tag-union type must carry or reference the checked canonical
+constructor order and payload field indexes. Later stages may translate those
+logical indexes to executable layout indexes, but they must not create a new
+constructor order by sorting names or scanning expressions.
+
 ## Callable And Capture Flow
 
 Callable and capture metadata must flow as typed MIR data, not side tables.
@@ -1327,6 +1487,7 @@ Lifted MIR:
 - computes recursive local-function captures by least fixed point
 - assigns `CaptureSlot.index` values and stores captures in lifted procedure
   metadata
+- rewrites captured value references in lifted bodies to `capture_ref(slot)`
 - rewrites every lifted local-function or closure value to `proc_value` with
   explicit `CaptureArg` payloads
 - rewrites aliases of local functions and closures to explicit `proc_value`
@@ -1341,8 +1502,8 @@ Lambda-solved MIR:
 - determines exact callable sets
 - associates capture types with callable members
 - propagates erasure requirements
-- emits explicit `erase_callable` boundaries with both source callable shape and
-  target erased type
+- emits explicit structural `erased_boundary` nodes with source type, boundary
+  type, direction, and `BoundaryCoercionPlan`
 - exposes zonked callable representations for `call_value.requested_fn_ty`,
   `call_proc.requested_fn_ty`, and `proc_value.fn_ty`
 - treats `call_proc` as direct procedure calls for inference and SCCs
@@ -1355,6 +1516,8 @@ Executable MIR:
 - emits callable-set values for non-erased callable values
 - synthesizes erased adapters when a finite callable-set value crosses an
   erased boundary
+- consumes `BoundaryCoercionPlan` instead of deciding erased callable shape
+  compatibility from executable types
 - emits finite callable-set `callable_match` expressions for non-erased callable
   calls
 - reserves executable specializations before emitting `call_direct` branches
@@ -1401,6 +1564,7 @@ late source type refinement helpers
 singleton tag source type construction
 method lookup data threaded beyond mono MIR
 bare procedure-symbol `var_` values after lifted MIR
+executable erased-shape compatibility as semantic decision logic
 ```
 
 Delete exported dispatch variants after checked CIR:
@@ -1532,8 +1696,9 @@ Add `src/mir/mono/method_registry.zig`.
 
 Build a registry from checked modules before mono MIR lowering.
 
-The registry must map owner/type/method ids to method definition refs or
-intrinsics.
+The registry must map `MethodKey { owner: MethodOwner, method_ident }` to method
+definition refs or intrinsics. `MethodOwner` must be explicit semantic owner
+identity, not expression shape and not display-name lookup.
 
 Use the registry for mono MIR static dispatch lowering.
 
@@ -1588,6 +1753,9 @@ For recursive local-function groups, allocate procedure symbols first, then
 compute captures to a least fixed point across all members before exporting
 lifted MIR.
 
+Rewrite every captured value reference inside a lifted procedure body to
+`capture_ref(slot)`.
+
 Rewrite every local function or closure value to a `proc_value` with explicit
 `CaptureArg` payloads.
 
@@ -1603,8 +1771,10 @@ Commit when lifted MIR verification proves:
 
 - all `call_proc` and `proc_value` targets exist
 - all procedure captures are explicit `CaptureSlot`s
+- all captured value references are explicit `capture_ref` nodes
 - recursive local-function capture sets are fixed-point complete
 - all `proc_value` captures are explicit `CaptureArg`s in slot order
+- no captured source symbol remains as ordinary `var_` inside a lifted body
 - no bare procedure-symbol `var_` values exist
 - no aliases of local functions or closures remain as bare `var_`
 - no local function or closure call is represented as `call_proc`
@@ -1622,7 +1792,9 @@ Preserve and clean up the real responsibilities:
 - instantiate lifted types
 - infer callable sets
 - propagate erasure
-- preserve explicit `erase_callable` source and target types
+- compute structural `erased_boundary_type(T)` facts
+- preserve explicit `erased_boundary` source type, boundary type, direction, and
+  `BoundaryCoercionPlan`
 - order recursive SCCs
 - enforce canonical callable-set unification algebra
 - export zonked callable representations for every executable specialization
@@ -1637,7 +1809,10 @@ Commit when lambda-solved MIR verification proves:
 - callable-set member order is canonical
 - each repeated callable member has exactly the same capture slots
 - erased callable requirements are explicit
-- every `erase_callable` stores source callable shape and target erased type
+- every `erased_boundary` stores source type, boundary type, direction, and
+  structural coercion plan
+- every function slot reachable through an erased boundary is represented as
+  erased in the exported boundary type
 - no executable specialization input contains generalized or unresolved type
   variables
 - `call_proc` and `proc_value` targets remain explicit
@@ -1666,8 +1841,7 @@ authoritativeCallableValue
 Executable specialization keys must be:
 
 ```text
-source/MIR procedure target
-+ stable ProcOrderKey
+ProcBaseKey
 + zonked lambda-solved argument and return structural type keys
 + finite callable-set member procedure identity when specializing a callable-set
   branch
@@ -1680,6 +1854,7 @@ not:
 
 ```text
 fact handles + expression ids + source/executable side channels + raw type ids
+ProcOrderKey
 ```
 
 Commit when executable MIR verification proves:
@@ -1778,6 +1953,10 @@ adapter emission, capture fixed-point ordering, or generated procedure emission.
 
 Forbid raw type-store ids in executable specialization keys.
 
+Forbid executable erased-shape compatibility helpers from making semantic
+lowering decisions. Erased-boundary decisions must come from lambda-solved
+`erased_boundary` facts and may be rechecked only by debug-only verifiers.
+
 Forbid bare procedure-symbol `var_` values outside mono MIR and lifted MIR input
 pattern matching.
 
@@ -1837,11 +2016,13 @@ Lifted MIR:
 
 - every lifted procedure target exists
 - every procedure capture is an explicit `CaptureSlot`
+- every captured value reference is an explicit `capture_ref`
 - recursive local-function groups compute captures to a fixed point
 - every local function or closure value is an explicit `proc_value`
 - aliases of local functions and closures become explicit `proc_value`
 - every `proc_value` capture arg is explicit and in slot order
 - every call through a local function or closure is `call_value`
+- no captured source symbol remains as ordinary `var_`
 - no bare procedure-symbol `var_` values exist
 - `call_proc` and `proc_value` targets are rewritten by explicit maps
 - no dispatch nodes exist
@@ -1854,7 +2035,10 @@ Lambda-solved MIR:
 - repeated callable members have identical capture slots
 - mismatched capture slots panic in debug verification
 - erasure requirements are explicit
-- `erase_callable` stores both source callable shape and target erased type
+- `erased_boundary` stores source type, boundary type, direction, and
+  `BoundaryCoercionPlan`
+- erased boundary types structurally rewrite every reachable function slot to
+  erased callable representation
 - finite callable-set erasure preserves source member metadata for executable
   adapter synthesis
 - generalized templates are clone-instantiated and zonked before executable
@@ -1884,6 +2068,8 @@ Executable MIR:
 - every packed erased function has explicit capture metadata
 - finite callable-set values crossing erased boundaries synthesize erased
   adapters
+- executable MIR consumes structural boundary plans and does not make semantic
+  erased-shape compatibility decisions
 - every erased capture record has deterministic field ordering
 - every erased call has an explicit erased function type
 - first-class intrinsic references use explicit wrapper procedures
@@ -1921,9 +2107,13 @@ Static dispatch:
   intrinsics
 - call-only intrinsics lower directly only when they never flow as values
 - first-class intrinsic method references synthesize wrapper procedures
+- dotted expressions without arguments are checked as field access, not static
+  method references
 - tag construction never creates singleton source tag-union types
-- method references used as first-class values resolve to explicit `proc_value`
-  values with empty captures, not executable direct calls
+- any future unbound source method symbol used as a first-class value resolves to
+  explicit `proc_value` with empty captures, not executable direct calls
+- any future receiver-bound method value lowers to an explicit closure capturing
+  the receiver, not an empty-capture `proc_value`
 
 Callable/capture behavior:
 
@@ -1947,6 +2137,10 @@ Callable/capture behavior:
 - erased boundary packaging with capture record
 - finite callable-set value crossing an erased boundary synthesizes an erased
   adapter whose body uses `callable_match`
+- structural erased-boundary coercion through records, tuples, tags, lists,
+  boxes, and nominal backing types
+- unerase to a value containing function slots gives those slots erased callable
+  representation
 - already-erased value crossing a matching erased boundary passes through after
   verification
 - boxed erased-call round trip
@@ -2007,17 +2201,21 @@ The cutover is complete only when all of these are true:
 - mono MIR `call_proc` targets only top-level mono-specialized procedures
 - lifted MIR output has no dispatch nodes
 - lifted MIR has explicit `CaptureSlot` metadata for every lifted procedure
+- lifted MIR uses `capture_ref` for every captured value reference
 - lifted MIR computes recursive local-function captures to a fixed point
 - lifted MIR procedure values are explicit `proc_value` nodes with
   `CaptureArg`s
+- lifted MIR has no captured source symbols represented as ordinary `var_`
 - lifted MIR has no bare procedure-symbol `var_` values
 - lifted MIR rewrites `call_proc` and `proc_value` targets only through
   explicit maps
 - lambda-solved MIR output has no dispatch nodes
 - lambda-solved MIR has explicit callable/lambda-set/erasure metadata for every
   `proc_value`, `call_proc`, and `call_value` executable MIR consumes
-- lambda-solved MIR uses explicit `erase_callable` boundaries preserving source
-  callable shape and target erased type
+- lambda-solved MIR uses explicit structural `erased_boundary` nodes preserving
+  source type, boundary type, direction, and `BoundaryCoercionPlan`
+- lambda-solved MIR structurally rewrites every reachable function slot at
+  erased boundaries
 - lambda-solved MIR exports only zonked executable specialization inputs
 - lambda-solved MIR enforces canonical callable-set unification algebra
 - executable MIR output has no dispatch nodes
@@ -2032,6 +2230,10 @@ The cutover is complete only when all of these are true:
 - executable MIR keeps callable-set values distinct from packed erased function
   values
 - callable-set member ordering uses `ProcOrderKey`, not `Symbol.raw()`
+- executable specialization keys use semantic base/type/representation keys,
+  not `ProcOrderKey`, raw type ids, expression ids, or fact ids
+- executable MIR consumes erased-boundary plans instead of making semantic
+  erased-shape compatibility decisions
 - logical field indexes are resolved to physical offsets only through the layout
   store
 - no exact callable alias side tables remain
