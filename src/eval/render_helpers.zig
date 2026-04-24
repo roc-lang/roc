@@ -115,7 +115,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
     // Str has a dedicated scalar layout; ordinary tag unions, including Bool,
     // are rendered structurally below using type information.
     if (value.layout.tag == .scalar) {
-        const scalar = value.layout.data.scalar;
+        const scalar = value.layout.getScalar();
         if (scalar.tag == .str) {
             // Render strings with quotes
             const rs: *const builtins.str.RocStr = @ptrCast(@alignCast(value.ptr.?));
@@ -183,7 +183,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
 
                         switch (value.layout.tag) {
                             .box => {
-                                const elem_layout = ctx.layout_store.getLayout(value.layout.data.box);
+                                const elem_layout = ctx.layout_store.getLayout(value.layout.getIdx());
                                 const data_ptr_opt = value.getBoxedData() orelse return error.TypeMismatch;
                                 if (!elem_layout.eql(payload_layout)) {
                                     return error.TypeMismatch;
@@ -229,7 +229,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                             const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(value.ptr.?));
                             const len = roc_list.len();
                             if (len > 0) {
-                                const elem_layout_idx = value.layout.data.list;
+                                const elem_layout_idx = value.layout.getIdx();
                                 const elem_layout = ctx.layout_store.getLayout(elem_layout_idx);
                                 const elem_size = ctx.layout_store.layoutSize(elem_layout);
                                 var i: usize = 0;
@@ -318,7 +318,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     return out.toOwnedSlice();
                 }
             } else if (value.layout.tag == .scalar) {
-                if (value.layout.data.scalar.tag == .int) {
+                if (value.layout.getScalar().tag == .int) {
                     // Only treat as tag if value fits in usize (valid tag discriminants are small)
                     if (std.math.cast(usize, value.asI128())) |idx| {
                         tag_index = idx;
@@ -342,7 +342,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     // Record-style: { tag, payload }
                     const field_rt = try ctx.runtime_types.fresh();
                     const tag_field = try rec_acc.getFieldByIndex(tag_field_idx, field_rt);
-                    if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                    if (tag_field.layout.tag == .scalar and tag_field.layout.getScalar().tag == .int) {
                         const tmp_sv = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true, .rt_var = undefined };
                         if (std.math.cast(usize, tmp_sv.asI128())) |tag_idx| {
                             tag_index = tag_idx;
@@ -421,7 +421,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     const count = tup_acc.getElementCount();
                     if (count > 0) {
                         const tag_elem = try tup_acc.getElement(count - 1, undefined);
-                        if (tag_elem.layout.tag == .scalar and tag_elem.layout.data.scalar.tag == .int) {
+                        if (tag_elem.layout.tag == .scalar and tag_elem.layout.getScalar().tag == .int) {
                             if (std.math.cast(usize, tag_elem.asI128())) |tag_idx| {
                                 tag_index = tag_idx;
                                 have_tag = true;
@@ -475,7 +475,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                 }
             } else if (value.layout.tag == .tag_union) {
                 // Tag union with new proper layout: payload at offset 0, discriminant at discriminant_offset
-                const tu_idx = value.layout.data.tag_union.idx;
+                const tu_idx = value.layout.getTagUnion().idx;
                 const tu_data = ctx.layout_store.getTagUnionData(tu_idx);
                 const disc_offset = ctx.layout_store.getTagUnionDiscriminantOffset(tu_idx);
                 if (value.ptr) |ptr| {
@@ -580,7 +580,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     const len = roc_list.len();
                     try out.append('[');
                     if (len > 0) {
-                        const elem_layout_idx = value.layout.data.list;
+                        const elem_layout_idx = value.layout.getIdx();
                         const elem_layout = ctx.layout_store.getLayout(elem_layout_idx);
                         const elem_size = ctx.layout_store.layoutSize(elem_layout);
                         var i: usize = 0;

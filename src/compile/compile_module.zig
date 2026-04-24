@@ -10,11 +10,11 @@
 //! - Playground (web-based compilation)
 
 const std = @import("std");
-const base = @import("base");
+const Allocator = std.mem.Allocator;
 const parse = @import("parse");
 const can = @import("can");
+const CoreCtx = @import("ctx").CoreCtx;
 
-pub const Allocators = base.Allocators;
 pub const AST = parse.AST;
 pub const ModuleEnv = can.ModuleEnv;
 pub const AutoImportedType = can.AutoImportedType;
@@ -55,20 +55,16 @@ pub const CompileOptions = struct {
 /// use `ast.parse_diagnostics`/`ast.tokenize_diagnostics` to handle errors.
 ///
 /// Memory ownership:
-/// - allocators: Caller provides and manages
+/// - gpa: Caller provides the general-purpose allocator
 /// - module_env: Caller provides and manages
 /// - Returned *AST: Heap-allocated; caller must call `ast.deinit()` when done
 ///
 /// Example:
 /// ```zig
-/// var allocators: Allocators = undefined;
-/// allocators.initInPlace(gpa);
-/// defer allocators.deinit();
-///
-/// var module_env = try ModuleEnv.init(allocators.gpa, source);
+/// var module_env = try ModuleEnv.init(gpa, source);
 /// defer module_env.deinit();
 ///
-/// const ast = try parseSingleModule(&allocators, &module_env, .file, .{});
+/// const ast = try parseSingleModule(gpa, &module_env, .file, .{});
 /// defer ast.deinit();
 ///
 /// if (ast.hasErrors()) {
@@ -76,13 +72,11 @@ pub const CompileOptions = struct {
 /// }
 /// ```
 pub fn parseSingleModule(
-    allocators: *Allocators,
+    gpa: Allocator,
     module_env: *ModuleEnv,
     mode: ParseMode,
     options: CompileOptions,
 ) !*AST {
-    const gpa = allocators.gpa;
-
     // Calculate line starts for source location tracking (idempotent if already done)
     try module_env.common.calcLineStarts(gpa);
 
@@ -93,10 +87,10 @@ pub fn parseSingleModule(
 
     // Parse based on mode - parse functions now return *AST directly
     const ast = switch (mode) {
-        .file => try parse.parse(allocators, &module_env.common),
-        .expr => try parse.parseExpr(allocators, &module_env.common),
-        .statement => try parse.parseStatement(allocators, &module_env.common),
-        .header => try parse.parseHeader(allocators, &module_env.common),
+        .file => try parse.parse(gpa, &module_env.common),
+        .expr => try parse.parseExpr(gpa, &module_env.common),
+        .statement => try parse.parseStatement(gpa, &module_env.common),
+        .header => try parse.parseHeader(gpa, &module_env.common),
     };
     errdefer ast.deinit();
 
@@ -117,48 +111,40 @@ pub fn parseSingleModule(
 /// Results are stored in module_env (all_defs, all_statements, diagnostics, etc).
 ///
 /// Memory ownership:
-/// - allocators: Caller provides and manages
+/// - roc_ctx: Caller provides the Roc compiler context (allocators + I/O)
 /// - module_env: Caller provides; results stored here
 /// - parse_ast: Caller provides and manages
 /// - context: Builtin type context plus optional explicit imported module environments
 ///
 /// Example:
 /// ```zig
-/// var allocators: Allocators = undefined;
-/// allocators.initInPlace(gpa);
-/// defer allocators.deinit();
-///
-/// var module_env = try ModuleEnv.init(allocators.gpa, source);
+/// var module_env = try ModuleEnv.init(gpa, source);
 /// defer module_env.deinit();
 ///
-/// const ast = try parseSingleModule(&allocators, &module_env, .file, .{});
+/// const ast = try parseSingleModule(gpa, &module_env, .file, .{});
 /// defer ast.deinit();
 ///
-/// try canonicalizeSingleModule(&allocators, &module_env, ast, context);
+/// try canonicalizeSingleModule(roc_ctx, &module_env, ast, context);
 ///
 /// // Results are now in module_env
 /// ```
 pub fn canonicalizeSingleModule(
-    allocators: *Allocators,
+    roc_ctx: CoreCtx,
     module_env: *ModuleEnv,
     parse_ast: *AST,
     context: can.Can.ModuleInitContext,
 ) !void {
-    try can.canonicalizeModule(allocators, module_env, parse_ast, context);
+    try can.canonicalizeModule(roc_ctx, module_env, parse_ast, context);
 }
 
 // Tests
 test "parseSingleModule - simple expression" {
     const allocator = std.testing.allocator;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
     var module_env = try ModuleEnv.init(allocator, "1 + 2");
     defer module_env.deinit();
 
-    const ast = try parseSingleModule(&allocators, &module_env, .expr, .{});
+    const ast = try parseSingleModule(allocator, &module_env, .expr, .{});
     defer ast.deinit();
 
     // Verify we got valid result
@@ -174,14 +160,10 @@ test "parseSingleModule - simple file" {
         \\main = "Hello"
     ;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
     var module_env = try ModuleEnv.init(allocator, source);
     defer module_env.deinit();
 
-    const ast = try parseSingleModule(&allocators, &module_env, .file, .{ .module_name = "Test" });
+    const ast = try parseSingleModule(allocator, &module_env, .file, .{ .module_name = "Test" });
     defer ast.deinit();
 
     // Verify we got a valid result
@@ -191,14 +173,10 @@ test "parseSingleModule - simple file" {
 test "parseSingleModule - collects diagnostics" {
     const allocator = std.testing.allocator;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
     var module_env = try ModuleEnv.init(allocator, "x = ");
     defer module_env.deinit();
 
-    const ast = try parseSingleModule(&allocators, &module_env, .statement, .{});
+    const ast = try parseSingleModule(allocator, &module_env, .statement, .{});
     defer ast.deinit();
 
     // Parsing incomplete input - should have diagnostics in the AST

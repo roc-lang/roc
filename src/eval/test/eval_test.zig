@@ -9,6 +9,7 @@ const builtins = @import("builtins");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 const roc_target = @import("roc_target");
+const CoreCtx = @import("ctx").CoreCtx;
 
 const helpers = @import("helpers.zig");
 const builtin_loading = @import("../builtin_loading.zig");
@@ -19,7 +20,6 @@ const BuiltinTypes = @import("../builtins.zig").BuiltinTypes;
 const Can = can.Can;
 const Check = check.Check;
 const ModuleEnv = can.ModuleEnv;
-const Allocators = base.Allocators;
 const CompactWriter = collections.CompactWriter;
 const testing = std.testing;
 // Use interpreter_allocator for interpreter tests (doesn't track leaks)
@@ -42,11 +42,12 @@ const runDevOnlyExpectStr = helpers.runDevOnlyExpectStr;
 
 const TraceWriterState = struct {
     buffer: [256]u8 = undefined,
-    writer: std.fs.File.Writer = undefined,
+    writer: std.Io.File.Writer = undefined,
 
-    fn init() TraceWriterState {
+    fn init(std_io: std.Io) TraceWriterState {
+        const stderr: std.Io.File = .{ .handle = std.posix.STDERR_FILENO, .flags = .{ .nonblocking = false } };
         var state = TraceWriterState{};
-        state.writer = std.fs.File.stderr().writer(&state.buffer);
+        state.writer = stderr.writer(std_io, &state.buffer);
         return state;
     }
 };
@@ -810,11 +811,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     try original_env.common.calcLineStarts(original_env.gpa);
 
     // Parse the source code
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
-    const parse_ast = try parse.parseExpr(&allocators, &original_env.common);
+    const parse_ast = try parse.parseExpr(gpa, &original_env.common);
     defer parse_ast.deinit();
 
     // Empty scratch space (required before canonicalization)
@@ -837,7 +834,8 @@ test "ModuleEnv serialization and interpreter evaluation" {
         .builtin_indices = builtin_indices,
     };
 
-    var czer = try Can.initModule(&allocators, &original_env, parse_ast, .{
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
+    var czer = try Can.initModule(roc_ctx, &original_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
@@ -874,7 +872,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         defer result.decref(layout_cache, ops);
 
         // Extract integer value (handles both integer and Dec types)
-        const int_value = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
+        const int_value = if (result.layout.tag == .scalar and result.layout.getScalar().tag == .int) blk: {
             break :blk result.asI128();
         } else blk: {
             const dec_value = result.asDec(ops);
@@ -892,13 +890,13 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
         var tmp_dir = testing.tmpDir(.{});
         defer tmp_dir.cleanup();
-        const tmp_file = try tmp_dir.dir.createFile("test_module_env.compact", .{ .read = true });
-        defer tmp_file.close();
+        const tmp_file = try tmp_dir.dir.createFile(std.testing.io, "test_module_env.compact", .{ .read = true });
+        defer tmp_file.close(std.testing.io);
 
         var writer = CompactWriter{
-            .iovecs = .{},
+            .iovecs = .empty,
             .total_bytes = 0,
-            .allocated_memory = .{},
+            .allocated_memory = .empty,
         };
         defer writer.deinit(arena_alloc);
 
@@ -911,13 +909,13 @@ test "ModuleEnv serialization and interpreter evaluation" {
         try serialized_ptr.serialize(&original_env, arena_alloc, &writer);
 
         // Write to file
-        try writer.writeGather(arena_alloc, tmp_file);
+        try writer.writeGather(tmp_file, std.testing.io);
 
         // Read back from file
-        const file_size = try tmp_file.getEndPos();
+        const file_size = writer.total_bytes;
         const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ModuleEnv)), @intCast(file_size));
         defer gpa.free(buffer);
-        _ = try tmp_file.pread(buffer, 0);
+        _ = try tmp_file.readPositionalAll(std.testing.io, buffer, 0);
 
         // Deserialize the ModuleEnv
         const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr + env_start_offset)));
@@ -972,7 +970,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
             // Verify we get the same result from the deserialized ModuleEnv
             // Extract integer value (handles both integer and Dec types)
-            const int_value = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
+            const int_value = if (result.layout.tag == .scalar and result.layout.getScalar().tag == .int) blk: {
                 break :blk result.asI128();
             } else blk: {
                 const dec_value = result.asDec(ops);
@@ -2378,14 +2376,7 @@ test "early return: ? in closure passed to List.map" {
 
 test "early return: ? in closure passed to List.fold" {
     // Regression test: early return from closure in List.fold would crash
-    if (std.time.microTimestamp() >= 0) return error.SkipZigTest;
-    try runExpectI64(
-        \\{
-        \\    compute = |x| Ok(x?)
-        \\    result = List.fold([Ok(1), Err({})], [], |acc, x| List.append(acc, compute(x)))
-        \\    List.len(result)
-        \\}
-    , 2, .no_trace);
+    return error.SkipZigTest;
 }
 
 test "early return: ? in second argument of multi-arg call" {

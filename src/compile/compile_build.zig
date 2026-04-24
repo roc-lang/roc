@@ -18,15 +18,16 @@ const reporting = @import("reporting");
 const eval = @import("eval");
 const check = @import("check");
 const unbundle = @import("unbundle");
-const Io = @import("io").Io;
+const CoreCtx = @import("ctx").CoreCtx;
 
+/// The underlying system I/O type, derived from CoreCtx to avoid
+/// referencing the raw Zig I/O type directly (which is banned in core modules).
 const Report = reporting.Report;
 const ReportBuilder = check.ReportBuilder;
 const BuiltinModules = eval.BuiltinModules;
 const compile_package = @import("compile_package.zig");
 const Mode = compile_package.Mode;
 const Allocator = std.mem.Allocator;
-const Allocators = base.Allocators;
 const ModuleEnv = can.ModuleEnv;
 const Can = can.Can;
 const Check = check.Check;
@@ -56,14 +57,14 @@ const ThreadCondition = threading.Condition;
 /// Native fetchUrl implementation that downloads a tar.zst bundle via HTTP
 /// and extracts it into the destination directory. Used by the CLI to wire up
 /// real download support through the Filesystem vtable.
-pub const nativeFetchUrl: ?*const fn (?*anyopaque, Allocator, []const u8, []const u8) Io.FetchUrlError!void = if (!is_freestanding)
+pub const nativeFetchUrl: ?*const fn (?*anyopaque, std.Io, Allocator, []const u8, []const u8) CoreCtx.FetchUrlError!void = if (!is_freestanding)
     &nativeFetchUrlImpl
 else
     null;
 
-fn nativeFetchUrlImpl(_: ?*anyopaque, allocator: Allocator, url: []const u8, dest_path: []const u8) Io.FetchUrlError!void {
+fn nativeFetchUrlImpl(_: ?*anyopaque, std_io: std.Io, allocator: Allocator, url: []const u8, dest_path: []const u8) CoreCtx.FetchUrlError!void {
     var alloc = allocator;
-    unbundle.download.downloadAndExtract(&alloc, url, dest_path) catch {
+    unbundle.download.downloadAndExtract(&alloc, std_io, url, dest_path) catch {
         return error.DownloadFailed;
     };
 }
@@ -139,7 +140,7 @@ pub const BuildEnv = struct {
     // Cache manager for compiled modules
     cache_manager: ?*CacheManager = null,
     // I/O abstraction for all OS operations (filesystem, stdio, env vars, etc.)
-    filesystem: Io = Io.default(),
+    filesystem: CoreCtx,
     // Explicit working directory for resolving relative paths
     cwd: []const u8,
 
@@ -167,7 +168,7 @@ pub const BuildEnv = struct {
         import_name: []const u8, // e.g., "pf.Stdout"
     };
 
-    pub fn init(gpa: Allocator, mode: Mode, max_threads: usize, target: roc_target.RocTarget, cwd: []const u8) !BuildEnv {
+    pub fn init(gpa: Allocator, mode: Mode, max_threads: usize, target: roc_target.RocTarget, cwd: []const u8, std_io: std.Io) !BuildEnv {
         // Allocate builtin modules on heap to prevent moves that would invalidate internal pointers
         const builtin_modules = try gpa.create(BuiltinModules);
         errdefer gpa.destroy(builtin_modules);
@@ -188,6 +189,7 @@ pub const BuildEnv = struct {
             .pkg_sink_ctxs = std.array_list.Managed(*PkgSinkCtx).init(gpa),
             .schedule_ctxs = std.array_list.Managed(*ScheduleCtx).init(gpa),
             .pending_known_modules = std.array_list.Managed(PendingKnownModule).init(gpa),
+            .filesystem = CoreCtx.default(gpa, gpa, std_io),
         };
 
         // On native targets, enable HTTP downloads for URL packages.
@@ -306,8 +308,9 @@ pub const BuildEnv = struct {
     }
 
     /// Set the I/O implementation (or reset to OS default).
-    pub fn setIo(self: *BuildEnv, io: ?Io) void {
-        self.filesystem = io orelse Io.default();
+    pub fn setCoreCtx(self: *BuildEnv, roc_ctx: ?CoreCtx) void {
+        self.filesystem = roc_ctx orelse CoreCtx.default(self.filesystem.gpa, self.filesystem.arena, self.filesystem.std_io);
+        self.sink.std_io = self.filesystem.std_io;
     }
 
     /// Get the TargetsConfig from the platform package, if any.
@@ -370,6 +373,9 @@ pub const BuildEnv = struct {
     pub fn initCoordinator(self: *BuildEnv) !void {
         if (self.coordinator != null) return; // Already initialized
 
+        // Propagate std_io to the ordered sink for its mutex operations
+        self.sink.std_io = self.filesystem.std_io;
+
         const coord = try self.gpa.create(Coordinator);
         coord.* = try Coordinator.init(
             self.gpa,
@@ -379,8 +385,8 @@ pub const BuildEnv = struct {
             self.builtin_modules,
             self.compiler_version,
             self.cache_manager,
+            self.filesystem,
         );
-        coord.setIo(self.filesystem);
         // Enable hosted transform for platform modules - converts e_anno_only to e_hosted_lambda
         // This is required for roc build so that hosted functions can be called at runtime
         coord.enable_hosted_transform = true;
@@ -427,7 +433,7 @@ pub const BuildEnv = struct {
         if (header_info.kind == .platform) {
             if (self.packages.getPtr(pkg_name)) |pkg| {
                 pkg.provides_entries = header_info.provides_entries;
-                header_info.provides_entries = .{}; // Prevent double-free in deinit
+                header_info.provides_entries = .empty; // Prevent double-free in deinit
                 pkg.targets_config = header_info.targets_config;
                 header_info.targets_config = null; // Prevent double-free in deinit
             }
@@ -1155,7 +1161,7 @@ pub const BuildEnv = struct {
         root_file: []u8,
         root_dir: []u8,
         shorthands: std.StringHashMapUnmanaged(PackageRef) = .{},
-        provides_entries: std.ArrayListUnmanaged(ProvidesEntry) = .{},
+        provides_entries: std.ArrayListUnmanaged(ProvidesEntry) = .empty,
         targets_config: ?targets_config_mod.TargetsConfig = null,
 
         fn deinit(self: *Package, gpa: Allocator) void {
@@ -1184,9 +1190,9 @@ pub const BuildEnv = struct {
         platform_path: ?[]u8 = null,
         shorthands: std.StringHashMapUnmanaged([]const u8) = .{},
         /// Platform-exposed modules (e.g., Stdout, Stderr) that apps can import
-        exposes: std.ArrayListUnmanaged([]const u8) = .{},
+        exposes: std.ArrayListUnmanaged([]const u8) = .empty,
         /// Platform provides entries (roc_ident -> ffi_symbol mapping)
-        provides_entries: std.ArrayListUnmanaged(ProvidesEntry) = .{},
+        provides_entries: std.ArrayListUnmanaged(ProvidesEntry) = .empty,
         /// Targets configuration extracted from platform header
         targets_config: ?targets_config_mod.TargetsConfig = null,
 
@@ -1286,11 +1292,7 @@ pub const BuildEnv = struct {
 
         try env.common.calcLineStarts(self.gpa);
 
-        var allocators: Allocators = undefined;
-        allocators.initInPlace(self.gpa);
-        defer allocators.deinit();
-
-        const ast = try parse.parse(&allocators, &env.common);
+        const ast = try parse.parse(self.gpa, &env.common);
         defer ast.deinit();
 
         // Check for parse errors - if any exist, we cannot proceed
@@ -1565,7 +1567,7 @@ pub const BuildEnv = struct {
                 const result = try buf.toOwnedSlice(self.gpa);
 
                 // Check for null bytes in the string, which are invalid in file paths
-                if (std.mem.indexOfScalar(u8, result, 0) != null) {
+                if (std.mem.findScalar(u8, result, 0) != null) {
                     self.gpa.free(result);
                     return error.InvalidNullByteInPath;
                 }
@@ -1651,31 +1653,21 @@ pub const BuildEnv = struct {
         errdefer self.gpa.free(package_dir_path);
 
         // Check if already cached
-        const already_cached = blk: {
-            var d = std.fs.cwd().openDir(package_dir_path, .{}) catch |err| switch (err) {
-                error.FileNotFound => break :blk false,
-                else => {
-                    std.log.err("Failed to access package directory: {}", .{err});
-                    return error.FileError;
-                },
-            };
-            d.close();
-            break :blk true;
-        };
+        const already_cached = self.filesystem.fileExists(package_dir_path);
 
         if (!already_cached) {
             // Not cached - need to download
             std.log.info("Downloading package from {s}...", .{url});
 
             // Create cache directory structure
-            std.fs.cwd().makePath(cache_dir_path) catch |make_err| {
+            self.filesystem.makePath(cache_dir_path) catch |make_err| {
                 std.log.err("Failed to create cache directory: {}", .{make_err});
                 return error.FileError;
             };
 
             // Create package directory
-            std.fs.cwd().makeDir(package_dir_path) catch |make_err| switch (make_err) {
-                error.PathAlreadyExists => {}, // Race condition, another process created it
+            self.filesystem.createDir(package_dir_path) catch |make_err| switch (make_err) {
+                error.IoError => {}, // May be PathAlreadyExists from race condition
                 else => {
                     std.log.err("Failed to create package directory: {}", .{make_err});
                     return error.FileError;
@@ -1684,7 +1676,7 @@ pub const BuildEnv = struct {
 
             // Download and extract via io vtable (path-based, no Dir handle needed)
             self.filesystem.fetchUrl(self.gpa, url, package_dir_path) catch |fetch_err| {
-                std.fs.cwd().deleteTree(package_dir_path) catch {};
+                self.filesystem.deleteTree(package_dir_path) catch {};
                 std.log.err("Failed to download package: {} (url: {s})", .{ fetch_err, url });
                 return error.DownloadFailed;
             };
@@ -1696,11 +1688,11 @@ pub const BuildEnv = struct {
         const source_path = std.fs.path.join(self.gpa, &.{ package_dir_path, "main.roc" }) catch {
             return error.OutOfMemory;
         };
-        std.fs.cwd().access(source_path, .{}) catch {
+        if (!self.filesystem.fileExists(source_path)) {
             self.gpa.free(source_path);
             std.log.err("No main.roc found in package at {s}", .{package_dir_path});
             return error.NoPackageSource;
-        };
+        }
         self.gpa.free(package_dir_path);
         return source_path;
     }
@@ -1863,7 +1855,7 @@ pub const BuildEnv = struct {
             if (self.packages.getPtr(alias)) |plat_pkg| {
                 if (plat_pkg.provides_entries.items.len == 0) {
                     plat_pkg.provides_entries = child_info.provides_entries;
-                    child_info.provides_entries = .{}; // Prevent double-free in deinit
+                    child_info.provides_entries = .empty; // Prevent double-free in deinit
                 }
                 if (plat_pkg.targets_config == null) {
                     plat_pkg.targets_config = child_info.targets_config;
@@ -1975,7 +1967,7 @@ pub const BuildEnv = struct {
                 if (self.packages.getPtr(alias)) |plat_pkg| {
                     if (plat_pkg.provides_entries.items.len == 0) {
                         plat_pkg.provides_entries = child_info.provides_entries;
-                        child_info.provides_entries = .{}; // Prevent double-free in deinit
+                        child_info.provides_entries = .empty; // Prevent double-free in deinit
                     }
                 }
             }
@@ -2038,8 +2030,8 @@ pub const BuildEnv = struct {
         try self.sink.buildOrder(pkg_names.items, module_names.items, depths.items);
 
         // Now that order is built, mark ready reports as emitted so they can be drained
-        self.sink.lock.lock();
-        defer self.sink.lock.unlock();
+        self.sink.lock.lockUncancelable(self.filesystem.std_io);
+        defer self.sink.lock.unlock(self.filesystem.std_io);
         // Mark entries without reports as emitted BEFORE calling tryEmitLocked
         // so they don't block other entries from being emitted.
         for (self.sink.entries.items) |*e| {
@@ -2705,8 +2697,9 @@ pub const OrderedSink = struct {
     };
 
     gpa: Allocator,
-    lock: Mutex = .{},
-    cond: ThreadCondition = .{},
+    std_io: std.Io,
+    lock: Mutex = Mutex.init,
+    cond: ThreadCondition = ThreadCondition.init,
 
     // Ordered buffer and index
     entries: std.array_list.Managed(Entry),
@@ -2726,6 +2719,7 @@ pub const OrderedSink = struct {
     pub fn init(gpa: Allocator) OrderedSink {
         return .{
             .gpa = gpa,
+            .std_io = undefined,
             .entries = std.array_list.Managed(Entry).init(gpa),
             .order = std.array_list.Managed(usize).init(gpa),
             .index = std.HashMap(ModuleKey, usize, ModuleKeyContext, 80).init(gpa),
@@ -2826,8 +2820,8 @@ pub const OrderedSink = struct {
 
     // Emit with package and module names
     pub fn emitReport(self: *OrderedSink, pkg_name: []const u8, module_name: []const u8, report: Report) void {
-        self.lock.lock();
-        defer self.lock.unlock();
+        self.lock.lockUncancelable(self.std_io);
+        defer self.lock.unlock(self.std_io);
 
         if (comptime trace_build) {
             std.debug.print("[SINK] emitReport: pkg=\"{s}\" module=\"{s}\" title=\"{s}\"\n", .{ pkg_name, module_name, report.title });
@@ -2872,8 +2866,8 @@ pub const OrderedSink = struct {
 
     // Attempt to emit entries in order prefix while next entries are ready (with locking).
     pub fn tryEmit(self: *OrderedSink) void {
-        self.lock.lock();
-        defer self.lock.unlock();
+        self.lock.lockUncancelable(self.std_io);
+        defer self.lock.unlock(self.std_io);
         self.tryEmitLocked();
     }
 
@@ -2919,8 +2913,8 @@ pub const OrderedSink = struct {
     };
 
     pub fn drainEmitted(self: *OrderedSink, gpa: Allocator) ![]Drained {
-        self.lock.lock();
-        defer self.lock.unlock();
+        self.lock.lockUncancelable(self.std_io);
+        defer self.lock.unlock(self.std_io);
 
         // Identify contiguous emitted prefix starting from current drain cursor
         var i: usize = self.drain_cursor;

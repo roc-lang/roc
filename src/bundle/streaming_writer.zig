@@ -9,24 +9,25 @@ const c = @cImport({
     @cInclude("zstd.h");
 });
 
-const WriterError = std.io.Writer.Error;
+const WriterError = std.Io.Writer.Error;
+const Writer = std.Io.Writer;
 
 /// A writer that compresses data with zstd and computes a hash incrementally
 pub const CompressingHashWriter = struct {
     allocator_ptr: *std.mem.Allocator,
     ctx: *c.ZSTD_CCtx,
     hasher: std.crypto.hash.Blake3,
-    output_writer: *std.io.Writer,
+    output_writer: *std.Io.Writer,
     out_buffer: []u8,
     finished: bool,
-    interface: std.io.Writer,
+    interface: std.Io.Writer,
 
     const Self = @This();
 
     pub fn init(
         allocator_ptr: *std.mem.Allocator,
         compression_level: c_int,
-        output_writer: *std.io.Writer,
+        output_writer: *std.Io.Writer,
         allocForZstd: *const fn (?*anyopaque, usize) callconv(.c) ?*anyopaque,
         freeForZstd: *const fn (?*anyopaque, ?*anyopaque) callconv(.c) void,
     ) !Self {
@@ -75,7 +76,7 @@ pub const CompressingHashWriter = struct {
         self.allocator_ptr.free(self.interface.buffer);
     }
 
-    fn flush(w: *std.io.Writer) WriterError!void {
+    fn flush(w: *std.Io.Writer) WriterError!void {
         const self: *Self = @alignCast(@fieldParentPtr("interface", w));
         if (self.finished and w.end != 0) return WriterError.WriteFailed;
         _ = self.compressAndHash(w.buffer[0..w.end], false) catch return error.WriteFailed;
@@ -83,7 +84,7 @@ pub const CompressingHashWriter = struct {
         return;
     }
 
-    fn drain(w: *std.io.Writer, data: []const []const u8, splat: usize) WriterError!usize {
+    fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) WriterError!usize {
         const self: *Self = @alignCast(@fieldParentPtr("interface", w));
         if (self.finished) return WriterError.WriteFailed;
         _ = self.compressAndHash(w.buffer[0..w.end], false) catch return error.WriteFailed;

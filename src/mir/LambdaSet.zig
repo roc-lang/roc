@@ -347,7 +347,7 @@ fn seedExactSymbolProcSets(
         const symbol = MIR.Symbol.fromRaw(entry.key_ptr.*);
         const proc_ids = mir_store.getProcSpan(entry.value_ptr.*);
 
-        var members = std.ArrayListUnmanaged(Member){};
+        var members: std.ArrayListUnmanaged(Member) = .empty;
         defer members.deinit(allocator);
         for (proc_ids) |proc_id| {
             const member = if (mir_store.getClosureMemberForProc(proc_id)) |closure_member_id|

@@ -7,6 +7,7 @@ const std = @import("std");
 const base = @import("base");
 const can = @import("can");
 const parse = @import("parse");
+const CoreCtx = @import("ctx").CoreCtx;
 
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
@@ -169,6 +170,7 @@ pub fn addImportedModulesToEnvMap(
     module_envs_map: *std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
     placeholder_env: *const ModuleEnv,
     gpa: Allocator,
+    roc_ctx: CoreCtx,
 ) !void {
     // Extract imports from the parsed AST
     const imports = try extractImportsFromAST(parse_ast, gpa);
@@ -189,7 +191,7 @@ pub fn addImportedModulesToEnvMap(
         defer gpa.free(file_path);
 
         // Only add if the file exists
-        std.fs.cwd().access(file_path, .{}) catch continue;
+        if (!roc_ctx.fileExists(file_path)) continue;
 
         // Add to module_envs with a placeholder env (just to pass the "contains" check)
         const module_ident = try env.insertIdent(base.Ident.for_text(module_name));

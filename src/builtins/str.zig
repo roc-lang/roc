@@ -952,7 +952,7 @@ pub fn strConcat(
 
 /// Str.contains
 pub fn strContains(haystack: RocStr, needle: RocStr) callconv(.c) bool {
-    return std.mem.indexOf(u8, haystack.asSlice(), needle.asSlice()) != null;
+    return std.mem.find(u8, haystack.asSlice(), needle.asSlice()) != null;
 }
 
 /// TODO: Document RocListStr.

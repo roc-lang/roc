@@ -43,6 +43,11 @@ const runner_core = @import("runner_core.zig");
 const PlatformConfig = platform_config.PlatformConfig;
 const TestStats = runner_core.TestStats;
 
+var debug_threaded_io_instance: std.Io.Threaded = .init_single_threaded;
+/// Override the default debug IO so that `std.Options.debug_io` uses a properly
+/// initialized Threaded instance with a real allocator for process spawning.
+pub const std_options_debug_threaded_io: *std.Io.Threaded = &debug_threaded_io_instance;
+
 /// Test mode
 const TestMode = enum {
     cross,
@@ -60,18 +65,22 @@ const Args = struct {
     app_filter: ?[]const u8,
     opt: ?[]const u8,
     verbose: bool,
-    /// Raw args buffer - caller must free via std.process.argsFree
-    raw_args: [][:0]u8,
 };
 
 /// Entry point for the unified test platform runner.
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+pub fn main(init: std.process.Init) !void {
+    // Initialize the debug IO with a real allocator for process spawning
+    debug_threaded_io_instance = .init(init.gpa, .{
+        .argv0 = .init(init.minimal.args),
+        .environ = init.minimal.environ,
+    });
+    defer debug_threaded_io_instance.deinit();
+
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const args = try parseArgs(allocator);
-    defer std.process.argsFree(allocator, args.raw_args);
+    const args = try parseArgs(init.minimal.args);
 
     // Look up the platform
     const platform = platform_config.findPlatform(args.platform_name) orelse {
@@ -119,25 +128,26 @@ pub fn main() !void {
     }
     std.debug.print("\n", .{});
 
+    const std_io = debug_threaded_io_instance.io();
     var stats = TestStats{};
 
     // Run tests based on mode
     switch (args.mode) {
         .cross => {
-            try runCrossCompileTests(allocator, args, platform, &stats);
+            try runCrossCompileTests(allocator, std_io, args, platform, &stats);
         },
         .native => {
-            try runNativeTests(allocator, args, platform, &stats);
+            try runNativeTests(allocator, std_io, args, platform, &stats);
         },
         .valgrind => {
-            try runValgrindTests(allocator, args, platform, &stats);
+            try runValgrindTests(allocator, std_io, args, platform, &stats);
         },
         .all => {
             // Run cross-compilation tests
-            try runCrossCompileTests(allocator, args, platform, &stats);
+            try runCrossCompileTests(allocator, std_io, args, platform, &stats);
 
             // Run native tests
-            try runNativeTests(allocator, args, platform, &stats);
+            try runNativeTests(allocator, std_io, args, platform, &stats);
         },
     }
 
@@ -151,6 +161,7 @@ pub fn main() !void {
 
 fn runCrossCompileTests(
     allocator: Allocator,
+    std_io: std.Io,
     args: Args,
     platform: PlatformConfig,
     stats: *TestStats,
@@ -173,7 +184,7 @@ fn runCrossCompileTests(
             continue;
         }
 
-        const exists = try runner_core.verifyPlatformFiles(allocator, platform.base_dir, target.name);
+        const exists = try runner_core.verifyPlatformFiles(allocator, std_io, platform.base_dir, target.name);
         if (exists) {
             runner_core.printResultLine("OK", target.name, "libhost.a exists");
         } else {
@@ -215,7 +226,7 @@ fn runCrossCompileTests(
                 const output_name = try std.fmt.allocPrint(allocator, "{s}_{s}", .{ platform.name, target.name });
                 defer allocator.free(output_name);
 
-                const result = try runner_core.crossCompile(allocator, args.roc_binary, roc_file, target.name, output_name, args.opt);
+                const result = try runner_core.crossCompile(allocator, std_io, args.roc_binary, roc_file, target.name, output_name, args.opt);
                 stats.record(result);
             }
         },
@@ -251,7 +262,7 @@ fn runCrossCompileTests(
                     const output_name = try std.fmt.allocPrint(allocator, "{s}_{s}", .{ basename, target.name });
                     defer allocator.free(output_name);
 
-                    const result = try runner_core.crossCompile(allocator, args.roc_binary, spec.roc_file, target.name, output_name, args.opt);
+                    const result = try runner_core.crossCompile(allocator, std_io, args.roc_binary, spec.roc_file, target.name, output_name, args.opt);
                     stats.record(result);
                 }
             }
@@ -288,7 +299,7 @@ fn runCrossCompileTests(
                     const output_name = try std.fmt.allocPrint(allocator, "{s}_{s}", .{ basename, target.name });
                     defer allocator.free(output_name);
 
-                    const result = try runner_core.crossCompile(allocator, args.roc_binary, spec.roc_file, target.name, output_name, args.opt);
+                    const result = try runner_core.crossCompile(allocator, std_io, args.roc_binary, spec.roc_file, target.name, output_name, args.opt);
                     stats.record(result);
                 }
             }
@@ -298,6 +309,7 @@ fn runCrossCompileTests(
 
 fn runNativeTests(
     allocator: Allocator,
+    std_io: std.Io,
     args: Args,
     platform: PlatformConfig,
     stats: *TestStats,
@@ -327,7 +339,7 @@ fn runNativeTests(
 
             // Build
             std.debug.print("Building {s} native... ", .{app_name});
-            const build_result = try runner_core.buildNative(allocator, args.roc_binary, roc_file, output_name, args.opt);
+            const build_result = try runner_core.buildNative(allocator, std_io, args.roc_binary, roc_file, output_name, args.opt);
             stats.record(build_result);
 
             if (build_result != .passed) {
@@ -339,11 +351,11 @@ fn runNativeTests(
             const exe_path = try std.fmt.allocPrint(allocator, "./{s}", .{output_name});
             defer allocator.free(exe_path);
 
-            const run_result = try runner_core.runNative(allocator, exe_path);
+            const run_result = try runner_core.runNative(allocator, std_io, exe_path);
             stats.record(run_result);
 
             // Cleanup
-            runner_core.cleanup(output_name);
+            runner_core.cleanup(std_io, output_name);
         },
 
         .spec_list => |specs| {
@@ -355,7 +367,7 @@ fn runNativeTests(
                     const test_num = i + 1;
                     std.debug.print("[{d}/{d}] {s}... ", .{ test_num, specs.len, spec.roc_file });
 
-                    const result = try runner_core.runWithIoSpec(allocator, args.roc_binary, spec.roc_file, spec.io_spec, args.opt);
+                    const result = try runner_core.runWithIoSpec(allocator, std_io, args.roc_binary, spec.roc_file, spec.io_spec, args.opt);
                     stats.record(result);
                 }
             } else {
@@ -375,7 +387,7 @@ fn runNativeTests(
                     defer allocator.free(output_name);
 
                     std.debug.print("[{d}/{d}] Building {s}... ", .{ test_num, matching_count, spec.roc_file });
-                    const build_result = try runner_core.buildNative(allocator, args.roc_binary, spec.roc_file, output_name, args.opt);
+                    const build_result = try runner_core.buildNative(allocator, std_io, args.roc_binary, spec.roc_file, output_name, args.opt);
                     stats.record(build_result);
 
                     if (build_result == .passed) {
@@ -383,10 +395,10 @@ fn runNativeTests(
                         defer allocator.free(exe_path);
 
                         std.debug.print("         Running... ", .{});
-                        const run_result = try runner_core.runNative(allocator, exe_path);
+                        const run_result = try runner_core.runNative(allocator, std_io, exe_path);
                         stats.record(run_result);
 
-                        runner_core.cleanup(output_name);
+                        runner_core.cleanup(std_io, output_name);
                     }
                 }
             }
@@ -411,7 +423,7 @@ fn runNativeTests(
                 defer allocator.free(output_name);
 
                 std.debug.print("[{d}/{d}] Building {s}... ", .{ test_num, matching_count, spec.roc_file });
-                const build_result = try runner_core.buildNative(allocator, args.roc_binary, spec.roc_file, output_name, args.opt);
+                const build_result = try runner_core.buildNative(allocator, std_io, args.roc_binary, spec.roc_file, output_name, args.opt);
                 stats.record(build_result);
 
                 if (build_result == .passed) {
@@ -419,10 +431,10 @@ fn runNativeTests(
                     defer allocator.free(exe_path);
 
                     std.debug.print("         Running... ", .{});
-                    const run_result = try runner_core.runNative(allocator, exe_path);
+                    const run_result = try runner_core.runNative(allocator, std_io, exe_path);
                     stats.record(run_result);
 
-                    runner_core.cleanup(output_name);
+                    runner_core.cleanup(std_io, output_name);
                 }
             }
         },
@@ -431,6 +443,7 @@ fn runNativeTests(
 
 fn runValgrindTests(
     allocator: Allocator,
+    std_io: std.Io,
     args: Args,
     platform: PlatformConfig,
     stats: *TestStats,
@@ -456,7 +469,7 @@ fn runValgrindTests(
             if (!appMatchesFilter(roc_file, args.app_filter)) return;
 
             std.debug.print("Running {s} under valgrind... ", .{app_name});
-            const result = try runner_core.runWithValgrind(allocator, args.roc_binary, roc_file);
+            const result = try runner_core.runWithValgrind(allocator, std_io, args.roc_binary, roc_file);
             stats.record(result);
         },
 
@@ -464,7 +477,7 @@ fn runValgrindTests(
             // For valgrind, only run tests that don't use stdin
             var valgrind_safe_count: usize = 0;
             for (specs) |spec| {
-                if (std.mem.indexOf(u8, spec.io_spec, "0<") == null and appMatchesFilter(spec.roc_file, args.app_filter)) {
+                if (std.mem.find(u8, spec.io_spec, "0<") == null and appMatchesFilter(spec.roc_file, args.app_filter)) {
                     valgrind_safe_count += 1;
                 }
             }
@@ -474,7 +487,7 @@ fn runValgrindTests(
             var test_num: usize = 0;
             for (specs) |spec| {
                 // Skip tests that use stdin
-                if (std.mem.indexOf(u8, spec.io_spec, "0<") != null) {
+                if (std.mem.find(u8, spec.io_spec, "0<") != null) {
                     continue;
                 }
 
@@ -482,7 +495,7 @@ fn runValgrindTests(
 
                 test_num += 1;
                 std.debug.print("[{d}/{d}] {s}... ", .{ test_num, valgrind_safe_count, spec.roc_file });
-                const result = try runner_core.runWithValgrind(allocator, args.roc_binary, spec.roc_file);
+                const result = try runner_core.runWithValgrind(allocator, std_io, args.roc_binary, spec.roc_file);
                 stats.record(result);
             }
         },
@@ -502,37 +515,41 @@ fn runValgrindTests(
 
                 test_num += 1;
                 std.debug.print("[{d}/{d}] {s}... ", .{ test_num, matching_count, spec.roc_file });
-                const result = try runner_core.runWithValgrind(allocator, args.roc_binary, spec.roc_file);
+                const result = try runner_core.runWithValgrind(allocator, std_io, args.roc_binary, spec.roc_file);
                 stats.record(result);
             }
         },
     }
 }
 
-fn parseArgs(allocator: Allocator) !Args {
-    const raw_args = try std.process.argsAlloc(allocator);
+fn parseArgs(process_args: std.process.Args) !Args {
+    var iter = std.process.Args.Iterator.init(process_args);
 
-    if (raw_args.len < 3) {
+    // Skip argv[0] (program name)
+    _ = iter.next();
+
+    const roc_binary = iter.next() orelse {
         printUsage();
         std.process.exit(1);
-    }
+    };
+
+    const platform_name = iter.next() orelse {
+        printUsage();
+        std.process.exit(1);
+    };
 
     var args = Args{
-        .roc_binary = raw_args[1],
-        .platform_name = raw_args[2],
+        .roc_binary = roc_binary,
+        .platform_name = platform_name,
         .target_filter = null,
         .mode = .all,
         .app_filter = null,
         .opt = null,
         .verbose = false,
-        .raw_args = raw_args,
     };
 
     // Parse options
-    var i: usize = 3;
-    while (i < raw_args.len) : (i += 1) {
-        const arg = raw_args[i];
-
+    while (iter.next()) |arg| {
         if (std.mem.startsWith(u8, arg, "--target=")) {
             args.target_filter = arg["--target=".len..];
         } else if (std.mem.startsWith(u8, arg, "--mode=")) {
@@ -576,7 +593,7 @@ fn appMatchesFilter(roc_file: []const u8, app_filter: ?[]const u8) bool {
 fn platformContainsApp(platform: PlatformConfig, app_filter: []const u8) bool {
     switch (platform.test_apps) {
         .single => |app_name| {
-            var buf: [std.fs.max_path_bytes]u8 = undefined;
+            var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
             const full_path = std.fmt.bufPrint(&buf, "{s}/{s}", .{ platform.base_dir, app_name }) catch return false;
             return appMatchesFilter(full_path, app_filter);
         },

@@ -13,8 +13,8 @@ const TAR_EXTENSION = ".tar.zst";
 const STREAM_BUFFER_SIZE: usize = 64 * 1024; // 64KB buffer for streaming operations
 // Buffer size for stdlib zstd decompressor: window_len + block_size_max for tar extraction
 const DECOMPRESS_BUFFER_SIZE: usize = zstd.default_window_len + zstd.block_size_max;
-// Max path bytes - use 4096 on WASM/freestanding, std.fs.max_path_bytes elsewhere
-const MAX_PATH_BYTES: usize = if (builtin.os.tag == .freestanding) 4096 else std.fs.max_path_bytes;
+// Max path bytes - use 4096 on WASM/freestanding, std.Io.Dir.max_path_bytes elsewhere
+const MAX_PATH_BYTES: usize = if (builtin.os.tag == .freestanding) 4096 else std.Io.Dir.max_path_bytes;
 
 /// Errors that can occur during the unbundle operation.
 pub const UnbundleError = error{
@@ -93,19 +93,21 @@ pub const ExtractWriter = struct {
 
 /// Directory-based extract writer for filesystem extraction
 pub const DirExtractWriter = struct {
-    dir: std.fs.Dir,
+    dir: std.Io.Dir,
+    io: std.Io,
     allocator: std.mem.Allocator,
     open_files: std.array_list.Managed(FileWriterEntry),
 
     const FileWriterEntry = struct {
-        file: std.fs.File,
+        file: std.Io.File,
         buffer: [4096]u8,
-        writer: std.fs.File.Writer,
+        writer: std.Io.File.Writer,
     };
 
-    pub fn init(dir: std.fs.Dir, allocator: std.mem.Allocator) DirExtractWriter {
+    pub fn init(dir: std.Io.Dir, io: std.Io, allocator: std.mem.Allocator) DirExtractWriter {
         return .{
             .dir = dir,
+            .io = io,
             .allocator = allocator,
             .open_files = std.array_list.Managed(FileWriterEntry).init(allocator),
         };
@@ -114,7 +116,7 @@ pub const DirExtractWriter = struct {
     pub fn deinit(self: *DirExtractWriter) void {
         // Close any remaining open files
         for (self.open_files.items) |*entry| {
-            entry.file.close();
+            entry.file.close(self.io);
         }
         self.open_files.deinit();
     }
@@ -137,10 +139,10 @@ pub const DirExtractWriter = struct {
 
         // Ensure parent directories exist
         if (std.fs.path.dirname(path)) |parent| {
-            self.dir.makePath(parent) catch return error.FileCreateFailed;
+            self.dir.createDirPath(self.io, parent) catch return error.FileCreateFailed;
         }
 
-        const file = self.dir.createFile(path, .{}) catch return error.FileCreateFailed;
+        const file = self.dir.createFile(self.io, path, .{}) catch return error.FileCreateFailed;
 
         // Append entry first to get stable memory in the array list.
         // We must initialize the writer AFTER appending, because the writer
@@ -151,13 +153,13 @@ pub const DirExtractWriter = struct {
             .buffer = undefined,
             .writer = undefined,
         }) catch {
-            file.close();
+            file.close(self.io);
             return error.OutOfMemory;
         };
 
         // Now initialize the writer with the buffer in the array (stable memory)
         const entry = &self.open_files.items[self.open_files.items.len - 1];
-        entry.writer = file.writer(&entry.buffer);
+        entry.writer = file.writer(self.io, &entry.buffer);
 
         return &entry.writer.interface;
     }
@@ -169,14 +171,14 @@ pub const DirExtractWriter = struct {
             const last_idx = self.open_files.items.len - 1;
             // Flush before closing
             self.open_files.items[last_idx].writer.interface.flush() catch {};
-            self.open_files.items[last_idx].file.close();
+            self.open_files.items[last_idx].file.close(self.io);
             _ = self.open_files.orderedRemove(last_idx);
         }
     }
 
     fn makeDir(ptr: *anyopaque, path: []const u8) ExtractWriter.MakeDirError!void {
         const self: *DirExtractWriter = @ptrCast(@alignCast(ptr));
-        self.dir.makePath(path) catch return error.DirectoryCreateFailed;
+        self.dir.createDirPath(self.io, path) catch return error.DirectoryCreateFailed;
     }
 };
 
@@ -339,7 +341,7 @@ pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
         defer if (component.len > upper_buf.len and upper_component.ptr != component.ptr)
             std.heap.page_allocator.free(upper_component);
 
-        const base_name = if (std.mem.indexOfScalar(u8, upper_component, '.')) |dot_pos|
+        const base_name = if (std.mem.findScalar(u8, upper_component, '.')) |dot_pos|
             upper_component[0..dot_pos]
         else
             upper_component;
@@ -661,7 +663,8 @@ pub fn validateBase58Hash(base58_str: []const u8) !?[32]u8 {
 pub fn unbundle(
     allocator: std.mem.Allocator,
     input_reader: *std.Io.Reader,
-    extract_dir: std.fs.Dir,
+    extract_dir: std.Io.Dir,
+    io: std.Io,
     filename: []const u8,
     error_context: ?*ErrorContext,
 ) UnbundleError!void {
@@ -673,7 +676,7 @@ pub fn unbundle(
         return error.InvalidFilename;
     };
 
-    var dir_writer = DirExtractWriter.init(extract_dir, allocator);
+    var dir_writer = DirExtractWriter.init(extract_dir, io, allocator);
     defer dir_writer.deinit();
     return unbundleStream(allocator, input_reader, dir_writer.extractWriter(), &expected_hash, error_context);
 }

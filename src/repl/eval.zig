@@ -15,6 +15,7 @@ const wasm_runner = @import("wasm_runner.zig");
 const roc_target = @import("roc_target");
 const compile = @import("compile");
 const single_module = compile.single_module;
+const CoreCtx = can.CoreCtx;
 const CrashContext = eval_mod.CrashContext;
 const BuiltinTypes = eval_mod.BuiltinTypes;
 const builtin_loading = eval_mod.builtin_loading;
@@ -67,11 +68,11 @@ fn renderParseDiagnosticForRepl(
     var end_pos: usize = full_result.len;
 
     // Find the last occurrence of "\n\n**" which marks the start of the source location section
-    if (std.mem.lastIndexOf(u8, full_result, "\n\n**")) |pos| {
+    if (std.mem.findLast(u8, full_result, "\n\n**")) |pos| {
         end_pos = pos;
     }
 
-    const trimmed = std.mem.trimRight(u8, full_result[0..end_pos], "\n");
+    const trimmed = std.mem.trimEnd(u8, full_result[0..end_pos], "\n");
     return try allocator.dupe(u8, trimmed);
 }
 
@@ -205,7 +206,9 @@ pub const Repl = struct {
 
             var can_buffer = std.ArrayList(u8).empty;
             defer can_buffer.deinit(self.allocator);
-            try tree.toStringPretty(can_buffer.writer(self.allocator).any(), .include_linecol);
+            var can_aw: std.Io.Writer.Allocating = .fromArrayList(self.allocator, &can_buffer);
+            defer can_buffer = can_aw.toArrayList();
+            try tree.toStringPretty(&can_aw.writer, .include_linecol);
 
             const can_html = try self.allocator.dupe(u8, can_buffer.items);
             try self.debug_can_html.append(can_html);
@@ -219,7 +222,9 @@ pub const Repl = struct {
 
             var types_buffer = std.ArrayList(u8).empty;
             defer types_buffer.deinit(self.allocator);
-            try tree.toStringPretty(types_buffer.writer(self.allocator).any(), .include_linecol);
+            var types_aw: std.Io.Writer.Allocating = .fromArrayList(self.allocator, &types_buffer);
+            defer types_buffer = types_aw.toArrayList();
+            try tree.toStringPretty(&types_aw.writer, .include_linecol);
 
             const types_html = try self.allocator.dupe(u8, types_buffer.items);
             try self.debug_types_html.append(types_html);
@@ -437,13 +442,9 @@ pub const Repl = struct {
         var module_env = try ModuleEnv.init(self.allocator, input);
         defer module_env.deinit();
 
-        var allocators: single_module.Allocators = undefined;
-        allocators.initInPlace(self.allocator);
-        defer allocators.deinit();
-
         // Try statement parsing using the unified compile_module interface
         const stmt_ast = single_module.parseSingleModule(
-            &allocators,
+            self.allocator,
             &module_env,
             .statement,
             .{ .module_name = "REPL", .init_cir_fields = false },
@@ -489,12 +490,8 @@ pub const Repl = struct {
         var module_env = try ModuleEnv.init(self.allocator, input);
         defer module_env.deinit();
 
-        var allocators: single_module.Allocators = undefined;
-        allocators.initInPlace(self.allocator);
-        defer allocators.deinit();
-
         const expr_ast = single_module.parseSingleModule(
-            &allocators,
+            self.allocator,
             &module_env,
             .expr,
             .{ .module_name = "REPL", .init_cir_fields = false },
@@ -550,14 +547,10 @@ pub const Repl = struct {
 
     /// Evaluate a program (which may contain definitions) - returns structured result
     fn evaluatePureExpressionStructured(self: *Repl, module_env: *ModuleEnv) !StepResult {
-        var allocators: single_module.Allocators = undefined;
-        allocators.initInPlace(self.allocator);
-        defer allocators.deinit();
-
         // Parse using the unified compile_module interface
         // Note: init_cir_fields=false because we call initCIRFields after parsing
         const parse_ast = single_module.parseSingleModule(
-            &allocators,
+            self.allocator,
             module_env,
             .expr,
             .{ .module_name = "repl", .init_cir_fields = false },
@@ -598,7 +591,8 @@ pub const Repl = struct {
         const cir = module_env;
         try cir.initCIRFields("repl");
 
-        var czer = Can.initModule(&allocators, cir, parse_ast, .{
+        const roc_ctx = CoreCtx.testing(self.allocator, self.allocator);
+        var czer = Can.initModule(roc_ctx, cir, parse_ast, .{
             .builtin_types = .{
                 .builtin_module_env = self.builtin_module.env,
                 .builtin_indices = self.builtin_indices,
@@ -700,7 +694,7 @@ pub const Repl = struct {
             output = unmanaged.toManaged(self.allocator);
             // Trim trailing whitespace from the rendered report
             const rendered = output.items;
-            const trimmed = std.mem.trimRight(u8, rendered, " \t\r\n");
+            const trimmed = std.mem.trimEnd(u8, rendered, " \t\r\n");
             const result = try self.allocator.dupe(u8, trimmed);
             output.deinit();
             return .{ .type_error = result };
@@ -1116,9 +1110,9 @@ fn formatTagUnion(
         // Tag union optimized to scalar — discriminant only, no multi-variant payload
         if (sorted_tag) |tags| {
             defer allocator.free(tags);
-            if (lay.data.scalar.tag == .int) {
+            if (lay.getScalar().tag == .int) {
                 const raw = ptr orelse unreachable;
-                const disc: usize = switch (lay.data.scalar.data.int) {
+                const disc: usize = switch (lay.getScalar().getInt()) {
                     .u8 => raw[0],
                     .u16 => @as(u16, raw[0]) | (@as(u16, raw[1]) << 8),
                     .u32 => @intCast(@as(u32, raw[0]) | (@as(u32, raw[1]) << 8) | (@as(u32, raw[2]) << 16) | (@as(u32, raw[3]) << 24)),
@@ -1145,7 +1139,7 @@ fn formatTagUnion(
     }
 
     if (lay.tag == .tag_union) {
-        const tu_idx = lay.data.tag_union.idx;
+        const tu_idx = lay.getTagUnion().idx;
         const tu_data = layout_store.getTagUnionData(tu_idx);
         const disc_offset = layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
@@ -1257,7 +1251,7 @@ fn formatList(
         const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(ptr.?));
         const len = roc_list.len();
         if (len > 0) {
-            const elem_layout_idx = lay.data.list;
+            const elem_layout_idx = lay.getIdx();
             const elem_layout = layout_store.getLayout(elem_layout_idx);
             const elem_size = layout_store.layoutSize(elem_layout);
             var i: usize = 0;
@@ -1274,7 +1268,7 @@ fn formatList(
     } else if (lay.tag == .list_of_zst) {
         const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(ptr.?));
         const len = roc_list.len();
-        const zst_layout = Layout{ .tag = .zst, .data = .{ .zst = {} } };
+        const zst_layout = Layout.zst();
         var i: usize = 0;
         while (i < len) : (i += 1) {
             const rendered = try formatWithTypes(allocator, null, zst_layout, elem_type_var, module_env, layout_store);
@@ -1308,7 +1302,7 @@ fn formatBox(
 
     if (lay.tag == .box) {
         // Box layout: the value at ptr is a machine word (pointer to heap-allocated inner value)
-        const inner_layout = layout_store.getLayout(lay.data.box);
+        const inner_layout = layout_store.getLayout(lay.getIdx());
         if (ptr) |p| {
             const box_ptr: *const usize = @ptrCast(@alignCast(p));
             const inner_ptr: [*]const u8 = @ptrFromInt(box_ptr.*);
@@ -1317,7 +1311,7 @@ fn formatBox(
             try out.appendSlice(rendered);
         }
     } else if (lay.tag == .box_of_zst) {
-        const zst_layout = Layout{ .tag = .zst, .data = .{ .zst = {} } };
+        const zst_layout = Layout.zst();
         const rendered = try formatWithTypes(allocator, null, zst_layout, inner_type_var, module_env, layout_store);
         defer allocator.free(rendered);
         try out.appendSlice(rendered);
@@ -1341,7 +1335,7 @@ fn formatRecord(
     layout_store: *const layout_mod.Store,
 ) FormatError![]u8 {
     const types_store = &module_env.types;
-    const rec_data = layout_store.getStructData(lay.data.struct_.idx);
+    const rec_data = layout_store.getStructData(lay.getStruct().idx);
 
     if (rec_data.fields.count == 0) {
         return try allocator.dupe(u8, "{}");
@@ -1381,7 +1375,7 @@ fn formatRecord(
         try out.appendSlice(name_text);
         try out.appendSlice(": ");
 
-        const offset = layout_store.getStructFieldOffset(lay.data.struct_.idx, @intCast(layout_idx));
+        const offset = layout_store.getStructFieldOffset(lay.getStruct().idx, @intCast(layout_idx));
         const field_layout = layout_store.getLayout(l_fld.layout);
         const base_ptr = ptr.?;
         const field_ptr = base_ptr + offset;
@@ -1405,7 +1399,7 @@ fn formatTuple(
     layout_store: *const layout_mod.Store,
 ) FormatError![]u8 {
     const types_store = &module_env.types;
-    const tuple_data = layout_store.getStructData(lay.data.struct_.idx);
+    const tuple_data = layout_store.getStructData(lay.getStruct().idx);
     const layout_fields = layout_store.struct_fields.sliceRange(tuple_data.getFields());
     const elem_vars = types_store.sliceVars(tup.elems);
     const count = @min(layout_fields.len, elem_vars.len);
@@ -1425,7 +1419,7 @@ fn formatTuple(
         };
         const fld = layout_fields.get(sorted_idx);
         const field_layout = layout_store.getLayout(fld.layout);
-        const elem_offset = layout_store.getStructFieldOffset(lay.data.struct_.idx, @intCast(sorted_idx));
+        const elem_offset = layout_store.getStructFieldOffset(lay.getStruct().idx, @intCast(sorted_idx));
         const base_ptr = ptr.?;
         const elem_ptr = base_ptr + elem_offset;
         const rendered = try formatWithTypes(allocator, elem_ptr, field_layout, elem_vars[original_idx], module_env, layout_store);

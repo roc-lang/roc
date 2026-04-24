@@ -55,7 +55,7 @@ inline fn readAligned(comptime T: type, raw_ptr: [*]const u8) T {
 /// Read the value as a signed 128-bit integer, widening smaller int types.
 pub fn readI128(self: RocValue) i128 {
     const raw_ptr = self.ptr orelse return 0;
-    return switch (self.lay.data.scalar.data.int) {
+    return switch (self.lay.getScalar().getInt()) {
         .u8 => readAligned(u8, raw_ptr),
         .i8 => readAligned(i8, raw_ptr),
         .u16 => readAligned(u16, raw_ptr),
@@ -72,7 +72,7 @@ pub fn readI128(self: RocValue) i128 {
 /// Read the value as an unsigned 128-bit integer, widening smaller int types.
 pub fn readU128(self: RocValue) u128 {
     const raw_ptr = self.ptr orelse return 0;
-    return switch (self.lay.data.scalar.data.int) {
+    return switch (self.lay.getScalar().getInt()) {
         .u8 => readAligned(u8, raw_ptr),
         .u16 => readAligned(u16, raw_ptr),
         .u32 => readAligned(u32, raw_ptr),
@@ -133,7 +133,7 @@ pub const FormatError = error{OutOfMemory};
 pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) FormatError![]u8 {
     // --- Scalars ---
     if (self.lay.tag == .scalar) {
-        const scalar = self.lay.data.scalar;
+        const scalar = self.lay.getScalar();
         switch (scalar.tag) {
             .str => {
                 const rs = self.readStr();
@@ -152,14 +152,14 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
                 return buf.toOwnedSlice();
             },
             .int => {
-                const precision = scalar.data.int;
+                const precision = scalar.getInt();
                 return switch (precision) {
                     .u64, .u128 => try std.fmt.allocPrint(allocator, "{d}", .{self.readU128()}),
                     else => try std.fmt.allocPrint(allocator, "{d}", .{self.readI128()}),
                 };
             },
             .frac => {
-                return switch (scalar.data.frac) {
+                return switch (scalar.getFrac()) {
                     .f32 => blk: {
                         var buf: [400]u8 = undefined;
                         const slice = i128h.f64_to_str(&buf, @as(f64, self.readF32()));
@@ -183,7 +183,7 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
 
     // --- Structs (unified records and tuples) ---
     if (self.lay.tag == .struct_) {
-        const struct_data = ctx.layout_store.getStructData(self.lay.data.struct_.idx);
+        const struct_data = ctx.layout_store.getStructData(self.lay.getStruct().idx);
         const fields = ctx.layout_store.struct_fields.sliceRange(struct_data.getFields());
         if (struct_data.fields.count == 0) {
             return try allocator.dupe(u8, "{}");
@@ -204,7 +204,7 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
             };
             const fld = fields.get(sorted_idx);
             const elem_layout = ctx.layout_store.getLayout(fld.layout);
-            const elem_offset = ctx.layout_store.getStructFieldOffset(self.lay.data.struct_.idx, @intCast(sorted_idx));
+            const elem_offset = ctx.layout_store.getStructFieldOffset(self.lay.getStruct().idx, @intCast(sorted_idx));
             const base_ptr = self.ptr.?;
             const elem_ptr = base_ptr + elem_offset;
             const elem_val = RocValue{ .ptr = elem_ptr, .lay = elem_layout };
@@ -225,7 +225,7 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
         const len = roc_list.len();
         try out.append('[');
         if (len > 0) {
-            const elem_layout_idx = self.lay.data.list;
+            const elem_layout_idx = self.lay.getIdx();
             const elem_layout = ctx.layout_store.getLayout(elem_layout_idx);
             const elem_size = ctx.layout_store.layoutSize(elem_layout);
             var i: usize = 0;
@@ -271,7 +271,7 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
         var out = std.array_list.AlignedManaged(u8, null).init(allocator);
         errdefer out.deinit();
         try out.appendSlice("Box(");
-        const elem_layout_idx = self.lay.data.box;
+        const elem_layout_idx = self.lay.getIdx();
         const elem_layout = ctx.layout_store.getLayout(elem_layout_idx);
         const elem_size = ctx.layout_store.layoutSize(elem_layout);
         if (elem_size > 0) {
@@ -320,8 +320,8 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
 
     switch (self.lay.tag) {
         .scalar => {
-            const s_scalar = self.lay.data.scalar;
-            const o_scalar = other.lay.data.scalar;
+            const s_scalar = self.lay.getScalar();
+            const o_scalar = other.lay.getScalar();
             if (s_scalar.tag != o_scalar.tag) return false;
             return switch (s_scalar.tag) {
                 .str => self.readStr().eql(other.readStr().*),
@@ -330,8 +330,8 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
                     return self.readI128() == other.readI128();
                 },
                 .frac => {
-                    if (s_scalar.data.frac != o_scalar.data.frac) return false;
-                    return switch (s_scalar.data.frac) {
+                    if (s_scalar.getFrac() != o_scalar.getFrac()) return false;
+                    return switch (s_scalar.getFrac()) {
                         .f32 => @as(u32, @bitCast(self.readF32())) == @as(u32, @bitCast(other.readF32())),
                         .f64 => @as(u64, @bitCast(self.readF64())) == @as(u64, @bitCast(other.readF64())),
                         .dec => self.readDec().num == other.readDec().num,
@@ -342,10 +342,10 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
         .zst => return true,
         .struct_ => {
             const s_fields = ctx.layout_store.struct_fields.sliceRange(
-                ctx.layout_store.getStructData(self.lay.data.struct_.idx).getFields(),
+                ctx.layout_store.getStructData(self.lay.getStruct().idx).getFields(),
             );
             const o_fields = ctx.layout_store.struct_fields.sliceRange(
-                ctx.layout_store.getStructData(other.lay.data.struct_.idx).getFields(),
+                ctx.layout_store.getStructData(other.lay.getStruct().idx).getFields(),
             );
             if (s_fields.len != o_fields.len) return false;
             for (0..s_fields.len) |i| {
@@ -353,8 +353,8 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
                 const o_fld = o_fields.get(i);
                 const s_field_layout = ctx.layout_store.getLayout(s_fld.layout);
                 const o_field_layout = ctx.layout_store.getLayout(o_fld.layout);
-                const s_offset = ctx.layout_store.getStructFieldOffset(self.lay.data.struct_.idx, @intCast(i));
-                const o_offset = ctx.layout_store.getStructFieldOffset(other.lay.data.struct_.idx, @intCast(i));
+                const s_offset = ctx.layout_store.getStructFieldOffset(self.lay.getStruct().idx, @intCast(i));
+                const o_offset = ctx.layout_store.getStructFieldOffset(other.lay.getStruct().idx, @intCast(i));
                 const s_field = RocValue{ .ptr = self.ptr.? + s_offset, .lay = s_field_layout };
                 const o_field = RocValue{ .ptr = other.ptr.? + o_offset, .lay = o_field_layout };
                 if (!s_field.equals(o_field, ctx)) return false;
@@ -367,8 +367,8 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
             if (s_list.len() != o_list.len()) return false;
             const len = s_list.len();
             if (len == 0) return true;
-            const s_elem_layout = ctx.layout_store.getLayout(self.lay.data.list);
-            const o_elem_layout = ctx.layout_store.getLayout(other.lay.data.list);
+            const s_elem_layout = ctx.layout_store.getLayout(self.lay.getIdx());
+            const o_elem_layout = ctx.layout_store.getLayout(other.lay.getIdx());
             const s_elem_size = ctx.layout_store.layoutSize(s_elem_layout);
             const o_elem_size = ctx.layout_store.layoutSize(o_elem_layout);
             const s_bytes = s_list.bytes orelse return false;
@@ -385,8 +385,8 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
         },
         // .record is now handled by .struct_ above
         .box => {
-            const s_inner_layout = ctx.layout_store.getLayout(self.lay.data.box);
-            const o_inner_layout = ctx.layout_store.getLayout(other.lay.data.box);
+            const s_inner_layout = ctx.layout_store.getLayout(self.lay.getIdx());
+            const o_inner_layout = ctx.layout_store.getLayout(other.lay.getIdx());
             const s_inner_size = ctx.layout_store.layoutSize(s_inner_layout);
             if (s_inner_size == 0) return true; // Both are boxes of ZST
             const s_data = self.getBoxedData() orelse return other.getBoxedData() == null;
@@ -397,8 +397,8 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
         },
         .box_of_zst => return true,
         .tag_union => {
-            const s_tu_idx = self.lay.data.tag_union.idx;
-            const o_tu_idx = other.lay.data.tag_union.idx;
+            const s_tu_idx = self.lay.getTagUnion().idx;
+            const o_tu_idx = other.lay.getTagUnion().idx;
             const s_tu_data = ctx.layout_store.getTagUnionData(s_tu_idx);
             const o_tu_data = ctx.layout_store.getTagUnionData(o_tu_idx);
             const s_disc_offset = ctx.layout_store.getTagUnionDiscriminantOffset(s_tu_idx);
@@ -441,10 +441,7 @@ test "readBool reads discriminant byte" {
 
 test "format i64" {
     const allocator = std.testing.allocator;
-    const i64_layout = Layout{
-        .tag = .scalar,
-        .data = .{ .scalar = .{ .data = .{ .int = .i64 }, .tag = .int } },
-    };
+    const i64_layout = Layout.int(.i64);
     var bytes: [@sizeOf(i64)]u8 = undefined;
     @memcpy(&bytes, std.mem.asBytes(&@as(i64, -42)));
     const val = RocValue{ .ptr = &bytes, .lay = i64_layout };
@@ -456,10 +453,7 @@ test "format i64" {
 
 test "format u64" {
     const allocator = std.testing.allocator;
-    const u64_layout = Layout{
-        .tag = .scalar,
-        .data = .{ .scalar = .{ .data = .{ .int = .u64 }, .tag = .int } },
-    };
+    const u64_layout = Layout.int(.u64);
     var bytes: [@sizeOf(u64)]u8 = undefined;
     @memcpy(&bytes, std.mem.asBytes(&@as(u64, 42)));
     const val = RocValue{ .ptr = &bytes, .lay = u64_layout };
@@ -471,10 +465,7 @@ test "format u64" {
 
 test "format dec with strip" {
     const allocator = std.testing.allocator;
-    const dec_layout = Layout{
-        .tag = .scalar,
-        .data = .{ .scalar = .{ .data = .{ .frac = .dec }, .tag = .frac } },
-    };
+    const dec_layout = Layout.frac(.dec);
     // 3 as Dec = 3 * 10^18
     const dec_val: i128 = 3 * RocDec.one_point_zero_i128;
     var bytes: [@sizeOf(i128)]u8 = undefined;
@@ -488,10 +479,7 @@ test "format dec with strip" {
 
 test "format dec fractional" {
     const allocator = std.testing.allocator;
-    const dec_layout = Layout{
-        .tag = .scalar,
-        .data = .{ .scalar = .{ .data = .{ .frac = .dec }, .tag = .frac } },
-    };
+    const dec_layout = Layout.frac(.dec);
     // 3.14 as Dec
     const dec_val: i128 = 3_140_000_000_000_000_000;
     var bytes: [@sizeOf(i128)]u8 = undefined;
@@ -505,10 +493,7 @@ test "format dec fractional" {
 
 test "format zst" {
     const allocator = std.testing.allocator;
-    const zst_layout = Layout{
-        .tag = .zst,
-        .data = .{ .zst = {} },
-    };
+    const zst_layout = Layout.zst();
     const val = RocValue.zst(zst_layout);
     const ctx = FormatContext{ .layout_store = undefined, .ident_store = null };
     const result = try val.format(allocator, ctx);
@@ -518,10 +503,7 @@ test "format zst" {
 
 test "format box_of_zst" {
     const allocator = std.testing.allocator;
-    const box_zst_layout = Layout{
-        .tag = .box_of_zst,
-        .data = .{ .box_of_zst = {} },
-    };
+    const box_zst_layout = Layout.boxOfZst();
     const val = RocValue.zst(box_zst_layout);
     const ctx = FormatContext{ .layout_store = undefined, .ident_store = null };
     const result = try val.format(allocator, ctx);
@@ -530,10 +512,7 @@ test "format box_of_zst" {
 }
 
 test "equals i64" {
-    const i64_layout = Layout{
-        .tag = .scalar,
-        .data = .{ .scalar = .{ .data = .{ .int = .i64 }, .tag = .int } },
-    };
+    const i64_layout = Layout.int(.i64);
     var a: [@sizeOf(i64)]u8 = undefined;
     var b: [@sizeOf(i64)]u8 = undefined;
     var c: [@sizeOf(i64)]u8 = undefined;
@@ -549,10 +528,7 @@ test "equals i64" {
 }
 
 test "equals f64" {
-    const f64_layout = Layout{
-        .tag = .scalar,
-        .data = .{ .scalar = .{ .data = .{ .frac = .f64 }, .tag = .frac } },
-    };
+    const f64_layout = Layout.frac(.f64);
     var a: [@sizeOf(f64)]u8 = undefined;
     var b: [@sizeOf(f64)]u8 = undefined;
     var c: [@sizeOf(f64)]u8 = undefined;
@@ -568,10 +544,7 @@ test "equals f64" {
 }
 
 test "equals dec" {
-    const dec_layout = Layout{
-        .tag = .scalar,
-        .data = .{ .scalar = .{ .data = .{ .frac = .dec }, .tag = .frac } },
-    };
+    const dec_layout = Layout.frac(.dec);
     const dec_a: i128 = 3 * RocDec.one_point_zero_i128;
     const dec_b: i128 = 3 * RocDec.one_point_zero_i128;
     const dec_c: i128 = 5 * RocDec.one_point_zero_i128;
@@ -590,10 +563,7 @@ test "equals dec" {
 }
 
 test "equals zst" {
-    const zst_layout = Layout{
-        .tag = .zst,
-        .data = .{ .zst = {} },
-    };
+    const zst_layout = Layout.zst();
     const va = RocValue.zst(zst_layout);
     const vb = RocValue.zst(zst_layout);
     const ctx = FormatContext{ .layout_store = undefined, .ident_store = null };
@@ -601,8 +571,8 @@ test "equals zst" {
 }
 
 test "equals mismatched tags" {
-    const zst_layout = Layout{ .tag = .zst, .data = .{ .zst = {} } };
-    const box_zst_layout = Layout{ .tag = .box_of_zst, .data = .{ .box_of_zst = {} } };
+    const zst_layout = Layout.zst();
+    const box_zst_layout = Layout.boxOfZst();
     const va = RocValue.zst(zst_layout);
     const vb = RocValue.zst(box_zst_layout);
     const ctx = FormatContext{ .layout_store = undefined, .ident_store = null };

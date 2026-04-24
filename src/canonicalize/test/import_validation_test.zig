@@ -14,7 +14,7 @@ const ModuleEnv = @import("../ModuleEnv.zig");
 const CIR = @import("../CIR.zig");
 const BuiltinTestContext = @import("./BuiltinTestContext.zig").BuiltinTestContext;
 
-const Allocators = base.Allocators;
+const CoreCtx = @import("ctx").CoreCtx;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
 
@@ -29,16 +29,14 @@ fn parseAndCanonicalizeSource(
     can: *Can,
     builtin_ctx: BuiltinTestContext,
 } {
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const parse_env = try allocator.create(ModuleEnv);
     // Note: We pass allocator for both gpa and arena since the ModuleEnv
     // will be cleaned up by the caller
     parse_env.* = try ModuleEnv.init(allocator, source);
 
-    const ast = try parse.parse(&allocators, &parse_env.common);
+    const ast = try parse.parse(allocator, &parse_env.common);
 
     // Initialize CIR fields
     try parse_env.initCIRFields("Test");
@@ -47,7 +45,7 @@ fn parseAndCanonicalizeSource(
     errdefer builtin_ctx.deinit();
 
     const can = try allocator.create(Can);
-    can.* = try Can.initModule(&allocators, parse_env, ast, .{
+    can.* = try Can.initModule(roc_ctx, parse_env, ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_ctx.builtin_module.env,
             .builtin_indices = builtin_ctx.builtin_indices,
@@ -64,7 +62,7 @@ fn parseAndCanonicalizeSource(
 }
 
 test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT EXPOSED, and working imports" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
 
@@ -120,9 +118,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
         \\main = "test"
     ;
     // Parse the source
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const parse_env = try allocator.create(ModuleEnv);
     parse_env.* = try ModuleEnv.init(allocator, source);
@@ -130,7 +126,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
         parse_env.deinit();
         allocator.destroy(parse_env);
     }
-    const ast = try parse.parse(&allocators, &parse_env.common);
+    const ast = try parse.parse(allocator, &parse_env.common);
     defer ast.deinit();
     // Initialize CIR fields
     try parse_env.initCIRFields("Test");
@@ -149,7 +145,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     var builtin_ctx = try BuiltinTestContext.init(allocator);
     defer builtin_ctx.deinit();
 
-    var can = try Can.initModule(&allocators, parse_env, ast, .{
+    var can = try Can.initModule(roc_ctx, parse_env, ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_ctx.builtin_module.env,
             .builtin_indices = builtin_ctx.builtin_indices,
@@ -205,7 +201,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
 }
 
 test "import validation - no module_envs provided" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
 
@@ -218,9 +214,7 @@ test "import validation - no module_envs provided" {
         \\main = "test"
     ;
     // Let's do it manually instead of using the helper to isolate the issue
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const parse_env = try allocator.create(ModuleEnv);
     parse_env.* = try ModuleEnv.init(allocator, source);
@@ -228,7 +222,7 @@ test "import validation - no module_envs provided" {
         parse_env.deinit();
         allocator.destroy(parse_env);
     }
-    const ast = try parse.parse(&allocators, &parse_env.common);
+    const ast = try parse.parse(allocator, &parse_env.common);
     defer ast.deinit();
     // Initialize CIR fields
     try parse_env.initCIRFields("Test");
@@ -236,7 +230,7 @@ test "import validation - no module_envs provided" {
     defer builtin_ctx.deinit();
 
     // Create czer without any explicit import envs
-    var can = try Can.initModule(&allocators, parse_env, ast, builtin_ctx.canInitContext());
+    var can = try Can.initModule(roc_ctx, parse_env, ast, builtin_ctx.canInitContext());
     defer can.deinit();
     _ = try can.canonicalizeFile();
     const diagnostics = try parse_env.getDiagnostics();
@@ -258,7 +252,7 @@ test "import validation - no module_envs provided" {
 }
 
 test "import interner - Import.Idx functionality" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
     // Parse source code with multiple imports, including duplicates
@@ -317,7 +311,7 @@ test "import interner - Import.Idx functionality" {
 }
 
 test "import interner - comprehensive usage example" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
     // Parse source with imports used in different contexts
@@ -378,7 +372,7 @@ test "import interner - comprehensive usage example" {
 }
 
 test "module scopes - imports work in module scope" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
     // Parse source with imports used in module scope
@@ -420,7 +414,7 @@ test "module scopes - imports work in module scope" {
 }
 
 test "module-qualified lookups with e_lookup_external" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
     // Parse source with module-qualified lookups
@@ -461,7 +455,7 @@ test "module-qualified lookups with e_lookup_external" {
 }
 
 test "exposed_items - tracking CIR node indices for exposed items" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
 
@@ -529,7 +523,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
 }
 
 test "export count safety - ensures safe u16 casting" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
 

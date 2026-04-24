@@ -39,7 +39,7 @@ pub const ScopeMap = struct {
 
     pub fn init(allocator: Allocator) ScopeMap {
         return .{
-            .bindings = std.ArrayList(Binding){},
+            .bindings = .empty,
             .allocator = allocator,
         };
     }

@@ -1,7 +1,7 @@
 .{
     .name = .roc,
     .version = "0.0.0",
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .afl_kit = .{
             .url = "git+https://github.com/kristoff-it/zig-afl-kit.git#395c39d5b33d999f6871a90bd731ec112d3995ca",
@@ -9,48 +9,48 @@
             .lazy = true,
         },
         .roc_deps_aarch64_macos_none = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.15.1/aarch64-macos-none.tar.xz",
-            .hash = "N-V-__8AAJuttw4mNdQg3ig107ac4uyAhcFPznGHmpnmX58C",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/aarch64-macos-none.tar.xz",
+            .hash = "N-V-__8AAEvEEA9B1q8qGkm3rJW_bkae4wn1SvyrfDa0w1lp",
             .lazy = true,
         },
         .roc_deps_aarch64_linux_musl = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.15.1/aarch64-linux-musl.tar.xz",
-            .hash = "N-V-__8AABnBVRNhZGWHvWKm8PO-N4Js4Zr65NnswmkZ0nYX",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/aarch64-linux-musl.tar.xz",
+            .hash = "N-V-__8AAHPjwBNV6lTtxPO6DYe4lg2Gx5Qakmeg1PO7N5k7",
             .lazy = true,
         },
         .roc_deps_aarch64_windows_gnu = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.15.1/aarch64-windows-gnu.zip",
-            .hash = "N-V-__8AAEbXoBTC007kkcMVW2_P5yIKMxPKQ-L5sYEc3_qH",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/aarch64-windows-gnu.zip",
+            .hash = "N-V-__8AAI4OFxV11RN1xAhLXxLTyaxZh3Wbi4U1Dza1OESo",
             .lazy = true,
         },
         .roc_deps_arm_linux_musleabihf = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.15.1/arm-linux-musleabihf.tar.xz",
-            .hash = "N-V-__8AAE9SyhMGHGnkgRenWYw-birLp2Nl-IYGqIbdlga3",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/arm-linux-musleabihf.tar.xz",
+            .hash = "N-V-__8AAHU1FhRO-2yZIDQWw5rkVVuUYn5purRT9mAqykzw",
             .lazy = true,
         },
         .roc_deps_x86_linux_musl = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.15.1/x86-linux-musl.tar.xz",
-            .hash = "N-V-__8AAGXNmxEQQYT5QBEheV2NJzSQjwaBuUx8wj_tGdoy",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/x86-linux-musl.tar.xz",
+            .hash = "N-V-__8AACNk7BFESU37UNPvVOXf2dGyPMjtDSsji-VYqvmz",
             .lazy = true,
         },
         .roc_deps_x86_64_linux_musl = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.15.1/x86_64-linux-musl.tar.xz",
-            .hash = "N-V-__8AAL1yjxS0Lef6Fv5mMGaqNa0rGcPJxOftYK0NYuJu",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/x86_64-linux-musl.tar.xz",
+            .hash = "N-V-__8AAJmm4xTmXSEZeLYLtOlZWKI_Kitjx2TOzm9vhCWM",
             .lazy = true,
         },
         .roc_deps_x86_64_macos_none = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.15.1/x86_64-macos-none.tar.xz",
-            .hash = "N-V-__8AAInnSA9gFeMzlB67m7Nu-NYBUOXqDrzYmYgatUHk",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/x86_64-macos-none.tar.xz",
+            .hash = "N-V-__8AAJGgsQ-GR2yR2tLFM4OM0z7ClQ0Rx7SjviQbx8Ks",
             .lazy = true,
         },
         .roc_deps_x86_64_windows_gnu = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.15.1/x86_64-windows-gnu.zip",
-            .hash = "N-V-__8AANpEpBfszYPGDvz9XJK8VRBNG7eQzzK1iNSlkdVG",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/x86_64-windows-gnu.zip",
+            .hash = "N-V-__8AAJAOJxiRcaWQZpXytjyF8_Q7Mj9g7xXQWtegD-6C",
             .lazy = true,
         },
         .bytebox = .{
-            .url = "git+https://github.com/rdunnington/bytebox.git#95ec0c8ddb9c95ded2e97f02748bc14bff189f6f",
-            .hash = "bytebox-0.0.1-SXc2sZE5DwBGj-RgYk7yO60U9Uv0I5b5W2nO8m-TTRus",
+            .url = "git+https://github.com/lukewilliamboswell/bytebox?ref=zig-0.16.0#d464d50776d0fe432329219acaed5d614b11cdb9",
+            .hash = "bytebox-0.0.1-SXc2sX5wDwBL5CTy-DwcmiZca_7CpZYT1NY_eOqmGr8W",
         },
         .zstd = .{
             .url = "git+https://github.com/allyourcodebase/zstd?ref=1.5.7-1#e1a501be57f42c541e8a5597e4b59a074dfd09a3", // 1.5.7-1

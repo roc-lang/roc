@@ -17,7 +17,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const layout = @import("layout");
 const lir = @import("lir");
-
 const LlvmBuilder = @import("Builder.zig");
 
 const LirExprStore = lir.LirExprStore;
@@ -134,6 +133,10 @@ pub const MonoLlvmCodeGen = struct {
     /// into the LLVM module at compile time, we declare them as external
     /// functions and call them directly — no function pointers or inttoptr.
     builtin_functions: std.StringHashMap(LlvmBuilder.Function.Index),
+
+    /// System I/O for debug output (e.g. ROC_LLVM_KEEP_IR).
+    /// Set by the evaluator before calling generateCode.
+    std_io: ?std.Io = null,
 
     /// Layout store for resolving composite type layouts (records, tuples).
     /// Set by the evaluator before calling generateCode.
@@ -545,7 +548,9 @@ pub const MonoLlvmCodeGen = struct {
 
         if (std.process.getEnvVarOwned(self.allocator, "ROC_LLVM_KEEP_IR")) |keep_path| {
             defer self.allocator.free(keep_path);
-            builder.printToFilePath(std.fs.cwd(), keep_path) catch return error.CompilationFailed;
+            if (self.std_io) |std_io| {
+                builder.printToFilePath(std_io, keep_path) catch return error.CompilationFailed;
+            }
         } else |_| {}
 
         const bitcode = builder.toBitcode(self.allocator, producer) catch return error.CompilationFailed;
@@ -580,7 +585,7 @@ pub const MonoLlvmCodeGen = struct {
         // so that proc bodies can call builtins like allocateWithRefcountC.
         const arg_layouts = self.store.getLayoutIdxSpan(proc.arg_layouts);
         const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
-        var param_types: std.ArrayList(LlvmBuilder.Type) = .{};
+        var param_types: std.ArrayList(LlvmBuilder.Type) = .empty;
         defer param_types.deinit(self.allocator);
         for (arg_layouts) |arg_layout| {
             param_types.append(self.allocator, try self.layoutToLlvmTypeFull(arg_layout)) catch return error.OutOfMemory;
@@ -689,21 +694,21 @@ pub const MonoLlvmCodeGen = struct {
                         break :blk builder.structType(.normal, &.{ ptr_type, .i64, .i64 }) catch return error.CompilationFailed;
                     },
                     .struct_ => {
-                        const struct_data = ls.getStructData(stored_layout.data.struct_.idx);
+                        const struct_data = ls.getStructData(stored_layout.getStruct().idx);
                         const fields = struct_data.getFields();
                         if (fields.count == 0) break :blk .i8;
 
                         var field_types: [32]LlvmBuilder.Type = undefined;
                         for (0..fields.count) |field_idx| {
                             field_types[field_idx] = try self.layoutToLlvmTypeWithOptions(
-                                ls.getStructFieldLayout(stored_layout.data.struct_.idx, @intCast(field_idx)),
+                                ls.getStructFieldLayout(stored_layout.getStruct().idx, @intCast(field_idx)),
                                 true,
                             );
                         }
                         break :blk builder.structType(.normal, field_types[0..fields.count]) catch return error.CompilationFailed;
                     },
                     .tag_union => {
-                        const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
+                        const tu_data = ls.getTagUnionData(stored_layout.getTagUnion().idx);
                         const variants = ls.getTagUnionVariants(tu_data);
                         for (0..variants.len) |variant_idx| {
                             if (variants.get(@intCast(variant_idx)).payload_layout != .zst) {
@@ -911,7 +916,7 @@ pub const MonoLlvmCodeGen = struct {
 
         var switch_inst = wip.@"switch"(cond_val, default_block, @intCast(branches.len), .none) catch return error.CompilationFailed;
 
-        var branch_blocks: std.ArrayList(LlvmBuilder.Function.Block.Index) = .{};
+        var branch_blocks: std.ArrayList(LlvmBuilder.Function.Block.Index) = .empty;
         defer branch_blocks.deinit(self.allocator);
 
         for (branches) |branch| {
@@ -1396,7 +1401,7 @@ pub const MonoLlvmCodeGen = struct {
         }
         std.debug.assert(stored_layout.tag == .struct_);
 
-        const struct_data = ls.getStructData(stored_layout.data.struct_.idx);
+        const struct_data = ls.getStructData(stored_layout.getStruct().idx);
         const field_count = struct_data.getFields().count;
         if (field_count == 0) {
             return self.generateEmptyRecord();
@@ -1407,7 +1412,7 @@ pub const MonoLlvmCodeGen = struct {
 
         for (field_exprs, 0..) |field_expr_id, i| {
             const raw_val = try self.generateExpr(field_expr_id);
-            const field_layout = ls.getStructFieldLayout(stored_layout.data.struct_.idx, @intCast(i));
+            const field_layout = ls.getStructFieldLayout(stored_layout.getStruct().idx, @intCast(i));
             field_values_buf[i] = try self.convertToFieldType(raw_val, field_layout);
         }
 
@@ -1484,7 +1489,7 @@ pub const MonoLlvmCodeGen = struct {
                 return (builder.intConst(.i8, 0) catch return error.OutOfMemory).toValue();
             },
             .tag_union => {
-                const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
+                const tu_data = ls.getTagUnionData(stored_layout.getTagUnion().idx);
                 const variants = ls.getTagUnionVariants(tu_data);
                 var has_payloads = false;
                 for (0..variants.len) |variant_idx| {
@@ -1499,7 +1504,7 @@ pub const MonoLlvmCodeGen = struct {
                 }
 
                 const tu_size = tu_data.size;
-                const tu_align_bytes: u64 = @intCast(stored_layout.data.tag_union.alignment.toByteUnits());
+                const tu_align_bytes: u64 = @intCast(stored_layout.getTagUnion().alignment.toByteUnits());
                 const min_align: u64 = @max(tu_align_bytes, 8);
                 const alignment = LlvmBuilder.Alignment.fromByteUnits(min_align);
                 const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
@@ -1545,9 +1550,9 @@ pub const MonoLlvmCodeGen = struct {
         const stored_layout = ls.getLayout(tag_expr.union_layout);
         std.debug.assert(stored_layout.tag == .tag_union);
 
-        const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
+        const tu_data = ls.getTagUnionData(stored_layout.getTagUnion().idx);
         const tu_size = tu_data.size;
-        const tu_align_bytes: u64 = @intCast(stored_layout.data.tag_union.alignment.toByteUnits());
+        const tu_align_bytes: u64 = @intCast(stored_layout.getTagUnion().alignment.toByteUnits());
         // Heap-allocate the tag union so returned pointer values remain valid after
         // the current function returns.
         const min_align: u64 = @max(tu_align_bytes, 8);
@@ -1587,18 +1592,18 @@ pub const MonoLlvmCodeGen = struct {
             // Multiple arguments — payload is a tuple
             const payload_layout = ls.getLayout(variant.payload_layout);
             if (payload_layout.tag == .struct_) {
-                const struct_data = ls.getStructData(payload_layout.data.struct_.idx);
+                const struct_data = ls.getStructData(payload_layout.getStruct().idx);
                 const sorted_fields = ls.struct_fields.sliceRange(struct_data.getFields());
 
                 for (arg_exprs, 0..) |arg_expr_id, i| {
-                    const field_layout = ls.getStructFieldLayout(payload_layout.data.struct_.idx, @intCast(i));
+                    const field_layout = ls.getStructFieldLayout(payload_layout.getStruct().idx, @intCast(i));
                     const arg = try self.generateExprAsValue(arg_expr_id);
                     const arg_val = try self.convertToFieldType(arg.value, field_layout);
                     var offset: u32 = 0;
                     for (0..sorted_fields.len) |si| {
                         const field = sorted_fields.get(@intCast(si));
                         if (field.index == i) {
-                            offset = ls.getStructFieldOffset(payload_layout.data.struct_.idx, @intCast(si));
+                            offset = ls.getStructFieldOffset(payload_layout.getStruct().idx, @intCast(si));
                             break;
                         }
                     }
@@ -1648,7 +1653,7 @@ pub const MonoLlvmCodeGen = struct {
                 return payload;
             },
             .box => {
-                const inner_layout = ls.getLayout(union_layout.data.box);
+                const inner_layout = ls.getLayout(union_layout.getIdx());
                 if (inner_layout.tag == .tag_union) {
                     const load_type = try self.layoutToStructFieldType(tpa.payload_layout);
                     const payload_alignment = LlvmBuilder.Alignment.fromByteUnits(
@@ -1693,7 +1698,7 @@ pub const MonoLlvmCodeGen = struct {
             },
             .tag_union => blk: {
                 // Tag union — load discriminant from pointer
-                const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
+                const tu_data = ls.getTagUnionData(stored_layout.getTagUnion().idx);
                 const disc_type = discriminantIntType(tu_data.discriminant_size);
                 const disc_offset = tu_data.discriminant_offset;
                 const disc_ptr = wip.gep(.inbounds, .i8, value, &.{builder.intValue(.i32, disc_offset) catch return error.OutOfMemory}, "") catch return error.OutOfMemory;
@@ -1785,7 +1790,7 @@ pub const MonoLlvmCodeGen = struct {
 
         // Promote existing symbol bindings to allocas for SSA correctness
         // (same as for_loop — loop body mutations must be visible after exit)
-        var promoted_keys: std.ArrayList(u64) = .{};
+        var promoted_keys: std.ArrayList(u64) = .empty;
         defer promoted_keys.deinit(self.allocator);
         {
             var sym_it = self.symbol_values.iterator();
@@ -1911,7 +1916,7 @@ pub const MonoLlvmCodeGen = struct {
         // mutations are visible after the loop exit (SSA domination fix).
         // The loop body may rebind variables via let_stmts; without allocas,
         // the new SSA values from the body block don't dominate the exit block.
-        var promoted_keys: std.ArrayList(u64) = .{};
+        var promoted_keys: std.ArrayList(u64) = .empty;
         defer promoted_keys.deinit(self.allocator);
         {
             var sym_it = self.symbol_values.iterator();
@@ -2134,7 +2139,7 @@ pub const MonoLlvmCodeGen = struct {
                     const discriminant = switch (stored_layout.tag) {
                         .scalar => scrutinee, // Scalar tag — value IS the discriminant
                         .tag_union => blk: {
-                            const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
+                            const tu_data = ls.getTagUnionData(stored_layout.getTagUnion().idx);
                             const disc_type = discriminantIntType(tu_data.discriminant_size);
                             const disc_offset_val = builder.intValue(.i32, tu_data.discriminant_offset) catch return error.OutOfMemory;
                             const disc_ptr = wip.gep(.inbounds, .i8, tag_scrutinee, &.{disc_offset_val}, "") catch return error.CompilationFailed;
@@ -2305,7 +2310,7 @@ pub const MonoLlvmCodeGen = struct {
         const stored_layout = ls.getLayout(tag_pat.union_layout);
         if (stored_layout.tag != .tag_union) return;
 
-        const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
+        const tu_data = ls.getTagUnionData(stored_layout.getTagUnion().idx);
         const variants = ls.getTagUnionVariants(tu_data);
         if (tag_pat.discriminant >= variants.len) return;
         const variant = variants.get(tag_pat.discriminant);
@@ -2322,13 +2327,13 @@ pub const MonoLlvmCodeGen = struct {
                 const current_layout = ls.getLayout(value_layout_idx);
                 if (current_layout.tag != .struct_) break;
 
-                const struct_data = ls.getStructData(current_layout.data.struct_.idx);
+                const struct_data = ls.getStructData(current_layout.getStruct().idx);
                 if (struct_data.getFields().count != 1) break;
 
-                const offset = ls.getStructFieldOffsetByOriginalIndex(current_layout.data.struct_.idx, 0);
+                const offset = ls.getStructFieldOffsetByOriginalIndex(current_layout.getStruct().idx, 0);
                 const offset_val = builder.intValue(.i32, offset) catch return error.OutOfMemory;
                 value_ptr = wip.gep(.inbounds, .i8, value_ptr, &.{offset_val}, "") catch return error.CompilationFailed;
-                value_layout_idx = ls.getStructFieldLayoutByOriginalIndex(current_layout.data.struct_.idx, 0);
+                value_layout_idx = ls.getStructFieldLayoutByOriginalIndex(current_layout.getStruct().idx, 0);
             }
 
             const payload_value = try self.loadValueFromPtr(value_ptr, value_layout_idx);
@@ -2339,8 +2344,8 @@ pub const MonoLlvmCodeGen = struct {
         if (payload_layout.tag != .struct_) return error.CompilationFailed;
 
         for (args, 0..) |arg_id, arg_i| {
-            const field_layout = ls.getStructFieldLayoutByOriginalIndex(payload_layout.data.struct_.idx, @intCast(arg_i));
-            const offset = ls.getStructFieldOffsetByOriginalIndex(payload_layout.data.struct_.idx, @intCast(arg_i));
+            const field_layout = ls.getStructFieldLayoutByOriginalIndex(payload_layout.getStruct().idx, @intCast(arg_i));
+            const offset = ls.getStructFieldOffsetByOriginalIndex(payload_layout.getStruct().idx, @intCast(arg_i));
             const offset_val = builder.intValue(.i32, offset) catch return error.OutOfMemory;
             const field_ptr = wip.gep(.inbounds, .i8, scrutinee, &.{offset_val}, "") catch return error.CompilationFailed;
             const field_value = try self.loadValueFromPtr(field_ptr, field_layout);
@@ -3589,7 +3594,7 @@ pub const MonoLlvmCodeGen = struct {
                 const ls = self.layout_store orelse unreachable;
                 const ret_layout_val = ls.getLayout(ll.ret_layout);
                 std.debug.assert(ret_layout_val.tag == .tag_union);
-                const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
+                const tu_data = ls.getTagUnionData(ret_layout_val.getTagUnion().idx);
                 const variants = ls.getTagUnionVariants(tu_data);
                 var ok_index: ?usize = null;
                 var err_index: ?usize = null;
@@ -3611,16 +3616,16 @@ pub const MonoLlvmCodeGen = struct {
                 const unwrapped_err_layout_idx = self.unwrapSingleFieldPayloadLayout(err_layout_idx) orelse err_layout_idx;
                 const err_layout_val = ls.getLayout(unwrapped_err_layout_idx);
                 const record_idx = switch (err_layout_val.tag) {
-                    .struct_ => err_layout_val.data.struct_.idx,
+                    .struct_ => err_layout_val.getStruct().idx,
                     .tag_union => blk: {
-                        const inner_tu_data = ls.getTagUnionData(err_layout_val.data.tag_union.idx);
+                        const inner_tu_data = ls.getTagUnionData(err_layout_val.getTagUnion().idx);
                         const inner_variants = ls.getTagUnionVariants(inner_tu_data);
                         if (inner_variants.len == 0) return error.CompilationFailed;
                         const inner_payload_layout_idx = inner_variants.get(0).payload_layout;
                         const unwrapped_inner_payload_idx = self.unwrapSingleFieldPayloadLayout(inner_payload_layout_idx) orelse inner_payload_layout_idx;
                         const inner_payload_layout = ls.getLayout(unwrapped_inner_payload_idx);
                         if (inner_payload_layout.tag != .struct_) return error.CompilationFailed;
-                        break :blk inner_payload_layout.data.struct_.idx;
+                        break :blk inner_payload_layout.getStruct().idx;
                     },
                     else => return error.CompilationFailed,
                 };
@@ -3997,7 +4002,7 @@ pub const MonoLlvmCodeGen = struct {
                 const range_layout = ls.getLayout(range_layout_idx);
                 if (range_layout.tag != .struct_) return error.CompilationFailed;
 
-                const record_idx = range_layout.data.struct_.idx;
+                const record_idx = range_layout.getStruct().idx;
                 const record_size = ls.getStructData(record_idx).size;
                 const len_offset = ls.getStructFieldOffsetByOriginalIndex(record_idx, 0);
                 const start_offset = ls.getStructFieldOffsetByOriginalIndex(record_idx, 1);
@@ -4163,7 +4168,7 @@ pub const MonoLlvmCodeGen = struct {
                 const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
 
                 const ret_layout = ls.getLayout(ll.ret_layout);
-                const elem_layout_idx = if (ret_layout.tag == .list) ret_layout.data.list else unreachable;
+                const elem_layout_idx = if (ret_layout.tag == .list) ret_layout.getIdx() else unreachable;
                 const elem_sa = ls.layoutSizeAlign(ls.getLayout(elem_layout_idx));
                 const elem_size: u64 = elem_sa.size;
                 const elem_align: u32 = @intCast(elem_sa.alignment.toByteUnits());
@@ -4373,7 +4378,7 @@ pub const MonoLlvmCodeGen = struct {
         if (ret_layout_val.tag != .tag_union) {
             return error.CompilationFailed;
         }
-        const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
+        const tu_data = ls.getTagUnionData(ret_layout_val.getTagUnion().idx);
         const zero_byte = builder.intValue(.i8, 0) catch return error.OutOfMemory;
         const total_size_val = builder.intValue(.i32, tu_data.size) catch return error.OutOfMemory;
         _ = wip.callMemSet(dest_ptr, alignment, zero_byte, total_size_val, .normal, false) catch return error.CompilationFailed;
@@ -4450,7 +4455,7 @@ pub const MonoLlvmCodeGen = struct {
         const layout_val = self.layout_store.?.getLayout(layout_idx);
         if (layout_val.tag != .struct_) return null;
 
-        const struct_data = self.layout_store.?.getStructData(layout_val.data.struct_.idx);
+        const struct_data = self.layout_store.?.getStructData(layout_val.getStruct().idx);
         const fields = self.layout_store.?.struct_fields.sliceRange(struct_data.getFields());
         if (fields.len != 1) return null;
 
@@ -4458,7 +4463,7 @@ pub const MonoLlvmCodeGen = struct {
         if (field.index != 0) return null;
 
         if (builtin.mode == .Debug) {
-            const field_offset = self.layout_store.?.getStructFieldOffsetByOriginalIndex(layout_val.data.struct_.idx, 0);
+            const field_offset = self.layout_store.?.getStructFieldOffsetByOriginalIndex(layout_val.getStruct().idx, 0);
             std.debug.assert(field_offset == 0);
         }
 
@@ -4572,7 +4577,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn endScope(self: *MonoLlvmCodeGen, scope: *ScopeSnapshot) Error!void {
-        var symbol_keys_to_remove: std.ArrayList(u64) = .{};
+        var symbol_keys_to_remove: std.ArrayList(u64) = .empty;
         defer symbol_keys_to_remove.deinit(self.allocator);
 
         var symbol_it = self.symbol_values.keyIterator();
@@ -4585,7 +4590,7 @@ pub const MonoLlvmCodeGen = struct {
             _ = self.symbol_values.remove(key);
         }
 
-        var closure_keys_to_remove: std.ArrayList(u64) = .{};
+        var closure_keys_to_remove: std.ArrayList(u64) = .empty;
         defer closure_keys_to_remove.deinit(self.allocator);
 
         var closure_it = self.closure_bindings.keyIterator();
@@ -4598,7 +4603,7 @@ pub const MonoLlvmCodeGen = struct {
             _ = self.closure_bindings.remove(key);
         }
 
-        var cell_keys_to_remove: std.ArrayList(u64) = .{};
+        var cell_keys_to_remove: std.ArrayList(u64) = .empty;
         defer cell_keys_to_remove.deinit(self.allocator);
 
         var cell_it = self.cell_allocas.keyIterator();
@@ -4627,7 +4632,7 @@ pub const MonoLlvmCodeGen = struct {
         // Get the tag union layout for the Result return type
         const ret_layout_val = ls.getLayout(ll.ret_layout);
         std.debug.assert(ret_layout_val.tag == .tag_union);
-        const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
+        const tu_data = ls.getTagUnionData(ret_layout_val.getTagUnion().idx);
         const disc_offset: u32 = tu_data.discriminant_offset;
         const payload_size: u32 = disc_offset; // payload is before discriminant
         const total_size: u32 = tu_data.size;
@@ -5570,7 +5575,7 @@ pub const MonoLlvmCodeGen = struct {
                 .decl, .mutate => |b| {
                     const stmt_expr = self.store.getExpr(b.expr);
                     switch (stmt_expr) {
-                        .lambda => |_| {
+                        .lambda => {
                             const val = try self.generateExpr(b.expr);
                             try self.bindPattern(b.pattern, val);
                             const pattern = self.store.getPattern(b.pattern);
@@ -5693,7 +5698,7 @@ pub const MonoLlvmCodeGen = struct {
         const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
         const params = self.store.getPatternSpan(lambda.params);
 
-        var param_types: std.ArrayList(LlvmBuilder.Type) = .{};
+        var param_types: std.ArrayList(LlvmBuilder.Type) = .empty;
         defer param_types.deinit(self.allocator);
 
         for (params) |param_id| {
@@ -5765,7 +5770,7 @@ pub const MonoLlvmCodeGen = struct {
         const expected_params = fn_type.functionParameters(builder);
 
         const args = self.store.getExprSpan(args_span);
-        var arg_values: std.ArrayList(LlvmBuilder.Value) = .{};
+        var arg_values: std.ArrayList(LlvmBuilder.Value) = .empty;
         defer arg_values.deinit(self.allocator);
         const expected_params_copy = self.allocator.dupe(LlvmBuilder.Type, expected_params) catch return error.OutOfMemory;
         defer self.allocator.free(expected_params_copy);
@@ -5832,7 +5837,7 @@ pub const MonoLlvmCodeGen = struct {
         const params = self.store.getPatternSpan(lambda.params);
         const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
 
-        var param_types: std.ArrayList(LlvmBuilder.Type) = .{};
+        var param_types: std.ArrayList(LlvmBuilder.Type) = .empty;
         defer param_types.deinit(self.allocator);
 
         for (params) |param_id| {
@@ -5995,7 +6000,7 @@ pub const MonoLlvmCodeGen = struct {
         const expected_params = fn_type.functionParameters(builder);
 
         const args = self.store.getExprSpan(args_span);
-        var arg_values: std.ArrayList(LlvmBuilder.Value) = .{};
+        var arg_values: std.ArrayList(LlvmBuilder.Value) = .empty;
         defer arg_values.deinit(self.allocator);
         const expected_params_copy = self.allocator.dupe(LlvmBuilder.Type, expected_params) catch return error.OutOfMemory;
         defer self.allocator.free(expected_params_copy);
@@ -6185,7 +6190,7 @@ pub const MonoLlvmCodeGen = struct {
         const ls = self.layout_store orelse return error.CompilationFailed;
         const list_layout = ls.getLayout(list_layout_idx);
         const elem_layout_idx = switch (list_layout.tag) {
-            .list => list_layout.data.list,
+            .list => list_layout.getIdx(),
             .list_of_zst => layout.Idx.zst,
             else => return error.CompilationFailed,
         };

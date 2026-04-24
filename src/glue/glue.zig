@@ -54,12 +54,13 @@ pub const GlueError = error{
     CompilationFailed,
     ModuleRetrieval,
     OutOfMemory,
+    WriteFailed,
 };
 
 /// Print platform glue information for a platform's main.roc file using full compilation path.
 /// This provides resolved types via TypeWriter and discovers hosted functions via e_hosted_lambda detection.
-pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, temp_dir: []const u8) GlueError!void {
-    rocGlueInner(gpa, stderr, stdout, args, temp_dir) catch |err| {
+pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, temp_dir: []const u8, std_io: std.Io) GlueError!void {
+    rocGlueInner(gpa, stderr, stdout, args, temp_dir, std_io) catch |err| {
         (switch (err) {
             error.GlueSpecNotFound => stderr.print("Error: Glue spec file not found: '{s}'\n", .{args.glue_spec}),
             error.NotPlatformFile => blk: {
@@ -75,20 +76,21 @@ pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, a
             error.CompilationFailed => stderr.print("Error: Compilation failed\n", .{}),
             error.ModuleRetrieval => stderr.print("Error: Failed to get compiled modules\n", .{}),
             error.OutOfMemory => stderr.print("Error: Out of memory\n", .{}),
+            error.WriteFailed => stderr.print("Error: Write failed\n", .{}),
         }) catch {};
         return err;
     };
 }
 
-fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, temp_dir: []const u8) GlueError!void {
+fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, temp_dir: []const u8, std_io: std.Io) GlueError!void {
 
     // 0. Validate glue spec file exists
-    std.fs.cwd().access(args.glue_spec, .{}) catch {
+    std.Io.Dir.cwd().access(std_io, args.glue_spec, .{}) catch {
         return error.GlueSpecNotFound;
     };
 
     // 1. Parse platform header to get requires entries and verify it's a platform file
-    const platform_info = parsePlatformHeader(gpa, args.platform_path) catch |err| {
+    const platform_info = parsePlatformHeader(gpa, args.platform_path, std_io) catch |err| {
         return switch (err) {
             error.NotPlatformFile => error.NotPlatformFile,
             error.FileNotFound => error.FileNotFound,
@@ -100,7 +102,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
 
     // 2. Compile platform using BuildEnv by creating a synthetic app
     // BuildEnv expects an app file, so we create a minimal app that imports the platform
-    const platform_abs_path = std.fs.cwd().realpathAlloc(gpa, args.platform_path) catch {
+    const platform_abs_path = std.Io.Dir.cwd().realPathFileAlloc(std_io, args.platform_path, gpa) catch {
         return error.PlatformPathResolution;
     };
     defer gpa.free(platform_abs_path);
@@ -108,7 +110,8 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     // Generate synthetic app source that imports the platform
     var app_source = std.ArrayList(u8).empty;
     defer app_source.deinit(gpa);
-    const w = app_source.writer(gpa);
+    var aw: std.Io.Writer.Allocating = .fromArrayList(gpa, &app_source);
+    const w = &aw.writer;
 
     // Build requires clause: app [Alias1, Alias2, entry1, entry2, ...] { pf: platform "path" }
     try w.print("app [", .{});
@@ -151,13 +154,16 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         try w.print("{s} = {s}\n", .{ entry.name, entry.stub_expr });
     }
 
+    // Sync the writer back to app_source
+    app_source = aw.toArrayList();
+
     // Write synthetic app to temp file
     const synthetic_app_path = std.fs.path.join(gpa, &.{ temp_dir, "synthetic_app.roc" }) catch {
         return error.OutOfMemory;
     };
     defer gpa.free(synthetic_app_path);
 
-    std.fs.cwd().writeFile(.{
+    std.Io.Dir.cwd().writeFile(std_io, .{
         .sub_path = synthetic_app_path,
         .data = app_source.items,
     }) catch {
@@ -168,11 +174,11 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     const thread_count: usize = 1;
     const mode: Mode = .single_threaded;
 
-    const cwd = std.process.getCwdAlloc(gpa) catch {
+    const cwd = std.Io.Dir.cwd().realPathFileAlloc(std_io, ".", gpa) catch {
         return error.BuildEnvInit;
     };
     defer gpa.free(cwd);
-    var build_env = BuildEnv.init(gpa, mode, thread_count, RocTarget.detectNative(), cwd) catch {
+    var build_env = BuildEnv.init(gpa, mode, thread_count, RocTarget.detectNative(), cwd, std_io) catch {
         return error.BuildEnvInit;
     };
 
@@ -351,16 +357,16 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     }
 
     // 5. Compile glue spec in-process and run via interpreter
-    const glue_spec_abs = std.fs.cwd().realpathAlloc(gpa, args.glue_spec) catch {
+    const glue_spec_abs = std.Io.Dir.cwd().realPathFileAlloc(std_io, args.glue_spec, gpa) catch {
         return error.GlueSpecNotFound;
     };
     defer gpa.free(glue_spec_abs);
 
-    const glue_cwd = std.process.getCwdAlloc(gpa) catch {
+    const glue_cwd = std.Io.Dir.cwd().realPathFileAlloc(std_io, ".", gpa) catch {
         return error.BuildEnvInit;
     };
     defer gpa.free(glue_cwd);
-    var glue_build_env = BuildEnv.init(gpa, .single_threaded, 1, RocTarget.detectNative(), glue_cwd) catch {
+    var glue_build_env = BuildEnv.init(gpa, .single_threaded, 1, RocTarget.detectNative(), glue_cwd, std_io) catch {
         return error.BuildEnvInit;
     };
     defer glue_build_env.deinit();
@@ -409,8 +415,8 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
 
     // 6. Construct List(Types) as C-ABI structs
     const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{};
-    var default_roc_ops_env: echo_platform.DefaultRocOpsEnv = .{};
-    var roc_ops = echo_platform.makeDefaultRocOps(&default_roc_ops_env, @constCast(&hosted_function_ptrs));
+    var echo_env = echo_platform.EchoEnv{ .std_io = std_io };
+    var roc_ops = echo_platform.makeDefaultRocOps(&echo_env, @constCast(&hosted_function_ptrs));
 
     var types_list = constructTypesRocList(collected_modules.items, &platform_info, cir_provides_entries.items, &type_table, &entrypoint_type_ids, &provides_type_ids, &roc_ops);
 
@@ -467,7 +473,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     }
 
     // Create output directory if needed
-    std.fs.cwd().makePath(args.output_dir) catch {
+    std.Io.Dir.cwd().createDirPath(std_io, args.output_dir) catch {
         stderr.print("Error: Could not create output directory: {s}\n", .{args.output_dir}) catch {};
         return error.CompilationFailed;
     };
@@ -482,7 +488,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         };
         defer gpa.free(file_path);
 
-        std.fs.cwd().writeFile(.{
+        std.Io.Dir.cwd().writeFile(std_io, .{
             .sub_path = file_path,
             .data = file.content.asSlice(),
         }) catch {
@@ -525,9 +531,9 @@ pub const PlatformHeaderInfo = struct {
 };
 
 /// Parse a platform header to extract requires entries and validate it's a platform file.
-fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8) !PlatformHeaderInfo {
+fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8, std_io: std.Io) !PlatformHeaderInfo {
     // Read source file
-    var source = std.fs.cwd().readFileAlloc(gpa, platform_path, std.math.maxInt(usize)) catch |err| switch (err) {
+    var source = std.Io.Dir.cwd().readFileAlloc(std_io, platform_path, gpa, .unlimited) catch |err| switch (err) {
         error.FileNotFound => return error.FileNotFound,
         else => return error.ParseFailed,
     };
@@ -548,12 +554,8 @@ fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8) !PlatformHeade
     env.module_name = module_name;
     env.common.calcLineStarts(gpa) catch return error.OutOfMemory;
 
-    var allocators: base.Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
     // Parse the source code
-    var parse_ast = parse.parse(&allocators, &env.common) catch return error.ParseFailed;
+    var parse_ast = parse.parse(gpa, &env.common) catch return error.ParseFailed;
     defer parse_ast.deinit();
 
     // Get the file header

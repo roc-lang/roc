@@ -34,7 +34,7 @@ pub inline fn alignedPtrCast(comptime T: type, ptr: anytype, src: std.builtin.So
     if (comptime builtin.mode == .Debug) {
         const ptr_info = @typeInfo(T);
         const alignment = switch (ptr_info) {
-            .pointer => |p| p.alignment,
+            .pointer => |p| p.alignment orelse 0,
             else => @compileError("alignedPtrCast target must be a pointer type"),
         };
         const ptr_int = @intFromPtr(ptr);

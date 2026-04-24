@@ -32,10 +32,11 @@ const TermColor = struct {
     pub const reset = "\x1b[0m";
 };
 
-pub fn main() !void {
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+pub fn main(init: std.process.Init) !void {
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
+    const io = init.io;
 
     var errors: Errors = .{};
 
@@ -50,7 +51,7 @@ pub fn main() !void {
     const file_buffer = try gpa.alloc(u8, MiB + MiB / 2); // 1.5 MiB
     defer gpa.free(file_buffer);
 
-    const paths = try listFilePaths(gpa);
+    const paths = try listFilePaths(gpa, io);
     defer {
         for (paths) |path| {
             gpa.free(path);
@@ -59,7 +60,7 @@ pub fn main() !void {
     }
 
     for (paths) |file_path| {
-        const bytes_read = (std.fs.cwd().readFile(file_path, file_buffer) catch |err| {
+        const bytes_read = (std.Io.Dir.cwd().readFile(io,file_path, file_buffer) catch |err| {
             std.debug.print("Error reading {s}: {}\n", .{ file_path, err });
             continue;
         }).len;
@@ -77,7 +78,7 @@ pub fn main() !void {
         try tidyFile(gpa, &counter, source_file, &errors);
 
         if (source_file.hasExtension(".zig")) {
-            try dead_files_detector.visit(source_file);
+            try dead_files_detector.visit(gpa, source_file);
         }
     }
 
@@ -201,6 +202,8 @@ fn tidyFile(
     tidyControlCharacters(file, errors);
     if (file.hasExtension(".zig")) {
         tidyBanned(file, errors);
+        tidyBannedStdIo(file, errors);
+        tidyBannedCoreCtxCreation(file, errors);
 
         var tree = try std.zig.Ast.parse(gpa, file.text, .zig);
         defer tree.deinit(gpa);
@@ -220,10 +223,114 @@ fn tidyControlCharacters(file: SourceFile, errors: *Errors) void {
     if (file.hasExtension(".bat")) return;
 
     var remaining = file.text;
-    while (mem.indexOfScalar(u8, remaining, '\r')) |index| {
+    while (mem.findScalar(u8, remaining, '\r')) |index| {
         const offset = index + (file.text.len - remaining.len);
         errors.addControlCharacter(file, offset, '\r');
         remaining = remaining[index + 1 ..];
+    }
+}
+
+/// Core compiler modules must use Roc's Ctx abstraction (@import("ctx").CoreCtx)
+/// instead of accessing OS I/O directly, to keep compiler-core decoupled from the
+/// Zig stdlib I/O layer. Using `std.Io` as a bare type for parameters/fields is fine
+/// since those values originate from CoreCtx.
+fn tidyBannedStdIo(file: SourceFile, errors: *Errors) void {
+    const core_modules: []const []const u8 = &.{
+        "src/collections/",
+        "src/base/",
+        "src/builtins/",
+        "src/types/",
+        "src/reporting/",
+        "src/parse/",
+        "src/canonicalize/",
+        "src/check/",
+        "src/mir/",
+        "src/lir/",
+        "src/layout/",
+        "src/interpreter_layout/",
+        "src/values/",
+        "src/interpreter_values/",
+        "src/backend/",
+        "src/target/",
+        "src/eval/",
+        "src/compile/",
+        "src/fmt/",
+        "src/repl/",
+        "src/sljmp/",
+    };
+
+    var is_core = false;
+    for (core_modules) |prefix| {
+        if (std.mem.startsWith(u8, file.path, prefix)) {
+            is_core = true;
+            break;
+        }
+    }
+    if (!is_core) return;
+
+    // Ban specific OS entry points that bypass the CoreCtx abstraction.
+    // Using std.Io sub-types (Timestamp, File, Dir) as types for values received
+    // from CoreCtx is fine — only ban the calls that reach into the OS directly.
+    const banned_io_patterns: []const struct { []const u8, []const u8 } = &.{
+        .{ "std.Io.Dir.cwd(", "CoreCtx filesystem methods (readFile, writeFile, etc.)" },
+        .{ "std.Io.File.stdout(", "CoreCtx.writeStdout() or CliCtx I/O" },
+        .{ "std.Io.File.stderr(", "CoreCtx.writeStderr() or CliCtx I/O" },
+        .{ "std.Io.File.stdin(", "CoreCtx.readStdin()" },
+        .{ "std.Io.Threaded.global_single_threaded", "accept std.Io as a parameter from CoreCtx" },
+    };
+
+    for (banned_io_patterns) |ban_item| {
+        const banned, const replacement = ban_item;
+        var remaining: []const u8 = file.text;
+        while (std.mem.find(u8, remaining, banned)) |index| {
+            const offset = @intFromPtr(remaining.ptr) - @intFromPtr(file.text.ptr) + index;
+            errors.addBanned(file, offset, banned, replacement);
+            remaining = remaining[index + banned.len ..];
+        }
+    }
+}
+
+/// CoreCtx creation (`.default(`, `.os(`) should only happen at entrypoints.
+/// All other code should accept a CoreCtx as a parameter.
+fn tidyBannedCoreCtxCreation(file: SourceFile, errors: *Errors) void {
+    const entrypoints: []const []const u8 = &.{
+        "src/cli/main.zig",
+        "src/cli/CliCtx.zig",
+        "src/build/builtin_compiler/main.zig",
+        "src/snapshot_tool/main.zig",
+        "src/playground_wasm/main.zig",
+        "src/compile/compile_build.zig",
+        "src/compile/coordinator.zig",
+        "src/lsp/syntax.zig",
+        "src/ctx/CoreCtx.zig",
+    };
+
+    // Don't ban ourselves (this file contains the banned strings as literals)
+    if (std.mem.endsWith(u8, file.path, "ci/tidy.zig")) return;
+
+    // Allow all test files
+    if (std.mem.find(u8, file.path, "/test/") != null) return;
+    if (std.mem.endsWith(u8, file.path, "_test.zig")) return;
+
+    // Allow entrypoint files
+    for (entrypoints) |ep| {
+        if (std.mem.endsWith(u8, file.path, ep)) return;
+    }
+
+    // Only scan production code — skip inline test blocks at the bottom of files.
+    const scan_text = if (std.mem.find(u8, file.text, "\ntest \"")) |test_start|
+        file.text[0..test_start]
+    else
+        file.text;
+
+    const banned_patterns: []const []const u8 = &.{ "CoreCtx.default(", "CoreCtx.os(" };
+    for (banned_patterns) |banned| {
+        var remaining: []const u8 = scan_text;
+        while (std.mem.find(u8, remaining, banned)) |index| {
+            const offset = @intFromPtr(remaining.ptr) - @intFromPtr(file.text.ptr) + index;
+            errors.addBanned(file, offset, banned, "accept CoreCtx as a parameter instead");
+            remaining = remaining[index + banned.len ..];
+        }
     }
 }
 
@@ -242,7 +349,7 @@ fn tidyBanned(file: SourceFile, errors: *Errors) void {
 
     for (ban_list) |ban_item| {
         const banned, const replacement = ban_item;
-        if (std.mem.indexOf(u8, file.text, banned)) |offset| {
+        if (std.mem.find(u8, file.text, banned)) |offset| {
             errors.addBanned(file, offset, banned, replacement);
         }
     }
@@ -251,7 +358,7 @@ fn tidyBanned(file: SourceFile, errors: *Errors) void {
     // Do use FIXME comments proactively while iterating on the code when you want to make sure
     // something is revisited before getting into the main branch.
     inline for (.{"FIXME"}) |banned| {
-        if (std.mem.indexOf(u8, file.text, banned)) |offset| {
+        if (std.mem.find(u8, file.text, banned)) |offset| {
             errors.addBannedReminder(file, offset, banned);
         }
     }
@@ -295,7 +402,7 @@ const IdentifierCounter = struct {
             // Count occurrences on a single line as one, as a special case for imports:
             // const foo = std.foo;
             const between_tokens_text = tree.source[gop.value_ptr.offset..token_offset];
-            const same_line_occurrence = mem.indexOfScalar(u8, between_tokens_text, '\n') == null;
+            const same_line_occurrence = mem.findScalar(u8, between_tokens_text, '\n') == null;
             if (same_line_occurrence) return;
         }
 
@@ -485,7 +592,7 @@ fn tidyMarkdownTitle(file: SourceFile, errors: *Errors) void {
         "www/",            // Website content
     };
     for (skip_paths) |skip_path| {
-        if (std.mem.indexOf(u8, file.path, skip_path) != null) return;
+        if (std.mem.find(u8, file.path, skip_path) != null) return;
     }
 
     var fenced_block = false; // Avoid interpreting `# ` shell comments as titles.
@@ -516,25 +623,25 @@ fn tidyMarkdownTitle(file: SourceFile, errors: *Errors) void {
 const DeadFilesDetector = struct {
     const FileName = [64]u8;
     const FileState = struct { import_count: u32, definition_count: u32 };
-    const FileMap = std.AutoArrayHashMap(FileName, FileState);
+    const FileMap = std.AutoArrayHashMapUnmanaged(FileName, FileState);
 
     files: FileMap,
 
-    fn init(gpa: Allocator) DeadFilesDetector {
-        return .{ .files = FileMap.init(gpa) };
+    fn init(_: Allocator) DeadFilesDetector {
+        return .{ .files = FileMap.empty };
     }
 
-    fn deinit(detector: *DeadFilesDetector, _: Allocator) void {
-        detector.files.deinit();
+    fn deinit(detector: *DeadFilesDetector, gpa: Allocator) void {
+        detector.files.deinit(gpa);
     }
 
-    fn visit(detector: *DeadFilesDetector, file: SourceFile) Allocator.Error!void {
+    fn visit(detector: *DeadFilesDetector, gpa: Allocator, file: SourceFile) Allocator.Error!void {
         assert(file.hasExtension(".zig"));
 
         // Only track src/ files as needing to be imported somewhere
         const is_src_file = std.mem.startsWith(u8, file.path, "src/");
         if (is_src_file) {
-            (try detector.fileState(file.path)).definition_count += 1;
+            (try detector.fileState(gpa, file.path)).definition_count += 1;
         }
 
         // Only scan src/, test/, and build files for imports
@@ -552,7 +659,7 @@ const DeadFilesDetector = struct {
             const import_path = result2[0];
             rest = result2[1];
             if (std.mem.endsWith(u8, import_path, ".zig")) {
-                (try detector.fileState(import_path)).import_count += 1;
+                (try detector.fileState(gpa, import_path)).import_count += 1;
             }
         } else {
             std.debug.panic("file with more than 1024 imports: {s}", .{file.path});
@@ -572,8 +679,8 @@ const DeadFilesDetector = struct {
         }
     }
 
-    fn fileState(detector: *DeadFilesDetector, path: []const u8) !*FileState {
-        const gop = try detector.files.getOrPut(pathToName(path));
+    fn fileState(detector: *DeadFilesDetector, gpa: Allocator, path: []const u8) !*FileState {
+        const gop = try detector.files.getOrPut(gpa, pathToName(path));
         if (!gop.found_existing) gop.value_ptr.* = .{ .import_count = 0, .definition_count = 0 };
         return gop.value_ptr;
     }
@@ -592,6 +699,7 @@ const DeadFilesDetector = struct {
         const entry_points: []const []const u8 = &.{
             "main.zig", // CLI, playground_wasm, interpreter_shim, etc.
             "static_lib.zig", // Builtins static library
+            "shim_io.zig", // Minimal std.Io impl for shims; imported as named module via build.zig
             "tracy.zig", // Profiler module (added via b.addModule)
             "tracy_stub.zig", // No-op tracy stub for standalone static library builds (added via b.addModule)
             "fuzz_sort.zig", // Fuzzing entry point
@@ -613,8 +721,8 @@ const DeadFilesDetector = struct {
 };
 
 /// Lists all files in the repository using git ls-files.
-fn listFilePaths(allocator: Allocator) ![][]const u8 {
-    var result = std.ArrayList([]const u8){};
+fn listFilePaths(allocator: Allocator, io: std.Io) ![][]const u8 {
+    var result : std.ArrayList([]const u8) = .empty;
     errdefer {
         for (result.items) |path| {
             allocator.free(path);
@@ -622,18 +730,14 @@ fn listFilePaths(allocator: Allocator) ![][]const u8 {
         result.deinit(allocator);
     }
 
-    var child = std.process.Child.init(&.{ "git", "ls-files", "-z" }, allocator);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
+    const run_result = try std.process.run(allocator, io, .{
+        .argv = &.{ "git", "ls-files", "-z" },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
 
-    _ = try child.spawn();
-
-    const stdout = child.stdout orelse return error.NoStdout;
-    const files = try stdout.readToEndAlloc(allocator, 10 * MiB);
-    defer allocator.free(files);
-
-    const term = try child.wait();
-    if (term.Exited != 0) return error.GitFailed;
+    const files = run_result.stdout;
+    if (run_result.term != .exited or run_result.term.exited != 0) return error.GitFailed;
 
     if (files.len == 0) return result.toOwnedSlice(allocator);
 
@@ -654,6 +758,6 @@ fn listFilePaths(allocator: Allocator) ![][]const u8 {
 /// Splits a string at the first occurrence of a delimiter.
 /// Returns null if delimiter is not found.
 fn cut(str: []const u8, delimiter: []const u8) ?struct { []const u8, []const u8 } {
-    const index = std.mem.indexOf(u8, str, delimiter) orelse return null;
+    const index = std.mem.find(u8, str, delimiter) orelse return null;
     return .{ str[0..index], str[index + delimiter.len ..] };
 }

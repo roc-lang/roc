@@ -1062,7 +1062,7 @@ fn emitRcForValueLocal(
 
     switch (l.tag) {
         .scalar => {
-            if (l.data.scalar.tag == .str) {
+            if (l.getScalar().tag == .str) {
                 try self.emitStrRc(kind, value_local, inc_count);
             }
         },
@@ -1077,7 +1077,7 @@ fn emitRcForValueLocal(
         },
         .closure => {
             // RC the captures payload, which may contain refcounted values
-            try self.emitRcAtPtr(kind, value_local, l.data.closure.captures_layout_idx, inc_count);
+            try self.emitRcAtPtr(kind, value_local, l.getClosure().captures_layout_idx, inc_count);
         },
         .zst => {},
     }
@@ -1097,7 +1097,7 @@ fn emitRcAtPtr(
 
     switch (l.tag) {
         .scalar => {
-            if (l.data.scalar.tag == .str) {
+            if (l.getScalar().tag == .str) {
                 try self.emitStrRc(kind, value_ptr_local, inc_count);
             }
         },
@@ -1112,7 +1112,7 @@ fn emitRcAtPtr(
             try self.emitBoxRc(kind, box_ptr, layout_idx, inc_count);
         },
         .struct_ => {
-            const struct_idx = l.data.struct_.idx;
+            const struct_idx = l.getStruct().idx;
             const struct_data = ls.getStructData(struct_idx);
             var field_i: u32 = 0;
             while (field_i < struct_data.fields.count) : (field_i += 1) {
@@ -1136,7 +1136,7 @@ fn emitRcAtPtr(
             }
         },
         .tag_union => {
-            const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
+            const tu_data = ls.getTagUnionData(l.getTagUnion().idx);
             const variants = ls.getTagUnionVariants(tu_data);
             if (variants.len == 0) return;
 
@@ -1173,7 +1173,7 @@ fn emitRcAtPtr(
         },
         .closure => {
             // RC the captures payload, which may contain refcounted values
-            try self.emitRcAtPtr(kind, value_ptr_local, l.data.closure.captures_layout_idx, inc_count);
+            try self.emitRcAtPtr(kind, value_ptr_local, l.getClosure().captures_layout_idx, inc_count);
         },
         .zst => {},
     }
@@ -1766,7 +1766,7 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
                 // Load discriminant from memory at discriminant_offset
                 const l = ls.getLayout(tag_pat.union_layout);
                 std.debug.assert(l.tag == .tag_union);
-                const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
+                const tu_data = ls.getTagUnionData(l.getTagUnion().idx);
                 const disc_offset = tu_data.discriminant_offset;
                 const disc_size: u32 = tu_data.discriminant_size;
                 if (disc_size == 0) {
@@ -1915,7 +1915,7 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
                         const bind_vt = self.resolveValType(bind.layout_idx);
                         const bind_byte_size = self.layoutStorageByteSize(bind.layout_idx);
                         const local_idx = self.storage.allocLocal(bind.symbol, bind_vt) catch return error.OutOfMemory;
-                        const field_offset = ls.getStructFieldOffset(l.data.struct_.idx, @intCast(i));
+                        const field_offset = ls.getStructFieldOffset(l.getStruct().idx, @intCast(i));
                         self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                         WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
                         if (self.isCompositeLayout(bind.layout_idx)) {
@@ -1932,7 +1932,7 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
                     },
                     .wildcard => {},
                     .struct_ => |inner_struct| {
-                        const field_offset = ls.getStructFieldOffset(l.data.struct_.idx, @intCast(i));
+                        const field_offset = ls.getStructFieldOffset(l.getStruct().idx, @intCast(i));
                         self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                         WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
                         if (field_offset > 0) {
@@ -2483,7 +2483,7 @@ fn compareCompositeByLayout(self: *Self, lhs_local: u32, rhs_local: u32, layout_
 
     switch (l.tag) {
         .struct_ => {
-            const struct_idx = l.data.struct_.idx;
+            const struct_idx = l.getStruct().idx;
             const struct_data = ls.getStructData(struct_idx);
             const field_count = struct_data.fields.count;
             if (field_count == 0) {
@@ -2530,7 +2530,7 @@ fn compareTagUnionByLayout(self: *Self, lhs_local: u32, rhs_local: u32, layout_i
     const l = ls.getLayout(layout_idx);
     std.debug.assert(l.tag == .tag_union);
 
-    const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
+    const tu_data = ls.getTagUnionData(l.getTagUnion().idx);
     const disc_offset = tu_data.discriminant_offset;
     const disc_size = tu_data.discriminant_size;
 
@@ -2686,7 +2686,7 @@ fn compareFieldByLayout(
     switch (field_layout.tag) {
         .list => {
             // List: call roc_list_eq or roc_list_str_eq
-            const elem_layout = field_layout.data.list;
+            const elem_layout = field_layout.getIdx();
             if (elem_layout == .str) {
                 const import_idx = self.list_str_eq_import orelse unreachable;
                 try self.emitLocalGet(lhs_local);
@@ -2705,7 +2705,7 @@ fn compareFieldByLayout(
                 WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
             } else if (ls.getLayout(elem_layout).tag == .list) {
                 // List of lists - use specialized host function with inner element size
-                const inner_elem_layout = ls.getLayout(elem_layout).data.list;
+                const inner_elem_layout = ls.getLayout(elem_layout).getIdx();
                 const inner_elem_size = self.layoutByteSize(inner_elem_layout);
                 const import_idx = self.list_list_eq_import orelse unreachable;
                 try self.emitLocalGet(lhs_local);
@@ -5397,7 +5397,7 @@ fn generateCFMatchBranches(self: *Self, branches: []const LIR.CFMatchBranch, val
                 // Load discriminant from memory at discriminant_offset
                 const l = ls.getLayout(tag_pat.union_layout);
                 std.debug.assert(l.tag == .tag_union);
-                const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
+                const tu_data = ls.getTagUnionData(l.getTagUnion().idx);
                 const disc_offset = tu_data.discriminant_offset;
                 const disc_size: u32 = tu_data.discriminant_size;
                 if (disc_size == 0) {
@@ -5631,16 +5631,16 @@ fn layoutStorageByteSize(self: *const Self, layout_idx: layout.Idx) u32 {
     const l = ls.getLayout(layout_idx);
     return switch (l.tag) {
         .zst => 0,
-        .scalar => switch (l.data.scalar.tag) {
+        .scalar => switch (l.getScalar().tag) {
             .str => 12,
-            .int => switch (l.data.scalar.data.int) {
+            .int => switch (l.getScalar().getInt()) {
                 .u8, .i8 => 1,
                 .u16, .i16 => 2,
                 .u32, .i32 => 4,
                 .u64, .i64 => 8,
                 .u128, .i128 => 16,
             },
-            .frac => switch (l.data.scalar.data.frac) {
+            .frac => switch (l.getScalar().getFrac()) {
                 .f32 => 4,
                 .f64 => 8,
                 .dec => 16,
@@ -5663,7 +5663,7 @@ fn layoutByteAlign(self: *const Self, layout_idx: layout.Idx) u32 {
             const l = ls.getLayout(layout_idx);
             return switch (l.tag) {
                 .list, .list_of_zst, .box, .box_of_zst => 4,
-                .scalar => if (l.data.scalar.tag == .str) 4 else @intCast(ls.layoutSizeAlign(l).alignment.toByteUnits()),
+                .scalar => if (l.getScalar().tag == .str) 4 else @intCast(ls.layoutSizeAlign(l).alignment.toByteUnits()),
                 else => @intCast(ls.layoutSizeAlign(l).alignment.toByteUnits()),
             };
         },
@@ -5675,16 +5675,16 @@ fn layoutStorageByteAlign(self: *const Self, layout_idx: layout.Idx) u32 {
     const l = ls.getLayout(layout_idx);
     return switch (l.tag) {
         .zst => 1,
-        .scalar => switch (l.data.scalar.tag) {
+        .scalar => switch (l.getScalar().tag) {
             .str => 4,
-            .int => switch (l.data.scalar.data.int) {
+            .int => switch (l.getScalar().getInt()) {
                 .u8, .i8 => 1,
                 .u16, .i16 => 2,
                 .u32, .i32 => 4,
                 .u64, .i64 => 8,
                 .u128, .i128 => 16,
             },
-            .frac => switch (l.data.scalar.data.frac) {
+            .frac => switch (l.getScalar().getFrac()) {
                 .f32 => 4,
                 .f64 => 8,
                 .dec => 16,
@@ -5938,7 +5938,7 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
         return;
     }
 
-    const align_val: u32 = @intCast(l.data.struct_.alignment.toByteUnits());
+    const align_val: u32 = @intCast(l.getStruct().alignment.toByteUnits());
 
     const frame_offset = try self.allocStackMemory(size, align_val);
 
@@ -5960,8 +5960,8 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
     defer self.allocator.free(field_val_types);
 
     for (fields, 0..) |field_expr_id, i| {
-        const field_byte_size = ls.getStructFieldSize(l.data.struct_.idx, @intCast(i));
-        const field_layout_idx = ls.getStructFieldLayout(l.data.struct_.idx, @intCast(i));
+        const field_byte_size = ls.getStructFieldSize(l.getStruct().idx, @intCast(i));
+        const field_layout_idx = ls.getStructFieldLayout(l.getStruct().idx, @intCast(i));
         const is_composite = self.isCompositeLayout(field_layout_idx);
         const field_vt = WasmLayout.resultValTypeWithStore(field_layout_idx, ls);
 
@@ -6004,9 +6004,9 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
 
     // Store each field from pre-computed locals
     for (fields, 0..) |_, i| {
-        const field_offset = ls.getStructFieldOffset(l.data.struct_.idx, @intCast(i));
-        const field_layout_idx = ls.getStructFieldLayout(l.data.struct_.idx, @intCast(i));
-        const field_byte_size = ls.getStructFieldSize(l.data.struct_.idx, @intCast(i));
+        const field_offset = ls.getStructFieldOffset(l.getStruct().idx, @intCast(i));
+        const field_layout_idx = ls.getStructFieldLayout(l.getStruct().idx, @intCast(i));
+        const field_byte_size = ls.getStructFieldSize(l.getStruct().idx, @intCast(i));
         const is_composite = self.isCompositeLayout(field_layout_idx);
 
         if (is_composite and field_byte_size > 0) {
@@ -6037,9 +6037,9 @@ fn bindStructPattern(self: *Self, ptr_local: u32, s: anytype) Allocator.Error!vo
     for (field_patterns, 0..) |pat_id, i| {
         const pat = self.store.getPattern(pat_id);
         const field_idx: u16 = @intCast(i);
-        const field_offset = ls.getStructFieldOffset(struct_layout.data.struct_.idx, field_idx);
-        const field_byte_size = ls.getStructFieldSize(struct_layout.data.struct_.idx, field_idx);
-        const field_layout_idx = ls.getStructFieldLayout(struct_layout.data.struct_.idx, field_idx);
+        const field_offset = ls.getStructFieldOffset(struct_layout.getStruct().idx, field_idx);
+        const field_byte_size = ls.getStructFieldSize(struct_layout.getStruct().idx, field_idx);
+        const field_layout_idx = ls.getStructFieldLayout(struct_layout.getStruct().idx, field_idx);
 
         switch (pat) {
             .bind => |bind| {
@@ -6113,13 +6113,13 @@ fn tagPatternIsIrrefutable(self: *Self, tag: anytype) bool {
     const union_layout = ls.getLayout(tag.union_layout);
     return switch (union_layout.tag) {
         .tag_union => blk: {
-            const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
+            const tu_data = ls.getTagUnionData(union_layout.getTagUnion().idx);
             break :blk ls.getTagUnionVariants(tu_data).len == 1;
         },
         .box => blk: {
-            const inner_layout = ls.getLayout(union_layout.data.box);
+            const inner_layout = ls.getLayout(union_layout.getIdx());
             if (inner_layout.tag != .tag_union) break :blk false;
-            const tu_data = ls.getTagUnionData(inner_layout.data.tag_union.idx);
+            const tu_data = ls.getTagUnionData(inner_layout.getTagUnion().idx);
             break :blk ls.getTagUnionVariants(tu_data).len == 1;
         },
         .scalar, .zst => true,
@@ -6287,8 +6287,8 @@ fn generateStructAccess(self: *Self, sa: anytype) Allocator.Error!void {
     const struct_layout = ls.getLayout(sa.struct_layout);
     std.debug.assert(struct_layout.tag == .struct_);
 
-    const field_offset = ls.getStructFieldOffset(struct_layout.data.struct_.idx, sa.field_idx);
-    const field_byte_size = ls.getStructFieldSize(struct_layout.data.struct_.idx, sa.field_idx);
+    const field_offset = ls.getStructFieldOffset(struct_layout.getStruct().idx, sa.field_idx);
+    const field_byte_size = ls.getStructFieldSize(struct_layout.getStruct().idx, sa.field_idx);
     const field_layout = ls.getLayout(sa.field_layout);
 
     // Check if the field is a composite type
@@ -6331,7 +6331,7 @@ fn generateZeroArgTag(self: *Self, z: anytype) Allocator.Error!void {
             return;
         }
         // Larger tag union — allocate memory, store discriminant
-        const align_val: u32 = @intCast(l.data.tag_union.alignment.toByteUnits());
+        const align_val: u32 = @intCast(l.getTagUnion().alignment.toByteUnits());
         const frame_offset = try self.allocStackMemory(tu_size, align_val);
 
         const base_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -6340,7 +6340,7 @@ fn generateZeroArgTag(self: *Self, z: anytype) Allocator.Error!void {
         WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
 
         // Store discriminant (size-aware)
-        const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
+        const tu_data = ls.getTagUnionData(l.getTagUnion().idx);
         const disc_offset = tu_data.discriminant_offset;
         const disc_size: u32 = tu_data.discriminant_size;
         // Push discriminant value
@@ -6368,7 +6368,7 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
     std.debug.assert(l.tag == .tag_union);
 
     const tu_size = ls.layoutSize(l);
-    const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
+    const tu_data = ls.getTagUnionData(l.getTagUnion().idx);
     const disc_offset = tu_data.discriminant_offset;
     if (tu_size <= 4 and disc_offset == 0) {
         // Small tag union — discriminant only, no payload (enum).
@@ -6385,7 +6385,7 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
         return;
     }
 
-    const align_val: u32 = @intCast(l.data.tag_union.alignment.toByteUnits());
+    const align_val: u32 = @intCast(l.getTagUnion().alignment.toByteUnits());
     const frame_offset = try self.allocStackMemory(tu_size, align_val);
 
     const base_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -6456,7 +6456,7 @@ fn generateDiscriminantSwitch(self: *Self, ds: anytype) Allocator.Error!void {
 
     if (union_layout.tag == .tag_union) {
         // Tag union in memory — load discriminant from memory offset
-        const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
+        const tu_data = ls.getTagUnionData(union_layout.getTagUnion().idx);
         const disc_offset = tu_data.discriminant_offset;
         const disc_size: u32 = tu_data.discriminant_size;
         const tu_size = ls.layoutSize(union_layout);
@@ -7198,7 +7198,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const list_layout_idx = self.exprLayoutIdx(args[0]);
             const list_layout = ls.getLayout(list_layout_idx);
             const elem_layout_idx = switch (list_layout.tag) {
-                .list => list_layout.data.list,
+                .list => list_layout.getIdx(),
                 .list_of_zst => ll.ret_layout,
                 else => unreachable,
             };
@@ -7798,7 +7798,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const ls = self.getLayoutStore();
             const record_layout_idx = self.exprLayoutIdx(args[1]);
             const record_layout = ls.getLayout(record_layout_idx);
-            const record_idx = record_layout.data.struct_.idx;
+            const record_idx = record_layout.getStruct().idx;
             const len_field_off = ls.getStructFieldOffsetByOriginalIndex(record_idx, 0);
             const start_field_off = ls.getStructFieldOffsetByOriginalIndex(record_idx, 1);
             if (builtin.mode == .Debug) {
@@ -8193,7 +8193,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const ls = self.getLayoutStore();
             const ret_layout_val = ls.getLayout(ll.ret_layout);
             if (ret_layout_val.tag != .tag_union) unreachable;
-            const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
+            const tu_data = ls.getTagUnionData(ret_layout_val.getTagUnion().idx);
             const import_idx = self.str_from_utf8_import orelse unreachable;
             try self.generateExpr(args[0]);
             const input = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -8213,7 +8213,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const ls = self.getLayoutStore();
             const ret_layout_val = ls.getLayout(ll.ret_layout);
             if (ret_layout_val.tag != .tag_union) unreachable;
-            const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
+            const tu_data = ls.getTagUnionData(ret_layout_val.getTagUnion().idx);
             const disc_offset: u32 = tu_data.discriminant_offset;
             const result_offset = try self.allocStackMemory(tu_data.size, 4);
 
@@ -8225,7 +8225,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     const payload_layout = ls.getLayout(payload);
                     if (payload_layout.tag != .struct_) break :blk payload;
 
-                    const struct_data = ls.getStructData(payload_layout.data.struct_.idx);
+                    const struct_data = ls.getStructData(payload_layout.getStruct().idx);
                     const fields = ls.struct_fields.sliceRange(struct_data.getFields());
                     if (fields.len != 1) break :blk payload;
 
@@ -10258,7 +10258,7 @@ fn generateListEq(self: *Self, lhs: LirExprId, rhs: LirExprId, list_layout_idx: 
     const ls = self.getLayoutStore();
     const list_layout = ls.getLayout(list_layout_idx);
     std.debug.assert(list_layout.tag == .list);
-    const elem_layout = list_layout.data.list;
+    const elem_layout = list_layout.getIdx();
     try self.generateListEqWithElemLayout(lhs, rhs, elem_layout, negate);
 }
 
@@ -10287,7 +10287,7 @@ fn generateListEqWithElemLayout(self: *Self, lhs: LirExprId, rhs: LirExprId, ele
         const elem_l = ls.getLayout(elem_layout);
         if (elem_l.tag == .list) {
             // List of lists - use specialized host function with inner element size
-            const inner_elem_layout = elem_l.data.list;
+            const inner_elem_layout = elem_l.getIdx();
             const inner_elem_size = self.layoutByteSize(inner_elem_layout);
             const import_idx = self.list_list_eq_import orelse unreachable;
             try self.emitLocalGet(lhs_local);
@@ -11565,7 +11565,7 @@ fn generateLLListAppend(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
     const elem_size = self.getListElemSize(ret_layout);
     const elem_align = self.getListElemAlign(ret_layout);
     const elem_layout_idx = switch (self.getLayoutStore().getLayout(ret_layout).tag) {
-        .list => self.getLayoutStore().getLayout(ret_layout).data.list,
+        .list => self.getLayoutStore().getLayout(ret_layout).getIdx(),
         .list_of_zst => layout.Idx.zst,
         else => unreachable,
     };

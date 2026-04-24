@@ -101,7 +101,7 @@ fn detectDotContext(source: []const u8, pos: anytype) CompletionContext {
 
             const access_chain = source[chain_start..ident_end];
 
-            if (std.ascii.isUpper(ident_name[0]) and std.mem.indexOfScalar(u8, access_chain, '.') == null) {
+            if (std.ascii.isUpper(ident_name[0]) and std.mem.findScalar(u8, access_chain, '.') == null) {
                 // Uppercase without dots - module access (e.g., "Str.")
                 return .{ .after_module_dot = ident_name };
             } else {

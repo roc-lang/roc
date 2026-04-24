@@ -7,9 +7,6 @@ const std = @import("std");
 const protocol = @import("../protocol.zig");
 const parse = @import("parse");
 const can = @import("can");
-const base = @import("base");
-
-const Allocators = base.Allocators;
 const AST = parse.AST;
 const TokenizedRegion = AST.TokenizedRegion;
 
@@ -75,7 +72,7 @@ pub fn handler(comptime ServerType: type) type {
             };
 
             // Process each position
-            var results = std.ArrayList(?SelectionRange){};
+            var results: std.ArrayList(?SelectionRange) = .empty;
             defer {
                 // Free the linked list nodes
                 for (results.items) |maybe_range| {
@@ -153,22 +150,18 @@ fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line:
     const target_offset = positionToOffset(line, character, &line_offsets) orelse return error.InvalidPosition;
 
     // Parse to get AST
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
     var module_env = can.ModuleEnv.init(allocator, source) catch {
         return error.ParseFailed;
     };
     defer module_env.deinit();
 
-    const ast = parse.parse(&allocators, &module_env.common) catch {
+    const ast = parse.parse(allocator, &module_env.common) catch {
         return error.ParseFailed;
     };
     defer ast.deinit();
 
     // Collect all containing regions
-    var containing_regions = std.ArrayList(ByteRange){};
+    var containing_regions: std.ArrayList(ByteRange) = .empty;
     defer containing_regions.deinit(allocator);
 
     // 1. Find the token at the position (innermost)
@@ -209,7 +202,7 @@ fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line:
     }.lessThan);
 
     // Remove duplicates (regions with same start and end)
-    var unique_regions = std.ArrayList(ByteRange){};
+    var unique_regions: std.ArrayList(ByteRange) = .empty;
     defer unique_regions.deinit(allocator);
 
     var prev: ?ByteRange = null;

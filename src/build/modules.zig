@@ -80,6 +80,7 @@ fn wrapperTestCount(b: *Build, module_type: ModuleType, module: *Module) usize {
         pending.items.len -= 1;
         total += scanFileForWrappers(
             allocator,
+            b.graph.io,
             entry,
             &pending,
             &seen,
@@ -92,17 +93,18 @@ fn wrapperTestCount(b: *Build, module_type: ModuleType, module: *Module) usize {
 
 fn scanFileForWrappers(
     allocator: std.mem.Allocator,
+    io: std.Io,
     entry: FileToScan,
     pending: *std.ArrayList(FileToScan),
     seen: *std.StringHashMap(void),
     has_aggregators: bool,
 ) usize {
     const path = entry.path;
-    const source = std.fs.cwd().readFileAllocOptions(
-        allocator,
+    const source = std.Io.Dir.cwd().readFileAllocOptions(
+        io,
         path,
-        wrapper_scan_max_bytes,
-        null,
+        allocator,
+        .limited(wrapper_scan_max_bytes),
         .@"1",
         0,
     ) catch |err| {
@@ -150,7 +152,7 @@ fn collectAggregatorImports(
     var search_index: usize = 0;
     const current_dir = std.fs.path.dirname(current_path) orelse ".";
 
-    while (std.mem.indexOfPos(u8, source, search_index, pattern)) |match_pos| {
+    while (std.mem.findPos(u8, source, search_index, pattern)) |match_pos| {
         const literal_start = match_pos + pattern.len;
         var cursor = literal_start;
         while (cursor < source.len) : (cursor += 1) {
@@ -292,7 +294,7 @@ pub const ModuleType = enum {
     can,
     check,
     tracy,
-    io,
+    ctx,
     build_options,
     layout,
     interpreter_layout,
@@ -321,7 +323,7 @@ pub const ModuleType = enum {
         return switch (self) {
             .build_options => &.{},
             .builtins => &.{.tracy},
-            .io => &.{},
+            .ctx => &.{},
             .tracy => &.{.build_options},
             .collections => &.{},
             .base => &.{ .collections, .builtins },
@@ -329,23 +331,23 @@ pub const ModuleType = enum {
             .types => &.{ .tracy, .base, .collections },
             .reporting => &.{ .collections, .base },
             .parse => &.{ .tracy, .collections, .base, .reporting },
-            .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting, .build_options },
+            .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting, .build_options, .ctx },
             .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting },
             .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can, .mir },
             .interpreter_layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
             .values => &.{ .collections, .base, .builtins, .layout },
             .interpreter_values => &.{ .collections, .base, .builtins, .interpreter_layout },
-            .eval => &.{ .tracy, .io, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .interpreter_layout, .values, .interpreter_values, .build_options, .reporting, .backend, .mir, .lir, .roc_target, .sljmp },
-            .compile => &.{ .tracy, .build_options, .io, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target },
+            .eval => &.{ .tracy, .ctx, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .interpreter_layout, .values, .interpreter_values, .build_options, .reporting, .backend, .mir, .lir, .roc_target, .sljmp },
+            .compile => &.{ .tracy, .build_options, .ctx, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target },
             .ipc => &.{},
             .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .values, .eval, .backend, .roc_target },
-            .fmt => &.{ .base, .parse, .collections, .can, .io, .tracy },
+            .fmt => &.{ .base, .parse, .collections, .can, .ctx, .tracy },
             .watch => &.{.build_options},
             .bundle => &.{ .base, .collections, .base58, .unbundle },
             .unbundle => &.{ .base, .collections, .base58 },
             .base58 => &.{},
-            .lsp => &.{ .compile, .reporting, .build_options, .io, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
-            .backend => &.{ .base, .layout, .builtins, .can, .lir, .roc_target },
+            .lsp => &.{ .compile, .reporting, .build_options, .ctx, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
+            .backend => &.{ .base, .layout, .builtins, .can, .lir, .roc_target, .ctx },
             .mir => &.{ .base, .can, .types, .builtins, .parse, .check, .collections, .reporting, .build_options, .tracy },
             .lir => &.{ .base, .layout, .types, .mir, .can },
             .roc_target => &.{.base},
@@ -370,7 +372,7 @@ pub const RocModules = struct {
     can: *Module,
     check: *Module,
     tracy: *Module,
-    io: *Module,
+    ctx: *Module,
     build_options: *Module,
     layout: *Module,
     interpreter_layout: *Module,
@@ -410,7 +412,7 @@ pub const RocModules = struct {
             .can = b.addModule("can", .{ .root_source_file = b.path("src/canonicalize/mod.zig") }),
             .check = b.addModule("check", .{ .root_source_file = b.path("src/check/mod.zig") }),
             .tracy = b.addModule("tracy", .{ .root_source_file = b.path("src/build/tracy.zig") }),
-            .io = b.addModule("io", .{ .root_source_file = b.path("src/io/mod.zig") }),
+            .ctx = b.addModule("ctx", .{ .root_source_file = b.path("src/ctx/mod.zig") }),
             .build_options = b.addModule(
                 "build_options",
                 .{ .root_source_file = build_options_step.getOutput() },
@@ -462,7 +464,7 @@ pub const RocModules = struct {
             .can,
             .check,
             .tracy,
-            .io,
+            .ctx,
             .build_options,
             .layout,
             .interpreter_layout,
@@ -511,7 +513,7 @@ pub const RocModules = struct {
         step.root_module.addImport("check", self.check);
         step.root_module.addImport("tracy", self.tracy);
         step.root_module.addImport("builtins", self.builtins);
-        step.root_module.addImport("io", self.io);
+        step.root_module.addImport("ctx", self.ctx);
         step.root_module.addImport("build_options", self.build_options);
         step.root_module.addImport("layout", self.layout);
         step.root_module.addImport("eval", self.eval);
@@ -557,7 +559,7 @@ pub const RocModules = struct {
             .can => self.can,
             .check => self.check,
             .tracy => self.tracy,
-            .io => self.io,
+            .ctx => self.ctx,
             .build_options => self.build_options,
             .layout => self.layout,
             .interpreter_layout => self.interpreter_layout,
@@ -610,7 +612,7 @@ pub const RocModules = struct {
             .parse,
             .can,
             .check,
-            .io,
+            .ctx,
             .layout,
             .values,
             .eval,
@@ -647,11 +649,13 @@ pub const RocModules = struct {
                     .root_source_file = module.root_source_file.?,
                     .target = target,
                     .optimize = optimize,
-                    // IPC module needs libc for mmap, munmap, close on POSIX systems
-                    // Bundle module needs libc for C zstd (unbundle uses stdlib zstd)
-                    // Eval/repl modules need libc for setjmp/longjmp crash protection
-                    // sljmp module needs libc for setjmp/longjmp functions
-                    .link_libc = (module_type == .ipc or module_type == .bundle or module_type == .eval or module_type == .repl or module_type == .sljmp),
+                    // Zig 0.16 requires explicit link_libc on any compile unit that references
+                    // std.c.* (directly or transitively). Our modules use std.c in multiple
+                    // places — stack_overflow, CoreCtx, ExecutableMemory, channel.nanosleep,
+                    // download.getaddrinfo, server.zig, etc. — and most of the remaining
+                    // modules import ctx/unbundle transitively. It's simpler (and has no
+                    // practical cost for native-only tests) to enable link_libc uniformly.
+                    .link_libc = true,
                 }),
                 .filters = filter_injection.filters,
             });
@@ -659,8 +663,8 @@ pub const RocModules = struct {
             // Watch module needs Core Foundation and FSEvents on macOS (only when not cross-compiling)
             // These frameworks provide the FSEvents API for proper event-driven file system monitoring on macOS.
             if (module_type == .watch and target.result.os.tag == .macos and targetMatchesHost(target)) {
-                test_step.linkFramework("CoreFoundation");
-                test_step.linkFramework("CoreServices");
+                test_step.root_module.linkFramework("CoreFoundation", .{});
+                test_step.root_module.linkFramework("CoreServices", .{});
             }
 
             // Add only the necessary dependencies for each module test
@@ -669,7 +673,7 @@ pub const RocModules = struct {
             // Link zstd for bundle module (unbundle uses stdlib zstd)
             if (module_type == .bundle) {
                 if (zstd) |z| {
-                    test_step.linkLibrary(z.artifact("zstd"));
+                    test_step.root_module.linkLibrary(z.artifact("zstd"));
                 }
             }
 

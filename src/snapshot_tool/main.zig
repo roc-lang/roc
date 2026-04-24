@@ -7,6 +7,11 @@
 //! the given Roc code snippet.
 
 const std = @import("std");
+
+/// Application IO instance, initialized from `std.process.Init` in `main`.
+/// Use this instead of `app_io` for all application IO.
+var app_io: std.Io = undefined;
+
 const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
@@ -43,7 +48,7 @@ fn panicHandler(msg: []const u8, ret_addr: ?usize) noreturn {
             if (ret_addr) |addr| {
                 std.debug.print("  return address: 0x{x}\n", .{addr});
             }
-            std.debug.dumpCurrentStackTrace(ret_addr);
+            std.debug.dumpCurrentStackTrace(.{ .first_address = ret_addr });
         }
         panic_jmp = null; // prevent re-entry
         sljmp.longjmp(jmp, 1);
@@ -55,7 +60,7 @@ fn panicHandler(msg: []const u8, ret_addr: ?usize) noreturn {
 /// Unix signal handler for catching segfaults and illegal instructions from
 /// generated code. Uses the same panic_jmp mechanism as the panic handler.
 /// Not available on Windows (no POSIX signals).
-fn crashSignalHandler(_: i32) callconv(.c) void {
+fn crashSignalHandler(_: std.posix.SIG) callconv(.c) void {
     if (panic_jmp) |jmp| {
         panic_msg = "signal: segfault or illegal instruction in generated code";
         gpa_poisoned = true;
@@ -74,7 +79,7 @@ fn crashSignalHandler(_: i32) callconv(.c) void {
 }
 
 /// SIGALRM handler for catching infinite loops in generated code.
-fn alarmSignalHandler(_: i32) callconv(.c) void {
+fn alarmSignalHandler(_: std.posix.SIG) callconv(.c) void {
     if (panic_jmp) |jmp| {
         panic_msg = "timeout: dev backend execution exceeded time limit";
         gpa_poisoned = true;
@@ -107,7 +112,7 @@ fn installCrashSignalHandlers() void {
 const Repl = repl.Repl;
 const CrashContext = eval_mod.CrashContext;
 const roc_target = @import("roc_target");
-const Allocators = base.Allocators;
+const CoreCtx = compile.CoreCtx;
 const CommonEnv = base.CommonEnv;
 const Check = check.Check;
 const CIR = can.CIR;
@@ -194,7 +199,7 @@ fn parseProblemEntry(allocator: std.mem.Allocator, content: []const u8, start_id
 
     // Find the end of the problem type
     const type_start = idx + 2;
-    const type_end_search = std.mem.indexOfPos(u8, content, type_start, "**");
+    const type_end_search = std.mem.findPos(u8, content, type_start, "**");
     if (type_end_search == null) return null;
     const type_end = type_end_search.?;
 
@@ -217,7 +222,7 @@ fn parseProblemEntry(allocator: std.mem.Allocator, content: []const u8, start_id
 
     // Handle compound error types like "NOT IMPLEMENTED - UNDEFINED VARIABLE"
     // We only want the last part after the last " - "
-    if (std.mem.lastIndexOf(u8, problem_type, " - ")) |dash_idx| {
+    if (std.mem.findLast(u8, problem_type, " - ")) |dash_idx| {
         problem_type = std.mem.trim(u8, problem_type[dash_idx + 3 ..], " \t\r\n");
     }
 
@@ -249,7 +254,7 @@ fn parseProblemEntry(allocator: std.mem.Allocator, content: []const u8, start_id
         // Check if this line starts with ** (potential new problem or location)
         if (current_idx + 2 <= content.len and std.mem.eql(u8, content[current_idx .. current_idx + 2], "**")) {
             const inner_start = current_idx + 2;
-            const inner_end_search = std.mem.indexOfPos(u8, content, inner_start, "**");
+            const inner_end_search = std.mem.findPos(u8, content, inner_start, "**");
 
             if (inner_end_search) |inner_end| {
                 const inner_content = content[inner_start..inner_end];
@@ -269,10 +274,10 @@ fn parseProblemEntry(allocator: std.mem.Allocator, content: []const u8, start_id
                 }
 
                 // Check if this looks like a location (contains .md: pattern)
-                if (std.mem.indexOf(u8, inner_content, ".md:")) |_| {
+                if (std.mem.find(u8, inner_content, ".md:")) |_| {
                     var location = inner_content;
                     // Strip trailing colon and whitespace
-                    location = std.mem.trimRight(u8, location, ": \t");
+                    location = std.mem.trimEnd(u8, location, ": \t");
 
                     // Count colons to determine format
                     var colon_count: usize = 0;
@@ -355,7 +360,7 @@ fn parseProblemEntry(allocator: std.mem.Allocator, content: []const u8, start_id
 
         if (next_idx + 2 <= content.len and std.mem.eql(u8, content[next_idx .. next_idx + 2], "**")) {
             const check_start = next_idx + 2;
-            const check_end = std.mem.indexOfPos(u8, content, check_start, "**");
+            const check_end = std.mem.findPos(u8, content, check_start, "**");
 
             if (check_end) |end| {
                 const check_content = content[check_start..end];
@@ -430,14 +435,14 @@ fn generateExpectedContent(allocator: std.mem.Allocator, problems: []const Probl
         return try allocator.dupe(u8, "NIL");
     }
 
-    var buffer = std.array_list.Managed(u8).init(allocator);
+    var buffer: std.Io.Writer.Allocating = .init(allocator);
     errdefer buffer.deinit();
 
     for (problems, 0..) |problem, i| {
         if (i > 0) {
-            try buffer.append('\n');
+            buffer.writer.writeAll("\n") catch return error.OutOfMemory;
         }
-        try problem.format(buffer.writer());
+        try problem.format(&buffer.writer);
     }
 
     return buffer.toOwnedSlice();
@@ -586,7 +591,9 @@ var debug_allocator: std.heap.DebugAllocator(.{}) = .{
 };
 
 /// cli entrypoint for snapshot tool
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
+    app_io = init.io;
+
     // Always use the debug allocator with the snapshot tool to help find allocation bugs.
     var gpa_tracy: tracy.TracyAllocator(null) = undefined;
     var gpa = debug_allocator.allocator();
@@ -601,8 +608,8 @@ pub fn main() !void {
         gpa = gpa_tracy.allocator();
     }
 
-    const args = try std.process.argsAlloc(gpa);
-    defer std.process.argsFree(gpa, args);
+    const args = try init.minimal.args.toSlice(gpa);
+    defer gpa.free(args);
 
     var snapshot_paths = std.array_list.Managed([]const u8).init(gpa);
     defer snapshot_paths.deinit();
@@ -681,7 +688,7 @@ pub fn main() !void {
                 \\Options:
                 \\  --verbose       Enable verbose logging
                 \\  --html          Generate HTML output files
-                \\  --debug         Use GeneralPurposeAllocator for debugging (default: c_allocator)
+                \\  --debug         Use DebugAllocator for debugging (default: c_allocator)
                 \\  --trace-eval    Enable interpreter trace output (only works with single REPL snapshot)
                 \\  --linecol       Include line/column information in output
                 \\  --threads <n>   Number of threads to use (0 = auto-detect, 1 = single-threaded). Default: 0.
@@ -734,7 +741,7 @@ pub fn main() !void {
     builtin_modules_ptr.* = try eval_mod.BuiltinModules.init(gpa);
     defer builtin_modules_ptr.deinit();
 
-    const cwd = try std.process.getCwdAlloc(gpa);
+    const cwd = try std.process.currentPathAlloc(app_io, gpa);
     defer gpa.free(cwd);
 
     const config = Config{
@@ -751,7 +758,7 @@ pub fn main() !void {
 
     if (config.maybe_fuzz_corpus_path != null) {
         log("copying SOURCE from snapshots to: {s}", .{config.maybe_fuzz_corpus_path.?});
-        try std.fs.cwd().makePath(config.maybe_fuzz_corpus_path.?);
+        try std.Io.Dir.cwd().createDirPath(app_io, config.maybe_fuzz_corpus_path.?);
     }
     const snapshots_dir = "test/snapshots";
 
@@ -791,7 +798,7 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
     builtin_modules_ptr.* = try eval_mod.BuiltinModules.init(gpa);
     defer builtin_modules_ptr.deinit();
 
-    const cwd = try std.process.getCwdAlloc(gpa);
+    const cwd = try std.process.currentPathAlloc(app_io, gpa);
     defer gpa.free(cwd);
 
     const config = Config{
@@ -859,11 +866,11 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
     var success: bool = true;
     log("Processing multi-file snapshot directory: {s}", .{dir_path});
 
-    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
+    var dir = std.Io.Dir.cwd().openDir(app_io, dir_path, .{ .iterate = true }) catch |err| {
         std.log.err("Failed to open directory {s}: {}", .{ dir_path, err });
         return false;
     };
-    defer dir.close();
+    defer dir.close(app_io);
 
     // First, collect EXPECTED sections from existing .md files
     var expected_sections = std.StringHashMap([]const u8).init(allocator);
@@ -877,17 +884,17 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
     }
 
     var iterator = dir.iterate();
-    while (try iterator.next()) |entry| {
+    while (try iterator.next(app_io)) |entry| {
         if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".md")) {
             const full_path = try std.fs.path.join(allocator, &.{ dir_path, entry.name });
             defer allocator.free(full_path);
 
-            if (std.fs.cwd().readFileAlloc(allocator, full_path, 1024 * 1024)) |content| {
+            if (std.Io.Dir.cwd().readFileAlloc(app_io, full_path, allocator, .limited(1024 * 1024))) |content| {
                 defer allocator.free(content);
 
                 // Extract EXPECTED section
                 const expected_header = "# EXPECTED\n";
-                if (std.mem.indexOf(u8, content, expected_header)) |start_idx| {
+                if (std.mem.find(u8, content, expected_header)) |start_idx| {
                     const content_start = start_idx + expected_header.len;
 
                     // Find the next section header
@@ -922,7 +929,7 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
             files_to_delete.deinit();
         }
 
-        while (try iterator.next()) |entry| {
+        while (try iterator.next(app_io)) |entry| {
             if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".md")) {
                 const file_path = try allocator.dupe(u8, entry.name);
                 try files_to_delete.append(file_path);
@@ -930,7 +937,7 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
         }
 
         for (files_to_delete.items) |file_name| {
-            dir.deleteFile(file_name) catch |err| {
+            dir.deleteFile(app_io, file_name) catch |err| {
                 warn("Failed to delete {s}: {}", .{ file_name, err });
             };
         }
@@ -940,7 +947,7 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
     iterator = dir.iterate();
     const snapshot_type = getMultiFileSnapshotType(dir_path);
 
-    while (try iterator.next()) |entry| {
+    while (try iterator.next(app_io)) |entry| {
         if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".roc")) {
             const roc_file_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir_path, entry.name });
             defer allocator.free(roc_file_path);
@@ -953,7 +960,7 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
             defer allocator.free(snapshot_file_path);
 
             // Read the .roc file content
-            const roc_content = std.fs.cwd().readFileAlloc(allocator, roc_file_path, 1024 * 1024) catch |err| {
+            const roc_content = std.Io.Dir.cwd().readFileAlloc(app_io, roc_file_path, allocator, .limited(1024 * 1024)) catch |err| {
                 warn("Failed to read {s}: {}", .{ roc_file_path, err });
                 continue;
             };
@@ -1020,13 +1027,13 @@ fn processSnapshotContent(
     // Extract module name from custom filename if provided, otherwise from output path
     const module_name = if (content.meta.filename) |custom_filename|
         // Strip .roc extension if present
-        if (std.mem.lastIndexOfScalar(u8, custom_filename, '.')) |dot_idx|
+        if (std.mem.findScalarLast(u8, custom_filename, '.')) |dot_idx|
             custom_filename[0..dot_idx]
         else
             custom_filename
     else blk: {
         const basename = std.fs.path.basename(output_path);
-        break :blk if (std.mem.lastIndexOfScalar(u8, basename, '.')) |dot_idx|
+        break :blk if (std.mem.findScalarLast(u8, basename, '.')) |dot_idx|
             basename[0..dot_idx]
         else
             basename;
@@ -1046,14 +1053,9 @@ fn processSnapshotContent(
     defer module_env.deinit();
     var can_ir = &module_env;
 
-    // Create allocators for parsing
-    var allocators: single_module.Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
     // Parse using the unified compile_module interface
     const parse_ast = try single_module.parseSingleModule(
-        &allocators,
+        allocator,
         can_ir,
         parse_mode,
         .{ .module_name = module_name },
@@ -1079,7 +1081,8 @@ fn processSnapshotContent(
             // Snippet and mono tests are full modules
             const builtin_env = config.builtin_module orelse return error.MissingBuiltinModule;
 
-            var czer = try Can.initModule(&allocators, can_ir, parse_ast, .{
+            const roc_ctx = CoreCtx.default(allocator, allocator, app_io);
+            var czer = try Can.initModule(roc_ctx, can_ir, parse_ast, .{
                 .builtin_types = .{
                     .builtin_module_env = builtin_env,
                     .builtin_indices = config.builtin_indices,
@@ -1095,7 +1098,8 @@ fn processSnapshotContent(
             // Expr and statement tests use different canonicalization methods
             const builtin_env = config.builtin_module orelse return error.MissingBuiltinModule;
 
-            var czer = try Can.initModule(&allocators, can_ir, parse_ast, .{
+            const roc_ctx = CoreCtx.default(allocator, allocator, app_io);
+            var czer = try Can.initModule(roc_ctx, can_ir, parse_ast, .{
                 .builtin_types = .{
                     .builtin_module_env = builtin_env,
                     .builtin_indices = config.builtin_indices,
@@ -1220,8 +1224,9 @@ fn processSnapshotContent(
             // This way it stays alive until the defer at line 1249
             module_envs_for_file = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
 
+            const roc_ctx_for_check = CoreCtx.default(allocator, allocator, app_io);
             var checker = try compile.PackageEnv.canonicalizeAndTypeCheckModule(
-                &allocators,
+                roc_ctx_for_check,
                 allocator,
                 can_ir,
                 parse_ast,
@@ -1282,9 +1287,10 @@ fn processSnapshotContent(
         defer original_tree.deinit();
         try ModuleEnv.pushToSExprTree(can_ir, null, &original_tree);
 
-        var original_sexpr = std.array_list.Managed(u8).init(allocator);
-        defer original_sexpr.deinit();
-        try original_tree.toStringPretty(original_sexpr.writer().any(), .skip_linecol);
+        var original_sexpr_aw: std.Io.Writer.Allocating = .init(allocator);
+        defer original_sexpr_aw.deinit();
+        try original_tree.toStringPretty(&original_sexpr_aw.writer, .skip_linecol);
+        const original_sexpr_items = original_sexpr_aw.writer.buffer[0..original_sexpr_aw.writer.end];
 
         // Create arena for serialization
         var cache_arena = std.heap.ArenaAllocator.init(allocator);
@@ -1310,17 +1316,18 @@ fn processSnapshotContent(
         defer restored_tree.deinit();
         try ModuleEnv.pushToSExprTree(restored_env, null, &restored_tree);
 
-        var restored_sexpr = std.array_list.Managed(u8).init(allocator);
-        defer restored_sexpr.deinit();
-        try restored_tree.toStringPretty(restored_sexpr.writer().any(), .skip_linecol);
+        var restored_sexpr_aw: std.Io.Writer.Allocating = .init(allocator);
+        defer restored_sexpr_aw.deinit();
+        try restored_tree.toStringPretty(&restored_sexpr_aw.writer, .skip_linecol);
+        const restored_sexpr_items = restored_sexpr_aw.writer.buffer[0..restored_sexpr_aw.writer.end];
 
         // Compare S-expressions - crash if they don't match
-        if (!std.mem.eql(u8, original_sexpr.items, restored_sexpr.items)) {
+        if (!std.mem.eql(u8, original_sexpr_items, restored_sexpr_items)) {
             std.log.err("Cache round-trip validation failed for snapshot: {s}", .{output_path});
             std.log.err("Original and restored CIR S-expressions don't match!", .{});
             std.log.err("This indicates a bug in MmapCache serialization/deserialization.", .{});
-            std.log.err("Original S-expression:\n{s}", .{original_sexpr.items});
-            std.log.err("Restored S-expression:\n{s}", .{restored_sexpr.items});
+            std.log.err("Original S-expression:\n{s}", .{original_sexpr_items});
+            std.log.err("Restored S-expression:\n{s}", .{restored_sexpr_items});
             return error.CacheRoundTripValidationFailed;
         }
     }
@@ -1470,13 +1477,13 @@ fn processSnapshotContent(
 
     if (!config.disable_updates) {
         // Write the markdown file
-        const md_file = std.fs.cwd().createFile(output_path, .{}) catch |err| {
+        const md_file = std.Io.Dir.cwd().createFile(app_io, output_path, .{}) catch |err| {
             std.log.err("Failed to create {s}: {}", .{ output_path, err });
             return false;
         };
-        defer md_file.close();
+        defer md_file.close(app_io);
 
-        try md_file.writeAll(md_buffer_unmanaged.items);
+        try md_file.writeStreamingAll(app_io, md_buffer_unmanaged.items);
 
         if (html_buffer_unmanaged) |*buf| {
             writeHtmlFile(allocator, output_path, buf) catch |err| {
@@ -1602,16 +1609,16 @@ fn processWorkItems(gpa: Allocator, work_list: WorkList, max_threads: usize, deb
 
 /// Stage 1: Walk directory tree and collect work items
 fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) !void {
-    const canonical_path = std.fs.cwd().realpathAlloc(gpa, path) catch |err| {
+    const canonical_path = std.Io.Dir.cwd().realPathFileAlloc(app_io, path, gpa) catch |err| {
         std.log.err("failed to resolve path '{s}': {s}", .{ path, @errorName(err) });
         return;
     };
     defer gpa.free(canonical_path);
 
     // Try to open as directory first
-    if (std.fs.cwd().openDir(canonical_path, .{ .iterate = true })) |dir_handle| {
+    if (std.Io.Dir.cwd().openDir(app_io, canonical_path, .{ .iterate = true })) |dir_handle| {
         var dir = dir_handle;
-        defer dir.close();
+        defer dir.close(app_io);
 
         // It's a directory
         if (isMultiFileSnapshot(canonical_path)) {
@@ -1622,7 +1629,7 @@ fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) !voi
             });
         } else {
             var dir_iterator = dir.iterate();
-            while (try dir_iterator.next()) |entry| {
+            while (try dir_iterator.next(app_io)) |entry| {
                 // Skip hidden files and special directories
                 if (entry.name[0] == '.') continue;
 
@@ -1746,7 +1753,7 @@ const Section = union(enum) {
 
         fn extract(self: Range, content: []const u8) []const u8 {
             if (self.end < self.start) @panic("invalid range");
-            return std.mem.trimRight(u8, content[self.start..self.end], "\n");
+            return std.mem.trimEnd(u8, content[self.start..self.end], "\n");
         }
     };
 };
@@ -1836,7 +1843,7 @@ const Meta = struct {
             } else if (std.mem.startsWith(u8, line, TYPE_START)) {
                 const ty = line[(TYPE_START.len)..];
                 // Check if there's a colon indicating a custom filename
-                if (std.mem.indexOfScalar(u8, ty, ':')) |colon_idx| {
+                if (std.mem.findScalar(u8, ty, ':')) |colon_idx| {
                     node_type = try NodeType.fromString(ty[0..colon_idx]);
                     filename = ty[colon_idx + 1 ..];
                 } else {
@@ -2954,11 +2961,7 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     };
 
     // Parse the MONO output as a headerless type module
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    const validation_ast = parse.parse(&allocators, &validation_env.common) catch |err| {
+    const validation_ast = parse.parse(allocator, &validation_env.common) catch |err| {
         std.log.err("MONO VALIDATION ERROR in {s}: Parse failed: {}", .{ source_path, err });
         return false;
     };
@@ -2993,7 +2996,8 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     };
 
     // Canonicalize the parsed MONO output
-    var czer = Can.initModule(&allocators, &validation_env, validation_ast, .{
+    const mono_roc_ctx = CoreCtx.default(allocator, allocator, app_io);
+    var czer = Can.initModule(mono_roc_ctx, &validation_env, validation_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_env,
             .builtin_indices = config.builtin_indices,
@@ -3144,11 +3148,7 @@ fn parseAndFormat(gpa: std.mem.Allocator, input: []const u8) ![]const u8 {
     var module_env = try ModuleEnv.init(gpa, input);
     defer module_env.deinit();
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.parse(gpa, &module_env.common);
     defer parse_ast.deinit();
 
     // Check for parse errors - if there are any, we can't format
@@ -3186,7 +3186,7 @@ fn typeStringIsPolymorphic(type_str: []const u8) bool {
 fn isIdentReferencedIn(name: []const u8, text: []const u8) bool {
     if (name.len == 0) return false;
     var pos: usize = 0;
-    while (std.mem.indexOfPos(u8, text, pos, name)) |idx| {
+    while (std.mem.findPos(u8, text, pos, name)) |idx| {
         const before_ok = idx == 0 or (!std.ascii.isAlphanumeric(text[idx - 1]) and text[idx - 1] != '_');
         const after_idx = idx + name.len;
         const after_ok = after_idx >= text.len or (!std.ascii.isAlphanumeric(text[after_idx]) and text[after_idx] != '_');
@@ -3410,13 +3410,13 @@ fn writeHtmlFile(gpa: Allocator, snapshot_path: []const u8, html_buffer: *std.Ar
     defer gpa.free(html_path);
 
     // Write HTML file
-    var html_file = std.fs.cwd().createFile(html_path, .{}) catch |err| {
+    var html_file = std.Io.Dir.cwd().createFile(app_io, html_path, .{}) catch |err| {
         log("failed to create HTML file '{s}': {s}", .{ html_path, @errorName(err) });
         return;
     };
-    defer html_file.close();
+    defer html_file.close(app_io);
     var html_writer_buffer: [4096]u8 = undefined;
-    var html_writer = html_file.writer(&html_writer_buffer);
+    var html_writer = html_file.writer(app_io, &html_writer_buffer);
     try html_writer.interface.writeAll(html_buffer.items);
     try html_writer.interface.flush();
 
@@ -3429,7 +3429,7 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, config:
     log("processing snapshot file: {s}", .{snapshot_path});
 
     const @"1Mb" = 1024 * 1024;
-    const file_content = std.fs.cwd().readFileAlloc(gpa, snapshot_path, @"1Mb") catch |err| {
+    const file_content = std.Io.Dir.cwd().readFileAlloc(app_io, snapshot_path, gpa, .limited(@"1Mb")) catch |err| {
         std.log.err("failed to read file '{s}': {s}", .{ snapshot_path, @errorName(err) });
         return false;
     };
@@ -3440,7 +3440,7 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, config:
         std.log.err("file '{s}' is not a valid snapshot file", .{snapshot_path});
         std.log.err("snapshot files must start with '# META'", .{});
         if (file_content.len > 0) {
-            const first_line_end = std.mem.indexOfScalar(u8, file_content, '\n') orelse @min(file_content.len, 50);
+            const first_line_end = std.mem.findScalar(u8, file_content, '\n') orelse @min(file_content.len, 50);
             const first_line = file_content[0..first_line_end];
             std.log.err("file starts with: '{s}'", .{first_line});
         }
@@ -3526,14 +3526,14 @@ fn writeCorpusFile(gpa: Allocator, path: []const u8, source: []const u8, rng: st
     const corpus_file_path = try std.fs.path.join(gpa, &rand_file_name);
     defer gpa.free(corpus_file_path);
 
-    var corpus_file = std.fs.cwd().createFile(corpus_file_path, .{}) catch |err| {
+    var corpus_file = std.Io.Dir.cwd().createFile(app_io, corpus_file_path, .{}) catch |err| {
         std.log.err("failed to create file in '{s}': {s}", .{ path, @errorName(err) });
         return;
     };
-    defer corpus_file.close();
+    defer corpus_file.close(app_io);
 
     var write_buffer: [4096]u8 = undefined;
-    var corpus_writer = corpus_file.writer(&write_buffer);
+    var corpus_writer = corpus_file.writer(app_io, &write_buffer);
     const writer = &corpus_writer.interface;
     try writer.writeAll(source);
     try writer.flush();
@@ -3640,18 +3640,18 @@ fn processDocsSnapshot(
         @as(u64, @intCast(@intFromPtr(output_path.ptr))),
     }) catch return false;
 
-    std.fs.cwd().makePath(tmp_dir_name) catch |err| {
+    std.Io.Dir.cwd().createDirPath(app_io, tmp_dir_name) catch |err| {
         std.log.err("Failed to create temp directory {s}: {}", .{ tmp_dir_name, err });
         return false;
     };
-    defer std.fs.cwd().deleteTree(tmp_dir_name) catch {};
+    defer std.Io.Dir.cwd().deleteTree(app_io, tmp_dir_name) catch {};
 
     // Find the app file (first .roc file, or explicitly "app.roc")
     var app_filename: ?[]const u8 = null;
     for (source_files) |sf| {
         const sub_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir_name, sf.filename });
         defer allocator.free(sub_path);
-        std.fs.cwd().writeFile(.{
+        std.Io.Dir.cwd().writeFile(app_io, .{
             .sub_path = sub_path,
             .data = sf.content,
         }) catch |err| {
@@ -3670,7 +3670,7 @@ fn processDocsSnapshot(
     const BuildEnv = compile.BuildEnv;
     const native_target = roc_target.RocTarget.detectNative();
 
-    var build_env = BuildEnv.init(allocator, .single_threaded, 1, native_target, config.cwd) catch |err| {
+    var build_env = BuildEnv.init(allocator, .single_threaded, 1, native_target, config.cwd, app_io) catch |err| {
         std.log.err("Failed to init BuildEnv: {}", .{err});
         return false;
     };
@@ -3743,8 +3743,8 @@ fn processDocsSnapshot(
         switch (config.expected_section_command) {
             .update => break :blk true,
             .check => {
-                const existing_trimmed = std.mem.trimRight(u8, content.docs_output.?, " \t\r\n");
-                const new_trimmed = std.mem.trimRight(u8, new_docs_text, " \t\r\n");
+                const existing_trimmed = std.mem.trimEnd(u8, content.docs_output.?, " \t\r\n");
+                const new_trimmed = std.mem.trimEnd(u8, new_docs_text, " \t\r\n");
                 if (!std.mem.eql(u8, existing_trimmed, new_trimmed)) {
                     std.debug.print("\nDOCS mismatch in {s}\n\n", .{output_path});
                     std.debug.print("Expected:\n{s}\n\nActual:\n{s}\n", .{ existing_trimmed, new_trimmed });
@@ -3754,8 +3754,8 @@ fn processDocsSnapshot(
                 break :blk false;
             },
             .none => {
-                const existing_trimmed = std.mem.trimRight(u8, content.docs_output.?, " \t\r\n");
-                const new_trimmed = std.mem.trimRight(u8, new_docs_text, " \t\r\n");
+                const existing_trimmed = std.mem.trimEnd(u8, content.docs_output.?, " \t\r\n");
+                const new_trimmed = std.mem.trimEnd(u8, new_docs_text, " \t\r\n");
                 if (!std.mem.eql(u8, existing_trimmed, new_trimmed)) {
                     std.debug.print("\nDOCS warning: output changed in {s}\n", .{output_path});
                     std.debug.print("Hint: use `zig build snapshot -- --check-expected` to see details, or `--update-expected` to update.\n\n", .{});
@@ -3801,13 +3801,13 @@ fn processDocsSnapshot(
     md_buffer = md_writer.toArrayList();
 
     // Write the output file
-    const md_file = std.fs.cwd().createFile(output_path, .{}) catch |err| {
+    const md_file = std.Io.Dir.cwd().createFile(app_io, output_path, .{}) catch |err| {
         std.log.err("Failed to create {s}: {}", .{ output_path, err });
         return false;
     };
-    defer md_file.close();
+    defer md_file.close(app_io);
 
-    try md_file.writeAll(md_buffer.items);
+    try md_file.writeStreamingAll(app_io, md_buffer.items);
     return success;
 }
 
@@ -3843,16 +3843,16 @@ fn parseMultiFileSource(allocator: Allocator, source_text: []const u8) ![]Source
         {
             // Extract filename (rest of line)
             const name_start = idx + 3;
-            const name_end = std.mem.indexOfScalarPos(u8, source_text, name_start, '\n') orelse source_text.len;
+            const name_end = std.mem.findScalarPos(u8, source_text, name_start, '\n') orelse source_text.len;
             const filename = std.mem.trim(u8, source_text[name_start..name_end], " \t\r");
             idx = name_end;
 
             // Find ~~~roc block
             const roc_marker = "~~~roc\n";
-            if (std.mem.indexOfPos(u8, source_text, idx, roc_marker)) |roc_start| {
+            if (std.mem.findPos(u8, source_text, idx, roc_marker)) |roc_start| {
                 const content_start = roc_start + roc_marker.len;
                 // Find closing ~~~
-                if (std.mem.indexOfPos(u8, source_text, content_start, "~~~")) |content_end| {
+                if (std.mem.findPos(u8, source_text, content_start, "~~~")) |content_end| {
                     try files.append(allocator, .{
                         .filename = filename,
                         .content = source_text[content_start..content_end],
@@ -3878,8 +3878,8 @@ const TargetHashResult = struct {
 /// Compare two hash text blocks (target=hash lines) for equality,
 /// ignoring trailing whitespace differences.
 fn hashTextMatches(existing: []const u8, new: []const u8) bool {
-    const existing_trimmed = std.mem.trimRight(u8, existing, " \t\r\n");
-    const new_trimmed = std.mem.trimRight(u8, new, " \t\r\n");
+    const existing_trimmed = std.mem.trimEnd(u8, existing, " \t\r\n");
+    const new_trimmed = std.mem.trimEnd(u8, new, " \t\r\n");
     return std.mem.eql(u8, existing_trimmed, new_trimmed);
 }
 
@@ -3889,11 +3889,11 @@ fn printHashMismatchTable(existing: []const u8, new: []const u8) void {
     std.debug.print("  {s:-<18} | {s:-<64} | {s:-<64}\n", .{ "", "", "" });
 
     // Parse existing hashes into a map-like iteration
-    var new_lines = std.mem.splitScalar(u8, std.mem.trimRight(u8, new, " \t\r\n"), '\n');
-    var existing_lines = std.mem.splitScalar(u8, std.mem.trimRight(u8, existing, " \t\r\n"), '\n');
+    var new_lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, new, " \t\r\n"), '\n');
+    var existing_lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, existing, " \t\r\n"), '\n');
 
     while (new_lines.next()) |new_line| {
-        const new_eq = std.mem.indexOfScalar(u8, new_line, '=') orelse continue;
+        const new_eq = std.mem.findScalar(u8, new_line, '=') orelse continue;
         const target = new_line[0..new_eq];
         const new_hash = new_line[new_eq + 1 ..];
 
@@ -3901,7 +3901,7 @@ fn printHashMismatchTable(existing: []const u8, new: []const u8) void {
         existing_lines.reset();
         var old_hash: ?[]const u8 = null;
         while (existing_lines.next()) |existing_line| {
-            const ex_eq = std.mem.indexOfScalar(u8, existing_line, '=') orelse continue;
+            const ex_eq = std.mem.findScalar(u8, existing_line, '=') orelse continue;
             if (std.mem.eql(u8, existing_line[0..ex_eq], target)) {
                 old_hash = existing_line[ex_eq + 1 ..];
                 break;
@@ -3945,18 +3945,18 @@ fn processDevObjectSnapshot(
         @as(u64, @intCast(@intFromPtr(output_path.ptr))),
     }) catch return false;
 
-    std.fs.cwd().makePath(tmp_dir_name) catch |err| {
+    std.Io.Dir.cwd().createDirPath(app_io, tmp_dir_name) catch |err| {
         std.log.err("Failed to create temp directory {s}: {}", .{ tmp_dir_name, err });
         return false;
     };
-    defer std.fs.cwd().deleteTree(tmp_dir_name) catch {};
+    defer std.Io.Dir.cwd().deleteTree(app_io, tmp_dir_name) catch {};
 
     // Find the app file (first .roc file, or explicitly "app.roc")
     var app_filename: ?[]const u8 = null;
     for (source_files) |sf| {
         const sub_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir_name, sf.filename });
         defer allocator.free(sub_path);
-        std.fs.cwd().writeFile(.{
+        std.Io.Dir.cwd().writeFile(app_io, .{
             .sub_path = sub_path,
             .data = sf.content,
         }) catch |err| {
@@ -3975,7 +3975,7 @@ fn processDevObjectSnapshot(
     const BuildEnv = compile.BuildEnv;
     const native_target = roc_target.RocTarget.detectNative();
 
-    var build_env = BuildEnv.init(allocator, .single_threaded, 1, native_target, config.cwd) catch |err| {
+    var build_env = BuildEnv.init(allocator, .single_threaded, 1, native_target, config.cwd, app_io) catch |err| {
         std.log.err("Failed to init BuildEnv: {}", .{err});
         return false;
     };
@@ -4523,13 +4523,13 @@ fn processDevObjectSnapshot(
     md_buffer = md_writer.toArrayList();
 
     // Write the output file
-    const md_file = std.fs.cwd().createFile(output_path, .{}) catch |err| {
+    const md_file = std.Io.Dir.cwd().createFile(app_io, output_path, .{}) catch |err| {
         std.log.err("Failed to create {s}: {}", .{ output_path, err });
         return false;
     };
-    defer md_file.close();
+    defer md_file.close(app_io);
 
-    try md_file.writeAll(md_buffer.items);
+    try md_file.writeStreamingAll(app_io, md_buffer.items);
     return success;
 }
 
@@ -4570,13 +4570,13 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
 
     if (!config.disable_updates) {
         // Write the markdown file
-        const md_file = std.fs.cwd().createFile(output_path, .{}) catch |err| {
+        const md_file = std.Io.Dir.cwd().createFile(app_io, output_path, .{}) catch |err| {
             std.log.err("Failed to create {s}: {}", .{ output_path, err });
             return false;
         };
-        defer md_file.close();
+        defer md_file.close(app_io);
 
-        try md_file.writeAll(md_buffer_unmanaged.items);
+        try md_file.writeStreamingAll(app_io, md_buffer_unmanaged.items);
 
         if (html_buffer_unmanaged) |*buf| {
             writeHtmlFile(allocator, output_path, buf) catch |err| {
@@ -4873,6 +4873,7 @@ fn generateReplProblemsSection(output: *DualOutput, _: *const Content) !void {
 }
 
 test "snapshot validation" {
+    app_io = std.testing.io;
     const allocator = std.testing.allocator;
     if (!try checkSnapshotExpectations(allocator)) {
         return error.SnapshotValidationFailed;
@@ -4894,8 +4895,8 @@ test "no Builtin module leaks in snapshots" {
     const allocator = std.testing.allocator;
 
     // Find all snapshot files
-    var snapshots_dir = try std.fs.cwd().openDir("test/snapshots", .{ .iterate = true });
-    defer snapshots_dir.close();
+    var snapshots_dir = try std.Io.Dir.cwd().openDir(std.testing.io, "test/snapshots", .{ .iterate = true });
+    defer snapshots_dir.close(std.testing.io);
 
     var files_with_builtin: std.array_list.Managed([]const u8) = .{ .allocator = allocator, .items = &.{}, .capacity = 0 };
     defer {
@@ -4921,12 +4922,12 @@ test "no Builtin module leaks in snapshots" {
 
 fn searchDirectoryForBuiltin(
     allocator: std.mem.Allocator,
-    dir: *std.fs.Dir,
+    dir: *std.Io.Dir,
     relative_path: []const u8,
     files_with_builtin: *std.array_list.Managed([]const u8),
 ) !void {
     var iter = dir.iterate();
-    while (try iter.next()) |entry| {
+    while (try iter.next(std.testing.io)) |entry| {
         const full_path = if (relative_path.len > 0)
             try std.fmt.allocPrint(allocator, "{s}/{s}", .{ relative_path, entry.name })
         else
@@ -4935,20 +4936,17 @@ fn searchDirectoryForBuiltin(
 
         switch (entry.kind) {
             .directory => {
-                var subdir = try dir.openDir(entry.name, .{ .iterate = true });
-                defer subdir.close();
+                var subdir = try dir.openDir(std.testing.io, entry.name, .{ .iterate = true });
+                defer subdir.close(std.testing.io);
                 try searchDirectoryForBuiltin(allocator, &subdir, full_path, files_with_builtin);
             },
             .file => {
                 if (std.mem.endsWith(u8, entry.name, ".md")) {
-                    const file = try dir.openFile(entry.name, .{});
-                    defer file.close();
-
-                    const content = try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
+                    const content = try dir.readFileAlloc(std.testing.io, entry.name, allocator, .limited(10 * 1024 * 1024));
                     defer allocator.free(content);
 
                     // Search for "Builtin" (case-sensitive)
-                    if (std.mem.indexOf(u8, content, "Builtin")) |_| {
+                    if (std.mem.find(u8, content, "Builtin")) |_| {
                         try files_with_builtin.append(try allocator.dupe(u8, full_path));
                     }
                 }

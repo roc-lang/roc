@@ -147,6 +147,209 @@ fn dumpMirExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId, depth: usize) v
     }
 }
 
+fn exprContainsRunLowLevelOp(mir_store: *const MIR.Store, expr_id: MIR.ExprId, op: can.CIR.Expr.LowLevel) bool {
+    const expr = mir_store.getExpr(expr_id);
+    switch (expr) {
+        .run_low_level => |low_level| {
+            if (low_level.op == op) return true;
+            for (mir_store.getExprSpan(low_level.args)) |arg| {
+                if (exprContainsRunLowLevelOp(mir_store, arg, op)) return true;
+            }
+            return false;
+        },
+        .list => |list| {
+            for (mir_store.getExprSpan(list.elems)) |elem| {
+                if (exprContainsRunLowLevelOp(mir_store, elem, op)) return true;
+            }
+            return false;
+        },
+        .struct_ => |struct_| {
+            for (mir_store.getExprSpan(struct_.fields)) |field| {
+                if (exprContainsRunLowLevelOp(mir_store, field, op)) return true;
+            }
+            return false;
+        },
+        .tag => |tag| {
+            for (mir_store.getExprSpan(tag.args)) |arg| {
+                if (exprContainsRunLowLevelOp(mir_store, arg, op)) return true;
+            }
+            return false;
+        },
+        .match_expr => |match_expr| {
+            if (exprContainsRunLowLevelOp(mir_store, match_expr.cond, op)) return true;
+            for (mir_store.getBranches(match_expr.branches)) |branch| {
+                if (!branch.guard.isNone() and exprContainsRunLowLevelOp(mir_store, branch.guard, op)) return true;
+                if (exprContainsRunLowLevelOp(mir_store, branch.body, op)) return true;
+            }
+            return false;
+        },
+        .closure_make => |closure| return exprContainsRunLowLevelOp(mir_store, closure.captures, op),
+        .call => |call| {
+            if (exprContainsRunLowLevelOp(mir_store, call.func, op)) return true;
+            for (mir_store.getExprSpan(call.args)) |arg| {
+                if (exprContainsRunLowLevelOp(mir_store, arg, op)) return true;
+            }
+            return false;
+        },
+        .block => |block| {
+            for (mir_store.getStmts(block.stmts)) |stmt| {
+                const binding = switch (stmt) {
+                    .decl_const, .decl_var, .mutate_var => |b| b,
+                };
+                if (exprContainsRunLowLevelOp(mir_store, binding.expr, op)) return true;
+            }
+            return exprContainsRunLowLevelOp(mir_store, block.final_expr, op);
+        },
+        .borrow_scope => |borrow_scope| {
+            for (mir_store.getBorrowBindings(borrow_scope.bindings)) |binding| {
+                if (exprContainsRunLowLevelOp(mir_store, binding.expr, op)) return true;
+            }
+            return exprContainsRunLowLevelOp(mir_store, borrow_scope.body, op);
+        },
+        .struct_access => |access| return exprContainsRunLowLevelOp(mir_store, access.struct_, op),
+        .str_escape_and_quote => |inner| return exprContainsRunLowLevelOp(mir_store, inner, op),
+        .dbg_expr => |dbg_expr| return exprContainsRunLowLevelOp(mir_store, dbg_expr.expr, op),
+        .expect => |expect| return exprContainsRunLowLevelOp(mir_store, expect.body, op),
+        .for_loop => |for_loop| {
+            return exprContainsRunLowLevelOp(mir_store, for_loop.list, op) or
+                exprContainsRunLowLevelOp(mir_store, for_loop.body, op);
+        },
+        .while_loop => |while_loop| {
+            return exprContainsRunLowLevelOp(mir_store, while_loop.cond, op) or
+                exprContainsRunLowLevelOp(mir_store, while_loop.body, op);
+        },
+        .return_expr => |ret| return exprContainsRunLowLevelOp(mir_store, ret.expr, op),
+        .lookup,
+        .proc_ref,
+        .runtime_err_can,
+        .runtime_err_type,
+        .runtime_err_ellipsis,
+        .runtime_err_anno_only,
+        .int,
+        .frac_f32,
+        .frac_f64,
+        .dec,
+        .str,
+        .crash,
+        .break_expr,
+        => return false,
+    }
+}
+
+fn procIsExactRunLowLevelWrapper(mir_store: *const MIR.Store, proc_id: MIR.ProcId, op: can.CIR.Expr.LowLevel) bool {
+    const proc = mir_store.getProc(proc_id);
+    if (proc.body.isNone()) return false;
+
+    var expr_id = proc.body;
+    while (true) {
+        const expr = mir_store.getExpr(expr_id);
+        switch (expr) {
+            .run_low_level => |low_level| return low_level.op == op,
+            .block => |block| {
+                if (!block.stmts.isEmpty()) return false;
+                expr_id = block.final_expr;
+            },
+            .borrow_scope => |borrow_scope| {
+                if (!borrow_scope.bindings.isEmpty()) return false;
+                expr_id = borrow_scope.body;
+            },
+            .dbg_expr => |dbg_expr| expr_id = dbg_expr.expr,
+            else => return false,
+        }
+    }
+}
+
+fn exprContainsCallToRunLowLevelWrapper(mir_store: *const MIR.Store, expr_id: MIR.ExprId, op: can.CIR.Expr.LowLevel) bool {
+    const expr = mir_store.getExpr(expr_id);
+    switch (expr) {
+        .call => |call| {
+            if (procIdFromCallableExpr(mir_store, call.func)) |proc_id| {
+                if (procIsExactRunLowLevelWrapper(mir_store, proc_id, op)) return true;
+            }
+            if (exprContainsCallToRunLowLevelWrapper(mir_store, call.func, op)) return true;
+            for (mir_store.getExprSpan(call.args)) |arg| {
+                if (exprContainsCallToRunLowLevelWrapper(mir_store, arg, op)) return true;
+            }
+            return false;
+        },
+        .list => |list| {
+            for (mir_store.getExprSpan(list.elems)) |elem| {
+                if (exprContainsCallToRunLowLevelWrapper(mir_store, elem, op)) return true;
+            }
+            return false;
+        },
+        .struct_ => |struct_| {
+            for (mir_store.getExprSpan(struct_.fields)) |field| {
+                if (exprContainsCallToRunLowLevelWrapper(mir_store, field, op)) return true;
+            }
+            return false;
+        },
+        .tag => |tag| {
+            for (mir_store.getExprSpan(tag.args)) |arg| {
+                if (exprContainsCallToRunLowLevelWrapper(mir_store, arg, op)) return true;
+            }
+            return false;
+        },
+        .match_expr => |match_expr| {
+            if (exprContainsCallToRunLowLevelWrapper(mir_store, match_expr.cond, op)) return true;
+            for (mir_store.getBranches(match_expr.branches)) |branch| {
+                if (!branch.guard.isNone() and exprContainsCallToRunLowLevelWrapper(mir_store, branch.guard, op)) return true;
+                if (exprContainsCallToRunLowLevelWrapper(mir_store, branch.body, op)) return true;
+            }
+            return false;
+        },
+        .closure_make => |closure| return exprContainsCallToRunLowLevelWrapper(mir_store, closure.captures, op),
+        .block => |block| {
+            for (mir_store.getStmts(block.stmts)) |stmt| {
+                const binding = switch (stmt) {
+                    .decl_const, .decl_var, .mutate_var => |b| b,
+                };
+                if (exprContainsCallToRunLowLevelWrapper(mir_store, binding.expr, op)) return true;
+            }
+            return exprContainsCallToRunLowLevelWrapper(mir_store, block.final_expr, op);
+        },
+        .borrow_scope => |borrow_scope| {
+            for (mir_store.getBorrowBindings(borrow_scope.bindings)) |binding| {
+                if (exprContainsCallToRunLowLevelWrapper(mir_store, binding.expr, op)) return true;
+            }
+            return exprContainsCallToRunLowLevelWrapper(mir_store, borrow_scope.body, op);
+        },
+        .struct_access => |access| return exprContainsCallToRunLowLevelWrapper(mir_store, access.struct_, op),
+        .str_escape_and_quote => |inner| return exprContainsCallToRunLowLevelWrapper(mir_store, inner, op),
+        .run_low_level => |low_level| {
+            for (mir_store.getExprSpan(low_level.args)) |arg| {
+                if (exprContainsCallToRunLowLevelWrapper(mir_store, arg, op)) return true;
+            }
+            return false;
+        },
+        .dbg_expr => |dbg_expr| return exprContainsCallToRunLowLevelWrapper(mir_store, dbg_expr.expr, op),
+        .expect => |expect| return exprContainsCallToRunLowLevelWrapper(mir_store, expect.body, op),
+        .for_loop => |for_loop| {
+            return exprContainsCallToRunLowLevelWrapper(mir_store, for_loop.list, op) or
+                exprContainsCallToRunLowLevelWrapper(mir_store, for_loop.body, op);
+        },
+        .while_loop => |while_loop| {
+            return exprContainsCallToRunLowLevelWrapper(mir_store, while_loop.cond, op) or
+                exprContainsCallToRunLowLevelWrapper(mir_store, while_loop.body, op);
+        },
+        .return_expr => |ret| return exprContainsCallToRunLowLevelWrapper(mir_store, ret.expr, op),
+        .lookup,
+        .proc_ref,
+        .runtime_err_can,
+        .runtime_err_type,
+        .runtime_err_ellipsis,
+        .runtime_err_anno_only,
+        .int,
+        .frac_f32,
+        .frac_f64,
+        .dec,
+        .str,
+        .crash,
+        .break_expr,
+        => return false,
+    }
+}
+
 fn firstForeignParamLookup(
     mir_store: *const MIR.Store,
     expr_id: MIR.ExprId,
@@ -2099,6 +2302,29 @@ test "cross-module: List.map lowers without error" {
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
     try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: List.map lowers list_len as run_low_level, not wrapper call" {
+    var env = try MirTestEnv.initExpr("List.map([2.I64, 4.I64, 6.I64], |val| val * 2)");
+    defer env.deinit();
+    _ = try env.lowerFirstDef();
+
+    var saw_direct_list_len = false;
+    for (env.mir_store.getProcs(), 0..) |proc, proc_idx| {
+        if (proc.body.isNone()) continue;
+
+        if (exprContainsRunLowLevelOp(env.mir_store, proc.body, .list_len)) {
+            saw_direct_list_len = true;
+        }
+
+        if (exprContainsCallToRunLowLevelWrapper(env.mir_store, proc.body, .list_len)) {
+            std.debug.print("proc {d} still calls a list_len wrapper\n", .{proc_idx});
+            dumpMirExpr(env.mir_store, proc.body, 1);
+            return error.TestUnexpectedResult;
+        }
+    }
+
+    try testing.expect(saw_direct_list_len);
 }
 
 test "cross-module: List.map on empty list lowers without error" {

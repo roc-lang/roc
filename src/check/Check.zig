@@ -315,9 +315,9 @@ fn initAssumePrepared(
         .enclosing_func_name = null,
         // Initialize with null import_mapping - caller should call fixupTypeWriter() after storing Check
         .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, cir.getIdentStore(), null),
-        .deferred_def_unifications = .{},
-        .deferred_cycle_envs = .{},
-        .binop_dispatch_tracking = .{},
+        .deferred_def_unifications = .empty,
+        .deferred_cycle_envs = .empty,
+        .binop_dispatch_tracking = .empty,
     };
 }
 
@@ -3024,12 +3024,12 @@ fn checkPatternHelp(
     };
 
     switch (pattern) {
-        .assign => |_| {
+        .assign => {
             // In the case of an assigned variable, set it to be a flex var initially.
             // This will be refined based on how it's used.
             try self.unifyWith(pattern_var, .{ .flex = Flex.init() }, env);
         },
-        .underscore => |_| {
+        .underscore => {
             // Underscore can be anything
             try self.unifyWith(pattern_var, .{ .flex = Flex.init() }, env);
         },
@@ -3314,11 +3314,11 @@ fn checkPatternHelp(
                 .dec => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("Dec", env), env),
             }
         },
-        .frac_f32_literal => |_| {
+        .frac_f32_literal => {
             // Phase 5: Use nominal F32 type
             try self.unifyWith(pattern_var, try self.mkNumberTypeContent("F32", env), env);
         },
-        .frac_f64_literal => |_| {
+        .frac_f64_literal => {
             // Phase 5: Use nominal F64 type
             try self.unifyWith(pattern_var, try self.mkNumberTypeContent("F64", env), env);
         },
@@ -3590,11 +3590,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
     switch (expr) {
         // str //
-        .e_str_segment => |_| {
+        .e_str_segment => {
             const str_var = try self.freshStr(env, expr_region);
             _ = try self.unify(expr_var, str_var, env);
         },
-        .e_bytes_literal => |_| {
+        .e_bytes_literal => {
             // Create List(U8) type
             const u8_content = try self.mkNumberTypeContent("U8", env);
             const u8_var = try self.freshFromContent(u8_content, env, expr_region);
@@ -4887,7 +4887,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // This shouldn't happen since we always create e_anno_only with an annotation
                     try self.unifyWith(expr_var, .err, env);
                 },
-                .expected => |_| {
+                .expected => {
                     // The expr will be unified with the expected type below
                     // expr_var is a flex var by default, so no action is need here
                 },
@@ -4924,7 +4924,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // This shouldn't happen since hosted lambdas always have annotations
                     try self.unifyWith(expr_var, .err, env);
                 },
-                .expected => |_| {
+                .expected => {
                     // The expr will be unified with the expected type below
                     // expr_var is a flex var by default, so no action is need here
                 },
@@ -5295,7 +5295,7 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
 
                 try self.unifyWith(stmt_var, .{ .structure = .empty_record }, env);
             },
-            .s_crash => |_| {
+            .s_crash => {
                 try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
                 diverges = true;
             },
@@ -5336,7 +5336,7 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
             .s_runtime_error => {
                 try self.unifyWith(stmt_var, .err, env);
             },
-            .s_break => |_| {
+            .s_break => {
                 // Nothing to do for break
                 // try self.unifyWith(stmt_var, .{ .structure = .empty_record }, env);
             },

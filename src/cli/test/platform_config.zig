@@ -64,7 +64,8 @@ const targets_fx = [_]TargetInfo{
     .{ .name = "x64musl", .requires_linux = false },
     .{ .name = "arm64musl", .requires_linux = false },
     .{ .name = "x64win", .requires_linux = false },
-    .{ .name = "arm64win", .requires_linux = false },
+    // TODO: re-enable when Zig 0.16 fixes @ptrCast alignment bug in std/debug/SelfInfo/Windows.zig
+    // .{ .name = "arm64win", .requires_linux = false },
 };
 
 /// Fx-open platform test apps - test effectful apps with open union errors and List(Str) args
@@ -209,22 +210,22 @@ pub fn getPlatformNames() []const []const u8 {
 /// Get test app paths for a platform
 pub fn getTestApps(platform: PlatformConfig) []const []const u8 {
     switch (platform.test_apps) {
-        .single => |app| {
+        inline .single => |app| {
             const result = [_][]const u8{app};
             return &result;
         },
-        .spec_list => |specs| {
+        inline .spec_list => |specs| {
             // Return just the roc_file paths
-            var paths: [specs.len][]const u8 = undefined;
-            for (specs, 0..) |spec, i| {
+            comptime var paths: [specs.len][]const u8 = undefined;
+            inline for (specs, 0..) |spec, i| {
                 paths[i] = spec.roc_file;
             }
             return &paths;
         },
-        .simple_list => |specs| {
+        inline .simple_list => |specs| {
             // Return just the roc_file paths
-            var paths: [specs.len][]const u8 = undefined;
-            for (specs, 0..) |spec, i| {
+            comptime var paths: [specs.len][]const u8 = undefined;
+            inline for (specs, 0..) |spec, i| {
                 paths[i] = spec.roc_file;
             }
             return &paths;

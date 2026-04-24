@@ -29,7 +29,7 @@ jobs:
 
       - uses: mlugg/setup-zig@8d6198c65fb0feaa111df26e6b467fea8345e46f # 2.0.5
         with:
-          version: 0.15.2
+          version: 0.15.2 # TODO ZIG 16: update to 0.16.x
           use-cache: false
 
       - name: Setup MSVC (Windows)

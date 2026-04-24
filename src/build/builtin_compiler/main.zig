@@ -18,15 +18,16 @@ const ModuleEnv = can.ModuleEnv;
 const Can = can.Can;
 const Check = check.Check;
 const Allocator = std.mem.Allocator;
-const Allocators = base.Allocators;
+const CoreCtx = can.CoreCtx;
 const CIR = can.CIR;
 
 const max_builtin_bytes = 1024 * 1024;
 
 // Stderr writer for diagnostic reporting
 var stderr_buffer: [4096]u8 = undefined;
-var stderr_writer: std.fs.File.Writer = undefined;
+var stderr_writer: std.Io.File.Writer = undefined;
 var stderr_initialized = false;
+var global_io: std.Io = undefined;
 
 fn flushStderr() void {
     if (stderr_initialized) {
@@ -36,7 +37,7 @@ fn flushStderr() void {
 
 fn stderrWriter() *std.Io.Writer {
     if (!stderr_initialized) {
-        stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+        stderr_writer = std.Io.File.stderr().writer(global_io, &stderr_buffer);
         stderr_initialized = true;
     }
     return &stderr_writer.interface;
@@ -1252,13 +1253,12 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     return new_def_indices;
 }
 
-fn readFileAllocPath(gpa: Allocator, path: []const u8) ![]u8 {
+fn readFileAllocPath(gpa: Allocator, io: std.Io, path: []const u8) ![]u8 {
     if (std.fs.path.isAbsolute(path)) {
-        var file = try std.fs.openFileAbsolute(path, .{});
-        defer file.close();
-        return try file.readToEndAlloc(gpa, max_builtin_bytes);
+        const root_dir = try std.Io.Dir.openDirAbsolute(io, "/", .{});
+        return try root_dir.readFileAlloc(io, path, gpa, .limited(max_builtin_bytes));
     }
-    return try std.fs.cwd().readFileAlloc(gpa, path, max_builtin_bytes);
+    return try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(max_builtin_bytes));
 }
 
 /// Build-time compiler that compiles builtin .roc sources into serialized ModuleEnvs.
@@ -1271,18 +1271,19 @@ fn readFileAllocPath(gpa: Allocator, path: []const u8) ![]u8 {
 /// 3. the output path for builtin_indices.bin
 ///
 /// We also keep project-relative defaults so manual runs still succeed.
-pub fn main() !void {
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
-    defer {
-        const leaked = gpa_impl.deinit();
-        if (leaked == .leak) {
-            std.debug.print("WARNING: Memory leaked!\n", .{});
-        }
-    }
-    const gpa = gpa_impl.allocator();
+pub fn main(process_init: std.process.Init) !void {
+    const gpa = process_init.gpa;
+    const io = process_init.io;
+    global_io = io;
 
-    const args = try std.process.argsAlloc(gpa);
-    defer std.process.argsFree(gpa, args);
+    var args_list = std.ArrayList([:0]const u8).empty;
+    defer args_list.deinit(gpa);
+    var args_iter = std.process.Args.Iterator.init(process_init.minimal.args);
+    defer args_iter.deinit();
+    while (args_iter.next()) |arg| {
+        try args_list.append(gpa, arg);
+    }
+    const args = args_list.items;
 
     // Prefer the explicit paths provided by the build system, but fall back to the
     // project-relative defaults so manual runs still succeed.
@@ -1292,7 +1293,7 @@ pub fn main() !void {
 
     // Read the Builtin.roc source file at runtime
     // NOTE: We must free this source manually; CommonEnv.deinit() does not free the source.
-    const builtin_roc_source = try readFileAllocPath(gpa, builtin_src_path);
+    const builtin_roc_source = try readFileAllocPath(gpa, io, builtin_src_path);
 
     // Compile Builtin.roc (it's completely self-contained)
     const builtin_env = try compileModule(
@@ -1396,10 +1397,10 @@ pub fn main() !void {
 
     // Create output directories when needed.
     if (std.fs.path.dirname(builtin_bin_path)) |dir| {
-        try std.fs.cwd().makePath(dir);
+        try std.Io.Dir.cwd().createDirPath(io, dir);
     }
     if (std.fs.path.dirname(builtin_indices_path)) |dir| {
-        try std.fs.cwd().makePath(dir);
+        try std.Io.Dir.cwd().createDirPath(io, dir);
     }
 
     // Serialize the single Builtin module
@@ -1556,11 +1557,7 @@ fn compileModule(
     };
 
     // 3. Parse
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.parse(gpa, &module_env.common);
     defer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 
@@ -1607,7 +1604,8 @@ fn compileModule(
         gpa.destroy(can_result);
     }
 
-    can_result.* = try Can.initBuiltin(&allocators, module_env, parse_ast);
+    const roc_ctx = CoreCtx.os(gpa, gpa, global_io);
+    can_result.* = try Can.initBuiltin(roc_ctx, module_env, parse_ast);
 
     try can_result.canonicalizeFile();
     try can_result.validateForChecking();
@@ -1775,8 +1773,8 @@ fn serializeModuleEnv(
     const arena_alloc = arena.allocator();
 
     // Create output file
-    const file = try std.fs.cwd().createFile(output_path, .{ .read = true });
-    defer file.close();
+    const file = try std.Io.Dir.cwd().createFile(global_io, output_path, .{ .read = true });
+    defer file.close(global_io);
 
     // Serialize using CompactWriter
     var writer = collections.CompactWriter.init();
@@ -1786,7 +1784,7 @@ fn serializeModuleEnv(
     try serialized.serialize(env, arena_alloc, &writer);
 
     // Write to file
-    try writer.writeGather(arena_alloc, file);
+    try writer.writeGather(file, global_io);
 }
 
 /// Find a type declaration by name in a compiled module
@@ -1853,10 +1851,10 @@ fn serializeBuiltinIndices(
     output_path: []const u8,
 ) !void {
     // Create output file
-    const file = try std.fs.cwd().createFile(output_path, .{});
-    defer file.close();
+    const file = try std.Io.Dir.cwd().createFile(global_io, output_path, .{});
+    defer file.close(global_io);
 
     // Write the struct directly as binary data
     // This is a simple struct with two u32 fields, so we can write it directly
-    try file.writeAll(std.mem.asBytes(&indices));
+    try file.writePositionalAll(global_io, std.mem.asBytes(&indices), 0);
 }

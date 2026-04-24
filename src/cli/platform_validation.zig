@@ -16,22 +16,21 @@ const reporting = @import("reporting");
 const target_mod = @import("target.zig");
 pub const targets_validator = @import("targets_validator.zig");
 
-const Allocators = base.Allocators;
-
 const TargetsConfig = target_mod.TargetsConfig;
 const RocTarget = target_mod.RocTarget;
 const LinkType = target_mod.LinkType;
 
 const is_windows = builtin.target.os.tag == .windows;
 
-var stderr_file_writer: std.fs.File.Writer = .{
-    .interface = std.fs.File.Writer.initInterface(&.{}),
-    .file = if (is_windows) undefined else std.fs.File.stderr(),
+var stderr_file_writer: std.Io.File.Writer = .{
+    .io = std.Io.Threaded.global_single_threaded.io(),
+    .interface = std.Io.File.Writer.initInterface(&.{}),
+    .file = if (is_windows) undefined else std.Io.File.stderr(),
     .mode = .streaming,
 };
 
 fn stderrWriter() *std.Io.Writer {
-    if (is_windows) stderr_file_writer.file = std.fs.File.stderr();
+    if (is_windows) stderr_file_writer.file = std.Io.File.stderr();
     return &stderr_file_writer.interface;
 }
 
@@ -68,10 +67,11 @@ pub const PlatformValidation = struct {
 /// Returns the TargetsConfig if valid, or an error with details.
 pub fn validatePlatformHeader(
     allocator: std.mem.Allocator,
+    std_io: std.Io,
     platform_source_path: []const u8,
 ) ValidationError!PlatformValidation {
     // Read platform source
-    var source = std.fs.cwd().readFileAlloc(allocator, platform_source_path, std.math.maxInt(usize)) catch {
+    var source = std.Io.Dir.cwd().readFileAlloc(std_io, platform_source_path, allocator, .unlimited) catch {
         renderFileReadError(allocator, platform_source_path);
         return error.FileReadError;
     };
@@ -86,11 +86,7 @@ pub fn validatePlatformHeader(
         return error.ParseError;
     };
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    const ast = parse.parse(&allocators, &env) catch {
+    const ast = parse.parse(allocator, &env) catch {
         renderParseError(allocator, platform_source_path);
         return error.ParseError;
     };
@@ -252,10 +248,11 @@ pub fn renderValidationError(
 /// Returns the ValidationResult for nice error reporting, or null if validation passed.
 pub fn validateAllTargetFilesExist(
     allocator: std.mem.Allocator,
+    std_io: std.Io,
     config: TargetsConfig,
     platform_dir_path: []const u8,
 ) ?ValidationResult {
-    var platform_dir = std.fs.cwd().openDir(platform_dir_path, .{}) catch {
+    var platform_dir = std.Io.Dir.cwd().openDir(std_io, platform_dir_path, .{}) catch {
         return .{
             .missing_files_directory = .{
                 .platform_path = platform_dir_path,
@@ -263,9 +260,9 @@ pub fn validateAllTargetFilesExist(
             },
         };
     };
-    defer platform_dir.close();
+    defer platform_dir.close(std_io);
 
-    const result = targets_validator.validateTargetFilesExist(allocator, config, platform_dir) catch {
+    const result = targets_validator.validateTargetFilesExist(allocator, std_io, config, platform_dir) catch {
         return .{
             .missing_files_directory = .{
                 .platform_path = platform_dir_path,

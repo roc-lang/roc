@@ -1011,7 +1011,7 @@ pub const Diagnostic = union(enum) {
         const owned_type_name = try report.addOwnedString(type_name);
 
         // Check if this looks like a qualified type (contains dots)
-        const has_dots = std.mem.indexOfScalar(u8, type_name, '.') != null;
+        const has_dots = std.mem.findScalar(u8, type_name, '.') != null;
 
         if (has_dots) {
             try report.document.addReflowingText("Cannot resolve qualified type ");

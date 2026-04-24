@@ -231,11 +231,11 @@ pub const MachOWriter = struct {
         var self = Self{
             .allocator = allocator,
             .arch = arch,
-            .text = .{},
-            .rodata = .{},
-            .symbols = .{},
-            .text_relocs = .{},
-            .strtab = .{},
+            .text = .empty,
+            .rodata = .empty,
+            .symbols = .empty,
+            .text_relocs = .empty,
+            .strtab = .empty,
         };
 
         // String table starts with space + null (Mach-O convention)
@@ -518,7 +518,7 @@ test "create minimal macho object" {
         .is_external = true,
     });
 
-    var output: std.ArrayList(u8) = .{};
+    var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
 
     try writer.write(&output);
@@ -538,7 +538,7 @@ test "macho with external call" {
     const ext_idx = try writer.addExternalSymbol("_external_func");
     try writer.addTextRelocation(1, ext_idx, true);
 
-    var output: std.ArrayList(u8) = .{};
+    var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
 
     try writer.write(&output);

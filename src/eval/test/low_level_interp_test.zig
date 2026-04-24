@@ -10,6 +10,7 @@ const base = @import("base");
 const can = @import("can");
 const check = @import("check");
 const compiled_builtins = @import("compiled_builtins");
+const CoreCtx = @import("ctx").CoreCtx;
 
 const ComptimeEvaluator = @import("../comptime_evaluator.zig").ComptimeEvaluator;
 const BuiltinTypes = @import("../builtins.zig").BuiltinTypes;
@@ -19,7 +20,6 @@ const roc_target = @import("roc_target");
 const Can = can.Can;
 const Check = check.Check;
 const ModuleEnv = can.ModuleEnv;
-const Allocators = base.Allocators;
 const testing = std.testing;
 // Use page_allocator for interpreter tests (doesn't track leaks)
 const test_allocator = std.heap.page_allocator;
@@ -46,11 +46,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     module_env.module_name = "TestModule";
     try module_env.common.calcLineStarts(module_env.gpa);
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.parse(gpa, &module_env.common);
     defer parse_ast.deinit();
 
     parse_ast.store.emptyScratch();
@@ -70,7 +66,8 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
         .builtin_indices = builtin_indices,
     };
 
-    var czer = try Can.initModule(&allocators, module_env, parse_ast, .{
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
+    var czer = try Can.initModule(roc_ctx, module_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
@@ -208,7 +205,7 @@ fn evalModuleAndGetDec(src: []const u8, decl_index: usize) !i128 {
         if (i == decl_index) {
             defer stack_value.decref(&result.evaluator.interpreter.runtime_layout_store, ops);
             // Dec values are stored as i128 internally
-            std.debug.assert(stack_value.layout.tag == .scalar and stack_value.layout.data.scalar.tag == .frac);
+            std.debug.assert(stack_value.layout.tag == .scalar and stack_value.layout.getScalar().tag == .frac);
             const ptr = @as(*const i128, @ptrCast(@alignCast(stack_value.ptr.?)));
             return ptr.*;
         }

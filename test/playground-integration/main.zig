@@ -4,6 +4,13 @@ const build_options = @import("build_options");
 
 var verbose_mode = false;
 
+/// Replacement for removed std.time.nanoTimestamp
+fn nanoTimestamp() i128 {
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(.MONOTONIC, &ts);
+    return @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
+}
+
 /// Verbose debug logging
 fn logDebug(comptime format: []const u8, args: anytype) void {
     if (verbose_mode) {
@@ -351,7 +358,7 @@ fn sendMessageToWasm(wasm_interface: *const WasmInterface, allocator: std.mem.Al
     }
 
     const response_slice = wasm_memory[response_ptr..];
-    const null_terminator_idx = std.mem.indexOfScalar(u8, response_slice, 0) orelse {
+    const null_terminator_idx = std.mem.findScalar(u8, response_slice, 0) orelse {
         logDebug("[ERROR] WASM returned response string without a null terminator.\n", .{});
         _ = wasm_interface.module_instance.invoke(wasm_interface.freeWasmString_handle, &[_]bytebox.Val{bytebox.Val{ .I32 = @intCast(response_ptr) }}, &[_]bytebox.Val{}, .{}) catch {};
         return error.WasmReturnedInvalidString;
@@ -417,11 +424,11 @@ fn parseWasmResponseJson(allocator: std.mem.Allocator, response_json_slice: []co
 
 /// Initialize WASM module and interface
 ///
-/// - `gpa` allocator is the GeneralPurposeAllocator, intended for bytebox VM.
+/// - `gpa` allocator is the DebugAllocator, intended for bytebox VM.
 /// - `arena` allocator is the ArenaAllocator, used for other test harness allocations.
 /// - `wasm_path` is the path to the WASM file to load.
-fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []const u8) !WasmInterface {
-    const wasm_data: []const u8 = std.fs.cwd().readFileAlloc(arena, wasm_path, std.math.maxInt(usize)) catch |err| {
+fn setupWasm(std_io: std.Io, gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []const u8) !WasmInterface {
+    const wasm_data: []const u8 = std.Io.Dir.cwd().readFileAlloc(std_io, wasm_path, arena, .unlimited) catch |err| {
         logDebug("[ERROR] Failed to read WASM file '{s}': {}\n", .{ wasm_path, err });
         return err;
     };
@@ -643,7 +650,7 @@ fn expectDiagnostics(response: *const WasmResponse, expected: MessageStep.Diagno
 fn runTestCase(allocator: std.mem.Allocator, wasm_interface: *WasmInterface, test_case: TestCase) StepExecutionResult {
     logDebug("\n--- Running Test Case: {s} ---\n", .{test_case.name});
 
-    const case_start_time = std.time.nanoTimestamp();
+    const case_start_time = nanoTimestamp();
 
     // Setup phase
     if (test_case.setup) |setup_fn| {
@@ -659,7 +666,7 @@ fn runTestCase(allocator: std.mem.Allocator, wasm_interface: *WasmInterface, tes
 
     // If steps failed, return that result immediately, skipping teardown.
     if (step_result.result != .passed) {
-        const case_end_time = std.time.nanoTimestamp();
+        const case_end_time = nanoTimestamp();
         const duration_ms: u64 = @intCast(@divTrunc((case_end_time - case_start_time), std.time.ns_per_ms));
         logDebug("--- Test Case {s}: {s} ({}ms) ---\n", .{ @tagName(step_result.result), test_case.name, duration_ms });
         return step_result;
@@ -670,14 +677,14 @@ fn runTestCase(allocator: std.mem.Allocator, wasm_interface: *WasmInterface, tes
         teardown_fn(allocator, wasm_interface) catch |err| {
             const msg = std.fmt.allocPrint(allocator, "Teardown failed: {}", .{err}) catch "Teardown failed (OOM formatting message)";
             logDebug("[ERROR] {s} for test case '{s}'\n", .{ msg, test_case.name });
-            const case_end_time = std.time.nanoTimestamp();
+            const case_end_time = nanoTimestamp();
             const duration_ms: u64 = @intCast(@divTrunc((case_end_time - case_start_time), std.time.ns_per_ms));
             logDebug("--- Test Case {s}: {s} ({}ms) ---\n", .{ @tagName(.failed), test_case.name, duration_ms });
             return StepExecutionResult{ .result = .failed, .failure_message = msg };
         };
     }
 
-    const case_end_time = std.time.nanoTimestamp();
+    const case_end_time = nanoTimestamp();
     const duration_ms: u64 = @intCast(@divTrunc((case_end_time - case_start_time), std.time.ns_per_ms));
 
     logDebug("--- Test Case {s}: {s} ({}ms) ---\n", .{ @tagName(step_result.result), test_case.name, duration_ms });
@@ -834,10 +841,10 @@ fn runTestSteps(allocator: std.mem.Allocator, wasm_interface: *WasmInterface, te
 // - `arena` allocator is for test harness allocations.
 // - `gpa` allocator is for the bytebox VM.
 // - `wasm_path` is the path to the WASM file to load.
-fn runTests(arena: std.mem.Allocator, gpa: std.mem.Allocator, test_cases: []const TestCase, wasm_path: []const u8) !TestStats {
+fn runTests(std_io: std.Io, arena: std.mem.Allocator, gpa: std.mem.Allocator, test_cases: []const TestCase, wasm_path: []const u8) !TestStats {
     var stats = TestStats{
         .total = test_cases.len,
-        .start_time = std.time.nanoTimestamp(),
+        .start_time = nanoTimestamp(),
         .passed = 0,
         .failed = 0,
         .skipped = 0,
@@ -848,7 +855,7 @@ fn runTests(arena: std.mem.Allocator, gpa: std.mem.Allocator, test_cases: []cons
 
     for (test_cases) |case| {
         logDebug("\n[INFO] Setting up WASM interface for test case: {s}...\n", .{case.name});
-        var wasm_interface = setupWasm(gpa, arena, wasm_path) catch |err| {
+        var wasm_interface = setupWasm(std_io, gpa, arena, wasm_path) catch |err| {
             logDebug("[ERROR] Failed to setup WASM for test case '{s}': {}\n", .{ case.name, err });
             stats.failed += 1;
             try failures.append(arena, .{
@@ -877,7 +884,7 @@ fn runTests(arena: std.mem.Allocator, gpa: std.mem.Allocator, test_cases: []cons
         }
     }
 
-    stats.end_time = std.time.nanoTimestamp();
+    stats.end_time = nanoTimestamp();
 
     // Print summary
     logDebug("\n=== Test Summary ===\n", .{});
@@ -912,21 +919,25 @@ fn createSimpleTest(allocator: std.mem.Allocator, name: []const u8, code: []cons
     return TestCase{ .name = name, .steps = steps };
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
+    const std_io = init.io;
     // Setup gpa allocator used for bytebox WASM VM
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
 
-    // Setup arena allocator usrd for test harness
+    // Setup arena allocator used for test harness
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    const stdout = std.fs.File.stdout().deprecatedWriter();
-
     // Handle CLI arguments
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+    var args_list: std.ArrayList([]const u8) = .empty;
+    defer args_list.deinit(allocator);
+    var args_iter = std.process.Args.Iterator.init(init.minimal.args);
+    while (args_iter.next()) |arg| {
+        try args_list.append(allocator, arg);
+    }
+    const args = args_list.items;
 
     var wasm_path: ?[]const u8 = null;
     var i: usize = 1;
@@ -935,16 +946,16 @@ pub fn main() !void {
         if (std.mem.eql(u8, arg, "--verbose")) {
             verbose_mode = true;
         } else if (std.mem.eql(u8, arg, "--help")) {
-            try stdout.print("Usage: test-playground [options] [wasm-path]\n", .{});
-            try stdout.print("Options:\n", .{});
-            try stdout.print("  --verbose           Enable verbose mode\n", .{});
-            try stdout.print("  --wasm-path PATH    Path to the playground WASM file\n", .{});
-            try stdout.print("  --help              Display this help message\n", .{});
+            std.debug.print("Usage: test-playground [options] [wasm-path]\n", .{});
+            std.debug.print("Options:\n", .{});
+            std.debug.print("  --verbose           Enable verbose mode\n", .{});
+            std.debug.print("  --wasm-path PATH    Path to the playground WASM file\n", .{});
+            std.debug.print("  --help              Display this help message\n", .{});
             return;
         } else if (std.mem.eql(u8, arg, "--wasm-path")) {
             i += 1;
             if (i >= args.len) {
-                try stdout.print("Error: --wasm-path requires a path argument\n", .{});
+                std.debug.print("Error: --wasm-path requires a path argument\n", .{});
                 return;
             }
             wasm_path = args[i];
@@ -1240,7 +1251,7 @@ pub fn main() !void {
     logDebug("[INFO] Starting Playground Integration Tests...\n", .{});
     logDebug("[INFO] Running {} test cases\n", .{test_cases.items.len});
 
-    const stats = try runTests(allocator, gpa.allocator(), test_cases.items, playground_wasm_path);
+    const stats = try runTests(std_io, allocator, gpa.allocator(), test_cases.items, playground_wasm_path);
 
     logDebug("\nAll Playground Integration Tests Completed!\n", .{});
     logDebug("Final Results: {}/{} passed ({d:0.}%)\n", .{ stats.passed, stats.total, stats.successRate() });

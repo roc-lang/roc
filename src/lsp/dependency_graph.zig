@@ -38,8 +38,8 @@ pub const ModuleNode = struct {
             .name = try allocator.dupe(u8, name),
             .content_hash = std.mem.zeroes([32]u8),
             .exports_hash = std.mem.zeroes([32]u8),
-            .imports = std.ArrayList([]const u8){},
-            .dependents = std.ArrayList([]const u8){},
+            .imports = .empty,
+            .dependents = .empty,
             .depth = std.math.maxInt(u32),
         };
     }
@@ -213,14 +213,14 @@ pub const DependencyGraph = struct {
     /// Get all modules that would be affected if the given module changes.
     /// Returns a list of paths that need to be rebuilt (transitively).
     pub fn getStaleModules(self: *const DependencyGraph, changed_path: []const u8) ![]const []const u8 {
-        var stale = std.ArrayList([]const u8){};
+        var stale: std.ArrayList([]const u8) = .empty;
         errdefer stale.deinit(self.allocator);
 
         var visited = std.StringHashMap(void).init(self.allocator);
         defer visited.deinit();
 
         // Use a worklist for BFS traversal of dependents
-        var worklist = std.ArrayList([]const u8){};
+        var worklist: std.ArrayList([]const u8) = .empty;
         defer worklist.deinit(self.allocator);
 
         try worklist.append(self.allocator, changed_path);
@@ -269,7 +269,7 @@ pub const DependencyGraph = struct {
     /// The hash is computed from sorted export names for stability.
     pub fn computeExportsHash(allocator: Allocator, module_env: *const @import("can").ModuleEnv) ![32]u8 {
         // Collect all exported symbol names
-        var export_names = std.ArrayList([]const u8){};
+        var export_names: std.ArrayList([]const u8) = .empty;
         defer export_names.deinit(allocator);
 
         // Iterate through module's exports (definitions)

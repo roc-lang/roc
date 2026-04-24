@@ -519,11 +519,11 @@ fn registerSpecializedMonotypeLayout(
         .func => {},
         .box => |b| {
             if (layout_val.tag == .box) {
-                try self.registerSpecializedMonotypeLayout(b.inner, layout_val.data.box, saved);
+                try self.registerSpecializedMonotypeLayout(b.inner, layout_val.getIdx(), saved);
             }
         },
         .list => |l| switch (layout_val.tag) {
-            .list => try self.registerSpecializedMonotypeLayout(l.elem, layout_val.data.list, saved),
+            .list => try self.registerSpecializedMonotypeLayout(l.elem, layout_val.getIdx(), saved),
             .list_of_zst => try self.registerSpecializedMonotypeLayout(
                 l.elem,
                 try self.zeroSizedSpecializationLayoutFromMonotype(l.elem),
@@ -542,7 +542,7 @@ fn registerSpecializedMonotypeLayout(
             }
             if (layout_val.tag != .struct_) return;
 
-            const struct_data = self.layout_store.getStructData(layout_val.data.struct_.idx);
+            const struct_data = self.layout_store.getStructData(layout_val.getStruct().idx);
             const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
             for (elems, 0..) |elem_mono_idx, semantic_index| {
                 for (0..layout_fields.len) |li| {
@@ -564,7 +564,7 @@ fn registerSpecializedMonotypeLayout(
             }
             if (layout_val.tag != .struct_) return;
 
-            const struct_data = self.layout_store.getStructData(layout_val.data.struct_.idx);
+            const struct_data = self.layout_store.getStructData(layout_val.getStruct().idx);
             const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
             for (fields, 0..) |field, semantic_index| {
                 for (0..layout_fields.len) |li| {
@@ -586,7 +586,7 @@ fn registerSpecializedMonotypeLayout(
             }
             if (layout_val.tag != .tag_union) return;
 
-            const union_data = self.layout_store.getTagUnionData(layout_val.data.tag_union.idx);
+            const union_data = self.layout_store.getTagUnionData(layout_val.getTagUnion().idx);
             const union_layouts = self.layout_store.getTagUnionVariants(union_data);
             for (tags, 0..) |tag, i| {
                 if (i >= union_layouts.len) break;
@@ -595,7 +595,7 @@ fn registerSpecializedMonotypeLayout(
                 if (payloads.len == 0) continue;
                 const payload_layout_val = self.layout_store.getLayout(payload_layout_idx);
                 if (payload_layout_val.tag != .struct_) continue;
-                const struct_data = self.layout_store.getStructData(payload_layout_val.data.struct_.idx);
+                const struct_data = self.layout_store.getStructData(payload_layout_val.getStruct().idx);
                 const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
                 for (payloads, 0..) |payload_mono_idx, semantic_index| {
                     for (0..layout_fields.len) |li| {
@@ -975,7 +975,7 @@ fn closureVariantPayloadLayout(
         );
     }
 
-    const union_data = self.layout_store.getTagUnionData(closure_layout_val.data.tag_union.idx);
+    const union_data = self.layout_store.getTagUnionData(closure_layout_val.getTagUnion().idx);
     const variants = self.layout_store.getTagUnionVariants(union_data);
     if (builtin.mode == .Debug and discriminant >= variants.len) {
         std.debug.panic(
@@ -1980,7 +1980,7 @@ fn runtimeListElemLayoutFromMirExpr(self: *Self, list_mir_expr_id: MIR.ExprId) A
     const list_layout = self.layout_store.getLayout(list_layout_idx);
 
     return switch (list_layout.tag) {
-        .list => list_layout.data.list,
+        .list => list_layout.getIdx(),
         .list_of_zst => switch (list_mono) {
             .list => |l| try self.zeroSizedSpecializationLayoutFromMonotype(l.elem),
             else => {
@@ -2124,7 +2124,7 @@ fn moduleOwnsIdent(env: anytype, ident: Ident.Idx) bool {
     if (start >= bytes.len) return false;
 
     const tail = bytes[start..];
-    const end_rel = std.mem.indexOfScalar(u8, tail, 0) orelse return false;
+    const end_rel = std.mem.findScalar(u8, tail, 0) orelse return false;
     const text = tail[0..end_rel];
 
     const roundtrip = ident_store.findByString(text) orelse return false;
@@ -2791,7 +2791,7 @@ fn lowerRecord(self: *Self, fields: MIR.ExprSpan, _: Monotype.Idx, mir_expr_id: 
     // MIR fields are in source/alphabetical order, but the layout store sorts
     // fields by alignment descending then alphabetically. Reorder expressions
     // to match layout order so codegen can use positional field indices.
-    const record_data = self.layout_store.getStructData(record_layout_val.data.struct_.idx);
+    const record_data = self.layout_store.getStructData(record_layout_val.getStruct().idx);
     const layout_fields = self.layout_store.struct_fields.sliceRange(record_data.getFields());
 
     const save_exprs = self.scratch_lir_expr_ids.items.len;
@@ -2869,7 +2869,7 @@ fn lowerTuple(self: *Self, fields: MIR.ExprSpan, _: Monotype.Idx, mir_expr_id: M
 
         if (tuple_layout_val.tag != .struct_) unreachable;
 
-        const struct_data = self.layout_store.getStructData(tuple_layout_val.data.struct_.idx);
+        const struct_data = self.layout_store.getStructData(tuple_layout_val.getStruct().idx);
         const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
 
         for (0..layout_fields.len) |li| {
@@ -2903,7 +2903,7 @@ fn lowerTuple(self: *Self, fields: MIR.ExprSpan, _: Monotype.Idx, mir_expr_id: M
 
     // MIR elements are in source order (.0, .1, .2, ...) but the layout store
     // sorts fields by alignment. Reorder to match layout order.
-    const struct_data = self.layout_store.getStructData(tuple_layout_val.data.struct_.idx);
+    const struct_data = self.layout_store.getStructData(tuple_layout_val.getStruct().idx);
     const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
 
     const save_exprs = self.scratch_lir_expr_ids.items.len;
@@ -2947,7 +2947,7 @@ fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, mir_expr_id:
     }
 
     const variant_payload_layout: ?layout.Idx = if (union_layout_val.tag == .tag_union) blk: {
-        const tu_data = self.layout_store.getTagUnionData(union_layout_val.data.tag_union.idx);
+        const tu_data = self.layout_store.getTagUnionData(union_layout_val.getTagUnion().idx);
         const variants = self.layout_store.getTagUnionVariants(tu_data);
         break :blk if (discriminant < variants.len) variants.get(discriminant).payload_layout else null;
     } else null;
@@ -3216,7 +3216,7 @@ fn lowerClosureMake(
     const tuple_layout_val = self.layout_store.getLayout(tuple_layout);
     if (tuple_layout_val.tag != .struct_) unreachable;
 
-    const struct_data = self.layout_store.getStructData(tuple_layout_val.data.struct_.idx);
+    const struct_data = self.layout_store.getStructData(tuple_layout_val.getStruct().idx);
     const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
     const closure_member = self.mir_store.getClosureMember(closure_member_id.?);
     const capture_bindings = self.mir_store.getCaptureBindings(closure_member.capture_bindings);
@@ -4631,7 +4631,7 @@ fn structFieldInfoByOriginalIndex(self: *Self, struct_layout: layout.Idx, origin
         return null;
     }
 
-    const struct_data = self.layout_store.getStructData(struct_layout_val.data.struct_.idx);
+    const struct_data = self.layout_store.getStructData(struct_layout_val.getStruct().idx);
     const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
     for (0..layout_fields.len) |li| {
         const layout_field = layout_fields.get(li);
@@ -4684,7 +4684,7 @@ fn adaptTagUnionValueLayout(
     // Only handle widening into a tag_union target
     if (target_layout_val.tag != .tag_union) return value_expr;
 
-    const target_tu_data = ls.getTagUnionData(target_layout_val.data.tag_union.idx);
+    const target_tu_data = ls.getTagUnionData(target_layout_val.getTagUnion().idx);
     const target_variants = ls.getTagUnionVariants(target_tu_data);
 
     // Verify source is actually a tag union monotype
@@ -4707,7 +4707,7 @@ fn adaptTagUnionValueLayout(
 
     // Source has a tag_union layout with a discriminant.
     // Handle the single-variant-with-discriminant case.
-    const source_tu_data = ls.getTagUnionData(source_layout_val.data.tag_union.idx);
+    const source_tu_data = ls.getTagUnionData(source_layout_val.getTagUnion().idx);
     const source_variants = ls.getTagUnionVariants(source_tu_data);
 
     if (source_variants.len == 1) {
@@ -4824,7 +4824,7 @@ fn adaptLayoutByStructure(
     var acc = self.startLetAccumulator();
     const source_value = try acc.ensureSymbol(value_expr, source_layout, region);
 
-    const target_struct_data = self.layout_store.getStructData(target_layout_val.data.struct_.idx);
+    const target_struct_data = self.layout_store.getStructData(target_layout_val.getStruct().idx);
     const target_fields = self.layout_store.struct_fields.sliceRange(target_struct_data.getFields());
 
     const save_exprs = self.scratch_lir_expr_ids.items.len;
@@ -4915,7 +4915,7 @@ fn adaptConcreteClosureMemberPayload(
     var acc = self.startLetAccumulator();
     const source_value = try acc.ensureSymbol(payload.expr, payload.layout, region);
 
-    const target_struct_data = self.layout_store.getStructData(target_layout_val.data.struct_.idx);
+    const target_struct_data = self.layout_store.getStructData(target_layout_val.getStruct().idx);
     const target_fields = self.layout_store.struct_fields.sliceRange(target_struct_data.getFields());
 
     const save_exprs = self.scratch_lir_expr_ids.items.len;
@@ -4977,7 +4977,7 @@ fn adaptRecordValueLayout(
 
     var acc = self.startLetAccumulator();
     const source_value = try acc.ensureSymbol(value_expr, source_layout, region);
-    const target_struct_data = self.layout_store.getStructData(target_layout_val.data.struct_.idx);
+    const target_struct_data = self.layout_store.getStructData(target_layout_val.getStruct().idx);
     const target_fields = self.layout_store.struct_fields.sliceRange(target_struct_data.getFields());
 
     const save_exprs = self.scratch_lir_expr_ids.items.len;
@@ -5034,7 +5034,7 @@ fn adaptTupleValueLayout(
 
     var acc = self.startLetAccumulator();
     const source_value = try acc.ensureSymbol(value_expr, source_layout, region);
-    const target_struct_data = self.layout_store.getStructData(target_layout_val.data.struct_.idx);
+    const target_struct_data = self.layout_store.getStructData(target_layout_val.getStruct().idx);
     const target_fields = self.layout_store.struct_fields.sliceRange(target_struct_data.getFields());
 
     const save_exprs = self.scratch_lir_expr_ids.items.len;
@@ -5390,7 +5390,7 @@ fn runtimeTagPayloadArgLayout(
     const payload_layout = try self.runtimeTagPayloadLayout(mono_idx, tag_name, union_runtime_layout, arg_count);
     const payload_layout_val = self.layout_store.getLayout(payload_layout);
     if (payload_layout_val.tag == .struct_) {
-        return self.layout_store.getStructFieldLayoutByOriginalIndex(payload_layout_val.data.struct_.idx, @intCast(arg_index));
+        return self.layout_store.getStructFieldLayoutByOriginalIndex(payload_layout_val.getStruct().idx, @intCast(arg_index));
     }
 
     if (builtin.mode == .Debug and arg_count != 1) {
@@ -5415,7 +5415,7 @@ fn runtimeTagPayloadLayout(
     const discriminant = self.tagDiscriminant(tag_name, mono_idx);
     return switch (union_layout.tag) {
         .tag_union => blk: {
-            const tu_data = self.layout_store.getTagUnionData(union_layout.data.tag_union.idx);
+            const tu_data = self.layout_store.getTagUnionData(union_layout.getTagUnion().idx);
             const variants = self.layout_store.getTagUnionVariants(tu_data);
             if (builtin.mode == .Debug and discriminant >= variants.len) {
                 std.debug.panic(
@@ -5426,14 +5426,14 @@ fn runtimeTagPayloadLayout(
             break :blk variants.get(discriminant).payload_layout;
         },
         .box => blk: {
-            const inner_layout = self.layout_store.getLayout(union_layout.data.box);
+            const inner_layout = self.layout_store.getLayout(union_layout.getIdx());
             if (builtin.mode == .Debug and inner_layout.tag != .tag_union) {
                 std.debug.panic(
                     "MirToLir invariant violated: boxed tag-pattern runtime layout must wrap tag_union, got {s}",
                     .{@tagName(inner_layout.tag)},
                 );
             }
-            const tu_data = self.layout_store.getTagUnionData(inner_layout.data.tag_union.idx);
+            const tu_data = self.layout_store.getTagUnionData(inner_layout.getTagUnion().idx);
             const variants = self.layout_store.getTagUnionVariants(tu_data);
             if (builtin.mode == .Debug and discriminant >= variants.len) {
                 std.debug.panic(
@@ -5512,7 +5512,7 @@ fn registerBindingPatternSymbols(
                         );
                     }
                     if (record_layout_val.tag == .struct_) {
-                        const record_data = self.layout_store.getStructData(record_layout_val.data.struct_.idx);
+                        const record_data = self.layout_store.getStructData(record_layout_val.getStruct().idx);
                         const layout_fields = self.layout_store.struct_fields.sliceRange(record_data.getFields());
 
                         for (0..layout_fields.len) |li| {
@@ -5530,7 +5530,7 @@ fn registerBindingPatternSymbols(
                         );
                     }
                     if (tuple_layout_val.tag == .struct_) {
-                        const struct_data = self.layout_store.getStructData(tuple_layout_val.data.struct_.idx);
+                        const struct_data = self.layout_store.getStructData(tuple_layout_val.getStruct().idx);
                         const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
                         for (0..layout_fields.len) |li| {
                             const original_index = layout_fields.get(li).index;
@@ -5750,7 +5750,7 @@ fn lowerPatternInternal(
                     }
 
                     if (record_layout_val.tag == .struct_) {
-                        const record_data = self.layout_store.getStructData(record_layout_val.data.struct_.idx);
+                        const record_data = self.layout_store.getStructData(record_layout_val.getStruct().idx);
                         const layout_fields = self.layout_store.struct_fields.sliceRange(record_data.getFields());
                         const save_len = self.scratch_lir_pattern_ids.items.len;
                         defer self.scratch_lir_pattern_ids.shrinkRetainingCapacity(save_len);
@@ -5786,7 +5786,7 @@ fn lowerPatternInternal(
                     }
 
                     if (struct_layout_val.tag == .struct_) {
-                        const struct_data = self.layout_store.getStructData(struct_layout_val.data.struct_.idx);
+                        const struct_data = self.layout_store.getStructData(struct_layout_val.getStruct().idx);
                         const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
 
                         const save_len = self.scratch_lir_pattern_ids.items.len;
@@ -6729,7 +6729,7 @@ test "MIR multi-tag union produces proper tag_union layout" {
     try testing.expect(result_layout.tag == .tag_union);
 
     // Check tag union data
-    const tu_data = env.layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+    const tu_data = env.layout_store.getTagUnionData(result_layout.getTagUnion().idx);
 
     // 2 tags → discriminant_size should be 1
     try testing.expectEqual(@as(u8, 1), tu_data.discriminant_size);
@@ -7085,12 +7085,12 @@ test "MIR single-tag union with one payload emits tag layout" {
 
     const union_layout = env.layout_store.getLayout(lir_expr.tag.union_layout);
     try testing.expectEqual(layout.LayoutTag.tag_union, union_layout.tag);
-    const tu_data = env.layout_store.getTagUnionData(union_layout.data.tag_union.idx);
+    const tu_data = env.layout_store.getTagUnionData(union_layout.getTagUnion().idx);
     const variants = env.layout_store.getTagUnionVariants(tu_data);
     try testing.expectEqual(@as(usize, 1), variants.len);
     const payload_layout = env.layout_store.getLayout(variants.get(0).payload_layout);
     try testing.expectEqual(layout.LayoutTag.struct_, payload_layout.tag);
-    const payload_data = env.layout_store.getStructData(payload_layout.data.struct_.idx);
+    const payload_data = env.layout_store.getStructData(payload_layout.getStruct().idx);
     const payload_fields = env.layout_store.struct_fields.sliceRange(payload_data.getFields());
     try testing.expectEqual(@as(usize, 1), payload_fields.len);
     try testing.expectEqual(@as(u16, 0), payload_fields.get(0).index);
@@ -7128,7 +7128,7 @@ test "MIR single-tag union with zero args emits zero_arg_tag" {
     try testing.expectEqual(@as(u16, 0), lir_expr.zero_arg_tag.discriminant);
     const union_layout = env.layout_store.getLayout(lir_expr.zero_arg_tag.union_layout);
     try testing.expectEqual(layout.LayoutTag.tag_union, union_layout.tag);
-    const tu_data = env.layout_store.getTagUnionData(union_layout.data.tag_union.idx);
+    const tu_data = env.layout_store.getTagUnionData(union_layout.getTagUnion().idx);
     const variants = env.layout_store.getTagUnionVariants(tu_data);
     try testing.expectEqual(@as(usize, 1), variants.len);
     try testing.expectEqual(layout.Idx.zst, variants.get(0).payload_layout);
@@ -7175,7 +7175,7 @@ test "MIR single-tag union with multiple payloads emits tag layout" {
 
     const union_layout = env.layout_store.getLayout(lir_expr.tag.union_layout);
     try testing.expectEqual(layout.LayoutTag.tag_union, union_layout.tag);
-    const tu_data = env.layout_store.getTagUnionData(union_layout.data.tag_union.idx);
+    const tu_data = env.layout_store.getTagUnionData(union_layout.getTagUnion().idx);
     const variants = env.layout_store.getTagUnionVariants(tu_data);
     try testing.expectEqual(@as(usize, 1), variants.len);
     const payload_layout = env.layout_store.getLayout(variants.get(0).payload_layout);

@@ -15,7 +15,7 @@ const can = @import("can");
 const uri_util = @import("uri.zig");
 
 const BuildEnv = compile.BuildEnv;
-const Io = compile.Io;
+const CoreCtx = compile.CoreCtx;
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 
@@ -26,7 +26,7 @@ pub const BuildSession = struct {
     /// Borrowed pointer to the BuildEnv for this build. Ownership stays with the
     /// caller (typically SyntaxChecker via BuildEnvHandle); deinit does NOT free it.
     env: *BuildEnv,
-    absolute_path: []const u8,
+    absolute_path: [:0]const u8,
     build_succeeded: bool,
     drained_reports: ?[]BuildEnv.DrainedModuleReports = null,
 
@@ -44,6 +44,7 @@ pub const BuildSession = struct {
     /// - Report draining
     pub fn init(
         allocator: Allocator,
+        std_io: std.Io,
         env: *BuildEnv,
         uri: []const u8,
         override_text: ?[]const u8,
@@ -52,17 +53,17 @@ pub const BuildSession = struct {
         const path = try uri_util.uriToPath(allocator, uri);
         defer allocator.free(path);
 
-        const absolute_path = std.fs.cwd().realpathAlloc(allocator, path) catch
-            try allocator.dupe(u8, path);
+        const absolute_path: [:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(std_io, path, allocator) catch
+            try allocator.dupeZ(u8, path);
         errdefer allocator.free(absolute_path);
 
         // Set up file override if override text provided.
         // SAFETY: override lives on the stack and its address is stored in env.filesystem.
         // This is safe because env.build() is synchronous and we restore the Io before returning.
-        var override: Io.ReadFileOverride = undefined;
+        var override: CoreCtx.ReadFileOverride = undefined;
         const saved_io = env.filesystem;
         if (override_text) |text| {
-            override = .{ .path = absolute_path, .content = text };
+            override = .{ .path = absolute_path, .content = text, .base = env.filesystem };
             env.filesystem = override.io();
         }
 

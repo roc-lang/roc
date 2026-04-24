@@ -288,7 +288,7 @@ pub fn extractModuleDocs(gpa: Allocator, module_env: *const ModuleEnv, package_n
         const entry = &entries_list.items[i];
 
         // Check if this is a method (name contains ".")
-        if (std.mem.lastIndexOfScalar(u8, entry.name, '.')) |dot_idx| {
+        if (std.mem.findScalarLast(u8, entry.name, '.')) |dot_idx| {
             const parent_name = entry.name[0..dot_idx];
             const method_short_name = entry.name[dot_idx + 1 ..];
 

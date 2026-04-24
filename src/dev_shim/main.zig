@@ -19,6 +19,13 @@ const eval = @import("eval");
 const layout = @import("layout");
 const tracy = @import("tracy");
 const backend = @import("backend");
+const shim_io = @import("shim_io");
+
+pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
+/// Minimal std.Io override for debug output; avoids pulling in the full threaded IO vtable.
+pub const std_options_debug_io = shim_io.io();
+/// Disables threaded debug IO to prevent the threaded vtable from being linked into user programs.
+pub const std_options_debug_threaded_io = null;
 
 // Module tracing flag - enabled via `zig build -Dtrace-modules`
 const trace_modules = if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
@@ -31,8 +38,11 @@ fn traceDbg(comptime fmt: []const u8, args: anytype) void {
 
 const ipc = @import("ipc");
 
-// Debug allocator for native platforms - provides leak detection in Debug/ReleaseSafe builds
-var debug_allocator: std.heap.DebugAllocator(.{}) = .{ .backing_allocator = std.heap.c_allocator };
+var app_std_io: std.Io = shim_io.io();
+
+// Debug allocator for native platforms - provides leak detection in Debug/ReleaseSafe builds.
+// Keep it single-threaded so static shim archives do not pull in std.Io.Threaded.
+var debug_allocator: std.heap.DebugAllocator(.{ .thread_safe = false }) = .{ .backing_allocator = std.heap.c_allocator };
 
 fn getBaseAllocator() std.mem.Allocator {
     return switch (builtin.mode) {
@@ -69,20 +79,20 @@ const InitializationFlag = struct {
 
 /// Mutex for thread-safe initialization.
 const PlatformMutex = struct {
-    inner: std.Thread.Mutex,
+    inner: std.Io.Mutex,
 
     const Self = @This();
 
     pub fn init() Self {
-        return .{ .inner = .{} };
+        return .{ .inner = std.Io.Mutex.init };
     }
 
     pub fn lock(self: *Self) void {
-        self.inner.lock();
+        self.inner.lockUncancelable(app_std_io);
     }
 
     pub fn unlock(self: *Self) void {
-        self.inner.unlock();
+        self.inner.unlock(app_std_io);
     }
 };
 
@@ -213,7 +223,7 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
     if (roc__serialized_base_ptr == null) {
         const page_size = SharedMemoryAllocator.getSystemPageSize() catch 4096;
 
-        var shm = SharedMemoryAllocator.fromCoordination(allocator, page_size) catch |err| {
+        var shm = SharedMemoryAllocator.fromCoordination(allocator, app_std_io, page_size) catch |err| {
             const msg2 = std.fmt.bufPrint(&buf, "Failed to create shared memory allocator: {s}", .{@errorName(err)}) catch "Failed to create shared memory allocator";
             roc_ops.crash(msg2);
             return error.SharedMemoryError;

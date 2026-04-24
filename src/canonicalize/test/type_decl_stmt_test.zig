@@ -12,7 +12,7 @@ const ModuleEnv = @import("../ModuleEnv.zig");
 const Can = @import("../Can.zig");
 const CIR = @import("../CIR.zig");
 
-const Allocators = base.Allocators;
+const CoreCtx = @import("ctx").CoreCtx;
 const testing = std.testing;
 const Ident = base.Ident;
 const Statement = CIR.Statement;
@@ -276,14 +276,12 @@ test "scopeLookupTypeDecl API is accessible" {
 
     try env.initCIRFields("test");
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
 
-    const ast = try parse.parseExpr(&allocators, &env.common);
+    const ast = try parse.parseExpr(gpa, &env.common);
     defer ast.deinit();
 
-    var can = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+    var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
     defer can.deinit();
 
     // Enter a scope
@@ -307,14 +305,12 @@ test "introduceType API is accessible" {
 
     try env.initCIRFields("test");
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
 
-    const ast = try parse.parseExpr(&allocators, &env.common);
+    const ast = try parse.parseExpr(gpa, &env.common);
     defer ast.deinit();
 
-    var can = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+    var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
     defer can.deinit();
 
     // Enter a scope for local type declarations
@@ -384,14 +380,12 @@ test "local type scoping - not visible after exiting block" {
 
     try env.initCIRFields("test");
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
 
-    const ast = try parse.parseExpr(&allocators, &env.common);
+    const ast = try parse.parseExpr(gpa, &env.common);
     defer ast.deinit();
 
-    var can = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+    var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
     defer can.deinit();
 
     // Enter outer scope

@@ -169,7 +169,7 @@ fn layoutsEqual(a: Layout, b: Layout) bool {
 /// - Tuple-style: (Data, Discriminant) where element 0 = payload, element 1 = tag
 pub fn isRecordStyleStruct(lay: Layout, layout_store: *layout.Store) bool {
     if (lay.tag != .struct_) return false;
-    const struct_data = layout_store.getStructData(lay.data.struct_.idx);
+    const struct_data = layout_store.getStructData(lay.getStruct().idx);
     const fields = layout_store.struct_fields.sliceRange(struct_data.getFields());
     if (fields.len == 0) return false;
     // If the first field has a non-NONE name, it's record-style
@@ -261,16 +261,16 @@ fn hasNestedLayoutMismatch(actual: Layout, expected: Layout, layout_store: *layo
 
     return switch (actual.tag) {
         .list => {
-            const actual_elem = layout_store.getLayout(actual.data.list);
-            const expected_elem = layout_store.getLayout(expected.data.list);
+            const actual_elem = layout_store.getLayout(actual.getIdx());
+            const expected_elem = layout_store.getLayout(expected.getIdx());
             const actual_size = layout_store.layoutSize(actual_elem);
             const expected_size = layout_store.layoutSize(expected_elem);
             // Size mismatch means iteration will read wrong offsets
             return actual_size != expected_size;
         },
         .struct_ => {
-            const actual_data = layout_store.getStructData(actual.data.struct_.idx);
-            const expected_data = layout_store.getStructData(expected.data.struct_.idx);
+            const actual_data = layout_store.getStructData(actual.getStruct().idx);
+            const expected_data = layout_store.getStructData(expected.getStruct().idx);
             const actual_fields = layout_store.struct_fields.sliceRange(actual_data.getFields());
             const expected_fields = layout_store.struct_fields.sliceRange(expected_data.getFields());
             if (actual_fields.len != expected_fields.len) return true;
@@ -291,9 +291,9 @@ fn hasNestedLayoutMismatch(actual: Layout, expected: Layout, layout_store: *layo
 /// Used by list_append, list_append_unsafe, and list_concat operations.
 fn selectCopyFallbackFn(elem_layout: Layout) builtins.list.CopyFallbackFn {
     return switch (elem_layout.tag) {
-        .scalar => switch (elem_layout.data.scalar.tag) {
+        .scalar => switch (elem_layout.getScalar().tag) {
             .str => &builtins.list.copy_str,
-            .int => switch (elem_layout.data.scalar.data.int) {
+            .int => switch (elem_layout.getScalar().getInt()) {
                 .u8 => &builtins.list.copy_u8,
                 .u16 => &builtins.list.copy_u16,
                 .u32 => &builtins.list.copy_u32,
@@ -1226,7 +1226,7 @@ pub const Interpreter = struct {
         value_rt_var: ?types.Var,
         roc_ops: *RocOps,
     ) !RocStr {
-        if (value.layout.tag == .scalar and value.layout.data.scalar.tag == .str) {
+        if (value.layout.tag == .scalar and value.layout.getScalar().tag == .str) {
             if (value.asRocStr()) |existing| {
                 var copy = existing.*;
                 copy.incref(1, roc_ops);
@@ -1256,7 +1256,7 @@ pub const Interpreter = struct {
         const shim_target_usize = self.runtime_layout_store.targetUsize();
         var alignment = layout_val.alignment(shim_target_usize);
         if (layout_val.tag == .closure) {
-            const captures_layout = self.runtime_layout_store.getLayout(layout_val.data.closure.captures_layout_idx);
+            const captures_layout = self.runtime_layout_store.getLayout(layout_val.getClosure().captures_layout_idx);
             alignment = alignment.max(captures_layout.alignment(shim_target_usize));
         }
         const ptr = try self.stack_memory.alloca(size, alignment);
@@ -1285,7 +1285,7 @@ pub const Interpreter = struct {
         const shim_target_usize = self.runtime_layout_store.targetUsize();
         var alignment = src.layout.alignment(shim_target_usize);
         if (src.layout.tag == .closure) {
-            const captures_layout = self.runtime_layout_store.getLayout(src.layout.data.closure.captures_layout_idx);
+            const captures_layout = self.runtime_layout_store.getLayout(src.layout.getClosure().captures_layout_idx);
             alignment = alignment.max(captures_layout.alignment(shim_target_usize));
         }
         const ptr = if (size > 0) try self.stack_memory.alloca(size, alignment) else null;
@@ -1569,8 +1569,8 @@ pub const Interpreter = struct {
 
                 const str_a = args[0];
                 const str_b = args[1];
-                if (str_a.layout.tag != .scalar or str_a.layout.data.scalar.tag != .str or
-                    str_b.layout.tag != .scalar or str_b.layout.data.scalar.tag != .str)
+                if (str_a.layout.tag != .scalar or str_a.layout.getScalar().tag != .str or
+                    str_b.layout.tag != .scalar or str_b.layout.getScalar().tag != .str)
                 {
                     return error.TypeMismatch;
                 }
@@ -2028,7 +2028,7 @@ pub const Interpreter = struct {
                             const disc_rt_var = try self.runtime_types.fresh();
 
                             const tag_field = try acc.getFieldByIndex(tag_field_idx, disc_rt_var);
-                            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                            if (tag_field.layout.tag == .scalar and tag_field.layout.getScalar().tag == .int) {
                                 var tmp = tag_field;
                                 tmp.is_initialized = false;
                                 try tmp.setInt(@intCast(ok_index orelse 0));
@@ -2053,7 +2053,7 @@ pub const Interpreter = struct {
                             }
 
                             const tag_field = try acc.getElement(1, disc_rt_var);
-                            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                            if (tag_field.layout.tag == .scalar and tag_field.layout.getScalar().tag == .int) {
                                 var tmp = tag_field;
                                 tmp.is_initialized = false;
                                 try tmp.setInt(@intCast(ok_index orelse 0));
@@ -2065,7 +2065,7 @@ pub const Interpreter = struct {
                     } else if (result_layout.tag == .tag_union) {
                         // Tag union layout with proper variant info
                         var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-                        const tu_idx = result_layout.data.tag_union.idx;
+                        const tu_idx = result_layout.getTagUnion().idx;
                         const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
                         const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
@@ -2095,7 +2095,7 @@ pub const Interpreter = struct {
                     } else if (result_layout.tag == .tag_union) {
                         // Tag union layout with proper variant info for Err case
                         var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-                        const tu_idx = result_layout.data.tag_union.idx;
+                        const tu_idx = result_layout.getTagUnion().idx;
                         const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
                         const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
@@ -2117,7 +2117,7 @@ pub const Interpreter = struct {
 
                             // BadUtf8 is a tag_union with record { problem, index } as its payload
                             if (err_variant_layout.tag == .tag_union) {
-                                const inner_tu_idx = err_variant_layout.data.tag_union.idx;
+                                const inner_tu_idx = err_variant_layout.getTagUnion().idx;
                                 const inner_tu_data = self.runtime_layout_store.getTagUnionData(inner_tu_idx);
                                 const inner_disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(inner_tu_idx);
 
@@ -2131,14 +2131,14 @@ pub const Interpreter = struct {
                                 if (record_layout.tag == .struct_) {
                                     // Write problem field
                                     const problem_offset = self.runtime_layout_store.getRecordFieldOffsetByName(
-                                        record_layout.data.struct_.idx,
+                                        record_layout.getStruct().idx,
                                         self.env.idents.problem,
                                     );
                                     builtins.utils.writeAs(u8, ptr_u8 + problem_offset, @intFromEnum(result.problem_code), @src());
 
                                     // Write index field
                                     const index_offset = self.runtime_layout_store.getRecordFieldOffsetByName(
-                                        record_layout.data.struct_.idx,
+                                        record_layout.getStruct().idx,
                                         self.env.idents.index,
                                     );
                                     builtins.utils.writeAs(u64, ptr_u8 + index_offset, result.byte_index, @src());
@@ -2176,8 +2176,8 @@ pub const Interpreter = struct {
                     if (return_rt_var) |rt_var| {
                         const candidate = self.getRuntimeLayout(rt_var) catch expected_layout;
                         if (candidate.tag == .list) {
-                            const elem_layout = self.runtime_layout_store.getLayout(candidate.data.list);
-                            if (elem_layout.tag == .scalar and elem_layout.data.scalar.tag == .str) {
+                            const elem_layout = self.runtime_layout_store.getLayout(candidate.getIdx());
+                            if (elem_layout.tag == .scalar and elem_layout.getScalar().tag == .str) {
                                 break :blk candidate;
                             }
                         }
@@ -2323,7 +2323,7 @@ pub const Interpreter = struct {
 
                     // Check if the result is already a string - if so, return it directly
                     if (to_inspect_result.layout.tag == .scalar and
-                        to_inspect_result.layout.data.scalar.tag == .str)
+                        to_inspect_result.layout.getScalar().tag == .str)
                     {
                         return to_inspect_result;
                     }
@@ -2348,9 +2348,9 @@ pub const Interpreter = struct {
                     if (nom.is_opaque) {
                         // Check if this is a builtin type with a primitive layout
                         const is_builtin_primitive = value.layout.tag == .scalar and
-                            (value.layout.data.scalar.tag == .int or
-                                value.layout.data.scalar.tag == .frac or
-                                value.layout.data.scalar.tag == .str);
+                            (value.layout.getScalar().tag == .int or
+                                value.layout.getScalar().tag == .frac or
+                                value.layout.getScalar().tag == .str);
                         if (is_builtin_primitive) {
                             break :blk try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
                         }
@@ -2475,8 +2475,8 @@ pub const Interpreter = struct {
                 // The index should be U64 (integer), but due to numeric literal defaulting
                 // (e.g., `var $x = 0` defaulting to Dec), it may arrive as a fractional type.
                 // Convert frac → int by extracting the whole number part.
-                const index: i128 = if (index_arg.layout.tag == .scalar and index_arg.layout.data.scalar.tag == .frac) blk: {
-                    if (index_arg.layout.data.scalar.data.frac == .dec) {
+                const index: i128 = if (index_arg.layout.tag == .scalar and index_arg.layout.getScalar().tag == .frac) blk: {
+                    if (index_arg.layout.getScalar().getFrac() == .dec) {
                         const dec_val = index_arg.asDec(roc_ops);
                         std.debug.assert(@rem(dec_val.num, RocDec.one_point_zero.num) == 0); // Dec index must be a whole number
                         break :blk @divTrunc(dec_val.num, RocDec.one_point_zero.num);
@@ -2647,7 +2647,7 @@ pub const Interpreter = struct {
                 const elem_layout_result: struct { elem_layout: Layout, result_layout: Layout } = blk: {
                     // Try to get element layout from list_a first
                     if (list_a_arg.layout.tag == .list) {
-                        const elem_idx = list_a_arg.layout.data.list;
+                        const elem_idx = list_a_arg.layout.getIdx();
                         const elem_lay = self.runtime_layout_store.getLayout(elem_idx);
                         // Check if this is actually a non-ZST element
                         if (self.runtime_layout_store.layoutSize(elem_lay) > 0) {
@@ -2656,7 +2656,7 @@ pub const Interpreter = struct {
                     }
                     // Try list_b
                     if (list_b_arg.layout.tag == .list) {
-                        const elem_idx = list_b_arg.layout.data.list;
+                        const elem_idx = list_b_arg.layout.getIdx();
                         const elem_lay = self.runtime_layout_store.getLayout(elem_idx);
                         if (self.runtime_layout_store.layoutSize(elem_lay) > 0) {
                             break :blk .{ .elem_layout = elem_lay, .result_layout = list_b_arg.layout };
@@ -2786,9 +2786,7 @@ pub const Interpreter = struct {
                     // Create a new list with the element's layout and append to it.
                     const elem_layout = elt_arg.layout;
                     const elem_layout_idx = try self.runtime_layout_store.insertLayout(elem_layout);
-                    var new_list_layout = roc_list_arg.layout;
-                    new_list_layout.tag = .list;
-                    new_list_layout.data = .{ .list = elem_layout_idx };
+                    const new_list_layout = Layout.list(elem_layout_idx);
 
                     // Create new empty list with correct element layout
                     const non_null_bytes: [*]u8 = @ptrCast(elt_arg.ptr.?);
@@ -2835,7 +2833,7 @@ pub const Interpreter = struct {
                 const roc_list = roc_list_arg.asRocList().?;
 
                 // Get element layout from the list's stored layout
-                const stored_elem_layout_idx = roc_list_arg.layout.data.list;
+                const stored_elem_layout_idx = roc_list_arg.layout.getIdx();
                 const stored_elem_layout = self.runtime_layout_store.getLayout(stored_elem_layout_idx);
                 var elt_value = elt_arg;
 
@@ -2890,7 +2888,7 @@ pub const Interpreter = struct {
                 // Allocate space for the result list
                 // If we upgraded the element layout, create a new list layout with the upgraded element
                 const result_layout: Layout = if (needs_element_layout_upgrade)
-                    Layout{ .tag = .list, .data = .{ .list = elem_layout_idx } }
+                    Layout.list(elem_layout_idx)
                 else
                     roc_list_arg.layout; // Same layout as input
 
@@ -3511,7 +3509,7 @@ pub const Interpreter = struct {
                 switch (lhs) {
                     .int => |l| {
                         // Perform shift and truncate to target type width
-                        const precision = result_layout.data.scalar.data.int;
+                        const precision = result_layout.getScalar().getInt();
                         const shifted: i128 = l << shift_amount;
                         const result: i128 = switch (precision) {
                             .u8 => @as(i128, @as(u8, @truncate(@as(u128, @bitCast(shifted))))),
@@ -3594,7 +3592,7 @@ pub const Interpreter = struct {
 
                 switch (lhs) {
                     .int => |l| {
-                        const precision = result_layout.data.scalar.data.int;
+                        const precision = result_layout.getScalar().getInt();
                         const result: i128 = switch (precision) {
                             .u8 => shiftRightZeroFill(u8, u8, l, shift_amount),
                             .i8 => shiftRightZeroFill(u8, i8, l, shift_amount),
@@ -3736,9 +3734,9 @@ pub const Interpreter = struct {
                     // (Don't use resolveBaseVar here as it strips away nominal type info needed for layout)
                     const num_layout = try self.getRuntimeLayout(target_type_var.?);
                     if (num_layout.tag == .scalar) {
-                        if (num_layout.data.scalar.tag == .int) {
+                        if (num_layout.getScalar().tag == .int) {
                             // Integer type - check range and sign
-                            const int_type = num_layout.data.scalar.data.int;
+                            const int_type = num_layout.getScalar().getInt();
 
                             // Set type info for error messages
                             switch (int_type) {
@@ -3839,8 +3837,8 @@ pub const Interpreter = struct {
                                     rejection_reason = .fractional_integer;
                                 }
                             }
-                        } else if (num_layout.data.scalar.tag == .frac) {
-                            const frac_type = num_layout.data.scalar.data.frac;
+                        } else if (num_layout.getScalar().tag == .frac) {
+                            const frac_type = num_layout.getScalar().getFrac();
                             switch (frac_type) {
                                 .f32 => type_name = "F32",
                                 .f64 => type_name = "F64",
@@ -3865,7 +3863,7 @@ pub const Interpreter = struct {
                     const tag_field, const payload_field = try getStructTagAndPayloadFields(self, &dest, result_layout);
 
                     // Write tag discriminant
-                    std.debug.assert(tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int);
+                    std.debug.assert(tag_field.layout.tag == .scalar and tag_field.layout.getScalar().tag == .int);
                     var tmp = tag_field;
                     tmp.is_initialized = false;
                     const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
@@ -3884,8 +3882,8 @@ pub const Interpreter = struct {
                     if (in_range and ok_payload_var != null) {
                         const num_layout = try self.getRuntimeLayout(ok_payload_var.?);
                         if (payload_field.ptr) |payload_ptr| {
-                            if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .int) {
-                                const int_type = num_layout.data.scalar.data.int;
+                            if (num_layout.tag == .scalar and num_layout.getScalar().tag == .int) {
+                                const int_type = num_layout.getScalar().getInt();
                                 if (is_negative) {
                                     // Write negative value
                                     // For i128, we need special handling because the minimum value's absolute
@@ -3933,9 +3931,9 @@ pub const Interpreter = struct {
                                         .i128 => builtins.utils.writeAs(i128, payload_ptr, @intCast(value), @src()),
                                     }
                                 }
-                            } else if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .frac) {
+                            } else if (num_layout.tag == .scalar and num_layout.getScalar().tag == .frac) {
                                 // Floating-point and Dec types
-                                const frac_precision = num_layout.data.scalar.data.frac;
+                                const frac_precision = num_layout.getScalar().getFrac();
                                 const float_value: f64 = if (is_negative)
                                     -i128h.u128_to_f64(value)
                                 else
@@ -4025,7 +4023,7 @@ pub const Interpreter = struct {
                                         if (err_acc.findFieldIndex(layout_env.getIdent(layout_env.idents.tag))) |inner_tag_idx| {
                                             const inner_tag_rt = try self.runtime_types.fresh();
                                             const inner_tag_field = try err_acc.getFieldByIndex(inner_tag_idx, inner_tag_rt);
-                                            if (inner_tag_field.layout.tag == .scalar and inner_tag_field.layout.data.scalar.tag == .int) {
+                                            if (inner_tag_field.layout.tag == .scalar and inner_tag_field.layout.getScalar().tag == .int) {
                                                 var inner_tmp = inner_tag_field;
                                                 inner_tmp.is_initialized = false;
                                                 try inner_tmp.setInt(0); // InvalidNumeral tag index
@@ -4044,7 +4042,7 @@ pub const Interpreter = struct {
                                         // Tuple: element 1 = tag, element 0 = payload
                                         const inner_tag_rt = try self.runtime_types.fresh();
                                         const inner_tag_field = try err_acc.getElement(1, inner_tag_rt);
-                                        if (inner_tag_field.layout.tag == .scalar and inner_tag_field.layout.data.scalar.tag == .int) {
+                                        if (inner_tag_field.layout.tag == .scalar and inner_tag_field.layout.getScalar().tag == .int) {
                                             var inner_tmp = inner_tag_field;
                                             inner_tmp.is_initialized = false;
                                             try inner_tmp.setInt(0); // InvalidNumeral tag index
@@ -4055,7 +4053,7 @@ pub const Interpreter = struct {
                                             inner_payload_field.setRocStr(roc_str);
                                         }
                                     }
-                                } else if (err_payload_layout.tag == .scalar and err_payload_layout.data.scalar.tag == .str) {
+                                } else if (err_payload_layout.tag == .scalar and err_payload_layout.getScalar().tag == .str) {
                                     // Direct Str payload (single-tag union optimized away)
                                     // Cannot use asRocStr() - outer_payload_ptr is a computed pointer
                                     // from tag union payload offset, not a StackValue.
@@ -4075,7 +4073,7 @@ pub const Interpreter = struct {
                 } else if (result_layout.tag == .tag_union) {
                     // Tag union layout: payload at offset 0, discriminant at discriminant_offset
                     var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-                    const tu_idx = result_layout.data.tag_union.idx;
+                    const tu_idx = result_layout.getTagUnion().idx;
                     const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
                     const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
@@ -4093,8 +4091,8 @@ pub const Interpreter = struct {
                     if (in_range and ok_payload_var != null) {
                         const num_layout = try self.getRuntimeLayout(ok_payload_var.?);
                         const payload_ptr: *anyopaque = @ptrCast(base_ptr);
-                        if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .int) {
-                            const int_type = num_layout.data.scalar.data.int;
+                        if (num_layout.tag == .scalar and num_layout.getScalar().tag == .int) {
+                            const int_type = num_layout.getScalar().getInt();
                             if (is_negative) {
                                 switch (int_type) {
                                     .i8 => {
@@ -4134,8 +4132,8 @@ pub const Interpreter = struct {
                                     .i128 => builtins.utils.writeAs(i128, payload_ptr, @intCast(value), @src()),
                                 }
                             }
-                        } else if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .frac) {
-                            const frac_precision = num_layout.data.scalar.data.frac;
+                        } else if (num_layout.tag == .scalar and num_layout.getScalar().tag == .frac) {
+                            const frac_precision = num_layout.getScalar().getFrac();
                             const float_value: f64 = if (is_negative)
                                 -i128h.u128_to_f64(value)
                             else
@@ -4214,8 +4212,8 @@ pub const Interpreter = struct {
                 if (ok_payload_var) |payload_var| {
                     const num_layout = try self.getRuntimeLayout(payload_var);
                     if (num_layout.tag == .scalar) {
-                        if (num_layout.data.scalar.tag == .int) {
-                            return switch (num_layout.data.scalar.data.int) {
+                        if (num_layout.getScalar().tag == .int) {
+                            return switch (num_layout.getScalar().getInt()) {
                                 .u8 => self.numFromStrInt(u8, roc_str, result_rt_var),
                                 .i8 => self.numFromStrInt(i8, roc_str, result_rt_var),
                                 .u16 => self.numFromStrInt(u16, roc_str, result_rt_var),
@@ -4227,8 +4225,8 @@ pub const Interpreter = struct {
                                 .u128 => self.numFromStrInt(u128, roc_str, result_rt_var),
                                 .i128 => self.numFromStrInt(i128, roc_str, result_rt_var),
                             };
-                        } else if (num_layout.data.scalar.tag == .frac) {
-                            return switch (num_layout.data.scalar.data.frac) {
+                        } else if (num_layout.getScalar().tag == .frac) {
+                            return switch (num_layout.getScalar().getFrac()) {
                                 .f32 => self.numFromStrFloat(f32, roc_str, result_rt_var),
                                 .f64 => self.numFromStrFloat(f64, roc_str, result_rt_var),
                                 .dec => self.numFromStrDec(roc_str, result_rt_var),
@@ -4707,7 +4705,7 @@ pub const Interpreter = struct {
             const tag_field, const payload_field = try getStructTagAndPayloadFields(self, &dest, result_layout);
 
             // Write tag discriminant
-            std.debug.assert(tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int);
+            std.debug.assert(tag_field.layout.tag == .scalar and tag_field.layout.getScalar().tag == .int);
             var tmp = tag_field;
             tmp.is_initialized = false;
             const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
@@ -4735,7 +4733,7 @@ pub const Interpreter = struct {
         } else if (result_layout.tag == .tag_union) {
             // Tag union layout: payload at offset 0, discriminant at discriminant_offset
             const dest = try self.pushRaw(result_layout, 0, result_rt_var);
-            const tu_idx = result_layout.data.tag_union.idx;
+            const tu_idx = result_layout.getTagUnion().idx;
             const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
             const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
@@ -5321,7 +5319,7 @@ pub const Interpreter = struct {
             return dest;
         } else if (result_layout.tag == .tag_union) {
             var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-            const tu_idx = result_layout.data.tag_union.idx;
+            const tu_idx = result_layout.getTagUnion().idx;
             const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
             const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
@@ -5632,8 +5630,8 @@ pub const Interpreter = struct {
 
     fn getRuntimeU8(value: StackValue) u8 {
         std.debug.assert(value.layout.tag == .scalar);
-        std.debug.assert(value.layout.data.scalar.tag == .int);
-        std.debug.assert(value.layout.data.scalar.data.int == .u8);
+        std.debug.assert(value.layout.getScalar().tag == .int);
+        std.debug.assert(value.layout.getScalar().getInt() == .u8);
 
         const ptr = value.ptr orelse debugUnreachable(null, "null pointer in getRuntimeU8", @src());
 
@@ -5646,13 +5644,13 @@ pub const Interpreter = struct {
         // Bool can be either a scalar (u8) or a tag_union layout
         // For tag_union: False=0, True=1 (alphabetically sorted)
         if (value.layout.tag == .scalar) {
-            std.debug.assert(value.layout.data.scalar.tag == .int);
-            std.debug.assert(value.layout.data.scalar.data.int == .u8);
+            std.debug.assert(value.layout.getScalar().tag == .int);
+            std.debug.assert(value.layout.getScalar().getInt() == .u8);
             const bool_byte = builtins.utils.readAs(u8, ptr, @src());
             return (bool_byte != 0) == equals;
         } else if (value.layout.tag == .tag_union) {
             // Tag union Bool: read discriminant at the correct offset
-            const tu_idx = value.layout.data.tag_union.idx;
+            const tu_idx = value.layout.getTagUnion().idx;
             const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
             const base_ptr: [*]u8 = @ptrCast(ptr);
             const disc_ptr = base_ptr + disc_offset;
@@ -5846,10 +5844,10 @@ pub const Interpreter = struct {
 
     fn extractNumericValue(_: *Interpreter, value: StackValue) !NumericValue {
         if (value.layout.tag != .scalar) return error.NotNumeric;
-        const scalar = value.layout.data.scalar;
+        const scalar = value.layout.getScalar();
         return switch (scalar.tag) {
             .int => NumericValue{ .int = value.asI128() },
-            .frac => switch (scalar.data.frac) {
+            .frac => switch (scalar.getFrac()) {
                 .f32 => {
                     const raw_ptr = value.ptr orelse return error.TypeMismatch;
                     return NumericValue{ .f32 = builtins.utils.readAs(f32, raw_ptr, @src()) };
@@ -5968,8 +5966,8 @@ pub const Interpreter = struct {
 
         // Handle scalar comparisons (numbers, strings) directly.
         if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
-            const lhs_scalar = lhs.layout.data.scalar;
-            const rhs_scalar = rhs.layout.data.scalar;
+            const lhs_scalar = lhs.layout.getScalar();
+            const rhs_scalar = rhs.layout.getScalar();
 
             // Handle numeric type mismatches (Int vs Dec)
             const lhs_is_numeric = lhs_scalar.tag == .int or lhs_scalar.tag == .frac;
@@ -6213,8 +6211,8 @@ pub const Interpreter = struct {
     ) StructuralEqError!bool {
         // Check if this is a simple scalar comparison (numbers, bools represented as scalars)
         if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
-            const lhs_scalar = lhs.layout.data.scalar;
-            const rhs_scalar = rhs.layout.data.scalar;
+            const lhs_scalar = lhs.layout.getScalar();
+            const rhs_scalar = rhs.layout.getScalar();
             if (lhs_scalar.tag != rhs_scalar.tag) {
                 // Different scalar types can't be equal
                 return false;
@@ -6265,15 +6263,15 @@ pub const Interpreter = struct {
                 return error.TypeMismatch;
 
             const stored_elem_layout = if (lhs.layout.tag == .list)
-                self.runtime_layout_store.getLayout(lhs.layout.data.list)
+                self.runtime_layout_store.getLayout(lhs.layout.getIdx())
             else if (rhs.layout.tag == .list)
-                self.runtime_layout_store.getLayout(rhs.layout.data.list)
+                self.runtime_layout_store.getLayout(rhs.layout.getIdx())
             else
                 layout.Layout.zst();
 
             const type_based_elem_layout = self.getRuntimeLayout(elem_rt_var) catch stored_elem_layout;
             const candidate_elem_layout = if (type_based_elem_layout.tag == .box)
-                self.runtime_layout_store.getLayout(type_based_elem_layout.data.box)
+                self.runtime_layout_store.getLayout(type_based_elem_layout.getIdx())
             else
                 type_based_elem_layout;
 
@@ -6596,7 +6594,7 @@ pub const Interpreter = struct {
 
     fn extractTagValue(self: *Interpreter, value: StackValue, union_rt_var: types.Var) !TagValue {
         switch (value.layout.tag) {
-            .scalar => switch (value.layout.data.scalar.tag) {
+            .scalar => switch (value.layout.getScalar().tag) {
                 .int => {
                     return .{ .index = @intCast(value.asI128()), .payload = null };
                 },
@@ -6721,7 +6719,7 @@ pub const Interpreter = struct {
                                 // then the other variant determines the payload size. We can compute
                                 // a scalar layout based on the payload space in the tag union.
                                 if (variant_layout.tag == .zst) {
-                                    const inner_tu_data = self.runtime_layout_store.getTagUnionData(value.layout.data.tag_union.idx);
+                                    const inner_tu_data = self.runtime_layout_store.getTagUnionData(value.layout.getTagUnion().idx);
                                     const inner_layout_variants = self.runtime_layout_store.getTagUnionVariants(inner_tu_data);
                                     // Check the other variant's layout
                                     var idx: usize = 0;
@@ -6782,7 +6780,7 @@ pub const Interpreter = struct {
             .box => {
                 // Auto-unbox for recursive types: the value is boxed but we need to extract
                 // the tag union inside. This happens when list elements are boxed for recursive types.
-                const elem_idx = value.layout.data.box;
+                const elem_idx = value.layout.getIdx();
                 const elem_layout = self.runtime_layout_store.getLayout(elem_idx);
 
                 // Get the element rt_var from the Box type's type argument
@@ -6843,7 +6841,7 @@ pub const Interpreter = struct {
         const disc_rt_var = try self.runtime_types.fresh();
         const tag_field = try acc.getFieldByIndex(tag_field_idx, disc_rt_var);
         var tag_index: usize = undefined;
-        if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+        if (tag_field.layout.tag == .scalar and tag_field.layout.getScalar().tag == .int) {
             var tmp = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true, .rt_var = tag_field.rt_var };
             tag_index = @intCast(tmp.asI128());
         } else return error.TypeMismatch;
@@ -6911,7 +6909,7 @@ pub const Interpreter = struct {
         const discrim_rt_var = if (tuple_elem_vars) |vars| (if (vars.len > 1) vars[1] else value.rt_var) else value.rt_var;
         const tag_field = try acc.getElement(1, discrim_rt_var);
         var tag_index: usize = undefined;
-        if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+        if (tag_field.layout.tag == .scalar and tag_field.layout.getScalar().tag == .int) {
             var tmp = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true, .rt_var = tag_field.rt_var };
             tag_index = @intCast(tmp.asI128());
         } else return error.TypeMismatch;
@@ -6981,7 +6979,7 @@ pub const Interpreter = struct {
 
             const field_rt = try self.runtime_types.fresh();
             const tag_field = try acc.getFieldByIndex(tag_field_idx, field_rt);
-            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+            if (tag_field.layout.tag == .scalar and tag_field.layout.getScalar().tag == .int) {
                 var tmp = tag_field;
                 tmp.is_initialized = false;
                 try tmp.setInt(@intCast(err_index orelse 1));
@@ -6995,7 +6993,7 @@ pub const Interpreter = struct {
             var acc = try dest.asTuple(&self.runtime_layout_store);
             const disc_rt_var = try self.runtime_types.fresh();
             const tag_field = try acc.getElement(1, disc_rt_var);
-            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+            if (tag_field.layout.tag == .scalar and tag_field.layout.getScalar().tag == .int) {
                 var tmp = tag_field;
                 tmp.is_initialized = false;
                 try tmp.setInt(@intCast(err_index orelse 1));
@@ -7017,7 +7015,7 @@ pub const Interpreter = struct {
             if (err_rec.findFieldIndex(self.env.getIdent(self.env.idents.tag))) |tag_idx| {
                 const field_rt = try self.runtime_types.fresh();
                 const inner_tag = try err_rec.getFieldByIndex(tag_idx, field_rt);
-                if (inner_tag.layout.tag == .scalar and inner_tag.layout.data.scalar.tag == .int) {
+                if (inner_tag.layout.tag == .scalar and inner_tag.layout.getScalar().tag == .int) {
                     var tmp = inner_tag;
                     tmp.is_initialized = false;
                     try tmp.setInt(0);
@@ -7040,7 +7038,7 @@ pub const Interpreter = struct {
             }
             const inner_disc_rt_var = try self.runtime_types.fresh();
             const err_tag = try err_tuple.getElement(1, inner_disc_rt_var);
-            if (err_tag.layout.tag == .scalar and err_tag.layout.data.scalar.tag == .int) {
+            if (err_tag.layout.tag == .scalar and err_tag.layout.getScalar().tag == .int) {
                 var tmp = err_tag;
                 tmp.is_initialized = false;
                 try tmp.setInt(0);
@@ -7083,7 +7081,7 @@ pub const Interpreter = struct {
             .box => {
                 traceDbg(roc_ops, "makeBoxValueFromLayout: handling .box", .{});
                 // Get the expected element layout from the box type
-                const expected_elem_layout = self.runtime_layout_store.getLayout(result_layout.data.box);
+                const expected_elem_layout = self.runtime_layout_store.getLayout(result_layout.getIdx());
                 const target_usize = self.runtime_layout_store.targetUsize();
                 traceDbg(roc_ops, "makeBoxValueFromLayout: expected_elem_layout.tag={s}", .{@tagName(expected_elem_layout.tag)});
 
@@ -7306,7 +7304,7 @@ pub const Interpreter = struct {
 
         // The result should be a Str
         if (result.layout.tag != .scalar) return null;
-        if (result.layout.data.scalar.tag != .str) return null;
+        if (result.layout.getScalar().tag != .str) return null;
 
         const rs = builtins.utils.alignedPtrCast(*const builtins.str.RocStr, result.ptr.?, @src());
         const s = rs.asSlice();
@@ -7347,13 +7345,13 @@ pub const Interpreter = struct {
         // This handles cases where the type system's layout doesn't match the actual
         // element layout after runtime defaulting (e.g., numeric literals defaulting to Dec).
         const actual_list_layout = if (list_layout.tag == .list) blk: {
-            const stored_elem_layout_idx = list_layout.data.list;
+            const stored_elem_layout_idx = list_layout.getIdx();
             const stored_elem_layout = self.runtime_layout_store.getLayout(stored_elem_layout_idx);
 
             const layouts_match = stored_elem_layout.eql(elem_layout);
             if (!layouts_match) {
                 const correct_elem_idx = try self.runtime_layout_store.insertLayout(elem_layout);
-                break :blk Layout{ .tag = .list, .data = .{ .list = correct_elem_idx } };
+                break :blk Layout.list(correct_elem_idx);
             } else {
                 break :blk list_layout;
             }
@@ -7460,13 +7458,10 @@ pub const Interpreter = struct {
             idx -= 1;
             traceDbg(roc_ops, "trimBindingList: decref idx={d} layout.tag={s}", .{ idx, @tagName(list.items[idx].value.layout.tag) });
             if (comptime trace_refcount and builtin.os.tag != .freestanding) {
-                const stderr_file: std.fs.File = .stderr();
-                var buf: [256]u8 = undefined;
-                const msg = std.fmt.bufPrint(&buf, "[INTERP] trimBindingList decref binding idx={} ptr=0x{x}\n", .{
+                std.debug.print("[INTERP] trimBindingList decref binding idx={} ptr=0x{x}\n", .{
                     idx,
                     @intFromPtr(list.items[idx].value.ptr),
-                }) catch "[INTERP] trimBindingList decref\n";
-                stderr_file.writeAll(msg) catch {};
+                });
             }
             list.items[idx].value.decref(&self.runtime_layout_store, roc_ops);
             traceDbg(roc_ops, "trimBindingList: decref complete", .{});
@@ -7601,7 +7596,7 @@ pub const Interpreter = struct {
         defer trace.end();
         const pat = self.env.store.getPattern(pattern_idx);
         switch (pat) {
-            .assign => |_| {
+            .assign => {
                 // Bind entire value to this pattern.
                 // Prefer value_rt_var when it provides more concrete type info than value.rt_var.
                 // This is critical for method receivers on polymorphic opaque types (issue #9049):
@@ -7645,11 +7640,11 @@ pub const Interpreter = struct {
                 const lit = il.value.toI128();
 
                 // Handle both int and Dec (frac) layouts for numeric literals
-                return switch (value.layout.data.scalar.tag) {
+                return switch (value.layout.getScalar().tag) {
                     .int => value.asI128() == lit,
                     .frac => blk: {
                         // For Dec type, extract the value and compare
-                        if (value.layout.data.scalar.data.frac != .dec) break :blk false;
+                        if (value.layout.getScalar().getFrac() != .dec) break :blk false;
                         const dec_value = value.asDec(roc_ops);
                         // Dec stores values scaled by 10^18, so compare with scaled literal
                         break :blk if (RocDec.fromWholeInt(lit)) |d| dec_value.num == d.num else false;
@@ -7658,7 +7653,7 @@ pub const Interpreter = struct {
                 };
             },
             .str_literal => |sl| {
-                if (!(value.layout.tag == .scalar and value.layout.data.scalar.tag == .str)) return false;
+                if (!(value.layout.tag == .scalar and value.layout.getScalar().tag == .str)) return false;
                 const lit = self.env.getString(sl.literal);
                 const rs = value.asRocStr().?;
                 return rs.eqlSlice(lit);
@@ -7750,7 +7745,7 @@ pub const Interpreter = struct {
                 // Get element layout from the actual list layout for memory access.
                 // The list's runtime layout may differ from the type system's expectation.
                 const physical_elem_layout = if (list_layout.tag == .list)
-                    self.runtime_layout_store.getLayout(list_layout.data.list)
+                    self.runtime_layout_store.getLayout(list_layout.getIdx())
                 else
                     Layout.zst(); // list_of_zst has zero-sized elements
 
@@ -8551,16 +8546,16 @@ pub const Interpreter = struct {
         return switch (lay.tag) {
             .list, .list_of_zst => blk: {
                 // Get element layout and recursively create element type
-                const elem_layout = self.runtime_layout_store.getLayout(lay.data.list);
+                const elem_layout = self.runtime_layout_store.getLayout(lay.getIdx());
                 const elem_type = try self.createTypeFromLayout(elem_layout);
                 // Create List type with element type
                 break :blk try self.createListTypeWithElement(elem_type);
             },
             .scalar => blk: {
-                const scalar = lay.data.scalar;
+                const scalar = lay.getScalar();
                 switch (scalar.tag) {
                     .int => {
-                        const type_name = switch (scalar.data.int) {
+                        const type_name = switch (scalar.getInt()) {
                             .i8 => "I8",
                             .i16 => "I16",
                             .i32 => "I32",
@@ -8576,7 +8571,7 @@ pub const Interpreter = struct {
                         break :blk try self.runtime_types.freshFromContent(content);
                     },
                     .frac => {
-                        const type_name = switch (scalar.data.frac) {
+                        const type_name = switch (scalar.getFrac()) {
                             .dec => "Dec",
                             .f32 => "F32",
                             .f64 => "F64",
@@ -8658,18 +8653,18 @@ pub const Interpreter = struct {
         const lay = self.runtime_layout_store.getLayout(lay_idx);
         switch (lay.tag) {
             .box => {
-                const inner_layout = self.runtime_layout_store.getLayout(lay.data.box);
-                if (inner_layout.tag == .tag_union and inner_layout.data.tag_union.idx.int_idx == target_tu_idx.int_idx) {
+                const inner_layout = self.runtime_layout_store.getLayout(lay.getIdx());
+                if (inner_layout.tag == .tag_union and inner_layout.getTagUnion().idx.int_idx == target_tu_idx.int_idx) {
                     return lay_idx; // Return the index, not the layout
                 }
                 // Don't recurse into a different tag_union
                 if (inner_layout.tag == .tag_union) {
                     return null;
                 }
-                return self.findBoxIdxForTagUnion(lay.data.box, target_tu_idx);
+                return self.findBoxIdxForTagUnion(lay.getIdx(), target_tu_idx);
             },
             .struct_ => {
-                const struct_data = self.runtime_layout_store.getStructData(lay.data.struct_.idx);
+                const struct_data = self.runtime_layout_store.getStructData(lay.getStruct().idx);
                 const fields = self.runtime_layout_store.struct_fields.sliceRange(struct_data.getFields());
                 var i: usize = 0;
                 while (i < fields.len) : (i += 1) {
@@ -8680,7 +8675,7 @@ pub const Interpreter = struct {
                 return null;
             },
             .list => {
-                return self.findBoxIdxForTagUnion(lay.data.list, target_tu_idx);
+                return self.findBoxIdxForTagUnion(lay.getIdx(), target_tu_idx);
             },
             else => return null,
         }
@@ -8694,8 +8689,8 @@ pub const Interpreter = struct {
     fn layoutContainsBoxOfTagUnion(self: *Interpreter, lay: layout.Layout, target_tu_idx: layout.TagUnionIdx) bool {
         switch (lay.tag) {
             .box => {
-                const inner_layout = self.runtime_layout_store.getLayout(lay.data.box);
-                if (inner_layout.tag == .tag_union and inner_layout.data.tag_union.idx.int_idx == target_tu_idx.int_idx) {
+                const inner_layout = self.runtime_layout_store.getLayout(lay.getIdx());
+                if (inner_layout.tag == .tag_union and inner_layout.getTagUnion().idx.int_idx == target_tu_idx.int_idx) {
                     return true;
                 }
                 // Don't recurse into tag_unions (we're looking for Box(target), not nested tag_unions)
@@ -8705,7 +8700,7 @@ pub const Interpreter = struct {
                 return self.layoutContainsBoxOfTagUnion(inner_layout, target_tu_idx);
             },
             .struct_ => {
-                const struct_data = self.runtime_layout_store.getStructData(lay.data.struct_.idx);
+                const struct_data = self.runtime_layout_store.getStructData(lay.getStruct().idx);
                 const fields = self.runtime_layout_store.struct_fields.sliceRange(struct_data.getFields());
                 var i: usize = 0;
                 while (i < fields.len) : (i += 1) {
@@ -8717,7 +8712,7 @@ pub const Interpreter = struct {
                 return false;
             },
             .list => {
-                const elem_layout = self.runtime_layout_store.getLayout(lay.data.list);
+                const elem_layout = self.runtime_layout_store.getLayout(lay.getIdx());
                 return self.layoutContainsBoxOfTagUnion(elem_layout, target_tu_idx);
             },
             // Don't recurse into tag_unions - we're looking for Box(target) directly
@@ -11862,7 +11857,7 @@ pub const Interpreter = struct {
                     // 1. For flex rt_vars, it would return Dec (scalar) layout instead of list
                     // 2. We have no elements to determine element layout from anyway
                     // The list_of_zst layout is the correct representation for empty lists.
-                    const list_layout = layout.Layout{ .tag = .list_of_zst, .data = undefined };
+                    const list_layout = layout.Layout.listOfZst();
                     const dest = try self.pushRaw(list_layout, 0, list_rt_var);
                     if (dest.ptr != null) {
                         dest.setRocList(RocList.empty());
@@ -11917,7 +11912,7 @@ pub const Interpreter = struct {
                     if (is_elem_zst) {
                         // Special case: list of ZSTs
                         // We can create the entire list immediately
-                        const list_layout = layout.Layout{ .tag = .list_of_zst, .data = undefined };
+                        const list_layout = layout.Layout.listOfZst();
                         const dest = try self.pushRaw(list_layout, 0, list_rt_var);
                         if (dest.ptr != null) {
                             var list = RocList.empty();
@@ -12333,7 +12328,7 @@ pub const Interpreter = struct {
                 if (layout_val.tag == .scalar) {
                     // No payload union - just set discriminant
                     var out = try self.pushRaw(layout_val, 0, rt_var);
-                    if (layout_val.data.scalar.tag == .int) {
+                    if (layout_val.getScalar().tag == .int) {
                         out.is_initialized = false;
                         try out.setInt(@intCast(tag_index));
                         out.is_initialized = true;
@@ -12373,7 +12368,7 @@ pub const Interpreter = struct {
                 } else if (layout_val.tag == .box) {
                     // Boxed tag union — this happens with recursive types or types that require
                     // heap allocation. Construct the inner value, then box it.
-                    const inner_layout_idx = layout_val.data.box;
+                    const inner_layout_idx = layout_val.getIdx();
                     const inner_layout = self.runtime_layout_store.getLayout(inner_layout_idx);
 
                     const effective_inner_layout = inner_layout;
@@ -12725,7 +12720,7 @@ pub const Interpreter = struct {
                                     const elem_ct_var = seed_args[0];
                                     const elem_ct_resolved = self.env.types.resolveVar(elem_ct_var);
                                     // Get the element layout from the binding's actual list layout
-                                    const elem_layout_idx = b.value.layout.data.list;
+                                    const elem_layout_idx = b.value.layout.getIdx();
                                     const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
                                     // Check if the CT element type translates to a different layout
                                     const ct_elem_layout = self.getRuntimeLayout(
@@ -13030,7 +13025,7 @@ pub const Interpreter = struct {
         // default to Dec since we're evaluating a numeric literal.
         // Also update the rt_var to be a concrete Dec type so method dispatch works.
         const is_numeric_layout = layout_val.tag == .scalar and
-            (layout_val.data.scalar.tag == .int or layout_val.data.scalar.tag == .frac);
+            (layout_val.getScalar().tag == .int or layout_val.getScalar().tag == .frac);
         var final_rt_var = layout_rt_var;
         if (!is_numeric_layout or is_flex_or_rigid) {
             if (!is_numeric_layout) {
@@ -13044,9 +13039,9 @@ pub const Interpreter = struct {
         var value = try self.pushRaw(layout_val, 0, final_rt_var);
         value.is_initialized = false;
         switch (layout_val.tag) {
-            .scalar => switch (layout_val.data.scalar.tag) {
+            .scalar => switch (layout_val.getScalar().tag) {
                 .int => try value.setIntFromBytes(num_lit.value.bytes, num_lit.value.kind == .u128),
-                .frac => switch (layout_val.data.scalar.data.frac) {
+                .frac => switch (layout_val.getScalar().getFrac()) {
                     .f32 => {
                         const ptr = builtins.utils.alignedPtrCast(*f32, value.ptr.?, @src());
                         if (num_lit.value.kind == .u128) {
@@ -13081,8 +13076,8 @@ pub const Interpreter = struct {
         const rt_resolved = self.runtime_types.resolveVar(value.rt_var);
         if (rt_resolved.desc.content == .flex) {
             const concrete_rt_var = switch (layout_val.tag) {
-                .scalar => switch (layout_val.data.scalar.tag) {
-                    .int => switch (layout_val.data.scalar.data.int) {
+                .scalar => switch (layout_val.getScalar().tag) {
+                    .int => switch (layout_val.getScalar().getInt()) {
                         .i8 => try self.runtime_types.freshFromContent(try self.mkNumberTypeContentRuntime("I8")),
                         .i16 => try self.runtime_types.freshFromContent(try self.mkNumberTypeContentRuntime("I16")),
                         .i32 => try self.runtime_types.freshFromContent(try self.mkNumberTypeContentRuntime("I32")),
@@ -13094,7 +13089,7 @@ pub const Interpreter = struct {
                         .u64 => try self.runtime_types.freshFromContent(try self.mkNumberTypeContentRuntime("U64")),
                         .u128 => try self.runtime_types.freshFromContent(try self.mkNumberTypeContentRuntime("U128")),
                     },
-                    .frac => switch (layout_val.data.scalar.data.frac) {
+                    .frac => switch (layout_val.getScalar().getFrac()) {
                         .f32 => try self.runtime_types.freshFromContent(try self.mkNumberTypeContentRuntime("F32")),
                         .f64 => try self.runtime_types.freshFromContent(try self.mkNumberTypeContentRuntime("F64")),
                         .dec => try self.runtime_types.freshFromContent(try self.mkNumberTypeContentRuntime("Dec")),
@@ -13214,8 +13209,8 @@ pub const Interpreter = struct {
         // (e.g., function type from calling a literal like 0.0()), the type is incompatible.
         // Return an error instead of crashing - the type checker will report the actual error.
         const is_dec_layout = layout_val.tag == .scalar and
-            layout_val.data.scalar.tag == .frac and
-            layout_val.data.scalar.data.frac == .dec;
+            layout_val.getScalar().tag == .frac and
+            layout_val.getScalar().getFrac() == .dec;
         if (!is_dec_layout) {
             // Fall back to Dec layout for the literal itself
             layout_val = layout.Layout.frac(types.Frac.Precision.dec);
@@ -13267,7 +13262,7 @@ pub const Interpreter = struct {
 
         // If the layout isn't a numeric type, default based on the explicit type annotation
         const is_numeric_layout = layout_val.tag == .scalar and
-            (layout_val.data.scalar.tag == .int or layout_val.data.scalar.tag == .frac);
+            (layout_val.getScalar().tag == .int or layout_val.getScalar().tag == .frac);
         var final_rt_var = layout_rt_var;
         if (!is_numeric_layout or is_flex_or_rigid) {
             // Get the type name from the identifier store to determine the correct type
@@ -13280,9 +13275,9 @@ pub const Interpreter = struct {
         var value = try self.pushRaw(layout_val, 0, final_rt_var);
         value.is_initialized = false;
         switch (layout_val.tag) {
-            .scalar => switch (layout_val.data.scalar.tag) {
+            .scalar => switch (layout_val.getScalar().tag) {
                 .int => try value.setIntFromBytes(typed_int.value.bytes, typed_int.value.kind == .u128),
-                .frac => switch (layout_val.data.scalar.data.frac) {
+                .frac => switch (layout_val.getScalar().getFrac()) {
                     .f32 => {
                         const ptr = builtins.utils.alignedPtrCast(*f32, value.ptr.?, @src());
                         if (typed_int.value.kind == .u128) {
@@ -13340,7 +13335,7 @@ pub const Interpreter = struct {
 
         // If the layout isn't a numeric type, default based on the explicit type annotation
         const is_numeric_layout = layout_val.tag == .scalar and
-            (layout_val.data.scalar.tag == .int or layout_val.data.scalar.tag == .frac);
+            (layout_val.getScalar().tag == .int or layout_val.getScalar().tag == .frac);
         var final_rt_var = layout_rt_var;
         if (!is_numeric_layout or is_flex_or_rigid) {
             // Get the type name from the identifier store to determine the correct type
@@ -13356,8 +13351,8 @@ pub const Interpreter = struct {
         var value = try self.pushRaw(layout_val, 0, final_rt_var);
         value.is_initialized = false;
         switch (layout_val.tag) {
-            .scalar => switch (layout_val.data.scalar.tag) {
-                .frac => switch (layout_val.data.scalar.data.frac) {
+            .scalar => switch (layout_val.getScalar().tag) {
+                .frac => switch (layout_val.getScalar().getFrac()) {
                     .f32 => {
                         const ptr = builtins.utils.alignedPtrCast(*f32, value.ptr.?, @src());
                         // Convert from scaled i128 without losing the fractional
@@ -13525,7 +13520,7 @@ pub const Interpreter = struct {
             // Default to list of Dec for empty lists when type can't be determined
             const default_elem_layout = Layout.frac(types.Frac.Precision.dec);
             const elem_layout_idx = try self.runtime_layout_store.insertLayout(default_elem_layout);
-            break :blk Layout{ .tag = .list, .data = .{ .list = elem_layout_idx } };
+            break :blk Layout.list(elem_layout_idx);
         };
 
         const dest = try self.pushRaw(list_layout, 0, final_rt_var);
@@ -13594,7 +13589,7 @@ pub const Interpreter = struct {
         // Handle different layout representations
         if (layout_val.tag == .scalar) {
             var out = try self.pushRaw(layout_val, 0, rt_var);
-            if (layout_val.data.scalar.tag == .int) {
+            if (layout_val.getScalar().tag == .int) {
                 out.is_initialized = false;
                 try out.setInt(@intCast(tag_index));
                 out.is_initialized = true;
@@ -13606,7 +13601,7 @@ pub const Interpreter = struct {
             // Struct tag union (record-style or tuple-style)
             var dest = try self.pushRaw(layout_val, 0, rt_var);
             const tag_field = try getStructTagFieldWithRtVar(self, &dest, layout_val, rt_var, roc_ops);
-            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+            if (tag_field.layout.tag == .scalar and tag_field.layout.getScalar().tag == .int) {
                 var tmp = tag_field;
                 tmp.is_initialized = false;
                 try tmp.setInt(@intCast(tag_index));
@@ -13618,7 +13613,7 @@ pub const Interpreter = struct {
         } else if (layout_val.tag == .tag_union) {
             // Tag union layout with proper variant info - for recursive types like Nat := [Zero, Suc(Box(Nat))]
             var dest = try self.pushRaw(layout_val, 0, rt_var);
-            const tu_idx = layout_val.data.tag_union.idx;
+            const tu_idx = layout_val.getTagUnion().idx;
             const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
             const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
             if (dest.ptr) |base_ptr| {
@@ -13649,7 +13644,7 @@ pub const Interpreter = struct {
             // Struct tag union (record-style or tuple-style)
             var dest = try self.pushRaw(layout_val, 0, rt_var);
             const tag_field = try getStructTagFieldWithRtVar(self, &dest, layout_val, rt_var, roc_ops);
-            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+            if (tag_field.layout.tag == .scalar and tag_field.layout.getScalar().tag == .int) {
                 var tmp = tag_field;
                 tmp.is_initialized = false;
                 try tmp.setInt(@intCast(tag_index));
@@ -13657,7 +13652,7 @@ pub const Interpreter = struct {
             return dest;
         } else if (layout_val.tag == .tag_union) {
             var dest = try self.pushRaw(layout_val, 0, rt_var);
-            const tu_idx = layout_val.data.tag_union.idx;
+            const tu_idx = layout_val.getTagUnion().idx;
             const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
             const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
             const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
@@ -13667,7 +13662,7 @@ pub const Interpreter = struct {
         } else if (layout_val.tag == .scalar) {
             // Pure enum tag union (no payloads) — just set the discriminant
             var dest = try self.pushRaw(layout_val, 0, rt_var);
-            if (layout_val.data.scalar.tag == .int) {
+            if (layout_val.getScalar().tag == .int) {
                 dest.is_initialized = false;
                 try dest.setInt(@intCast(tag_index));
                 dest.is_initialized = true;
@@ -13708,7 +13703,7 @@ pub const Interpreter = struct {
 
                     const field_rt = try self.runtime_types.fresh();
                     const tag_field = try acc.getFieldByIndex(tag_field_idx, field_rt);
-                    if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                    if (tag_field.layout.tag == .scalar and tag_field.layout.getScalar().tag == .int) {
                         var tmp = tag_field;
                         tmp.is_initialized = false;
                         try tmp.setInt(@intCast(tag_index));
@@ -13730,7 +13725,7 @@ pub const Interpreter = struct {
                 var tup_acc = try dest.asTuple(&self.runtime_layout_store);
                 const discriminant_rt_var = try self.runtime_types.fresh();
                 const tag_field = try tup_acc.getElement(1, discriminant_rt_var);
-                if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                if (tag_field.layout.tag == .scalar and tag_field.layout.getScalar().tag == .int) {
                     var tmp = tag_field;
                     tmp.is_initialized = false;
                     try tmp.setInt(@intCast(tag_index));
@@ -13743,7 +13738,7 @@ pub const Interpreter = struct {
                 return dest;
             },
             .tag_union => {
-                const tu_idx = layout_val.data.tag_union.idx;
+                const tu_idx = layout_val.getTagUnion().idx;
                 const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
                 const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
@@ -13755,7 +13750,7 @@ pub const Interpreter = struct {
                 const expected_payload_layout = self.runtime_layout_store.getLayout(variants.get(tag_index).payload_layout);
 
                 if (expected_payload_layout.tag == .box and payload.layout.tag != .box and payload.layout.tag != .box_of_zst) {
-                    const elem_layout = self.runtime_layout_store.getLayout(expected_payload_layout.data.box);
+                    const elem_layout = self.runtime_layout_store.getLayout(expected_payload_layout.getIdx());
                     const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
                     const target_usize = self.runtime_layout_store.targetUsize();
                     const elem_align: u32 = @intCast(elem_layout.alignment(target_usize).toByteUnits());
@@ -13768,7 +13763,7 @@ pub const Interpreter = struct {
                     const slot: *usize = @ptrCast(@alignCast(payload_ptr));
                     slot.* = @intFromPtr(data_ptr);
                 } else if (payload.layout.tag == .box and expected_payload_layout.tag != .box) {
-                    const inner_layout = self.runtime_layout_store.getLayout(payload.layout.data.box);
+                    const inner_layout = self.runtime_layout_store.getLayout(payload.layout.getIdx());
                     const data_ptr: *anyopaque = @ptrCast(payload.getBoxedData().?);
                     const inner_value = StackValue{
                         .layout = inner_layout,
@@ -13786,7 +13781,7 @@ pub const Interpreter = struct {
                 return dest;
             },
             .box => {
-                const inner_layout = self.runtime_layout_store.getLayout(layout_val.data.box);
+                const inner_layout = self.runtime_layout_store.getLayout(layout_val.getIdx());
                 const inner_value = try self.buildTagValueFromPayload(rt_var, inner_layout, tag_index, payload_opt, roc_ops);
                 defer inner_value.decref(&self.runtime_layout_store, roc_ops);
                 return try self.makeBoxValueFromLayout(layout_val, inner_value, roc_ops, rt_var);
@@ -13955,7 +13950,7 @@ pub const Interpreter = struct {
                 .body_idx = lam.body,
                 .params = lam.args,
                 .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
-                .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
+                .captures_layout_idx = closure_layout.getClosure().captures_layout_idx,
                 .lambda_expr_idx = expr_idx,
                 .source_env = self.env,
             }, @src());
@@ -13985,14 +13980,7 @@ pub const Interpreter = struct {
 
         // Get a ZST layout for hosted functions (they have no captures)
         const zst_idx = try self.runtime_layout_store.ensureZstLayout();
-        const closure_layout = Layout{
-            .tag = .closure,
-            .data = .{
-                .closure = .{
-                    .captures_layout_idx = zst_idx,
-                },
-            },
-        };
+        const closure_layout = Layout.closure(zst_idx);
         const value = try self.pushRaw(closure_layout, 0, rt_var);
         self.registerDefValue(expr_idx, value);
         if (value.ptr) |ptr| {
@@ -14000,7 +13988,7 @@ pub const Interpreter = struct {
                 .body_idx = hosted.body,
                 .params = hosted.args,
                 .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
-                .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
+                .captures_layout_idx = closure_layout.getClosure().captures_layout_idx,
                 .lambda_expr_idx = expr_idx,
                 .source_env = self.env,
             }, @src());
@@ -14120,7 +14108,7 @@ pub const Interpreter = struct {
                 closure_idx -= 1;
                 const cls_val = self.active_closures.items[closure_idx];
                 if (cls_val.layout.tag == .closure and cls_val.ptr != null) {
-                    const captures_layout = self.runtime_layout_store.getLayout(cls_val.layout.data.closure.captures_layout_idx);
+                    const captures_layout = self.runtime_layout_store.getLayout(cls_val.layout.getClosure().captures_layout_idx);
                     const header_sz = @sizeOf(layout.Closure);
                     const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
                     const aligned_off = std.mem.alignForward(usize, header_sz, @intCast(cap_align.toByteUnits()));
@@ -14279,7 +14267,7 @@ pub const Interpreter = struct {
                         const has_real_captures = (lambda_expr == .e_closure);
                         if (has_real_captures) {
                             const closure_data = lambda_expr.e_closure;
-                            const captures_layout = self.runtime_layout_store.getLayout(cls_val.layout.data.closure.captures_layout_idx);
+                            const captures_layout = self.runtime_layout_store.getLayout(cls_val.layout.getClosure().captures_layout_idx);
                             const header_sz = @sizeOf(layout.Closure);
                             const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
                             const aligned_off = std.mem.alignForward(usize, header_sz, @intCast(cap_align.toByteUnits()));
@@ -14492,7 +14480,7 @@ pub const Interpreter = struct {
                 .body_idx = body_idx,
                 .params = params,
                 .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
-                .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
+                .captures_layout_idx = closure_layout.getClosure().captures_layout_idx,
                 .lambda_expr_idx = rhs_expr,
                 .source_env = self.env,
             }, @src());
@@ -14907,21 +14895,15 @@ pub const Interpreter = struct {
                 // Pop evaluated value from stack
                 const val = value_stack.pop() orelse return error.Crash;
                 if (comptime trace_refcount and builtin.os.tag != .freestanding) {
-                    const stderr_file: std.fs.File = .stderr();
-                    var buf: [256]u8 = undefined;
-                    const msg = std.fmt.bufPrint(&buf, "[INTERP] bind_decl popped val ptr=0x{x} (will defer decref)\n", .{
+                    std.debug.print("[INTERP] bind_decl popped val ptr=0x{x} (will defer decref)\n", .{
                         @intFromPtr(val.ptr),
-                    }) catch "[INTERP] bind_decl popped val\n";
-                    stderr_file.writeAll(msg) catch {};
+                    });
                 }
                 defer {
                     if (comptime trace_refcount and builtin.os.tag != .freestanding) {
-                        const stderr_file: std.fs.File = .stderr();
-                        var buf: [256]u8 = undefined;
-                        const msg = std.fmt.bufPrint(&buf, "[INTERP] bind_decl defer decref val ptr=0x{x}\n", .{
+                        std.debug.print("[INTERP] bind_decl defer decref val ptr=0x{x}\n", .{
                             @intFromPtr(val.ptr),
-                        }) catch "[INTERP] bind_decl defer decref\n";
-                        stderr_file.writeAll(msg) catch {};
+                        });
                     }
                     val.decref(&self.runtime_layout_store, roc_ops);
                 }
@@ -14946,12 +14928,9 @@ pub const Interpreter = struct {
                 // to self.bindings, so we must NOT decref temp_binds afterwards.
                 for (temp_binds.items) |binding| {
                     if (comptime trace_refcount and builtin.os.tag != .freestanding) {
-                        const stderr_file: std.fs.File = .stderr();
-                        var buf: [256]u8 = undefined;
-                        const msg = std.fmt.bufPrint(&buf, "[INTERP] upsertBinding from temp_binds ptr=0x{x}\n", .{
+                        std.debug.print("[INTERP] upsertBinding from temp_binds ptr=0x{x}\n", .{
                             @intFromPtr(binding.value.ptr),
-                        }) catch "[INTERP] upsertBinding\n";
-                        stderr_file.writeAll(msg) catch {};
+                        });
                     }
                     try self.upsertBinding(binding, bd.bindings_start, bd.is_var_decl, roc_ops);
                 }
@@ -15036,7 +15015,7 @@ pub const Interpreter = struct {
                             need_auto_box[idx] = false;
 
                             if (elem_layout.tag == .tag_union) {
-                                const tu_idx = elem_layout.data.tag_union.idx;
+                                const tu_idx = elem_layout.getTagUnion().idx;
                                 const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
                                 const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
                                 // Check if any variant's payload contains a Box pointing to this tag_union
@@ -15053,7 +15032,7 @@ pub const Interpreter = struct {
 
                             // If this element needs boxing, find the Box layout and box the value
                             if (need_auto_box[idx]) {
-                                const tu_idx = elem_layout.data.tag_union.idx;
+                                const tu_idx = elem_layout.getTagUnion().idx;
                                 const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
                                 const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
 
@@ -15238,7 +15217,7 @@ pub const Interpreter = struct {
                         // If not already detected as needing boxing, check if the actual layout
                         // is a recursive tag_union (contains a Box pointing back to itself)
                         if (!need_auto_box and actual_elem_layout.tag == .tag_union) {
-                            const tu_idx = actual_elem_layout.data.tag_union.idx;
+                            const tu_idx = actual_elem_layout.getTagUnion().idx;
                             const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
                             const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
                             // Check if any variant's payload contains a Box that points to a tag_union
@@ -15261,7 +15240,7 @@ pub const Interpreter = struct {
                             // Find the existing Box layout INDEX from the tag union's variant payloads.
                             // We must use the exact same index to avoid layout mismatches when
                             // the list is copied into variant payloads later.
-                            const tu_idx = actual_elem_layout.data.tag_union.idx;
+                            const tu_idx = actual_elem_layout.getTagUnion().idx;
                             const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
                             const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
 
@@ -15287,7 +15266,7 @@ pub const Interpreter = struct {
                         }
 
                         // Create the list layout with the correct element layout index
-                        const actual_list_layout = Layout{ .tag = .list, .data = .{ .list = list_elem_idx } };
+                        const actual_list_layout = Layout.list(list_elem_idx);
 
                         var dest = try self.pushRaw(actual_list_layout, 0, lc.list_rt_var);
                         dest.rt_var = lc.list_rt_var;
@@ -15318,7 +15297,7 @@ pub const Interpreter = struct {
                                 if (need_auto_box) {
                                     // Auto-box each element before storing in the list
                                     // list_elem_layout is Box(actual_elem_layout), so get the inner type
-                                    const inner_elem_layout = self.runtime_layout_store.getLayout(list_elem_layout.data.box);
+                                    const inner_elem_layout = self.runtime_layout_store.getLayout(list_elem_layout.getIdx());
                                     const inner_elem_size = self.runtime_layout_store.layoutSize(inner_elem_layout);
                                     const target_usize = self.runtime_layout_store.targetUsize();
                                     const inner_elem_align: u32 = @intCast(inner_elem_layout.alignment(target_usize).toByteUnits());
@@ -15425,7 +15404,7 @@ pub const Interpreter = struct {
                         // a Box pointing to this same tag_union.
                         const field_layout = field_values[i].layout;
                         if (field_layout.tag == .tag_union) {
-                            const tu_idx = field_layout.data.tag_union.idx;
+                            const tu_idx = field_layout.getTagUnion().idx;
                             const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
                             const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
                             var needs_boxing = false;
@@ -15760,7 +15739,7 @@ pub const Interpreter = struct {
                         // Write tag discriminant
                         const field_rt = try self.runtime_types.fresh();
                         const tag_field = try acc.getFieldByIndex(tag_field_idx, field_rt);
-                        if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                        if (tag_field.layout.tag == .scalar and tag_field.layout.getScalar().tag == .int) {
                             var tmp = tag_field;
                             tmp.is_initialized = false;
                             try tmp.setInt(@intCast(tc.tag_index));
@@ -15789,7 +15768,7 @@ pub const Interpreter = struct {
                                     const proper_tag_field_idx = proper_acc.findFieldIndex(self.env.getIdent(self.env.idents.tag)) orelse unreachable;
                                     const proper_field_rt = try self.runtime_types.fresh();
                                     const proper_tag_field = try proper_acc.getFieldByIndex(proper_tag_field_idx, proper_field_rt);
-                                    if (proper_tag_field.layout.tag == .scalar and proper_tag_field.layout.data.scalar.tag == .int) {
+                                    if (proper_tag_field.layout.tag == .scalar and proper_tag_field.layout.getScalar().tag == .int) {
                                         var tmp = proper_tag_field;
                                         tmp.is_initialized = false;
                                         try tmp.setInt(@intCast(tc.tag_index));
@@ -15841,7 +15820,7 @@ pub const Interpreter = struct {
                                     const proper_tag_field_idx = proper_acc.findFieldIndex(self.env.getIdent(self.env.idents.tag)) orelse unreachable;
                                     const proper_field_rt = try self.runtime_types.fresh();
                                     const proper_tag_field = try proper_acc.getFieldByIndex(proper_tag_field_idx, proper_field_rt);
-                                    if (proper_tag_field.layout.tag == .scalar and proper_tag_field.layout.data.scalar.tag == .int) {
+                                    if (proper_tag_field.layout.tag == .scalar and proper_tag_field.layout.getScalar().tag == .int) {
                                         var tmp = proper_tag_field;
                                         tmp.is_initialized = false;
                                         try tmp.setInt(@intCast(tc.tag_index));
@@ -15904,7 +15883,7 @@ pub const Interpreter = struct {
 
                         // Write tag discriminant (element 1)
                         const tag_field = try acc.getElement(1, discriminant_rt_var);
-                        if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                        if (tag_field.layout.tag == .scalar and tag_field.layout.getScalar().tag == .int) {
                             var tmp = tag_field;
                             tmp.is_initialized = false;
                             try tmp.setInt(@intCast(tc.tag_index));
@@ -15929,7 +15908,7 @@ pub const Interpreter = struct {
 
                                     // Write tag
                                     const proper_tag_field = try proper_acc.getElement(1, discriminant_rt_var);
-                                    if (proper_tag_field.layout.tag == .scalar and proper_tag_field.layout.data.scalar.tag == .int) {
+                                    if (proper_tag_field.layout.tag == .scalar and proper_tag_field.layout.getScalar().tag == .int) {
                                         var tmp = proper_tag_field;
                                         tmp.is_initialized = false;
                                         try tmp.setInt(@intCast(tc.tag_index));
@@ -15980,7 +15959,7 @@ pub const Interpreter = struct {
                         try value_stack.push(dest);
                     } else if (tc.layout_type == 2) {
                         // Tag union layout: payload at offset 0, discriminant at discriminant_offset
-                        const tu_idx = layout_val.data.tag_union.idx;
+                        const tu_idx = layout_val.getTagUnion().idx;
                         const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
                         const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
@@ -15999,10 +15978,7 @@ pub const Interpreter = struct {
                                 // Layout mismatch - create a tuple layout [payload, discriminant]
                                 // This is the same approach as layout_type == 1
                                 const disc_precision = tu_data.discriminantPrecision();
-                                const disc_layout = Layout{
-                                    .tag = .scalar,
-                                    .data = .{ .scalar = .{ .tag = .int, .data = .{ .int = disc_precision } } },
-                                };
+                                const disc_layout = Layout.int(disc_precision);
                                 var elem_layouts_fixed = [2]Layout{ values[0].layout, disc_layout };
                                 const proper_tuple_idx = try self.runtime_layout_store.putTuple(&elem_layouts_fixed);
                                 const proper_tuple_layout = self.runtime_layout_store.getLayout(proper_tuple_idx);
@@ -16014,7 +15990,7 @@ pub const Interpreter = struct {
 
                                 // Write tag discriminant (element 1)
                                 const proper_tag_field = try proper_acc.getElement(1, disc_rt_var);
-                                if (proper_tag_field.layout.tag == .scalar and proper_tag_field.layout.data.scalar.tag == .int) {
+                                if (proper_tag_field.layout.tag == .scalar and proper_tag_field.layout.getScalar().tag == .int) {
                                     var tmp = proper_tag_field;
                                     tmp.is_initialized = false;
                                     try tmp.setInt(@intCast(tc.tag_index));
@@ -16051,7 +16027,7 @@ pub const Interpreter = struct {
                             // Check if we need to auto-box: expected is Box but actual isn't
                             if (expected_payload_layout.tag == .box and values[0].layout.tag != .box and values[0].layout.tag != .box_of_zst) {
                                 // Auto-box the value for recursive types
-                                const elem_layout = self.runtime_layout_store.getLayout(expected_payload_layout.data.box);
+                                const elem_layout = self.runtime_layout_store.getLayout(expected_payload_layout.getIdx());
                                 const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
                                 const target_usize = self.runtime_layout_store.targetUsize();
                                 const elem_align: u32 = @intCast(elem_layout.alignment(target_usize).toByteUnits());
@@ -16068,7 +16044,7 @@ pub const Interpreter = struct {
                                 // This happens when List elements are boxed (for recursive types),
                                 // but wrapped in a tag union (like Try) whose type says unboxed.
                                 // Dereference the box and copy the inner data.
-                                const inner_layout = self.runtime_layout_store.getLayout(values[0].layout.data.box);
+                                const inner_layout = self.runtime_layout_store.getLayout(values[0].layout.getIdx());
                                 const data_ptr: *anyopaque = @ptrCast(values[0].getBoxedData().?);
                                 const inner_value = StackValue{
                                     .layout = inner_layout,
@@ -16087,7 +16063,7 @@ pub const Interpreter = struct {
                                 const wide_size = self.runtime_layout_store.layoutSize(expected_payload_layout);
                                 if (narrow_size < wide_size) {
                                     // Tag union widening: determine the correct discriminant mapping
-                                    const narrow_tu_data = self.runtime_layout_store.getTagUnionData(values[0].layout.data.tag_union.idx);
+                                    const narrow_tu_data = self.runtime_layout_store.getTagUnionData(values[0].layout.getTagUnion().idx);
                                     const narrow_disc = narrow_tu_data.readDiscriminant(@as([*]const u8, @ptrCast(values[0].ptr.?)));
 
                                     // Get tag names from the narrow type
@@ -16124,11 +16100,11 @@ pub const Interpreter = struct {
                                         try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
 
                                         // Clear the source discriminant and write the translated one
-                                        const narrow_disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(values[0].layout.data.tag_union.idx);
+                                        const narrow_disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(values[0].layout.getTagUnion().idx);
                                         base_ptr[narrow_disc_offset] = 0;
 
-                                        const wide_tu_data = self.runtime_layout_store.getTagUnionData(expected_payload_layout.data.tag_union.idx);
-                                        const wide_disc_offset_val = self.runtime_layout_store.getTagUnionDiscriminantOffset(expected_payload_layout.data.tag_union.idx);
+                                        const wide_tu_data = self.runtime_layout_store.getTagUnionData(expected_payload_layout.getTagUnion().idx);
+                                        const wide_disc_offset_val = self.runtime_layout_store.getTagUnionDiscriminantOffset(expected_payload_layout.getTagUnion().idx);
                                         wide_tu_data.writeDiscriminantToPtr(base_ptr + wide_disc_offset_val, dd);
                                     } else {
                                         // Same tag ordering or unable to translate - just copy
@@ -16148,7 +16124,7 @@ pub const Interpreter = struct {
 
                             // A multi-value tag payload MUST have a tuple layout. If not, it's a compiler bug.
                             if (expected_payload_layout.tag != .struct_) unreachable;
-                            const expected_tuple_data = self.runtime_layout_store.getStructData(expected_payload_layout.data.struct_.idx);
+                            const expected_tuple_data = self.runtime_layout_store.getStructData(expected_payload_layout.getStruct().idx);
                             const expected_fields = self.runtime_layout_store.struct_fields.sliceRange(expected_tuple_data.getFields());
 
                             // Create tuple with expected layouts for proper sizing
@@ -16238,7 +16214,7 @@ pub const Interpreter = struct {
                                 // Check if we need to auto-box
                                 if (expected_elem_layout.tag == .box and val.layout.tag != .box and val.layout.tag != .box_of_zst) {
                                     // Auto-box the value
-                                    const inner_elem_layout = self.runtime_layout_store.getLayout(expected_elem_layout.data.box);
+                                    const inner_elem_layout = self.runtime_layout_store.getLayout(expected_elem_layout.getIdx());
                                     const inner_elem_size = self.runtime_layout_store.layoutSize(inner_elem_layout);
                                     const target_usize = self.runtime_layout_store.targetUsize();
                                     const inner_elem_align: u32 = @intCast(inner_elem_layout.alignment(target_usize).toByteUnits());
@@ -16271,7 +16247,7 @@ pub const Interpreter = struct {
                         // Boxed tag union: construct the inner tag union value, then box it.
                         // layout_val is .box (from getRuntimeLayout on the boxed type).
                         // We need to resolve the actual backing layout for the inner value.
-                        const inner_layout_idx = layout_val.data.box;
+                        const inner_layout_idx = layout_val.getIdx();
                         const raw_inner_layout = self.runtime_layout_store.getLayout(inner_layout_idx);
 
                         const backing_layout = raw_inner_layout;
@@ -16292,7 +16268,7 @@ pub const Interpreter = struct {
                                 // Write tag discriminant
                                 const field_rt = try self.runtime_types.fresh();
                                 const tag_field = try acc.getFieldByIndex(tag_field_idx, field_rt);
-                                if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                                if (tag_field.layout.tag == .scalar and tag_field.layout.getScalar().tag == .int) {
                                     var tmp = tag_field;
                                     tmp.is_initialized = false;
                                     try tmp.setInt(@intCast(tc.tag_index));
@@ -16318,7 +16294,7 @@ pub const Interpreter = struct {
                                 try value_stack.push(boxed);
                             } else if (backing_layout.tag == .tag_union) {
                                 // Construct inner tag_union, then box
-                                const tu_idx = backing_layout.data.tag_union.idx;
+                                const tu_idx = backing_layout.getTagUnion().idx;
                                 const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
                                 const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
@@ -16332,7 +16308,7 @@ pub const Interpreter = struct {
 
                                     if (expected_payload_layout.tag == .box and values[0].layout.tag != .box and values[0].layout.tag != .box_of_zst) {
                                         // Auto-box the payload for recursive types
-                                        const elem_layout = self.runtime_layout_store.getLayout(expected_payload_layout.data.box);
+                                        const elem_layout = self.runtime_layout_store.getLayout(expected_payload_layout.getIdx());
                                         const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
                                         const target_usize = self.runtime_layout_store.targetUsize();
                                         const elem_align: u32 = @intCast(elem_layout.alignment(target_usize).toByteUnits());
@@ -16362,7 +16338,7 @@ pub const Interpreter = struct {
                                 var tup_acc = try inner_dest.asTuple(&self.runtime_layout_store);
                                 const discriminant_rt_var = try self.runtime_types.fresh();
                                 const tag_field = try tup_acc.getElement(1, discriminant_rt_var);
-                                if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                                if (tag_field.layout.tag == .scalar and tag_field.layout.getScalar().tag == .int) {
                                     var tmp = tag_field;
                                     tmp.is_initialized = false;
                                     try tmp.setInt(@intCast(tc.tag_index));
@@ -16384,7 +16360,7 @@ pub const Interpreter = struct {
                         } else if (backing_layout.tag == .scalar) {
                             // Scalar backing layout (no payload variants, just discriminant)
                             var inner_dest = try self.pushRaw(backing_layout, 0, tc.rt_var);
-                            if (backing_layout.data.scalar.tag == .int) {
+                            if (backing_layout.getScalar().tag == .int) {
                                 inner_dest.is_initialized = false;
                                 try inner_dest.setInt(@intCast(tc.tag_index));
                                 inner_dest.is_initialized = true;
@@ -17538,9 +17514,9 @@ pub const Interpreter = struct {
                 // This handles cases where method dispatch would fail (e.g., polymorphic values)
                 // Only use direct handling when we had to default to Dec due to flex/rigid types
                 const lhs_is_numeric_layout = lhs.layout.tag == .scalar and
-                    (lhs.layout.data.scalar.tag == .int or lhs.layout.data.scalar.tag == .frac);
+                    (lhs.layout.getScalar().tag == .int or lhs.layout.getScalar().tag == .frac);
                 const rhs_is_numeric_layout = rhs.layout.tag == .scalar and
-                    (rhs.layout.data.scalar.tag == .int or rhs.layout.data.scalar.tag == .frac);
+                    (rhs.layout.getScalar().tag == .int or rhs.layout.getScalar().tag == .frac);
                 if (lhs_is_numeric_layout and rhs_is_numeric_layout and defaulted_to_dec) {
                     // Handle numeric comparisons directly via low-level ops
                     if (ba.method_ident.eql(self.root_env.idents.is_gt)) {
@@ -17635,8 +17611,8 @@ pub const Interpreter = struct {
                             // for numeric flex vars while avoiding crashes for non-numeric scalars
                             // like strings.
                             if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
-                                const lhs_tag = lhs.layout.data.scalar.tag;
-                                const rhs_tag = rhs.layout.data.scalar.tag;
+                                const lhs_tag = lhs.layout.getScalar().tag;
+                                const rhs_tag = rhs.layout.getScalar().tag;
 
                                 const lhs_is_numeric = lhs_tag == .int or lhs_tag == .frac;
                                 const rhs_is_numeric = rhs_tag == .int or rhs_tag == .frac;
@@ -18015,7 +17991,7 @@ pub const Interpreter = struct {
                         return error.TypeMismatch;
                     }
 
-                    const rec_data = self.runtime_layout_store.getStructData(receiver_value.layout.data.struct_.idx);
+                    const rec_data = self.runtime_layout_store.getStructData(receiver_value.layout.getStruct().idx);
                     if (rec_data.fields.count == 0) {
                         return error.TypeMismatch;
                     }
@@ -18337,7 +18313,7 @@ pub const Interpreter = struct {
                         if (da.field_name.eql(self.root_env.idents.is_eq) and arg_exprs.len == 1) {
                             // Check if receiver is numeric
                             if (receiver_value.layout.tag == .scalar) {
-                                const scalar_tag = receiver_value.layout.data.scalar.tag;
+                                const scalar_tag = receiver_value.layout.getScalar().tag;
                                 const is_numeric = scalar_tag == .int or scalar_tag == .frac;
                                 if (is_numeric) {
                                     // Evaluate the RHS argument
@@ -18347,7 +18323,7 @@ pub const Interpreter = struct {
 
                                     // Check if RHS is also numeric before using numeric comparison
                                     const rhs_is_numeric = rhs_value.layout.tag == .scalar and
-                                        (rhs_value.layout.data.scalar.tag == .int or rhs_value.layout.data.scalar.tag == .frac);
+                                        (rhs_value.layout.getScalar().tag == .int or rhs_value.layout.getScalar().tag == .frac);
                                     if (rhs_is_numeric) {
                                         // Use numeric comparison
                                         const result = try self.compareNumericValues(receiver_value, rhs_value, .eq);
@@ -18398,9 +18374,9 @@ pub const Interpreter = struct {
                         // For flex/rigid numeric types with other method calls (like to_str),
                         // derive the nominal type from the layout
                         if (receiver_value.layout.tag == .scalar) {
-                            const scalar_tag = receiver_value.layout.data.scalar.tag;
+                            const scalar_tag = receiver_value.layout.getScalar().tag;
                             if (scalar_tag == .int) {
-                                const int_info = receiver_value.layout.data.scalar.data.int;
+                                const int_info = receiver_value.layout.getScalar().getInt();
                                 const type_name: []const u8 = switch (int_info) {
                                     .i8 => "I8",
                                     .i16 => "I16",
@@ -18420,7 +18396,7 @@ pub const Interpreter = struct {
                                     .ident = nom.ident.ident_idx,
                                 };
                             } else if (scalar_tag == .frac) {
-                                const frac_info = receiver_value.layout.data.scalar.data.frac;
+                                const frac_info = receiver_value.layout.getScalar().getFrac();
                                 const type_name: []const u8 = switch (frac_info) {
                                     .f32 => "F32",
                                     .f64 => "F64",
@@ -19501,7 +19477,7 @@ pub const Interpreter = struct {
                     return error.TypeMismatch;
                 }
                 var elem_layout = if (list_value.layout.tag == .list)
-                    self.runtime_layout_store.getLayout(list_value.layout.data.list)
+                    self.runtime_layout_store.getLayout(list_value.layout.getIdx())
                 else
                     layout.Layout.zst(); // list_of_zst has zero-sized elements
 
@@ -19539,7 +19515,7 @@ pub const Interpreter = struct {
 
                 // For 'box' layouts (recursive types), unwrap to get the actual backing layout
                 const effective_elem_layout = if (type_based_elem_layout.tag == .box) blk: {
-                    const inner = self.runtime_layout_store.getLayout(type_based_elem_layout.data.box);
+                    const inner = self.runtime_layout_store.getLayout(type_based_elem_layout.getIdx());
                     break :blk inner;
                 } else type_based_elem_layout;
 
@@ -19898,7 +19874,7 @@ pub const Interpreter = struct {
                         break :blk discriminant == 2; // LT
                     } else if (cmp_result.layout.tag == .tag_union) {
                         // Get discriminant from tag_union layout
-                        const tu_idx = cmp_result.layout.data.tag_union.idx;
+                        const tu_idx = cmp_result.layout.getTagUnion().idx;
                         const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
                         if (cmp_result.ptr) |ptr| {
                             const base_ptr: [*]u8 = @ptrCast(ptr);

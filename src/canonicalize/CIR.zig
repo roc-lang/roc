@@ -691,11 +691,19 @@ pub fn formatBase256ToDecimal(
     digits_after_pt: []const u8,
     buf: []u8,
 ) []const u8 {
-    var writer = std.io.fixedBufferStream(buf);
-    const w = writer.writer();
+    var pos: usize = 0;
+
+    const appendSlice = struct {
+        fn f(b: []u8, p: *usize, data: []const u8) void {
+            const end = @min(p.* + data.len, b.len);
+            const len = end - p.*;
+            @memcpy(b[p.*..end], data[0..len]);
+            p.* = end;
+        }
+    }.f;
 
     // Write sign if negative
-    if (is_negative) w.writeAll("-") catch {};
+    if (is_negative) appendSlice(buf, &pos, "-");
 
     // Convert base-256 integer part to decimal
     var value: u128 = 0;
@@ -703,7 +711,7 @@ pub fn formatBase256ToDecimal(
         value = value * 256 + digit;
     }
     var int_buf: [40]u8 = undefined;
-    w.writeAll(builtins.compiler_rt_128.u128_to_str(&int_buf, value).str) catch {};
+    appendSlice(buf, &pos, builtins.compiler_rt_128.u128_to_str(&int_buf, value).str);
 
     // Format fractional part if present and non-zero
     if (digits_after_pt.len > 0) {
@@ -715,7 +723,7 @@ pub fn formatBase256ToDecimal(
             }
         }
         if (has_nonzero) {
-            w.writeAll(".") catch {};
+            appendSlice(buf, &pos, ".");
             // Convert base-256 fractional digits to decimal
             var frac: f64 = 0;
             var frac_mult: f64 = 1.0 / 256.0;
@@ -727,12 +735,12 @@ pub fn formatBase256ToDecimal(
             var frac_buf: [400]u8 = undefined;
             const frac_str = builtins.compiler_rt_128.f64_to_str(&frac_buf, frac);
             if (frac_str.len > 2 and std.mem.startsWith(u8, frac_str, "0.")) {
-                w.writeAll(frac_str[2..]) catch {};
+                appendSlice(buf, &pos, frac_str[2..]);
             }
         }
     }
 
-    return buf[0..writer.pos];
+    return buf[0..pos];
 }
 
 // RocDec type definition (for missing export)
@@ -887,7 +895,7 @@ pub const Import = struct {
                 const import_name = env.common.getString(str_idx);
 
                 // For package-qualified imports like "pf.Stdout", extract the base module name
-                const base_name = if (std.mem.lastIndexOf(u8, import_name, ".")) |dot_pos|
+                const base_name = if (std.mem.findLast(u8, import_name, ".")) |dot_pos|
                     import_name[dot_pos + 1 ..]
                 else
                     import_name;

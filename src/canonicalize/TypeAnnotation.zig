@@ -104,13 +104,13 @@ pub const TypeAnno = union(enum) {
                 try tree.pushStringPair("name", ir.getIdentText(a.name));
 
                 switch (a.base) {
-                    .builtin => |_| {
+                    .builtin => {
                         const field_begin = tree.beginNode();
                         try tree.pushStaticAtom("builtin");
                         const field_attrs = tree.beginNode();
                         try tree.endNode(field_begin, field_attrs);
                     },
-                    .local => |_| {
+                    .local => {
                         const field_begin = tree.beginNode();
                         try tree.pushStaticAtom("local");
                         const field_attrs = tree.beginNode();
@@ -164,7 +164,7 @@ pub const TypeAnno = union(enum) {
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
-            .underscore => |_| {
+            .underscore => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("ty-underscore");
                 const region = ir.store.getTypeAnnoRegion(type_anno_idx);
@@ -180,13 +180,13 @@ pub const TypeAnno = union(enum) {
                 try tree.pushStringPair("name", ir.getIdentText(t.name));
 
                 switch (t.base) {
-                    .builtin => |_| {
+                    .builtin => {
                         const field_begin = tree.beginNode();
                         try tree.pushStaticAtom("builtin");
                         const field_attrs = tree.beginNode();
                         try tree.endNode(field_begin, field_attrs);
                     },
-                    .local => |_| {
+                    .local => {
                         const field_begin = tree.beginNode();
                         try tree.pushStaticAtom("local");
                         const field_attrs = tree.beginNode();
@@ -317,7 +317,7 @@ pub const TypeAnno = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .malformed => |_| {
+            .malformed => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("ty-malformed");
                 const region = ir.store.getTypeAnnoRegion(type_anno_idx);

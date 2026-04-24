@@ -8,8 +8,8 @@ const eval = @import("eval");
 const repl_mod = @import("repl");
 const Repl = repl_mod.Repl;
 
-const cli_context = @import("CliContext.zig");
-const CliContext = cli_context.CliContext;
+const cli_context = @import("CliCtx.zig");
+const CliCtx = cli_context.CliCtx;
 const Backend = @import("backend").EvalBackend;
 
 const ReplLine = @import("ReplLine.zig");
@@ -163,7 +163,7 @@ const ReplOps = struct {
 };
 
 /// Run the interactive REPL
-pub fn run(ctx: *CliContext, backend: Backend) !void {
+pub fn run(ctx: *CliCtx, backend: Backend) !void {
     const stdout = ctx.io.stdout();
 
     // Print welcome banner
@@ -187,8 +187,11 @@ pub fn run(ctx: *CliContext, backend: Backend) !void {
     while (true) : ({
         ctx.io.flush();
     }) {
-        // Read line
-        const line = try repl_line.readLine(ctx.arena, "» ", std.fs.File.stdin());
+        // Read line (EOF on stdin exits the REPL gracefully)
+        const line = repl_line.readLine(ctx.arena, ctx.io.std_io, "» ", std.Io.File.stdin()) catch |err| switch (err) {
+            error.EndOfStream => break,
+            else => return err,
+        };
         defer ctx.arena.free(line);
         // add line to history
         try repl_line.history.append(line);

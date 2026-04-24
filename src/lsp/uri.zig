@@ -4,7 +4,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 fn percentDecode(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
-    var out = std.ArrayList(u8){};
+    var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
 
     var i: usize = 0;
@@ -29,7 +29,7 @@ fn percentDecode(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
 }
 
 fn percentEncode(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
-    var out = std.ArrayList(u8){};
+    var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
 
     for (input) |ch| {

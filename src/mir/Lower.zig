@@ -316,7 +316,7 @@ fn moduleOwnsIdent(env: *const ModuleEnv, ident: Ident.Idx) bool {
     if (start >= bytes.len) return false;
 
     const tail = bytes[start..];
-    const end_rel = std.mem.indexOfScalar(u8, tail, 0) orelse return false;
+    const end_rel = std.mem.findScalar(u8, tail, 0) orelse return false;
     const text = tail[0..end_rel];
 
     const roundtrip = ident_store.findByString(text) orelse return false;
@@ -439,7 +439,7 @@ fn identsStructurallyEqual(self: *const Self, lhs: anytype, rhs: anytype) bool {
 }
 
 fn identLastSegment(text: []const u8) []const u8 {
-    const dot = std.mem.lastIndexOfScalar(u8, text, '.') orelse return text;
+    const dot = std.mem.findScalarLast(u8, text, '.') orelse return text;
     return text[dot + 1 ..];
 }
 
@@ -5859,6 +5859,26 @@ fn lowerDispatchProcInstForExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.E
     return self.lowerProcInst(proc_inst_id);
 }
 
+fn procInstLowLevelWrapperOp(self: *const Self, proc_inst_id: Monomorphize.ProcInstId) ?CIR.Expr.LowLevel {
+    const proc_inst = self.monomorphization.getProcInst(proc_inst_id);
+    const template = self.monomorphization.getProcTemplate(proc_inst.template);
+    return cirExprLowLevelWrapperOp(self.all_module_envs[template.module_idx], template.cir_expr);
+}
+
+fn expectedArgMonotypesForProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId, target_module_idx: u32) Allocator.Error![]const Monotype.Idx {
+    const proc_inst = self.monomorphization.getProcInst(proc_inst_id);
+    const proc_mono = try self.importMonotypeFromStore(
+        &self.monomorphization.monotype_store,
+        proc_inst.fn_monotype,
+        proc_inst.fn_monotype_module_idx,
+        target_module_idx,
+    );
+    return switch (self.store.monotype_store.getMonotype(proc_mono)) {
+        .func => |func| self.store.monotype_store.getIdxSpan(func.args),
+        else => &.{},
+    };
+}
+
 fn lookupMonomorphizedProcInst(
     self: *Self,
     template_id: Monomorphize.ProcTemplateId,
@@ -6103,17 +6123,44 @@ fn getCallLowLevelOp(self: *Self, caller_env: *const ModuleEnv, func_expr: CIR.E
     };
 }
 
+fn cirExprLowLevelWrapperOp(module_env: *const ModuleEnv, expr_idx: CIR.Expr.Idx) ?CIR.Expr.LowLevel {
+    return switch (module_env.store.getExpr(expr_idx)) {
+        .e_lambda => |lambda| cirExprTrivialRunLowLevelOp(module_env, lambda.body),
+        .e_block => |block| {
+            if (block.stmts.span.len != 0) return null;
+            return cirExprLowLevelWrapperOp(module_env, block.final_expr);
+        },
+        .e_dbg => |dbg_expr| cirExprLowLevelWrapperOp(module_env, dbg_expr.expr),
+        .e_expect => |expect_expr| cirExprLowLevelWrapperOp(module_env, expect_expr.body),
+        .e_return => |return_expr| cirExprLowLevelWrapperOp(module_env, return_expr.expr),
+        .e_nominal => |nominal_expr| cirExprLowLevelWrapperOp(module_env, nominal_expr.backing_expr),
+        .e_nominal_external => |nominal_expr| cirExprLowLevelWrapperOp(module_env, nominal_expr.backing_expr),
+        else => null,
+    };
+}
+
+fn cirExprTrivialRunLowLevelOp(module_env: *const ModuleEnv, expr_idx: CIR.Expr.Idx) ?CIR.Expr.LowLevel {
+    return switch (module_env.store.getExpr(expr_idx)) {
+        .e_run_low_level => |run_low_level| run_low_level.op,
+        .e_block => |block| {
+            if (block.stmts.span.len != 0) return null;
+            return cirExprTrivialRunLowLevelOp(module_env, block.final_expr);
+        },
+        .e_dbg => |dbg_expr| cirExprTrivialRunLowLevelOp(module_env, dbg_expr.expr),
+        .e_expect => |expect_expr| cirExprTrivialRunLowLevelOp(module_env, expect_expr.body),
+        .e_return => |return_expr| cirExprTrivialRunLowLevelOp(module_env, return_expr.expr),
+        .e_nominal => |nominal_expr| cirExprTrivialRunLowLevelOp(module_env, nominal_expr.backing_expr),
+        .e_nominal_external => |nominal_expr| cirExprTrivialRunLowLevelOp(module_env, nominal_expr.backing_expr),
+        else => null,
+    };
+}
+
 fn getLocalLowLevelOp(module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?CIR.Expr.LowLevel {
     const defs = module_env.store.sliceDefs(module_env.all_defs);
     for (defs) |def_idx| {
         const def = module_env.store.getDef(def_idx);
         if (def.pattern != pattern_idx) continue;
-        const def_expr = module_env.store.getExpr(def.expr);
-        if (def_expr == .e_lambda) {
-            const body_expr = module_env.store.getExpr(def_expr.e_lambda.body);
-            if (body_expr == .e_run_low_level) return body_expr.e_run_low_level.op;
-        }
-        return null;
+        return cirExprLowLevelWrapperOp(module_env, def.expr);
     }
     return null;
 }
@@ -6153,12 +6200,7 @@ fn getExternalLowLevelOp(self: *Self, caller_env: *const ModuleEnv, lookup: anyt
     if (!ext_env.store.isDefNode(lookup.target_node_idx)) return null;
     const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
     const def = ext_env.store.getDef(def_idx);
-    const def_expr = ext_env.store.getExpr(def.expr);
-    if (def_expr == .e_lambda) {
-        const body_expr = ext_env.store.getExpr(def_expr.e_lambda.body);
-        if (body_expr == .e_run_low_level) return body_expr.e_run_low_level.op;
-    }
-    return null;
+    return cirExprLowLevelWrapperOp(ext_env, def.expr);
 }
 
 /// Lower `e_block` to MIR block.
@@ -7018,27 +7060,23 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
             return try self.lowerStructuralEquality(receiver, rhs, rcv_mono_idx, monotype, region);
         }
 
-        const receiver: MIR.ExprId = if (uses_runtime_receiver) try self.lowerExpr(da.receiver) else .none;
-
-        // Build args as either:
-        // - [receiver] ++ explicit_args for instance methods
-        // - explicit_args only for associated-item/static calls like
-        //   `Simple.leaf("hello")`
         const explicit_args = module_env.store.sliceExpr(args_span);
-        const func_expr = try self.lowerDispatchProcInstForExpr(expr_idx);
-        const func_mono = self.store.typeOf(func_expr);
-        const expected_arg_monotypes = switch (self.store.monotype_store.getMonotype(func_mono)) {
-            .func => |func| self.store.monotype_store.getIdxSpan(func.args),
-            else => {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "MIR Lower invariant: dispatch proc for dot access '{s}' did not lower to function monotype",
-                        .{module_env.getIdent(da.field_name)},
-                    );
-                }
-                unreachable;
-            },
+        const proc_inst_id = self.lookupMonomorphizedDispatchProcInst(expr_idx) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "MIR Lower invariant: monomorphization missing dispatch proc inst for dot access '{s}' expr {d} in module {d}",
+                    .{ module_env.getIdent(da.field_name), @intFromEnum(expr_idx), self.current_module_idx },
+                );
+            }
+            unreachable;
         };
+        const low_level_op = self.procInstLowLevelWrapperOp(proc_inst_id);
+        // Lower the receiver BEFORE obtaining the arg monotypes slice, because
+        // recursive lowering (e.g. nested dot access) can grow the monotype
+        // store and invalidate slices into it.
+        const receiver: MIR.ExprId = if (uses_runtime_receiver) try self.lowerExpr(da.receiver) else .none;
+        const expected_arg_monotypes = try self.allocator.dupe(Monotype.Idx, try self.expectedArgMonotypesForProcInst(proc_inst_id, self.current_module_idx));
+        defer self.allocator.free(expected_arg_monotypes);
 
         const receiver_param_offset: usize = if (uses_runtime_receiver) 1 else 0;
 
@@ -7074,6 +7112,23 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         const call_result_monotype = monotype;
 
         const args = try self.store.addExprSpan(self.allocator, lowered_call_args);
+
+        if (low_level_op) |ll_op| {
+            if (ll_op == .str_inspect and uses_runtime_receiver and explicit_args.len == 0) {
+                return try self.lowerStrInspectExpr(
+                    module_env,
+                    receiver,
+                    ModuleEnv.varFrom(da.receiver),
+                    region,
+                );
+            }
+            return try self.store.addExpr(self.allocator, .{ .run_low_level = .{
+                .op = ll_op,
+                .args = args,
+            } }, call_result_monotype, region);
+        }
+
+        const func_expr = try self.lowerProcInst(proc_inst_id);
 
         return try self.store.addExpr(self.allocator, .{ .call = .{
             .func = func_expr,
@@ -7226,9 +7281,51 @@ fn lowerRecord(self: *Self, module_env: *const ModuleEnv, record: anytype, monot
 
 /// Lower `e_type_var_dispatch` using checker-resolved dispatch target.
 fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.Idx, tvd: anytype, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
-    const args = try self.lowerExprSpan(module_env, tvd.args);
-    const func_expr = try self.lowerDispatchProcInstForExpr(expr_idx);
+    const proc_inst_id = self.lookupMonomorphizedDispatchProcInst(expr_idx) orelse {
+        if (std.debug.runtime_safety) {
+            const expr = self.all_module_envs[self.current_module_idx].store.getExpr(expr_idx);
+            std.debug.panic(
+                "MIR Lower invariant: monomorphization missing dispatch proc inst for expr {d} in module {d} kind={s}",
+                .{ @intFromEnum(expr_idx), self.current_module_idx, @tagName(expr) },
+            );
+        }
+        unreachable;
+    };
+    const expected_arg_monotypes = try self.allocator.dupe(Monotype.Idx, try self.expectedArgMonotypesForProcInst(proc_inst_id, self.current_module_idx));
+    defer self.allocator.free(expected_arg_monotypes);
 
+    const args_top = self.scratch_expr_ids.top();
+    defer self.scratch_expr_ids.clearFrom(args_top);
+    for (module_env.store.sliceExpr(tvd.args), 0..) |arg_idx, i| {
+        const arg_override = if (i < expected_arg_monotypes.len and self.monotypeIsWellFormed(expected_arg_monotypes[i]))
+            expected_arg_monotypes[i]
+        else
+            Monotype.Idx.none;
+        const isolate_override = !arg_override.isNone() and try cirExprNeedsCallableOverrideIsolation(module_env, arg_idx);
+        const lowered_arg = if (!arg_override.isNone() and isolate_override)
+            try self.lowerExprWithMonotypeOverrideIsolated(arg_idx, arg_override)
+        else if (!arg_override.isNone())
+            try self.lowerExprWithMonotypeOverride(arg_idx, arg_override)
+        else
+            try self.lowerExpr(arg_idx);
+        try self.scratch_expr_ids.append(lowered_arg);
+    }
+    const args = try self.store.addExprSpan(self.allocator, self.scratch_expr_ids.sliceFromStart(args_top));
+
+    if (self.procInstLowLevelWrapperOp(proc_inst_id)) |ll_op| {
+        if (ll_op == .str_inspect) {
+            return try self.lowerStrInspect(module_env, .{
+                .op = ll_op,
+                .args = tvd.args,
+            }, region);
+        }
+        return try self.store.addExpr(self.allocator, .{ .run_low_level = .{
+            .op = ll_op,
+            .args = args,
+        } }, monotype, region);
+    }
+
+    const func_expr = try self.lowerProcInst(proc_inst_id);
     return try self.store.addExpr(self.allocator, .{ .call = .{
         .func = func_expr,
         .args = args,

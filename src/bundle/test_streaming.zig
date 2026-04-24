@@ -278,14 +278,15 @@ test "large data roundtrip" {
 
 test "large file streaming extraction" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
     // Create a large file (2MB)
     const large_size = 2 * 1024 * 1024;
     {
-        const file = try tmp.dir.createFile("large.bin", .{});
-        defer file.close();
+        const file = try tmp.dir.createFile(io, "large.bin", .{});
+        defer file.close(io);
 
         // Write recognizable pattern
         var buffer: [1024]u8 = undefined;
@@ -295,7 +296,7 @@ test "large file streaming extraction" {
 
         var written: usize = 0;
         while (written < large_size) : (written += buffer.len) {
-            try file.writeAll(&buffer);
+            try file.writeStreamingAll(io, &buffer);
         }
     }
 
@@ -312,6 +313,7 @@ test "large file streaming extraction" {
         &iter,
         3,
         &allocator_copy,
+        io,
         &bundle_writer.writer,
         tmp.dir,
         null,

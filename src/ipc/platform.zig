@@ -171,7 +171,7 @@ pub fn getSystemPageSize() !usize {
 }
 
 /// Create a new anonymous shared memory mapping
-pub fn createMapping(size: usize) SharedMemoryError!Handle {
+pub fn createMapping(io: std.Io, size: usize) SharedMemoryError!Handle {
     switch (builtin.os.tag) {
         .windows => {
             // Handle sizes larger than 4GB properly
@@ -214,16 +214,19 @@ pub fn createMapping(size: usize) SharedMemoryError!Handle {
             const fd = std.math.cast(std.posix.fd_t, fd_raw) orelse return error.MemfdCreateFailed;
 
             // Set the size of the shared memory
-            std.posix.ftruncate(fd, size) catch {
-                _ = std.posix.close(fd);
+            if (std.c.ftruncate(fd, @intCast(size)) != 0) {
+                _ = std.c.close(fd);
                 return error.FtruncateFailed;
-            };
+            }
 
             return fd;
         },
         .macos, .freebsd, .openbsd, .netbsd => {
             // Use shm_open with a random name
-            const random_name = std.fmt.allocPrintSentinel(std.heap.page_allocator, "/roc_shm_{}", .{std.crypto.random.int(u64)}, 0) catch {
+            var random_buf: [8]u8 = undefined;
+            io.random(&random_buf);
+            const random_val = std.mem.readInt(u64, &random_buf, .little);
+            const random_name = std.fmt.allocPrintSentinel(std.heap.page_allocator, "/roc_shm_{}", .{random_val}, 0) catch {
                 return error.OutOfMemory;
             };
             defer std.heap.page_allocator.free(random_name);
@@ -247,10 +250,10 @@ pub fn createMapping(size: usize) SharedMemoryError!Handle {
             _ = posix.shm_unlink(shm_name_null_terminated);
 
             // Set the size of the shared memory
-            std.posix.ftruncate(fd, size) catch {
-                _ = std.posix.close(fd);
+            if (std.c.ftruncate(fd, @intCast(size)) != 0) {
+                _ = std.c.close(fd);
                 return error.FtruncateFailed;
-            };
+            }
 
             return fd;
         },

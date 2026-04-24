@@ -50,11 +50,11 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
             const def_region = env.store.getRegionAt(def_node_idx);
 
             // Extract the local name by stripping the module name prefix (first dot-separated segment).
-            // Use indexOfScalar (first dot) instead of lastIndexOfScalar to preserve nested type paths.
+            // Use findScalar (first dot) instead of findScalarLast to preserve nested type paths.
             // e.g., "PartDef.Idx.get!" -> "Idx.get!" (not just "get!")
             // e.g., "Echo.line!" -> "line!"
             const full_name = env.getIdent(full_ident);
-            const local_name = if (std.mem.indexOfScalar(u8, full_name, '.')) |dot_idx|
+            const local_name = if (std.mem.findScalar(u8, full_name, '.')) |dot_idx|
                 full_name[dot_idx + 1 ..]
             else
                 full_name;

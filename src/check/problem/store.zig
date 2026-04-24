@@ -24,7 +24,7 @@ pub const Store = struct {
     const Self = @This();
     const ALIGNMENT = std.mem.Alignment.@"16";
 
-    problems: std.ArrayListAligned(Problem, ALIGNMENT) = .{},
+    problems: std.ArrayListAligned(Problem, ALIGNMENT) = .empty,
 
     /// Backing storage for formatted pattern strings
     extra_strings_backing: ByteList,
@@ -64,8 +64,7 @@ pub const Store = struct {
     /// Put an extra string in the backing store, returning an "id" (range)
     pub fn putFmtExtraString(self: *Self, comptime format: []const u8, args: anytype) std.mem.Allocator.Error!ExtraStringIdx {
         const start = self.extra_strings_backing.items.len;
-        var writer = self.extra_strings_backing.writer();
-        try writer.print(format, args);
+        try self.extra_strings_backing.print(format, args);
         const end = self.extra_strings_backing.items.len;
         return ExtraStringIdx{ .start = start, .count = end - start };
     }

@@ -60,8 +60,8 @@ test "Import.Store empty CompactWriter roundtrip" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_empty_import_store.dat", .{ .read = true });
-    defer file.close();
+    const file = try tmp_dir.dir.createFile(std.testing.io, "test_empty_import_store.dat", .{ .read = true });
+    defer file.close(std.testing.io);
 
     var writer = CompactWriter.init();
     defer writer.deinit(gpa);
@@ -69,11 +69,11 @@ test "Import.Store empty CompactWriter roundtrip" {
     const serialized = try writer.appendAlloc(gpa, Import.Store.Serialized);
     try serialized.serialize(&original, gpa, &writer);
 
-    try writer.writeGather(gpa, file);
+    try writer.writeGather(file, std.testing.io);
 
-    try file.seekTo(0);
-    const buffer = try file.readToEndAlloc(gpa, 1024 * 1024);
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(writer.total_bytes));
     defer gpa.free(buffer);
+    _ = try file.readPositionalAll(std.testing.io, buffer, 0);
 
     const serialized_ptr = @as(*Import.Store.Serialized, @ptrCast(@alignCast(buffer.ptr)));
     const deserialized = try serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa);
@@ -102,8 +102,8 @@ test "Import.Store basic CompactWriter roundtrip" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_basic_import_store.dat", .{ .read = true });
-    defer file.close();
+    const file = try tmp_dir.dir.createFile(std.testing.io, "test_basic_import_store.dat", .{ .read = true });
+    defer file.close(std.testing.io);
 
     var writer = CompactWriter.init();
     defer writer.deinit(gpa);
@@ -111,11 +111,11 @@ test "Import.Store basic CompactWriter roundtrip" {
     const serialized = try writer.appendAlloc(gpa, Import.Store.Serialized);
     try serialized.serialize(&original, gpa, &writer);
 
-    try writer.writeGather(gpa, file);
+    try writer.writeGather(file, std.testing.io);
 
-    try file.seekTo(0);
-    const buffer = try file.readToEndAlloc(gpa, 1024 * 1024);
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(writer.total_bytes));
     defer gpa.free(buffer);
+    _ = try file.readPositionalAll(std.testing.io, buffer, 0);
 
     const serialized_ptr: *Import.Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
     var deserialized = try serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa);
@@ -154,8 +154,8 @@ test "Import.Store duplicate imports CompactWriter roundtrip" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_duplicate_import_store.dat", .{ .read = true });
-    defer file.close();
+    const file = try tmp_dir.dir.createFile(std.testing.io, "test_duplicate_import_store.dat", .{ .read = true });
+    defer file.close(std.testing.io);
 
     var writer = CompactWriter.init();
     defer writer.deinit(gpa);
@@ -163,11 +163,11 @@ test "Import.Store duplicate imports CompactWriter roundtrip" {
     const serialized = try writer.appendAlloc(gpa, Import.Store.Serialized);
     try serialized.serialize(&original, gpa, &writer);
 
-    try writer.writeGather(gpa, file);
+    try writer.writeGather(file, std.testing.io);
 
-    try file.seekTo(0);
-    const buffer = try file.readToEndAlloc(gpa, 1024 * 1024);
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(writer.total_bytes));
     defer gpa.free(buffer);
+    _ = try file.readPositionalAll(std.testing.io, buffer, 0);
 
     const serialized_ptr: *Import.Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
     var deserialized = try serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa);

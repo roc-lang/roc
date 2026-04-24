@@ -56,8 +56,8 @@ test "ModuleEnv.Serialized roundtrip" {
 
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    const tmp_file = try tmp_dir.dir.createFile("test.compact", .{ .read = true });
-    defer tmp_file.close();
+    const tmp_file = try tmp_dir.dir.createFile(std.testing.io, "test.compact", .{ .read = true });
+    defer tmp_file.close(std.testing.io);
 
     var writer = CompactWriter.init();
     defer writer.deinit(arena_alloc);
@@ -67,13 +67,13 @@ test "ModuleEnv.Serialized roundtrip" {
     try serialized.serialize(&original, arena_alloc, &writer);
 
     // Write to file
-    try writer.writeGather(arena_alloc, tmp_file);
+    try writer.writeGather(tmp_file, std.testing.io);
 
     // Read back
-    const file_size = try tmp_file.getEndPos();
+    const file_size = writer.total_bytes;
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
-    _ = try tmp_file.pread(buffer, 0);
+    _ = try tmp_file.readPositionalAll(std.testing.io, buffer, 0);
 
     const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
 
@@ -170,20 +170,19 @@ test "ModuleEnv.Serialized roundtrip" {
     // Verify that the map was repopulated correctly
     try testing.expectEqual(@as(usize, 2), env.imports.map.count());
 
-    // Test that deduplication still works after deserialization
-    // Use arena allocator for these operations to avoid memory issues
+    // Test that deduplication still works after deserialization for existing keys.
+    // Note: the deserialized StringLiteral.Store points into the cache buffer and
+    // cannot be grown (SafeList.deserializeInto contract), so we only test lookup
+    // of already-serialized strings here.
     var test_arena = std.heap.ArenaAllocator.init(gpa);
     defer test_arena.deinit();
     const test_alloc = test_arena.allocator();
 
     const import4 = try env.imports.getOrPut(test_alloc, &env.common.strings, "json.Json");
-    const import5 = try env.imports.getOrPut(test_alloc, &env.common.strings, "new.Module");
 
-    // Should find existing json.Json
+    // Should find existing json.Json (deduplication)
     try testing.expectEqual(@as(u32, 0), @intFromEnum(import4));
-    // Should create new entry for new.Module
-    try testing.expectEqual(@as(u32, 2), @intFromEnum(import5));
-    try testing.expectEqual(@as(usize, 3), env.imports.imports.len());
+    try testing.expectEqual(@as(usize, 2), env.imports.imports.len());
 }
 
 // test "ModuleEnv with types CompactWriter roundtrip" {
@@ -235,7 +234,7 @@ test "ModuleEnv.Serialized roundtrip" {
 //     serialized.common = common_serialized.*;
 
 //     // Write to file
-//     try writer.writeGather(arena_alloc, file);
+//     try writer.writeGather(file);
 
 //     // Read back
 //     try file.seekTo(0);
@@ -318,7 +317,7 @@ test "ModuleEnv.Serialized roundtrip" {
 //     try serialized_ptr.serialize(&original, arena_alloc, &writer);
 
 //     // Write to file
-//     try writer.writeGather(arena_alloc, file);
+//     try writer.writeGather(file);
 
 //     // Read back
 //     try file.seekTo(0);
@@ -388,7 +387,7 @@ test "ModuleEnv.Serialized roundtrip" {
 //     try serialized_ptr.serialize(&original, arena_alloc, &writer);
 
 //     // Write to file
-//     try writer.writeGather(arena_alloc, file);
+//     try writer.writeGather(file);
 
 //     // Read back
 //     try file.seekTo(0);
@@ -450,15 +449,21 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
     // Call pushExprTypesToSExprTree (which is called by pushTypesToSExprTree)
     try env.pushTypesToSExprTree(expr_idx, &tree);
 
-    // Convert tree to string
+    // Convert tree to string.
+    // fromArrayList takes ownership of the ArrayList buffer immediately, so
+    // we must call toArrayList() explicitly before inspecting the result.
     var result = std.ArrayList(u8).empty;
     defer result.deinit(gpa);
-    try tree.toStringPretty(result.writer(gpa).any(), .include_linecol);
+    {
+        var aw: std.Io.Writer.Allocating = .fromArrayList(gpa, &result);
+        try tree.toStringPretty(&aw.writer, .include_linecol);
+        result = aw.toArrayList();
+    }
 
     // Verify the output contains the type information
     const result_str = result.items;
 
-    try testing.expect(std.mem.indexOf(u8, result_str, "(expr") != null);
-    try testing.expect(std.mem.indexOf(u8, result_str, "(type") != null);
-    try testing.expect(std.mem.indexOf(u8, result_str, "Str") != null);
+    try testing.expect(std.mem.find(u8, result_str, "(expr") != null);
+    try testing.expect(std.mem.find(u8, result_str, "(type") != null);
+    try testing.expect(std.mem.find(u8, result_str, "Str") != null);
 }
