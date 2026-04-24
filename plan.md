@@ -10,6 +10,7 @@ The final pipeline is:
 ```text
 checked CIR
   -> mono MIR
+  -> row-finalized mono MIR
   -> lifted MIR
   -> lambda-solved MIR
   -> executable MIR
@@ -36,6 +37,7 @@ delete the old top-level architecture. The final namespace is:
 
 ```text
 src/mir/mono
+src/mir/mono/row_finalize
 src/mir/lifted
 src/mir/lambda_solved
 src/mir/executable
@@ -62,6 +64,10 @@ variable or unresolved link.
 
 Static dispatch is eliminated in `mono MIR`, the first monomorphic stage. It
 must not survive into lifted MIR, lambda-solved MIR, executable MIR, IR, or LIR.
+
+Row finalization is a separate mono-MIR pass after static dispatch lowering and
+before lifted MIR. It must not be implemented lazily inside representation
+solving, executable lowering, IR lowering, or layout lowering.
 
 Roc functions have fixed arity. Roc functions are not automatically curried.
 
@@ -264,11 +270,13 @@ It owns:
 - static dispatch target resolution
 - nominal/custom equality target resolution
 - procedure-symbol call emission for resolved static dispatch
+- source-name row operations before row finalization
 
 Its input is checked CIR plus the checked type store, checked method registry,
 and specialization roots.
 
-Its output is monomorphic, typed MIR.
+Its output is monomorphic, typed, dispatch-free MIR that has not yet been row
+finalized.
 
 Mono MIR may still contain:
 
@@ -279,6 +287,7 @@ Mono MIR may still contain:
 - `proc_value` values for top-level procedure values with empty captures
 - structural equality
 - source tag names and full monomorphic tag-union types
+- source record field names on row operations
 - fixed-arity function types and calls
 
 Mono MIR must not contain:
@@ -334,11 +343,79 @@ executable representation mode
 lambda-set shape
 ```
 
+### Row-Finalized Mono MIR
+
+Row-finalized mono MIR is a separate type-state between mono MIR and lifted MIR.
+
+It owns:
+
+- converting source record field names to `RecordFieldId`
+- converting source tag names to `TagId`
+- converting tag payload positions to `TagPayloadId`
+- interning canonical logical record and tag-union shapes
+- deleting all name-based row operations before lifting
+
+Its input is dispatch-free mono MIR plus the specialization-local mono type
+store with all type links resolved for the current specialization.
+
+Its output is dispatch-free, row-finalized mono MIR.
+
+Row-finalized mono MIR may still contain:
+
+- local functions
+- closures
+- value calls through function values
+- `call_proc` calls to source/MIR procedures
+- `proc_value` values for top-level procedure values with empty captures
+- structural equality
+- fixed-arity function types and calls
+
+Row-finalized mono MIR must not contain:
+
+- record construction keyed only by source field name
+- record access keyed only by source field name
+- record destructuring keyed only by source field name
+- tag construction keyed only by source tag name
+- tag pattern matching keyed only by source tag name
+- tag payload projection keyed only by local payload position without an owning
+  `TagPayloadId`
+- any helper that computes logical row indexes by sorting names, scanning rows,
+  scanning expressions, or inspecting physical layout order
+
+Every row operation in row-finalized mono MIR stores compact finalized IDs:
+
+```zig
+record_construct: struct {
+    shape: RecordShapeId,
+    fields: Span(RecordFieldInit),
+}
+
+record_access: struct {
+    record: ExprId,
+    field: RecordFieldId,
+}
+
+tag_construct: struct {
+    union_shape: TagUnionShapeId,
+    tag: TagId,
+    payloads: Span(TagPayloadArg),
+}
+
+tag_pattern: struct {
+    union_shape: TagUnionShapeId,
+    tag: TagId,
+    payloads: Span(TagPayloadPattern),
+}
+```
+
+The exact Zig field names may differ. The type-state boundary must not differ:
+after row finalization, later MIR stages cannot represent name-only row lookup.
+
 ### Lifted MIR
 
 Lifted MIR owns lambda lifting and capture discovery.
 
-It consumes dispatch-free mono MIR.
+It consumes dispatch-free, row-finalized mono MIR.
 
 It produces dispatch-free lifted MIR where:
 
@@ -2321,61 +2398,138 @@ No compiler stage may recover a capture field, record field, or tag payload
 position by sorting names, scanning bodies, or relying on physical layout order.
 
 If a source-level family has a canonical order, that order must be stored as an
-explicit checked or MIR row record before layout lowering consumes it. A later
-stage may use source/display names only to look up that explicit index in the
-owning type metadata. It must not sort names to create a new order.
+explicit checked or MIR row record before layout lowering consumes it. Row
+finalization is the last stage that may use a source/display name to select a
+logical row ID. Later stages must consume the finalized IDs directly and must
+not use names to look them up again.
 
-### Row Finalization Records
+### Row Finalization Pass
 
-Open record and tag-union rows must be finalized before representation solving.
-This finalization is a mono MIR responsibility for each mono specialization.
-Later stages must consume the finalization records; they must not flatten rows,
-sort names, or reconstruct logical indexes from source syntax.
+Open record and tag-union rows must be finalized by a dedicated mono-MIR pass
+before lifting and before representation solving.
 
-Row finalization consumes the fully clone-instantiated mono type store with all
-type links resolved for one mono specialization. Checked types may provide declaration
-metadata and canonical source-ordering rules, but checked types are not enough
-by themselves because open rows, aliases, and specialized type variables must be
-resolved in the specialization-local mono store before representation solving.
+This pass is required for correctness. It is not merely a debug verifier, and it
+must not be replaced by lazy lookup inside a later lowering pass.
 
-Row finalization emits stable IDs:
+The pass consumes one complete mono specialization at a time:
+
+- dispatch-free mono MIR
+- the specialization-local mono type store
+- checked declaration metadata
+- checked canonical source-ordering rules
+
+The pass requires every row type it consumes to be fully resolved in the
+specialization-local mono type store. Checked types are inputs, but checked
+types are not sufficient by themselves because open rows, aliases, and
+specialized type variables must be resolved in the current mono specialization
+before logical row identity can be assigned.
+
+The pass produces row-finalized mono MIR. Later stages consume only this
+row-finalized type-state.
+
+The implementation must be compact. It must intern each unique logical row shape
+once, and row-finalized MIR nodes must store small IDs into that interned shape
+store. It must not duplicate the full row shape on every expression.
+
+The pass may walk mono specializations one at a time while writing into a
+module-wide or compilation-unit-wide interner, as long as the IDs remain stable
+for all later stages. The shape interner must store only logical labels and
+payload arity. It must not copy field types, payload types, expression IDs, or
+per-use metadata into shape keys.
+
+Conceptual shape store:
 
 ```zig
-RecordShapeId
-RecordFieldId {
-    owner: RecordShapeId,
-    field_ident: Ident,
-    logical_index: u32,
-}
+const RowShapeStore = struct {
+    records: InternMap(RecordShapeKey, RecordShapeId),
+    record_fields: Store(RecordFieldInfo),
 
-TagUnionShapeId
-TagId {
-    owner: TagUnionShapeId,
-    tag_ident: Ident,
+    tag_unions: InternMap(TagUnionShapeKey, TagUnionShapeId),
+    tags: Store(TagInfo),
+    tag_payloads: Store(TagPayloadInfo),
+};
+
+const RecordShapeKey = struct {
+    fields: Span(Ident.Idx),
+};
+
+const RecordFieldInfo = struct {
+    owner: RecordShapeId,
+    field_ident: Ident.Idx,
     logical_index: u32,
-}
-TagPayloadId {
+};
+
+const TagUnionShapeKey = struct {
+    tags: Span(TagShapeKey),
+};
+
+const TagShapeKey = struct {
+    tag_ident: Ident.Idx,
+    payload_count: u32,
+};
+
+const TagInfo = struct {
+    owner: TagUnionShapeId,
+    tag_ident: Ident.Idx,
+    logical_index: u32,
+};
+
+const TagPayloadInfo = struct {
     tag: TagId,
     payload_index: u32,
-}
+};
 ```
 
-The exact Zig field names may differ, but the records must exist. Record
-construction, record access, record destructuring, tag construction, tag
-patterns, and tag payload access must store these IDs or direct references to
-them. Representation merge uses `RecordFieldId`, `TagId`, and `TagPayloadId`.
-It must not use display names, sorted name order, source expression shape, or
-physical layout position.
+The exact Zig field names may differ, but the identity model must not. Shape
+keys describe logical row order and payload arity only. They do not include
+payload slot types. Payload slot types remain in the mono type store and later
+representation edges, because the same logical row shape can appear at multiple
+type instantiations.
+
+The row-finalization algorithm is:
+
+1. Walk every expression and pattern in one mono specialization exactly once.
+2. For each record construction, record access, record update, record
+   destructuring pattern, tag construction, tag pattern, and tag payload
+   projection, read the operation's mono result type or input type from the mono
+   MIR node.
+3. Fully resolve that type in the specialization-local mono type store.
+4. Derive the full logical record or tag-union row from that resolved type.
+5. Intern the full logical row shape in `RowShapeStore`.
+6. Validate that the requested field or tag exists in that full row, and that
+   the payload count in the operation matches the full row's constructor arity.
+7. Rewrite the MIR node in place, or into a new row-finalized store, so it
+   stores `RecordShapeId`, `RecordFieldId`, `TagUnionShapeId`, `TagId`, and
+   `TagPayloadId` values instead of name-only row keys.
+8. Attach or preserve the mono type slot for each field or payload edge so
+   representation solving can connect value flow without looking names up again.
+9. Export only row-finalized mono MIR.
+
+Caching is allowed only inside this pass. A cache key must be the canonical
+fully resolved row shape, not the first source expression that happened to use a
+field or tag. The cache is an implementation detail of producing finalized IDs;
+it must not be exposed as a later-stage lookup helper.
 
 Name sorting is permitted only inside row finalization if the checked type
 system defines that as the canonical source-level order. The output of that sort
-is the explicit ID table above. After row finalization, names are diagnostic text
-and checked lookup keys only; they are not representation or layout identity.
+is the interned shape and finalized ID set above. After row finalization, names
+are diagnostic text and checked lookup keys only; they are not representation or
+layout identity.
 
-Debug verification must panic if any record, tag-union, tag constructor, tag
-payload, pattern, or projection reaches representation solving without finalized
-row IDs. It must also panic if a later stage attempts to compute a logical index
-by sorting names or scanning a row.
+Representation merge consumes `RecordFieldId`, `TagId`, and `TagPayloadId`. It
+must not use display names, sorted name order, source expression shape, or
+physical layout position.
+
+Debug verification after row finalization must panic if any row-finalized mono
+MIR node still has a name-only row operation. Debug verification in later stages
+must panic if any record, tag-union, tag constructor, tag payload, pattern, or
+projection reaches representation solving without finalized row IDs. It must
+also panic if a later stage attempts to compute a logical index by sorting names,
+scanning a row, scanning expressions, or inspecting physical layout order.
+
+These verifications are debug-only assertions. They are not part of normal
+release compiler runtime cost, and release builds must still be correct because
+the row-finalized MIR type-state cannot represent name-only row lookup.
 
 ## Static Dispatch Lowering
 
@@ -2579,9 +2733,12 @@ particular call. `StaticDispatchCallPlan.dispatcher_var` chooses that.
 
 ## Tags And Constructors
 
-Tag names remain symbolic until layout lowering.
+Tag names remain symbolic only until row finalization.
 
-That is required because layout indices are not available in mono MIR.
+Logical `TagId` and `TagPayloadId` values are created by the row-finalization
+pass. Physical layout indices are still not available in mono MIR; layout
+lowering later translates finalized logical IDs through the explicit layout
+store.
 
 The forbidden behavior is constructing source types from local tag syntax.
 
@@ -2605,14 +2762,16 @@ when the checked expression type is:
 [Ok(I64), Err(Str)]
 ```
 
-Discriminants and payload indexes may be computed from the full mono MIR
-tag-union type. They must not be computed from a singleton type invented from
-syntax.
+Logical discriminants and payload indexes may be computed only by row
+finalization from the full mono MIR tag-union type. They must not be computed
+from a singleton type invented from syntax, and they must not be computed lazily
+inside representation solving, executable lowering, IR lowering, or layout
+lowering.
 
-The full mono MIR tag-union type must carry or reference finalized `TagUnionShapeId`,
+Row-finalized mono MIR tag operations must carry finalized `TagUnionShapeId`,
 `TagId`, and `TagPayloadId` records. Later stages may translate those logical
 indexes to executable layout indexes, but they must not create a new constructor
-order by sorting names or scanning expressions.
+order by sorting names, scanning rows, or scanning expressions.
 
 ## Callable And Capture Flow
 
@@ -2634,6 +2793,14 @@ Mono MIR:
   dependencies before exporting mono MIR
 - does not package erased callables
 - does not synthesize curried or partial-application functions
+
+Row-finalized mono MIR:
+
+- interns logical record and tag-union row shapes once per unique shape
+- rewrites record and tag operations to finalized row IDs
+- preserves the mono type for every expression, field edge, and payload edge
+- deletes name-only row lookup before lifting
+- exports no API for later stages to compute logical row indexes from names
 
 Lifted MIR:
 
@@ -2988,9 +3155,65 @@ Commit when mono MIR verification proves:
   `requested_fn_ty`
 - no mono MIR node represents automatic currying or partial application
 
-### 4. Harden Lifted MIR
+### 4. Add Row-Finalized Mono MIR Pass
 
-Update lifted MIR to consume dispatch-free mono MIR.
+Add a dedicated row-finalization pass between mono MIR and lifted MIR.
+
+This pass must consume dispatch-free mono MIR and produce a distinct
+row-finalized mono MIR type-state. Do not implement row finalization as a lazy
+helper inside lifted MIR, lambda-solved MIR, executable MIR, IR lowering, or
+layout lowering.
+
+Add a compact `RowShapeStore` or equivalent interner:
+
+- unique record shapes keyed by canonical logical field order
+- unique tag-union shapes keyed by canonical logical tag order and payload arity
+- `RecordFieldId` records owned by `RecordShapeId`
+- `TagId` records owned by `TagUnionShapeId`
+- `TagPayloadId` records owned by `TagId`
+
+Rewrite every row operation so it carries finalized IDs:
+
+- record construction carries `RecordShapeId` and `RecordFieldId` entries
+- record access carries `RecordFieldId`
+- record update carries `RecordShapeId` and `RecordFieldId` entries
+- record destructuring patterns carry `RecordFieldId`
+- tag construction carries `TagUnionShapeId`, `TagId`, and `TagPayloadId`
+  entries for payloads
+- tag patterns carry `TagUnionShapeId`, `TagId`, and `TagPayloadId` entries for
+  payload patterns
+- tag payload projections carry `TagPayloadId`
+
+For every row operation, the pass must resolve the operation's mono type in the
+specialization-local mono type store, derive the full logical row from that
+type, intern that full row shape, validate the requested field or tag against
+the full row, validate constructor payload arity, and then rewrite the MIR node.
+
+The pass may cache finalized IDs while it runs. The cache key must be the
+canonical fully resolved row shape. The cache must not be exported as an API that
+later stages can call to look up names.
+
+Commit when row-finalized mono MIR verification proves:
+
+- lifted MIR consumes row-finalized mono MIR, not name-bearing mono MIR
+- no row-finalized mono MIR node stores a name-only row operation
+- every record construction, access, update, and destructuring pattern stores
+  finalized record IDs
+- every tag construction, tag pattern, and tag payload projection stores
+  finalized tag IDs
+- row shape metadata is interned once per unique logical row shape, not copied
+  onto every expression
+- row shape keys exclude payload slot types; payload slot types remain in the
+  mono type store and later representation edges
+- every finalized row ID was derived from the full resolved mono type for that
+  operation, never from singleton syntax such as `Err("x")`
+- no later-stage helper exists for computing logical row indexes by sorting
+  names, scanning rows, scanning expressions, or inspecting physical layout
+  order
+
+### 5. Harden Lifted MIR
+
+Update lifted MIR to consume dispatch-free, row-finalized mono MIR.
 
 Delete all dispatch cases from lifted MIR AST and lowering.
 
@@ -3027,7 +3250,7 @@ Commit when lifted MIR verification proves:
 - no local function or closure call is represented as `call_proc`
 - no dispatch terms exist in exported lifted MIR
 
-### 5. Harden Lambda-Solved MIR
+### 6. Harden Lambda-Solved MIR
 
 Update lambda-solved MIR to consume dispatch-free lifted MIR.
 
@@ -3147,7 +3370,7 @@ Commit when lambda-solved MIR verification proves:
 - `call_proc` and `proc_value` participate in callable inference and SCC ordering
 - every `proc_value` capture arg unifies with its target `CaptureSlot`
 
-### 6. Replace Executable Side-Table Planner
+### 7. Replace Executable Side-Table Planner
 
 Rewrite executable MIR lowering so it consumes lambda-solved MIR and emits
 executable MIR without source-expression side tables.
@@ -3242,7 +3465,7 @@ Commit when executable MIR verification proves:
 - every executable procedure has a `ProcOwnershipContract` before IR lowering
 - LIR ownership logic does not infer procedure contracts as semantic truth
 
-### 7. Delete Source-Type Reconstruction
+### 8. Delete Source-Type Reconstruction
 
 Delete the whole source-type reconstruction family:
 
@@ -3258,7 +3481,7 @@ Do not keep compatibility wrappers.
 
 Commit only after targeted searches prove there are no stragglers.
 
-### 8. Rewire IR Lowering
+### 9. Rewire IR Lowering
 
 Update `src/ir/lower.zig` to consume executable MIR.
 
@@ -3269,7 +3492,7 @@ forms.
 
 Commit when IR lowering has no imports of checked CIR or MIR builder internals.
 
-### 9. Rewire Public Pipelines
+### 10. Rewire Public Pipelines
 
 Update eval, compile, CLI, dev shim, snapshot tool, and test helpers to call the
 MIR-family pipeline.
@@ -3278,7 +3501,7 @@ Remove helper names that refer to old stages.
 
 Commit when `rg` finds no old post-check imports or pipeline labels.
 
-### 10. Strengthen Audits
+### 11. Strengthen Audits
 
 Make audits allowlist-based.
 
@@ -3345,7 +3568,7 @@ method_eq
 
 Commit when guarded semantic audits pass.
 
-### 11. Rewrite Tests
+### 12. Rewrite Tests
 
 Rewrite old intermediate-stage tests.
 
@@ -3394,6 +3617,22 @@ Mono MIR:
 - no call node encodes automatic currying or partial application
 - `call_proc` is not an executable direct call
 - `call_proc` does not target local functions or closures
+
+Row-finalized mono MIR:
+
+- every row-finalized mono MIR expression still has a mono type
+- no name-only record construction, access, update, or destructuring node exists
+- no name-only tag construction, pattern, or payload projection node exists
+- every record operation carries `RecordShapeId` and `RecordFieldId` values
+- every tag operation carries `TagUnionShapeId`, `TagId`, and `TagPayloadId`
+  values
+- shape interning reuses one logical shape record across repeated uses of the
+  same field or tag-union shape
+- row shape keys do not include payload slot types
+- `Err("x")` in a full `[Ok(I64), Err(Str)]` context uses the finalized `Err`
+  ID from the full union, never a singleton `[Err(Str)]` shape
+- no later-stage API can lazily compute logical row indexes by sorting names,
+  scanning rows, scanning expressions, or inspecting physical layout order
 
 Lifted MIR:
 
