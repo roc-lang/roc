@@ -521,18 +521,26 @@ representation through `call_value.requested_fn_ty`.
 
 For every `call_value`, lambda-solved MIR must also create explicit
 representation-flow edges for the call relation. The callee expression root
-connects to the callable slot of `call_value.requested_fn_ty`; each argument
+merges with the whole function representation root for
+`call_value.requested_fn_ty`. This is the representation root of the entire
+fixed-arity Roc function value, not just its callable-set child. Each argument
 expression root connects to the same-index requested function argument slot; the
-requested function return slot connects to the call expression result root.
+requested function return slot connects to the call expression result root. The
+callable-set slot is only the callable child of that whole function root.
 
 For every `call_proc`, lambda-solved MIR must create the same representation-flow
-edges against the instantiated target procedure signature. The call arguments
-connect to the instantiated target parameter slots and the instantiated target
-return slot connects to the call expression result root.
+edges against the whole representation root for `call_proc.requested_fn_ty` and
+the instantiated target procedure signature. The call arguments connect to the
+instantiated target parameter slots and the instantiated target return slot
+connects to the call expression result root. The instantiated target procedure
+function root and `call_proc.requested_fn_ty` must merge as whole fixed-arity
+function representations before their argument, return, and callable child slots
+are considered solved.
 
 For every `proc_value`, lambda-solved MIR must connect the expression result root
-to the callable representation of `proc_value.fn_ty`. Each `CaptureArg.expr`
-root connects to the same-index instantiated `CaptureSlot` representation root.
+to the whole function representation root for `proc_value.fn_ty`. A `proc_value`
+is a function value, not just a callable-set child. Each `CaptureArg.expr` root
+connects to the same-index instantiated `CaptureSlot` representation root.
 
 These call/procedure/value representation edges are required even when the
 logical type unifier has already unified the corresponding type variables. The
@@ -605,6 +613,26 @@ requirements are solved. Structural children are also explicit representation
 variables: record fields, tuple elements, tag payloads, `List(T)` elements,
 `Box(T)` payloads, nominal backing slots, function arguments, function returns,
 and callable-representation slots.
+
+Semantic source mutation must be converted to SSA before representation solving.
+The representation store must not model a source `var` as a physical mutable
+storage cell whose representation can change over time. It models explicit SSA
+values:
+
+- a source `var` declaration creates version 0.
+- every source reassignment creates a fresh version.
+- every branch merge that can observe multiple incoming versions creates an
+  explicit join version.
+- every loop-carried mutable value creates explicit loop header phi, backedge,
+  and loop-exit join roots.
+- ordinary uses read the current SSA version for that control-flow point.
+
+Any later IR or LIR `set`/`set_local`-style operation is a backend temporary
+after executable layout has already been fixed. It is not semantic source
+mutation. If such operations survive in the final architecture, debug
+verification must prove the target and value layouts are exactly identical before
+lowering continues. A stage after representation solving must not use assignment
+to force two incompatible representations into the same storage slot.
 
 A representation variable may reference a zonked logical `TypeId` as a checked
 type fact, but that `TypeId` is not the representation variable's identity. Two
@@ -847,8 +875,9 @@ can move, bind, project, join, or return a boxed payload value:
   callee's instantiated parameter representation.
 - procedure returns connect every returned expression to the instantiated
   procedure return representation.
-- `call_value.func` connects to the callable slot of
-  `call_value.requested_fn_ty`.
+- `call_value.func` merges with the whole function representation root for
+  `call_value.requested_fn_ty`; it does not connect directly to only the
+  callable-set slot.
 - `call_value.args[i]` connects to argument slot `i` of
   `call_value.requested_fn_ty`.
 - the return slot of `call_value.requested_fn_ty` connects to the `call_value`
@@ -856,20 +885,24 @@ can move, bind, project, join, or return a boxed payload value:
 - `call_proc.args[i]` connects to instantiated target procedure parameter slot
   `i`, and the instantiated target return slot connects to the `call_proc`
   expression result root.
-- `proc_value` expression results connect to `proc_value.fn_ty`.
+- the instantiated target procedure function root merges with the whole function
+  representation root for `call_proc.requested_fn_ty`.
+- `proc_value` expression results merge with the whole function representation
+  root for `proc_value.fn_ty`.
 - `capture_ref(slot)` connects to the instantiated `CaptureSlotInstance.ty`.
 - `proc_value.captures[i]` connects to the instantiated target
   `CaptureSlotInstance[i].ty`.
-- records connect each field expression to the checked logical field type.
+- records connect each field expression to the finalized `RecordFieldId` and its
+  checked logical field type.
 - tuples connect each element expression to the checked logical element type.
-- tag construction connects each payload expression to the checked logical tag
-  payload type for that constructor.
+- tag construction connects each payload expression to the finalized
+  `TagPayloadId` and its checked logical payload type for that constructor.
 - tag payload access connects the projected payload representation to the
-  checked logical tag payload type and payload index.
+  finalized `TagPayloadId` and its checked logical tag payload type.
 - `List(T)` literals and builders connect every element expression to the list
   element representation.
-- tuple and record access connect the projected value to the checked logical
-  element or field representation.
+- tuple and record access connect the projected value to the checked tuple
+  element or finalized `RecordFieldId` representation.
 - `if` and source `match` result requirements connect the whole expression
   representation to every branch result.
 - `if` and source `match` statement joins create explicit mutable variable join
@@ -894,6 +927,12 @@ can move, bind, project, join, or return a boxed payload value:
   join versions. A loop with no `break` still has exit join versions for
   variables assigned in the body.
 
+These mutable-version, join, and loop-phi roots are SSA facts. They are not
+physical stack slots. Representation solving must finish before any later stage
+chooses whether two SSA values can reuse storage. Storage reuse is allowed only
+when it preserves the already-solved executable layout; it must not feed back
+into representation solving.
+
 These edges are lambda-solved facts. Executable MIR may verify them in debug
 builds, but it must not add missing edges, rebuild containers, or reinterpret a
 branch/pattern result to satisfy a boxed payload requirement.
@@ -911,8 +950,13 @@ The required callable representation algebra is:
 ```text
 finite callable set + finite callable set = canonical finite callable-set union
 finite callable set + erased callable = erased callable
-erased callable + erased callable = erased callable with exactly matching erased signature
+erased callable + erased callable = erased callable with exactly matching ErasedFnSigKey
 ```
+
+`ErasedFnSigKey` equality includes the erased-call ABI policy. Two erased
+callables with the same erased argument and return representations but different
+`ErasedCallAbiPolicyKey` values are different erased callable representations.
+They must not silently merge.
 
 The required structural representation algebra is separate and equally
 mandatory. Each solved representation class has exactly one `RepresentationShape`
@@ -937,11 +981,10 @@ Merge rules:
 
 - `unknown` adopts the other shape.
 - primitives must match exactly.
-- records merge by checked logical field index from the owning record type
-  metadata.
+- records merge by finalized `RecordFieldId` from the owning `RecordShapeId`.
 - tuples merge by tuple element index.
-- tag unions merge by checked constructor logical index and checked payload
-  index from the full checked tag-union type.
+- tag unions merge by finalized `TagId` and `TagPayloadId` from the owning
+  `TagUnionShapeId`.
 - `List(T)` merges by merging the element representation.
 - `Box(T)` merges by merging the payload representation. This does not create
   erasure; only an explicit `Box(T)` boundary may create
@@ -960,10 +1003,11 @@ Merge rules:
 
 No structural merge rule may inspect source expression syntax, singleton tag
 constructor syntax, display names, physical layout order, or source code body
-shape. Tag construction must use the full checked tag-union type attached to the
-expression, never a synthetic singleton constructor type. If the checked
-tag-union type has constructors `[Ok(I64), Err(Str)]`, then constructing
-`Err("x")` still creates payload edges into the `Err` slot of that full union.
+shape. Tag construction must use the finalized full tag-union shape attached to
+the expression, never a synthetic singleton constructor type. If the checked
+tag-union type has constructors `[Ok(I64), Err(Str)]`, row finalization produces
+one `TagUnionShapeId` for that full union, and constructing `Err("x")` creates
+payload edges into the finalized `Err` slot of that full union.
 
 Recursive shapes are solved with placeholders and stable recursion binders. A
 representation solver must allocate the placeholder before merging children and
@@ -1081,6 +1125,22 @@ raw type ids, symbol freshening suffixes, or allocation-order-dependent data.
 
 `ErasedFnSigKey` must include the canonical erased argument types, canonical
 erased return type, fixed Roc arity, and an `ErasedCallAbiPolicyKey`.
+
+That policy is part of key identity. Exact `ErasedFnSigKey` equality means:
+
+```text
+same fixed Roc arity
+same canonical erased argument representations
+same canonical erased return representation
+same ErasedCallAbiPolicyKey
+```
+
+Same erased arguments and same erased return with a different
+`ErasedCallAbiPolicyKey` is not the same erased callable representation. The
+compiler must either emit an explicit adapter or bridge at a boundary that names
+both policies, or fail before exporting executable MIR. A later stage must not
+repair the mismatch by inspecting an adapter body, capture layout, runtime
+function pointer, hosted symbol, or ownership result.
 
 `ErasedCallAbiPolicyKey` is produced before executable ownership solving. It is
 the erased-call ABI contract for the boundary, not the ownership result of a
@@ -2208,10 +2268,10 @@ Logical indexes include:
 - `CaptureSlot.index`
 - callable-set member capture payload fields
 - erased capture record fields
-- checked type-store record field indexes
+- finalized `RecordFieldId.logical_index` values
 - tuple fields
-- checked type-store tag constructor indexes
-- checked type-store tag payload field indexes
+- finalized `TagId.logical_index` values
+- finalized `TagPayloadId.payload_index` values
 - compiler-generated struct fields
 
 Executable MIR layout graph nodes must store field identity explicitly:
@@ -2240,9 +2300,59 @@ explicit checked or MIR fact before layout lowering consumes it. A later stage
 may use source/display names only to look up that explicit index in the owning
 type metadata. It must not sort names to create a new order.
 
+### Row Finalization Facts
+
+Open record and tag-union rows must be finalized before representation solving.
+This finalization is a checked/mono MIR responsibility. Later stages must consume
+the finalization facts; they must not flatten rows, sort names, or reconstruct
+logical indexes from source syntax.
+
+Row finalization consumes the solved checked type store and emits stable IDs:
+
+```zig
+RecordShapeId
+RecordFieldId {
+    owner: RecordShapeId,
+    field_ident: Ident,
+    logical_index: u32,
+}
+
+TagUnionShapeId
+TagId {
+    owner: TagUnionShapeId,
+    tag_ident: Ident,
+    logical_index: u32,
+}
+TagPayloadId {
+    tag: TagId,
+    payload_index: u32,
+}
+```
+
+The exact Zig field names may differ, but the facts must exist. Record
+construction, record access, record destructuring, tag construction, tag
+patterns, and tag payload access must store these IDs or direct references to
+them. Representation merge uses `RecordFieldId`, `TagId`, and `TagPayloadId`.
+It must not use display names, sorted name order, source expression shape, or
+physical layout position.
+
+Name sorting is permitted only inside row finalization if the checked type
+system defines that as the canonical source-level order. The output of that sort
+is the explicit ID table above. After row finalization, names are diagnostic text
+and checked lookup keys only; they are not representation or layout identity.
+
+Debug verification must panic if any record, tag-union, tag constructor, tag
+payload, pattern, or projection reaches representation solving without finalized
+row IDs. It must also panic if a later stage attempts to compute a logical index
+by sorting names or scanning a row.
+
 ## Static Dispatch Lowering
 
-Static dispatch lowering only consumes checked static-dispatch nodes:
+Static dispatch target identity is a checked fact. Mono MIR lowering must not
+recover it from a receiver expression, a result type, a method name, a module
+environment lookup, or display-name sorting.
+
+Checked CIR may contain these source-level dispatch forms while type checking:
 
 ```text
 e_dispatch_call
@@ -2250,8 +2360,43 @@ e_type_dispatch_call
 e_method_eq
 ```
 
+By the time checked CIR is exported to mono MIR, every dispatch form must either
+be rewritten to `structural_eq` or carry a resolved static-dispatch fact:
+
+```zig
+ResolvedStaticDispatch {
+    expr: CIR.Expr.Idx,
+    kind: enum { ordinary, type_dispatch, nominal_eq },
+    owner: MethodOwner,
+    method_ident: Ident,
+    constraint_fn_var: Var,
+    target_proc: ResolvedProcRef,
+}
+
+ResolvedProcRef {
+    module: ModuleId,
+    def: CIR.Def.Idx,
+}
+```
+
+The exact Zig field names may differ, but the fact must name the target
+procedure. `owner` and `method_ident` are audit/debug facts after checking; they
+are not permission for mono MIR to perform method lookup again. The target
+procedure identity is the semantic source of truth.
+
+If the checked method registry contains a hosted, platform, or intrinsic method
+entry, checking must normalize it to an explicit builtin procedure target with a
+checked callable type before exporting `ResolvedStaticDispatch`. Mono MIR still
+emits `call_proc` to a procedure symbol. It must not special-case a method name
+as an intrinsic after checked dispatch resolution.
+
 A dotted expression without arguments is checked field access. It is not an
 unresolved static method value and must not be treated as one later.
+
+If a nominal or alias equality constraint is satisfied by implicit structural
+equality instead of a method definition, checked CIR must rewrite the expression
+to `structural_eq` before mono MIR lowering. It must not export a resolved
+dispatch fact with no target procedure.
 
 ### Ordinary Dispatch
 
@@ -2263,22 +2408,40 @@ x.foo(a, b)
 
 mono MIR lowering does:
 
-1. Lower the checked dispatch constraint function type into a mono function
-   type.
-2. Lower `x` with expected type `constraint.args[0]`.
-3. Resolve the owner from `typeOf(x)`.
-4. Look up `(owner, foo)` in the checked method registry.
-5. Request or reserve the target mono specialization at the exact mono source
-   constraint function type.
-6. Lower `a` and `b` with expected types `constraint.args[1..]`.
-7. Emit `call_proc` with:
+1. Read the `ResolvedStaticDispatch` fact attached to this expression and verify
+   `kind == ordinary`.
+2. Lower `constraint_fn_var` from that fact into a mono function type in the
+   current mono type store.
+3. Instantiate `target_proc`'s checked procedure type into the same mono type
+   store.
+4. Unify the instantiated target procedure type with the mono dispatch
+   constraint type. The unified function type is the exact requested mono source
+   function type for this call.
+5. Lower `x` with expected type `requested.args[0]`.
+6. Lower `a` and `b` with expected types `requested.args[1..]`.
+7. Request or reserve the target mono specialization for `target_proc` at the
+   exact requested mono source function type.
+8. Emit `call_proc` with:
    - `proc` equal to the mono-specialized source/MIR procedure symbol
    - `args` equal to the lowered receiver followed by lowered explicit args
-   - `requested_fn_ty` equal to the exact mono source constraint function type
+   - `requested_fn_ty` equal to the exact requested mono source function type
 
 No later stage sees the method name as an unresolved call.
 
 No stage treats this as an executable direct call until executable MIR.
+
+The target-procedure unification must happen before the result type is used by
+any enclosing expression. For chained dispatch such as:
+
+```roc
+x.foo().bar()
+```
+
+the `bar` owner is checked and stored in its own `ResolvedStaticDispatch` fact,
+and mono MIR lowers `x.foo()` to a `call_proc` whose result type is the unified
+return slot of `foo`'s target procedure type. Mono MIR must not use the
+pre-target constraint approximation as the receiver type for the following
+dispatch.
 
 ### Type Dispatch
 
@@ -2290,20 +2453,30 @@ Thing.default()
 
 mono MIR lowering does:
 
-1. Lower the type-var alias target type into a mono type.
-2. Resolve the owner from that mono type.
-3. Lower the checked dispatch constraint function type.
-4. Look up `(owner, default)` in the checked method registry.
-5. Request or reserve the target mono specialization at the exact mono source
-   constraint function type.
-6. Lower explicit args.
+1. Read the `ResolvedStaticDispatch` fact attached to this expression and verify
+   `kind == type_dispatch`.
+2. Lower `constraint_fn_var` from that fact into a mono function type in the
+   current mono type store.
+3. Instantiate `target_proc`'s checked procedure type into the same mono type
+   store.
+4. Unify the instantiated target procedure type with the mono dispatch
+   constraint type. The unified function type is the exact requested mono source
+   function type for this call.
+5. Lower explicit args with expected types from the unified requested function
+   type.
+6. Request or reserve the target mono specialization for `target_proc` at the
+   exact requested mono source function type.
 7. Emit `call_proc` with:
    - `proc` equal to the mono-specialized source/MIR procedure symbol
    - `args` equal to the lowered explicit args
-   - `requested_fn_ty` equal to the exact mono source constraint function type
+   - `requested_fn_ty` equal to the exact requested mono source function type
 
 There is no receiver argument for type dispatch unless the checked constraint
 itself has one.
+
+Mono MIR may preserve the lowered dispatcher type as debug metadata, but it must
+not resolve the owner from that type. Owner resolution already happened during
+checking and is recorded in `ResolvedStaticDispatch.owner`.
 
 ### Nominal Equality
 
@@ -2314,14 +2487,29 @@ x == y
 x != y
 ```
 
-mono MIR lowering resolves `is_eq` through the same owner and registry path.
+If checking selected a custom `is_eq` method, mono MIR lowering consumes the
+`ResolvedStaticDispatch` fact attached to the equality expression and verifies
+`kind == nominal_eq` and `method_ident == is_eq`.
 
-`==` emits `call_proc` to the specialized `is_eq`.
+Mono MIR then:
+
+1. Lowers the equality dispatch constraint function type.
+2. Instantiates the resolved `is_eq` target procedure type into the same mono
+   type store.
+3. Unifies the target type with the equality dispatch constraint type.
+4. Lowers the left and right operands with the unified argument types.
+5. Reserves the target mono specialization at the exact requested mono source
+   function type.
+6. Emits `call_proc` to that specialized `is_eq`.
 
 `!=` emits the same `call_proc` followed by `bool_not`.
 
 Anonymous structural equality remains `structural_eq` and never goes through
 method dispatch.
+
+Mono MIR must not resolve `is_eq` by looking up the operand owner. It may only
+consume the checked `ResolvedStaticDispatch.target_proc` or the already-rewritten
+`structural_eq`.
 
 ## Tags And Constructors
 
@@ -2355,10 +2543,10 @@ Discriminants and payload indexes may be computed from the full mono MIR
 tag-union type. They must not be computed from a singleton type invented from
 syntax.
 
-The full mono MIR tag-union type must carry or reference the checked canonical
-constructor order and payload field indexes. Later stages may translate those
-logical indexes to executable layout indexes, but they must not create a new
-constructor order by sorting names or scanning expressions.
+The full mono MIR tag-union type must carry or reference finalized `TagUnionShapeId`,
+`TagId`, and `TagPayloadId` facts. Later stages may translate those logical
+indexes to executable layout indexes, but they must not create a new constructor
+order by sorting names or scanning expressions.
 
 ## Callable And Capture Flow
 
@@ -2534,7 +2722,6 @@ src/mir/mod.zig
 src/mir/mono/ast.zig
 src/mir/mono/type.zig
 src/mir/mono/build.zig
-src/mir/mono/method_registry.zig
 src/mir/mono/verify.zig
 src/mir/lifted/ast.zig
 src/mir/lifted/lower.zig
@@ -2619,15 +2806,35 @@ imports the old top-level module names.
 
 ### 2. Build Checked Method Registry
 
-Add `src/mir/mono/method_registry.zig`.
+Add `src/check/static_dispatch_registry.zig`.
 
-Build a registry from checked modules before mono MIR lowering.
+Build a registry from checked modules before checked dispatch facts are exported
+to mono MIR.
 
-The registry must map `MethodKey { owner: MethodOwner, method_ident }` to method
-definition refs or intrinsics. `MethodOwner` must be explicit semantic owner
-identity, not expression shape and not display-name lookup.
+The registry must map `MethodKey { owner: MethodOwner, method_ident }` to
+procedure targets. `MethodOwner` must be explicit semantic owner identity, not
+expression shape and not display-name lookup. Hosted, platform, or intrinsic
+method entries must be normalized to explicit builtin procedure targets with
+checked callable types before the registry exports `ResolvedStaticDispatch`.
 
-Use the registry for mono MIR static dispatch lowering.
+Use the registry only to produce and verify checked `ResolvedStaticDispatch`
+facts. Mono MIR lowering consumes those facts. It must not use the registry to
+resolve `(owner, method_ident)` again.
+
+Each checked dispatch expression that remains after type checking must store:
+
+```text
+ResolvedStaticDispatch.expr
+ResolvedStaticDispatch.kind
+ResolvedStaticDispatch.owner
+ResolvedStaticDispatch.method_ident
+ResolvedStaticDispatch.constraint_fn_var
+ResolvedStaticDispatch.target_proc
+```
+
+Structural equality rewrites must happen before mono MIR. A checked equality
+expression that uses implicit structural equality must be `structural_eq`, not a
+dispatch fact with a missing target.
 
 Then remove downstream `attached_method_index` threading.
 
@@ -2660,11 +2867,25 @@ Mono MIR lowering from checked CIR must resolve:
 - type dispatch
 - nominal/custom equality
 
-to `call_proc` calls immediately.
+to `call_proc` calls immediately by consuming checked `ResolvedStaticDispatch`
+facts. It must not resolve method owners or target procedures from expression
+shape, receiver type, result type, method name, or module environment lookup.
+
+For every static-dispatch-produced `call_proc`, mono MIR must instantiate the
+resolved target procedure type into the current mono type store, unify it with
+the dispatch constraint type, use the unified argument and return slots as the
+call's requested mono source function type, and reserve the target mono
+specialization at exactly that type before exporting mono MIR.
 
 Commit when mono MIR verification proves:
 
 - no exported mono MIR dispatch nodes exist
+- every source dispatch or custom equality call consumed a checked
+  `ResolvedStaticDispatch` fact or was already rewritten to `structural_eq`
+- no mono MIR code path resolves static-dispatch owner or target identity from a
+  receiver expression, result type, method name, or environment lookup
+- every static-dispatch-produced `call_proc.requested_fn_ty` is the unified
+  target-procedure type and dispatch-constraint type in the mono type store
 - `call_proc` targets only top-level mono-specialized procedures
 - mono `proc_value` captures are empty
 - mono `proc_value` targets for top-level procedure values are mono-specialized
@@ -2731,14 +2952,19 @@ Preserve and clean up the real responsibilities:
 - create distinct representation roots for every expression result, binder,
   pattern binder, procedure parameter, procedure return, capture slot,
   callable requested-function occurrence, mutable variable version, and loop phi
+- consume finalized `RecordShapeId`, `RecordFieldId`, `TagUnionShapeId`, `TagId`,
+  and `TagPayloadId` facts for records, tag unions, patterns, and projections
 - create `require_box_erased(payload_root)` seeds only from explicit `Box(T)`
   boundaries
-- create explicit representation edges for every `call_value` callee, argument,
-  return slot, and result
+- create explicit representation edges that merge every `call_value` callee with
+  the whole requested function representation root, plus every argument, return
+  slot, and result
 - create explicit representation edges for every `call_proc` argument and
-  instantiated target return
+  instantiated target return, and merge the target procedure function root with
+  the whole `call_proc.requested_fn_ty` root
 - create explicit representation edges from every `proc_value` result and
-  capture argument to the corresponding procedure callable/capture slot
+  capture argument to the whole `proc_value.fn_ty` function root and
+  corresponding procedure capture slot
 - preserve explicit `boxed_erased_boundary` box type, payload source type,
   payload boundary type, direction, representation roots, and payload
   `BoxPayloadRepresentationPlan`
@@ -2749,6 +2975,8 @@ Preserve and clean up the real responsibilities:
   returned values
 - solve mutable variable representation through explicit versions, branch joins,
   loop phis, and loop-exit joins
+- treat those mutable versions, joins, and loop phis as SSA facts rather than
+  physical mutable storage cells
 - solve structural representation classes with explicit merge rules for
   primitives, records, tuples, tag unions, `List(T)`, `Box(T)`, nominals,
   functions, and callable slots
@@ -2784,22 +3012,29 @@ Commit when lambda-solved MIR verification proves:
 - representation equality is occurrence/value-flow based, not type-id based
 - two unrelated roots with equal logical `TypeId`s do not unify unless an
   explicit representation edge connects them
-- every `call_value` has representation edges for callee, every argument,
-  requested return slot, and result
+- every `call_value` has representation edges that merge the callee with the
+  whole requested function root, plus every argument, requested return slot, and
+  result
 - every `call_proc` has representation edges for every argument and instantiated
-  target return
-- every `proc_value` has representation edges for the value result and every
-  capture argument
+  target return, and merges the target procedure function root with the whole
+  `call_proc.requested_fn_ty` root
+- every `proc_value` has representation edges that merge the value result with
+  the whole `proc_value.fn_ty` function root and connect every capture argument
+  to the corresponding procedure capture slot
 - every mutable use reads from a current mutable version root
 - every `reassign` creates a new mutable version root
 - every branch join and loop-carried mutable value has an explicit join or loop
   phi root
+- mutable versions, branch joins, and loop phis are SSA representation facts, not
+  physical storage slots
 - every exported representation root has a solved representation class
 - every solved representation class has one structural `RepresentationShape`
+- every record and tag-union representation slot refers to finalized row IDs, not
+  display-name sorting or physical layout order
 - tag construction edges target the full checked tag-union type, never a
   singleton constructor type reconstructed from syntax
-- structural representation merge uses checked logical indexes, never display
-  name sorting or physical layout order
+- structural representation merge uses finalized row IDs, never display-name
+  sorting or physical layout order
 - every `require_box_erased(payload_root)` seed is owned by an explicit
   `Box(T)` boundary
 - no executable specialization input contains generalized or unresolved type
@@ -2880,6 +3115,10 @@ Commit when executable MIR verification proves:
 - erased calls have explicit erased function types
 - erased function signature keys contain an explicit `ErasedCallAbiPolicyKey`,
   not a future `CallableCallOwnershipKey`
+- erased callable equality requires exact `ErasedFnSigKey` equality, including
+  `ErasedCallAbiPolicyKey`
+- same erased args/return with different `ErasedCallAbiPolicyKey` values requires
+  an explicit adapter or bridge and must not silently merge
 - ordinary Roc boxed erased callables use the canonical erased ABI policy:
   borrow packed function, borrow all erased arguments, fresh result
 - erased adapters are synthesized for finite callable-set values crossing
@@ -3028,7 +3267,7 @@ Obsolete expectations:
 
 Replacement expectations:
 
-- checked CIR contains dispatch where appropriate
+- checked CIR contains dispatch only with resolved target facts where appropriate
 - mono MIR contains `call_proc` and no dispatch
 - lifted MIR contains explicit `CaptureSlot`s, explicit `proc_value`
   `CaptureArg`s, and no dispatch
@@ -3047,6 +3286,10 @@ Mono MIR:
 - every expression has a mono type
 - no dispatch nodes exist
 - static dispatch becomes `call_proc`
+- static dispatch consumes checked `ResolvedStaticDispatch.target_proc` facts,
+  never method lookup in mono MIR
+- static-dispatch `call_proc.requested_fn_ty` is the mono-store unification of
+  the dispatch constraint and target procedure type
 - nominal/custom equality becomes `call_proc` to `is_eq`
 - structural equality remains structural
 - transparent aliases preserve nominal identity
@@ -3090,21 +3333,27 @@ Lambda-solved MIR:
   callable requested-function occurrence, mutable variable version, and loop phi
 - representation variables unify only through explicit value-flow edges, never
   merely through equal logical `TypeId`s
-- every `call_value` exports representation edges for callee, every argument,
-  requested return slot, and result
+- every `call_value` exports representation edges that merge the callee with the
+  whole requested function root, plus every argument, requested return slot, and
+  result
 - every `call_proc` exports representation edges for every argument and
-  instantiated target return
-- every `proc_value` exports representation edges for the value result and every
-  capture argument
+  instantiated target return, and merges the target procedure function root with
+  the whole `call_proc.requested_fn_ty` root
+- every `proc_value` exports representation edges that merge the value result
+  with the whole `proc_value.fn_ty` function root and connect every capture
+  argument to the corresponding procedure capture slot
 - every mutable use reads from a current mutable version root
 - every reassignment, branch join, loop-carried value, and loop exit has an
   explicit representation edge through a mutable version, join, or loop phi
+- mutable versions, branch joins, loop-carried values, and loop exits are SSA
+  facts, not physical mutable storage slots
 - every `require_box_erased(payload_root)` seed is attached to an explicit
   `Box(T)` boundary
 - every exported representation root has a solved representation class
 - every solved representation class has one structural `RepresentationShape`
-- structural representation merge uses checked logical indexes and the full
-  checked tag-union type
+- row finalization IDs are present before representation solving
+- structural representation merge uses finalized row IDs and the full checked
+  tag-union type
 - boxed payload representation requirements propagate through aliases, binders,
   captures, parameters, returns, and expression occurrences
 - boxed payload representation requirements propagate through source `match`
@@ -3348,9 +3597,18 @@ The cutover is complete only when all of these are true:
   -> executable MIR -> IR -> LIR`
 - no public pipeline imports old top-level post-check modules
 - static dispatch exists only in checked CIR and mono MIR input pattern matching
+- every checked static-dispatch node exported to mono MIR carries a
+  `ResolvedStaticDispatch` fact with an explicit target procedure, or has already
+  been rewritten to `structural_eq`
+- mono MIR consumes checked `ResolvedStaticDispatch.target_proc` facts and never
+  recovers target identity from receiver expressions, result types, method names,
+  or environment lookup
 - mono MIR output has no dispatch nodes
 - mono MIR output uses `call_proc`, not `call_direct`, for resolved static
   dispatch
+- every static-dispatch-produced `call_proc.requested_fn_ty` is the mono-store
+  unification of the dispatch constraint function type and the instantiated
+  target procedure type
 - mono MIR `call_proc` targets only top-level mono-specialized procedures
 - mono MIR top-level `proc_value` targets are mono-specialized at the exact
   requested mono source function type
@@ -3373,11 +3631,13 @@ The cutover is complete only when all of these are true:
 - lambda-solved MIR has explicit callable/lambda-set/erasure metadata for every
   `proc_value`, `call_proc`, and `call_value` executable MIR consumes
 - lambda-solved MIR exports explicit representation edges for every `call_value`
-  callee, argument, return slot, and result
+  callee merged with the whole requested function root, every argument, return
+  slot, and result
 - lambda-solved MIR exports explicit representation edges for every `call_proc`
-  argument and instantiated target return
+  argument, instantiated target return, and whole target procedure function root
 - lambda-solved MIR exports explicit representation edges for every `proc_value`
-  result and capture argument
+  result merged with the whole `proc_value.fn_ty` function root, and every
+  capture argument
 - lambda-solved MIR uses explicit `boxed_erased_boundary` nodes preserving box
   type, payload source type, payload boundary type, direction, representation
   roots, and `BoxPayloadRepresentationPlan`
@@ -3397,9 +3657,18 @@ The cutover is complete only when all of these are true:
   projections, loops, and returned values
 - lambda-solved MIR represents mutable variables with explicit versions, branch
   joins, loop phis, and loop-exit joins
+- lambda-solved MIR treats mutable versions, joins, and loop phis as SSA facts,
+  not physical mutable storage cells
+- any later `set` or `set_local`-style assignment is layout-identical backend
+  storage reuse after representation solving, verified in debug
 - lambda-solved MIR solves structural representation classes with explicit merge
   rules for primitives, records, tuples, tag unions, `List(T)`, `Box(T)`,
   nominals, functions, and callable slots
+- row finalization emits explicit `RecordShapeId`, `RecordFieldId`,
+  `TagUnionShapeId`, `TagId`, and `TagPayloadId` facts before representation
+  solving
+- representation merge consumes finalized row IDs and never sorts names, scans
+  rows, or relies on physical layout order to compute logical indexes
 - tag construction representation edges use the full checked tag-union type,
   never a singleton constructor type reconstructed from syntax
 - lambda-solved MIR computes boxed payload representation plans and
@@ -3441,6 +3710,9 @@ The cutover is complete only when all of these are true:
 - executable MIR consumes erased-call ownership contracts from `ErasedFnSigKey`
   through explicit `ErasedCallAbiPolicyKey` values instead of recovering
   ownership from runtime function pointers or capture layouts
+- erased callable merge requires exact `ErasedFnSigKey` equality, including
+  `ErasedCallAbiPolicyKey`; policy mismatches require explicit adapters or
+  bridges
 - executable ownership solving produces `ProcOwnershipContract` values before
   IR lowering
 - executable ownership solving is one SCC fixed point over procedure,
@@ -3459,7 +3731,8 @@ The cutover is complete only when all of these are true:
 - no source/executable fact side tables remain
 - no expression-based method owner resolver remains
 - no syntax-derived source type reconstruction remains
-- method registry is consumed only by mono MIR construction
+- method registry is consumed only while producing checked
+  `ResolvedStaticDispatch` facts; mono MIR consumes those facts, not the registry
 - IR lowering consumes executable MIR only
 - IR lowering preserves executable ownership facts for LIR
 - LIR ownership code verifies or translates ownership facts but does not infer
