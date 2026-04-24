@@ -7264,6 +7264,282 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return disc_reg;
         }
 
+
+        /// After the outer tag discriminant has matched, emit discriminant checks for any
+        /// nested .tag arg patterns. For example, for the branch `Err(Exit(code))`, after
+        /// confirming the outer discriminant is Err, this function checks that the payload's
+        /// discriminant is also Exit. If any inner check fails, a conditional jump is emitted
+        /// and its patch location is appended to `fail_patches` so the caller can direct all
+        /// failures to the same "start of next branch" target.
+        ///
+        /// Handles both the single-arg case (payload is itself a tag_union) and the multi-arg
+        /// case (payload is a struct whose fields may be tag unions). Recurses for deeper nesting.
+        fn emitInnerTagArgDiscriminantChecks(
+            self: *Self,
+            tag_pattern: anytype,
+            value_loc: ValueLocation,
+            value_layout_idx: layout.Idx,
+            value_layout_val: anytype,
+            fail_patches: *std.ArrayList(usize),
+        ) Allocator.Error!void {
+            const ls = self.layout_store;
+            const args = self.store.getPatternSpan(tag_pattern.args);
+            if (args.len == 0) return;
+
+            if (value_layout_val.tag != .tag_union) return;
+
+            const tu_data = ls.getTagUnionData(value_layout_val.getTagUnion().idx);
+            const variants = ls.getTagUnionVariants(tu_data);
+            if (tag_pattern.discriminant >= variants.len) return;
+
+            const payload_layout_idx = variants.get(tag_pattern.discriminant).payload_layout;
+            const payload_layout_val = ls.getLayout(payload_layout_idx);
+
+            // Materialize the outer value to the stack so we can address the payload.
+            const stable_value_loc = try self.materializeValueToStackForLayout(value_loc, value_layout_idx);
+            const base_offset: i32 = switch (stable_value_loc) {
+                .stack => |s| s.offset,
+                .stack_i128 => |off| off,
+                .stack_str => |off| off,
+                .list_stack => |ls_info| ls_info.struct_offset,
+                else => return,
+            };
+            const payload_loc = self.stackLocationForLayout(payload_layout_idx, base_offset);
+
+            if (payload_layout_val.tag == .tag_union) {
+                // Single-arg payload that is itself a tag union — check its discriminant.
+                if (args.len >= 1) {
+                    // Unwrap as_pattern wrappers (e.g., Err(e as Exit(code))).
+                    var effective_pat = self.store.getPattern(args[0]);
+                    while (effective_pat == .as_pattern) {
+                        effective_pat = self.store.getPattern(effective_pat.as_pattern.inner);
+                    }
+                    if (effective_pat == .tag) {
+                        const inner_tag_pat = effective_pat.tag;
+                        const inner_tu = ls.getTagUnionData(payload_layout_val.getTagUnion().idx);
+                        const inner_disc_offset: i32 = @intCast(inner_tu.discriminant_offset);
+                        const inner_disc_size: u8 = inner_tu.discriminant_size;
+                        const inner_total_size: u32 = inner_tu.size;
+                        const inner_disc_use_w32 = (inner_disc_offset + 8 > @as(i32, @intCast(inner_total_size)));
+
+                        const inner_disc_reg = try self.loadAndMaskDiscriminant(
+                            payload_loc,
+                            inner_disc_use_w32,
+                            inner_disc_offset,
+                            inner_disc_size,
+                        );
+                        try self.emitCmpImm(inner_disc_reg, @intCast(inner_tag_pat.discriminant));
+                        self.codegen.freeGeneral(inner_disc_reg);
+                        const fail_patch = try self.emitJumpIfNotEqual();
+                        try fail_patches.append(self.allocator, fail_patch);
+
+                        // Recurse for deeper nesting (e.g., A(B(C(x)))).
+                        try self.emitInnerTagArgDiscriminantChecks(
+                            inner_tag_pat,
+                            payload_loc,
+                            payload_layout_idx,
+                            payload_layout_val,
+                            fail_patches,
+                        );
+                    }
+                }
+            } else if (payload_layout_val.tag == .struct_) {
+                // Multi-arg tag payload stored as a struct; check any fields that are .tag patterns.
+                for (args, 0..) |arg_pattern_id, arg_idx| {
+                    // Unwrap as_pattern wrappers (e.g., Foo(x, e as Bar(y))).
+                    var effective_pat = self.store.getPattern(arg_pattern_id);
+                    while (effective_pat == .as_pattern) {
+                        effective_pat = self.store.getPattern(effective_pat.as_pattern.inner);
+                    }
+                    if (effective_pat != .tag) continue;
+
+                    const inner_tag_pat = effective_pat.tag;
+                    const field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(
+                        payload_layout_val.getStruct().idx,
+                        @intCast(arg_idx),
+                    );
+                    const field_layout_val = ls.getLayout(field_layout_idx);
+                    if (field_layout_val.tag != .tag_union) continue;
+
+                    const field_offset = ls.getStructFieldOffsetByOriginalIndex(
+                        payload_layout_val.getStruct().idx,
+                        @intCast(arg_idx),
+                    );
+                    const field_loc = self.stackLocationForLayout(
+                        field_layout_idx,
+                        base_offset + @as(i32, @intCast(field_offset)),
+                    );
+
+                    const inner_tu = ls.getTagUnionData(field_layout_val.getTagUnion().idx);
+                    const inner_disc_offset: i32 = @intCast(inner_tu.discriminant_offset);
+                    const inner_disc_size: u8 = inner_tu.discriminant_size;
+                    const inner_total_size: u32 = inner_tu.size;
+                    const inner_disc_use_w32 = (inner_disc_offset + 8 > @as(i32, @intCast(inner_total_size)));
+
+                    const inner_disc_reg = try self.loadAndMaskDiscriminant(
+                        field_loc,
+                        inner_disc_use_w32,
+                        inner_disc_offset,
+                        inner_disc_size,
+                    );
+                    try self.emitCmpImm(inner_disc_reg, @intCast(inner_tag_pat.discriminant));
+                    self.codegen.freeGeneral(inner_disc_reg);
+                    const fail_patch = try self.emitJumpIfNotEqual();
+                    try fail_patches.append(self.allocator, fail_patch);
+
+                    // Recurse for deeper nesting.
+                    try self.emitInnerTagArgDiscriminantChecks(
+                        inner_tag_pat,
+                        field_loc,
+                        field_layout_idx,
+                        field_layout_val,
+                        fail_patches,
+                    );
+                }
+            }
+        }
+
+        /// Emit runtime checks for a pattern used in a match arm. Literal patterns
+        /// (int/str) produce compare-and-jump sequences whose fail-jump patch location
+        /// is appended to `fail_patches`. Struct and as-patterns recurse into their
+        /// contents. Bind and wildcard patterns emit nothing because they always match.
+        ///
+        /// The top-level match switch in generateMatch / generateMatchStmt handles
+        /// literal / tag / list / wildcard / bind patterns directly at the scrutinee
+        /// root. This helper is used when a pattern is nested inside a struct_ (e.g.,
+        /// a tuple pattern like `(1, 2)` whose fields are int_literal patterns) and
+        /// the scrutinee value must be compared field-by-field. Callers must pass a
+        /// `value_loc` that is stable across the emitted comparisons (for example,
+        /// a stack-backed location obtained via `ensureOnStack`).
+        fn emitPatternChecks(
+            self: *Self,
+            pattern_id: LirPatternId,
+            value_loc: ValueLocation,
+            value_layout_idx: layout.Idx,
+            fail_patches: *std.ArrayList(usize),
+        ) Allocator.Error!void {
+            const ls = self.layout_store;
+            const pattern = self.store.getPattern(pattern_id);
+
+            switch (pattern) {
+                .bind, .wildcard => {},
+
+                .int_literal => |int_lit| {
+                    try self.emitIntPatternCheck(int_lit.value, value_loc);
+                    const patch = try self.emitJumpIfNotEqual();
+                    try fail_patches.append(self.allocator, patch);
+                },
+
+                .str_literal => |str_lit_idx| {
+                    try self.emitStringPatternCheck(str_lit_idx, value_loc);
+                    const patch = try self.emitJumpIfEqual();
+                    try fail_patches.append(self.allocator, patch);
+                },
+
+                .struct_ => |struct_pat| {
+                    const struct_layout_val = ls.getLayout(struct_pat.struct_layout);
+                    if (struct_layout_val.tag != .struct_) return;
+
+                    const field_patterns = self.store.getPatternSpan(struct_pat.fields);
+                    if (field_patterns.len == 0) return;
+
+                    const base_offset: i32 = switch (value_loc) {
+                        .stack => |s| s.offset,
+                        .stack_i128, .stack_str => |off| off,
+                        .list_stack => |info| info.struct_offset,
+                        else => {
+                            if (builtin.mode == .Debug) {
+                                std.debug.panic(
+                                    "LIR/codegen invariant violated: emitPatternChecks struct expected stack value location, got {s}",
+                                    .{@tagName(value_loc)},
+                                );
+                            }
+                            unreachable;
+                        },
+                    };
+
+                    for (field_patterns, 0..) |field_pattern_id, field_idx| {
+                        const field_offset = ls.getStructFieldOffset(
+                            struct_layout_val.getStruct().idx,
+                            @intCast(field_idx),
+                        );
+                        const field_layout_idx = ls.getStructFieldLayout(
+                            struct_layout_val.getStruct().idx,
+                            @intCast(field_idx),
+                        );
+                        const field_loc = self.stackLocationForLayout(
+                            field_layout_idx,
+                            base_offset + @as(i32, @intCast(field_offset)),
+                        );
+
+                        try self.emitPatternChecks(
+                            field_pattern_id,
+                            field_loc,
+                            field_layout_idx,
+                            fail_patches,
+                        );
+                    }
+                },
+
+                .tag => |tag_pat| {
+                    const value_layout_val = ls.getLayout(value_layout_idx);
+                    if (value_layout_val.tag != .tag_union) return;
+
+                    const tu_data = ls.getTagUnionData(value_layout_val.getTagUnion().idx);
+                    const tu_disc_offset: i32 = @intCast(tu_data.discriminant_offset);
+                    const tu_disc_size: u8 = tu_data.discriminant_size;
+                    const tu_total_size: u32 = tu_data.size;
+                    const disc_use_w32 = (tu_disc_offset + 8 > @as(i32, @intCast(tu_total_size)));
+
+                    const disc_reg = try self.loadAndMaskDiscriminant(
+                        value_loc,
+                        disc_use_w32,
+                        tu_disc_offset,
+                        tu_disc_size,
+                    );
+                    try self.emitCmpImm(disc_reg, @intCast(tag_pat.discriminant));
+                    self.codegen.freeGeneral(disc_reg);
+                    const patch = try self.emitJumpIfNotEqual();
+                    try fail_patches.append(self.allocator, patch);
+
+                    try self.emitInnerTagArgDiscriminantChecks(
+                        tag_pat,
+                        value_loc,
+                        value_layout_idx,
+                        value_layout_val,
+                        fail_patches,
+                    );
+                },
+
+                .list => |list_pat| {
+                    try self.emitListLengthCheck(list_pat, value_loc);
+                    const is_exact_match = list_pat.rest.isNone();
+                    const patch = if (is_exact_match)
+                        try self.emitJumpIfNotEqual()
+                    else
+                        try self.emitJumpIfLessThan();
+                    try fail_patches.append(self.allocator, patch);
+
+                    try self.emitListLiteralChecks(list_pat, value_loc, fail_patches);
+                },
+
+                .as_pattern => |as_pat| {
+                    try self.emitPatternChecks(
+                        as_pat.inner,
+                        value_loc,
+                        value_layout_idx,
+                        fail_patches,
+                    );
+                },
+
+                .float_literal => {
+                    // Float literal comparisons inside struct fields are not yet
+                    // emitted by the dev backend. Leave as always-match to preserve
+                    // existing behaviour until a float compare helper exists.
+                },
+            }
+        }
+
         /// Bind tag payload fields to symbols after a tag pattern match.
         /// Computes the payload location for each arg and delegates to bindPattern,
         /// which handles all pattern types (bind, wildcard, tag, struct, list, as_pattern, etc.).
