@@ -1082,10 +1082,20 @@ fn parseMarkdownLink(text: []const u8, start: usize) ?MarkdownLink {
     if (j >= text.len) return null;
     const label_end = j;
     if (label_end + 1 >= text.len or text[label_end + 1] != '(') return null;
+    // Allow balanced parentheses inside the URL (e.g. a trailing ')' in a
+    // Wikipedia link like `Union_(set_theory)`): only a `)` at depth 0
+    // terminates the destination.
     var k = label_end + 2;
-    while (k < text.len and text[k] != ')') {
-        if (text[k] == '\n') return null;
-        k += 1;
+    var depth: usize = 0;
+    while (k < text.len) : (k += 1) {
+        const c = text[k];
+        if (c == '\n') return null;
+        if (c == '(') {
+            depth += 1;
+        } else if (c == ')') {
+            if (depth == 0) break;
+            depth -= 1;
+        }
     }
     if (k >= text.len) return null;
     return .{
