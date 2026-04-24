@@ -2,7 +2,7 @@
 
 ## Objective
 
-Replace the old competing-facts architecture with a MIR-family lowering
+Replace the old competing-source architecture with a MIR-family lowering
 pipeline.
 
 The final pipeline is:
@@ -42,7 +42,7 @@ src/mir/executable
 ```
 
 The important final-state rule is not the directory name. The important rule is
-that the old source/executable fact architecture is gone, and each MIR-family
+that the old source/executable side-channel architecture is gone, and each MIR-family
 stage has a precise, enforceable contract.
 
 ## Non-Negotiable Rules
@@ -50,7 +50,7 @@ stage has a precise, enforceable contract.
 No compiler stage after checking may recover, guess, reconstruct, approximate,
 or best-effort semantic information.
 
-Every post-check stage must consume explicit facts from the previous stage.
+Every post-check stage must consume explicit stage outputs from the previous stage.
 
 Backends must not think about reference counting. They lower explicit LIR
 `incref` and `decref` statements only.
@@ -110,9 +110,10 @@ id(foo(1, 2))
 Do not use Haskell-style run declarations, backslash-arrow lambdas, or
 whitespace function application in Roc examples.
 
-The executable MIR stage replaces the current `lambdamono` fact planner. It must
-not preserve `ValueFact`, `CallableFact`, expression fact maps, local constructor
-facts, or source/executable duplicate truth.
+The executable MIR stage replaces the current `lambdamono` side-table planner. It
+must not preserve legacy value side-table records, legacy callable side-table
+records, expression side tables, local constructor records, or
+source/executable duplicate truth.
 
 ## Hard Command Rule
 
@@ -172,7 +173,8 @@ Current `lambdamono`:
 
 - correctly owns executable representation work
 - incorrectly performs late static dispatch resolution
-- carries `ValueFact`, `CallableFact`, `FactId`, and `expr_facts`
+- carries legacy value/callable side-table records, semantic side-table ids, and
+  expression-indexed side-table maps
 - reconstructs or refines source types from expression syntax
 - resolves method owners from expressions instead of monomorphic types
 
@@ -187,18 +189,18 @@ It cannot happen before mono MIR because checked CIR can still contain generic
 dispatch sites whose target depends on the concrete specialization.
 
 It must not happen after mono MIR because mono MIR already has the required
-facts:
+stage inputs:
 
 - the checked dispatch operation
-- the checked dispatch constraint function type
-- the monomorphic receiver or type-dispatcher type
+- the checked dispatch callable function type
+- the checked dispatcher type variable selected for this dispatch site
 - the checked method registry
 - the specialization table
 
-Lambda lifting does not change the nominal owner of a receiver type.
+Lambda lifting does not change the semantic method owner of a dispatcher type.
 
-Lambda-set solving does not change which attached method a monomorphic receiver
-type names.
+Lambda-set solving does not change which method a monomorphic dispatcher type
+names.
 
 Executable representation lowering does not own source method semantics.
 
@@ -283,6 +285,7 @@ Mono MIR must not contain:
 - source-type refinement helpers
 - syntax-derived singleton tag-union types
 - method lookup tables for later stages
+- checked `StaticDispatchCallPlan` values
 - executable direct calls
 - executable call signatures
 - captured procedure values
@@ -349,7 +352,7 @@ Lifted MIR must not:
 - carry method registries
 - carry attached method indexes
 - reintroduce dispatch nodes
-- infer semantic type facts from expression syntax
+- infer semantic type records from expression syntax
 - represent a procedure value as a bare `var_` expression
 
 If lift changes procedure identities, it must rewrite `call_proc` and
@@ -440,7 +443,7 @@ It must not:
 - preserve method names as unresolved executable operations
 - reconstruct callable targets from source function types
 - carry method registries or attached method indexes
-- emit source/executable duplicate facts
+- emit source/executable duplicate records
 - decide static dispatch targets
 - decide executable direct-call signatures
 
@@ -634,8 +637,8 @@ verification must prove the target and value layouts are exactly identical befor
 lowering continues. A stage after representation solving must not use assignment
 to force two incompatible representations into the same storage slot.
 
-A representation variable may reference a zonked logical `TypeId` as a checked
-type fact, but that `TypeId` is not the representation variable's identity. Two
+A representation variable may reference a zonked logical `TypeId` as checked
+type metadata, but that `TypeId` is not the representation variable's identity. Two
 different roots with equal logical types remain different representation
 variables until an explicit value-flow edge unifies them. This is required so
 two unrelated values with the same type do not accidentally share erased
@@ -721,7 +724,7 @@ This rule is absolute. A non-boxed value must not acquire erased callable
 representation merely because it is a function, record, tuple, tag union,
 nominal, or `List(T)`. A non-boxed container is never an erased boundary.
 
-Lambda-solved MIR must preserve explicit boxed-boundary facts for every erased
+Lambda-solved MIR must preserve explicit boxed-boundary records for every erased
 `Box(T)` boundary. Erasure is not a callable-only operation, but it is a
 `Box(T)`-only operation.
 
@@ -749,10 +752,10 @@ of an explicit `Box(T)`. Those types are not themselves erasure boundaries.
 Non-callable data is preserved structurally.
 
 Nominal recursion is allowed only when lambda-solved MIR has an explicit
-representation fact for the nominal backing.
+representation record for the nominal backing.
 
 Inside the module that defines a transparent nominal, the defining module's
-checked type facts provide that representation fact. Outside the defining
+checked type records provide that representation record. Outside the defining
 module, nominal traversal is controlled by module-interface capability
 templates:
 
@@ -827,15 +830,15 @@ reuse a proof for `Opaque(I64)` when compiling `Opaque({ f : I64 -> I64 })`, and
 it must not treat a proof for the generic nominal definition as a proof for all
 instantiations unless the backing is closed over its type parameters.
 
-The defining module produces these proofs from its checked backing facts and
-exports them as compiler-private interface facts. Importing modules consume only
+The defining module produces these proofs from its checked backing records and
+exports them as compiler-private interface records. Importing modules consume only
 the proof and capability data. They must not inspect copied opaque backing
 syntax, display names, or layout shapes to recreate the proof.
 
 The compiler must not use copied opaque backing details, source syntax, display
 names, or layout inspection as a substitute for the interface capability. If a
 boxed erased boundary would require traversing an imported, opaque, hosted, or
-platform-owned value without an explicit representation fact, compilation must
+platform-owned value without an explicit representation record, compilation must
 fail before executable MIR. It must not emit a runtime conversion, generic
 opaque coercion, fallback erased wrapper, or best-effort indirect call.
 
@@ -927,13 +930,13 @@ can move, bind, project, join, or return a boxed payload value:
   join versions. A loop with no `break` still has exit join versions for
   variables assigned in the body.
 
-These mutable-version, join, and loop-phi roots are SSA facts. They are not
+These mutable-version, join, and loop-phi roots are SSA records. They are not
 physical stack slots. Representation solving must finish before any later stage
 chooses whether two SSA values can reuse storage. Storage reuse is allowed only
 when it preserves the already-solved executable layout; it must not feed back
 into representation solving.
 
-These edges are lambda-solved facts. Executable MIR may verify them in debug
+These edges are lambda-solved records. Executable MIR may verify them in debug
 builds, but it must not add missing edges, rebuild containers, or reinterpret a
 branch/pattern result to satisfy a boxed payload requirement.
 
@@ -1069,7 +1072,7 @@ const CallableBoxPlan = union(enum) {
 ```
 
 The exact Zig shape may differ, but the semantics must not. Structural nodes in
-`BoxPayloadRepresentationPlan` are expected-representation propagation facts.
+`BoxPayloadRepresentationPlan` are expected-representation propagation plans.
 They are not executable runtime conversions. Only a `callable_leaf` may cause
 executable MIR to pack a callable or synthesize an erased adapter, and only while
 lowering a value occurrence whose enclosing root is an explicit `Box(T)`
@@ -1120,7 +1123,7 @@ member specialization using the same erased-boundary requested function type.
 The erased adapter procedure will later receive a `CallableCallOwnershipKey`
 from executable ownership solving for its body-level `callable_match`.
 `ErasedAdapterKey` itself is reserved before executable ownership solving and
-must not contain that later key. It must not contain expression ids, fact ids,
+must not contain that later key. It must not contain expression ids, side-table ids,
 raw type ids, symbol freshening suffixes, or allocation-order-dependent data.
 
 `ErasedFnSigKey` must include the canonical erased argument types, canonical
@@ -1165,7 +1168,7 @@ This split is mandatory because `ErasedAdapterKey` and boxed payload plans are
 reserved before executable ownership solving, while `CallableCallOwnershipKey`
 is produced by executable ownership solving. `ErasedFnSigKey` must not contain a
 future `CallableCallOwnershipKey`, procedure body ownership result, expression
-id, fact id, or runtime function pointer. A later LIR or backend stage must not
+id, side-table id, or runtime function pointer. A later LIR or backend stage must not
 recover erased-call ownership from the adapter body, capture layout, host symbol,
 or runtime function pointer.
 
@@ -1193,7 +1196,7 @@ these contracts from branch bodies.
 
 ### Executable MIR
 
-Executable MIR replaces the current `lambdamono` fact planner.
+Executable MIR replaces the current `lambdamono` side-table planner.
 
 It consumes lambda-solved MIR.
 
@@ -1217,7 +1220,7 @@ It must not own:
 - method lookup
 - expression-based owner resolution
 - source type reconstruction
-- source/executable fact side tables
+- source/executable side tables
 - fallback executable signatures
 - erasure decision
 - erased callable shape compatibility decisions
@@ -1246,7 +1249,7 @@ Capture presence alone must never cause erased packing.
 
 This conversion must use only lambda-solved MIR metadata and executable MIR's own
 specialization queue. It must not inspect checked CIR, method registries, source
-syntax, or expression-derived facts.
+syntax, or expression-derived records.
 
 If executable MIR needs to cross a boxed erased boundary, it consumes the
 lambda-solved `boxed_erased_boundary` node and its
@@ -1384,10 +1387,10 @@ It must not contain:
 dispatch_call
 type_dispatch_call
 method_eq
-ValueFact
-CallableFact
-FactId
-expr_facts
+legacy value side-table records
+legacy callable side-table records
+semantic side-table ids
+expression-indexed side-table maps
 ```
 
 ### IR
@@ -1509,9 +1512,9 @@ explicit inputs to the fixed point; they are not inferred from names, layout
 shapes, runtime function pointers, or backend behavior.
 
 Executable ownership solving is the only stage that may discover semantic
-procedure ownership. IR lowering and LIR lowering preserve these facts. In the
+procedure ownership. IR lowering and LIR lowering preserve these records. In the
 final architecture, any LIR ownership pass may only verify, normalize storage,
-or translate already-produced ownership facts for `RcInsert`; it must not infer
+or translate already-produced ownership records for `RcInsert`; it must not infer
 whether a user procedure owns a parameter or whether a call result borrows,
 aliases, or owns data.
 
@@ -1524,12 +1527,12 @@ Reference counting is inserted before backends, as explicit LIR statements.
 Backends consume LIR only. They must not import MIR, IR builder internals,
 checked CIR, method registries, or reference-counting analysis.
 
-LIR ownership is a fact pipeline, not a backend behavior.
+LIR ownership is a record pipeline, not a backend behavior.
 
 Executable ownership solving and IR lowering must preserve enough ownership
 information for `RcInsert` to emit explicit `incref`, `decref`, and `free`
 statements. `RcInsert` is the only non-builtin stage that may turn those
-ownership facts into concrete reference-counting statements. Backends and the
+ownership records into concrete reference-counting statements. Backends and the
 ordinary interpreter path must execute those explicit LIR statements
 mechanically.
 
@@ -1684,7 +1687,7 @@ const SyntheticOrigin = union(enum) {
 ```
 
 No synthetic procedure identity may be keyed only by display name, generated
-symbol, expression id, fact id, or a payload-free origin kind.
+symbol, expression id, side-table id, or a payload-free origin kind.
 
 All key-like fields above are canonical keys, not handles into mutable stores.
 `CanonicalCallableSetKey` is the canonical ordered finite member map plus capture
@@ -1699,7 +1702,7 @@ or source identities, never generated symbol text.
 `ExecutableSpecializationKey` is the semantic key for executable specialization
 deduplication. It contains `ProcBaseKey` and canonical zonked structural type
 keys. It must not contain `ProcOrderKey`, raw type-store ids, expression ids,
-fact ids, or allocation-order-dependent data.
+side-table ids, or allocation-order-dependent data.
 
 `ProcOrderKey` is for deterministic ordering and reproducibility only. A
 base-only `ProcOrderKey` may exist before executable specialization so lifted
@@ -2075,24 +2078,34 @@ The registry is an input to mono MIR only.
 
 It is not part of lifted MIR, lambda-solved MIR, executable MIR, IR, or LIR.
 
-The registry must be built from checked declaration facts. It must not rely on
+The registry must be built from checked declaration outputs. It must not rely on
 late text lookup or module-name scanning during MIR lowering.
 
 Checker validation and mono MIR lowering must agree through this registry.
 
 The checker may keep `StaticDispatchConstraint` as the legality mechanism, but
-the method definition identity used for validation must be the same explicit
-definition identity mono MIR later consumes. There must not be one checker
-lookup path and a second mono MIR lookup path that can disagree.
+checked CIR must export a normalized `StaticDispatchCallPlan` for every
+expression classified as static dispatch. The plan stores the dispatcher type
+variable, callable type variable, method identifier, ordered value arguments, and
+equality behavior. It does not store a final target procedure.
 
-If ordinary method calls and type-var alias method calls need different origin
-metadata, add that explicit origin to the checked constraint. Do not infer the
-origin later from expression shape.
+Mono MIR resolves every static dispatch target from:
+
+```text
+the checked method registry
++ the plan's dispatcher type variable after mono instantiation and zonking
++ the plan's method identifier
+```
+
+That is the only target-selection path. There must not be one checker lookup
+path and a second mono MIR lookup path that can disagree, and there must not be
+separate post-check paths for ordinary method syntax, type-variable qualified
+syntax, or equality syntax.
 
 The registry returns checked method target identity and ABI metadata needed to
 create a `ProcTarget`, not a final executable procedure.
 
-Mono MIR lowering must pass that checked method target and the exact requested
+Mono MIR lowering must pass the selected method target and the exact requested
 mono source function type through the mono specialization queue or wrapper
 synthesis path. The queue returns the mono-specialized source/MIR procedure
 symbol stored in `call_proc`.
@@ -2105,7 +2118,7 @@ normalized to a procedure symbol with `ProcTarget` metadata:
 - first-class intrinsic method references synthesize a wrapper procedure and
   become `ProcTarget.intrinsic_wrapper`
 
-The `ProcTarget` metadata must include representation ABI facts and ownership
+The `ProcTarget` metadata must include representation ABI records and ownership
 contract templates for hosted, platform, and intrinsic-wrapper procedures before
 mono MIR is exported. Static dispatch lowering must not leave behind a method
 name or owner key for later ABI discovery.
@@ -2122,12 +2135,17 @@ intrinsics, and later stages must not infer hosted behavior from names.
 Executable MIR later creates executable specializations from lambda-solved MIR.
 It must not reuse raw method registry symbols as executable direct-call targets.
 
-### Owner Resolution
+### Dispatch Type Resolution
 
-Owner resolution takes a monomorphic type, never an expression:
+The method owner is the semantic type identity used as the first component of a
+method registry key. It is not runtime ownership, reference-count ownership, or
+value ownership.
+
+Dispatch type resolution takes a monomorphic type from `StaticDispatchCallPlan`,
+never an expression:
 
 ```zig
-fn ownerForDispatchType(types: *const MonoTypeStore, ty: MonoTypeId) MethodOwner
+fn methodOwnerForDispatcherType(types: *const MonoTypeStore, ty: MonoTypeId) MethodOwner
 ```
 
 Allowed owner cases:
@@ -2164,12 +2182,13 @@ resolveTargetFromExpr
 ```
 
 Chained dispatch works by lowering the receiver expression first and using the
-receiver expression's MIR type.
+`StaticDispatchCallPlan.callable_var` result type for the already-lowered call.
 
-The receiver expression's MIR type must be the result of the resolved callee's
-requested mono function type, after the dispatch constraint has been unified with
-the lowered argument types. A later dispatch in a chain must never re-infer the
-receiver owner from source expression shape.
+The next dispatch in a chain has its own `StaticDispatchCallPlan`. That plan's
+`dispatcher_var` must be the checked type variable selected by the checker for
+that dispatch site. If that variable is the result of an earlier call, mono MIR
+gets the value by instantiating the plan's type variable in the current mono
+specialization, not by inspecting the earlier expression's syntax.
 
 ### Mono Type Store
 
@@ -2249,7 +2268,7 @@ source type variables
 unresolved links
 placeholder
 unbd
-fact handles
+side-table handles
 curried-call markers
 partial-application markers
 ```
@@ -2296,18 +2315,24 @@ No compiler stage may recover a capture field, record field, or tag payload
 position by sorting names, scanning bodies, or relying on physical layout order.
 
 If a source-level family has a canonical order, that order must be stored as an
-explicit checked or MIR fact before layout lowering consumes it. A later stage
-may use source/display names only to look up that explicit index in the owning
-type metadata. It must not sort names to create a new order.
+explicit checked or MIR row record before layout lowering consumes it. A later
+stage may use source/display names only to look up that explicit index in the
+owning type metadata. It must not sort names to create a new order.
 
-### Row Finalization Facts
+### Row Finalization Records
 
 Open record and tag-union rows must be finalized before representation solving.
-This finalization is a checked/mono MIR responsibility. Later stages must consume
-the finalization facts; they must not flatten rows, sort names, or reconstruct
-logical indexes from source syntax.
+This finalization is a mono MIR responsibility for each mono specialization.
+Later stages must consume the finalization records; they must not flatten rows,
+sort names, or reconstruct logical indexes from source syntax.
 
-Row finalization consumes the solved checked type store and emits stable IDs:
+Row finalization consumes the fully clone-instantiated and zonked mono type
+store for one mono specialization. Checked types may provide declaration
+metadata and canonical source-ordering rules, but checked types are not enough
+by themselves because open rows, aliases, and specialized type variables must be
+resolved in the specialization-local mono store before representation solving.
+
+Row finalization emits stable IDs:
 
 ```zig
 RecordShapeId
@@ -2329,7 +2354,7 @@ TagPayloadId {
 }
 ```
 
-The exact Zig field names may differ, but the facts must exist. Record
+The exact Zig field names may differ, but the records must exist. Record
 construction, record access, record destructuring, tag construction, tag
 patterns, and tag payload access must store these IDs or direct references to
 them. Representation merge uses `RecordFieldId`, `TagId`, and `TagPayloadId`.
@@ -2348,11 +2373,19 @@ by sorting names or scanning a row.
 
 ## Static Dispatch Lowering
 
-Static dispatch target identity is a checked fact. Mono MIR lowering must not
-recover it from a receiver expression, a result type, a method name, a module
-environment lookup, or display-name sorting.
+Surface syntax does not determine whether an expression is static dispatch.
+For example, this source form is only a qualified function call syntactically:
 
-Checked CIR may contain these source-level dispatch forms while type checking:
+```roc
+Fmt.decode_str(format, source)
+```
+
+It might refer to a module function, or it might be a static-dispatch call whose
+dispatcher type variable is constrained by the checked `where` clause. Parser
+and canonicalization must not decide that from the spelling. Name resolution and
+type checking classify it.
+
+Checked CIR may contain these source-level forms while type checking:
 
 ```text
 e_dispatch_call
@@ -2360,156 +2393,183 @@ e_type_dispatch_call
 e_method_eq
 ```
 
-By the time checked CIR is exported to mono MIR, every dispatch form must either
-be rewritten to `structural_eq` or carry a resolved static-dispatch fact:
+Before mono MIR lowering consumes checked CIR, every checked static-dispatch
+expression must export exactly one normalized plan:
 
 ```zig
-ResolvedStaticDispatch {
+StaticDispatchCallPlan {
     expr: CIR.Expr.Idx,
-    kind: enum { ordinary, type_dispatch, nominal_eq },
-    owner: MethodOwner,
-    method_ident: Ident,
-    constraint_fn_var: Var,
-    target_proc: ResolvedProcRef,
+    method_ident: Ident.Idx,
+    dispatcher_var: Var,
+    callable_var: Var,
+    args: Span(CIR.Expr.Idx),
+    result_mode: StaticDispatchResultMode,
 }
 
-ResolvedProcRef {
-    module: ModuleId,
-    def: CIR.Def.Idx,
-}
+const StaticDispatchResultMode = union(enum) {
+    value,
+    equality: EqualityDispatchMode,
+};
+
+const EqualityDispatchMode = struct {
+    negated: bool,
+    structural_allowed: bool,
+};
 ```
 
-The exact Zig field names may differ, but the fact must name the target
-procedure. `owner` and `method_ident` are audit/debug facts after checking; they
-are not permission for mono MIR to perform method lookup again. The target
-procedure identity is the semantic source of truth.
+The exact Zig field names may differ, but the semantic shape must not differ.
+There is no post-check resolved-dispatch record with a preselected target
+procedure, no separate owner-selection field, and no separate downstream
+representation for ordinary method syntax, type-variable qualified syntax, or
+equality syntax.
 
-If the checked method registry contains a hosted, platform, or intrinsic method
-entry, checking must normalize it to an explicit builtin procedure target with a
-checked callable type before exporting `ResolvedStaticDispatch`. Mono MIR still
-emits `call_proc` to a procedure symbol. It must not special-case a method name
-as an intrinsic after checked dispatch resolution.
+`dispatcher_var` is the checked type variable whose mono-zonked type determines
+method lookup. It may come from any part of the checked constraint: the first
+argument, a later argument, the return value, or a variable that appears only in
+the `where` constraint. Mono MIR must consume this explicit variable. It must
+not rediscover it from argument order, result position, receiver syntax, a
+qualified-name prefix, a method name, a module environment lookup, or
+display-name sorting.
 
-A dotted expression without arguments is checked field access. It is not an
-unresolved static method value and must not be treated as one later.
+`callable_var` is the checked fixed-arity function type for the operation. Roc
+functions have fixed arity and are not automatically curried. Therefore the
+arity of `callable_var` and the number of normalized `args` must match exactly.
 
-If a nominal or alias equality constraint is satisfied by implicit structural
-equality instead of a method definition, checked CIR must rewrite the expression
-to `structural_eq` before mono MIR lowering. It must not export a resolved
-dispatch fact with no target procedure.
-
-### Ordinary Dispatch
-
-For checked source:
+`args` are the actual value arguments in final call order:
 
 ```roc
 x.foo(a, b)
 ```
 
-mono MIR lowering does:
+normalizes to:
 
-1. Read the `ResolvedStaticDispatch` fact attached to this expression and verify
-   `kind == ordinary`.
-2. Lower `constraint_fn_var` from that fact into a mono function type in the
-   current mono type store.
-3. Instantiate `target_proc`'s checked procedure type into the same mono type
-   store.
-4. Unify the instantiated target procedure type with the mono dispatch
-   constraint type. The unified function type is the exact requested mono source
-   function type for this call.
-5. Lower `x` with expected type `requested.args[0]`.
-6. Lower `a` and `b` with expected types `requested.args[1..]`.
-7. Request or reserve the target mono specialization for `target_proc` at the
-   exact requested mono source function type.
-8. Emit `call_proc` with:
-   - `proc` equal to the mono-specialized source/MIR procedure symbol
-   - `args` equal to the lowered receiver followed by lowered explicit args
-   - `requested_fn_ty` equal to the exact requested mono source function type
-
-No later stage sees the method name as an unresolved call.
-
-No stage treats this as an executable direct call until executable MIR.
-
-The target-procedure unification must happen before the result type is used by
-any enclosing expression. For chained dispatch such as:
-
-```roc
-x.foo().bar()
+```text
+args = [x, a, b]
 ```
 
-the `bar` owner is checked and stored in its own `ResolvedStaticDispatch` fact,
-and mono MIR lowers `x.foo()` to a `call_proc` whose result type is the unified
-return slot of `foo`'s target procedure type. Mono MIR must not use the
-pre-target constraint approximation as the receiver type for the following
-dispatch.
-
-### Type Dispatch
-
-For checked source:
+If checked name resolution proves that `Fmt` is a type-variable alias rather
+than a module, then:
 
 ```roc
-Thing.default()
+Fmt.decode_str(format, source)
 ```
 
-mono MIR lowering does:
+normalizes to:
 
-1. Read the `ResolvedStaticDispatch` fact attached to this expression and verify
-   `kind == type_dispatch`.
-2. Lower `constraint_fn_var` from that fact into a mono function type in the
-   current mono type store.
-3. Instantiate `target_proc`'s checked procedure type into the same mono type
-   store.
-4. Unify the instantiated target procedure type with the mono dispatch
-   constraint type. The unified function type is the exact requested mono source
-   function type for this call.
-5. Lower explicit args with expected types from the unified requested function
-   type.
-6. Request or reserve the target mono specialization for `target_proc` at the
-   exact requested mono source function type.
-7. Emit `call_proc` with:
-   - `proc` equal to the mono-specialized source/MIR procedure symbol
-   - `args` equal to the lowered explicit args
-   - `requested_fn_ty` equal to the exact requested mono source function type
+```text
+args = [format, source]
+```
 
-There is no receiver argument for type dispatch unless the checked constraint
-itself has one.
-
-Mono MIR may preserve the lowered dispatcher type as debug metadata, but it must
-not resolve the owner from that type. Owner resolution already happened during
-checking and is recorded in `ResolvedStaticDispatch.owner`.
-
-### Nominal Equality
-
-For nominal/custom equality:
+Equality normalizes the same way:
 
 ```roc
 x == y
 x != y
 ```
 
-If checking selected a custom `is_eq` method, mono MIR lowering consumes the
-`ResolvedStaticDispatch` fact attached to the equality expression and verifies
-`kind == nominal_eq` and `method_ident == is_eq`.
+normalizes to:
 
-Mono MIR then:
+```text
+method_ident = is_eq
+args = [x, y]
+result_mode = equality { negated = false, structural_allowed = ... } // for ==
+result_mode = equality { negated = true,  structural_allowed = ... } // for !=
+```
 
-1. Lowers the equality dispatch constraint function type.
-2. Instantiates the resolved `is_eq` target procedure type into the same mono
+`result_mode.value` emits a method call. `result_mode.equality` emits a custom
+`is_eq` call when mono finds one; if mono finds no custom method and
+`structural_allowed` is true, it emits structural equality. `!=` is represented
+only by `negated = true`, and mono emits the same equality operation followed by
+`bool_not`.
+
+A concrete equality expression that checking proves is always structural may be
+rewritten directly to `structural_eq`. A generic equality expression must keep a
+`StaticDispatchCallPlan` with `result_mode.equality.structural_allowed = true`
+so mono decides per specialization after `dispatcher_var` has been instantiated
+and zonked.
+
+### Method Lookup In Mono
+
+Mono MIR lowering uses one algorithm for every `StaticDispatchCallPlan`:
+
+1. Instantiate `dispatcher_var` and `callable_var` into the same mono type store
+   with the same clone-instantiation mapping as the expression.
+2. Connect the instantiated callable return slot to this expression's
+   instantiated mono result type. This must happen before method lookup because
+   `dispatcher_var` may be selected from the return position.
+3. Lower all `args` in the normalized order, using the instantiated callable
+   argument slots as expected types.
+4. Zonk the instantiated dispatcher type.
+5. Resolve `MethodOwner` from the zonked dispatcher type.
+6. Look up `(MethodOwner, method_ident)` in the checked method registry.
+7. If a target exists, instantiate the target procedure type into the same mono
    type store.
-3. Unifies the target type with the equality dispatch constraint type.
-4. Lowers the left and right operands with the unified argument types.
-5. Reserves the target mono specialization at the exact requested mono source
+8. Unify the instantiated target procedure type with the instantiated callable
+   type. The unified function type is the exact requested mono source function
+   type for this call.
+9. Request or reserve the target mono specialization at that exact requested
    function type.
-6. Emits `call_proc` to that specialized `is_eq`.
+10. Emit `call_proc` with:
+   - `proc` equal to the mono-specialized source/MIR procedure symbol
+   - `args` equal to the lowered normalized args
+   - `requested_fn_ty` equal to the unified requested mono source function type
+11. If no target exists and `result_mode.equality.structural_allowed` is true,
+    emit `structural_eq` using the lowered normalized args and the instantiated
+    equality argument types.
+12. If `result_mode.equality.negated` is true, emit `bool_not` after the custom
+    call or structural equality operation.
 
-`!=` emits the same `call_proc` followed by `bool_not`.
+If lookup fails for `result_mode.value`, or if lookup fails for
+`result_mode.equality` while `structural_allowed` is false, that is a compiler
+invariant failure. The checker should have rejected invalid dispatch. Mono must
+panic loudly in debug verification rather than inventing a target.
 
-Anonymous structural equality remains `structural_eq` and never goes through
-method dispatch.
+If `dispatcher_var` is not zonkable to one allowed `MethodOwner` after the
+callable arguments and return slot have been connected, that is also a compiler
+invariant failure. A dispatch site whose controlling type cannot be determined
+from the checked callable type and enclosing expression type is ambiguous and
+must not be exported to mono MIR.
 
-Mono MIR must not resolve `is_eq` by looking up the operand owner. It may only
-consume the checked `ResolvedStaticDispatch.target_proc` or the already-rewritten
-`structural_eq`.
+No later stage sees the method name as an unresolved call. No stage treats this
+as an executable direct call until executable MIR.
+
+For chained dispatch:
+
+```roc
+x.foo().bar()
+```
+
+the `bar` expression has its own `StaticDispatchCallPlan`. Mono lowers
+`x.foo()` first, unifies the target procedure type with `foo`'s callable type,
+and uses that unified return slot as the receiver expression type for the
+surrounding expression. The `bar` plan still supplies its own `dispatcher_var`.
+Mono must not use the pre-target constraint approximation from `foo` as the
+dispatcher for `bar`.
+
+### Method Registry
+
+The checked method registry maps:
+
+```zig
+MethodKey {
+    owner: MethodOwner,
+    method_ident: Ident.Idx,
+}
+```
+
+to procedure targets with checked callable types.
+
+If the checked method registry contains a hosted, platform, or intrinsic method
+entry, checking must normalize it to an explicit builtin procedure target with
+a checked callable type before mono consumes the registry. Mono still emits
+`call_proc` to a procedure symbol when a target exists. It must not special-case
+a method name as an intrinsic after static-dispatch lookup.
+
+A dotted expression without arguments is checked field access. It is not an
+unresolved static method value and must not be treated as one later.
+
+The registry is only a target table. It does not choose which type controls a
+particular call. `StaticDispatchCallPlan.dispatcher_var` chooses that.
 
 ## Tags And Constructors
 
@@ -2544,7 +2604,7 @@ tag-union type. They must not be computed from a singleton type invented from
 syntax.
 
 The full mono MIR tag-union type must carry or reference finalized `TagUnionShapeId`,
-`TagId`, and `TagPayloadId` facts. Later stages may translate those logical
+`TagId`, and `TagPayloadId` records. Later stages may translate those logical
 indexes to executable layout indexes, but they must not create a new constructor
 order by sorting names or scanning expressions.
 
@@ -2631,7 +2691,7 @@ Executable MIR:
 - emits `call_direct` where executable targets are exact
 - inserts explicit bridges
 - runs executable ownership solving after all executable targets are reserved
-- preserves solved ownership facts for `call_direct`, `call_erased`,
+- preserves solved ownership records for `call_direct`, `call_erased`,
   `callable_match`, callable-set values, `packed_erased_fn`, erased adapters,
   capture records, `Box.box`, `Box.unbox`, and bridges so IR/LIR can preserve
   them for `RcInsert`
@@ -2640,7 +2700,7 @@ The following are forbidden:
 
 - callable truth in environment side fields
 - callable truth in expression side tables
-- capture truth in `FactId` arrays
+- capture truth in side-table-id arrays
 - exact callable truth in alias side tables
 - target recovery from source function types
 - capture recovery from body scanning in executable MIR
@@ -2655,13 +2715,13 @@ The following are forbidden:
 Delete these families completely:
 
 ```text
-ValueFact
-CallableFact
-FactId as semantic truth
-expr_facts
+legacy value side-table records
+legacy callable side-table records
+semantic side-table-id usage
+expression-indexed side-table maps
 exact_callable_aliases as semantic truth
-callableTargetForExprFact
-callableCapturesForExprFact
+expression-to-callable-target lookup helper
+expression-to-callable-captures lookup helper
 authoritativeCallableValue
 refinedSourceTypeForExpr
 exactTagSourceTypeForExpr
@@ -2804,37 +2864,46 @@ from the build graph in the same work sequence.
 Commit when the build graph names the MIR-family modules and no public pipeline
 imports the old top-level module names.
 
-### 2. Build Checked Method Registry
+### 2. Build Checked Method Registry And Dispatch Plans
 
 Add `src/check/static_dispatch_registry.zig`.
+Add the checked representation for `StaticDispatchCallPlan`.
 
-Build a registry from checked modules before checked dispatch facts are exported
+Build a registry from checked modules before checked dispatch plans are exported
 to mono MIR.
 
 The registry must map `MethodKey { owner: MethodOwner, method_ident }` to
-procedure targets. `MethodOwner` must be explicit semantic owner identity, not
+procedure targets. `MethodOwner` must be explicit semantic type identity, not
 expression shape and not display-name lookup. Hosted, platform, or intrinsic
 method entries must be normalized to explicit builtin procedure targets with
-checked callable types before the registry exports `ResolvedStaticDispatch`.
+checked callable types before mono consumes the registry.
 
-Use the registry only to produce and verify checked `ResolvedStaticDispatch`
-facts. Mono MIR lowering consumes those facts. It must not use the registry to
-resolve `(owner, method_ident)` again.
+Use the registry only as the target table for mono lookup. The registry must not
+choose the dispatcher type for a call. The checked dispatch plan chooses that
+with `dispatcher_var`.
 
 Each checked dispatch expression that remains after type checking must store:
 
 ```text
-ResolvedStaticDispatch.expr
-ResolvedStaticDispatch.kind
-ResolvedStaticDispatch.owner
-ResolvedStaticDispatch.method_ident
-ResolvedStaticDispatch.constraint_fn_var
-ResolvedStaticDispatch.target_proc
+StaticDispatchCallPlan.expr
+StaticDispatchCallPlan.method_ident
+StaticDispatchCallPlan.dispatcher_var
+StaticDispatchCallPlan.callable_var
+StaticDispatchCallPlan.args
+StaticDispatchCallPlan.result_mode
 ```
 
-Structural equality rewrites must happen before mono MIR. A checked equality
-expression that uses implicit structural equality must be `structural_eq`, not a
-dispatch fact with a missing target.
+`dispatcher_var` must be selected by checked name resolution and type checking
+from the operation's semantic constraint. It must not be inferred later from
+syntax. The same representation is used whether the dispatcher type appears in
+the first argument, a later argument, the return value, or only in the `where`
+constraint.
+
+A concrete equality expression that checking proves is always structural may be
+rewritten to `structural_eq`. A generic equality expression must keep
+`StaticDispatchCallPlan.result_mode.equality.structural_allowed = true` so mono
+can decide per specialization after instantiating and zonking
+`dispatcher_var`.
 
 Then remove downstream `attached_method_index` threading.
 
@@ -2867,25 +2936,41 @@ Mono MIR lowering from checked CIR must resolve:
 - type dispatch
 - nominal/custom equality
 
-to `call_proc` calls immediately by consuming checked `ResolvedStaticDispatch`
-facts. It must not resolve method owners or target procedures from expression
-shape, receiver type, result type, method name, or module environment lookup.
+to `call_proc` calls or `structural_eq` immediately by consuming checked
+`StaticDispatchCallPlan` values plus the checked method registry. It must not
+choose the dispatcher variable from expression shape, receiver position, result
+position, method name, or module environment lookup.
 
 For every static-dispatch-produced `call_proc`, mono MIR must instantiate the
-resolved target procedure type into the current mono type store, unify it with
-the dispatch constraint type, use the unified argument and return slots as the
-call's requested mono source function type, and reserve the target mono
-specialization at exactly that type before exporting mono MIR.
+plan's `dispatcher_var` and `callable_var` into the current mono type store,
+connect the callable return slot to the expression's instantiated mono result
+type, lower normalized args through the callable arg slots, zonk the dispatcher
+type, resolve `MethodOwner` from that zonked type, look up `(MethodOwner,
+method_ident)` in the checked method registry, instantiate the target procedure
+type into the current mono type store, unify it with the instantiated callable
+type, use the unified argument and return slots as the call's requested mono
+source function type, and reserve the target mono specialization at exactly that
+type before exporting mono MIR.
+
+For static-dispatch equality without a custom target, mono may emit
+`structural_eq` only when `StaticDispatchCallPlan.result_mode.equality`
+explicitly allows structural equality. `!=` must emit `bool_not` after the
+custom call or structural equality operation.
 
 Commit when mono MIR verification proves:
 
 - no exported mono MIR dispatch nodes exist
 - every source dispatch or custom equality call consumed a checked
-  `ResolvedStaticDispatch` fact or was already rewritten to `structural_eq`
-- no mono MIR code path resolves static-dispatch owner or target identity from a
-  receiver expression, result type, method name, or environment lookup
+  `StaticDispatchCallPlan` or was already rewritten to `structural_eq`
+- no mono MIR code path chooses the dispatcher variable from a receiver
+  expression, result position, method name, or environment lookup
+- no mono MIR code path has a separate ordinary-dispatch/type-dispatch/equality
+  target model after it has consumed `StaticDispatchCallPlan`
+- every dispatcher's mono type is zonked to exactly one allowed `MethodOwner`
+  after callable args and return slot have been connected
 - every static-dispatch-produced `call_proc.requested_fn_ty` is the unified
-  target-procedure type and dispatch-constraint type in the mono type store
+  target-procedure type and `StaticDispatchCallPlan.callable_var` type in the
+  mono type store
 - `call_proc` targets only top-level mono-specialized procedures
 - mono `proc_value` captures are empty
 - mono `proc_value` targets for top-level procedure values are mono-specialized
@@ -2947,13 +3032,13 @@ Preserve and clean up the real responsibilities:
 - instantiate lifted types
 - infer callable sets
 - propagate erasure
-- compute `erased_box_payload_type(T)` facts for explicit `Box(T)` boundaries
+- compute `erased_box_payload_type(T)` plans for explicit `Box(T)` boundaries
 - build the specialization-local `RepresentationStore`
 - create distinct representation roots for every expression result, binder,
   pattern binder, procedure parameter, procedure return, capture slot,
   callable requested-function occurrence, mutable variable version, and loop phi
 - consume finalized `RecordShapeId`, `RecordFieldId`, `TagUnionShapeId`, `TagId`,
-  and `TagPayloadId` facts for records, tag unions, patterns, and projections
+  and `TagPayloadId` records for records, tag unions, patterns, and projections
 - create `require_box_erased(payload_root)` seeds only from explicit `Box(T)`
   boundaries
 - create explicit representation edges that merge every `call_value` callee with
@@ -2975,7 +3060,7 @@ Preserve and clean up the real responsibilities:
   returned values
 - solve mutable variable representation through explicit versions, branch joins,
   loop phis, and loop-exit joins
-- treat those mutable versions, joins, and loop phis as SSA facts rather than
+- treat those mutable versions, joins, and loop phis as SSA records rather than
   physical mutable storage cells
 - solve structural representation classes with explicit merge rules for
   primitives, records, tuples, tag unions, `List(T)`, `Box(T)`, nominals,
@@ -2986,7 +3071,7 @@ Preserve and clean up the real responsibilities:
   templates and instantiated capabilities for imported and opaque nominal boxed
   payload traversal
 - publish and consume instantiation-sensitive `NoReachableCallableSlotsProof`
-  facts for `opaque_atomic` nominals
+  records for `opaque_atomic` nominals
 - consume hosted/platform callable representation metadata explicitly
 - order recursive SCCs
 - enforce canonical callable-set unification algebra
@@ -3025,7 +3110,7 @@ Commit when lambda-solved MIR verification proves:
 - every `reassign` creates a new mutable version root
 - every branch join and loop-carried mutable value has an explicit join or loop
   phi root
-- mutable versions, branch joins, and loop phis are SSA representation facts, not
+- mutable versions, branch joins, and loop phis are SSA representation records, not
   physical storage slots
 - every exported representation root has a solved representation class
 - every solved representation class has one structural `RepresentationShape`
@@ -3055,10 +3140,10 @@ Commit when lambda-solved MIR verification proves:
 - `call_proc` and `proc_value` participate in callable inference and SCC ordering
 - every `proc_value` capture arg unifies with its target `CaptureSlot`
 
-### 6. Replace Executable Fact Planner
+### 6. Replace Executable Side-Table Planner
 
 Rewrite executable MIR lowering so it consumes lambda-solved MIR and emits
-executable MIR without fact side tables.
+executable MIR without source-expression side tables.
 
 Executable MIR must run executable ownership solving after all executable
 specializations, erased adapters, intrinsic wrappers, bridge procedures, entry
@@ -3071,14 +3156,14 @@ and boxed-boundary ownership semantics.
 Delete:
 
 ```text
-ValueFact
-CallableFact
-expr_facts
-FactKey
-semantic FactId usage
+legacy value side-table records
+legacy callable side-table records
+expression-indexed side-table maps
+semantic side-table keys
+semantic side-table-id usage
 exact_callable_aliases
-callableTargetForExprFact
-callableCapturesForExprFact
+expression-to-callable-target lookup helper
+expression-to-callable-captures lookup helper
 authoritativeCallableValue
 executableTypesHaveErasedCallableShapeMismatch
 executableTypeHasMoreSpecificErasedCallableShape
@@ -3103,7 +3188,7 @@ ProcBaseKey
 not:
 
 ```text
-fact handles + expression ids + source/executable side channels + raw type ids
+side-table handles + expression ids + source/executable side channels + raw type ids
 ProcOrderKey
 ```
 
@@ -3199,18 +3284,18 @@ lambdasolved
 lambdamono
 ```
 
-Forbid old fact and reconstruction families everywhere outside tests that
+Forbid old side-table and reconstruction families everywhere outside tests that
 intentionally check the audit:
 
 ```text
-ValueFact
-CallableFact
-expr_facts
-FactKey
-semantic FactId usage
+legacy value side-table records
+legacy callable side-table records
+expression-indexed side-table maps
+semantic side-table keys
+semantic side-table-id usage
 exact_callable_aliases
-callableTargetForExprFact
-callableCapturesForExprFact
+expression-to-callable-target lookup helper
+expression-to-callable-captures lookup helper
 authoritativeCallableValue
 refinedSourceTypeForExpr
 exactTagSourceTypeForExpr
@@ -3225,11 +3310,11 @@ adapter emission, capture fixed-point ordering, or generated procedure emission.
 
 Forbid raw type-store ids in executable specialization keys.
 
-Forbid any erased-boundary facts whose root is not `Box(T)`.
+Forbid any erased-boundary record whose root is not `Box(T)`.
 
 Forbid executable erased-shape compatibility helpers from making semantic
 lowering decisions. Boxed erased-boundary decisions must come from lambda-solved
-`boxed_erased_boundary` facts and `BoxPayloadRepresentationPlan` values. They
+`boxed_erased_boundary` records and `BoxPayloadRepresentationPlan` values. They
 may be rechecked only by debug-only verifiers.
 
 Forbid any MIR, executable MIR, IR, or LIR operation whose semantic purpose is
@@ -3261,20 +3346,22 @@ Obsolete expectations:
 
 - dispatch survives into monotype
 - dispatch survives into lambdasolved
-- accumulator facts are visible before lambdamono
-- executable fact tables contain expected facts
+- accumulator side tables are visible before executable MIR
+- executable side tables contain old source-level expression records
 - old stage type stores contain old-stage shapes
 
 Replacement expectations:
 
-- checked CIR contains dispatch only with resolved target facts where appropriate
+- checked CIR contains dispatch only with normalized `StaticDispatchCallPlan`
+  values where appropriate
 - mono MIR contains `call_proc` and no dispatch
 - lifted MIR contains explicit `CaptureSlot`s, explicit `proc_value`
   `CaptureArg`s, and no dispatch
 - lambda-solved MIR contains explicit callable sets and no dispatch
 - executable MIR contains direct/erased calls, finite callable-set
   `callable_match`
-  lowering, packed erased functions, bridges, and no fact side tables
+  lowering, packed erased functions, bridges, and no source-expression side
+  tables
 - IR/LIR contain direct/erased calls only
 
 ## Required Structural Tests
@@ -3286,10 +3373,10 @@ Mono MIR:
 - every expression has a mono type
 - no dispatch nodes exist
 - static dispatch becomes `call_proc`
-- static dispatch consumes checked `ResolvedStaticDispatch.target_proc` facts,
-  never method lookup in mono MIR
+- static dispatch consumes checked `StaticDispatchCallPlan` values and the
+  checked method registry, never syntax-derived method lookup in mono MIR
 - static-dispatch `call_proc.requested_fn_ty` is the mono-store unification of
-  the dispatch constraint and target procedure type
+  `StaticDispatchCallPlan.callable_var` and the target procedure type
 - nominal/custom equality becomes `call_proc` to `is_eq`
 - structural equality remains structural
 - transparent aliases preserve nominal identity
@@ -3346,7 +3433,7 @@ Lambda-solved MIR:
 - every reassignment, branch join, loop-carried value, and loop exit has an
   explicit representation edge through a mutable version, join, or loop phi
 - mutable versions, branch joins, loop-carried values, and loop exits are SSA
-  facts, not physical mutable storage slots
+  records, not physical mutable storage slots
 - every `require_box_erased(payload_root)` seed is attached to an explicit
   `Box(T)` boundary
 - every exported representation root has a solved representation class
@@ -3433,8 +3520,8 @@ Executable MIR:
 - logical field indexes are preserved until LIR resolves physical offsets
 - bridges connect concrete executable types
 - callable lowering, erased packaging, boxed payload boundaries, and bridges
-  preserve explicit ownership facts for LIR
-- no fact side tables exist
+  preserve explicit ownership records for LIR
+- no source-expression side tables exist
 
 IR/LIR:
 
@@ -3444,7 +3531,7 @@ IR/LIR:
 - every value-producing LIR statement has sufficient ownership semantics for
   `RcInsert`
 - LIR ownership code verifies, normalizes, or translates explicit ownership
-  facts only; it does not infer procedure ownership contracts as semantic truth
+  records only; it does not infer procedure ownership contracts as semantic truth
 - `RcInsert` is the only non-builtin stage that emits explicit `incref`,
   `decref`, and `free`
 - backends execute explicit LIR RC statements and perform no ordinary RC
@@ -3456,9 +3543,11 @@ Static dispatch:
 
 - generic dispatch specializes to different nominal method targets
 - generic target methods specialize at exact monomorphic function types
-- chained dispatch resolves from the lowered receiver result type
-- chained dispatch does not call any expression-based owner resolver
-- type-var alias dispatch resolves from the specialized alias target type
+- chained dispatch uses each dispatch site's own `StaticDispatchCallPlan` and
+  the earlier call's unified return slot
+- chained dispatch does not call any expression-based method resolver
+- type-var alias dispatch resolves from the specialized dispatcher type selected
+  by `StaticDispatchCallPlan.dispatcher_var`
 - primitive methods resolve through builtin primitive owners
 - list methods resolve through the builtin `List` owner
 - box methods resolve through the builtin `Box` owner
@@ -3468,7 +3557,7 @@ Static dispatch:
   and direct executable `is_eq` plus `bool_not` after executable MIR
 - anonymous record equality remains structural equality
 - transparent tag-union aliases resolve through nominal identity
-- cross-module attached methods resolve through registry def refs
+- cross-module methods resolve through registry target refs
 - recursive and mutually recursive methods use reserved specialized proc ids
 - hosted/effect/platform methods use explicit method targets or explicit
   intrinsics
@@ -3554,7 +3643,7 @@ Callable/capture behavior:
 - `Box.unbox` borrows the box and materializes a copied payload result; no test
   may rely on move-out semantics for `Box.unbox`
 - `packed_erased_fn`, erased adapters, `callable_match`, `Box.box`,
-  `Box.unbox`, and bridges produce LIR ownership facts consumed by `RcInsert`
+  `Box.unbox`, and bridges produce LIR ownership records consumed by `RcInsert`
 
 End-to-end:
 
@@ -3571,8 +3660,9 @@ pipeline tests, not old-stage contract tests.
 
 For every failure:
 
-1. Identify which stage must have owned the missing fact.
-2. Add that fact to that stage's explicit output.
+1. Identify which stage must have owned the missing stage output.
+2. Add that record, plan, table entry, or contract to that stage's explicit
+   output.
 3. Delete any old reconstruction or side-channel path exposed by the failure.
 4. Strengthen audits if the failure reveals a family that could return.
 5. Rerun the narrowest guarded test that exercises the failure.
@@ -3582,7 +3672,7 @@ Forbidden responses:
 - restoring old module imports
 - adding compatibility shims
 - making owner resolution expression-based
-- adding expression fact side tables
+- adding expression-derived side tables
 - storing callable truth in environment entries
 - reconstructing source types from expression syntax
 - using body-derived summaries as executable truth
@@ -3598,16 +3688,18 @@ The cutover is complete only when all of these are true:
 - no public pipeline imports old top-level post-check modules
 - static dispatch exists only in checked CIR and mono MIR input pattern matching
 - every checked static-dispatch node exported to mono MIR carries a
-  `ResolvedStaticDispatch` fact with an explicit target procedure, or has already
-  been rewritten to `structural_eq`
-- mono MIR consumes checked `ResolvedStaticDispatch.target_proc` facts and never
-  recovers target identity from receiver expressions, result types, method names,
-  or environment lookup
+  `StaticDispatchCallPlan`, or has already been rewritten to `structural_eq`
+- mono MIR consumes checked `StaticDispatchCallPlan` values plus the checked
+  method registry and never chooses the dispatcher variable from receiver
+  expressions, result positions, method names, or environment lookup
+- mono MIR has one normalized static-dispatch lowering path after consuming
+  `StaticDispatchCallPlan`; it has no separate ordinary-dispatch,
+  type-dispatch, or equality target model
 - mono MIR output has no dispatch nodes
 - mono MIR output uses `call_proc`, not `call_direct`, for resolved static
   dispatch
 - every static-dispatch-produced `call_proc.requested_fn_ty` is the mono-store
-  unification of the dispatch constraint function type and the instantiated
+  unification of `StaticDispatchCallPlan.callable_var` and the instantiated
   target procedure type
 - mono MIR `call_proc` targets only top-level mono-specialized procedures
 - mono MIR top-level `proc_value` targets are mono-specialized at the exact
@@ -3657,7 +3749,7 @@ The cutover is complete only when all of these are true:
   projections, loops, and returned values
 - lambda-solved MIR represents mutable variables with explicit versions, branch
   joins, loop phis, and loop-exit joins
-- lambda-solved MIR treats mutable versions, joins, and loop phis as SSA facts,
+- lambda-solved MIR treats mutable versions, joins, and loop phis as SSA records,
   not physical mutable storage cells
 - any later `set` or `set_local`-style assignment is layout-identical backend
   storage reuse after representation solving, verified in debug
@@ -3665,7 +3757,7 @@ The cutover is complete only when all of these are true:
   rules for primitives, records, tuples, tag unions, `List(T)`, `Box(T)`,
   nominals, functions, and callable slots
 - row finalization emits explicit `RecordShapeId`, `RecordFieldId`,
-  `TagUnionShapeId`, `TagId`, and `TagPayloadId` facts before representation
+  `TagUnionShapeId`, `TagId`, and `TagPayloadId` records before representation
   solving
 - representation merge consumes finalized row IDs and never sorts names, scans
   rows, or relies on physical layout order to compute logical indexes
@@ -3704,7 +3796,7 @@ The cutover is complete only when all of these are true:
   values
 - callable-set member ordering uses `ProcOrderKey`, not `Symbol.raw()`
 - executable specialization keys use semantic base/type/representation keys,
-  not `ProcOrderKey`, raw type ids, expression ids, or fact ids
+  not `ProcOrderKey`, raw type ids, expression ids, or side-table ids
 - executable MIR consumes `BoxPayloadRepresentationPlan` instead of making
   semantic erased-shape compatibility decisions
 - executable MIR consumes erased-call ownership contracts from `ErasedFnSigKey`
@@ -3719,7 +3811,7 @@ The cutover is complete only when all of these are true:
   callable-match, erased-adapter, and bridge nodes
 - `CallableCallOwnershipKey` values are produced by that fixed point and are not
   semantic components of erased adapter keys
-- executable MIR preserves ownership facts for callable lowering, erased
+- executable MIR preserves ownership records for callable lowering, erased
   packaging, boxed payload boundaries, and bridges
 - `Box.unbox` is borrowed/copy materialization only; consuming move-out requires
   a separate explicit operation
@@ -3728,14 +3820,14 @@ The cutover is complete only when all of these are true:
 - no exact callable alias side tables remain
 - requested function type verifiers are debug-only compiler assertions and do not
   add runtime checks to user programs
-- no source/executable fact side tables remain
+- no source/executable side tables remain
 - no expression-based method owner resolver remains
 - no syntax-derived source type reconstruction remains
-- method registry is consumed only while producing checked
-  `ResolvedStaticDispatch` facts; mono MIR consumes those facts, not the registry
+- checked static dispatch exports only normalized `StaticDispatchCallPlan`
+  values; mono MIR consumes those plans and the checked method registry
 - IR lowering consumes executable MIR only
-- IR lowering preserves executable ownership facts for LIR
-- LIR ownership code verifies or translates ownership facts but does not infer
+- IR lowering preserves executable ownership records for LIR
+- LIR ownership code verifies or translates ownership records but does not infer
   procedure ownership contracts as semantic truth
 - LIR `RcInsert` is the only non-builtin stage that emits explicit `incref`,
   `decref`, and `free`
