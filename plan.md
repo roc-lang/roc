@@ -487,37 +487,49 @@ ordered by `CaptureSlot.index`.
 `ProcOrderKey` may define canonical ordering inside a specialization key, but
 it must not be a semantic component of the specialization key itself.
 
-Erasure is decided here. Lambda-solved MIR must preserve explicit structural
-boundary facts for every erased boundary. Erasure is not a callable-only
-operation.
+Erasure is decided here. Erasure is permitted only for `Box(T)`.
+
+This rule is absolute. A non-boxed value must not acquire erased callable
+representation merely because it is a function, record, tuple, tag union,
+nominal, or `List(T)`. A non-boxed container is never an erased boundary.
+
+Lambda-solved MIR must preserve explicit boxed-boundary facts for every erased
+`Box(T)` boundary. Erasure is not a callable-only operation, but it is a
+`Box(T)`-only operation.
 
 The exported lambda-solved type contract includes:
 
 ```text
-erased_boundary_type(T)
+erased_box_payload_type(T)
 ```
 
-`erased_boundary_type(T)` recursively walks `T` and rewrites every reachable
-function slot to erased callable representation. It descends through records,
-tuples, tag unions, lists, boxes, and nominal backing types. Non-callable data
-is preserved structurally.
+`erased_box_payload_type(T)` may be called only for the payload type of an
+explicit `Box(T)` boundary. It recursively walks that boxed payload type and
+rewrites every reachable function slot to erased callable representation.
 
-Every erased boundary exports:
+Any recursion through records, tuples, tag unions, `List(T)`, nested `Box(T)`,
+or nominal backing types happens only because those types are inside the payload
+of an explicit `Box(T)`. Those types are not themselves erasure boundaries.
+Non-callable data is preserved structurally.
+
+Every boxed erased boundary exports:
 
 ```zig
-erased_boundary {
+boxed_erased_boundary {
     value: ExprId,
-    source_ty: TypeId,
-    boundary_ty: TypeId,
-    direction: EraseBoundaryDirection,
+    box_ty: TypeId,
+    payload_source_ty: TypeId,
+    payload_boundary_ty: TypeId,
+    direction: BoxErasureDirection,
     plan: BoundaryCoercionPlan,
 }
 ```
 
-`source_ty` and `boundary_ty` are zonked lambda-solved types. `boundary_ty` is
-the explicit erased-boundary version of the value's type. `direction` records
-whether this boundary came from erase or unerase. `plan` is a structural
-coercion plan from `source_ty` to `boundary_ty`.
+`box_ty`, `payload_source_ty`, and `payload_boundary_ty` are zonked
+lambda-solved types. `box_ty` must be `Box(payload_boundary_ty)`.
+`payload_boundary_ty` is the explicit erased representation of the boxed
+payload. `direction` records whether this boundary boxes or unboxes. `plan`
+records how the boxed payload representation is constrained.
 
 `BoundaryCoercionPlan` is explicit data, not executable MIR reasoning:
 
@@ -535,12 +547,12 @@ const BoundaryCoercionPlan = union(enum) {
 };
 ```
 
-The exact Zig shape may differ, but the semantics must not: structural erased
-boundary coercion is produced by lambda-solved MIR and consumed by executable
-MIR. Executable MIR must not rediscover erased callable shape mismatches by
-comparing executable types.
+The exact Zig shape may differ, but the semantics must not: boxed erased-boundary
+coercion is produced by lambda-solved MIR and consumed by executable MIR.
+Executable MIR must not rediscover erased callable shape mismatches by comparing
+executable types.
 
-For erase, executable MIR consumes the boundary plan as follows:
+For boxing, executable MIR consumes the boundary plan as follows:
 
 - `proc_value -> erased` packs the explicit procedure member and explicit
   capture payloads.
@@ -549,13 +561,20 @@ For erase, executable MIR consumes the boundary plan as follows:
   `callable_match`.
 - `already-erased value -> erased` passes through after verifying the erased
   function type matches exactly.
-- structural containers recurse exactly according to `BoundaryCoercionPlan`.
+- structural payload components are already constrained by lambda-solved MIR to
+  use the boxed erased representation.
 
-For unerase, executable MIR gives the opaque erased value the explicit
-`boundary_ty` representation. Nested callable slots in that representation are
-erased callable slots. Later field access or call lowering must consume that
-erased callable representation; it must not recover the original finite
-callable-set shape.
+For unboxing, executable MIR gives the boxed payload the explicit
+`payload_boundary_ty` representation. Nested callable slots in that
+representation are erased callable slots. Later field access or call lowering
+must consume that erased callable representation; it must not recover the
+original finite callable-set shape.
+
+Executable MIR must not synthesize generic runtime traversal or conversion for
+`List(T)`, records, tuples, tag unions, nominals, or any other non-`Box(T)`
+container. If such a value contains functions inside a boxed payload, the
+required erased representation must have been propagated by lambda-solved MIR to
+the producers and uses of that boxed payload.
 
 Executable MIR must not infer erasure from usage.
 
@@ -616,11 +635,16 @@ This conversion must use only lambda-solved MIR metadata and executable MIR's ow
 specialization queue. It must not inspect checked CIR, method registries, source
 syntax, or expression-derived facts.
 
-If executable MIR needs to cross an erased boundary, it consumes the
-lambda-solved `erased_boundary` node and its `BoundaryCoercionPlan`. It must not
-compare executable source and target shapes to decide whether erasure repair,
-adapter synthesis, or pass-through is semantically required. Such comparisons
-are allowed only as debug-only verification of the explicit boundary plan.
+If executable MIR needs to cross a boxed erased boundary, it consumes the
+lambda-solved `boxed_erased_boundary` node and its `BoundaryCoercionPlan`. It
+must not compare executable source and target shapes to decide whether erasure
+repair, adapter synthesis, or pass-through is semantically required. Such
+comparisons are allowed only as debug-only verification of the explicit boundary
+plan.
+
+Executable MIR must reject any erased-boundary request whose root is not
+`Box(T)`. Non-boxed `List(T)`, records, tuples, tag unions, functions, and
+nominals are not erased-boundary roots.
 
 When executable MIR lowers `call_proc`, it must still reserve or create the
 target executable specialization from the lambda-solved procedure target and the
@@ -1257,7 +1281,7 @@ It must explicitly encode:
 - lambda/callable members
 - captures for each callable member
 - erased callable representation when required
-- erased-boundary structural type transforms for erase and unerase
+- boxed erased-boundary payload type transforms for boxing and unboxing
 
 It must not use ordinary source tag unions as a hidden carrier for unresolved
 static dispatch.
@@ -1265,13 +1289,16 @@ static dispatch.
 If physical layout later uses a tag-union-like representation for callable
 sets, that is a layout decision derived from explicit callable metadata.
 
-Lambda-solved MIR owns `erased_boundary_type(T)`.
+Lambda-solved MIR owns `erased_box_payload_type(T)`.
 
-This transform is structural. It recursively rewrites reachable function slots
-to erased callable representation inside records, tuples, tags, lists, boxes,
-and nominal backing types. It is the same contract for erase and unerase
-boundaries. Executable MIR consumes the already-computed boundary type and
-coercion plan.
+This transform is structural only inside an explicit `Box(T)` payload. It
+recursively rewrites reachable function slots to erased callable representation
+inside the boxed payload, including through nested records, tuples, tags,
+`List(T)`, nested `Box(T)`, and nominal backing types when they are part of that
+payload. It is the same contract for boxing and unboxing boundaries. Executable
+MIR consumes the already-computed boxed payload boundary type and coercion plan.
+
+Calling this transform on a non-`Box(T)` root is a compiler invariant failure.
 
 ### Executable Types
 
@@ -1502,8 +1529,8 @@ Lambda-solved MIR:
 - determines exact callable sets
 - associates capture types with callable members
 - propagates erasure requirements
-- emits explicit structural `erased_boundary` nodes with source type, boundary
-  type, direction, and `BoundaryCoercionPlan`
+- emits explicit `boxed_erased_boundary` nodes with box type, payload source
+  type, payload boundary type, direction, and `BoundaryCoercionPlan`
 - exposes zonked callable representations for `call_value.requested_fn_ty`,
   `call_proc.requested_fn_ty`, and `proc_value.fn_ty`
 - treats `call_proc` as direct procedure calls for inference and SCCs
@@ -1515,7 +1542,7 @@ Executable MIR:
 - builds capture records
 - emits callable-set values for non-erased callable values
 - synthesizes erased adapters when a finite callable-set value crosses an
-  erased boundary
+  erased `Box(T)` boundary
 - consumes `BoundaryCoercionPlan` instead of deciding erased callable shape
   compatibility from executable types
 - emits finite callable-set `callable_match` expressions for non-erased callable
@@ -1564,6 +1591,7 @@ late source type refinement helpers
 singleton tag source type construction
 method lookup data threaded beyond mono MIR
 bare procedure-symbol `var_` values after lifted MIR
+non-`Box(T)` erased boundaries
 executable erased-shape compatibility as semantic decision logic
 ```
 
@@ -1792,9 +1820,9 @@ Preserve and clean up the real responsibilities:
 - instantiate lifted types
 - infer callable sets
 - propagate erasure
-- compute structural `erased_boundary_type(T)` facts
-- preserve explicit `erased_boundary` source type, boundary type, direction, and
-  `BoundaryCoercionPlan`
+- compute `erased_box_payload_type(T)` facts for explicit `Box(T)` boundaries
+- preserve explicit `boxed_erased_boundary` box type, payload source type,
+  payload boundary type, direction, and `BoundaryCoercionPlan`
 - order recursive SCCs
 - enforce canonical callable-set unification algebra
 - export zonked callable representations for every executable specialization
@@ -1809,10 +1837,11 @@ Commit when lambda-solved MIR verification proves:
 - callable-set member order is canonical
 - each repeated callable member has exactly the same capture slots
 - erased callable requirements are explicit
-- every `erased_boundary` stores source type, boundary type, direction, and
-  structural coercion plan
-- every function slot reachable through an erased boundary is represented as
-  erased in the exported boundary type
+- every `boxed_erased_boundary` stores box type, payload source type, payload
+  boundary type, direction, and structural coercion plan
+- every function slot reachable through an explicit `Box(T)` erased boundary is
+  represented as erased in the exported boxed payload boundary type
+- no non-`Box(T)` root can introduce erased callable representation
 - no executable specialization input contains generalized or unresolved type
   variables
 - `call_proc` and `proc_value` targets remain explicit
@@ -1862,8 +1891,8 @@ Commit when executable MIR verification proves:
 - direct calls have explicit targets
 - direct call args match target signatures
 - erased calls have explicit erased function types
-- erased adapters are synthesized for finite callable-set values crossing erased
-  boundaries
+- erased adapters are synthesized for finite callable-set values crossing
+  erased `Box(T)` boundaries
 - `callable_match` evaluates its callable expression and original arguments
   exactly once before branching
 - callable-set values have explicit member capture payloads
@@ -1953,9 +1982,11 @@ adapter emission, capture fixed-point ordering, or generated procedure emission.
 
 Forbid raw type-store ids in executable specialization keys.
 
+Forbid any erased-boundary facts whose root is not `Box(T)`.
+
 Forbid executable erased-shape compatibility helpers from making semantic
-lowering decisions. Erased-boundary decisions must come from lambda-solved
-`erased_boundary` facts and may be rechecked only by debug-only verifiers.
+lowering decisions. Boxed erased-boundary decisions must come from lambda-solved
+`boxed_erased_boundary` facts and may be rechecked only by debug-only verifiers.
 
 Forbid bare procedure-symbol `var_` values outside mono MIR and lifted MIR input
 pattern matching.
@@ -2035,10 +2066,12 @@ Lambda-solved MIR:
 - repeated callable members have identical capture slots
 - mismatched capture slots panic in debug verification
 - erasure requirements are explicit
-- `erased_boundary` stores source type, boundary type, direction, and
-  `BoundaryCoercionPlan`
-- erased boundary types structurally rewrite every reachable function slot to
-  erased callable representation
+- `boxed_erased_boundary` stores box type, payload source type, payload boundary
+  type, direction, and `BoundaryCoercionPlan`
+- boxed payload boundary types structurally rewrite every reachable function
+  slot to erased callable representation
+- no erased boundary exists for non-boxed `List(T)`, records, tuples, tag unions,
+  functions, or nominals
 - finite callable-set erasure preserves source member metadata for executable
   adapter synthesis
 - generalized templates are clone-instantiated and zonked before executable
@@ -2066,10 +2099,11 @@ Executable MIR:
 - every callable-set capture payload has deterministic field ordering
 - callable-set member tag ordering uses `ProcOrderKey`, not `Symbol.raw()`
 - every packed erased function has explicit capture metadata
-- finite callable-set values crossing erased boundaries synthesize erased
-  adapters
+- finite callable-set values crossing erased `Box(T)` boundaries synthesize
+  erased adapters
 - executable MIR consumes structural boundary plans and does not make semantic
   erased-shape compatibility decisions
+- executable MIR rejects erased-boundary roots other than `Box(T)`
 - every erased capture record has deterministic field ordering
 - every erased call has an explicit erased function type
 - first-class intrinsic references use explicit wrapper procedures
@@ -2093,8 +2127,8 @@ Static dispatch:
 - chained dispatch does not call any expression-based owner resolver
 - type-var alias dispatch resolves from the specialized alias target type
 - primitive methods resolve through builtin primitive owners
-- list methods resolve through builtin List owner
-- box methods resolve through builtin Box owner
+- list methods resolve through the builtin `List` owner
+- box methods resolve through the builtin `Box` owner
 - custom equality lowers to `call_proc` `is_eq` before executable MIR and direct
   executable `is_eq` after executable MIR
 - inequality lowers to `call_proc` `is_eq` plus `bool_not` before executable MIR
@@ -2134,15 +2168,18 @@ Callable/capture behavior:
   branch dispatch
 - finite callable-set branch direct calls receive source args plus optional
   trailing capture record
-- erased boundary packaging with capture record
-- finite callable-set value crossing an erased boundary synthesizes an erased
-  adapter whose body uses `callable_match`
-- structural erased-boundary coercion through records, tuples, tags, lists,
-  boxes, and nominal backing types
-- unerase to a value containing function slots gives those slots erased callable
-  representation
-- already-erased value crossing a matching erased boundary passes through after
-  verification
+- boxed erased-boundary packaging with capture record
+- finite callable-set value crossing an erased `Box(T)` boundary synthesizes an
+  erased adapter whose body uses `callable_match`
+- structural erased-boundary coercion through records, tuples, tags, `List(T)`,
+  nested `Box(T)`, and nominal backing types only inside an explicit `Box(T)`
+  payload
+- unboxing to a payload containing function slots gives those slots erased
+  callable representation
+- non-boxed `List(T)`, records, tuples, tag unions, functions, and nominals do
+  not erase
+- already-erased value crossing a matching erased `Box(T)` boundary passes
+  through after verification
 - boxed erased-call round trip
 - non-boxed polymorphic closure does not erase
 - hosted function flowing as first-class value
@@ -2212,10 +2249,11 @@ The cutover is complete only when all of these are true:
 - lambda-solved MIR output has no dispatch nodes
 - lambda-solved MIR has explicit callable/lambda-set/erasure metadata for every
   `proc_value`, `call_proc`, and `call_value` executable MIR consumes
-- lambda-solved MIR uses explicit structural `erased_boundary` nodes preserving
-  source type, boundary type, direction, and `BoundaryCoercionPlan`
-- lambda-solved MIR structurally rewrites every reachable function slot at
-  erased boundaries
+- lambda-solved MIR uses explicit `boxed_erased_boundary` nodes preserving box
+  type, payload source type, payload boundary type, direction, and
+  `BoundaryCoercionPlan`
+- lambda-solved MIR structurally rewrites every reachable function slot inside
+  explicit `Box(T)` payload boundaries
 - lambda-solved MIR exports only zonked executable specialization inputs
 - lambda-solved MIR enforces canonical callable-set unification algebra
 - executable MIR output has no dispatch nodes
@@ -2223,7 +2261,7 @@ The cutover is complete only when all of these are true:
 - executable MIR lowers every finite non-erased callable-set call to explicit
   `callable_match`
 - executable MIR synthesizes erased adapters for finite callable-set values
-  crossing erased boundaries
+  crossing erased `Box(T)` boundaries
 - executable MIR records exact branch `direct_args`
 - executable MIR ordinary source `match` and callable-set `callable_match` are
   structurally distinguishable
@@ -2232,7 +2270,7 @@ The cutover is complete only when all of these are true:
 - callable-set member ordering uses `ProcOrderKey`, not `Symbol.raw()`
 - executable specialization keys use semantic base/type/representation keys,
   not `ProcOrderKey`, raw type ids, expression ids, or fact ids
-- executable MIR consumes erased-boundary plans instead of making semantic
+- executable MIR consumes boxed erased-boundary plans instead of making semantic
   erased-shape compatibility decisions
 - logical field indexes are resolved to physical offsets only through the layout
   store
