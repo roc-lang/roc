@@ -58,6 +58,32 @@ Backends must not think about reference counting. They lower explicit LIR
 Static dispatch is eliminated in `mono MIR`, the first monomorphic stage. It
 must not survive into lifted MIR, lambda-solved MIR, executable MIR, IR, or LIR.
 
+Roc functions have fixed arity. Roc functions are not automatically curried.
+
+This is a hard semantic rule for every stage in this plan.
+
+In Roc type syntax:
+
+```roc
+Str, Str -> Str
+```
+
+means one function that takes exactly two arguments. It does not mean:
+
+```roc
+Str -> (Str -> Str)
+```
+
+That is a different type: one argument, returning a function value.
+
+A call to a fixed-arity function must provide exactly that function's full
+argument count. The compiler must not synthesize partial-application closures,
+curried call chains, or missing-argument wrappers unless Roc source syntax
+explicitly constructs a function value that returns another function.
+
+The cor prototype uses curried unary functions. This plan borrows cor's
+lambda-set architecture, not cor's function arity model.
+
 The executable MIR stage replaces the current `lambdamono` fact planner. It must
 not preserve `ValueFact`, `CallableFact`, expression fact maps, local constructor
 facts, or source/executable duplicate truth.
@@ -220,6 +246,7 @@ Mono MIR may still contain:
 - `proc_value` values for top-level procedure values with empty captures
 - structural equality
 - source tag names and full monomorphic tag-union types
+- fixed-arity function types and calls
 
 Mono MIR must not contain:
 
@@ -233,8 +260,14 @@ Mono MIR must not contain:
 - executable direct calls
 - executable call signatures
 - captured procedure values
+- automatically curried calls
+- compiler-synthesized partial application
 
 Every expression in mono MIR has a mandatory `MonoTypeId`.
+
+Every mono MIR function type stores an explicit ordered parameter list and an
+explicit result type. A function's arity is the length of that parameter list.
+Function arity is not recovered from nested unary function types.
 
 The mono MIR store API must require the type at construction:
 
@@ -416,6 +449,7 @@ For every `call_proc`, lambda-solved MIR must:
 - add an SCC dependency edge to the procedure target
 - instantiate the procedure target's callable type
 - unify the procedure target type with the requested callable type
+- verify the call supplies exactly the requested fixed-arity parameter list
 - preserve the procedure target identity for executable MIR
 
 For every `call_proc`, lambda-solved MIR must also unify the call arguments and
@@ -458,6 +492,9 @@ that executable MIR consumes.
 
 For every `call_value`, lambda-solved MIR must export a complete zonked callable
 representation through `call_value.requested_fn_ty`.
+
+For every `call_value`, lambda-solved MIR must verify that the call supplies
+exactly the fixed-arity parameter list of `call_value.requested_fn_ty`.
 
 If that representation is a finite non-erased callable set, executable MIR must
 treat every member as an executable specialization dependency of that call. If
@@ -698,7 +735,7 @@ the executable specialization queue, not by name lookup.
 The executable calling convention for a callable-set member is:
 
 ```text
-source call arguments in source order
+all fixed-arity source call arguments in source order
 + optional trailing capture-record argument when the member has captures
 ```
 
@@ -707,6 +744,10 @@ It must be the original argument temporaries, followed by the destructured
 capture payload temporary when `capture_payload` is present. Branch `body` may
 wrap that direct call in bridges, but it must not add, remove, duplicate, or
 reorder direct-call arguments.
+
+`callable_match` is not a curried-call loop. It dispatches one fixed-arity Roc
+call. Every branch must call a member specialization whose source-argument arity
+matches the original `call_value.requested_fn_ty`.
 
 No branch may emit a `call_direct` to a procedure that has not been reserved or
 created by executable MIR. By the end of executable MIR, every `direct_proc`
@@ -938,8 +979,12 @@ function-value calls.
 `call_proc` and `proc_value` are MIR contract terms, not `cor` AST concepts.
 
 In the `cor` prototype, the equivalent of `proc_value` is just a `Var(proc)`
-whose symbol has already been specialized. The equivalent of `call_proc` is an
-ordinary `Call(Var(proc), arg)`.
+whose symbol has already been specialized. Cor's AST uses unary
+`Call(Var(proc), arg)` because cor's prototype language is curried.
+
+Roc does not use that call model. The Roc MIR equivalent of a direct source/MIR
+procedure call is one fixed-arity `call_proc` node with all source arguments in
+`args: Span(ExprId)`.
 
 That cor call remains ordinary until lambda-set solving and executable lowering.
 
@@ -1027,6 +1072,12 @@ captureless local functions.
 type used for this call. It is mandatory even though the call expression itself
 also has a result type.
 
+`call_proc.args.len` and `call_value.args.len` must exactly equal the arity of
+their `requested_fn_ty`. A missing argument is a compile-time source error before
+MIR export, not a request to synthesize a partial application. Extra arguments
+are likewise invalid unless the source explicitly calls the result of a function
+that returns another function.
+
 When mono MIR enters lambda-solved MIR, every mono `requested_fn_ty` is
 transformed into the lambda-solved callable type shape by inserting the
 lambda-set slot owned by lambda-solved MIR.
@@ -1034,6 +1085,7 @@ lambda-set slot owned by lambda-solved MIR.
 Debug verifiers must assert, as early as possible, that:
 
 - the call expression type is the requested function return type
+- each `call_proc` and `call_value` has exactly the requested function arity
 - each call argument expression type is the corresponding requested function
   argument type
 - `call_value.func` has a callable type that unifies with `requested_fn_ty`
@@ -1276,7 +1328,7 @@ Lambda-solved MIR may use a richer callable type representation than mono MIR.
 
 It must explicitly encode:
 
-- function argument types
+- fixed-arity function parameter lists
 - return type
 - lambda/callable members
 - captures for each callable member
@@ -1326,6 +1378,8 @@ unresolved links
 placeholder
 unbd
 fact handles
+curried-call markers
+partial-application markers
 ```
 
 Executable type lowering consumes lambda-solved MIR types and metadata. It does
@@ -1502,10 +1556,14 @@ Mono MIR:
 
 - preserves function values and procedure-symbol calls distinctly
 - assigns monomorphic function types to expressions
+- preserves Roc fixed arity on every function type and call
 - stores the exact requested mono source function type on every `call_proc` and
   `call_value`
+- requires `call_proc.args.len` and `call_value.args.len` to match the requested
+  function arity exactly
 - represents top-level procedure values as `proc_value` with empty captures
 - does not package erased callables
+- does not synthesize curried or partial-application functions
 
 Lifted MIR:
 
@@ -1550,6 +1608,7 @@ Executable MIR:
 - reserves executable specializations before emitting `call_direct` branches
 - supplies `callable_match` branch `direct_args` as source args plus optional
   trailing capture record
+- preserves fixed arity in every direct, erased, and callable-set call
 - emits `packed_erased_fn` only for explicitly erased callable values
 - emits `call_erased`
 - emits `call_direct` where executable targets are exact
@@ -1566,6 +1625,8 @@ The following are forbidden:
 - callable-set member ordering through `Symbol.raw()`
 - body-derived summaries as executable truth
 - bare procedure-symbol `var_` values after lifted MIR
+- automatic currying
+- compiler-synthesized partial application
 
 ## Deletions
 
@@ -1768,6 +1829,9 @@ Commit when mono MIR verification proves:
 - no exported mono MIR dispatch nodes exist
 - `call_proc` targets only top-level mono-specialized procedures
 - mono `proc_value` captures are empty
+- every `call_proc` and `call_value` has exactly the arity of its
+  `requested_fn_ty`
+- no mono MIR node represents automatic currying or partial application
 
 ### 4. Harden Lifted MIR
 
@@ -1890,6 +1954,7 @@ Commit when executable MIR verification proves:
 
 - direct calls have explicit targets
 - direct call args match target signatures
+- direct, erased, and callable-set calls preserve fixed Roc arity
 - erased calls have explicit erased function types
 - erased adapters are synthesized for finite callable-set values crossing
   erased `Box(T)` boundaries
@@ -1903,6 +1968,7 @@ Commit when executable MIR verification proves:
 - every `callable_match` branch records exact `direct_args`
 - every callable member direct-call signature is source args plus optional
   trailing capture record
+- no executable MIR node represents automatic currying or partial application
 - no ordinary source `match` satisfies callable-set lowering verification
 - packed erased functions have explicit captures
 - bridge nodes connect concrete executable MIR types
@@ -1988,6 +2054,9 @@ Forbid executable erased-shape compatibility helpers from making semantic
 lowering decisions. Boxed erased-boundary decisions must come from lambda-solved
 `boxed_erased_boundary` facts and may be rechecked only by debug-only verifiers.
 
+Forbid any MIR, executable MIR, IR, or LIR operation whose semantic purpose is
+automatic currying or compiler-synthesized partial application.
+
 Forbid bare procedure-symbol `var_` values outside mono MIR and lifted MIR input
 pattern matching.
 
@@ -2040,6 +2109,8 @@ Mono MIR:
 - `proc_value` is distinct from `call_proc`
 - mono `proc_value` captures are empty
 - `call_proc` carries exact requested mono source function types
+- every `call_proc` and `call_value` carries all fixed-arity source arguments
+- no call node encodes automatic currying or partial application
 - `call_proc` is not an executable direct call
 - `call_proc` does not target local functions or closures
 
@@ -2086,12 +2157,15 @@ Executable MIR:
 
 - every direct call target exists
 - direct call arg/result types match signatures
+- direct, erased, and callable-set calls preserve fixed Roc arity
 - every finite callable-set call lowers to an explicit `callable_match`
 - every `callable_match` binds the callable expression and original call
   arguments once, before member branching
 - every `callable_match` branch corresponds to exactly one callable-set member
 - every `callable_match` branch has a reserved executable specialization
 - every `callable_match` branch stores exact `direct_args`
+- every `callable_match` branch passes all fixed-arity source arguments exactly
+  once, plus only the optional trailing capture record
 - ordinary source `match` does not satisfy callable-set lowering verification
 - singleton finite callable-set calls still lower to `callable_match`
 - every callable-set value has explicit member capture payload metadata
@@ -2152,6 +2226,12 @@ Static dispatch:
 Callable/capture behavior:
 
 - direct top-level function call
+- fixed-arity multi-argument function call, for example a function with type
+  `I64, I64 -> I64`
+- missing-argument calls to fixed-arity functions are rejected before MIR export;
+  they do not synthesize partial-application closures
+- extra-argument calls to fixed-arity functions are rejected unless the source
+  explicitly calls a returned function value
 - generic top-level function specialization
 - local closure with no captures
 - local closure with captures
@@ -2236,6 +2316,10 @@ The cutover is complete only when all of these are true:
 - mono MIR output uses `call_proc`, not `call_direct`, for resolved static
   dispatch
 - mono MIR `call_proc` targets only top-level mono-specialized procedures
+- mono MIR has no automatic currying or compiler-synthesized partial
+  application
+- every mono MIR call arity exactly matches its requested fixed-arity function
+  type
 - lifted MIR output has no dispatch nodes
 - lifted MIR has explicit `CaptureSlot` metadata for every lifted procedure
 - lifted MIR uses `capture_ref` for every captured value reference
@@ -2263,6 +2347,7 @@ The cutover is complete only when all of these are true:
 - executable MIR synthesizes erased adapters for finite callable-set values
   crossing erased `Box(T)` boundaries
 - executable MIR records exact branch `direct_args`
+- executable MIR direct, erased, and callable-set calls preserve fixed Roc arity
 - executable MIR ordinary source `match` and callable-set `callable_match` are
   structurally distinguishable
 - executable MIR keeps callable-set values distinct from packed erased function
