@@ -1107,7 +1107,9 @@ test "check type - value restriction - out of order 2" {
 }
 
 test "check type - value restriction - curried 1" {
-    // Currently errors out in czer
+    // Each inline `process(1.U8)` call creates a fresh instantiation, so the
+    // two inner applications with differently-typed ignored arguments are
+    // independent and both type-check successfully (mirrors curried 2).
 
     const source =
         \\main! = |_| {}
@@ -1123,10 +1125,12 @@ test "check type - value restriction - curried 1" {
         \\
         \\x = 10
     ;
-    try checkTypesModule(
+    try checkTypesModuleDefs(
         source,
-        .fail,
-        "TYPE MISMATCH",
+        &.{
+            .{ .def = "x", .expected = "U8" },
+            .{ .def = "process", .expected = "U8 -> (_arg -> List(U8))" },
+        },
     );
 }
 test "check type - value restriction - curried 2" {
