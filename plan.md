@@ -544,6 +544,50 @@ checker variables.
 
 Representation solving is also specialization-local.
 
+Lambda-solved MIR must not use `TypeId` as representation identity.
+
+Lambda-solved MIR owns an explicit `RepresentationStore`:
+
+```zig
+const RepRootId = union(enum) {
+    expr: ExprId,
+    binder: BinderId,
+    pattern_binder: PatternBinderId,
+    proc_param: struct { proc: Symbol, index: u32 },
+    proc_return: Symbol,
+    capture_slot: struct { proc: Symbol, slot: CaptureSlot.Index },
+};
+
+const RepVarId = enum(u32) { _ };
+const RepEdgeId = enum(u32) { _ };
+const RepClassId = enum(u32) { _ };
+
+const RepresentationStore = struct {
+    roots: Map(RepRootId, RepVarId),
+    vars: Store(RepresentationVar),
+    edges: Store(RepresentationEdge),
+    classes: Store(SolvedRepresentationClass),
+};
+```
+
+The exact Zig field names may differ, but the identity model must not.
+
+Every expression result, binder, pattern binder, procedure parameter,
+procedure return, and capture slot gets its own representation root before
+representation requirements are solved. Structural children are also explicit
+representation variables: record fields, tuple elements, tag payloads,
+`List(T)` elements, `Box(T)` payloads, nominal backing slots, function
+arguments, function returns, and callable-representation slots.
+
+A representation variable may reference a zonked logical `TypeId` as a checked
+type fact, but that `TypeId` is not the representation variable's identity. Two
+different roots with equal logical types remain different representation
+variables until an explicit value-flow edge unifies them. This is required so
+two unrelated values with the same type do not accidentally share erased
+representation. A shared value does share representation because `let`, use,
+parameter, return, capture, and projection edges explicitly connect the same
+value flow.
+
 `BoxPayloadRepresentationPlan`, callable representation, capture shape keys,
 erased function signature keys, erased adapter keys, and executable callable
 member keys must be produced only from the specialization-local lambda-solved
@@ -592,11 +636,13 @@ recursing, and fill those placeholders after children have been transformed.
 Transform modes include at least natural representation, boxed-erased-payload
 representation, and executable representation.
 
-Canonical key serialization for recursive types must emit stable recursion
-binders and backrefs derived from first encounter order in the explicit type
-graph. It must not serialize raw `TypeId`, pointer identity, allocation order, or
-hash-map iteration order. Debug verifiers must reject any exported key that
-contains a transient type-store id or can recurse forever.
+Canonical key serialization for recursive types and solved representation
+classes must emit stable recursion
+binders and backrefs derived from first encounter order in the explicit
+type/representation graph being serialized. It must not serialize raw `TypeId`,
+pointer identity, allocation order, or hash-map iteration order. Debug
+verifiers must reject any exported key that contains a transient type-store id
+or can recurse forever.
 
 The same rule applies to recursive callable and capture graphs.
 `CanonicalCallableSetKey`, `CaptureShapeKey`, `ErasedAdapterKey`, and any key
@@ -628,11 +674,19 @@ The exported lambda-solved type contract includes:
 
 ```text
 erased_box_payload_type(T)
+require_box_erased(payload_root: RepRootId)
 ```
 
 `erased_box_payload_type(T)` may be called only for the payload type of an
 explicit `Box(T)` boundary. It recursively walks that boxed payload type and
 rewrites every reachable function slot to erased callable representation.
+
+`require_box_erased(payload_root)` may be created only for the payload root of
+an explicit `Box(T)` boundary. It is a constraint seed in the
+`RepresentationStore`, not an executable conversion. Solving that seed walks
+the payload root's representation graph and marks every reachable function
+representation slot as erased. The walk follows only explicit representation
+edges already present in the store.
 
 Any recursion through records, tuples, tag unions, `List(T)`, nested `Box(T)`,
 or nominal backing types happens only because those types are inside the payload
@@ -644,11 +698,48 @@ representation fact for the nominal backing.
 
 Inside the module that defines a transparent nominal, the defining module's
 checked type facts provide that representation fact. Outside the defining
-module, an imported nominal backing may be traversed only if the imported module
-interface exports the required boxed-payload representation capability for that
-nominal and the requested specialization. Opaque nominals are atomic outside
-their defining module unless the interface explicitly exports a boxed-payload
-representation capability for the exact boundary being compiled.
+module, nominal traversal is controlled by module-interface capability
+templates:
+
+```zig
+BoxPayloadCapabilityTemplate {
+    nominal: NominalKey,
+    params: Span(TypeParam),
+    backing: NominalBackingRepresentationTemplate,
+}
+
+const NominalPayloadRepresentation = union(enum) {
+    transparent_backing: struct {
+        nominal: NominalKey,
+        backing_plan: *BoxPayloadRepresentationPlan,
+    },
+    imported_capability: struct {
+        capability_key: BoxPayloadCapabilityKey,
+        instantiated_args: Span(CanonicalTypeKey),
+        backing_plan: *BoxPayloadRepresentationPlan,
+    },
+    opaque_atomic: struct {
+        nominal: NominalKey,
+        proof: NoReachableCallableSlotsProof,
+    },
+    hosted_abi: HostedRepresentationCapabilityKey,
+    recursive_ref: RepresentationRecursionBinder,
+};
+```
+
+The defining module owns `BoxPayloadCapabilityTemplate` values for exported
+nominals. An importing module may instantiate a capability template only with
+the exact specialization-local zonked type arguments and boxed-payload
+representation mode being compiled. The instantiated capability becomes an
+ordinary `NominalPayloadRepresentation.imported_capability` node inside the
+importer's specialization-local `BoxPayloadRepresentationPlan`.
+
+Opaque nominals are atomic outside their defining module only when the interface
+exports an explicit `opaque_atomic` capability with a compiler-produced
+`NoReachableCallableSlotsProof`. Otherwise an opaque nominal that appears inside
+a boxed erased payload must be traversed through an imported capability. If no
+capability exists for that exact boundary, compilation must fail before
+executable MIR.
 
 The compiler must not use copied opaque backing details, source syntax, display
 names, or layout inspection as a substitute for the interface capability. If a
@@ -676,8 +767,8 @@ occurrences. The boxed erased payload type is not merely assigned to the final
 `Box.box(...)` call result; it must be propagated to the payload producer and all
 uses that share that value.
 
-The representation constraint graph must contain explicit edges for all
-constructs that can move, bind, project, join, or return a boxed payload value:
+The `RepresentationStore` must contain explicit edges for all constructs that
+can move, bind, project, join, or return a boxed payload value:
 
 - `let` and `var` binders connect the bound expression representation to every
   use of the binder.
@@ -714,6 +805,14 @@ These edges are lambda-solved facts. Executable MIR may verify them in debug
 builds, but it must not add missing edges, rebuild containers, or reinterpret a
 branch/pattern result to satisfy a boxed payload requirement.
 
+`Box.box(payload)` creates a `boxed_erased_boundary` and a
+`require_box_erased(payload_root)` seed. The produced box root's payload child
+is linked to the solved boxed payload representation class. `Box.unbox(boxed)`
+creates a `boxed_erased_boundary` whose box root is the boxed input and whose
+payload root is the unboxed expression result. It links the unboxed payload root
+to the explicit boxed payload representation. It does not recover or request
+the original finite callable-set shape.
+
 The required representation algebra is:
 
 ```text
@@ -735,6 +834,8 @@ Every boxed erased boundary exports:
 boxed_erased_boundary {
     direction: BoxErasureDirection,
     input: ExprId,
+    box_root: RepRootId,
+    payload_root: RepRootId,
     box_ty: TypeId,
     payload_source_ty: TypeId,
     payload_boundary_ty: TypeId,
@@ -743,12 +844,14 @@ boxed_erased_boundary {
 ```
 
 For boxing, `input` is the payload expression. For unboxing, `input` is the boxed
-expression. `box_ty`, `payload_source_ty`, and `payload_boundary_ty` are zonked
-lambda-solved types. `box_ty` must be exactly `Box(payload_boundary_ty)`.
-`payload_boundary_ty` is the explicit erased representation of the boxed
-payload. `direction` records whether this boundary boxes or unboxes.
-`payload_plan` records the compile-time representation requirement for the boxed
-payload.
+expression. `box_root` is the representation root of the produced or consumed
+box. `payload_root` is the representation root of the payload expression being
+boxed or the unboxed expression result. `box_ty`, `payload_source_ty`, and
+`payload_boundary_ty` are zonked lambda-solved types. `box_ty` must be exactly
+`Box(payload_boundary_ty)`. `payload_boundary_ty` is the explicit erased
+representation of the boxed payload. `direction` records whether this boundary
+boxes or unboxes. `payload_plan` records the compile-time representation
+requirement for the boxed payload.
 
 `BoxPayloadRepresentationPlan` is explicit lambda-solved data:
 
@@ -820,8 +923,11 @@ the boxed payload boundary. It captures exactly the finite callable-set value, o
 an explicit capture record containing that value. Its body receives the erased
 boundary arguments, dispatches with `callable_match`, and calls each finite
 member specialization using the same erased-boundary requested function type.
-The adapter key must not contain expression ids, fact ids, raw type ids, symbol
-freshening suffixes, or allocation-order-dependent data.
+The erased adapter procedure will later receive a `CallableCallOwnershipKey`
+from executable ownership solving for its body-level `callable_match`.
+`ErasedAdapterKey` itself is reserved before executable ownership solving and
+must not contain that later key. It must not contain expression ids, fact ids,
+raw type ids, symbol freshening suffixes, or allocation-order-dependent data.
 
 `ErasedFnSigKey` must include the canonical erased argument types, canonical
 erased return type, fixed Roc arity, and erased-call ownership contract. The
@@ -829,6 +935,28 @@ ownership contract states which erased-call arguments are borrowed, consumed, or
 retained by the result, and how the erased result is materialized. A later LIR or
 backend stage must not recover erased-call ownership from the adapter body,
 capture layout, host symbol, or runtime function pointer.
+
+Finite callable-set calls also have a single explicit call ownership key:
+
+```zig
+CallableCallOwnershipKey {
+    callable_set_key: CanonicalCallableSetKey,
+    requested_fn_key: CanonicalTypeKey,
+    arg_modes: Span(ArgOwnershipMode),
+    result_contract: ProcResultContract,
+}
+```
+
+This key is produced by executable ownership solving, not by branch-local
+lowering. A `callable_match` has exactly one `CallableCallOwnershipKey`.
+Every member specialization and erased adapter branch in that `callable_match`
+must expose the same argument modes and result contract at the branch boundary.
+If one member consumes an argument, the whole callable call consumes that
+argument. Members that only borrow it receive an explicit branch-local bridge
+from the normalized ownership state. A result may preserve an alias or borrow
+relation only when every branch returns the same compatible relation; otherwise
+the branch boundary must materialize a fresh result. Later stages must not infer
+these contracts from branch bodies.
 
 ### Executable MIR
 
@@ -1066,6 +1194,44 @@ flow.
 It must not lower to a call-like fallback operation, erased-call fallback,
 indirect-call fallback, source dispatch operation, or method operation.
 
+### Executable Ownership Solve
+
+Executable ownership solving runs after executable MIR has reserved every user
+procedure specialization, lifted-local specialization, erased adapter, intrinsic
+wrapper, bridge procedure, entry wrapper, and hosted procedure target, and
+before executable MIR lowers to IR.
+
+This stage consumes:
+
+- executable MIR
+- explicit hosted/platform/intrinsic ABI metadata
+- explicit low-level ownership metadata
+- callable-set member metadata
+- erased function signature keys
+- bridge plans
+
+It produces:
+
+- `ProcOwnershipContract` for every executable procedure
+- `CallableCallOwnershipKey` for every `callable_match`
+- node-local ownership semantics for every value-producing executable MIR node
+- bridge ownership semantics
+- boxed-boundary ownership semantics
+
+`ProcOwnershipContract` contains the owned/borrowed/consumed mode for every
+parameter, the result contract, and any retained-borrow relation needed by
+`RcInsert`. Recursive procedure groups are solved by fixed point over the
+executable procedure dependency graph. Hosted, platform, intrinsic wrapper, and
+low-level contracts are explicit inputs to the fixed point; they are not inferred
+from names, layout shapes, runtime function pointers, or backend behavior.
+
+Executable ownership solving is the only stage that may discover semantic
+procedure ownership. IR lowering and LIR lowering preserve these facts. In the
+final architecture, any LIR ownership pass may only verify, normalize storage,
+or translate already-produced ownership facts for `RcInsert`; it must not infer
+whether a user procedure owns a parameter or whether a call result borrows,
+aliases, or owns data.
+
 ### LIR And Backends
 
 LIR consumes IR.
@@ -1077,9 +1243,9 @@ checked CIR, method registries, or reference-counting analysis.
 
 LIR ownership is a fact pipeline, not a backend behavior.
 
-Executable MIR and IR lowering must preserve enough ownership information for
-LIR ownership planning and `RcInsert` to emit explicit `incref`, `decref`, and
-`free` statements. `RcInsert` is the only non-builtin stage that may turn those
+Executable ownership solving and IR lowering must preserve enough ownership
+information for `RcInsert` to emit explicit `incref`, `decref`, and `free`
+statements. `RcInsert` is the only non-builtin stage that may turn those
 ownership facts into concrete reference-counting statements. Backends and the
 ordinary interpreter path must execute those explicit LIR statements
 mechanically.
@@ -1109,9 +1275,10 @@ ownership contract before LIR:
 - `Box.box` must state how the payload is materialized into the boxed storage.
   If the payload is copied from a borrowed source, LIR ownership must retain the
   produced boxed payload explicitly.
-- `Box.unbox` must state whether the result is copied from a borrowed box
-  payload or moved out of a consumed box. The chosen contract must be explicit;
-  later stages must not infer it from layout shape.
+- `Box.unbox` always borrows the box and materializes the payload as a copied
+  result from borrowed boxed storage. It is not a consuming move-out operation.
+  A consuming unbox would require a separate explicit builtin, low-level op, and
+  ownership contract.
 - bridge nodes must state whether they are direct aliases, copied values,
   freshly materialized aggregates, or consuming transformations.
 
@@ -1281,17 +1448,39 @@ incidental traversal order
 Procedure definitions also carry an explicit implementation target:
 
 ```zig
-ProcTarget {
-    user_proc,
-    hosted_proc,
-    intrinsic_wrapper,
-}
+const ProcTarget = union(enum) {
+    user_proc: UserProcTarget,
+    hosted_proc: HostedProcTarget,
+    intrinsic_wrapper: IntrinsicWrapperTarget,
+};
+
+const UserProcTarget = struct {
+    body_symbol: Symbol,
+};
+
+const HostedProcTarget = struct {
+    host_symbol: Ident.Idx,
+    dispatch_index: u32,
+    representation_abi: ProcRepresentationAbi,
+    ownership_contract_template: ProcOwnershipContractTemplate,
+};
+
+const IntrinsicWrapperTarget = struct {
+    intrinsic_id: IntrinsicId,
+    representation_abi: ProcRepresentationAbi,
+    ownership_contract_template: ProcOwnershipContractTemplate,
+};
 ```
 
 `ProcTarget` is procedure metadata. `call_proc`, `proc_value`, and `call_direct`
 still refer to the procedure's `Symbol`. Later stages read the target metadata
 from the procedure definition; they must not rediscover whether a procedure is
 user code, hosted code, or an intrinsic wrapper from names or source syntax.
+Hosted and intrinsic targets must carry their representation ABI and ownership
+contract templates here before mono MIR output is exported. Lambda-solved MIR,
+executable MIR, IR, LIR, and backends must consume this metadata; they must not
+recover it from method names, host symbol names, layout shapes, runtime function
+pointers, or surrounding user code.
 
 ### Proc Calls, Direct Calls, And Value Calls
 
@@ -1569,8 +1758,17 @@ const MethodDefRef = struct {
     def_idx: CIR.Def.Idx,
 };
 
+const HostedProcRef = struct {
+    module_idx: u32,
+    host_symbol: Ident.Idx,
+    dispatch_index: u32,
+    representation_abi: ProcRepresentationAbi,
+    ownership_contract_template: ProcOwnershipContractTemplate,
+};
+
 const MethodTarget = union(enum) {
-    proc: MethodDefRef,
+    user_proc: MethodDefRef,
+    hosted_proc: HostedProcRef,
     intrinsic: IntrinsicMethod,
 };
 ```
@@ -1608,12 +1806,13 @@ If ordinary method calls and type-var alias method calls need different origin
 metadata, add that explicit origin to the checked constraint. Do not infer the
 origin later from expression shape.
 
-The registry returns source method definition identity, not a final executable
-procedure.
+The registry returns checked method target identity and ABI metadata needed to
+create a `ProcTarget`, not a final executable procedure.
 
-Mono MIR lowering must pass that source method definition and the exact requested
-mono source function type through the mono specialization queue. The queue
-returns the mono-specialized source/MIR procedure symbol stored in `call_proc`.
+Mono MIR lowering must pass that checked method target and the exact requested
+mono source function type through the mono specialization queue or wrapper
+synthesis path. The queue returns the mono-specialized source/MIR procedure
+symbol stored in `call_proc`.
 
 Before mono MIR output is exported, every callable method target must be
 normalized to a procedure symbol with `ProcTarget` metadata:
@@ -1622,6 +1821,11 @@ normalized to a procedure symbol with `ProcTarget` metadata:
 - hosted/platform methods become `ProcTarget.hosted_proc`
 - first-class intrinsic method references synthesize a wrapper procedure and
   become `ProcTarget.intrinsic_wrapper`
+
+The `ProcTarget` metadata must include representation ABI facts and ownership
+contract templates for hosted, platform, and intrinsic-wrapper procedures before
+mono MIR is exported. Static dispatch lowering must not leave behind a method
+name or owner key for later ABI discovery.
 
 An intrinsic may lower directly to executable `low_level` only when it is
 strictly call-only and never appears as a first-class value. If an intrinsic can
@@ -1985,8 +2189,8 @@ Lambda-solved MIR:
   returned values
 - solves boxed payload representation only in the specialization-local
   lambda-solved type store after clone-instantiation and zonking
-- emits module-interface representation capabilities for boxed payload traversal
-  through imported or opaque nominals
+- emits module-interface representation capability templates and instantiated
+  capabilities for boxed payload traversal through imported or opaque nominals
 - consumes hosted/platform callable representation metadata instead of inferring
   it from hosted symbol names or layouts
 - exposes zonked callable representations for `call_value.requested_fn_ty`,
@@ -2015,9 +2219,11 @@ Executable MIR:
 - emits `call_erased`
 - emits `call_direct` where executable targets are exact
 - inserts explicit bridges
-- preserves ownership facts for `call_direct`, `call_erased`, `callable_match`,
-  callable-set values, `packed_erased_fn`, erased adapters, capture records,
-  `Box.box`, `Box.unbox`, and bridges so LIR can emit explicit RC statements
+- runs executable ownership solving after all executable targets are reserved
+- preserves solved ownership facts for `call_direct`, `call_erased`,
+  `callable_match`, callable-set values, `packed_erased_fn`, erased adapters,
+  capture records, `Box.box`, `Box.unbox`, and bridges so IR/LIR can preserve
+  them for `RcInsert`
 
 The following are forbidden:
 
@@ -2059,6 +2265,8 @@ method lookup data threaded beyond mono MIR
 bare procedure-symbol `var_` values after lifted MIR
 non-`Box(T)` erased boundaries
 executable erased-shape compatibility as semantic decision logic
+LIR procedure ownership inference as semantic truth
+backend or interpreter ownership inference
 ```
 
 Delete exported dispatch variants after checked CIR:
@@ -2110,11 +2318,13 @@ src/mir/lifted/lower.zig
 src/mir/lifted/verify.zig
 src/mir/lambda_solved/ast.zig
 src/mir/lambda_solved/type.zig
+src/mir/lambda_solved/representation.zig
 src/mir/lambda_solved/lower.zig
 src/mir/lambda_solved/verify.zig
 src/mir/executable/ast.zig
 src/mir/executable/type.zig
 src/mir/executable/lower.zig
+src/mir/executable/ownership.zig
 src/mir/executable/layouts.zig
 src/mir/executable/verify.zig
 ```
@@ -2294,8 +2504,14 @@ Preserve and clean up the real responsibilities:
 - infer callable sets
 - propagate erasure
 - compute `erased_box_payload_type(T)` facts for explicit `Box(T)` boundaries
+- build the specialization-local `RepresentationStore`
+- create distinct representation roots for every expression result, binder,
+  pattern binder, procedure parameter, procedure return, and capture slot
+- create `require_box_erased(payload_root)` seeds only from explicit `Box(T)`
+  boundaries
 - preserve explicit `boxed_erased_boundary` box type, payload source type,
-  payload boundary type, direction, and `BoxPayloadRepresentationPlan`
+  payload boundary type, direction, representation roots, and payload
+  `BoxPayloadRepresentationPlan`
 - solve boxed payload representation requirements through aliases, binders,
   captures, function parameters, function returns, and expression occurrences
 - solve boxed payload representation requirements through branch joins, source
@@ -2303,8 +2519,9 @@ Preserve and clean up the real responsibilities:
   returned values
 - solve boxed payload representation requirements only after
   specialization-local clone-instantiation and zonking
-- publish and consume explicit module-interface representation capabilities for
-  imported and opaque nominal boxed payload traversal
+- publish and consume explicit module-interface representation capability
+  templates and instantiated capabilities for imported and opaque nominal boxed
+  payload traversal
 - consume hosted/platform callable representation metadata explicitly
 - order recursive SCCs
 - enforce canonical callable-set unification algebra
@@ -2327,6 +2544,12 @@ Commit when lambda-solved MIR verification proves:
 - no structural boxed payload plan node implies runtime traversal, runtime
   container rebuilding, or non-`Box(T)` erasure
 - no non-`Box(T)` root can introduce erased callable representation
+- representation equality is occurrence/value-flow based, not type-id based
+- two unrelated roots with equal logical `TypeId`s do not unify unless an
+  explicit representation edge connects them
+- every exported representation root has a solved representation class
+- every `require_box_erased(payload_root)` seed is owned by an explicit
+  `Box(T)` boundary
 - no executable specialization input contains generalized or unresolved type
   variables
 - canonical type keys and boxed payload transforms are cycle-safe graph
@@ -2347,6 +2570,13 @@ Commit when lambda-solved MIR verification proves:
 
 Rewrite executable MIR lowering so it consumes lambda-solved MIR and emits
 executable MIR without fact side tables.
+
+Executable MIR must run executable ownership solving after all executable
+specializations, erased adapters, intrinsic wrappers, bridge procedures, entry
+wrappers, and hosted targets have been reserved, and before lowering to IR.
+That solver produces `ProcOwnershipContract`, `CallableCallOwnershipKey`, node
+ownership semantics, bridge ownership semantics, and boxed-boundary ownership
+semantics.
 
 Delete:
 
@@ -2405,6 +2635,9 @@ Commit when executable MIR verification proves:
 - every `callable_match` branch records exact `direct_args`
 - every callable member direct-call signature is source args plus optional
   trailing capture record
+- every `callable_match` has exactly one `CallableCallOwnershipKey`
+- every branch in a `callable_match` conforms to the same normalized argument
+  modes and result contract
 - no executable MIR node represents automatic currying or partial application
 - no ordinary source `match` satisfies callable-set lowering verification
 - packed erased functions have explicit captures
@@ -2412,6 +2645,8 @@ Commit when executable MIR verification proves:
 - every executable MIR node introduced for callable lowering, erased packaging,
   boxed payload boundaries, and bridges carries explicit ownership semantics for
   LIR
+- every executable procedure has a `ProcOwnershipContract` before IR lowering
+- LIR ownership logic does not infer procedure contracts as semantic truth
 
 ### 7. Delete Source-Type Reconstruction
 
@@ -2584,9 +2819,16 @@ Lambda-solved MIR:
 - mismatched capture slots panic in debug verification
 - erasure requirements are explicit
 - `boxed_erased_boundary` stores box type, payload source type, payload boundary
-  type, direction, and `BoxPayloadRepresentationPlan`
+  type, direction, representation roots, and `BoxPayloadRepresentationPlan`
 - boxed payload boundary types structurally rewrite every reachable function
   slot to erased callable representation
+- `RepresentationStore` has distinct roots for every expression result, binder,
+  pattern binder, procedure parameter, procedure return, and capture slot
+- representation variables unify only through explicit value-flow edges, never
+  merely through equal logical `TypeId`s
+- every `require_box_erased(payload_root)` seed is attached to an explicit
+  `Box(T)` boundary
+- every exported representation root has a solved representation class
 - boxed payload representation requirements propagate through aliases, binders,
   captures, parameters, returns, and expression occurrences
 - boxed payload representation requirements propagate through source `match`
@@ -2598,6 +2840,8 @@ Lambda-solved MIR:
   functions, or nominals
 - imported, opaque, hosted, and platform-owned boxed payload traversal requires
   explicit representation capabilities
+- opaque nominal atomic traversal requires an explicit
+  `NoReachableCallableSlotsProof`
 - finite callable-set erasure preserves source member metadata for executable
   adapter synthesis
 - erased adapter keys include finite callable-set identity, erased function
@@ -2633,6 +2877,9 @@ Executable MIR:
 - every `callable_match` branch stores exact `direct_args`
 - every `callable_match` branch passes all fixed-arity source arguments exactly
   once, plus only the optional trailing capture record
+- every `callable_match` has exactly one `CallableCallOwnershipKey`
+- every branch conforms to that key's normalized argument modes and result
+  contract
 - ordinary source `match` does not satisfy callable-set lowering verification
 - singleton finite callable-set calls still lower to `callable_match`
 - every callable-set value has explicit member capture payload metadata
@@ -2650,6 +2897,7 @@ Executable MIR:
 - every erased capture record has deterministic field ordering
 - every erased call has an explicit erased function type
 - every erased call has an explicit ownership contract from `ErasedFnSigKey`
+- every executable procedure has a `ProcOwnershipContract` before IR lowering
 - first-class intrinsic references use explicit wrapper procedures
 - logical field indexes are preserved until LIR resolves physical offsets
 - bridges connect concrete executable types
@@ -2664,6 +2912,8 @@ IR/LIR:
 - no method/dispatch operation exists
 - every value-producing LIR statement has sufficient ownership semantics for
   `RcInsert`
+- LIR ownership code verifies, normalizes, or translates explicit ownership
+  facts only; it does not infer procedure ownership contracts as semantic truth
 - `RcInsert` is the only non-builtin stage that emits explicit `incref`,
   `decref`, and `free`
 - backends execute explicit LIR RC statements and perform no ordinary RC
@@ -2734,6 +2984,13 @@ Callable/capture behavior:
 - structural erased-boundary coercion through records, tuples, tags, `List(T)`,
   nested `Box(T)`, and nominal backing types only inside an explicit `Box(T)`
   payload
+- two unrelated values with the same logical type do not share erased
+  representation when only one flows into `Box(T)`
+- a shared value used both normally and inside `Box(T)` has one representation
+  class, and ordinary uses consume the solved erased representation
+- representation propagation follows explicit `let`, parameter, return, capture,
+  branch, pattern, projection, and loop edges without using equal `TypeId`s as a
+  substitute for value flow
 - unboxing to a payload containing function slots gives those slots erased
   callable representation
 - non-boxed `List(T)`, records, tuples, tag unions, functions, and nominals do
@@ -2756,8 +3013,15 @@ Callable/capture behavior:
   representation into every branch result and pattern binder
 - imported opaque nominal boxed payload traversal succeeds only with an explicit
   exported representation capability
+- imported opaque nominal boxed payload traversal without an exact capability
+  fails before executable MIR
 - hosted function with callable-containing args or returns consumes explicit ABI
   representation and erased-call ownership metadata
+- finite callable-set call where one branch consumes an argument and another
+  branch borrows it normalizes to one `CallableCallOwnershipKey` for the whole
+  `callable_match`
+- `Box.unbox` borrows the box and materializes a copied payload result; no test
+  may rely on move-out semantics for `Box.unbox`
 - `packed_erased_fn`, erased adapters, `callable_match`, `Box.box`,
   `Box.unbox`, and bridges produce LIR ownership facts consumed by `RcInsert`
 
@@ -2827,8 +3091,15 @@ The cutover is complete only when all of these are true:
 - lambda-solved MIR has explicit callable/lambda-set/erasure metadata for every
   `proc_value`, `call_proc`, and `call_value` executable MIR consumes
 - lambda-solved MIR uses explicit `boxed_erased_boundary` nodes preserving box
-  type, payload source type, payload boundary type, direction, and
-  `BoxPayloadRepresentationPlan`
+  type, payload source type, payload boundary type, direction, representation
+  roots, and `BoxPayloadRepresentationPlan`
+- lambda-solved MIR exports a specialization-local `RepresentationStore` whose
+  roots are expression/binder/parameter/return/capture occurrences, not logical
+  type identities
+- lambda-solved MIR creates `require_box_erased(payload_root)` only from
+  explicit `Box(T)` boundaries
+- lambda-solved MIR never unifies representation variables merely because their
+  logical `TypeId`s are equal
 - lambda-solved MIR structurally rewrites every reachable function slot inside
   explicit `Box(T)` payload boundaries
 - lambda-solved MIR propagates boxed payload representation requirements through
@@ -2841,6 +3112,8 @@ The cutover is complete only when all of these are true:
   zonked type stores
 - lambda-solved MIR requires explicit module-interface representation
   capabilities before traversing imported or opaque nominal boxed payloads
+- opaque nominal atomic traversal requires an explicit
+  `NoReachableCallableSlotsProof`
 - lambda-solved MIR consumes hosted/platform callable representation metadata
   explicitly
 - lambda-solved MIR exports only zonked executable specialization inputs
@@ -2857,6 +3130,8 @@ The cutover is complete only when all of these are true:
 - executable MIR synthesizes erased adapters for finite callable-set values
   crossing erased `Box(T)` boundaries
 - executable MIR records exact branch `direct_args`
+- executable MIR records one `CallableCallOwnershipKey` for every
+  `callable_match`
 - executable MIR direct, erased, and callable-set calls preserve fixed Roc arity
 - executable MIR ordinary source `match` and callable-set `callable_match` are
   structurally distinguishable
@@ -2870,8 +3145,12 @@ The cutover is complete only when all of these are true:
 - executable MIR consumes erased-call ownership contracts from `ErasedFnSigKey`
   instead of recovering ownership from runtime function pointers or capture
   layouts
+- executable ownership solving produces `ProcOwnershipContract` values before
+  IR lowering
 - executable MIR preserves ownership facts for callable lowering, erased
   packaging, boxed payload boundaries, and bridges
+- `Box.unbox` is borrowed/copy materialization only; consuming move-out requires
+  a separate explicit operation
 - logical field indexes are resolved to physical offsets only through the layout
   store
 - no exact callable alias side tables remain
@@ -2883,6 +3162,8 @@ The cutover is complete only when all of these are true:
 - method registry is consumed only by mono MIR construction
 - IR lowering consumes executable MIR only
 - IR lowering preserves executable ownership facts for LIR
+- LIR ownership code verifies or translates ownership facts but does not infer
+  procedure ownership contracts as semantic truth
 - LIR `RcInsert` is the only non-builtin stage that emits explicit `incref`,
   `decref`, and `free`
 - LIR/backends do not know about source methods
