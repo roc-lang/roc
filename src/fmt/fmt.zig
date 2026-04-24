@@ -2593,6 +2593,7 @@ const Formatter = struct {
 
     fn flushComments(fmt: *Formatter, between_text: []const u8) !bool {
         var newline_count: usize = 0;
+        var prev_was_comment: bool = false;
         var i: usize = 0;
         while (i < between_text.len) {
             if (between_text[i] == '#') {
@@ -2605,11 +2606,9 @@ const Formatter = struct {
 
                 // Check if it's a doc comment
                 const is_doc_comment = comment_start < between_text.len and between_text[comment_start] == '#';
-                // between_text contains only whitespace and comments (never code), so
-                // newline_count == 1 at a comment uniquely means this is the first comment
-                // in the text and it sits on the line directly after the previous token
-                // (i.e., directly after code). In that case, add a blank line.
-                if (is_doc_comment and newline_count == 1) {
+                // If a doc comment directly follows code (only one \n between them,
+                // and the previous token wasn't another comment), add a blank line.
+                if (is_doc_comment and newline_count == 1 and !prev_was_comment) {
                     try fmt.newline();
                     newline_count += 1;
                 }
@@ -2628,6 +2627,7 @@ const Formatter = struct {
                 try fmt.pushAll(comment_text);
                 try fmt.newline();
                 newline_count = 1; // reset count to allow an additional newline after a comment
+                prev_was_comment = true;
                 i = comment_end + 1;
             } else if (between_text[i] == '\n') {
                 if (newline_count < 2) {
