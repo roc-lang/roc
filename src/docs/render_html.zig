@@ -1230,9 +1230,11 @@ fn renderDocTypeHtml(w: Writer, ctx: *const RenderContext, doc_type: *const DocT
         },
         .record => |rec| {
             try w.writeAll("{ ");
-            if (rec.ext) |ext| {
+            if (rec.is_open) {
                 try w.writeAll("..");
-                try renderDocTypeHtml(w, ctx, ext, false);
+                if (rec.ext) |ext| {
+                    try renderDocTypeHtml(w, ctx, ext, false);
+                }
                 if (rec.fields.len > 0) try w.writeAll(", ");
             }
             for (rec.fields, 0..) |field, i| {
@@ -1259,10 +1261,14 @@ fn renderDocTypeHtml(w: Writer, ctx: *const RenderContext, doc_type: *const DocT
                     try w.writeAll(")");
                 }
             }
-            try w.writeAll("]");
-            if (tu.ext) |ext| {
-                try renderDocTypeHtml(w, ctx, ext, false);
+            if (tu.is_open) {
+                if (tu.tags.len > 0) try w.writeAll(", ");
+                try w.writeAll("..");
+                if (tu.ext) |ext| {
+                    try renderDocTypeHtml(w, ctx, ext, false);
+                }
             }
+            try w.writeAll("]");
         },
         .tuple => |tup| {
             try w.writeAll("(");
