@@ -54,6 +54,7 @@ EndOfFile,
 ~~~roc
 ## Top-level type documentation
 Foo := [Whatever].{
+
 	## Nested type documentation
 	Bar := [X, Y, Z]
 
