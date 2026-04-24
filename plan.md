@@ -18,6 +18,22 @@ checked CIR
   -> LIR
 ```
 
+Compile-time constants use the same executable path, but they are evaluated as
+part of checking finalization, before checked artifacts are published:
+
+```text
+checked CIR
+  -> mono MIR
+  -> row-finalized mono MIR
+  -> lifted MIR
+  -> lambda-solved MIR
+  -> executable MIR
+  -> IR
+  -> LIR
+  -> LIR interpreter
+  -> compile-time value store
+```
+
 This plan does not skip monomorphization, lambda lifting, lambda-set solving, or
 executable representation planning. Those are real compiler responsibilities.
 The cutover replaces the current implementations and contracts so that every
@@ -58,6 +74,14 @@ All user-facing compiler errors must be reported during checking at the absolute
 latest. After checking completes, every compiler stage must succeed. A violated
 post-check assumption is a compiler bug, not a user-facing error and not a
 recoverable compiler result.
+
+Checking is not complete until compile-time constant evaluation has run and all
+compile-time constant crashes, expect failures, numeric conversion failures, and
+other user-facing compile-time evaluation problems have been reported. The LIR
+interpreter may be used to perform that evaluation, but the whole operation is
+inside checking finalization. After the checked artifact is published, compile-time
+constant data is an input to later stages; it is not something later stages try
+to produce, repair, or skip.
 
 Compiler invariant violations have exactly one implementation shape:
 
@@ -2014,7 +2038,1003 @@ by LIR, or if any backend/imported path branches on refcounted layout shape
 except while executing explicit LIR RC statements. Release builds use
 `unreachable` for the equivalent compiler-invariant path.
 
+### Checking Finalization: Compile-Time Constants
+
+Compile-time constants are evaluated by the LIR interpreter before checking is
+considered complete.
+
+This stage consumes:
+
+- the checked module
+- the MIR-family lowering pipeline
+- LIR after executable ownership solving and reference-count insertion
+- explicit compile-time root records
+- explicit reification schemas built from the resolved source type and selected
+  layout
+- explicit callable-result records for roots whose source type is a function
+  type
+
+It produces:
+
+- `CompileTimeValueStore`
+- one binding entry for each evaluated top-level constant pattern
+- promoted closed procedure symbols for top-level callable roots
+- serialized constant data for cached modules and imported modules
+
+It must not produce:
+
+- runtime top-level thunks for constants
+- runtime global initializer procedures for constants
+- runtime zero-argument constant wrappers
+- runtime top-level closure objects for top-level bindings
+- runtime global callable-value objects for top-level bindings
+- generated code that initializes module constants at program startup
+
+Cor lowers top-level values through zero-argument thunks plus global
+initializers. Roc must not adopt that model. Roc top-level constants are
+compile-time evaluated and reified into compiler-owned constant data.
+
+The compile-time evaluator may synthesize private LIR roots only as interpreter
+entrypoints. These roots are `comptime_only` by construction. They are not
+exported runtime roots, not module initializers, not user-callable procedures,
+and not allowed to survive into backend input.
+
+A private aggregate interpreter root may evaluate multiple constants in
+dependency order and return an aggregate value for efficient reification. That
+aggregate root is only an implementation detail of compile-time evaluation. The
+observable result is the `CompileTimeValueStore`, not a callable procedure.
+
+Compile-time root selection must be explicit. The final design must not use
+late syntax filters such as "is this top-level expression shaped like a lambda?"
+inside LIR evaluation. Checking finalization or mono MIR must emit a root table:
+
+```zig
+const ComptimeRoot = struct {
+    module: ModuleId,
+    pattern: PatternId,
+    expr: ExprId,
+    proc: Symbol,
+    result: ComptimeRootResult,
+    kind: enum {
+        serializable_constant,
+        callable_binding,
+        expect_body,
+    },
+};
+
+const ComptimeRootResult = union(enum) {
+    serializable_schema: ComptimeSchemaId,
+    callable_result: CallableResultId,
+    expect_result: ExpectRootId,
+};
+```
+
+The exact Zig names may differ, but the responsibility must not. A root records
+which checked/MIR expression is being evaluated, which procedure symbol LIR must
+execute, and which schema or callable-result record will reify or promote the
+result. Later stages must not recreate this information from source syntax,
+expression shape, naming conventions, or environment lookup.
+
+#### Top-Level Callable Finalization
+
+Checking finalization handles top-level callable bindings before publishing the
+checked artifact. After publication, every top-level binding whose source type
+is a function type is a `procedure_value: Symbol`. There is no post-check
+top-level closure-value category.
+
+There are three source-level cases:
+
+1. A top-level function declaration or top-level lambda is already a procedure
+   declaration. It does not need to be evaluated by the LIR interpreter just to
+   discover that it is callable. Publication records the binding as
+   `procedure_value` pointing at the procedure symbol created from the checked
+   declaration. If its body references top-level constants, those references
+   are resolved through `TopLevelValueTable` after checking finalization:
+   serializable constants become `ConstRef` reads and function-valued bindings
+   become procedure values.
+2. A top-level binding with function source type whose expression is not already
+   a function declaration or top-level lambda is a compile-time callable root.
+   Checking finalization must evaluate the expression through the same
+   MIR-family-to-LIR path used for serializable constants. The interpreter
+   result is a compile-time callable value, not serialized constant data.
+3. A top-level binding with non-function source type and a supported
+   serializable schema is a serializable compile-time constant. It is evaluated
+   and reified into `CompileTimeValueStore` as `serializable_constant`.
+
+For example, this binding is case 1:
+
+```roc
+add1 : I64 -> I64
+add1 = |x| x + 1
+```
+
+This binding is case 2:
+
+```roc
+makeAdder : I64 -> (I64 -> I64)
+makeAdder = |n| |x| x + n
+
+add5 : I64 -> I64
+add5 = makeAdder(5)
+```
+
+After checking finalization, `add5` must be represented exactly like a
+top-level function. Conceptually, later stages see the equivalent of:
+
+```roc
+add5 : I64 -> I64
+add5 = |x| x + 5
+```
+
+The implementation must not depend on source rewriting, but the published
+artifact must have the same semantic shape: `add5` is a closed procedure symbol
+with the fixed arity from its resolved source function type.
+
+Compile-time callable evaluation may call ordinary top-level functions. Those
+functions are consumed as procedure symbols during interpretation, exactly as
+they are consumed by later runtime lowering. The interpreter does not evaluate a
+top-level function declaration merely because it exists; it only executes
+listed compile-time roots and any procedures those roots call.
+
+Compile-time callable roots produce `ComptimeCallable` values:
+
+```zig
+const ComptimeCallable = struct {
+    source_type: Var,
+    entry: CallableEntry,
+    captures: CaptureValueSlice,
+};
+
+const CallableEntry = union(enum) {
+    procedure: Symbol,
+    lifted_lambda: Symbol,
+    callable_set_member: CallableMemberId,
+};
+
+const CaptureValue = union(enum) {
+    serializable_constant: ConstRef,
+    callable: ComptimeCallableId,
+};
+```
+
+The exact Zig names may differ, but the meaning must not. A compile-time
+callable value is a compiler-owned description of the selected callable entry
+and its evaluated captures. It is not a runtime function pointer, not a packed
+erased function value, not a heap closure object, not a global initializer, and
+not a thunk.
+
+Callable promotion turns each `ComptimeCallable` that is the result of a
+top-level binding into a closed top-level procedure symbol before artifact
+publication. Promotion must:
+
+- allocate a procedure symbol owned by the checked artifact; exported bindings
+  export that promoted symbol, and private bindings keep it private
+- give the promoted procedure the exact fixed arity and resolved source function
+  type of the top-level binding
+- rewrite every capture read in the callable body to an explicit
+  `serializable_constant` or `procedure_value`
+- recursively promote callable captures to private closed procedure symbols
+  before the outer promoted procedure is published
+- reject unsupported captured values during checking finalization, before
+  publication, instead of leaving them for a post-check stage
+- record debug provenance from the promoted symbol back to the original
+  top-level binding and callable expression
+
+Serializable captured values are reified into `CompileTimeValueStore` and then
+referenced from the promoted procedure through `ConstRef`. Callable captured
+values are promoted recursively and then referenced as procedure values.
+Aggregate captured values are allowed only when their entire source type has a
+supported serializable schema, or when a future explicit callable-containing
+constant representation has been designed. The current design must not publish
+an aggregate runtime closure environment for a top-level binding.
+
+Promotion is part of checking finalization. If promotion cannot produce a closed
+procedure from a top-level function-valued binding, checking has not completed.
+After publication, any missing promoted procedure, remaining capture
+environment, top-level closure object, runtime callable object, or top-level
+callable initializer is a compiler invariant violation handled only by
+debug-only assertion in debug builds and `unreachable` in release builds.
+
+The current compile-time value store represents serializable data: ints,
+fractions, strings, lists, boxes, tuples, records, tag unions, aliases, and
+nominals. Function source types are not accepted as serializable constant
+schemas. Callable top-level results use callable promotion and then publish as
+`procedure_value`.
+
+Reification must copy runtime interpreter results into compiler-owned constant
+nodes. Raw runtime addresses, Roc heap pointers, interpreter arena pointers, and
+refcount headers must not survive reification. Lists, strings, boxes, records,
+tuples, tags, aliases, and nominals become logical constant nodes addressed by
+`(schema_id, value_id)`.
+
+The reification schema is built from the resolved source type and the selected
+layout. Both are required:
+
+- the source type gives logical names, wrappers, aliases, nominals, record
+  fields, tag names, and payload arity
+- the layout gives byte interpretation for the LIR interpreter result
+
+Schema construction must not infer logical row structure from runtime bytes or
+physical layout order. Physical layout order may be used only to read bytes after
+the logical schema has identified the value being read.
+
+Compile-time evaluation uses the same LIR interpreter ownership boundary as
+ordinary interpreter execution. The interpreter executes explicit LIR
+`incref`, `decref`, and `free` statements. Compile-time `RocOps` may allocate
+temporary Roc heap data during evaluation, but reification must detach the
+result from that temporary allocation domain.
+
+Compile-time evaluation problems are checking problems because this stage is
+part of checking finalization. A user-written compile-time crash, failed
+`expect`, division by zero, numeric conversion failure, or unsupported constant
+schema must be reported before `TypeCheckOutput` or equivalent checked artifact
+data is returned. If any of those conditions reaches a post-check stage, that is
+a compiler invariant violation handled only by debug-only assertion in debug
+builds and `unreachable` in release builds.
+
+Cached modules must store and load the serialized `CompileTimeValueStore` as
+part of the complete checked module artifact. A downstream module consumes
+imported constant bindings from that store. It must not re-run the imported
+module's LIR constant roots unless the imported module is being rechecked and
+re-finalized.
+
+The checked artifact cache is target-independent. Its key must not include
+target ABI/layout inputs. Target ABI/layout inputs belong only in later caches
+that store target-shaped data, such as finalized layouts, executable MIR
+specializations with target layout commitments, LIR, object code, or constant
+materialization output.
+
+The compile-time value store inside a checked artifact is a logical value graph,
+not target-shaped storage. Reification copies interpreter results into logical
+schema/value nodes. Any later target-specific bytes, statics, layout IDs,
+alignment choices, or ownership materialization plans must be produced by a
+target-specific post-check cache or by normal lowering for that target.
+
+A checked artifact cache hit must restore checked artifact data and compile-time
+values together or miss together. There must not be an independently accepted
+compile-time-value sidecar. If the checked artifact says compile-time bindings
+exist and the cache cannot restore their value store, the entire checked artifact
+cache entry misses before publication.
+
+After checking finalization, later stages may consume compile-time constants as
+explicit constant handles or serialized constant data. They must not turn a
+missing constant binding into a runtime initializer, attempt LIR interpretation
+again as a post-check recovery path, or silently omit a constant.
+
+### Checking Finalization: Artifact Publication
+
+Checking finalization publishes exactly one immutable checked module artifact,
+or it publishes nothing.
+
+Publication is the boundary between "the compiler may still report user-facing
+checking problems" and "all later stages must succeed unless the compiler has a
+bug." A module is not checked merely because its source types solved. A module
+is checked only after every checked-stage output required by importers and
+post-check lowering has been built, verified, and bundled into the artifact.
+
+Conceptual artifact shape:
+
+```zig
+const CheckedModuleArtifact = struct {
+    key: CheckedModuleArtifactKey,
+    module_identity: ModuleIdentity,
+    checking_context_identity: CheckingContextIdentity,
+    env: ModuleEnv,
+    exports: ExportTable,
+    provides_requires: ProvidesRequiresMetadata,
+    method_registry: MethodRegistry,
+    static_dispatch_plans: StaticDispatchPlanTable,
+    root_requests: RootRequestTable,
+    hosted_procs: HostedProcTable,
+    platform_required_bindings: PlatformRequiredBindingTable,
+    interface_capabilities: ModuleInterfaceCapabilities,
+    top_level_values: TopLevelValueTable,
+    promoted_procedures: PromotedProcedureTable,
+    compile_time_roots: ?ComptimeRootTable,
+    comptime_values: CompileTimeValueStore,
+};
+```
+
+The exact Zig names may differ, but the completeness rule must not. The checked
+artifact is the unit imported by downstream modules and consumed by public
+post-check lowering APIs. Later stages may consume narrowed views of the
+artifact, but those views must be derived from this artifact and must not scan
+or mutate raw checked modules to rebuild missing semantic data.
+
+Checking finalization order:
+
+1. Finish type solving and collect all user-facing diagnostics.
+2. Build the checked method registry and normalized static dispatch plans.
+3. Build root requests for runtime, tools, tests, and compile-time evaluation.
+4. Build hosted procedure and platform-required binding tables.
+5. Build public exports, provides/requires metadata, and interface capability
+   records.
+6. Evaluate compile-time serializable constants and compile-time callable roots
+   through the MIR-family path and LIR interpreter.
+7. Reify serializable values into `CompileTimeValueStore`.
+8. Promote compile-time callable results to closed procedure symbols.
+9. Build `TopLevelValueTable` so every referenced top-level binding maps to
+   either `serializable_constant` or `procedure_value`.
+10. Store the complete `CompileTimeValueStore`, promoted procedure table, and
+    top-level value table in the artifact.
+11. Run debug-only artifact verification.
+12. Publish the immutable checked artifact.
+
+If any user-facing problem is found in steps 1 through 9, checking reports it
+and no artifact is published for that module. Later compiler stages never see a
+partial checked artifact.
+
+After publication:
+
+- `ModuleEnv` identity must not be patched.
+- hosted indices must not be assigned by mutating checked CIR.
+- platform-required lookup targets must not be populated by mutating checked
+  modules.
+- roots must not be discovered by scanning exports, declarations, or expression
+  shapes.
+- compile-time values must not be produced by re-running imported module LIR
+  roots.
+- interface capabilities must not be recreated from imported module bodies.
+
+Missing artifact components after publication are compiler invariant
+violations. Debug builds must use debug-only assertions that fail immediately.
+Release builds use `unreachable` for the equivalent compiler-invariant path.
+
+### Compile-Time Constant Consumption
+
+The compile-time value store is not merely a cache payload. It is the
+post-check input for imported and local serializable constants.
+
+Checking finalization classifies each top-level binding that can be referenced
+after checking as one of:
+
+```zig
+const TopLevelValueKind = union(enum) {
+    serializable_constant: ConstRef,
+    procedure_value: Symbol,
+};
+
+const TopLevelValueEntry = struct {
+    module: ModuleId,
+    pattern: PatternId,
+    source_type: Var,
+    value: TopLevelValueKind,
+};
+
+const PromotedProcedure = struct {
+    symbol: Symbol,
+    source_binding: PatternId,
+    source_type: Var,
+    provenance: PromotedProcedureProvenance,
+};
+```
+
+`serializable_constant` is for top-level values whose checked source type has a
+supported compile-time schema and whose value has been reified into
+`CompileTimeValueStore`.
+
+`procedure_value` is for function declarations and function-valued declarations.
+Those do not become runtime zero-argument thunks and do not become serialized
+constant data unless a future design adds an explicit serialized function-value
+representation. A `procedure_value` symbol may be the original top-level
+procedure symbol or a closed procedure symbol produced by compile-time callable
+promotion. There is no post-check top-level closure-value category: any
+top-level callable result must be promoted before artifact publication.
+
+`TopLevelValueTable` is the only post-check lookup table for top-level values.
+Mono MIR, executable MIR, eval, REPL, tests, glue, and CLI helpers must consume
+this table. They must not classify top-level values by scanning source
+declarations, checking whether an expression is syntactically a lambda, looking
+for generated symbol-name patterns, or re-running constant evaluation.
+
+`PromotedProcedureTable` records procedure symbols created from compile-time
+callable roots. The promoted procedures live in the same procedure namespace as
+ordinary top-level functions after publication. The separate table exists for
+debug provenance, artifact verification, and deterministic serialization; it is
+not a runtime closure environment and is not a second callable representation.
+
+Conceptual constant handle:
+
+```zig
+const ConstRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    module: ModuleId,
+    pattern: PatternId,
+    schema: ComptimeSchemaId,
+    value: ComptimeValueId,
+    source_type: Var,
+};
+```
+
+The `artifact` field identifies the checked artifact that owns the value store.
+The `schema` and `value` fields identify the logical constant node inside that
+store. `source_type` records the resolved checked source type used to build the
+schema. It is not a request for later stages to reconstruct a schema from bytes,
+layout order, expression syntax, or display names.
+
+Mono MIR lookup of a top-level serializable constant emits a constant reference
+expression:
+
+```zig
+const_ref {
+    ref: ConstRef,
+    ty: MonoTypeId,
+}
+```
+
+The exact expression name may differ, but the operation must carry the
+`ConstRef`. It must not call a hidden top-level thunk, synthesize a runtime
+initializer, or ask the LIR interpreter to run the imported module again.
+
+Executable MIR and LIR materialize a constant reference through an explicit
+target-specific materialization plan:
+
+```zig
+const ConstMaterializationPlan = struct {
+    const_ref: ConstRef,
+    target_type: CanonicalExecTypeKey,
+    layout: LayoutId,
+    ownership: ConstOwnership,
+    storage: ConstStoragePlan,
+};
+```
+
+The materialization plan is target-specific and belongs after checking. It may
+choose target bytes, statics, alignment, and layout IDs. It must not change the
+logical constant value. If target-specific materialization is cached, that cache
+is keyed by the checked artifact key plus target/layout inputs, not by a
+separate compile-time value sidecar.
+
+Constant materialization must preserve the ordinary ownership contract:
+
+- immutable static bytes may be referenced only through LIR operations whose
+  ownership semantics are explicit
+- heap values materialized from constants must have explicit LIR `incref`,
+  `decref`, and `free` behavior where needed
+- backends must only emit the requested static data or heap setup and follow
+  explicit LIR reference-counting statements
+
+Imported constants are consumed only through imported checked artifacts and
+their `CompileTimeValueStore`. A downstream module never re-evaluates an
+imported module's compile-time roots after that imported artifact has been
+published.
+
+### Checked Module Artifact Cache
+
+The checked module cache stores one complete, target-independent checked module
+artifact. It must not cache `ModuleEnv` separately from side stores that are
+required to use it correctly.
+
+The cached artifact must include every checked-stage output that later stages or
+importing modules consume, including:
+
+- `ModuleEnv`
+- public exports
+- provides/requires metadata after checking finalization
+- method registry
+- normalized static dispatch call plans
+- root request table
+- hosted procedure table
+- platform-required binding table
+- imported/interface representation capabilities
+- compile-time root table, if retained for diagnostics or verification
+- `CompileTimeValueStore`
+
+The exact names may differ, but the cache hit unit must be the complete checked
+artifact. A cache hit restores all of it or none of it.
+
+The cache key for a checked artifact is:
+
+```text
+CheckedModuleArtifactKey =
+    source_hash
+  + compiler_artifact_hash
+  + module_identity
+  + checking_context_identity
+  + direct_import_artifact_keys
+```
+
+This is a semantic cache key, not an object-code key and not a target-layout key.
+It must not include target ABI, target pointer width, layout IDs, field offsets,
+alignment decisions, backend choice, object format, or code-generation options.
+Those inputs belong to later target-specific caches only.
+
+#### `compiler_artifact_hash`
+
+`compiler_artifact_hash` is one build-time hash produced by `zig build`.
+
+It replaces separate cache-key fields for:
+
+- compiler semantic version
+- compiler implementation identity
+- generated builtin module data
+- builtin module source and interfaces
+- semantic-affecting build options
+- checked-artifact serialization format
+
+Those inputs are all part of the compiler artifact. The checked module cache
+must not store them as separately compared cache-key fields. If changing any of
+those inputs can change checked output, the build-time compiler artifact hash
+must change.
+
+Unsupported cache format, invalid bytes, or a cache entry built by a different
+compiler artifact is a cache miss before checked artifact data is published. It
+is not a recoverable post-check compiler result.
+
+#### `module_identity`
+
+`module_identity` answers: which module is this?
+
+It must include the semantic identity the compiler assigns to the module, for
+example:
+
+- package identity
+- module name
+- qualified module name
+- module kind or role, such as app module, package module, platform module,
+  platform sibling, hosted module, or builtin module
+
+It must be strong enough that a loaded artifact never needs to patch its module
+identity after a cache hit. In particular, a cache hit must not rewrite
+`qualified_module_ident` or equivalent identity fields after deserialization.
+If the same source text is compiled as two different modules, those are two
+different checked artifact keys.
+
+`module_identity` is not necessarily an absolute file path. Use a path only when
+the compiler's semantic module identity is path-based. If package/module identity
+is defined by package metadata plus module name, the key should use that
+semantic identity instead of incidental filesystem spelling.
+
+#### `checking_context_identity`
+
+`checking_context_identity` answers: under which external checking context was
+this module checked?
+
+It includes name-resolution and role information that can affect checked output
+but is not the source text itself and not the imported artifacts' contents.
+Examples include:
+
+- package shorthand mapping, such as `pf -> concrete package identity`
+- source import name to resolved module identity mapping
+- import alias information when the alias changes visible names or exported
+  checked artifact data
+- auto-import policy
+- builtin import policy
+- platform/app relationship for this check
+- hosted/platform ABI context used during checking
+- provides/requires configuration that affects checked module output
+
+For example, this source is not enough to identify the checked result:
+
+```roc
+import pf.Stdout
+```
+
+The source text says `pf.Stdout`, but the meaning depends on which concrete
+package identity `pf` resolves to in this build. Two builds with the same text
+and different shorthand resolution must not share a checked artifact.
+
+`checking_context_identity` records the resolution context. The imported
+artifact keys record the checked artifacts that were resolved.
+
+#### `direct_import_artifact_keys`
+
+The key must include checked artifact keys for each direct import, not source
+hashes of direct imports.
+
+This gives transitive invalidation by construction:
+
+```text
+A imports B
+B imports C
+```
+
+If `C` changes, then `C`'s checked artifact key changes. Because `B`'s key
+contains `C`'s key, `B`'s checked artifact key changes even if `B.roc` text is
+unchanged. Because `A`'s key contains `B`'s checked artifact key, `A` misses too.
+
+Using only direct imported source hashes is insufficient. It misses changes
+where an imported module's own source text is unchanged but its checked artifact
+changes because one of its imports, context identities, or compiler artifact
+inputs changed.
+
+The direct import list must be deterministic. It should be keyed by the checked
+module's resolved import records, not by hash-map iteration order. If the same
+artifact is imported through two source import entries with different visible
+names or roles, the key must preserve those distinct import records through
+`checking_context_identity`.
+
+#### Compile-Time Values In The Cache
+
+Compile-time constants are part of checking finalization, so the checked artifact
+is incomplete without its `CompileTimeValueStore`.
+
+The cache must not accept an entry that restores checked declarations but omits
+the compile-time value store required by those declarations. It also must not
+accept a compile-time value store whose checked artifact is missing or whose key
+does not match the checked artifact key.
+
+The store is logical and target-independent:
+
+```text
+schema_id + value_id -> logical constant node
+```
+
+It is not:
+
+```text
+target bytes
+layout IDs
+field offsets
+alignment-specific records
+backend static-data symbols
+```
+
+Target-specific constant materialization happens after checking, in the
+target-specific lowering pipeline. If that materialization is cached, that is a
+different cache keyed by the checked artifact key plus target/layout inputs.
+
+#### Cache Misses And Published Artifacts
+
+Before publication, these conditions are cache misses:
+
+- missing cache entry
+- unsupported cache format
+- invalid serialized bytes
+- mismatched `compiler_artifact_hash`
+- missing required artifact component
+- missing `CompileTimeValueStore` for an artifact with compile-time bindings
+- failed deserialization
+
+After a checked artifact has been published to later compiler stages, missing
+components are not recoverable. They are compiler invariant violations: debug-only
+assertion in debug builds and `unreachable` in release builds.
+
 ## Final Data Structures
+
+### Checked Artifact Boundary
+
+Every post-check public pipeline consumes checked artifacts, not loose checked
+modules plus optional side stores.
+
+The compiler may expose restricted views for specific consumers:
+
+```zig
+const ImportedModuleView = struct {
+    key: CheckedModuleArtifactKey,
+    module_identity: ModuleIdentity,
+    exports: ExportTableView,
+    method_registry: MethodRegistryView,
+    interface_capabilities: ModuleInterfaceCapabilitiesView,
+    comptime_values: CompileTimeValueStoreView,
+};
+
+const LoweringModuleView = struct {
+    artifact: *const CheckedModuleArtifact,
+    roots: RootRequestSet,
+};
+```
+
+Those views are read-only projections. They must not contain mutable pointers
+that allow later stages to patch `ModuleEnv`, hosted indices,
+platform-required bindings, compile-time values, or interface capability
+records.
+
+Downstream modules import `ImportedModuleView`. They do not inspect another
+module's unchecked source, checked expression bodies, opaque backing syntax, or
+private definitions to complete their own checked artifact.
+
+The executable pipeline consumes `LoweringModuleView` values. It may lower only
+roots named by `RootRequestSet`. It must not discover additional roots by
+scanning exports, source declarations, checked CIR expression shapes, or
+procedure order.
+
+### Root Requests And Root Binding
+
+Root selection happens during checking finalization or build planning before
+post-check lowering begins.
+
+A root request records that a particular checked artifact requires a runtime,
+tool, test, REPL, development, or compile-time entrypoint. It is not a lowered
+procedure yet.
+
+Conceptual pre-MIR request shape:
+
+```zig
+const RootProcedureRequest = struct {
+    id: RootRequestId,
+    kind: RootKind,
+    module: ModuleId,
+    source: RootSource,
+    checked_type: Var,
+    abi: RootAbi,
+    exposure: RootExposure,
+    order: RootOrderKey,
+};
+
+const RootKind = enum {
+    app_main,
+    platform_required,
+    provided_export,
+    hosted_export,
+    test_expect,
+    repl_expr,
+    dev_expr,
+    comptime_constant,
+    comptime_expect,
+};
+
+const RootSource = union(enum) {
+    top_level_def: DefId,
+    statement: StatementId,
+    expression: ExprId,
+    hosted_proc: HostedProcId,
+};
+```
+
+`RootKind` is semantic. It says why this root exists. It must not be recovered
+from display names such as `main`, from the last lowered procedure, from
+whether an expression syntactically looks like a lambda, or from which tool is
+currently calling the pipeline.
+
+`RootSource` points at checked source ownership. It does not name an executable
+procedure. Mono MIR binds the request to a mono procedure or constant by
+lowering the source in the appropriate specialization.
+
+Conceptual lowered binding shape:
+
+```zig
+const LoweredRoot = struct {
+    request: RootRequestId,
+    target: RootTarget,
+};
+
+const RootTarget = union(enum) {
+    proc: Symbol,
+    const_ref: ConstRef,
+};
+```
+
+Runtime roots bind to procedures. Serializable compile-time constants bind to
+`ConstRef` values after evaluation. Private aggregate interpreter roots may bind
+to procedures while compile-time evaluation is running, but those roots are
+`comptime_only` and must not be exported as runtime roots.
+
+No MIR, IR, LIR, eval, REPL, snapshot, CLI, glue, or test helper may select a
+root by:
+
+- scanning `provides` entries
+- scanning top-level declarations for a name
+- filtering expressions by syntax
+- comparing expression IDs for equality after lowering
+- choosing the last procedure in a root list
+- searching for a hosted lambda expression
+- inferring root kind from a generated symbol name
+
+If a command requires a root and checking/build planning cannot create one, that
+is a user-facing checking or build-planning diagnostic before artifact
+publication. If a missing root reaches mono MIR or later, it is a compiler
+invariant violation handled by debug-only assertion in debug builds and
+`unreachable` in release builds.
+
+### Hosted And Platform Tables
+
+Hosted procedure discovery and platform-required binding happen during checking
+finalization. They produce artifact tables. They do not mutate CIR after the
+artifact boundary.
+
+Conceptual hosted table:
+
+```zig
+const HostedProcTable = struct {
+    entries: Span(HostedProcEntry),
+    by_source: Map(HostedProcSource, HostedProcId),
+    by_abi_name: Map(HostedAbiName, HostedProcId),
+};
+
+const HostedProcEntry = struct {
+    id: HostedProcId,
+    module: ModuleId,
+    def: DefId,
+    expr: ExprId,
+    symbol_name: Ident.Idx,
+    abi_name: HostedAbiName,
+    order: HostedOrderKey,
+    representation: HostedRepresentationCapabilityKey,
+    ownership_contract_template: ProcOwnershipContractTemplate,
+};
+```
+
+`HostedOrderKey` gives deterministic ordering for hosted procedure tables and
+generated ABI lists. It is not stored by writing an index into checked CIR.
+
+The final architecture must delete or make non-authoritative any
+`e_hosted_lambda.index`-style field. If a syntax node still carries a placeholder
+for diagnostics while checking is running, post-check stages must ignore it and
+consume `HostedProcTable`.
+
+Conceptual platform-required binding table:
+
+```zig
+const PlatformRequiredBindingTable = struct {
+    entries: Span(PlatformRequiredBinding),
+    by_platform_required: Map(RequiredTypeId, PlatformRequiredBindingId),
+};
+
+const PlatformRequiredBinding = struct {
+    id: PlatformRequiredBindingId,
+    platform_required: RequiredTypeId,
+    platform_ident: Ident.Idx,
+    app_module: ModuleId,
+    app_def: DefId,
+    app_pattern: PatternId,
+    checked_relation: PlatformRequirementRelationId,
+};
+```
+
+This table replaces post-check lookup-target population. It records exactly
+which app binding satisfies each platform requirement and which checked relation
+proved it. Mono MIR consumes the table when producing roots and calls for
+platform-required functions.
+
+Hosted and platform methods that can be called through static dispatch must
+also appear in the checked method registry as explicit procedure targets with
+checked callable types. The hosted/platform tables provide ABI identity,
+ordering, representation capability keys, and ownership templates. The method
+registry provides method lookup identity. Later stages must consume both
+explicit records as needed; they must not rediscover hosted/platform behavior
+from names, expression shapes, or module scans.
+
+### Interface Capability Publication
+
+Representation capabilities are compiler-private interface records published in
+the checked artifact.
+
+Conceptual shape:
+
+```zig
+const ModuleInterfaceCapabilities = struct {
+    boxed_payload_templates: BoxPayloadCapabilityTable,
+    opaque_atomic_proofs: OpaqueAtomicProofTable,
+    hosted_representations: HostedRepresentationCapabilityTable,
+    platform_representations: PlatformRepresentationCapabilityTable,
+    exported_nominal_representations: NominalRepresentationTable,
+};
+```
+
+The defining module produces these records while it still has legal access to
+its checked definitions and private nominal backing information. Importing
+modules consume only the published capability records through
+`ImportedModuleView`.
+
+An importer must not:
+
+- copy opaque backing bodies into its own semantic lowering path
+- inspect imported private definitions
+- infer transparent representation from display names
+- use layout shapes as proof of source-level representation
+- synthesize hosted or platform callable representation behavior from ABI names
+
+Lambda-solved MIR and executable MIR consume capability records by key. Missing
+capability records after artifact publication are compiler invariant
+violations. Debug builds assert immediately. Release builds use `unreachable`.
+
+If an imported opaque, hosted, platform, or cross-module transparent nominal
+inside an explicit `Box(T)` erased payload requires traversal and no exact
+capability or exact `opaque_atomic` proof exists, checking finalization reports
+the problem before publishing the importing artifact. Later stages do not
+recover by treating the value as erased, atomic, indirect, or runtime-converted.
+
+### Public Pipeline API
+
+There is one public semantic lowering entrance from checked artifacts to LIR.
+
+Conceptual API:
+
+```zig
+pub const LowerResourceError = std.mem.Allocator.Error;
+
+pub fn lowerArtifactsToLir(
+    allocator: Allocator,
+    artifacts: ArtifactSet,
+    roots: RootRequestSet,
+    target: TargetConfig,
+) LowerResourceError!LoweredProgram;
+```
+
+The exact name may differ, but the contract must not. Public callers provide
+published checked artifacts, explicit roots, and target configuration. They get
+lowered output or resource failure. They do not get semantic failure variants.
+
+The following clients must call this pipeline instead of hand-assembling old
+stage chains:
+
+- build runner
+- CLI commands
+- eval pipeline
+- REPL
+- dev shim
+- interpreter shim
+- snapshot tool
+- glue
+- test helpers
+
+Tooling is not an exception to the architecture. A REPL expression or dev
+expression becomes a temporary checked artifact with an explicit `.repl_expr` or
+`.dev_expr` root. Tests may construct small artifacts directly, but they must
+still call the same checked-artifact-to-LIR public pipeline when testing
+semantic lowering.
+
+Forbidden public APIs after the cutover:
+
+```text
+lowerTypedCIRToLir*
+lowerTypedCIRToSemanticEval*
+public monotype -> monotype_lifted -> lambdasolved -> lambdamono chains
+public helpers that accept checked CIR plus an optional root name
+public helpers that return NoRootProc or NoRootDefinition
+```
+
+Internal stage tests may call an individual MIR pass only when they construct
+that pass's exact input type-state. Those helpers must not become compatibility
+entrypoints for tools.
+
+### Post-Check API Error Shape
+
+Post-check semantic lowering APIs must not return semantic errors.
+
+Forbidden public post-check API shapes:
+
+```zig
+pub fn lower(...) !T
+pub fn lower(...) anyerror!T
+pub fn lower(...) SemanticLowerError!T
+```
+
+unless the named error set contains only resource errors such as
+`Allocator.Error`.
+
+Allowed public post-check API shape:
+
+```zig
+pub const LowerResourceError = std.mem.Allocator.Error;
+
+pub fn lowerExecutableMir(...) LowerResourceError!IrProgram;
+```
+
+Forbidden post-check semantic errors include:
+
+```text
+NoRootProc
+NoRootDefinition
+MissingRoot
+MethodNotFound
+DispatchOwnerNotFound
+UnsupportedSourceType
+UnsupportedLayout
+SchemaLayoutMismatch
+AbstractSchemaType
+MissingCompileTimeValue
+MissingInterfaceCapability
+MissingHostedProc
+MissingPlatformRequiredBinding
+```
+
+Those conditions must either be reported before checked artifact publication or
+be treated as compiler invariant violations after publication.
+
+The implementation shape for post-check invariants is:
+
+```text
+debug build: debug-only assertion
+release build: unreachable
+```
+
+Cache invalidity, invalid serialized bytes, and unsupported cache format are
+pre-publication cache misses. They are not semantic lowering errors. File I/O,
+backend executable availability, and operating-system failures in command-line
+wrappers may still be ordinary tool/resource errors, but they must not select a
+different semantic lowering path.
 
 ### Procedure Identity
 
@@ -3281,6 +4301,19 @@ non-`Box(T)` erased boundaries
 executable erased-shape compatibility as semantic decision logic
 LIR procedure ownership inference as semantic truth
 backend or interpreter ownership inference
+Cor-style runtime top-level constant thunks
+runtime global initializer procedures for compile-time constants
+runtime zero-argument constant wrappers
+runtime top-level closure objects for top-level bindings
+runtime global callable-value objects for top-level bindings
+public lowerTypedCIRToLir entrypoints
+public lowerTypedCIRToSemanticEval entrypoints
+NoRootProc and NoRootDefinition as post-check lowering results
+post-check root discovery by export/name/expression/procedure-order scan
+post-check hosted-index mutation in checked CIR
+post-check platform-required lookup-target mutation
+imported representation recovery from private bodies or opaque backing syntax
+imported compile-time constant re-evaluation after artifact publication
 ```
 
 Delete exported dispatch variants after checked CIR:
@@ -3377,10 +4410,17 @@ lambdamono
 
 Do not provide old-name compatibility modules.
 
-All public pipelines must call:
+All public executable pipelines must call:
 
 ```text
-checked CIR -> mir.mono -> mir.lifted -> mir.lambda_solved -> mir.executable -> ir -> lir
+checked CIR -> mir.mono -> mir.mono.row_finalize -> mir.lifted -> mir.lambda_solved -> mir.executable -> ir -> lir
+```
+
+Compile-time constant evaluation must call the same MIR-family lowering path and
+then run the LIR interpreter during checking finalization:
+
+```text
+checked CIR -> mir.mono -> mir.mono.row_finalize -> mir.lifted -> mir.lambda_solved -> mir.executable -> ir -> lir -> LIR interpreter -> compile-time value store
 ```
 
 Required pipeline call-site updates include:
@@ -3450,7 +4490,69 @@ can decide per specialization after instantiation and full type-link resolution 
 
 Then remove downstream `attached_method_index` threading.
 
-### 3. Harden Mono MIR AST
+### 3. Publish Checked Artifact Boundary Records
+
+Introduce the checked artifact publication boundary before rewiring individual
+lowering stages.
+
+Add the checked artifact type and read-only views:
+
+```text
+CheckedModuleArtifact
+ImportedModuleView
+LoweringModuleView
+```
+
+The artifact must contain `ModuleEnv`, exports, provides/requires metadata,
+method registry, static dispatch plans, root requests, hosted procedure table,
+platform-required binding table, interface capabilities, compile-time roots if
+retained, and `CompileTimeValueStore`.
+
+This step must also introduce explicit table shapes for:
+
+```text
+RootRequestTable
+HostedProcTable
+PlatformRequiredBindingTable
+ModuleInterfaceCapabilities
+```
+
+Do not migrate callers by adding compatibility adapters. Instead, create the new
+records and make checking finalization populate them before any public
+post-check pipeline can consume the module.
+
+Root requests must be produced for app entrypoints, provided exports,
+platform-required bindings, hosted exports, tests, REPL/dev expressions, and
+compile-time constants. Root requests must record kind, source, checked type,
+ABI, exposure, and deterministic order. They must not be inferred later from
+export scans, declaration names, expression shapes, or procedure order.
+
+Hosted procedures must be collected into `HostedProcTable`. Deterministic hosted
+ordering belongs in that table. Do not write hosted indices into checked CIR as
+authoritative post-check data.
+
+Platform-required bindings must be collected into
+`PlatformRequiredBindingTable`. Do not populate lookup targets by mutating
+checked module environments after publication.
+
+Interface capabilities must be published in `ModuleInterfaceCapabilities`.
+Importers must consume these records through `ImportedModuleView`; they must not
+inspect imported private definitions or recreate representation capability data.
+
+Commit when checked artifacts can be constructed with these records and debug
+verification proves:
+
+- a published artifact has every required component
+- artifact views are read-only
+- no post-publication code path patches module identity
+- no post-publication code path writes hosted indices into checked CIR
+- no post-publication code path populates platform-required lookup targets by
+  mutating checked modules
+- root requests exist before MIR lowering starts
+- missing root requests are reported before artifact publication or asserted as
+  compiler bugs after publication
+
+### 4. Harden Mono MIR AST
 
 Remove exported mono MIR variants:
 
@@ -3524,7 +4626,7 @@ Commit when mono MIR verification proves:
   `requested_fn_ty`
 - no mono MIR node represents automatic currying or partial application
 
-### 4. Add Row-Finalized Mono MIR Pass
+### 5. Add Row-Finalized Mono MIR Pass
 
 Add a dedicated row-finalization pass between mono MIR and lifted MIR.
 
@@ -3580,7 +4682,7 @@ Commit when row-finalized mono MIR verification proves:
   names, scanning rows, scanning expressions, or inspecting physical layout
   order
 
-### 5. Harden Lifted MIR
+### 6. Harden Lifted MIR
 
 Update lifted MIR to consume dispatch-free, row-finalized mono MIR.
 
@@ -3619,7 +4721,7 @@ Commit when lifted MIR verification proves:
 - no local function or closure call is represented as `call_proc`
 - no dispatch terms exist in exported lifted MIR
 
-### 6. Harden Lambda-Solved MIR
+### 7. Harden Lambda-Solved MIR
 
 Update lambda-solved MIR to consume dispatch-free lifted MIR.
 
@@ -3740,7 +4842,7 @@ Commit when lambda-solved MIR verification proves:
 - `call_proc` and `proc_value` participate in callable inference and SCC ordering
 - every `proc_value` capture arg unifies with its target `CaptureSlot`
 
-### 7. Replace Executable Side-Table Planner
+### 8. Replace Executable Side-Table Planner
 
 Rewrite executable MIR lowering so it consumes lambda-solved MIR and emits
 executable MIR without source-expression side tables.
@@ -3835,7 +4937,7 @@ Commit when executable MIR verification proves:
 - every executable procedure has a `ProcOwnershipContract` before IR lowering
 - LIR ownership logic does not infer procedure contracts as semantic truth
 
-### 8. Delete Source-Type Reconstruction
+### 9. Delete Source-Type Reconstruction
 
 Delete the whole source-type reconstruction family:
 
@@ -3851,7 +4953,7 @@ Do not keep compatibility wrappers.
 
 Commit only after targeted searches prove there are no stragglers.
 
-### 9. Rewire IR Lowering
+### 10. Rewire IR Lowering
 
 Update `src/ir/lower.zig` to consume executable MIR.
 
@@ -3862,16 +4964,148 @@ forms.
 
 Commit when IR lowering has no imports of checked CIR or MIR builder internals.
 
-### 10. Rewire Public Pipelines
+### 11. Rewire Public Pipelines
 
-Update eval, compile, CLI, dev shim, snapshot tool, and test helpers to call the
-MIR-family pipeline.
+Update eval, compile, CLI, dev shim, interpreter shim, snapshot tool, glue, REPL,
+and test helpers to call the checked-artifact public pipeline.
+
+The public semantic lowering API must accept:
+
+```text
+published checked artifacts
+explicit RootRequestSet
+target configuration
+```
+
+and return:
+
+```text
+LowerResourceError!LoweredProgram
+```
+
+where `LowerResourceError` contains only resource failures such as
+`Allocator.Error`.
+
+Delete public helpers that accept checked CIR plus optional roots or root names.
+Delete public helpers that choose a root by scanning exports, selecting the last
+root procedure, filtering expressions by syntax, or looking for hosted lambda
+nodes.
+
+REPL and development expressions must be checked as temporary modules or
+temporary checked artifacts with explicit `.repl_expr` or `.dev_expr` roots.
+Tests may build small artifacts directly, but semantic lowering tests must call
+the same checked-artifact public pipeline as production tools.
 
 Remove helper names that refer to old stages.
 
-Commit when `rg` finds no old post-check imports or pipeline labels.
+Commit when `rg` finds no old post-check imports or pipeline labels, no
+`lowerTypedCIRToLir*` or `lowerTypedCIRToSemanticEval*` public entrypoints, and
+no public semantic lowering result that can return `NoRootProc`,
+`NoRootDefinition`, `MissingRoot`, `MethodNotFound`, `UnsupportedSourceType`,
+`UnsupportedLayout`, `SchemaLayoutMismatch`, or `MissingInterfaceCapability`.
 
-### 11. Strengthen Audits
+### 12. Rewire Compile-Time Constant Evaluation
+
+Replace the current compile-time evaluation lowering path with the MIR-family
+pipeline:
+
+```text
+checked CIR
+  -> mir.mono
+  -> mir.mono.row_finalize
+  -> mir.lifted
+  -> mir.lambda_solved
+  -> mir.executable
+  -> ir
+  -> lir
+  -> LIR interpreter
+  -> CompileTimeValueStore + promoted procedure table
+```
+
+This work must preserve the current valid architecture:
+
+- compile-time constants are evaluated by the LIR interpreter
+- runtime bytes are reified into explicit schema/value nodes
+- top-level constant bindings point at `(schema_id, value_id)`
+- top-level callable bindings publish as `procedure_value` after compile-time
+  callable promotion when promotion is needed
+- serialized compile-time values travel inside cached checked artifacts
+- imported modules expose compile-time constants through their serialized value
+  store
+- serializable top-level constants are consumed by `ConstRef`
+- function declarations and function-valued declarations are consumed as
+  procedure values; direct top-level functions use their original procedure
+  symbols, and compile-time callable roots use promoted procedure symbols
+
+This work must delete or replace the current invalid architecture:
+
+- no runtime top-level constant thunks
+- no runtime global initializer procedures for constants
+- no runtime zero-argument wrappers for constants
+- no runtime top-level closure objects for top-level bindings
+- no runtime global callable-value objects for top-level bindings
+- no late syntax filters for root selection
+- no checked-CIR-to-LIR semantic eval path that bypasses MIR-family contracts
+- no imported module LIR re-execution after checked artifact publication
+- no target-shaped constant bytes stored in the checked artifact cache
+
+Introduce an explicit compile-time root table before LIR interpretation. The
+table must record at least the source module, top-level pattern, expression,
+procedure symbol, root kind, and either the result schema for serializable
+constants or the callable-result record for function-valued bindings. Root
+selection must happen before the LIR interpreter runs. The interpreter must only
+execute listed roots; it must not decide which top-level declarations are
+constants or callable bindings.
+
+Add compile-time callable promotion to checking finalization. Function-valued
+top-level bindings whose expressions are not already top-level functions must
+run as `callable_binding` roots. Their interpreter result must be reified as a
+compiler-owned `ComptimeCallable`, promoted to a closed procedure symbol, and
+published as `procedure_value`. The promoted procedure must have no runtime
+capture environment. Serializable captures become `ConstRef` reads; callable
+captures are promoted recursively to private procedure symbols. Unsupported
+captures are checking problems before publication.
+
+Private aggregate LIR roots are allowed only as `comptime_only` interpreter
+entrypoints. They must be excluded from runtime root lists, backend input, and
+generated program entry metadata. Debug verification must assert that no
+`comptime_only` proc reaches runtime codegen; release builds use `unreachable`
+if that invariant is violated.
+
+Move the user-facing reporting boundary so compile-time evaluation is part of
+checking finalization. `TypeCheckOutput` or equivalent checked artifact data
+must not be returned until compile-time constant evaluation has either produced
+a complete `CompileTimeValueStore` plus all required promoted procedures, or
+appended all user-facing checking problems.
+
+After checked artifact data is returned, missing compile-time constant data or a
+missing promoted procedure is not a recoverable condition. Later stages must
+consume the published artifact data or hit a compiler invariant violation.
+
+Add `ConstRef` or the exact equivalent. Mono MIR lookup of a serializable
+top-level constant must emit a constant-reference node that carries this handle.
+Executable MIR/LIR must turn the handle into an explicit target-specific
+`ConstMaterializationPlan` containing target executable type, layout, ownership,
+and storage strategy. Backends must only emit requested static data or heap setup
+and follow explicit LIR `incref` and `decref` statements.
+
+Replace the current checked-module cache shape with the checked artifact cache
+described above. The checked artifact key must use `source_hash`,
+`compiler_artifact_hash`, `module_identity`, `checking_context_identity`, and
+direct imported checked artifact keys. It must not include target/layout inputs.
+
+A checked artifact cache hit and its compile-time value store must be accepted
+together or rejected together. There must not be an independently accepted
+compile-time-value sidecar. If target-specific constant materialization is ever
+cached, that cache is separate from the checked artifact cache and is keyed by
+the checked artifact key plus target/layout inputs.
+
+Commit when compile-time evaluation uses the MIR-family pipeline, runtime
+codegen cannot see `comptime_only` roots, cached/imported constants are loaded
+only from the compile-time value store through `ConstRef`, and target-specific
+constant materialization is outside the checked artifact cache.
+
+### 13. Strengthen Audits
 
 Make audits allowlist-based.
 
@@ -3928,6 +5162,35 @@ may be rechecked only by debug-only verifiers.
 Forbid any MIR, executable MIR, IR, or LIR operation whose semantic purpose is
 automatic currying or compiler-synthesized partial application.
 
+Forbid runtime top-level constant thunks, runtime global initializer procedures
+for compile-time constants, runtime zero-argument constant wrappers, runtime
+top-level closure objects for top-level bindings, and runtime global
+callable-value objects for top-level bindings. Private `comptime_only` LIR
+interpreter roots are allowed only in the compile-time evaluation module and
+tests that explicitly verify they never reach runtime codegen.
+
+Forbid compile-time root selection by late syntax filters in LIR evaluation.
+Compile-time roots must come from the explicit compile-time root table.
+
+Forbid post-check root selection by scanning exports, top-level declarations,
+checked expressions, procedure order, hosted lambda expressions, or generated
+symbol names. Root selection must consume `RootRequestTable`.
+
+Forbid post-check mutation of hosted indices or platform-required lookup
+targets inside checked CIR or `ModuleEnv`. Hosted and platform data must come
+from `HostedProcTable` and `PlatformRequiredBindingTable`.
+
+Forbid public semantic lowering APIs that return semantic errors after artifact
+publication. Post-check semantic lowering may return resource errors only.
+
+Forbid imported representation recovery from module bodies, opaque backing
+syntax, display names, or layout shapes. Cross-module representation data must
+come from `ModuleInterfaceCapabilities`.
+
+Forbid runtime constant materialization from hidden top-level thunks or imported
+module LIR re-execution. Serializable constants must be consumed through
+`ConstRef` and `CompileTimeValueStore`.
+
 Forbid invalid Roc syntax in plan examples and tests that are intended to be Roc
 source. In particular, forbid Haskell-style run declarations, backslash-arrow
 lambdas, and whitespace function application. Roc examples must use lambdas like
@@ -3946,7 +5209,7 @@ method_eq
 
 Commit when guarded semantic audits pass.
 
-### 12. Rewrite Tests
+### 14. Rewrite Tests
 
 Rewrite old intermediate-stage tests.
 
@@ -3975,6 +5238,63 @@ Replacement expectations:
 ## Required Structural Tests
 
 Add MIR-family verification tests for each stage.
+
+Checking finalization and compile-time constants:
+
+- checking finalization publishes a complete `CheckedModuleArtifact` or no
+  artifact
+- published artifacts include method registry, static dispatch plans, root
+  request table, hosted procedure table, platform-required binding table,
+  interface capabilities, and compile-time value store
+- artifact views exposed to importers and lowering are read-only
+- a cache hit does not patch module identity after deserialization
+- hosted procedure ordering is stored in `HostedProcTable`, not by mutating
+  checked CIR
+- platform-required bindings are stored in `PlatformRequiredBindingTable`, not
+  by mutating checked module lookup targets after publication
+- root requests exist before MIR lowering starts
+- root requests cover app entrypoints, provided exports, platform-required
+  bindings, hosted exports, tests, REPL/dev expressions, and compile-time roots
+- no eval, REPL, snapshot, CLI, glue, build, or test helper selects roots by
+  scanning exports, declaration names, expression syntax, hosted lambda nodes,
+  or procedure order
+- imported modules expose representation capabilities through
+  `ModuleInterfaceCapabilities`
+- importing modules do not inspect imported private definitions or opaque
+  backing syntax to rebuild representation capability data
+- compile-time constant evaluation runs before checked artifacts are published
+- user-facing compile-time crashes, expect failures, numeric conversion
+  failures, and evaluation errors are reported as checking problems
+- every compile-time evaluation root appears in the explicit compile-time root
+  table
+- no LIR interpreter code path selects compile-time roots by inspecting source
+  expression syntax
+- private aggregate LIR roots used by compile-time evaluation are marked
+  `comptime_only`
+- no `comptime_only` root reaches runtime root lists, backend input, generated
+  program entry metadata, or runtime codegen
+- compile-time value reification stores `(schema_id, value_id)` bindings, not
+  raw runtime addresses
+- compile-time schemas are built from resolved source types plus selected
+  layouts
+- function source types are rejected as serializable constant schemas unless a
+  future explicit serialized function-value representation exists
+- function-valued top-level bindings that evaluate to closed callable values are
+  promoted during checking finalization to closed procedure symbols
+- cached checked artifacts include serialized compile-time values and hit or
+  miss as one unit
+- checked artifact keys use `source_hash`, `compiler_artifact_hash`,
+  `module_identity`, `checking_context_identity`, and direct imported checked
+  artifact keys
+- checked artifact keys do not include target/layout inputs
+- serializable top-level constants are consumed through `ConstRef`
+- function declarations and function-valued declarations are consumed as
+  procedure values after any required callable promotion, not serialized
+  constants
+- imported constants are not evaluated by re-running imported module LIR roots
+  after the imported artifact is published
+- target-specific constant materialization uses explicit layout, ownership, and
+  storage plans outside the checked artifact cache
 
 Mono MIR:
 
@@ -4151,6 +5471,11 @@ Executable MIR:
 
 IR/LIR:
 
+- public checked-artifact-to-LIR lowering APIs return only resource errors such
+  as `Allocator.Error`
+- public semantic lowering APIs do not return `NoRootProc`, `NoRootDefinition`,
+  `MissingRoot`, `MethodNotFound`, `UnsupportedSourceType`,
+  `UnsupportedLayout`, `SchemaLayoutMismatch`, or `MissingInterfaceCapability`
 - direct calls lower to direct calls
 - erased calls lower to erased calls
 - no method/dispatch operation exists
@@ -4273,6 +5598,68 @@ Callable/capture behavior:
 - `packed_erased_fn`, erased adapters, `callable_match`, `Box.box`,
   `Box.unbox`, and bridges produce LIR ownership records consumed by `RcInsert`
 
+Compile-time constants:
+
+- simple top-level constants evaluate through the LIR interpreter and appear in
+  the compile-time value store
+- top-level constants that call helper functions evaluate through the same LIR
+  interpreter path
+- compile-time constants containing strings, lists, records, tuples, tag unions,
+  boxes, aliases, and nominals reify to logical constant nodes
+- top-level function declarations do not become runtime constant thunks
+- top-level function-valued declarations do not become runtime closure objects,
+  runtime global callable-value objects, runtime initializer procedures, or
+  runtime thunks
+- top-level function declarations are published directly as `procedure_value`
+  without being evaluated just to prove they are callable
+- top-level function-typed expressions such as `add5 = makeAdder(5)` evaluate
+  as `callable_binding` roots during checking finalization
+- top-level function-valued declarations are not reified as serializable
+  constants unless an explicit serialized function-value representation has
+  been added
+- top-level function-valued declarations that evaluate to closed callable values
+  are promoted before artifact publication to closed top-level procedures and
+  then consumed as `procedure_value`
+- promoted procedures have no runtime capture environment; serializable
+  captures are consumed through `ConstRef`, and callable captures are promoted
+  recursively to private procedure symbols
+- `TopLevelValueTable` is the only post-check source for deciding whether a
+  top-level binding is a `serializable_constant` or `procedure_value`
+- user-written compile-time crashes and failed `expect` statements are reported
+  before checked artifacts are published
+- division by zero and numeric conversion failures during compile-time constant
+  evaluation are reported before checked artifacts are published
+- cross-module constants are consumed from the imported module's serialized
+  compile-time value store
+- cross-module constants are referenced by `ConstRef`, not by generated
+  zero-argument procedures
+- a cached checked artifact restores compile-time values with the rest of the
+  checked artifact
+- changing a direct or transitive import changes imported checked artifact keys
+  and invalidates dependent checked artifacts
+- changing target/layout-relevant inputs does not invalidate checked artifacts;
+  those inputs invalidate only target-specific post-check caches
+- no generated runtime code contains top-level constant initializer thunks,
+  global initializer procedures for constants, or zero-argument constant wrappers
+- private aggregate `comptime_only` roots never appear in backend input
+
+Artifact and tooling behavior:
+
+- app entrypoints lower only through explicit root requests
+- platform-required roots lower only through `PlatformRequiredBindingTable`
+- hosted exports lower only through `HostedProcTable`
+- REPL expressions lower as temporary checked artifacts with `.repl_expr` roots
+- dev expressions lower as temporary checked artifacts with `.dev_expr` roots
+- tests that compile source to LIR call the same checked-artifact public
+  pipeline as production tools
+- missing roots are reported before artifact publication for commands that
+  require them
+- imported opaque representation succeeds only through published interface
+  capabilities
+- imported opaque representation without a capability is reported before the
+  importing artifact is published
+- public post-check lowering APIs never return semantic missing-data errors
+
 End-to-end:
 
 ```sh
@@ -4312,8 +5699,47 @@ Forbidden responses:
 
 The cutover is complete only when all of these are true:
 
-- public pipeline is `checked CIR -> mono MIR -> lifted MIR -> lambda-solved MIR
-  -> executable MIR -> IR -> LIR`
+- public executable pipeline is `checked CIR -> mono MIR -> row-finalized mono
+  MIR -> lifted MIR -> lambda-solved MIR -> executable MIR -> IR -> LIR`
+- every public semantic lowering client enters through the checked-artifact
+  pipeline with explicit roots and target configuration
+- checked finalization publishes complete immutable checked artifacts or no
+  artifacts
+- checked artifacts contain root requests, hosted procedure tables,
+  platform-required binding tables, interface capabilities, method registries,
+  static dispatch plans, and compile-time value stores
+- published checked artifacts are consumed through read-only views and are not
+  patched after cache load or publication
+- no post-check stage mutates checked CIR or `ModuleEnv` to assign hosted
+  indices, platform-required lookup targets, roots, or module identity
+- root requests are built before MIR lowering and no later stage selects roots
+  by scanning exports, declarations, expression syntax, hosted lambda nodes, or
+  procedure order
+- REPL and development expressions become temporary checked artifacts with
+  explicit roots
+- imported modules expose representation capabilities and compile-time constants
+  only through their checked artifacts
+- public post-check semantic lowering APIs return resource errors only; semantic
+  missing-data conditions are checking diagnostics before publication or
+  compiler invariant violations after publication
+- compile-time constant evaluation runs during checking finalization through
+  `checked CIR -> mono MIR -> row-finalized mono MIR -> lifted MIR ->
+  lambda-solved MIR -> executable MIR -> IR -> LIR -> LIR interpreter ->
+  compile-time value store`
+- checked artifact data is not published until compile-time constant evaluation
+  has either produced a complete compile-time value store or appended all
+  user-facing checking problems
+- no runtime top-level constant thunks, runtime global initializer procedures
+  for constants, runtime zero-argument constant wrappers, runtime top-level
+  closure objects, or runtime global callable-value objects exist for top-level
+  bindings
+- private `comptime_only` LIR roots are visible only to compile-time evaluation
+  and never reach backend input
+- imported constants are consumed through `ConstRef` from serialized
+  compile-time value stores, not by re-running imported module LIR roots after
+  checking
+- target-specific constant materialization uses explicit layout, ownership, and
+  storage plans outside the checked artifact cache
 - no public pipeline imports old top-level post-check modules
 - static dispatch exists only in checked CIR and mono MIR input pattern matching
 - every checked static-dispatch node exported to mono MIR carries a

@@ -751,9 +751,9 @@ const Planner = struct {
                     try resolved_cache.put(id, exec_ty);
                 } else if (!self.executableTypeIsAbstract(existing) and self.executableTypeIsAbstract(exec_ty)) {
                     return;
-                } else if (self.executableTypeHasMoreSpecificErasedCallableShape(exec_ty, existing)) {
+                } else if (self.executableTypeShouldReplaceSeededFact(exec_ty, existing)) {
                     try resolved_cache.put(id, exec_ty);
-                } else if (self.executableTypeHasMoreSpecificErasedCallableShape(existing, exec_ty)) {
+                } else if (self.executableTypeShouldReplaceSeededFact(existing, exec_ty)) {
                     return;
                 } else {
                     const existing_summary = self.debugExecutableTypeSummary(existing);
@@ -3842,7 +3842,27 @@ const Planner = struct {
             }
             break :blk cloned;
         };
+        return try self.lowerBindingBodyAtSourceTy(
+            inst,
+            mono_cache,
+            venv,
+            bind,
+            body_expr_id,
+            bind_ty,
+            context,
+        );
+    }
 
+    fn lowerBindingBodyAtSourceTy(
+        self: *Planner,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        venv: []const EnvEntry,
+        bind: solved.Ast.TypedSymbol,
+        body_expr_id: solved.Ast.ExprId,
+        bind_ty: TypeVarId,
+        comptime context: []const u8,
+    ) std.mem.Allocator.Error!LoweredBinding {
         const body_expr = self.input.store.getExpr(body_expr_id);
         if (!self.sourceTypeIsAbstract(inst.types, bind_ty)) {
             const bind_exec_ty = try self.requireConcreteExecutableTypeForBinding(
@@ -4801,6 +4821,13 @@ const Planner = struct {
                 if (fn_args.len != requested_arg_tys.len) {
                     debugPanic("lambdamono.exec_plan.specializeFn function arg arity mismatch");
                 }
+                try self.seedExecutableTypeFactsFromCallArgs(
+                    inst.types,
+                    &mono_cache,
+                    requested_arg_tys,
+                    initial_proc_arg_exec_tys,
+                    repr_mode,
+                );
                 var final_source_ret_ty = fn_shape.ret;
                 const result: ast.FnDef = switch (repr_mode) {
                     .natural => if (frozen_captures.len == 0) blk_fn: {
@@ -4817,6 +4844,13 @@ const Planner = struct {
                         const body_pending = self.lookupPendingBySpecializedSymbol(pending_symbol) orelse
                             debugPanic("lambdamono.exec_plan.specializeFn lost pending specialization before lowering natural body");
                         const proc_arg_exec_tys = try self.ensurePendingExecutableArgTypes(body_pending);
+                        try self.seedExecutableTypeFactsFromCallArgs(
+                            inst.types,
+                            &mono_cache,
+                            requested_arg_tys,
+                            proc_arg_exec_tys,
+                            repr_mode,
+                        );
                         const body_env = try self.buildFnBodyEnv(
                             inst.types,
                             requested_arg_tys,
@@ -5011,6 +5045,13 @@ const Planner = struct {
                         const pre_body_pending = self.lookupPendingBySpecializedSymbol(pending_symbol) orelse
                             debugPanic("lambdamono.exec_plan.specializeFn lost pending specialization before reading erased signature");
                         const proc_arg_exec_tys = try self.ensurePendingExecutableArgTypes(pre_body_pending);
+                        try self.seedExecutableTypeFactsFromCallArgs(
+                            inst.types,
+                            &mono_cache,
+                            requested_arg_tys,
+                            proc_arg_exec_tys,
+                            repr_mode,
+                        );
                         const body_env = try self.buildFnBodyEnv(
                             inst.types,
                             requested_arg_tys,
@@ -5637,15 +5678,16 @@ const Planner = struct {
                 defer self.allocator.free(refined_rest_env);
                 try self.preRefineExprSourceTypes(inst, mono_cache, refined_rest_env, let_expr.rest);
 
-                var lowered_binding = try self.lowerBindingBody(
+                const refined_source_ty = self.envSourceType(refined_entry);
+                var lowered_binding = try self.lowerBindingBodyAtSourceTy(
                     inst,
                     mono_cache,
                     venv,
                     let_expr.bind,
                     let_expr.body,
+                    refined_source_ty,
                     "planIgnoredExpr(let_)",
                 );
-                const refined_source_ty = self.envSourceType(refined_entry);
                 if (!self.sourceTypeIsAbstract(inst.types, refined_source_ty)) {
                     lowered_binding.source_ty = refined_source_ty;
                     lowered_binding.exec_ty = self.requireConcreteExecutableType(
@@ -6066,15 +6108,16 @@ const Planner = struct {
                 defer self.allocator.free(refined_rest_env);
                 try self.preRefineExprSourceTypes(inst, mono_cache, refined_rest_env, let_expr.rest);
 
-                var lowered_binding = try self.lowerBindingBody(
+                const refined_source_ty = self.envSourceType(refined_entry);
+                var lowered_binding = try self.lowerBindingBodyAtSourceTy(
                     inst,
                     mono_cache,
                     venv,
                     let_expr.bind,
                     let_expr.body,
+                    refined_source_ty,
                     "planExpr(let_)",
                 );
-                const refined_source_ty = self.envSourceType(refined_entry);
                 if (!self.sourceTypeIsAbstract(inst.types, refined_source_ty)) {
                     lowered_binding.source_ty = refined_source_ty;
                     lowered_binding.exec_ty = self.requireConcreteExecutableType(
@@ -7752,6 +7795,99 @@ const Planner = struct {
             return false;
         }
         return false;
+    }
+
+    fn executableTypeShouldReplaceSeededFact(
+        self: *Planner,
+        candidate_ty: type_mod.TypeId,
+        current_ty: type_mod.TypeId,
+    ) bool {
+        if (self.types.equalIds(candidate_ty, current_ty)) return false;
+        if (self.executableTypeHasMoreSpecificErasedCallableShape(candidate_ty, current_ty)) return true;
+        if (self.executableTypePreservesNominalWrapper(candidate_ty, current_ty)) return true;
+        return self.executableTypeHasWiderTagUnionShape(candidate_ty, current_ty);
+    }
+
+    fn executableTypePreservesNominalWrapper(
+        self: *Planner,
+        candidate_ty: type_mod.TypeId,
+        current_ty: type_mod.TypeId,
+    ) bool {
+        return switch (self.types.getTypePreservingNominal(candidate_ty)) {
+            .nominal => |nominal| self.types.equalIds(nominal.backing, current_ty),
+            else => false,
+        };
+    }
+
+    fn executableTypeHasWiderTagUnionShape(
+        self: *Planner,
+        candidate_ty: type_mod.TypeId,
+        current_ty: type_mod.TypeId,
+    ) bool {
+        var visited = std.AutoHashMap(u64, void).init(self.allocator);
+        defer visited.deinit();
+        return self.executableTypeHasWiderTagUnionShapeVisited(candidate_ty, current_ty, &visited) catch false;
+    }
+
+    fn executableTypeHasWiderTagUnionShapeVisited(
+        self: *Planner,
+        candidate_ty: type_mod.TypeId,
+        current_ty: type_mod.TypeId,
+        visited: *std.AutoHashMap(u64, void),
+    ) std.mem.Allocator.Error!bool {
+        const key = (@as(u64, @intFromEnum(candidate_ty)) << 32) | @as(u64, @intFromEnum(current_ty));
+        if (visited.contains(key)) return false;
+        try visited.put(key, {});
+
+        const candidate = self.types.getTypePreservingNominal(candidate_ty);
+        const current = self.types.getTypePreservingNominal(current_ty);
+        if (candidate == .nominal) {
+            return try self.executableTypeHasWiderTagUnionShapeVisited(candidate.nominal.backing, current_ty, visited);
+        }
+        if (current == .nominal) {
+            return try self.executableTypeHasWiderTagUnionShapeVisited(candidate_ty, current.nominal.backing, visited);
+        }
+        if (candidate == .tag_union and current == .tag_union) {
+            return self.executableTagUnionContains(
+                candidate.tag_union.tags,
+                candidate.tag_union.call,
+                current.tag_union.tags,
+                current.tag_union.call,
+            );
+        }
+        return false;
+    }
+
+    fn executableTagUnionContains(
+        self: *Planner,
+        candidate_tags: type_mod.Tags,
+        candidate_call: ?type_mod.CallableSig,
+        current_tags: type_mod.Tags,
+        current_call: ?type_mod.CallableSig,
+    ) bool {
+        if (candidate_call != null or current_call != null) return false;
+        if (self.tagUnionIsInternalLambdaSet(candidate_tags) or self.tagUnionIsInternalLambdaSet(current_tags)) return false;
+        if (candidate_tags.len <= current_tags.len) return false;
+        for (current_tags) |current_tag| {
+            const candidate_tag = self.executableTagByName(candidate_tags, current_tag.name) orelse return false;
+            if (candidate_tag.args.len != current_tag.args.len) return false;
+            for (candidate_tag.args, current_tag.args) |candidate_arg, current_arg| {
+                if (!self.types.equalIds(candidate_arg, current_arg)) return false;
+            }
+        }
+        return true;
+    }
+
+    fn executableTagByName(
+        self: *const Planner,
+        tags: type_mod.Tags,
+        name: type_mod.TagName,
+    ) ?type_mod.Tag {
+        _ = self;
+        for (tags) |tag| {
+            if (std.meta.eql(tag.name, name)) return tag;
+        }
+        return null;
     }
 
     fn emitExplicitBridgeExpr(
@@ -11266,15 +11402,16 @@ const Planner = struct {
                         decl.bind,
                         decl.body,
                     );
-                var lowered_binding = try self.lowerBindingBody(
+                const refined_source_ty = self.envSourceType(refined_entry);
+                var lowered_binding = try self.lowerBindingBodyAtSourceTy(
                     inst,
                     mono_cache,
                     venv,
                     decl.bind,
                     decl.body,
+                    refined_source_ty,
                     "specializeStmt(decl)",
                 );
-                const refined_source_ty = self.envSourceType(refined_entry);
                 if (!self.sourceTypeIsAbstract(inst.types, refined_source_ty)) {
                     lowered_binding.source_ty = refined_source_ty;
                     lowered_binding.exec_ty = self.requireConcreteExecutableType(
@@ -11315,15 +11452,16 @@ const Planner = struct {
                         decl.bind,
                         decl.body,
                     );
-                var lowered_binding = try self.lowerBindingBody(
+                const refined_source_ty = self.envSourceType(refined_entry);
+                var lowered_binding = try self.lowerBindingBodyAtSourceTy(
                     inst,
                     mono_cache,
                     venv,
                     decl.bind,
                     decl.body,
+                    refined_source_ty,
                     "specializeStmt(var_decl)",
                 );
-                const refined_source_ty = self.envSourceType(refined_entry);
                 if (!self.sourceTypeIsAbstract(inst.types, refined_source_ty)) {
                     lowered_binding.source_ty = refined_source_ty;
                     lowered_binding.exec_ty = self.requireConcreteExecutableType(
