@@ -1876,7 +1876,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     }
     // Inline `expect` failures don't halt the program but must cause a
     // non-zero exit status so scripts and test runners can detect them.
-    if (default_roc_ops_env.inline_expect_failed) {
+    if (echo_env.inline_expect_failed) {
         std.process.exit(1);
     }
 }
@@ -6050,9 +6050,9 @@ fn printTestFailure(
         const curr_line_start_idx = region_info.start_line_idx;
         const curr_line_start = line_starts[curr_line_start_idx];
         const prev_line_start = if (curr_line_start_idx > 0) line_starts[curr_line_start_idx - 1] else break :blk null;
-        const prev_line = std.mem.trimLeft(u8, src[prev_line_start..curr_line_start], " ");
+        const prev_line = std.mem.trimStart(u8, src[prev_line_start..curr_line_start], " ");
         if (std.mem.startsWith(u8, prev_line, "##")) {
-            break :blk std.mem.trimRight(u8, prev_line, " \r\n");
+            break :blk std.mem.trimEnd(u8, prev_line, " \r\n");
         }
         break :blk null;
     };
@@ -7068,7 +7068,7 @@ fn generateDocs(
     defer package_docs.deinit(ctx.gpa);
 
     // Remove existing output directory to ensure a clean build
-    try std.fs.cwd().deleteTree(base_output_dir);
+    try std.Io.Dir.cwd().deleteTree(ctx.io.std_io, base_output_dir);
 
     // Create output directory
     std.Io.Dir.cwd().createDirPath(ctx.io.std_io, base_output_dir) catch |err| switch (err) {

@@ -7479,11 +7479,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     for (field_patterns, 0..) |field_pattern_id, field_idx| {
                         const field_offset = ls.getStructFieldOffset(
-                            struct_layout_val.data.struct_.idx,
+                            struct_layout_val.getStruct().idx,
                             @intCast(field_idx),
                         );
                         const field_layout_idx = ls.getStructFieldLayout(
-                            struct_layout_val.data.struct_.idx,
+                            struct_layout_val.getStruct().idx,
                             @intCast(field_idx),
                         );
                         const field_loc = self.stackLocationForLayout(
@@ -7504,7 +7504,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const value_layout_val = ls.getLayout(value_layout_idx);
                     if (value_layout_val.tag != .tag_union) return;
 
-                    const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
+                    const tu_data = ls.getTagUnionData(value_layout_val.getTagUnion().idx);
                     const tu_disc_offset: i32 = @intCast(tu_data.discriminant_offset);
                     const tu_disc_size: u8 = tu_data.discriminant_size;
                     const tu_total_size: u32 = tu_data.size;

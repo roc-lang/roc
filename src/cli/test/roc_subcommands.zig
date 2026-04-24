@@ -1034,7 +1034,7 @@ fn testFailureOutputContainsSourceSnippet(opt: []const u8) !void {
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+    try testing.expect(result.term == .exited and result.term.exited == 1);
 
     // Output should contain line-numbered source lines with │ prefix
     try testing.expect(std.mem.indexOf(u8, result.stderr, "\u{2502}") != null); // │
@@ -1059,7 +1059,7 @@ fn testFailureOutputContainsDocComment(opt: []const u8) !void {
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+    try testing.expect(result.term == .exited and result.term.exited == 1);
 
     // Output should contain the doc comment text
     try testing.expect(std.mem.indexOf(u8, result.stderr, "## This test should fail") != null);
@@ -1094,8 +1094,8 @@ fn testVerboseAndNonVerboseFailureFormatMatch(opt: []const u8) !void {
     defer gpa.free(verbose.stdout);
     defer gpa.free(verbose.stderr);
 
-    try testing.expect(non_verbose.term == .Exited and non_verbose.term.Exited == 1);
-    try testing.expect(verbose.term == .Exited and verbose.term.Exited == 1);
+    try testing.expect(non_verbose.term == .exited and non_verbose.term.exited == 1);
+    try testing.expect(verbose.term == .exited and verbose.term.exited == 1);
 
     // Both modes should contain the same formatting elements for failures
     for ([_][]const u8{ "\u{2502}", "add(1, 1) == 3" }) |needle| {
@@ -1215,7 +1215,7 @@ test "roc run returns exit code 1 for old platform download" {
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+    try testing.expect(result.term == .exited and result.term.exited == 1);
 
     try testing.expect(std.mem.indexOf(u8, result.stderr, "platform was built with the old Roc") != null);
 }
@@ -1705,7 +1705,7 @@ test "failed inline expect exits with code 1 and continues program (dev)" {
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+    try testing.expect(result.term == .exited and result.term.exited == 1);
     try testing.expect(std.mem.indexOf(u8, result.stdout, "Hello, World!") != null);
     try testing.expect(std.mem.indexOf(u8, result.stderr, "expect failed") != null);
 }
@@ -1718,7 +1718,7 @@ test "failed inline expect exits with code 1 and continues program (interpreter)
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+    try testing.expect(result.term == .exited and result.term.exited == 1);
     try testing.expect(std.mem.indexOf(u8, result.stdout, "Hello, World!") != null);
     try testing.expect(std.mem.indexOf(u8, result.stderr, "Expect failed") != null);
 }

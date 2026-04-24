@@ -926,7 +926,7 @@ fn renderDocComment(w: Writer, ctx: *const RenderContext, doc: []const u8) !void
         // Find the closing fence
         const close_pos = findCodeFence(doc, pos) orelse {
             // Unclosed fence; render the rest as a code block
-            const code = std.mem.trimRight(u8, doc[pos..], "\n\r");
+            const code = std.mem.trimEnd(u8, doc[pos..], "\n\r");
             if (code.len > 0) {
                 try w.writeAll("                <pre><code>");
                 try writeHtmlEscaped(w, code);
@@ -936,7 +936,7 @@ fn renderDocComment(w: Writer, ctx: *const RenderContext, doc: []const u8) !void
         };
 
         // Render the code block content
-        const code = std.mem.trimRight(u8, doc[pos..close_pos], "\n\r");
+        const code = std.mem.trimEnd(u8, doc[pos..close_pos], "\n\r");
         if (code.len > 0) {
             try w.writeAll("                <pre><code>");
             try writeHtmlEscaped(w, code);
