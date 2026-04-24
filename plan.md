@@ -321,6 +321,38 @@ After lifting, local functions and closures are still called through
 This is true even for captureless local functions. Direct-call optimization is
 not a representation invariant.
 
+Recursive local-function groups are lifted by fixed point, not by one-pass
+body scanning.
+
+For each recursive local-function group, lifted MIR must:
+
+1. Allocate stable procedure symbols for every group member before lowering any
+   member body.
+2. Assign a stable `ProcOrderKey` to every group member before lowering any
+   member body.
+3. Compute each member's `CaptureSlot`s as the least fixed point of:
+   - external values directly referenced by that member body
+   - external values needed to construct any referenced self or sibling
+     `proc_value`
+   - capture slots pulled through references to self or sibling procedures
+4. Rewrite every self, sibling, local-function, and closure reference to an
+   explicit `proc_value`.
+5. Fill each `proc_value.captures` from values in the current scope or from the
+   current procedure's own `CaptureSlot`s.
+6. Iterate until every member's capture-slot set is stable.
+
+Failure to converge is a compiler invariant failure. It is not a fallback path.
+
+Capture slot ordering inside a recursive group must be deterministic. The base
+order is lexical capture discovery. Fixed-point additions are appended in
+`ProcOrderKey` order, then by lexical reference order inside that procedure.
+Capture slot ordering must not depend on hash-map iteration, symbol allocation
+order, pointer identity, or body traversal accidents.
+
+After lifted MIR, no local alias variable may stand for a procedure value. An
+alias of a local function or closure must be rewritten to an explicit
+`proc_value`, or it must be an ordinary non-procedure value.
+
 ### Lambda-Solved MIR
 
 Lambda-solved MIR owns callable/lambda-set solving.
@@ -349,6 +381,21 @@ It must not:
 Lambda-solved MIR output must make callable metadata explicit in its types,
 procedure metadata, and `proc_value` capture payloads. The executable MIR stage
 must not have to rediscover it.
+
+The lambda-solved type store is the single source of callable representation for
+executable lowering.
+
+Executable MIR must consume the zonked callable representation attached to:
+
+```text
+call_value.requested_fn_ty
+call_proc.requested_fn_ty
+proc_value.fn_ty
+```
+
+It must not derive a callable member set from `proc_value` syntax, environment
+lookup, body scanning, source function types, or the local shape of a callee
+expression.
 
 `call_proc` participates in lambda-set inference as a direct procedure call. It
 is not a first-class procedure value and it carries no captures.
@@ -402,14 +449,65 @@ Unification of two callable sets is exact:
 This algebra is not an optimization. It is the exported lambda-solved contract
 that executable MIR consumes.
 
+For every `call_value`, lambda-solved MIR must export a complete zonked callable
+representation through `call_value.requested_fn_ty`.
+
+If that representation is a finite non-erased callable set, executable MIR must
+treat every member as an executable specialization dependency of that call. If
+that representation is erased, executable MIR must lower the call as an erased
+call. Executable MIR must not inspect the callee expression to choose between
+finite and erased representation.
+
 Lambda-solved builder internals may use solver links, unbound variables, and
 generalized variables while solving. Exported lambda-solved MIR must expose a
 zonked view for every executable specialization input. Generalized variables may
 remain only in specialization templates that are explicitly instantiated before
 executable lowering consumes them.
 
-Erasure is decided here. Executable MIR consumes explicit erased-callable
-metadata from lambda-solved MIR and must not infer erasure from usage.
+Generalized variables may appear only in procedure specialization templates.
+Before executable MIR consumes a procedure, call, or callable value, the
+template must be clone-instantiated into a specialization-local lambda-solved
+type store and zonked. No exported executable specialization key, executable MIR
+type, callable-set member, capture type, bridge endpoint, or erased function
+type may contain `for_a`, `flex_for_a`, `unbd`, unresolved links, or raw
+checker variables.
+
+Executable specialization keys must be canonical structural keys after zonking.
+They must not contain raw type-store ids from a transient clone. Procedure
+members in those keys are ordered by `ProcOrderKey`. Capture components are
+ordered by `CaptureSlot.index`.
+
+Erasure is decided here. Lambda-solved MIR must preserve both sides of every
+erased callable coercion:
+
+```zig
+erase_callable {
+    value: ExprId,
+    source_callable_ty: TypeId,
+    erased_fn_ty: TypeId,
+}
+```
+
+`source_callable_ty` is the zonked callable representation of the value before
+erasure. `erased_fn_ty` is the explicit erased callable type required by the
+boundary.
+
+Erasure must not overwrite the only callable shape available at the construction
+site. If a finite callable-set value crosses an erased boundary, executable MIR
+must still be able to see the finite source members through
+`source_callable_ty`.
+
+Executable MIR consumes `erase_callable` as follows:
+
+- `proc_value -> erased` packs the explicit procedure member and explicit
+  capture payloads.
+- `finite callable-set value -> erased` synthesizes an erased adapter procedure
+  that captures the finite callable-set value. The adapter body dispatches with
+  `callable_match`.
+- `already-erased value -> erased` passes through after verifying the erased
+  function type matches exactly.
+
+Executable MIR must not infer erasure from usage.
 
 ### Executable MIR
 
@@ -467,6 +565,13 @@ This conversion must use only lambda-solved MIR metadata and executable MIR's ow
 specialization queue. It must not inspect checked CIR, method registries, source
 syntax, or expression-derived facts.
 
+When executable MIR lowers `call_proc`, it must still reserve or create the
+target executable specialization from the lambda-solved procedure target and the
+zonked requested callable type. It must lower and bridge every argument
+explicitly. A `call_proc` may return ordinary data, finite callable-set values,
+or erased callable values; direct-call lowering must not assume the result is
+non-callable.
+
 Finite callable-set calls are mandatory lowering, not an optimization.
 
 When lambda-solved MIR says a `call_value` callee has a finite non-erased
@@ -500,6 +605,7 @@ CallableBranch {
     member_tag_index: u32,
     capture_payload: ?TypedSymbol,
     direct_proc: Symbol,
+    direct_args: Span(ExprId),
     body: ExprId,
 }
 ```
@@ -507,6 +613,19 @@ CallableBranch {
 `member_proc` is the lambda-solved callable-set member. `direct_proc` is the
 reserved executable specialization used by the branch body. They are related by
 the executable specialization queue, not by name lookup.
+
+The executable calling convention for a callable-set member is:
+
+```text
+source call arguments in source order
++ optional trailing capture-record argument when the member has captures
+```
+
+`direct_args` is the exact argument list supplied to the branch `call_direct`.
+It must be the original argument temporaries, followed by the destructured
+capture payload temporary when `capture_payload` is present. Branch `body` may
+wrap that direct call in bridges, but it must not add, remove, duplicate, or
+reorder direct-call arguments.
 
 No branch may emit a `call_direct` to a procedure that has not been reserved or
 created by executable MIR. By the end of executable MIR, every `direct_proc`
@@ -532,13 +651,11 @@ source `match` does not satisfy the finite callable-set lowering requirement.
 Callable-set member tag assignment must be deterministic.
 
 The member ordering key is the canonical lambda-solved callable-set member
-order. That order is by stable source/MIR procedure identity. If `Symbol.raw()`
-is not assigned from a stable procedure identity, add an explicit stable
-procedure-order key and use that instead.
+order. That order is by stable `ProcOrderKey`.
 
 The ordering key must be explicit and stable across builds. It must not depend
-on hash-map iteration order, allocation order, pointer identity, display names,
-fresh-symbol suffixes, or incidental lowering traversal order.
+on `Symbol.raw()`, hash-map iteration order, allocation order, pointer identity,
+display names, fresh-symbol suffixes, or incidental lowering traversal order.
 
 Capture payload field ordering must also be deterministic for every callable-set
 member and every erased capture record.
@@ -650,6 +767,60 @@ old Symbol -> new Symbol
 ```
 
 It must not recover targets from names, expression shapes, or source lookup.
+
+Every procedure definition produced by mono MIR or any later MIR-family stage
+must carry an explicit stable order key:
+
+```zig
+ProcOrderKey {
+    module_idx: u32,
+    source_def_idx: ?CIR.Def.Idx,
+    lexical_proc_path: Span(u32),
+    specialization_key: ?CanonicalSpecializationKey,
+    synthetic_kind: SyntheticProcKind,
+}
+```
+
+`ProcOrderKey` is for deterministic ordering and reproducibility. `Symbol`
+remains the public procedure identity used by call nodes.
+
+`lexical_proc_path` records the stable path to a nested/lifted procedure inside
+its source definition. `specialization_key` is the canonical structural
+specialization key after zonking, not raw type-store ids. `synthetic_kind`
+distinguishes ordinary procedures from compiler-created procedures such as
+lifted locals, erased adapters, intrinsic wrappers, entrypoint wrappers, and
+bridges.
+
+Callable-set member ordering, erased adapter ordering, recursive capture
+fixed-point ordering, and generated procedure emission order must use
+`ProcOrderKey`.
+
+They must not use:
+
+```text
+Symbol.raw()
+symbol display names
+fresh-symbol suffixes
+hash-map iteration order
+allocation order
+pointer identity
+incidental traversal order
+```
+
+Procedure definitions also carry an explicit implementation target:
+
+```zig
+ProcTarget {
+    user_proc,
+    hosted_proc,
+    intrinsic_wrapper,
+}
+```
+
+`ProcTarget` is procedure metadata. `call_proc`, `proc_value`, and `call_direct`
+still refer to the procedure's `Symbol`. Later stages read the target metadata
+from the procedure definition; they must not rediscover whether a procedure is
+user code, hosted code, or an intrinsic wrapper from names or source syntax.
 
 ### Proc Calls, Direct Calls, And Value Calls
 
@@ -825,6 +996,9 @@ const MethodTarget = union(enum) {
 };
 ```
 
+`MethodTarget` is a mono MIR input contract only. It must not appear in lifted
+MIR, lambda-solved MIR, executable MIR, IR, or LIR.
+
 The registry maps:
 
 ```text
@@ -855,6 +1029,23 @@ procedure.
 Mono MIR lowering must pass that source method definition and the exact requested
 mono source function type through the mono specialization queue. The queue
 returns the mono-specialized source/MIR procedure symbol stored in `call_proc`.
+
+Before mono MIR output is exported, every callable method target must be
+normalized to a procedure symbol with `ProcTarget` metadata:
+
+- ordinary source methods become `ProcTarget.user_proc`
+- hosted/platform methods become `ProcTarget.hosted_proc`
+- first-class intrinsic method references synthesize a wrapper procedure and
+  become `ProcTarget.intrinsic_wrapper`
+
+An intrinsic may lower directly to executable `low_level` only when it is
+strictly call-only and never appears as a first-class value. If an intrinsic can
+flow as a value, mono MIR must synthesize an intrinsic wrapper procedure, emit
+`proc_value` for the value, and let lambda-solved/executable MIR handle it like
+any other procedure value.
+
+Hosted procedures are valid procedure targets. They are not a fallback for
+intrinsics, and later stages must not infer hosted behavior from names.
 
 Executable MIR later creates executable specializations from lambda-solved MIR.
 It must not reuse raw method registry symbols as executable direct-call targets.
@@ -974,6 +1165,43 @@ fact handles
 
 Executable type lowering consumes lambda-solved MIR types and metadata. It does
 not inspect source CIR or reconstruct from expressions.
+
+### Logical Layout Indices
+
+MIR and IR use logical field indexes. Physical layout lowering may reorder
+fields for representation efficiency, but it must preserve an explicit mapping
+from logical index to physical offset.
+
+Logical indexes include:
+
+- `CaptureSlot.index`
+- callable-set member capture payload fields
+- erased capture record fields
+- record fields
+- tuple fields
+- tag payload fields
+- compiler-generated struct fields
+
+Executable MIR layout graph nodes must store field identity explicitly:
+
+```zig
+LayoutField {
+    logical_index: u32,
+    ty: ExecTypeId,
+}
+```
+
+IR `make_struct`, `get_struct_field`, capture-record construction, and
+callable-set payload construction must refer to logical indexes. If an
+implementation uses slice position as a temporary representation, debug
+verification must prove that `slice_index == logical_index` before lowering
+continues.
+
+LIR access lowering is the first place that may resolve logical indexes to
+physical offsets through the layout store.
+
+No compiler stage may recover a capture field, record field, or tag payload
+position by sorting names, scanning bodies, or relying on physical layout order.
 
 ## Static Dispatch Lowering
 
@@ -1096,10 +1324,13 @@ Lifted MIR:
 
 - lifts local functions and closures
 - computes captures
+- computes recursive local-function captures by least fixed point
 - assigns `CaptureSlot.index` values and stores captures in lifted procedure
   metadata
 - rewrites every lifted local-function or closure value to `proc_value` with
   explicit `CaptureArg` payloads
+- rewrites aliases of local functions and closures to explicit `proc_value`
+  nodes
 - rewrites every call through a lifted local function or closure to `call_value`
 - rewrites `call_proc` and `proc_value` targets only through explicit procedure-id
   maps
@@ -1110,6 +1341,10 @@ Lambda-solved MIR:
 - determines exact callable sets
 - associates capture types with callable members
 - propagates erasure requirements
+- emits explicit `erase_callable` boundaries with both source callable shape and
+  target erased type
+- exposes zonked callable representations for `call_value.requested_fn_ty`,
+  `call_proc.requested_fn_ty`, and `proc_value.fn_ty`
 - treats `call_proc` as direct procedure calls for inference and SCCs
 - treats `proc_value` as first-class procedure values with explicit captures
 - exports canonical callable-set algebra and ordering
@@ -1118,9 +1353,13 @@ Executable MIR:
 
 - builds capture records
 - emits callable-set values for non-erased callable values
+- synthesizes erased adapters when a finite callable-set value crosses an
+  erased boundary
 - emits finite callable-set `callable_match` expressions for non-erased callable
   calls
 - reserves executable specializations before emitting `call_direct` branches
+- supplies `callable_match` branch `direct_args` as source args plus optional
+  trailing capture record
 - emits `packed_erased_fn` only for explicitly erased callable values
 - emits `call_erased`
 - emits `call_direct` where executable targets are exact
@@ -1134,6 +1373,7 @@ The following are forbidden:
 - exact callable truth in alias side tables
 - target recovery from source function types
 - capture recovery from body scanning in executable MIR
+- callable-set member ordering through `Symbol.raw()`
 - body-derived summaries as executable truth
 - bare procedure-symbol `var_` values after lifted MIR
 
@@ -1147,10 +1387,15 @@ CallableFact
 FactId as semantic truth
 expr_facts
 exact_callable_aliases as semantic truth
+callableTargetForExprFact
+callableCapturesForExprFact
+authoritativeCallableValue
 refinedSourceTypeForExpr
 exactTagSourceTypeForExpr
 attachedMethodOwnerForExpr
 resolveAttachedMethodTargetFromExpr
+ownerForExpr
+resolve.*TargetFromExpr
 source/executable relation side tables
 late source type refinement helpers
 singleton tag source type construction
@@ -1339,8 +1584,15 @@ Delete all dispatch cases from lifted MIR AST and lowering.
 
 Add explicit `CaptureSlot` metadata to lifted procedure definitions.
 
+For recursive local-function groups, allocate procedure symbols first, then
+compute captures to a least fixed point across all members before exporting
+lifted MIR.
+
 Rewrite every local function or closure value to a `proc_value` with explicit
 `CaptureArg` payloads.
+
+Rewrite every self-reference, sibling-reference, and alias of a local function
+or closure to an explicit `proc_value`.
 
 Rewrite every call through a local function or closure to `call_value`.
 
@@ -1351,8 +1603,10 @@ Commit when lifted MIR verification proves:
 
 - all `call_proc` and `proc_value` targets exist
 - all procedure captures are explicit `CaptureSlot`s
+- recursive local-function capture sets are fixed-point complete
 - all `proc_value` captures are explicit `CaptureArg`s in slot order
 - no bare procedure-symbol `var_` values exist
+- no aliases of local functions or closures remain as bare `var_`
 - no local function or closure call is represented as `call_proc`
 - no dispatch terms exist in exported lifted MIR
 
@@ -1368,8 +1622,13 @@ Preserve and clean up the real responsibilities:
 - instantiate lifted types
 - infer callable sets
 - propagate erasure
+- preserve explicit `erase_callable` source and target types
 - order recursive SCCs
 - enforce canonical callable-set unification algebra
+- export zonked callable representations for every executable specialization
+  input
+- clone-instantiate generalized templates before executable lowering consumes
+  them
 
 Commit when lambda-solved MIR verification proves:
 
@@ -1378,6 +1637,9 @@ Commit when lambda-solved MIR verification proves:
 - callable-set member order is canonical
 - each repeated callable member has exactly the same capture slots
 - erased callable requirements are explicit
+- every `erase_callable` stores source callable shape and target erased type
+- no executable specialization input contains generalized or unresolved type
+  variables
 - `call_proc` and `proc_value` targets remain explicit
 - `call_proc` and `proc_value` participate in callable inference and SCC ordering
 - every `proc_value` capture arg unifies with its target `CaptureSlot`
@@ -1396,13 +1658,17 @@ expr_facts
 FactKey
 semantic FactId usage
 exact_callable_aliases
+callableTargetForExprFact
+callableCapturesForExprFact
+authoritativeCallableValue
 ```
 
 Executable specialization keys must be:
 
 ```text
 source/MIR procedure target
-+ lambda-solved argument and return types
++ stable ProcOrderKey
++ zonked lambda-solved argument and return structural type keys
 + finite callable-set member procedure identity when specializing a callable-set
   branch
 + capture slot shape and capture types for callable-set or erased captures
@@ -1413,7 +1679,7 @@ source/MIR procedure target
 not:
 
 ```text
-fact handles + expression ids + source/executable side channels
+fact handles + expression ids + source/executable side channels + raw type ids
 ```
 
 Commit when executable MIR verification proves:
@@ -1421,6 +1687,8 @@ Commit when executable MIR verification proves:
 - direct calls have explicit targets
 - direct call args match target signatures
 - erased calls have explicit erased function types
+- erased adapters are synthesized for finite callable-set values crossing erased
+  boundaries
 - `callable_match` evaluates its callable expression and original arguments
   exactly once before branching
 - callable-set values have explicit member capture payloads
@@ -1428,6 +1696,9 @@ Commit when executable MIR verification proves:
 - callable-set capture payload field ordering is deterministic
 - finite callable-set calls lower to explicit `callable_match`
 - every `callable_match` branch has a reserved executable specialization
+- every `callable_match` branch records exact `direct_args`
+- every callable member direct-call signature is source args plus optional
+  trailing capture record
 - no ordinary source `match` satisfies callable-set lowering verification
 - packed erased functions have explicit captures
 - bridge nodes connect concrete executable MIR types
@@ -1491,6 +1762,9 @@ expr_facts
 FactKey
 semantic FactId usage
 exact_callable_aliases
+callableTargetForExprFact
+callableCapturesForExprFact
+authoritativeCallableValue
 refinedSourceTypeForExpr
 exactTagSourceTypeForExpr
 attachedMethodOwnerForExpr
@@ -1498,6 +1772,11 @@ resolveAttachedMethodTargetFromExpr
 ownerForExpr
 resolve.*TargetFromExpr
 ```
+
+Forbid `Symbol.raw()` as an ordering key for callable-set members, erased
+adapter emission, capture fixed-point ordering, or generated procedure emission.
+
+Forbid raw type-store ids in executable specialization keys.
 
 Forbid bare procedure-symbol `var_` values outside mono MIR and lifted MIR input
 pattern matching.
@@ -1558,7 +1837,9 @@ Lifted MIR:
 
 - every lifted procedure target exists
 - every procedure capture is an explicit `CaptureSlot`
+- recursive local-function groups compute captures to a fixed point
 - every local function or closure value is an explicit `proc_value`
+- aliases of local functions and closures become explicit `proc_value`
 - every `proc_value` capture arg is explicit and in slot order
 - every call through a local function or closure is `call_value`
 - no bare procedure-symbol `var_` values exist
@@ -1573,6 +1854,11 @@ Lambda-solved MIR:
 - repeated callable members have identical capture slots
 - mismatched capture slots panic in debug verification
 - erasure requirements are explicit
+- `erase_callable` stores both source callable shape and target erased type
+- finite callable-set erasure preserves source member metadata for executable
+  adapter synthesis
+- generalized templates are clone-instantiated and zonked before executable
+  lowering consumes them
 - no dispatch nodes exist
 - `call_proc` and `proc_value` have SCC dependency edges
 - `call_proc` is inferred as a call to its procedure target type
@@ -1588,14 +1874,20 @@ Executable MIR:
   arguments once, before member branching
 - every `callable_match` branch corresponds to exactly one callable-set member
 - every `callable_match` branch has a reserved executable specialization
+- every `callable_match` branch stores exact `direct_args`
 - ordinary source `match` does not satisfy callable-set lowering verification
 - singleton finite callable-set calls still lower to `callable_match`
 - every callable-set value has explicit member capture payload metadata
 - every callable-set value has deterministic member tag ordering
 - every callable-set capture payload has deterministic field ordering
+- callable-set member tag ordering uses `ProcOrderKey`, not `Symbol.raw()`
 - every packed erased function has explicit capture metadata
+- finite callable-set values crossing erased boundaries synthesize erased
+  adapters
 - every erased capture record has deterministic field ordering
 - every erased call has an explicit erased function type
+- first-class intrinsic references use explicit wrapper procedures
+- logical field indexes are preserved until LIR resolves physical offsets
 - bridges connect concrete executable types
 - no fact side tables exist
 
@@ -1627,6 +1919,8 @@ Static dispatch:
 - recursive and mutually recursive methods use reserved specialized proc ids
 - hosted/effect/platform methods use explicit method targets or explicit
   intrinsics
+- call-only intrinsics lower directly only when they never flow as values
+- first-class intrinsic method references synthesize wrapper procedures
 - tag construction never creates singleton source tag-union types
 - method references used as first-class values resolve to explicit `proc_value`
   values with empty captures, not executable direct calls
@@ -1639,6 +1933,8 @@ Callable/capture behavior:
 - local closure with captures
 - recursive local function
 - mutually recursive local functions
+- recursive local functions that reference sibling procedure values require
+  fixed-point capture propagation
 - closure returned from a function
 - closure passed as an argument
 - direct `call_proc` becomes executable direct call without erased packaging
@@ -1646,10 +1942,20 @@ Callable/capture behavior:
 - captured local function calls lower through explicit `proc_value` captures
 - finite callable-set calls evaluate callable and arguments exactly once before
   branch dispatch
+- finite callable-set branch direct calls receive source args plus optional
+  trailing capture record
 - erased boundary packaging with capture record
+- finite callable-set value crossing an erased boundary synthesizes an erased
+  adapter whose body uses `callable_match`
+- already-erased value crossing a matching erased boundary passes through after
+  verification
 - boxed erased-call round trip
 - non-boxed polymorphic closure does not erase
 - hosted function flowing as first-class value
+- first-class intrinsic function flowing as a wrapper `proc_value`
+- generalized procedure template instantiated at two concrete callable shapes
+  without raw type ids leaking into executable keys
+- logical capture field indexes survive physical layout reordering
 - deterministic callable-set member tag ordering
 - deterministic callable-set capture payload field ordering
 - deterministic erased capture record field ordering
@@ -1701,6 +2007,7 @@ The cutover is complete only when all of these are true:
 - mono MIR `call_proc` targets only top-level mono-specialized procedures
 - lifted MIR output has no dispatch nodes
 - lifted MIR has explicit `CaptureSlot` metadata for every lifted procedure
+- lifted MIR computes recursive local-function captures to a fixed point
 - lifted MIR procedure values are explicit `proc_value` nodes with
   `CaptureArg`s
 - lifted MIR has no bare procedure-symbol `var_` values
@@ -1709,15 +2016,24 @@ The cutover is complete only when all of these are true:
 - lambda-solved MIR output has no dispatch nodes
 - lambda-solved MIR has explicit callable/lambda-set/erasure metadata for every
   `proc_value`, `call_proc`, and `call_value` executable MIR consumes
+- lambda-solved MIR uses explicit `erase_callable` boundaries preserving source
+  callable shape and target erased type
+- lambda-solved MIR exports only zonked executable specialization inputs
 - lambda-solved MIR enforces canonical callable-set unification algebra
 - executable MIR output has no dispatch nodes
 - executable MIR is the first stage that emits `call_direct`
 - executable MIR lowers every finite non-erased callable-set call to explicit
   `callable_match`
+- executable MIR synthesizes erased adapters for finite callable-set values
+  crossing erased boundaries
+- executable MIR records exact branch `direct_args`
 - executable MIR ordinary source `match` and callable-set `callable_match` are
   structurally distinguishable
 - executable MIR keeps callable-set values distinct from packed erased function
   values
+- callable-set member ordering uses `ProcOrderKey`, not `Symbol.raw()`
+- logical field indexes are resolved to physical offsets only through the layout
+  store
 - no exact callable alias side tables remain
 - requested function type verifiers are debug-only compiler assertions and do not
   add runtime checks to user programs
