@@ -587,7 +587,7 @@ const LoweredExprInfo = struct {
 };
 
 const LoweredCall = struct {
-    data: @FieldType(ast.Expr.Data, "call"),
+    data: ast.Expr.Data,
     result_ty: type_mod.TypeId,
 };
 
@@ -1283,6 +1283,11 @@ pub const Lowerer = struct {
             },
             .call => |call| {
                 try self.finalizeExprById(call.func, visited);
+                for (self.program.store.sliceExprSpan(call.args)) |arg_expr| {
+                    try self.finalizeExprById(arg_expr, visited);
+                }
+            },
+            .call_proc => |call| {
                 for (self.program.store.sliceExprSpan(call.args)) |arg_expr| {
                     try self.finalizeExprById(arg_expr, visited);
                 }
@@ -2721,7 +2726,7 @@ pub const Lowerer = struct {
             );
             return try self.program.store.addExpr(.{
                 .ty = lowered_call.result_ty,
-                .data = .{ .call = lowered_call.data },
+                .data = lowered_call.data,
             });
         }
 
@@ -6400,14 +6405,10 @@ pub const Lowerer = struct {
             requested_fn_var,
             requested_fn_ty,
         );
-        const func_expr = try self.program.store.addExpr(.{
-            .ty = requested_fn_ty,
-            .data = .{ .var_ = specialized_symbol },
-        });
         return try self.program.store.addExpr(.{
             .ty = result_ty,
-            .data = .{ .call = .{
-                .func = func_expr,
+            .data = .{ .call_proc = .{
+                .proc = specialized_symbol,
                 .args = try self.program.store.addExprSpan(lowered_args),
                 .call_constraint_ty = requested_fn_ty,
             } },
@@ -6636,28 +6637,34 @@ pub const Lowerer = struct {
         }
 
         const callable_expr = self.program.store.getExpr(current_expr);
-        const call_func = if (callable_expr.data == .var_) blk: {
+        if (callable_expr.data == .var_) {
             const source_symbol = callable_expr.data.var_;
-            const top_level = self.top_level_defs_by_symbol.get(source_symbol) orelse break :blk current_expr;
-            if (!top_level.is_function) break :blk current_expr;
-            const specialized_symbol = try self.specializeTopLevelFunctionSymbol(
-                type_scope,
-                source_symbol,
-                current_fn_var,
-                current_fn_ty,
-            );
-            break :blk try self.program.store.addExpr(.{
-                .ty = current_fn_ty,
-                .data = .{ .var_ = specialized_symbol },
-            });
-        } else current_expr;
+            if (self.top_level_defs_by_symbol.get(source_symbol)) |top_level| {
+                if (top_level.is_function) {
+                    const specialized_symbol = try self.specializeTopLevelFunctionSymbol(
+                        type_scope,
+                        source_symbol,
+                        current_fn_var,
+                        current_fn_ty,
+                    );
+                    return .{
+                        .data = .{ .call_proc = .{
+                            .proc = specialized_symbol,
+                            .args = try self.program.store.addExprSpan(lowered_args),
+                            .call_constraint_ty = current_fn_ty,
+                        } },
+                        .result_ty = fn_parts.ret,
+                    };
+                }
+            }
+        }
 
         return .{
-            .data = .{
-                .func = call_func,
+            .data = .{ .call = .{
+                .func = current_expr,
                 .args = try self.program.store.addExprSpan(lowered_args),
                 .call_constraint_ty = current_fn_ty,
-            },
+            } },
             .result_ty = fn_parts.ret,
         };
     }
@@ -6762,7 +6769,7 @@ pub const Lowerer = struct {
                 const lowered_call = try self.lowerCall(module_idx, type_scope, env, call);
                 break :blk try self.program.store.addExpr(.{
                     .ty = lowered_call.result_ty,
-                    .data = .{ .call = lowered_call.data },
+                    .data = lowered_call.data,
                 });
             },
             .e_lambda => |lambda| blk: {

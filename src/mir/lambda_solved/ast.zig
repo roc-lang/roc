@@ -125,6 +125,11 @@ pub const Expr = struct {
             args: Span(ExprId),
             call_constraint_ty: TypeVarId,
         },
+        call_proc: struct {
+            proc: Symbol,
+            args: Span(ExprId),
+            call_constraint_ty: TypeVarId,
+        },
         inspect: ExprId,
         low_level: struct {
             op: base.LowLevel,

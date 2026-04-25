@@ -503,6 +503,16 @@ const Lowerer = struct {
                     } },
                 });
             },
+            .call_proc => |call| {
+                lowered.expr = try self.output.addExpr(.{
+                    .ty = expr.ty,
+                    .data = .{ .call_proc = .{
+                        .proc = call.proc,
+                        .args = try self.lowerExprSpan(&lowered.lifted_defs, venv, call.args),
+                        .call_constraint_ty = call.call_constraint_ty,
+                    } },
+                });
+            },
             .inspect => |value| {
                 lowered.expr = try self.output.addExpr(.{
                     .ty = expr.ty,
@@ -1117,6 +1127,11 @@ const Lowerer = struct {
                     try self.collectFreeVarsExpr(arg, bound, free);
                 }
             },
+            .call_proc => |call| {
+                for (self.input.program.store.sliceExprSpan(call.args)) |arg| {
+                    try self.collectFreeVarsExpr(arg, bound, free);
+                }
+            },
             .inspect => |value| try self.collectFreeVarsExpr(value, bound, free),
             .low_level => |ll| for (self.input.program.store.sliceExprSpan(ll.args)) |arg| try self.collectFreeVarsExpr(arg, bound, free),
             .when => |when_expr| {
@@ -1471,6 +1486,11 @@ const Lowerer = struct {
             },
             .call => |call| {
                 try self.collectBindingTypesExpr(call.func);
+                for (self.input.program.store.sliceExprSpan(call.args)) |arg| {
+                    try self.collectBindingTypesExpr(arg);
+                }
+            },
+            .call_proc => |call| {
                 for (self.input.program.store.sliceExprSpan(call.args)) |arg| {
                     try self.collectBindingTypesExpr(arg);
                 }

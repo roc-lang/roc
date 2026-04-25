@@ -376,7 +376,7 @@ const Lowerer = struct {
                 }
                 break :blk null;
             },
-            .call => null,
+            .call, .call_proc => null,
             .low_level => null,
             else => null,
         };
@@ -447,6 +447,11 @@ const Lowerer = struct {
             } },
             .call => |call| .{ .call = .{
                 .func = try self.instantiateExpr(call.func),
+                .args = try self.instantiateExprSpan(call.args),
+                .call_constraint_ty = try self.instantiateType(call.call_constraint_ty),
+            } },
+            .call_proc => |call| .{ .call_proc = .{
+                .proc = call.proc,
                 .args = try self.instantiateExprSpan(call.args),
                 .call_constraint_ty = try self.instantiateType(call.call_constraint_ty),
             } },
@@ -1815,6 +1820,23 @@ const Lowerer = struct {
                 }
                 try self.unify(target_ty, constraint_shape.ret);
                 try self.assertCallResultNotGeneralized("call", target_ty);
+                break :blk target_ty;
+            },
+            .call_proc => |call| blk: {
+                const call_args = try self.allocator.dupe(ast.ExprId, self.output.sliceExprSpan(call.args));
+                defer self.allocator.free(call_args);
+                const arg_tys = try self.inferCallArgTypes(venv, call_args);
+                defer self.allocator.free(arg_tys);
+                const constraint_shape = self.types.fnShape(call.call_constraint_ty);
+                const constraint_args = self.types.sliceTypeVarSpan(constraint_shape.args);
+                if (constraint_args.len != arg_tys.len) {
+                    debugPanic("lambdasolved.call_proc invariant violated: explicit call constraint arity mismatch", .{});
+                }
+                for (constraint_args, arg_tys) |constraint_arg_ty, arg_ty| {
+                    try self.unify(constraint_arg_ty, arg_ty);
+                }
+                try self.unify(target_ty, constraint_shape.ret);
+                try self.assertCallResultNotGeneralized("call_proc", target_ty);
                 break :blk target_ty;
             },
             .inspect => |value| blk: {
