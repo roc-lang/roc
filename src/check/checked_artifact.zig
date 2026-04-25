@@ -469,7 +469,7 @@ pub fn loweringView(artifact: *const CheckedModuleArtifact) LoweringModuleView {
 
 pub fn publishFromTypedModule(
     allocator: Allocator,
-    modules: *TypedCIR.Modules,
+    modules: *const TypedCIR.Modules,
     module_idx: u32,
 ) Allocator.Error!CheckedModuleArtifact {
     const module = modules.module(module_idx);

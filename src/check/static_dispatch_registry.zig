@@ -72,7 +72,7 @@ pub const MethodRegistry = struct {
         self.* = .{};
     }
 
-    pub fn fromTypedModules(allocator: Allocator, modules: *TypedCIR.Modules) Allocator.Error!MethodRegistry {
+    pub fn fromTypedModules(allocator: Allocator, modules: *const TypedCIR.Modules) Allocator.Error!MethodRegistry {
         var entries = std.ArrayList(MethodRegistryEntry).empty;
         errdefer entries.deinit(allocator);
 

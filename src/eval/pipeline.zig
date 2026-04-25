@@ -83,6 +83,7 @@ pub const ParsedResources = struct {
     can: *Can,
     checker: *Check,
     typed_cir_modules: check.TypedCIR.Modules,
+    checked_artifact: check.CheckedArtifact.CheckedModuleArtifact,
     expr_idx: CIR.Expr.Idx,
     builtin_module: builtin_loading.LoadedModule,
     builtin_indices: CIR.BuiltinIndices,
@@ -100,6 +101,7 @@ pub const ParsedResources = struct {
         self.checker.deinit();
         self.can.deinit();
         self.parse_ast.deinit();
+        self.checked_artifact.deinit(allocator);
         self.typed_cir_modules.deinit();
         self.builtin_module.deinit();
         allocator.free(self.imported_envs);
@@ -281,12 +283,16 @@ pub fn parseAndCanonicalizeProgramWrapped(
         extra.owned_source = null;
     }
 
+    var checked_artifact = try check.CheckedArtifact.publishFromTypedModule(allocator, &typed_cir_modules, 0);
+    errdefer checked_artifact.deinit(allocator);
+
     return .{
         .module_env = main_checked.module_env,
         .parse_ast = main_checked.parse_ast,
         .can = main_checked.can,
         .checker = main_checked.checker,
         .typed_cir_modules = typed_cir_modules,
+        .checked_artifact = checked_artifact,
         .expr_idx = expr_idx,
         .builtin_module = builtin_module,
         .builtin_indices = builtin_indices,
