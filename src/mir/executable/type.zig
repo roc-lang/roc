@@ -3,7 +3,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
-const solved_type = @import("lambdasolved").Type;
+const solved_type = @import("../lambda_solved/mod.zig").Type;
 
 /// Identifier for an executable monomorphic type node.
 pub const TypeId = enum(u32) { _ };

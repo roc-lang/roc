@@ -22,11 +22,11 @@
 
 const std = @import("std");
 const ir = @import("ir");
-const lambdamono = @import("lambdamono");
-const lambdasolved = @import("lambdasolved");
+const lambdamono = @import("mir").Executable;
+const lambdasolved = @import("mir").LambdaSolved;
 const lir = @import("lir");
-const monotype = @import("monotype");
-const monotype_lifted = @import("monotype_lifted");
+const monotype = @import("mir").Mono;
+const monotype_lifted = @import("mir").Lifted;
 const symbol = @import("symbol");
 
 /// Configure std library logging to suppress debug messages in production.

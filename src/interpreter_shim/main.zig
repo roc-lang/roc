@@ -17,10 +17,10 @@ const collections = @import("collections");
 const eval = @import("eval");
 const layout = @import("layout");
 const tracy = @import("tracy");
-const monotype = @import("monotype");
-const monotype_lifted = @import("monotype_lifted");
-const lambdasolved = @import("lambdasolved");
-const lambdamono = @import("lambdamono");
+const monotype = @import("mir").Mono;
+const monotype_lifted = @import("mir").Lifted;
+const lambdasolved = @import("mir").LambdaSolved;
+const lambdamono = @import("mir").Executable;
 const ir = @import("ir");
 const lir = @import("lir");
 

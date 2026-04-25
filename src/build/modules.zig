@@ -270,7 +270,7 @@ pub const ModuleTest = struct {
 /// unnamed wrappers) so callers can correct the reported totals.
 pub const ModuleTestsResult = struct {
     /// Compile/run steps for each module's tests, in creation order.
-    tests: [32]ModuleTest,
+    tests: [29]ModuleTest,
     /// Number of synthetic passes the summary must subtract when filters were injected.
     /// Includes aggregator ensures and unconditional wrapper tests.
     forced_passes: usize,
@@ -306,10 +306,7 @@ pub const ModuleType = enum {
     backend,
     lir,
     symbol,
-    monotype,
-    monotype_lifted,
-    lambdasolved,
-    lambdamono,
+    mir,
     ir,
     roc_target,
     sljmp,
@@ -335,10 +332,10 @@ pub const ModuleType = enum {
             .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
             .interpreter_layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
             .values => &.{ .collections, .base, .builtins, .layout },
-            .eval => &.{ .tracy, .io, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .interpreter_layout, .values, .build_options, .reporting, .backend, .lir, .symbol, .monotype, .monotype_lifted, .lambdasolved, .lambdamono, .ir, .roc_target, .sljmp },
-            .compile => &.{ .tracy, .build_options, .io, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target, .backend, .lir, .symbol, .monotype, .monotype_lifted, .lambdasolved, .lambdamono, .ir, .sljmp },
+            .eval => &.{ .tracy, .io, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .interpreter_layout, .values, .build_options, .reporting, .backend, .lir, .symbol, .mir, .ir, .roc_target, .sljmp },
+            .compile => &.{ .tracy, .build_options, .io, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target, .backend, .lir, .symbol, .mir, .ir, .sljmp },
             .ipc => &.{},
-            .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .values, .eval, .backend, .roc_target, .lir, .monotype, .monotype_lifted, .lambdasolved, .lambdamono, .ir },
+            .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .values, .eval, .backend, .roc_target, .lir, .mir, .ir },
             .fmt => &.{ .base, .parse, .collections, .can, .io, .tracy },
             .watch => &.{.build_options},
             .bundle => &.{ .base, .collections, .base58, .unbundle },
@@ -348,11 +345,8 @@ pub const ModuleType = enum {
             .backend => &.{ .base, .layout, .builtins, .can, .lir, .roc_target },
             .lir => &.{ .base, .layout, .types, .can, .ir },
             .symbol => &.{.base},
-            .monotype => &.{ .base, .types, .can, .check, .symbol },
-            .monotype_lifted => &.{ .base, .types, .symbol, .monotype },
-            .lambdasolved => &.{ .base, .types, .symbol, .monotype_lifted },
-            .lambdamono => &.{ .base, .types, .symbol, .lambdasolved, .layout },
-            .ir => &.{ .base, .types, .symbol, .lambdamono, .layout },
+            .mir => &.{ .base, .types, .can, .check, .symbol, .layout },
+            .ir => &.{ .base, .types, .symbol, .mir, .layout },
             .roc_target => &.{.base},
             .sljmp => &.{},
             .echo_platform => &.{.builtins},
@@ -392,10 +386,7 @@ pub const RocModules = struct {
     backend: *Module,
     lir: *Module,
     symbol: *Module,
-    monotype: *Module,
-    monotype_lifted: *Module,
-    lambdasolved: *Module,
-    lambdamono: *Module,
+    mir: *Module,
     ir: *Module,
     roc_target: *Module,
     sljmp: *Module,
@@ -439,10 +430,7 @@ pub const RocModules = struct {
             .backend = b.addModule("backend", .{ .root_source_file = b.path("src/backend/mod.zig") }),
             .lir = b.addModule("lir", .{ .root_source_file = b.path("src/lir/mod.zig") }),
             .symbol = b.addModule("symbol", .{ .root_source_file = b.path("src/symbol/mod.zig") }),
-            .monotype = b.addModule("monotype", .{ .root_source_file = b.path("src/monotype/mod.zig") }),
-            .monotype_lifted = b.addModule("monotype_lifted", .{ .root_source_file = b.path("src/monotype_lifted/mod.zig") }),
-            .lambdasolved = b.addModule("lambdasolved", .{ .root_source_file = b.path("src/lambdasolved/mod.zig") }),
-            .lambdamono = b.addModule("lambdamono", .{ .root_source_file = b.path("src/lambdamono/mod.zig") }),
+            .mir = b.addModule("mir", .{ .root_source_file = b.path("src/mir/mod.zig") }),
             .ir = b.addModule("ir", .{ .root_source_file = b.path("src/ir/mod.zig") }),
             .roc_target = b.addModule("roc_target", .{ .root_source_file = b.path("src/target/mod.zig") }),
             .sljmp = b.addModule("sljmp", .{ .root_source_file = b.path("src/sljmp/mod.zig") }),
@@ -492,10 +480,7 @@ pub const RocModules = struct {
             .backend,
             .lir,
             .symbol,
-            .monotype,
-            .monotype_lifted,
-            .lambdasolved,
-            .lambdamono,
+            .mir,
             .ir,
             .roc_target,
             .sljmp,
@@ -541,10 +526,7 @@ pub const RocModules = struct {
         step.root_module.addImport("backend", self.backend);
         step.root_module.addImport("lir", self.lir);
         step.root_module.addImport("symbol", self.symbol);
-        step.root_module.addImport("monotype", self.monotype);
-        step.root_module.addImport("monotype_lifted", self.monotype_lifted);
-        step.root_module.addImport("lambdasolved", self.lambdasolved);
-        step.root_module.addImport("lambdamono", self.lambdamono);
+        step.root_module.addImport("mir", self.mir);
         step.root_module.addImport("ir", self.ir);
         step.root_module.addImport("sljmp", self.sljmp);
         step.root_module.addImport("echo_platform", self.echo_platform);
@@ -597,10 +579,7 @@ pub const RocModules = struct {
             .backend => self.backend,
             .lir => self.lir,
             .symbol => self.symbol,
-            .monotype => self.monotype,
-            .monotype_lifted => self.monotype_lifted,
-            .lambdasolved => self.lambdasolved,
-            .lambdamono => self.lambdamono,
+            .mir => self.mir,
             .ir => self.ir,
             .roc_target => self.roc_target,
             .sljmp => self.sljmp,
@@ -652,10 +631,7 @@ pub const RocModules = struct {
             .backend,
             .lir,
             .symbol,
-            .monotype,
-            .monotype_lifted,
-            .lambdasolved,
-            .lambdamono,
+            .mir,
             .ir,
             .sljmp,
             .echo_platform,

@@ -1,7 +1,7 @@
 //! Solved-callable-driven executable specialization queue.
 
 const std = @import("std");
-const solved = @import("lambdasolved");
+const solved = @import("../lambda_solved/mod.zig");
 const ast = @import("ast.zig");
 const type_mod = @import("type.zig");
 const symbol_mod = @import("symbol");

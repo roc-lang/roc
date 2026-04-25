@@ -22,10 +22,10 @@ const tracy = @import("tracy");
 const backend = @import("backend");
 const ir = @import("ir");
 const lir = @import("lir");
-const lambdamono = @import("lambdamono");
-const lambdasolved = @import("lambdasolved");
-const monotype = @import("monotype");
-const monotype_lifted = @import("monotype_lifted");
+const lambdamono = @import("mir").Executable;
+const lambdasolved = @import("mir").LambdaSolved;
+const monotype = @import("mir").Mono;
+const monotype_lifted = @import("mir").Lifted;
 const symbol = @import("symbol");
 const ExecutableMemoryInitError = @typeInfo(@typeInfo(@TypeOf(backend.ExecutableMemory.initWithEntryOffset)).@"fn".return_type.?).error_union.error_set;
 

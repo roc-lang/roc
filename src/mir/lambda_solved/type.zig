@@ -3,7 +3,7 @@
 const std = @import("std");
 const base = @import("base");
 const symbol_mod = @import("symbol");
-const lifted_type = @import("monotype_lifted").Type;
+const lifted_type = @import("../lifted/mod.zig").Type;
 
 pub const Symbol = symbol_mod.Symbol;
 pub const Prim = lifted_type.Prim;

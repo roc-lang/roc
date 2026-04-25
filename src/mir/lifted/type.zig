@@ -1,6 +1,6 @@
 //! Lifted monotype program uses the same type graph as the monotype stage.
 
-const mono_type = @import("monotype").Type;
+const mono_type = @import("../mono/mod.zig").Type;
 
 pub const TypeId = mono_type.TypeId;
 pub const TypeIds = mono_type.TypeIds;

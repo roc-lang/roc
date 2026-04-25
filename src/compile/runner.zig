@@ -11,10 +11,10 @@ const eval = @import("eval");
 const ir = @import("ir");
 const layout = @import("layout");
 const lir = @import("lir");
-const lambdamono = @import("lambdamono");
-const lambdasolved = @import("lambdasolved");
-const monotype = @import("monotype");
-const monotype_lifted = @import("monotype_lifted");
+const lambdamono = @import("mir").Executable;
+const lambdasolved = @import("mir").LambdaSolved;
+const monotype = @import("mir").Mono;
+const monotype_lifted = @import("mir").Lifted;
 const builtins = @import("builtins");
 const platform_requirements = @import("platform_requirements.zig");
 
