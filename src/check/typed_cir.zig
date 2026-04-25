@@ -235,6 +235,14 @@ pub const Module = struct {
         return self.data_store.env;
     }
 
+    pub fn moduleIndex(self: @This()) u32 {
+        return self.module_idx;
+    }
+
+    pub fn moduleEnvConst(self: @This()) *const ModuleEnv {
+        return self.data_store.env;
+    }
+
     /// Return all definitions owned by this module in source order.
     pub fn allDefs(self: @This()) []const CIR.Def.Idx {
         return self.env().store.sliceDefs(self.env().all_defs);
@@ -575,6 +583,13 @@ pub const Def = struct {
     /// Return the module that owns this definition.
     pub fn module(self: @This()) Module {
         return self.owner;
+    }
+
+    pub fn patternName(self: @This()) ?Ident.Idx {
+        return switch (self.pattern.data) {
+            .assign => |assign| assign.ident,
+            else => null,
+        };
     }
 };
 

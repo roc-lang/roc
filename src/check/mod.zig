@@ -17,6 +17,8 @@ pub const report = @import("report.zig");
 /// **Exhaustiveness Checking**
 pub const exhaustive = @import("exhaustive.zig");
 pub const TypedCIR = @import("typed_cir.zig");
+pub const StaticDispatchRegistry = @import("static_dispatch_registry.zig");
+pub const CheckedArtifact = @import("checked_artifact.zig");
 
 pub const Check = @import("Check.zig");
 pub const TestEnv = @import("test/TestEnv.zig");
@@ -32,6 +34,8 @@ test "check tests" {
     std.testing.refAllDecls(@import("problem/store.zig"));
     std.testing.refAllDecls(@import("problem/types.zig"));
     std.testing.refAllDecls(@import("report.zig"));
+    std.testing.refAllDecls(@import("static_dispatch_registry.zig"));
+    std.testing.refAllDecls(@import("checked_artifact.zig"));
     std.testing.refAllDecls(@import("typed_cir.zig"));
     std.testing.refAllDecls(@import("snapshot.zig"));
     std.testing.refAllDecls(@import("unify.zig"));
