@@ -490,6 +490,9 @@ pub fn publishFromTypedModule(
     var method_registry = try static_dispatch.MethodRegistry.fromTypedModules(allocator, modules);
     errdefer method_registry.deinit(allocator);
 
+    var static_dispatch_plans = try static_dispatch.StaticDispatchPlanTable.fromModule(allocator, module);
+    errdefer static_dispatch_plans.deinit(allocator);
+
     var root_requests = try RootRequestTable.fromModule(allocator, module);
     errdefer root_requests.deinit(allocator);
 
@@ -519,7 +522,7 @@ pub fn publishFromTypedModule(
             .requires = requires,
         },
         .method_registry = method_registry,
-        .static_dispatch_plans = .{},
+        .static_dispatch_plans = static_dispatch_plans,
         .root_requests = root_requests,
         .hosted_procs = hosted_procs,
         .platform_required_bindings = platform_required_bindings,

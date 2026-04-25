@@ -114,7 +114,7 @@ pub const MethodRegistry = struct {
 };
 
 pub const StaticDispatchResultMode = union(enum) {
-    ordinary,
+    value,
     equality: struct {
         structural_allowed: bool,
         negated: bool,
@@ -132,6 +132,77 @@ pub const StaticDispatchCallPlan = struct {
 
 pub const StaticDispatchPlanTable = struct {
     plans: []StaticDispatchCallPlan = &.{},
+
+    pub fn fromModule(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!StaticDispatchPlanTable {
+        var plans = std.ArrayList(StaticDispatchCallPlan).empty;
+        errdefer {
+            for (plans.items) |plan| allocator.free(plan.args);
+            plans.deinit(allocator);
+        }
+
+        var node_idx: u32 = 0;
+        while (node_idx < module.nodeCount()) : (node_idx += 1) {
+            const tag = module.nodeTag(@enumFromInt(node_idx));
+            switch (tag) {
+                .expr_dispatch_call,
+                .expr_type_dispatch_call,
+                .expr_method_eq,
+                => {},
+                else => continue,
+            }
+
+            const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
+            const expr = module.expr(expr_idx);
+            switch (expr.data) {
+                .e_dispatch_call => |dispatch_call| {
+                    const explicit_args = module.sliceExpr(dispatch_call.args);
+                    const args = try allocator.alloc(CIR.Expr.Idx, explicit_args.len + 1);
+                    args[0] = dispatch_call.receiver;
+                    @memcpy(args[1..], explicit_args);
+
+                    try plans.append(allocator, .{
+                        .expr = expr_idx,
+                        .method_ident = dispatch_call.method_name,
+                        .dispatcher_var = module.exprType(dispatch_call.receiver),
+                        .callable_var = dispatch_call.constraint_fn_var,
+                        .args = args,
+                        .result_mode = .value,
+                    });
+                },
+                .e_type_dispatch_call => |dispatch_call| {
+                    const alias_stmt = module.getStatement(dispatch_call.type_var_alias_stmt);
+                    const args = try allocator.dupe(CIR.Expr.Idx, module.sliceExpr(dispatch_call.args));
+
+                    try plans.append(allocator, .{
+                        .expr = expr_idx,
+                        .method_ident = dispatch_call.method_name,
+                        .dispatcher_var = ModuleEnv.varFrom(alias_stmt.s_type_var_alias.type_var_anno),
+                        .callable_var = dispatch_call.constraint_fn_var,
+                        .args = args,
+                        .result_mode = .value,
+                    });
+                },
+                .e_method_eq => |eq| {
+                    const args = try allocator.dupe(CIR.Expr.Idx, &.{ eq.lhs, eq.rhs });
+
+                    try plans.append(allocator, .{
+                        .expr = expr_idx,
+                        .method_ident = module.commonIdents().is_eq,
+                        .dispatcher_var = module.exprType(eq.lhs),
+                        .callable_var = eq.constraint_fn_var,
+                        .args = args,
+                        .result_mode = .{ .equality = .{
+                            .structural_allowed = true,
+                            .negated = eq.negated,
+                        } },
+                    });
+                },
+                else => unreachable,
+            }
+        }
+
+        return .{ .plans = try plans.toOwnedSlice(allocator) };
+    }
 
     pub fn deinit(self: *StaticDispatchPlanTable, allocator: Allocator) void {
         for (self.plans) |plan| allocator.free(plan.args);
