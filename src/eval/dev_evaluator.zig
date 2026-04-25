@@ -121,7 +121,9 @@ pub const DevEvaluator = struct {
         var mono = try mono_lowerer.runRootExpr(@intCast(module_idx), expr_idx);
         defer mono.deinit();
 
-        var lifted = try monotype_lifted.Lower.run(self.allocator, &mono);
+        var row_finalized = try @import("mir").MonoRow.run(self.allocator, &mono);
+        defer row_finalized.deinit();
+        var lifted = try monotype_lifted.Lower.run(self.allocator, &row_finalized);
         defer lifted.deinit();
         var solved = try lambdasolved.Lower.run(self.allocator, &lifted);
         defer solved.deinit();

@@ -4329,7 +4329,9 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     var mono = try mono_lowerer.run(platform_module_idx);
     defer mono.deinit();
 
-    var lifted = try monotype_lifted.Lower.run(ctx.gpa, &mono);
+    var row_finalized = try @import("mir").MonoRow.run(ctx.gpa, &mono);
+    defer row_finalized.deinit();
+    var lifted = try monotype_lifted.Lower.run(ctx.gpa, &row_finalized);
     defer lifted.deinit();
     var solved = try lambdasolved.Lower.run(ctx.gpa, &lifted);
     defer solved.deinit();

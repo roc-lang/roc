@@ -13,6 +13,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
 const mono = @import("../mono/mod.zig");
+const mono_row = @import("../mono_row/mod.zig");
 const ast = @import("ast.zig");
 const type_mod = @import("type.zig");
 const symbol_mod = @import("symbol");
@@ -68,8 +69,8 @@ pub const Result = struct {
 };
 
 /// Run this compilation stage.
-pub fn run(allocator: std.mem.Allocator, input: *MonoResult) std.mem.Allocator.Error!Result {
-    var lowerer = Lowerer.init(allocator, try input.take(allocator));
+pub fn run(allocator: std.mem.Allocator, input: *mono_row.Result) std.mem.Allocator.Error!Result {
+    var lowerer = Lowerer.init(allocator, try input.takeMono(allocator));
     defer lowerer.deinit();
     try lowerer.collectTopLevels();
     try lowerer.lowerProgram();

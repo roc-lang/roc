@@ -230,27 +230,39 @@ pub const Store = struct {
 };
 
 pub const Result = struct {
+    mono: Mono.Lower.Result,
     shapes: Store,
 
     pub fn deinit(self: *Result) void {
+        self.mono.deinit();
         self.shapes.deinit();
+    }
+
+    pub fn takeMono(self: *Result, allocator: Allocator) Allocator.Error!Mono.Lower.Result {
+        return try self.mono.take(allocator);
     }
 };
 
-pub fn run(allocator: Allocator, mono: *const Mono.Lower.Result) Allocator.Error!Result {
+pub fn run(allocator: Allocator, mono: *Mono.Lower.Result) Allocator.Error!Result {
+    var owned_mono = try mono.take(allocator);
+    errdefer owned_mono.deinit();
+
     var shapes = Store.init(allocator);
     errdefer shapes.deinit();
 
-    for (mono.types.types.items, 0..) |_, raw_i| {
+    for (owned_mono.types.types.items, 0..) |_, raw_i| {
         const ty: TypeId = @enumFromInt(@as(u32, @intCast(raw_i)));
-        switch (mono.types.getType(ty)) {
+        switch (owned_mono.types.getType(ty)) {
             .record => |record| _ = try shapes.internRecordShape(record.fields),
             .tag_union => |tag_union| _ = try shapes.internTagUnionShape(tag_union.tags),
             else => {},
         }
     }
 
-    const result = Result{ .shapes = shapes };
+    const result = Result{
+        .mono = owned_mono,
+        .shapes = shapes,
+    };
     verifyResult(&result);
     return result;
 }

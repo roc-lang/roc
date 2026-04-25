@@ -466,7 +466,9 @@ fn evaluateFromSharedMemory(entry_idx: u32, host_roc_ops: *RocOps, ret_ptr: *any
     const entry_symbol = try mono_lowerer.specializeTopLevelDef(primary_module_idx, entry_def_idx.?);
     var mono = try mono_lowerer.run(primary_module_idx);
     defer mono.deinit();
-    var lifted = try monotype_lifted.Lower.run(wrapped_allocator, &mono);
+    var row_finalized = try @import("mir").MonoRow.run(wrapped_allocator, &mono);
+    defer row_finalized.deinit();
+    var lifted = try monotype_lifted.Lower.run(wrapped_allocator, &row_finalized);
     defer lifted.deinit();
     var solved = try lambdasolved.Lower.run(wrapped_allocator, &lifted);
     defer solved.deinit();

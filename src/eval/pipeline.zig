@@ -519,7 +519,9 @@ pub fn lowerTypedCIRToLirForTarget(
     defer mono.deinit();
     debugValidateMonotypeTypes(&mono.types);
     trace.log("monotype -> monotype_lifted", .{});
-    var lifted = try monotype_lifted.Lower.run(allocator, &mono);
+    var row_finalized = try @import("mir").MonoRow.run(allocator, &mono);
+    defer row_finalized.deinit();
+    var lifted = try monotype_lifted.Lower.run(allocator, &row_finalized);
     defer lifted.deinit();
     trace.log("monotype_lifted -> lambdasolved", .{});
     var solved = try lambdasolved.Lower.run(allocator, &lifted);
@@ -827,7 +829,9 @@ pub fn lowerTypedCIRToSemanticEvalProgramForTarget(
     defer mono.deinit();
     debugValidateMonotypeTypes(&mono.types);
     trace.log("monotype -> monotype_lifted (semantic eval)", .{});
-    var lifted = try monotype_lifted.Lower.run(allocator, &mono);
+    var row_finalized = try @import("mir").MonoRow.run(allocator, &mono);
+    defer row_finalized.deinit();
+    var lifted = try monotype_lifted.Lower.run(allocator, &row_finalized);
     defer lifted.deinit();
     trace.log("monotype_lifted -> lambdasolved (semantic eval)", .{});
     var solved = try lambdasolved.Lower.run(allocator, &lifted);
@@ -960,7 +964,9 @@ fn lowerToLirForTarget(
     debugValidateMonotypeTypes(&mono.types);
 
     trace.log("monotype -> monotype_lifted", .{});
-    var lifted = try monotype_lifted.Lower.run(allocator, &mono);
+    var row_finalized = try @import("mir").MonoRow.run(allocator, &mono);
+    defer row_finalized.deinit();
+    var lifted = try monotype_lifted.Lower.run(allocator, &row_finalized);
     defer lifted.deinit();
     trace.log("monotype_lifted -> lambdasolved", .{});
     var solved = try lambdasolved.Lower.run(allocator, &lifted);

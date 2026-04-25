@@ -175,7 +175,9 @@ pub fn runViaInterpreter(
     var mono = try mono_lowerer.run(entry_idx);
     defer mono.deinit();
 
-    var lifted = try monotype_lifted.Lower.run(gpa, &mono);
+    var row_finalized = try @import("mir").MonoRow.run(gpa, &mono);
+    defer row_finalized.deinit();
+    var lifted = try monotype_lifted.Lower.run(gpa, &row_finalized);
     defer lifted.deinit();
     var solved = try lambdasolved.Lower.run(gpa, &lifted);
     defer solved.deinit();
@@ -272,7 +274,9 @@ pub fn runViaDev(
     var mono = try mono_lowerer.run(entry_idx);
     defer mono.deinit();
 
-    var lifted = try monotype_lifted.Lower.run(gpa, &mono);
+    var row_finalized = try @import("mir").MonoRow.run(gpa, &mono);
+    defer row_finalized.deinit();
+    var lifted = try monotype_lifted.Lower.run(gpa, &row_finalized);
     defer lifted.deinit();
     var solved = try lambdasolved.Lower.run(gpa, &lifted);
     defer solved.deinit();

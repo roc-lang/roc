@@ -231,7 +231,9 @@ fn compileExecutableFromParsedResources(
 ) !lambdamono.Lower.Result {
     var mono = try compileMonotypeFromParsedResources(allocator, resources);
     defer mono.deinit();
-    var lifted = try monotype_lifted.Lower.run(allocator, &mono);
+    var row_finalized = try @import("mir").MonoRow.run(allocator, &mono);
+    defer row_finalized.deinit();
+    var lifted = try monotype_lifted.Lower.run(allocator, &row_finalized);
     defer lifted.deinit();
     var solved = try lambdasolved.Lower.run(allocator, &lifted);
     defer solved.deinit();
@@ -261,7 +263,9 @@ fn compileExecutableProgram(
     defer mono_lowerer.deinit();
     var mono = try mono_lowerer.run(0);
     defer mono.deinit();
-    var lifted = try monotype_lifted.Lower.run(allocator, &mono);
+    var row_finalized = try @import("mir").MonoRow.run(allocator, &mono);
+    defer row_finalized.deinit();
+    var lifted = try monotype_lifted.Lower.run(allocator, &row_finalized);
     defer lifted.deinit();
     var solved = try lambdasolved.Lower.run(allocator, &lifted);
     defer solved.deinit();
@@ -286,7 +290,9 @@ fn compileIrProgram(
     defer mono_lowerer.deinit();
     var mono = try mono_lowerer.run(0);
     defer mono.deinit();
-    var lifted = try monotype_lifted.Lower.run(allocator, &mono);
+    var row_finalized = try @import("mir").MonoRow.run(allocator, &mono);
+    defer row_finalized.deinit();
+    var lifted = try monotype_lifted.Lower.run(allocator, &row_finalized);
     defer lifted.deinit();
     var solved = try lambdasolved.Lower.run(allocator, &lifted);
     defer solved.deinit();
@@ -2603,7 +2609,9 @@ test "cor pipeline - to_utf8 local binding stays list u8 before lambdamono" {
         else => return error.UnexpectedMonotypeDispatchShape,
     }
 
-    var lifted = try monotype_lifted.Lower.run(testing.allocator, &mono);
+    var row_finalized = try @import("mir").MonoRow.run(testing.allocator, &mono);
+    defer row_finalized.deinit();
+    var lifted = try monotype_lifted.Lower.run(testing.allocator, &row_finalized);
     defer lifted.deinit();
     var solved = try lambdasolved.Lower.run(testing.allocator, &lifted);
     defer solved.deinit();
@@ -2661,7 +2669,9 @@ test "cor pipeline - List.fold builtin sum keeps numeric facts before lambdamono
     try testing.expectEqual(monotype.Type.Prim.dec, try monotypeListElemPrim(&mono.types, mono.program.store.getExpr(mono_args[0]).ty));
     try testing.expectEqual(monotype.Type.Prim.dec, try monotypePrim(&mono.types, mono.program.store.getExpr(mono_args[1]).ty));
 
-    var lifted = try monotype_lifted.Lower.run(testing.allocator, &mono);
+    var row_finalized = try @import("mir").MonoRow.run(testing.allocator, &mono);
+    defer row_finalized.deinit();
+    var lifted = try monotype_lifted.Lower.run(testing.allocator, &row_finalized);
     defer lifted.deinit();
     var solved = try lambdasolved.Lower.run(testing.allocator, &lifted);
     defer solved.deinit();
@@ -2742,7 +2752,9 @@ test "cor pipeline - List.fold method syntax keeps accumulator facts before lamb
     try testing.expectEqual(monotype.Type.Prim.i64, try monotypeListElemPrim(&mono.types, mono.program.store.getExpr(mono_dispatch.receiver).ty));
     try testing.expectEqual(monotype.Type.Prim.i64, try monotypeListElemPrim(&mono.types, mono.program.store.getExpr(mono_args[0]).ty));
 
-    var lifted = try monotype_lifted.Lower.run(testing.allocator, &mono);
+    var row_finalized = try @import("mir").MonoRow.run(testing.allocator, &mono);
+    defer row_finalized.deinit();
+    var lifted = try monotype_lifted.Lower.run(testing.allocator, &row_finalized);
     defer lifted.deinit();
     var solved = try lambdasolved.Lower.run(testing.allocator, &lifted);
     defer solved.deinit();
@@ -2796,7 +2808,9 @@ test "cor pipeline - polymorphic additional specialization via List.append keeps
     const mono_first_len_decl = try monotypeBlockDeclByName(&mono, monotypeRootValueExprId(&mono), "_first_len");
     try testing.expectEqual(monotype.Type.Prim.u64, try monotypePrim(&mono.types, mono.program.store.getExpr(mono_first_len_decl.body).ty));
 
-    var lifted = try monotype_lifted.Lower.run(testing.allocator, &mono);
+    var row_finalized = try @import("mir").MonoRow.run(testing.allocator, &mono);
+    defer row_finalized.deinit();
+    var lifted = try monotype_lifted.Lower.run(testing.allocator, &row_finalized);
     defer lifted.deinit();
     var solved = try lambdasolved.Lower.run(testing.allocator, &lifted);
     defer solved.deinit();
@@ -2924,7 +2938,9 @@ test "cor pipeline - entry-specialized to_utf8 local binding stays list u8 befor
     try testing.expectEqual(monotype.Type.Prim.u8, try monotypeListElemPrim(&mono.types, mono_x_decl.bind.ty));
     try testing.expectEqual(monotype.Type.Prim.u8, try monotypeListElemPrim(&mono.types, mono.program.store.getExpr(mono_x_decl.body).ty));
 
-    var lifted = try monotype_lifted.Lower.run(testing.allocator, &mono);
+    var row_finalized = try @import("mir").MonoRow.run(testing.allocator, &mono);
+    defer row_finalized.deinit();
+    var lifted = try monotype_lifted.Lower.run(testing.allocator, &row_finalized);
     defer lifted.deinit();
 
     const lifted_x_decl = try liftedBlockDeclByName(&lifted, liftedRootValueExprId(&lifted), "x");
