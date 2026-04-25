@@ -2431,6 +2431,11 @@ const Lowerer = struct {
                     self.debugCountExprSymbol(arg, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
                 }
             },
+            .call_proc => |call| {
+                for (self.output.sliceExprSpan(call.args)) |arg| {
+                    self.debugCountExprSymbol(arg, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+                }
+            },
             .inspect => |value| self.debugCountExprSymbol(value, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr),
             .low_level => |ll| for (self.output.sliceExprSpan(ll.args)) |arg| self.debugCountExprSymbol(arg, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr),
             .when => |when_expr| {
@@ -2756,6 +2761,33 @@ const Lowerer = struct {
                             },
                             else => unreachable,
                         }
+                    }
+                }
+            },
+            .call_proc => |call| {
+                for (self.output.sliceExprSpan(call.args)) |arg| {
+                    try self.propagateExprErasure(arg, venv);
+                }
+                expr.ty = self.types.fnShape(call.call_constraint_ty).ret;
+                if (self.boxBoundaryBuiltinOpForSymbol(call.proc)) |op| {
+                    const call_args = self.output.sliceExprSpan(call.args);
+                    if (call_args.len != 1) {
+                        debugPanic("lambdasolved.propagateExprErasure box boundary call_proc expected exactly one arg", .{});
+                    }
+                    const arg_ty = self.output.getExpr(call_args[0]).ty;
+                    switch (op) {
+                        .box_box => {
+                            const boxed_arg_ty = try self.eraseBoundaryCallableType(arg_ty);
+                            expr.ty = try self.types.freshContent(.{
+                                .box = boxed_arg_ty,
+                            });
+                        },
+                        .box_unbox => {
+                            const boxed_elem_ty = self.boxedPayloadType(arg_ty) orelse
+                                return debugPanic("lambdasolved.propagateExprErasure box_unbox call_proc expected boxed arg", .{});
+                            expr.ty = try self.eraseBoundaryCallableType(boxed_elem_ty);
+                        },
+                        else => unreachable,
                     }
                 }
             },
@@ -3557,6 +3589,14 @@ const Lowerer = struct {
             },
             .call => |call| {
                 try self.collectExprEdges(call.func, edges);
+                for (self.output.sliceExprSpan(call.args)) |arg| {
+                    try self.collectExprEdges(arg, edges);
+                }
+            },
+            .call_proc => |call| {
+                if (self.def_id_by_symbol.contains(call.proc) and !containsSymbol(edges.items, call.proc)) {
+                    try edges.append(self.allocator, call.proc);
+                }
                 for (self.output.sliceExprSpan(call.args)) |arg| {
                     try self.collectExprEdges(arg, edges);
                 }

@@ -2087,6 +2087,12 @@ const Planner = struct {
                 }
                 return false;
             },
+            .call_proc => |call| {
+                for (self.input.store.sliceExprSpan(call.args)) |arg_expr| {
+                    if (self.exprContainsReturn(arg_expr)) return true;
+                }
+                return false;
+            },
             .inspect => |inner| self.exprContainsReturn(inner),
             .low_level => |ll| {
                 for (self.input.store.sliceExprSpan(ll.args)) |arg_expr| {
@@ -4168,6 +4174,20 @@ const Planner = struct {
                 try self.unifyIn(inst.types, current_func_ty, refined_func_ty);
                 try self.unifyIn(inst.types, refined_func_ty, call_relation_ty);
             },
+            .call_proc => |call| {
+                const arg_expr_ids = self.input.store.sliceExprSpan(call.args);
+                for (arg_expr_ids) |arg_expr_id| {
+                    try self.preRefineExprSourceTypes(inst, mono_cache, venv, arg_expr_id);
+                }
+                const current_result_ty = try self.explicitExprSourceType(inst, venv, expr_id);
+                _ = try self.instantiateConstraintFnTypeForExprs(
+                    inst,
+                    venv,
+                    arg_expr_ids,
+                    call.call_constraint_ty,
+                    current_result_ty,
+                );
+            },
             .structural_eq => |eq| {
                 try self.preRefineExprSourceTypes(inst, mono_cache, venv, eq.lhs);
                 try self.preRefineExprSourceTypes(inst, mono_cache, venv, eq.rhs);
@@ -4588,6 +4608,22 @@ const Planner = struct {
         const expr = self.input.store.getExpr(expr_id);
         return switch (expr.data) {
             .call => |call| blk: {
+                const arg_expr_ids = self.input.store.sliceExprSpan(call.args);
+                const call_result_ty = try self.explicitExprSourceType(inst, venv, expr_id);
+                const call_constraint_ty = try self.instantiateConstraintFnTypeForExprs(
+                    inst,
+                    venv,
+                    arg_expr_ids,
+                    call.call_constraint_ty,
+                    call_result_ty,
+                );
+                break :blk self.attachedMethodOwnerForType(
+                    inst.types,
+                    inst.types.fnShape(call_constraint_ty).ret,
+                    method_name,
+                );
+            },
+            .call_proc => |call| blk: {
                 const arg_expr_ids = self.input.store.sliceExprSpan(call.args);
                 const call_result_ty = try self.explicitExprSourceType(inst, venv, expr_id);
                 const call_constraint_ty = try self.instantiateConstraintFnTypeForExprs(
@@ -6155,6 +6191,7 @@ const Planner = struct {
                 };
             },
             .call => |call| try self.specializeCallExpr(inst, mono_cache, venv, call, ty, required_exec_ty),
+            .call_proc => |call| try self.specializeCallProcExpr(inst, mono_cache, venv, call, ty, required_exec_ty),
             .structural_eq => |eq| try self.specializeStructuralEqExpr(
                 inst,
                 mono_cache,
@@ -9336,6 +9373,7 @@ const Planner = struct {
             else
                 self.callableTargetForBinding(symbol),
             .call => null,
+            .call_proc => null,
             .low_level => null,
             else => null,
         };
@@ -9414,7 +9452,7 @@ const Planner = struct {
                 ) orelse debugPanic("lambdamono.exec_plan.instantiatedSourceTypeForExpr missing solved tag payload");
             },
             .tag => try self.cloneInstType(inst, expr.ty),
-            .call, .dispatch_call, .type_dispatch_call, .low_level => try self.refinedSourceTypeForExpr(
+            .call, .call_proc, .dispatch_call, .type_dispatch_call, .low_level => try self.refinedSourceTypeForExpr(
                 inst,
                 venv,
                 expr_id,
@@ -9595,6 +9633,40 @@ const Planner = struct {
                 );
                 try self.unifyIn(inst.types, current_func_ty, refined_func_ty);
                 try self.unifyIn(inst.types, refined_func_ty, call_constraint_ty);
+                break :blk inst.types.fnShape(call_constraint_ty).ret;
+            },
+            .call_proc => |call| blk: {
+                const arg_expr_ids = self.input.store.sliceExprSpan(call.args);
+                const explicit_result_ty = try self.explicitExprSourceType(inst, venv, expr_id);
+                try self.unifyIn(inst.types, current_source_ty, explicit_result_ty);
+                if (self.boxBoundaryBuiltinOp(call.proc)) |op| {
+                    if (arg_expr_ids.len != 1) {
+                        debugPanic("lambdamono.exec_plan.refinedSourceTypeForExpr box boundary call_proc must have arity 1");
+                    }
+                    switch (op) {
+                        .box_unbox => {
+                            const boxed_arg_ty = try self.instantiatedSourceTypeForExpr(inst, venv, arg_expr_ids[0]);
+                            break :blk self.solvedBoxElemType(inst.types, boxed_arg_ty) orelse
+                                debugPanic("lambdamono.exec_plan.refinedSourceTypeForExpr box_unbox call_proc missing solved payload type");
+                        },
+                        .box_box => {
+                            const arg_source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, arg_expr_ids[0]);
+                            const refined_arg_ty = try self.refinedSourceTypeForExpr(inst, venv, arg_expr_ids[0], arg_source_ty);
+                            const boxed_payload_ty = self.solvedBoxElemType(inst.types, current_source_ty) orelse
+                                debugPanic("lambdamono.exec_plan.refinedSourceTypeForExpr box_box call_proc missing solved payload type");
+                            try self.unifyIn(inst.types, boxed_payload_ty, refined_arg_ty);
+                            break :blk current_source_ty;
+                        },
+                        else => unreachable,
+                    }
+                }
+                const call_constraint_ty = try self.instantiateConstraintFnTypeForExprs(
+                    inst,
+                    venv,
+                    arg_expr_ids,
+                    call.call_constraint_ty,
+                    current_source_ty,
+                );
                 break :blk inst.types.fnShape(call_constraint_ty).ret;
             },
             .low_level => |ll| blk: {
@@ -10523,6 +10595,268 @@ const Planner = struct {
             .ty = final_expr.ty,
             .data = final_expr.data,
             .source_ty = fn_shape.ret,
+        };
+    }
+
+    fn specializeCallProcExpr(
+        self: *Planner,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        venv: []const EnvEntry,
+        call: @FieldType(solved.Ast.Expr.Data, "call_proc"),
+        current_result_source_ty: TypeVarId,
+        required_exec_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!SpecializedExprLowering {
+        _ = required_exec_ty;
+        const arg_expr_ids = self.input.store.sliceExprSpan(call.args);
+
+        if (self.boxBoundaryBuiltinOp(call.proc)) |op| {
+            if (arg_expr_ids.len != 1) {
+                debugPanic("lambdamono.exec_plan.specializeCallProcExpr box boundary call must have arity 1");
+            }
+            const lowered_arg = try self.specializeBoxBoundaryArgExpr(inst, mono_cache, venv, op, arg_expr_ids[0]);
+            const result_expr = try self.output.addExpr(.{
+                .ty = try self.boxBoundaryResultTypeFromArg(op, self.output.getExpr(lowered_arg).ty),
+                .data = .{ .low_level = .{
+                    .op = op,
+                    .args = try self.output.addExprSpan(&.{lowered_arg}),
+                } },
+            });
+            const lowered = self.output.getExpr(result_expr);
+            const source_result_ty = switch (op) {
+                .box_unbox => blk: {
+                    const boxed_arg_ty = try self.instantiatedSourceTypeForExpr(inst, venv, arg_expr_ids[0]);
+                    break :blk self.solvedBoxElemType(inst.types, boxed_arg_ty) orelse
+                        debugPanic("lambdamono.exec_plan.specializeCallProcExpr box_unbox missing solved payload type");
+                },
+                .box_box => blk: {
+                    const arg_source_ty = try self.instantiatedSourceTypeForExpr(inst, venv, arg_expr_ids[0]);
+                    const refined_arg_ty = try self.refinedSourceTypeForExpr(inst, venv, arg_expr_ids[0], arg_source_ty);
+                    const boxed_payload_ty = self.solvedBoxElemType(inst.types, current_result_source_ty) orelse
+                        debugPanic("lambdamono.exec_plan.specializeCallProcExpr box_box missing solved payload type");
+                    try self.unifyIn(inst.types, boxed_payload_ty, refined_arg_ty);
+                    break :blk current_result_source_ty;
+                },
+                else => unreachable,
+            };
+            const result_fact = try self.boxBoundaryResultFact(
+                op,
+                source_result_ty,
+                lowered.ty,
+                lowered_arg,
+            );
+            return .{
+                .ty = lowered.ty,
+                .data = lowered.data,
+                .source_ty = source_result_ty,
+                .fact = result_fact,
+            };
+        }
+
+        const call_relation_ty = try self.instantiateConstraintFnTypeForExprs(
+            inst,
+            venv,
+            arg_expr_ids,
+            call.call_constraint_ty,
+            current_result_source_ty,
+        );
+        const call_relation_shape = inst.types.fnShape(call_relation_ty);
+        const call_arg_tys = try self.dupeTypeVarIds(
+            inst.types.sliceTypeVarSpan(call_relation_shape.args),
+        );
+        defer if (call_arg_tys.len != 0) self.allocator.free(call_arg_tys);
+        try self.refineCallArgSourceTypesIn(
+            inst,
+            venv,
+            arg_expr_ids,
+            call_arg_tys,
+        );
+
+        const target_symbol = call.proc;
+        const target_source_entry = specializations.lookupFnExact(self.fenv, target_symbol);
+        if (target_source_entry == null and !self.isHostedTopLevelSymbol(target_symbol)) {
+            debugPanic("lambdamono.exec_plan.specializeCallProcExpr call_proc target is not an exact callable");
+        }
+        const capture_symbols: []const Symbol = if (target_source_entry) |target_entry|
+            target_entry.capture_symbols
+        else
+            &.{};
+        if (!self.envHasAllCaptureSymbols(venv, capture_symbols)) {
+            debugPanic("lambdamono.exec_plan.specializeCallProcExpr direct proc target captures are not available in the current environment");
+        }
+
+        const explicit_call_relation_ty = try self.instantiateConstraintFnTypeForExprs(
+            inst,
+            venv,
+            arg_expr_ids,
+            call.call_constraint_ty,
+            current_result_source_ty,
+        );
+        const requested_call_ty = if (target_source_entry) |entry|
+            try self.unifyExactCallableSourceType(inst, entry.fn_ty, explicit_call_relation_ty)
+        else
+            explicit_call_relation_ty;
+        const requested_call_shape = inst.types.fnShape(requested_call_ty);
+        const requested_call_arg_tys = try self.dupeTypeVarIds(
+            inst.types.sliceTypeVarSpan(requested_call_shape.args),
+        );
+        defer if (requested_call_arg_tys.len != 0) self.allocator.free(requested_call_arg_tys);
+        const repr_mode = self.callableReprMode(target_symbol);
+        const scoped_capture_facts = try self.callableCapturesForTarget(target_symbol, venv);
+        defer if (scoped_capture_facts.len != 0) self.allocator.free(scoped_capture_facts);
+        const current_capture = try self.currentCapturePayload(mono_cache, scoped_capture_facts);
+        defer current_capture.deinit(self.allocator);
+        const capture_facts = try self.valueFactsForEnv(current_capture.env);
+        defer if (capture_facts.len != 0) self.allocator.free(capture_facts);
+        const direct_exec_arg_tys = try self.allocator.alloc(type_mod.TypeId, arg_expr_ids.len);
+        defer if (direct_exec_arg_tys.len != 0) self.allocator.free(direct_exec_arg_tys);
+        const direct_explicit_arg_tys = try self.allocator.alloc(?type_mod.TypeId, arg_expr_ids.len);
+        defer if (direct_explicit_arg_tys.len != 0) self.allocator.free(direct_explicit_arg_tys);
+        const direct_arg_exprs = try self.allocator.alloc(ast.ExprId, arg_expr_ids.len);
+        defer self.allocator.free(direct_arg_exprs);
+        const direct_arg_facts = try self.allocator.alloc(ValueFactId, arg_expr_ids.len);
+        defer if (direct_arg_facts.len != 0) self.allocator.free(direct_arg_facts);
+        if (requested_call_arg_tys.len != arg_expr_ids.len) {
+            debugPanic("lambdamono.exec_plan.specializeCallProcExpr explicit direct arg arity mismatch");
+        }
+        try self.refineCallArgSourceTypesIn(
+            inst,
+            venv,
+            arg_expr_ids,
+            requested_call_arg_tys,
+        );
+        for (arg_expr_ids, requested_call_arg_tys, 0..) |arg_expr_id, requested_arg_ty, i| {
+            const actual_arg_source_ty = try self.instantiatedSourceTypeForExpr(
+                inst,
+                venv,
+                arg_expr_id,
+            );
+            _ = try self.refinedSourceTypeForExpr(
+                inst,
+                venv,
+                arg_expr_id,
+                actual_arg_source_ty,
+            );
+            direct_explicit_arg_tys[i] = try self.explicitProjectedExecutableTypeForExpr(
+                inst,
+                mono_cache,
+                venv,
+                arg_expr_id,
+                requested_arg_ty,
+            );
+            const explicit_arg_ty = direct_explicit_arg_tys[i] orelse continue;
+            if (!self.executableTypeIsAbstract(explicit_arg_ty)) {
+                direct_exec_arg_tys[i] = explicit_arg_ty;
+            }
+        }
+        for (arg_expr_ids, requested_call_arg_tys, 0..) |arg_expr_id, requested_arg_ty, i| {
+            const provisional_exec_ty = switch (repr_mode) {
+                .natural => try self.lowerExecutableTypeFromSolvedIn(inst.types, mono_cache, requested_arg_ty),
+                .erased_boundary => try self.lowerErasedBoundaryExecutableTypeIn(inst.types, mono_cache, requested_arg_ty),
+            };
+            const required_arg_exec_ty = if (direct_explicit_arg_tys[i]) |explicit_arg_ty|
+                if (!self.executableTypeIsAbstract(explicit_arg_ty))
+                    explicit_arg_ty
+                else
+                    provisional_exec_ty
+            else
+                provisional_exec_ty;
+            const arg_expr = self.input.store.getExpr(arg_expr_id);
+            const lowered_arg = try self.planExprWithRequiredExecTy(
+                inst,
+                mono_cache,
+                venv,
+                arg_expr_id,
+                arg_expr,
+                requested_arg_ty,
+                required_arg_exec_ty,
+            );
+            const authoritative_arg = self.authoritativeCallableValue(lowered_arg);
+            direct_arg_exprs[i] = authoritative_arg.expr;
+            direct_exec_arg_tys[i] = self.output.getExpr(direct_arg_exprs[i]).ty;
+            direct_arg_facts[i] = self.valueFactForExpr(direct_arg_exprs[i]) orelse
+                try self.addValueFact(Symbol.none, requested_arg_ty, direct_exec_arg_tys[i], null);
+        }
+        const direct_exec_ret_ty = try self.executableReturnTypeFromCallRelation(
+            inst.types,
+            mono_cache,
+            requested_call_arg_tys,
+            direct_exec_arg_tys,
+            requested_call_shape.ret,
+            repr_mode,
+        );
+        const specialized = try self.ensureQueuedCallableSpecializedWithExecSignature(
+            inst.types,
+            target_symbol,
+            repr_mode,
+            requested_call_ty,
+            capture_facts,
+            current_capture.ty,
+            direct_arg_facts,
+            direct_exec_arg_tys,
+            direct_exec_ret_ty,
+        );
+        const imported = try self.importCallableSummaryIntoInst(
+            inst,
+            call_relation_ty,
+            specialized.summary_types,
+            specialized.summary_fn_ty,
+        );
+        const exact_shape = imported.fn_shape;
+        const exact_arg_tys = try self.dupeTypeVarIds(
+            inst.types.sliceTypeVarSpan(exact_shape.args),
+        );
+        defer if (exact_arg_tys.len != 0) self.allocator.free(exact_arg_tys);
+        const lowered_args = try self.allocator.alloc(ast.ExprId, arg_expr_ids.len);
+        defer self.allocator.free(lowered_args);
+        if (specialized.exec_args_tys.len != exact_arg_tys.len) {
+            debugPanic("lambdamono.exec_plan.specializeCallProcExpr direct exact arg arity mismatch against specialization summary");
+        }
+        for (exact_arg_tys, call_arg_tys, arg_expr_ids, 0..) |exact_arg_ty, call_arg_ty, arg_expr_id, i| {
+            try self.unifyIn(inst.types, exact_arg_ty, call_arg_ty);
+            _ = arg_expr_id;
+            lowered_args[i] = direct_arg_exprs[i];
+            if (!self.types.equalIds(self.output.getExpr(lowered_args[i]).ty, specialized.exec_args_tys[i])) {
+                lowered_args[i] = try self.retargetOrEmitExplicitBridgeExpr(
+                    lowered_args[i],
+                    specialized.exec_args_tys[i],
+                );
+            }
+        }
+        const capture_expr = if (current_capture.ty) |capture_ty|
+            try self.specializeCaptureRecord(inst, mono_cache, current_capture.env, capture_ty)
+        else
+            null;
+        const result_expr = try self.applyExactTopLevelFunctionCall(
+            inst,
+            mono_cache,
+            specialized.symbol,
+            exact_arg_tys,
+            lowered_args,
+            specialized.exec_args_tys,
+            specialized.exec_capture_ty,
+            capture_expr,
+            specialized.exec_ret_ty,
+        );
+        try self.attachCallReturnFact(
+            result_expr,
+            exact_shape.ret,
+            specialized.exec_ret_ty,
+            specialized.return_fact,
+        );
+        const lowered = self.output.getExpr(result_expr);
+        const result_fact = self.valueFactForExpr(result_expr);
+        if (result_fact == null and self.isExecutableCallableType(lowered.ty)) {
+            debugPanicFmt(
+                "lambdamono.exec_plan.specializeCallProcExpr direct callable result missing fact expr={d} ty={d}",
+                .{ @intFromEnum(result_expr), @intFromEnum(lowered.ty) },
+            );
+        }
+        return .{
+            .ty = lowered.ty,
+            .data = lowered.data,
+            .source_ty = exact_shape.ret,
+            .fact = result_fact,
         };
     }
 
