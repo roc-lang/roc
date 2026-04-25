@@ -1256,21 +1256,6 @@ pub const Lowerer = struct {
                 try self.finalizeExprById(eq.lhs, visited);
                 try self.finalizeExprById(eq.rhs, visited);
             },
-            .method_eq => |eq| {
-                try self.finalizeExprById(eq.lhs, visited);
-                try self.finalizeExprById(eq.rhs, visited);
-            },
-            .dispatch_call => |method_call| {
-                try self.finalizeExprById(method_call.receiver, visited);
-                for (self.program.store.sliceExprSpan(method_call.args)) |arg_expr| {
-                    try self.finalizeExprById(arg_expr, visited);
-                }
-            },
-            .type_dispatch_call => |method_call| {
-                for (self.program.store.sliceExprSpan(method_call.args)) |arg_expr| {
-                    try self.finalizeExprById(arg_expr, visited);
-                }
-            },
             .let_ => |*let_expr| {
                 try self.finalizeLetDef(&let_expr.def, visited);
                 try self.finalizeExprById(let_expr.rest, visited);

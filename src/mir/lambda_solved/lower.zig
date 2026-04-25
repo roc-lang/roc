@@ -422,24 +422,6 @@ const Lowerer = struct {
                 .lhs = try self.instantiateExpr(eq.lhs),
                 .rhs = try self.instantiateExpr(eq.rhs),
             } },
-            .method_eq => |eq| .{ .method_eq = .{
-                .lhs = try self.instantiateExpr(eq.lhs),
-                .rhs = try self.instantiateExpr(eq.rhs),
-                .negated = eq.negated,
-                .dispatch_constraint_ty = try self.instantiateType(eq.dispatch_constraint_ty),
-            } },
-            .dispatch_call => |method_call| .{ .dispatch_call = .{
-                .receiver = try self.instantiateExpr(method_call.receiver),
-                .method_name = method_call.method_name,
-                .args = try self.instantiateExprSpan(method_call.args),
-                .dispatch_constraint_ty = try self.instantiateType(method_call.dispatch_constraint_ty),
-            } },
-            .type_dispatch_call => |method_call| .{ .type_dispatch_call = .{
-                .dispatcher_ty = try self.instantiateType(method_call.dispatcher_ty),
-                .method_name = method_call.method_name,
-                .args = try self.instantiateExprSpan(method_call.args),
-                .dispatch_constraint_ty = try self.instantiateType(method_call.dispatch_constraint_ty),
-            } },
             .let_ => |let_expr| .{ .let_ = .{
                 .bind = try self.instantiateTypedSymbol(let_expr.bind),
                 .body = try self.instantiateExpr(let_expr.body),
@@ -1743,53 +1725,6 @@ const Lowerer = struct {
                 try self.unify(target_ty, try self.freshPrimitiveType(.bool));
                 break :blk target_ty;
             },
-            .method_eq => |eq| blk: {
-                const lhs_ty = try self.inferExpr(venv, eq.lhs);
-                const rhs_ty = try self.inferExpr(venv, eq.rhs);
-                try self.unify(lhs_ty, self.output.getExpr(eq.lhs).ty);
-                try self.unify(rhs_ty, self.output.getExpr(eq.rhs).ty);
-                const constraint_shape = self.types.fnShape(eq.dispatch_constraint_ty);
-                const constraint_args = self.types.sliceTypeVarSpan(constraint_shape.args);
-                if (constraint_args.len != 2) {
-                    debugPanic("lambdasolved.method_eq invariant violated: dispatch arg arity mismatch", .{});
-                }
-                try self.unify(constraint_args[0], lhs_ty);
-                try self.unify(constraint_args[1], rhs_ty);
-                try self.unify(target_ty, constraint_shape.ret);
-                break :blk target_ty;
-            },
-            .dispatch_call => |method_call| blk: {
-                const receiver = method_call.receiver;
-                const receiver_ty = try self.inferExpr(venv, receiver);
-                try self.unify(receiver_ty, self.output.getExpr(receiver).ty);
-                const arg_tys = try self.inferCallArgTypes(venv, self.output.sliceExprSpan(method_call.args));
-                defer self.allocator.free(arg_tys);
-                const constraint_shape = self.types.fnShape(method_call.dispatch_constraint_ty);
-                const constraint_args = self.types.sliceTypeVarSpan(constraint_shape.args);
-                if (constraint_args.len != arg_tys.len + 1) {
-                    debugPanic("lambdasolved.dispatch_call invariant violated: dispatch arg arity mismatch", .{});
-                }
-                try self.unify(constraint_args[0], receiver_ty);
-                for (arg_tys, 0..) |arg_ty, i| {
-                    try self.unify(constraint_args[i + 1], arg_ty);
-                }
-                try self.unify(target_ty, constraint_shape.ret);
-                break :blk target_ty;
-            },
-            .type_dispatch_call => |method_call| blk: {
-                const arg_tys = try self.inferCallArgTypes(venv, self.output.sliceExprSpan(method_call.args));
-                defer self.allocator.free(arg_tys);
-                const constraint_shape = self.types.fnShape(method_call.dispatch_constraint_ty);
-                const constraint_args = self.types.sliceTypeVarSpan(constraint_shape.args);
-                if (constraint_args.len != arg_tys.len) {
-                    debugPanic("lambdasolved.type_dispatch_call invariant violated: dispatch arg arity mismatch", .{});
-                }
-                for (arg_tys, 0..) |arg_ty, i| {
-                    try self.unify(constraint_args[i], arg_ty);
-                }
-                try self.unify(target_ty, constraint_shape.ret);
-                break :blk target_ty;
-            },
             .let_ => |let_expr| blk: {
                 const body_ty = try self.inferExpr(venv, let_expr.body);
                 try self.unify(body_ty, let_expr.bind.ty);
@@ -2405,21 +2340,6 @@ const Lowerer = struct {
                 self.debugCountExprSymbol(eq.lhs, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
                 self.debugCountExprSymbol(eq.rhs, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
             },
-            .method_eq => |eq| {
-                self.debugCountExprSymbol(eq.lhs, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
-                self.debugCountExprSymbol(eq.rhs, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
-            },
-            .dispatch_call => |method_call| {
-                self.debugCountExprSymbol(method_call.receiver, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
-                for (self.output.sliceExprSpan(method_call.args)) |arg| {
-                    self.debugCountExprSymbol(arg, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
-                }
-            },
-            .type_dispatch_call => |method_call| {
-                for (self.output.sliceExprSpan(method_call.args)) |arg| {
-                    self.debugCountExprSymbol(arg, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
-                }
-            },
             .let_ => |let_expr| {
                 if (let_expr.bind.symbol == symbol) bind_count.* += 1;
                 self.debugCountExprSymbol(let_expr.body, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
@@ -2702,23 +2622,6 @@ const Lowerer = struct {
             .structural_eq => |eq| {
                 try self.propagateExprErasure(eq.lhs, venv);
                 try self.propagateExprErasure(eq.rhs, venv);
-            },
-            .method_eq => |eq| {
-                try self.propagateExprErasure(eq.lhs, venv);
-                try self.propagateExprErasure(eq.rhs, venv);
-            },
-            .dispatch_call => |method_call| {
-                try self.propagateExprErasure(method_call.receiver, venv);
-                for (self.output.sliceExprSpan(method_call.args)) |arg| {
-                    try self.propagateExprErasure(arg, venv);
-                }
-                expr.ty = self.types.fnShape(method_call.dispatch_constraint_ty).ret;
-            },
-            .type_dispatch_call => |method_call| {
-                for (self.output.sliceExprSpan(method_call.args)) |arg| {
-                    try self.propagateExprErasure(arg, venv);
-                }
-                expr.ty = self.types.fnShape(method_call.dispatch_constraint_ty).ret;
             },
             .let_ => |*let_expr| {
                 try self.propagateExprErasure(let_expr.body, venv);
@@ -3567,21 +3470,6 @@ const Lowerer = struct {
             .structural_eq => |eq| {
                 try self.collectExprEdges(eq.lhs, edges);
                 try self.collectExprEdges(eq.rhs, edges);
-            },
-            .method_eq => |eq| {
-                try self.collectExprEdges(eq.lhs, edges);
-                try self.collectExprEdges(eq.rhs, edges);
-            },
-            .dispatch_call => |method_call| {
-                try self.collectExprEdges(method_call.receiver, edges);
-                for (self.output.sliceExprSpan(method_call.args)) |arg| {
-                    try self.collectExprEdges(arg, edges);
-                }
-            },
-            .type_dispatch_call => |method_call| {
-                for (self.output.sliceExprSpan(method_call.args)) |arg| {
-                    try self.collectExprEdges(arg, edges);
-                }
             },
             .let_ => |let_expr| {
                 try self.collectExprEdges(let_expr.body, edges);

@@ -363,39 +363,6 @@ const Lowerer = struct {
                     } },
                 });
             },
-            .method_eq => |eq| {
-                lowered.expr = try self.output.addExpr(.{
-                    .ty = expr.ty,
-                    .data = .{ .method_eq = .{
-                        .lhs = try self.lowerExprInto(&lowered.lifted_defs, venv, eq.lhs),
-                        .rhs = try self.lowerExprInto(&lowered.lifted_defs, venv, eq.rhs),
-                        .negated = eq.negated,
-                        .dispatch_constraint_ty = eq.dispatch_constraint_ty,
-                    } },
-                });
-            },
-            .dispatch_call => |method_call| {
-                lowered.expr = try self.output.addExpr(.{
-                    .ty = expr.ty,
-                    .data = .{ .dispatch_call = .{
-                        .receiver = try self.lowerExprInto(&lowered.lifted_defs, venv, method_call.receiver),
-                        .method_name = method_call.method_name,
-                        .args = try self.lowerExprSpan(&lowered.lifted_defs, venv, method_call.args),
-                        .dispatch_constraint_ty = method_call.dispatch_constraint_ty,
-                    } },
-                });
-            },
-            .type_dispatch_call => |method_call| {
-                lowered.expr = try self.output.addExpr(.{
-                    .ty = expr.ty,
-                    .data = .{ .type_dispatch_call = .{
-                        .dispatcher_ty = method_call.dispatcher_ty,
-                        .method_name = method_call.method_name,
-                        .args = try self.lowerExprSpan(&lowered.lifted_defs, venv, method_call.args),
-                        .dispatch_constraint_ty = method_call.dispatch_constraint_ty,
-                    } },
-                });
-            },
             .let_ => |let_expr| switch (let_expr.def) {
                 .let_val => |let_val| {
                     const body = try self.lowerExprInto(&lowered.lifted_defs, venv, let_val.body);
@@ -1069,21 +1036,6 @@ const Lowerer = struct {
                 try self.collectFreeVarsExpr(eq.lhs, bound, free);
                 try self.collectFreeVarsExpr(eq.rhs, bound, free);
             },
-            .method_eq => |eq| {
-                try self.collectFreeVarsExpr(eq.lhs, bound, free);
-                try self.collectFreeVarsExpr(eq.rhs, bound, free);
-            },
-            .dispatch_call => |method_call| {
-                try self.collectFreeVarsExpr(method_call.receiver, bound, free);
-                for (self.input.program.store.sliceExprSpan(method_call.args)) |arg| {
-                    try self.collectFreeVarsExpr(arg, bound, free);
-                }
-            },
-            .type_dispatch_call => |method_call| {
-                for (self.input.program.store.sliceExprSpan(method_call.args)) |arg| {
-                    try self.collectFreeVarsExpr(arg, bound, free);
-                }
-            },
             .let_ => |let_expr| switch (let_expr.def) {
                 .let_val => |let_val| {
                     try self.collectFreeVarsExpr(let_val.body, bound, free);
@@ -1447,21 +1399,6 @@ const Lowerer = struct {
             .structural_eq => |eq| {
                 try self.collectBindingTypesExpr(eq.lhs);
                 try self.collectBindingTypesExpr(eq.rhs);
-            },
-            .method_eq => |eq| {
-                try self.collectBindingTypesExpr(eq.lhs);
-                try self.collectBindingTypesExpr(eq.rhs);
-            },
-            .dispatch_call => |method_call| {
-                try self.collectBindingTypesExpr(method_call.receiver);
-                for (self.input.program.store.sliceExprSpan(method_call.args)) |arg| {
-                    try self.collectBindingTypesExpr(arg);
-                }
-            },
-            .type_dispatch_call => |method_call| {
-                for (self.input.program.store.sliceExprSpan(method_call.args)) |arg| {
-                    try self.collectBindingTypesExpr(arg);
-                }
             },
             .let_ => |let_expr| switch (let_expr.def) {
                 .let_val => |let_val| {
