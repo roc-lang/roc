@@ -324,7 +324,7 @@ It owns:
 - source-name row operations before row finalization
 
 Its input is checked CIR plus the checked type store, checked method registry,
-and specialization roots.
+checked procedure templates, and concrete specialization requests.
 
 Its output is monomorphic, typed, dispatch-free MIR that has not yet been row
 finalized.
@@ -393,6 +393,71 @@ executable procedure identity
 executable representation mode
 lambda-set shape
 ```
+
+Checked procedure bodies are registered before mono MIR as templates. A checked
+procedure template is the post-check source body plus its checked type, checked
+static-dispatch plans, checked top-level value references, checked local
+procedure paths, and checked procedure metadata. It is not mono MIR.
+
+Conceptual shape:
+
+```zig
+const CheckedProcedureTemplate = struct {
+    source_proc: SourceProcKey,
+    body: CIR.Expr.Idx,
+    checked_fn_var: Var,
+    static_dispatch_plans: StaticDispatchPlanTableRef,
+    top_level_value_uses: TopLevelUseSummaryRef,
+    local_proc_paths: LocalProcPathTableRef,
+    target: ProcTarget,
+};
+
+const MonoSpecializationRequest = struct {
+    source_proc: SourceProcKey,
+    requested_mono_fn_ty: CanonicalTypeKey,
+    reason: MonoSpecializationReason,
+};
+
+const MonoSpecializationReason = union(enum) {
+    root: RootRequestId,
+    call_proc: ExprId,
+    proc_value: ExprId,
+    static_dispatch_target: CIR.Expr.Idx,
+    comptime_dependency_summary: ComptimeSummaryRequestId,
+};
+```
+
+The exact Zig names may differ, but the boundary must not. Mono MIR consumes
+checked procedure templates only by clone-instantiating one concrete
+`MonoSpecializationRequest`. A top-level checked function declaration, generic
+export, imported function, hosted wrapper, or promoted procedure symbol must not
+be lowered into mono MIR merely because it exists.
+
+The mono specialization queue is the only way to turn a checked procedure
+template into mono MIR. The queue must reserve the output procedure symbol before
+lowering the body, then lower exactly one specialization-local body with exactly
+one specialization-local mono type store. Re-entering an in-progress
+specialization returns the reserved symbol and records the dependency edge; it
+must not lower the same checked body a second time with a partially resolved
+type store.
+
+Mono MIR must not have a `lowerAllTopLevelFunctions`, "emit every function",
+"lower every export", or equivalent eager path. Direct top-level functions are
+checked procedure templates and may also be published as top-level
+`procedure_value` entries, but their mono bodies are still produced only when a
+concrete root request, direct call, static-dispatch target, first-class
+`proc_value`, or compile-time dependency summary requests an exact
+`MonoSpecializationKey`.
+
+This is mandatory for generic procedures and for any procedure whose body
+contains static dispatch. Static dispatch can be eliminated only while lowering a
+concrete mono specialization, after the enclosing procedure's requested function
+type and the dispatch expression's `callable_var`, arguments, and result slot
+have been clone-instantiated into the same mono type store.
+
+Exported checked artifacts may contain generic procedure templates. Exported
+mono MIR may not contain generic procedure bodies, checked procedure templates,
+unchecked static-dispatch nodes, or pending mono-specialization work.
 
 ### Row-Finalized Mono MIR
 
@@ -3118,7 +3183,7 @@ compile-time root:
 ```zig
 const ComptimeProcDependencySummary = struct {
     proc: ProcSpecializationKey,
-    local_values: Span(TopLevelBindingId),
+    local_values: Span(TopLevelValueUse),
     imported_values: Span(ImportedTopLevelValueRef),
     direct_proc_deps: Span(ProcSpecializationKey),
     static_dispatch_deps: Span(ProcSpecializationKey),
@@ -3126,8 +3191,14 @@ const ComptimeProcDependencySummary = struct {
 };
 
 const ComptimeDependencySummary = struct {
-    local_values: Span(TopLevelBindingId),
+    local_values: Span(TopLevelValueUse),
     imported_values: Span(ImportedTopLevelValueRef),
+};
+
+const TopLevelValueUse = union(enum) {
+    published_serializable_constant: ConstRef,
+    published_procedure_value: Symbol,
+    pending_local_root: ComptimeRootId,
 };
 ```
 
@@ -3150,6 +3221,34 @@ This is allowed to over-approximate within the resolved monomorphic call graph,
 but it must not approximate by scanning names or syntax after lowering. A
 spurious edge is acceptable only when it names a real resolved dependency that
 can be justified by the monomorphic call graph. Missing edges are compiler bugs.
+
+Dependency summaries have one special checking-finalization-only mode for
+pending top-level values. While building `CompileTimeRootDependencyGraph`, the
+compiler may encounter a top-level binding whose in-progress `TopLevelValueTable`
+entry is `pending`. In that mode, the summary collector records
+`pending_local_root` and continues collecting dependencies, but it does not
+produce runnable mono MIR, executable MIR, IR, LIR, or backend input. It is a
+dependency-analysis product, not a lowering result.
+
+The summary collector must still run inside a concrete mono specialization
+context. Static dispatch inside the summarized body must be resolved to concrete
+`call_proc` targets using the same `StaticDispatchCallPlan` algorithm as normal
+mono lowering. Direct procedure calls and `proc_value` dependencies reserve
+ordinary mono specializations and participate in the fixed-point summary graph.
+Only top-level value lookup may produce `pending_local_root`, and only before the
+checked artifact is published.
+
+After dependency ordering has evaluated a prerequisite root, real MIR lowering
+for any dependent root must consume the published `ConstRef` or
+`procedure_value`. If a runnable post-check lowering path sees a pending
+top-level value, or if dependency ordering tries to publish an artifact with a
+pending entry, that is a compiler invariant violation handled by debug-only
+assertion in debug builds and `unreachable` in release builds.
+
+The pending collection mode must not insert placeholder constants, placeholder
+procedure symbols, runtime thunks, runtime initializer procedures, or closure
+objects. It must not suppress a dependency to make lowering proceed. Its only
+observable output is a dependency edge to a real local compile-time root.
 
 For example:
 
@@ -3495,6 +3594,7 @@ const CheckedModuleArtifact = struct {
     provides_requires: ProvidesRequiresMetadata,
     method_registry: MethodRegistry,
     static_dispatch_plans: StaticDispatchPlanTable,
+    procedure_templates: CheckedProcedureTemplateTable,
     root_requests: RootRequestTable,
     hosted_procs: HostedProcTable,
     platform_required_bindings: PlatformRequiredBindingTable,
@@ -3516,32 +3616,38 @@ Checking finalization order:
 
 1. Finish type solving and collect all user-facing diagnostics.
 2. Build the checked method registry and normalized static dispatch plans.
-3. Build root requests for runtime, tools, tests, and compile-time evaluation.
-4. Build hosted procedure and platform-required binding tables.
-5. Build public exports, provides/requires metadata, and interface capability
+3. Build checked procedure templates for direct source procedures, hosted
+   wrappers, intrinsic wrappers, promoted procedures that already exist, and
+   compiler-created checked procedure bodies needed by roots.
+4. Build root requests for concrete runtime, tool, test, REPL, development, and
+   compile-time entrypoints. Generic exports are not root requests merely because
+   they are exported.
+5. Build hosted procedure and platform-required binding tables.
+6. Build public exports, provides/requires metadata, and interface capability
    records.
-6. Allocate direct procedure symbols and initialize an in-progress
+7. Allocate direct procedure symbols and initialize an in-progress
    `TopLevelValueTable` with every direct top-level function declaration and
    already-procedure top-level lambda as `procedure_value`.
-7. Build the monomorphic procedure dependency summaries and the
+8. Build the monomorphic procedure dependency summaries and the
    `CompileTimeRootDependencyGraph` for serializable constants, callable binding
    roots, and expect roots.
-8. Evaluate compile-time serializable constants and compile-time callable roots
+9. Evaluate compile-time serializable constants and compile-time callable roots
    through the MIR-family path and LIR interpreter in dependency order.
-9. Reify each serializable value into `CompileTimeValueStore` and immediately
+10. Reify each serializable value into `CompileTimeValueStore` and immediately
    publish its `ConstRef` into the in-progress `TopLevelValueTable`.
-10. Promote compile-time callable results to closed procedure symbols and
+11. Promote compile-time callable results to closed procedure symbols and
     immediately publish their `procedure_value` entries into the in-progress
     `TopLevelValueTable`.
-11. Verify that `TopLevelValueTable` has no `pending` entries and that every
+12. Verify that `TopLevelValueTable` has no `pending` entries and that every
     referenced top-level binding maps to either `serializable_constant` or
     `procedure_value`.
-12. Store the complete `CompileTimeValueStore`, promoted procedure table, and
+13. Store the complete checked procedure template table, `CompileTimeValueStore`,
+    promoted procedure table, and
     top-level value table in the artifact.
-13. Run debug-only artifact verification.
-14. Publish the immutable checked artifact.
+14. Run debug-only artifact verification.
+15. Publish the immutable checked artifact.
 
-If any user-facing problem is found in steps 1 through 11, checking reports it
+If any user-facing problem is found in steps 1 through 12, checking reports it
 and no artifact is published for that module. Later compiler stages never see a
 partial checked artifact.
 
@@ -3694,6 +3800,7 @@ importing modules consume, including:
 - provides/requires metadata after checking finalization
 - method registry
 - normalized static dispatch call plans
+- checked procedure template table
 - root request table
 - hosted procedure table
 - platform-required binding table
@@ -3885,6 +3992,7 @@ const ImportedModuleView = struct {
     key: CheckedModuleArtifactKey,
     module_identity: ModuleIdentity,
     exports: ExportTableView,
+    exported_procedure_templates: ExportedProcedureTemplateView,
     method_registry: MethodRegistryView,
     interface_capabilities: ModuleInterfaceCapabilitiesView,
     comptime_values: CompileTimeValueStoreView,
@@ -3905,6 +4013,13 @@ Downstream modules import `ImportedModuleView`. They do not inspect another
 module's unchecked source, checked expression bodies, opaque backing syntax, or
 private definitions to complete their own checked artifact.
 
+If an import uses an exported generic procedure at a concrete type, it consumes
+only the exported checked procedure template named by the imported module's
+export table. It must not scan imported private definitions or lower every
+exported template in the imported module. Private templates are invisible to
+importers except through concrete procedure dependencies explicitly exposed by
+the imported artifact.
+
 The executable pipeline consumes `LoweringModuleView` values. It may lower only
 roots named by `RootRequestSet`. It must not discover additional roots by
 scanning exports, source declarations, checked CIR expression shapes, or
@@ -3918,6 +4033,30 @@ post-check lowering begins.
 A root request records that a particular checked artifact requires a runtime,
 tool, test, REPL, development, or compile-time entrypoint. It is not a lowered
 procedure yet.
+
+Root requests are concrete entrypoint obligations. They are not the same thing
+as public exports. A public generic function export is represented in
+`ExportTable` as an exported checked procedure template plus its checked source
+type. It does not force mono MIR to lower the generic body, and it does not
+become a `RootProcedureRequest` until some consumer requests a concrete
+monomorphic function type for a concrete runtime, tool, test, REPL,
+development, or compile-time entrypoint.
+
+Provided exports split into two cases:
+
+- A concrete required export whose ABI, source type, and exposure require a
+  runtime entrypoint becomes a root request with one concrete requested function
+  type.
+- A generic package export, generic module export, or first-class function export
+  with no concrete runtime entrypoint remains a checked procedure template
+  reachable through the export table. Importers specialize it later by adding
+  concrete `MonoSpecializationRequest` values. The exporting module must not
+  lower every exported checked procedure just because it is public.
+
+This distinction is mandatory for static dispatch. A generic exported procedure
+may contain checked `StaticDispatchCallPlan` records. Those records are resolved
+only when an importer or root requests a concrete mono specialization. Exporting
+the template does not require and must not attempt method-owner lookup.
 
 Conceptual pre-MIR request shape:
 
@@ -3961,6 +4100,13 @@ currently calling the pipeline.
 `RootSource` points at checked source origin. It does not name an executable
 procedure. Mono MIR binds the request to a mono procedure or constant by
 lowering the source in the appropriate specialization.
+
+For a procedure root, `checked_type` is the concrete requested checked function
+type for that root. If a source definition is still generic at this point, root
+binding first instantiates it to the requested concrete function type and then
+creates one `MonoSpecializationRequest`. A root request must never mean "lower
+all specializations of this source procedure" or "lower the generic template as
+mono MIR."
 
 Conceptual lowered binding shape:
 
@@ -5392,6 +5538,32 @@ not rediscover it from argument order, result position, receiver syntax, a
 qualified-name prefix, a method name, a module environment lookup, or
 display-name sorting.
 
+"Appears only in the `where` constraint" is a source-syntax statement, not
+permission for an unconstrained post-check owner. A valid checked dispatch plan
+must be determinate for every concrete mono specialization that can reach it.
+After the enclosing checked procedure template is clone-instantiated at its
+requested mono function type, and after the dispatch plan's `callable_var`, all
+normalized arguments, and the dispatch expression result slot are connected in
+that same mono type store, `dispatcher_var` must fully resolve to exactly one
+allowed method owner.
+
+If two different method owners can satisfy the same
+`MonoSpecializationKey { source_proc, requested_mono_fn_ty }`, then either the
+specialization key is missing required semantic input or checking accepted an
+ambiguous dispatch. Both are forbidden. The design chooses the simpler invariant:
+checking may export a `StaticDispatchCallPlan` only when the selected
+`dispatcher_var` is functionally determined by the checked callable type, the
+enclosing expression type, and the concrete mono specialization request. If that
+cannot be proven during checking finalization, checking reports the dispatch as
+ambiguous before publishing the artifact.
+
+For example, a dispatcher selected from a return type is valid when the call
+result is constrained by the enclosing expression or by the requested procedure
+return type. A dispatcher selected from a type variable that is mentioned only in
+a `where` clause and not connected to any argument, return, result, annotation,
+or enclosing requested function type is not a post-check problem; checking must
+reject it before artifact publication.
+
 `callable_var` is the checked fixed-arity function type for the operation. Roc
 functions have fixed arity and are not automatically curried. Therefore the
 arity of `callable_var` and the number of normalized `args` must match exactly.
@@ -5451,7 +5623,8 @@ and fully resolved.
 
 ### Method Lookup In Mono
 
-Mono MIR lowering uses one algorithm for every `StaticDispatchCallPlan`:
+Mono MIR lowering uses one algorithm for every `StaticDispatchCallPlan` while
+lowering one concrete mono specialization:
 
 1. Instantiate `dispatcher_var` and `callable_var` into the same mono type store
    with the same clone-instantiation mapping as the expression.
@@ -5493,6 +5666,13 @@ determined from the checked callable type and enclosing expression type is
 ambiguous; checking must have reported it before mono MIR begins. The
 post-check path is debug-only assertion in debug builds and `unreachable` in
 release builds.
+
+This invariant is checked only at concrete specialization time. A checked
+procedure template may still contain `StaticDispatchCallPlan` records whose
+`dispatcher_var` is generic. That template is not exported mono MIR. Exported
+mono MIR must contain only the resolved `call_proc`, `structural_eq`, and
+`bool_not` results produced after clone-instantiating the template for one exact
+`MonoSpecializationKey`.
 
 No later stage sees the method name as an unresolved call. No stage treats this
 as an executable direct call until executable MIR.
@@ -5918,14 +6098,15 @@ LoweringModuleView
 ```
 
 The artifact must contain `ModuleEnv`, exports, provides/requires metadata,
-method registry, static dispatch plans, root requests, hosted procedure table,
-platform-required binding table, interface capabilities, compile-time roots if
-retained, and `CompileTimeValueStore`.
+method registry, static dispatch plans, checked procedure templates, root
+requests, hosted procedure table, platform-required binding table, interface
+capabilities, compile-time roots if retained, and `CompileTimeValueStore`.
 
 This step must also introduce explicit table shapes for:
 
 ```text
 RootRequestTable
+CheckedProcedureTemplateTable
 HostedProcTable
 PlatformRequiredBindingTable
 ModuleInterfaceCapabilities
@@ -5935,11 +6116,13 @@ Do not migrate callers by adding compatibility adapters. Instead, create the new
 records and make checking finalization populate them before any public
 post-check pipeline can consume the module.
 
-Root requests must be produced for app entrypoints, provided exports,
-platform-required bindings, hosted exports, tests, REPL/dev expressions, and
-compile-time constants. Root requests must record kind, source, checked type,
-ABI, exposure, and deterministic order. They must not be inferred later from
-export scans, declaration names, expression shapes, or procedure order.
+Root requests must be produced for app entrypoints, concrete provided exports
+that require runtime entrypoints, platform-required bindings, hosted exports,
+tests, REPL/dev expressions, and compile-time constants. Generic exports that do
+not require one concrete runtime entrypoint stay in the export table as checked
+procedure templates. Root requests must record kind, source, checked type, ABI,
+exposure, and deterministic order. They must not be inferred later from export
+scans, declaration names, expression shapes, or procedure order.
 
 Hosted procedures must be collected into `HostedProcTable`. Deterministic hosted
 ordering belongs in that table. Do not write hosted indices into checked CIR as
@@ -5957,6 +6140,10 @@ Commit when checked artifacts can be constructed with these records and debug
 verification proves:
 
 - a published artifact has every required component
+- every exported source procedure has either a checked procedure template or an
+  explicit non-procedure top-level value entry
+- every checked procedure template has checked type identity, body identity,
+  static-dispatch plan coverage, and top-level-use summaries
 - artifact views are read-only
 - no post-publication code path patches module identity
 - no post-publication code path writes hosted indices into checked CIR
@@ -5966,7 +6153,80 @@ verification proves:
 - missing root requests are reported before artifact publication or asserted as
   compiler bugs after publication
 
-### 4. Harden Mono MIR AST
+### 4. Replace Eager Mono Lowering With Specialization Queue
+
+Before removing dispatch nodes from exported mono MIR, replace the current eager
+top-level lowering model with the final specialization-driven model.
+
+Add the checked procedure template table and mono specialization queue:
+
+```zig
+const CheckedProcedureTemplateTable = struct {
+    templates: Span(CheckedProcedureTemplate),
+};
+
+const MonoSpecializationQueue = struct {
+    requested: Map(MonoSpecializationKey, ReservedMonoProc),
+    pending: WorkQueue(MonoSpecializationKey),
+};
+
+const ReservedMonoProc = struct {
+    symbol: Symbol,
+    state: enum { reserved, lowering, lowered },
+};
+```
+
+The exact Zig names may differ, but the lifecycle must not:
+
+1. Checking finalization registers checked procedure templates.
+2. Root binding, direct calls, static-dispatch targets, and first-class
+   `proc_value` uses create concrete `MonoSpecializationRequest` values.
+3. The queue reserves the output symbol for each `MonoSpecializationKey` before
+   lowering the body.
+4. The body is clone-instantiated into a specialization-local mono type store.
+5. Static dispatch is resolved inside that specialization-local lowering.
+6. Any new `call_proc` or top-level `proc_value` dependencies enqueue additional
+   concrete mono specializations.
+7. The queue drains before row-finalized mono MIR consumes the output.
+
+Delete `lowerAllTopLevelFunctions` and every equivalent eager lowering path
+before static dispatch nodes are removed. There must be no code path whose
+contract is "visit every top-level function and lower it." There must also be no
+code path whose contract is "visit every exported function and lower it." A
+public generic function export remains a checked procedure template until a
+concrete consumer requests a concrete mono function type.
+
+This deletion is not cosmetic. Eager lowering can force static dispatch lookup
+inside a generic template before `dispatcher_var` has a concrete method owner.
+That produces either an invariant violation or a temptation to reintroduce
+owner reconstruction. The queue-based model is the correctness mechanism.
+
+Implement `call_proc` and `proc_value` before resolving dispatch. A resolved
+direct source procedure call, resolved static dispatch call, resolved custom
+equality call, or top-level procedure value must store the target mono-specialized
+procedure symbol in `call_proc.proc` or `proc_value.proc`. It must not lower to a
+generic `call` whose callee expression is `var_(target_symbol)`. Cor can use
+`Var(proc)` because Cor's symbol is already specialized and its prototype call
+syntax is unary; Roc MIR must use explicit fixed-arity `call_proc`.
+
+Commit when mono verification and deletion audits prove:
+
+- checked procedure templates are registered without lowering bodies
+- no eager top-level function lowering path exists
+- no eager exported-function lowering path exists
+- every concrete root request creates at most one initial
+  `MonoSpecializationRequest`
+- generic exports remain checked procedure templates until a concrete importer or
+  root requests a concrete mono type
+- every reserved mono specialization has exactly one output symbol
+- recursive or mutually recursive specializations reuse reserved symbols
+- every exported mono procedure was produced by the specialization queue
+- static dispatch target lookup runs only while lowering one concrete
+  `MonoSpecializationKey`
+- no exported mono MIR `call` node uses a bare `var_` target to stand in for a
+  resolved direct procedure call
+
+### 5. Harden Mono MIR AST
 
 Remove exported mono MIR variants:
 
@@ -5989,7 +6249,8 @@ bool_not
 Mono MIR `proc_value` is valid only for top-level procedure values and must have
 empty captures.
 
-Mono MIR lowering from checked CIR must resolve:
+Mono MIR lowering from one concrete checked procedure template specialization
+must resolve:
 
 - ordinary dispatch
 - type dispatch
@@ -6036,11 +6297,13 @@ Commit when mono MIR verification proves:
   at the exact requested mono source function type
 - the mono specialization queue has no pending `call_proc` or `proc_value`
   dependencies
+- no direct source procedure call, static-dispatch call, or custom equality call
+  is represented as `call(var_(proc), args)` instead of `call_proc`
 - every `call_proc` and `call_value` has exactly the arity of its
   `requested_fn_ty`
 - no mono MIR node represents automatic currying or partial application
 
-### 5. Add Row-Finalized Mono MIR Pass
+### 6. Add Row-Finalized Mono MIR Pass
 
 Add a dedicated row-finalization pass between mono MIR and lifted MIR.
 
@@ -6106,7 +6369,7 @@ Commit when row-finalized mono MIR verification proves:
   names, scanning rows, scanning expressions, or inspecting physical layout
   order
 
-### 6. Harden Lifted MIR
+### 7. Harden Lifted MIR
 
 Update lifted MIR to consume dispatch-free, row-finalized mono MIR.
 
@@ -6162,7 +6425,7 @@ Commit when lifted MIR verification proves:
 - no local function or closure call is represented as `call_proc`
 - no dispatch terms exist in exported lifted MIR
 
-### 7. Harden Lambda-Solved MIR
+### 8. Harden Lambda-Solved MIR
 
 Update lambda-solved MIR to consume dispatch-free lifted MIR.
 
@@ -6304,7 +6567,7 @@ Commit when lambda-solved MIR verification proves:
 - `call_proc` and `proc_value` participate in callable inference and SCC ordering
 - every `proc_value` capture arg unifies with its target `CaptureSlot`
 
-### 8. Replace Executable Side-Table Planner
+### 9. Replace Executable Side-Table Planner
 
 Rewrite executable MIR lowering so it consumes lambda-solved MIR and emits
 executable MIR without source-expression side tables.
@@ -6468,7 +6731,7 @@ Commit when executable MIR verification proves:
 - LIR ARC insertion emits explicit `incref`, `decref`, and `free` from LIR
   values and control flow, not from procedure contracts
 
-### 9. Delete Source-Type Reconstruction
+### 10. Delete Source-Type Reconstruction
 
 Delete the whole source-type reconstruction family:
 
@@ -6484,7 +6747,7 @@ Do not keep compatibility wrappers.
 
 Commit only after targeted searches prove there are no stragglers.
 
-### 10. Rewire IR Lowering
+### 11. Rewire IR Lowering
 
 Update `src/ir/lower.zig` to consume executable MIR.
 
@@ -6505,7 +6768,7 @@ and layout verification proves every recursive by-value SCC edge has exactly
 one committed physical indirection while no stage treats that indirection as
 source `Box(T)` or erased callable representation.
 
-### 11. Rewire Public Pipelines
+### 12. Rewire Public Pipelines
 
 Update eval, compile, CLI, dev shim, interpreter shim, snapshot tool, glue, REPL,
 and test helpers to call the checked-artifact public pipeline.
@@ -6545,7 +6808,7 @@ no public semantic lowering result that can return `NoRootProc`,
 `NoRootDefinition`, `MissingRoot`, `MethodNotFound`, `UnsupportedSourceType`,
 `UnsupportedLayout`, `SchemaLayoutMismatch`, or `MissingInterfaceCapability`.
 
-### 12. Rewire Compile-Time Constant Evaluation
+### 13. Rewire Compile-Time Constant Evaluation
 
 Replace the current compile-time evaluation lowering path with the MIR-family
 pipeline:
@@ -6613,6 +6876,14 @@ procedure calls, static-dispatch calls, and already-resolved `proc_value` calls
 reachable from that procedure body. Checking finalization computes an SCC fixed
 point over those summaries so a root depends on top-level values referenced by
 procedures it can call during compile-time evaluation.
+
+Add the checking-finalization-only pending-value summary mode at the same time.
+While computing the dependency graph, a top-level lookup of a pending local
+compile-time root records `pending_local_root`; it does not lower to a
+`ConstRef`, does not lower to `procedure_value`, and does not emit runnable MIR.
+After the dependency graph is ordered, actual root lowering must happen only
+after every pending dependency for that root has published its `ConstRef` or
+promoted `procedure_value`.
 
 Delete the current semantic-eval shortcuts: syntax predicates such as
 `topLevelExprNeedsEvaluation`, lowering every definition as a compile-time root,
@@ -6709,7 +6980,7 @@ codegen cannot see `comptime_only` roots, cached/imported constants are loaded
 only from the compile-time value store through `ConstRef`, and target-specific
 constant materialization is outside the checked artifact cache.
 
-### 13. Strengthen Audits
+### 14. Strengthen Audits
 
 Make audits allowlist-based.
 
@@ -6798,6 +7069,26 @@ Forbid post-check root selection by scanning exports, top-level declarations,
 checked expressions, procedure order, hosted lambda expressions, or generated
 symbol names. Root selection must consume `RootRequestTable`.
 
+Forbid eager mono lowering of top-level or exported functions. These names and
+families must not exist outside deletion-audit tests:
+
+```text
+lowerAllTopLevelFunctions
+lowerEveryTopLevelFunction
+lowerAllExportedFunctions
+emitAllTopLevelFunctions
+allDefs as mono function lowering order
+export scan as mono specialization source
+```
+
+Mono function bodies must be produced only by `MonoSpecializationQueue` entries
+with concrete `MonoSpecializationKey` values.
+
+Forbid direct source procedure calls represented as ordinary `call` nodes whose
+callee expression is a bare `var_` procedure symbol. A resolved direct
+procedure call, resolved static-dispatch target, or resolved custom equality
+target must use `call_proc` until executable MIR lowers it to `call_direct`.
+
 Forbid the old semantic-eval helper family outside deletion-audit tests:
 
 ```text
@@ -6854,7 +7145,7 @@ method_eq
 
 Commit when guarded semantic audits pass.
 
-### 14. Rewrite Tests
+### 15. Rewrite Tests
 
 Rewrite old intermediate-stage tests.
 
@@ -6868,9 +7159,14 @@ Obsolete expectations:
 
 Replacement expectations:
 
+- checked artifacts contain checked procedure templates for source procedures
+  without eagerly lowering those templates to mono MIR
 - checked CIR contains dispatch only with normalized `StaticDispatchCallPlan`
   values where appropriate
+- mono MIR procedures are produced by concrete `MonoSpecializationQueue`
+  requests, never by scanning all top-level or exported procedures
 - mono MIR contains `call_proc` and no dispatch
+- mono MIR direct procedure calls use `call_proc`, not `call(var_(proc), args)`
 - lifted MIR contains explicit `CaptureSlot`s, explicit `proc_value`
   `CaptureArg`s, and no dispatch
 - lambda-solved MIR contains explicit callable sets and no dispatch
@@ -6888,9 +7184,10 @@ Checking finalization and compile-time constants:
 
 - checking finalization publishes a complete `CheckedModuleArtifact` or no
   artifact
-- published artifacts include method registry, static dispatch plans, root
-  request table, hosted procedure table, platform-required binding table,
-  interface capabilities, and compile-time value store
+- published artifacts include method registry, static dispatch plans, checked
+  procedure template table, root request table, hosted procedure table,
+  platform-required binding table, interface capabilities, and compile-time
+  value store
 - artifact views exposed to importers and lowering are read-only
 - a cache hit does not patch module identity after deserialization
 - hosted procedure ordering is stored in `HostedProcTable`, not by mutating
@@ -6898,13 +7195,17 @@ Checking finalization and compile-time constants:
 - platform-required bindings are stored in `PlatformRequiredBindingTable`, not
   by mutating checked module lookup targets after publication
 - root requests exist before MIR lowering starts
-- root requests cover app entrypoints, provided exports, platform-required
-  bindings, hosted exports, tests, REPL/dev expressions, and compile-time roots
+- root requests cover app entrypoints, concrete provided exports that require
+  runtime entrypoints, platform-required bindings, hosted exports, tests,
+  REPL/dev expressions, and compile-time roots
+- generic exports are represented as checked procedure templates, not root
+  requests, until a concrete consumer requests one mono specialization
 - no eval, REPL, snapshot, CLI, glue, build, or test helper selects roots by
   scanning exports, declaration names, expression syntax, hosted lambda nodes,
   or procedure order
 - imported modules expose representation capabilities through
-  `ModuleInterfaceCapabilities`
+  `ModuleInterfaceCapabilities` and exported checked procedure templates through
+  `ImportedModuleView`
 - importing modules do not inspect imported private definitions or opaque
   backing syntax to rebuild representation capability data
 - compile-time constant evaluation runs before checked artifacts are published
@@ -7229,6 +7530,16 @@ Static dispatch:
 
 - generic dispatch specializes to different nominal method targets
 - generic target methods specialize at exact monomorphic function types
+- generic procedures containing static dispatch are registered as checked
+  procedure templates and lower only when a concrete mono specialization is
+  requested; tests must fail if the implementation visits every top-level
+  function before root/call specialization requests exist
+- generic exported procedures containing static dispatch remain export-table
+  templates until imported at concrete types; exporting the module alone must not
+  perform method-owner lookup
+- ambiguous static dispatch whose `dispatcher_var` is not determined by the
+  checked callable type, enclosing expression type, and requested mono function
+  type is reported before artifact publication
 - chained dispatch uses each dispatch site's own `StaticDispatchCallPlan` and
   the earlier call's unified return slot
 - chained dispatch does not call any expression-based method resolver
@@ -7241,6 +7552,9 @@ Static dispatch:
   executable `is_eq` after executable MIR
 - inequality lowers to `call_proc` `is_eq` plus `bool_not` before executable MIR
   and direct executable `is_eq` plus `bool_not` after executable MIR
+- resolved direct calls, static-dispatch calls, and custom equality calls are
+  represented as `call_proc`; no test expectation may accept
+  `call(var_(proc), args)` as an equivalent mono MIR shape
 - anonymous record equality remains structural equality
 - transparent tag-union aliases resolve through nominal identity
 - cross-module methods resolve through registry target refs
@@ -7440,6 +7754,10 @@ Compile-time constants:
 - compile-time root dependencies are evaluated in topological order
 - compile-time root dependencies include monomorphic procedure body summaries for
   direct calls, resolved static-dispatch calls, and resolved `proc_value` calls
+- compile-time dependency summary collection may record `pending_local_root`
+  only inside checking finalization and only while building
+  `CompileTimeRootDependencyGraph`; runnable mono MIR must never contain pending
+  top-level values
 - a serializable constant that calls a direct function whose body references a
   callable binding depends on that callable binding root even when the root
   expression does not name it directly
@@ -7561,7 +7879,8 @@ The cutover is complete only when all of these are true:
   artifacts
 - checked artifacts contain root requests, hosted procedure tables,
   platform-required binding tables, interface capabilities, method registries,
-  static dispatch plans, and compile-time value stores
+  static dispatch plans, checked procedure template tables, and compile-time
+  value stores
 - published checked artifacts are consumed through read-only views and are not
   patched after cache load or publication
 - no post-check stage mutates checked CIR or `ModuleEnv` to assign hosted
@@ -7569,10 +7888,13 @@ The cutover is complete only when all of these are true:
 - root requests are built before MIR lowering and no later stage selects roots
   by scanning exports, declarations, expression syntax, hosted lambda nodes, or
   procedure order
+- generic public exports remain checked procedure templates until a concrete
+  consumer requests a concrete mono function type; exporting a generic procedure
+  never lowers its body eagerly
 - REPL and development expressions become temporary checked artifacts with
   explicit roots
 - imported modules expose representation capabilities and compile-time constants
-  only through their checked artifacts
+  and exported checked procedure templates only through their checked artifacts
 - public post-check semantic lowering APIs return resource errors only; semantic
   missing-data conditions are checking diagnostics before publication or
   compiler invariant violations after publication
@@ -7603,6 +7925,12 @@ The cutover is complete only when all of these are true:
 - static dispatch exists only in checked CIR and mono MIR input pattern matching
 - every checked static-dispatch node exported to mono MIR carries a
   `StaticDispatchCallPlan`, or has already been rewritten to `structural_eq`
+- every checked `StaticDispatchCallPlan` is determinate for each concrete mono
+  specialization that can reach it; checking rejects ambiguous dispatcher
+  variables before artifact publication
+- mono MIR is produced only through the `MonoSpecializationQueue`; no
+  `lowerAllTopLevelFunctions`, lower-every-export, or equivalent eager lowering
+  path remains
 - mono MIR consumes checked `StaticDispatchCallPlan` values plus the checked
   method registry and never chooses the dispatcher variable from receiver
   expressions, result positions, method names, or environment lookup
@@ -7612,6 +7940,9 @@ The cutover is complete only when all of these are true:
 - mono MIR output has no dispatch nodes
 - mono MIR output uses `call_proc`, not `call_direct`, for resolved static
   dispatch
+- mono MIR output uses `call_proc`, not `call(var_(proc), args)`, for every
+  resolved direct procedure call, resolved static dispatch call, and resolved
+  custom equality call
 - every static-dispatch-produced `call_proc.requested_fn_ty` is the mono-store
   unification of `StaticDispatchCallPlan.callable_var` and the instantiated
   target procedure type

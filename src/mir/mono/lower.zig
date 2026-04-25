@@ -36,6 +36,18 @@ const Var = types.Var;
 const Instantiator = instantiate.Instantiator;
 const dec_scale_i128: i128 = 1_000_000_000_000_000_000;
 
+const MethodLookupKey = struct {
+    module_idx: u32,
+    type_ident: base.Ident.Idx,
+    method_ident: base.Ident.Idx,
+};
+
+const MethodLookupTarget = struct {
+    module_idx: u32,
+    def_idx: CIR.Def.Idx,
+    symbol: symbol_mod.Symbol,
+};
+
 /// Public struct `Program`.
 pub const Program = struct {
     store: ast.Store,
@@ -104,6 +116,7 @@ const Ctx = struct {
     idents: base.Ident.Store,
     source_modules: *typed_cir.Modules,
     static_dispatch_plans: []static_dispatch.StaticDispatchPlanTable,
+    method_targets: std.AutoHashMap(MethodLookupKey, MethodLookupTarget),
     builtin_module_idx: u32,
     executable_start_ident: base.Ident.Idx,
     executable_len_ident: base.Ident.Idx,
@@ -341,6 +354,7 @@ const Ctx = struct {
             .idents = idents,
             .source_modules = typed_cir_modules,
             .static_dispatch_plans = static_dispatch_plans,
+            .method_targets = std.AutoHashMap(MethodLookupKey, MethodLookupTarget).init(allocator),
             .builtin_module_idx = builtin_module_idx,
             .executable_start_ident = executable_start_ident,
             .executable_len_ident = executable_len_ident,
@@ -354,6 +368,7 @@ const Ctx = struct {
             plans.deinit(self.allocator);
         }
         self.allocator.free(self.static_dispatch_plans);
+        self.method_targets.deinit();
         self.pattern_symbols.deinit();
         self.top_level_symbols.deinit();
         self.idents.deinit(self.allocator);
@@ -381,6 +396,103 @@ const Ctx = struct {
             if (plan.expr == expr_idx) return plan;
         }
         return null;
+    }
+
+    fn buildCheckedMethodTargets(self: *Ctx) std.mem.Allocator.Error!void {
+        var registry = try static_dispatch.MethodRegistry.fromTypedModules(self.allocator, self.source_modules);
+        defer registry.deinit(self.allocator);
+
+        for (registry.entries) |entry| {
+            const owner = try self.copyCheckedMethodOwner(entry.key.owner);
+            const method_ident = try self.copyCheckedMethodIdent(entry.key.owner, entry.key.method_ident);
+            const symbol = try self.getOrCreateTopLevelSymbol(
+                entry.target.module_idx,
+                entry.target.def_idx,
+                entry.target.qualified_ident,
+            );
+            try self.method_targets.put(.{
+                .module_idx = owner.module_idx,
+                .type_ident = owner.type_ident,
+                .method_ident = method_ident,
+            }, .{
+                .module_idx = entry.target.module_idx,
+                .def_idx = entry.target.def_idx,
+                .symbol = symbol,
+            });
+        }
+    }
+
+    fn checkedMethodTarget(
+        self: *const Ctx,
+        module_idx: u32,
+        type_ident: base.Ident.Idx,
+        method_ident: base.Ident.Idx,
+    ) ?MethodLookupTarget {
+        return self.method_targets.get(.{
+            .module_idx = module_idx,
+            .type_ident = type_ident,
+            .method_ident = method_ident,
+        });
+    }
+
+    const CopiedMethodOwner = struct {
+        module_idx: u32,
+        type_ident: base.Ident.Idx,
+    };
+
+    fn copyCheckedMethodOwner(
+        self: *Ctx,
+        owner: static_dispatch.MethodOwner,
+    ) std.mem.Allocator.Error!CopiedMethodOwner {
+        return switch (owner) {
+            .nominal => |nominal| .{
+                .module_idx = nominal.module_idx,
+                .type_ident = try self.copyExecutableIdent(nominal.module_idx, nominal.type_ident),
+            },
+            .builtin => |builtin_owner| .{
+                .module_idx = self.builtin_module_idx,
+                .type_ident = try self.copyBuiltinMethodOwnerIdent(builtin_owner),
+            },
+        };
+    }
+
+    fn copyCheckedMethodIdent(
+        self: *Ctx,
+        owner: static_dispatch.MethodOwner,
+        method_ident: base.Ident.Idx,
+    ) std.mem.Allocator.Error!base.Ident.Idx {
+        const source_module_idx = switch (owner) {
+            .nominal => |nominal| nominal.module_idx,
+            .builtin => self.builtin_module_idx,
+        };
+        return self.copyExecutableIdent(source_module_idx, method_ident);
+    }
+
+    fn copyBuiltinMethodOwnerIdent(
+        self: *Ctx,
+        owner: static_dispatch.BuiltinOwner,
+    ) std.mem.Allocator.Error!base.Ident.Idx {
+        const idents = self.typedCirModule(self.builtin_module_idx).commonIdents();
+        const source_ident = switch (owner) {
+            .list => idents.list,
+            .box => idents.box,
+            .bool => idents.bool,
+            .str => idents.str,
+            .u8 => idents.u8,
+            .i8 => idents.i8,
+            .u16 => idents.u16,
+            .i16 => idents.i16,
+            .u32 => idents.u32,
+            .i32 => idents.i32,
+            .u64 => idents.u64,
+            .i64 => idents.i64,
+            .u128 => idents.u128,
+            .i128 => idents.i128,
+            .f32 => idents.f32,
+            .f64 => idents.f64,
+            .dec => idents.dec,
+        };
+        return self.copyExecutableIdent(self.builtin_module_idx, source_ident);
     }
 
     fn getOrCreateTopLevelSymbol(
@@ -813,7 +925,7 @@ pub const Lowerer = struct {
         builtin_module_idx: u32,
         app_module_idx: ?u32,
     ) std.mem.Allocator.Error!Lowerer {
-        return .{
+        var lowerer = Lowerer{
             .allocator = allocator,
             .ctx = try Ctx.init(allocator, typed_cir_modules, builtin_module_idx),
             .program = Program.init(allocator),
@@ -826,6 +938,9 @@ pub const Lowerer = struct {
             .attached_method_index = symbol_mod.AttachedMethodIndex.init(allocator),
             .required_app_module_idx = app_module_idx,
         };
+        errdefer lowerer.deinit();
+        try lowerer.ctx.buildCheckedMethodTargets();
+        return lowerer;
     }
 
     pub fn deinit(self: *Lowerer) void {
@@ -5868,15 +5983,35 @@ pub const Lowerer = struct {
             .equality => |equality| equality,
             .value => unreachable,
         };
-        return try self.program.store.addExpr(.{
-            .ty = result_ty,
-            .data = .{ .method_eq = .{
-                .lhs = lowered_args[0],
-                .rhs = lowered_args[1],
-                .negated = equality.negated,
-                .dispatch_constraint_ty = dispatch_constraint_ty,
-            } },
-        });
+        const dispatcher_ty = try self.instantiateSourceVarType(
+            module_idx,
+            type_scope,
+            plan.dispatcher_var,
+        );
+        const base_eq = if (try self.resolveStaticDispatchTarget(module_idx, plan, dispatcher_ty)) |target|
+            try self.makeStaticDispatchCallExpr(
+                result_ty,
+                target.symbol,
+                lowered_args,
+                dispatch_constraint_ty,
+            )
+        else blk: {
+            if (!equality.structural_allowed) {
+                debugPanic(
+                    "monotype static dispatch invariant violated: checked equality plan for expr {d} has no target and does not allow structural equality",
+                    .{@intFromEnum(expr_idx)},
+                );
+            }
+            break :blk try self.program.store.addExpr(.{
+                .ty = result_ty,
+                .data = .{ .structural_eq = .{
+                    .lhs = lowered_args[0],
+                    .rhs = lowered_args[1],
+                } },
+            });
+        };
+        if (!equality.negated) return base_eq;
+        return try self.makeLowLevelExpr(result_ty, .bool_not, &.{base_eq});
     }
 
     fn lowerStructuralEqExpr(
@@ -5945,15 +6080,18 @@ pub const Lowerer = struct {
             dispatch_shape.args,
         );
         defer self.allocator.free(lowered_args);
-        return try self.program.store.addExpr(.{
-            .ty = result_ty,
-            .data = .{ .dispatch_call = .{
-                .receiver = lowered_args[0],
-                .method_name = try self.ctx.copyExecutableIdent(module_idx, plan.method_ident),
-                .args = try self.program.store.addExprSpan(lowered_args[1..]),
-                .dispatch_constraint_ty = dispatch_constraint_ty,
-            } },
-        });
+        const dispatcher_ty = try self.instantiateSourceVarType(
+            module_idx,
+            type_scope,
+            plan.dispatcher_var,
+        );
+        const target = try self.requireStaticDispatchTarget(module_idx, expr_idx, plan, dispatcher_ty);
+        return try self.makeStaticDispatchCallExpr(
+            result_ty,
+            target.symbol,
+            lowered_args,
+            dispatch_constraint_ty,
+        );
     }
 
     fn lowerTypeDispatchCallExpr(
@@ -5992,15 +6130,128 @@ pub const Lowerer = struct {
             dispatch_shape.args,
         );
         defer self.allocator.free(lowered_args);
+        const target = try self.requireStaticDispatchTarget(module_idx, expr_idx, plan, dispatcher_ty);
+        return try self.makeStaticDispatchCallExpr(
+            result_ty,
+            target.symbol,
+            lowered_args,
+            dispatch_constraint_ty,
+        );
+    }
+
+    fn makeStaticDispatchCallExpr(
+        self: *Lowerer,
+        result_ty: type_mod.TypeId,
+        target_symbol: symbol_mod.Symbol,
+        lowered_args: []const ast.ExprId,
+        requested_fn_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        const func_expr = try self.program.store.addExpr(.{
+            .ty = requested_fn_ty,
+            .data = .{ .var_ = target_symbol },
+        });
         return try self.program.store.addExpr(.{
             .ty = result_ty,
-            .data = .{ .type_dispatch_call = .{
-                .dispatcher_ty = dispatcher_ty,
-                .method_name = try self.ctx.copyExecutableIdent(module_idx, plan.method_ident),
+            .data = .{ .call = .{
+                .func = func_expr,
                 .args = try self.program.store.addExprSpan(lowered_args),
-                .dispatch_constraint_ty = dispatch_constraint_ty,
+                .call_constraint_ty = requested_fn_ty,
             } },
         });
+    }
+
+    fn requireStaticDispatchTarget(
+        self: *Lowerer,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        plan: *const static_dispatch.StaticDispatchCallPlan,
+        dispatcher_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!MethodLookupTarget {
+        const method_ident = try self.ctx.copyExecutableIdent(module_idx, plan.method_ident);
+        const owner = try self.maybeMethodLookupOwnerForType(dispatcher_ty, method_ident) orelse debugPanic(
+            "monotype static dispatch invariant violated: checked dispatch plan for expr {d} has no method owner for method {s}",
+            .{ @intFromEnum(expr_idx), self.ctx.idents.getText(method_ident) },
+        );
+        return self.ctx.checkedMethodTarget(owner.module_idx, owner.type_ident, owner.method_ident) orelse debugPanic(
+            "monotype static dispatch invariant violated: checked dispatch plan for expr {d} has no method target for owner module {d} type {s} method {s}",
+            .{
+                @intFromEnum(expr_idx),
+                owner.module_idx,
+                self.ctx.idents.getText(owner.type_ident),
+                self.ctx.idents.getText(owner.method_ident),
+            },
+        );
+    }
+
+    fn resolveStaticDispatchTarget(
+        self: *Lowerer,
+        module_idx: u32,
+        plan: *const static_dispatch.StaticDispatchCallPlan,
+        dispatcher_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!?MethodLookupTarget {
+        const method_ident = try self.ctx.copyExecutableIdent(module_idx, plan.method_ident);
+        const owner = try self.maybeMethodLookupOwnerForType(dispatcher_ty, method_ident) orelse return null;
+        return self.ctx.checkedMethodTarget(owner.module_idx, owner.type_ident, owner.method_ident);
+    }
+
+    fn maybeMethodLookupOwnerForType(
+        self: *Lowerer,
+        dispatcher_ty: type_mod.TypeId,
+        method_ident: base.Ident.Idx,
+    ) std.mem.Allocator.Error!?MethodLookupKey {
+        const builtin_idents = self.ctx.typedCirModule(self.ctx.builtin_module_idx).commonIdents();
+        return switch (self.ctx.types.getTypePreservingNominal(dispatcher_ty)) {
+            .nominal => |nominal| .{
+                .module_idx = nominal.module_idx,
+                .type_ident = nominal.ident,
+                .method_ident = method_ident,
+            },
+            .primitive => |prim| .{
+                .module_idx = self.ctx.builtin_module_idx,
+                .type_ident = try self.copyBuiltinPrimitiveMethodOwnerIdent(builtin_idents, prim),
+                .method_ident = method_ident,
+            },
+            .list => .{
+                .module_idx = self.ctx.builtin_module_idx,
+                .type_ident = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_idents.list),
+                .method_ident = method_ident,
+            },
+            .box => .{
+                .module_idx = self.ctx.builtin_module_idx,
+                .type_ident = try self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, builtin_idents.box),
+                .method_ident = method_ident,
+            },
+            else => null,
+        };
+    }
+
+    fn copyBuiltinPrimitiveMethodOwnerIdent(
+        self: *Lowerer,
+        idents: CommonIdents,
+        prim: type_mod.Prim,
+    ) std.mem.Allocator.Error!base.Ident.Idx {
+        const source_ident = switch (prim) {
+            .bool => idents.bool,
+            .str => idents.str,
+            .u8 => idents.u8,
+            .i8 => idents.i8,
+            .u16 => idents.u16,
+            .i16 => idents.i16,
+            .u32 => idents.u32,
+            .i32 => idents.i32,
+            .u64 => idents.u64,
+            .i64 => idents.i64,
+            .u128 => idents.u128,
+            .i128 => idents.i128,
+            .f32 => idents.f32,
+            .f64 => idents.f64,
+            .dec => idents.dec,
+            .erased => debugPanic(
+                "monotype static dispatch invariant violated: erased primitive cannot own a method",
+                .{},
+            ),
+        };
+        return self.ctx.copyExecutableIdent(self.ctx.builtin_module_idx, source_ident);
     }
 
     const RequiredStaticDispatchMode = enum {
