@@ -480,6 +480,26 @@ const Lowerer = struct {
                     } },
                 });
             },
+            .proc_value => |proc_value| {
+                const captures = self.input.program.store.sliceCaptureArgSpan(proc_value.captures);
+                const lowered_captures = try self.allocator.alloc(ast.CaptureArg, captures.len);
+                defer self.allocator.free(lowered_captures);
+                for (captures, 0..) |capture, i| {
+                    lowered_captures[i] = .{
+                        .slot = capture.slot,
+                        .symbol = capture.symbol,
+                        .expr = try self.lowerExprInto(&lowered.lifted_defs, venv, capture.expr),
+                    };
+                }
+                lowered.expr = try self.output.addExpr(.{
+                    .ty = expr.ty,
+                    .data = .{ .proc_value = .{
+                        .proc = proc_value.proc,
+                        .captures = try self.output.addCaptureArgSpan(lowered_captures),
+                        .fn_ty = proc_value.fn_ty,
+                    } },
+                });
+            },
             .inspect => |value| {
                 lowered.expr = try self.output.addExpr(.{
                     .ty = expr.ty,
@@ -1084,6 +1104,11 @@ const Lowerer = struct {
                     try self.collectFreeVarsExpr(arg, bound, free);
                 }
             },
+            .proc_value => |proc_value| {
+                for (self.input.program.store.sliceCaptureArgSpan(proc_value.captures)) |capture| {
+                    try self.collectFreeVarsExpr(capture.expr, bound, free);
+                }
+            },
             .inspect => |value| try self.collectFreeVarsExpr(value, bound, free),
             .low_level => |ll| for (self.input.program.store.sliceExprSpan(ll.args)) |arg| try self.collectFreeVarsExpr(arg, bound, free),
             .when => |when_expr| {
@@ -1430,6 +1455,11 @@ const Lowerer = struct {
             .call_proc => |call| {
                 for (self.input.program.store.sliceExprSpan(call.args)) |arg| {
                     try self.collectBindingTypesExpr(arg);
+                }
+            },
+            .proc_value => |proc_value| {
+                for (self.input.program.store.sliceCaptureArgSpan(proc_value.captures)) |capture| {
+                    try self.collectBindingTypesExpr(capture.expr);
                 }
             },
             .inspect => |value| try self.collectBindingTypesExpr(value),

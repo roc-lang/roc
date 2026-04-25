@@ -2079,6 +2079,12 @@ const Planner = struct {
                 }
                 return false;
             },
+            .proc_value => |proc_value| {
+                for (self.input.store.sliceCaptureArgSpan(proc_value.captures)) |capture| {
+                    if (self.exprContainsReturn(capture.expr)) return true;
+                }
+                return false;
+            },
             .inspect => |inner| self.exprContainsReturn(inner),
             .low_level => |ll| {
                 for (self.input.store.sliceExprSpan(ll.args)) |arg_expr| {
@@ -4174,6 +4180,11 @@ const Planner = struct {
                     current_result_ty,
                 );
             },
+            .proc_value => |proc_value| {
+                for (self.input.store.sliceCaptureArgSpan(proc_value.captures)) |capture| {
+                    try self.preRefineExprSourceTypes(inst, mono_cache, venv, capture.expr);
+                }
+            },
             .structural_eq => |eq| {
                 try self.preRefineExprSourceTypes(inst, mono_cache, venv, eq.lhs);
                 try self.preRefineExprSourceTypes(inst, mono_cache, venv, eq.rhs);
@@ -6047,6 +6058,7 @@ const Planner = struct {
             },
             .call => |call| try self.specializeCallExpr(inst, mono_cache, venv, call, ty, required_exec_ty),
             .call_proc => |call| try self.specializeCallProcExpr(inst, mono_cache, venv, call, ty, required_exec_ty),
+            .proc_value => |proc_value| try self.specializeProcValueExpr(inst, mono_cache, venv, proc_value, required_exec_ty),
             .structural_eq => |eq| try self.specializeStructuralEqExpr(
                 inst,
                 mono_cache,
@@ -9206,6 +9218,7 @@ const Planner = struct {
                 self.callableTargetForBinding(symbol),
             .call => null,
             .call_proc => null,
+            .proc_value => |proc_value| proc_value.proc,
             .low_level => null,
             else => null,
         };
@@ -9232,6 +9245,9 @@ const Planner = struct {
     ) ?base.LowLevel {
         if (self.callableTargetForExprFact(venv, expr)) |symbol| {
             if (self.boxBoundaryBuiltinOp(symbol)) |op| return op;
+        }
+        if (expr.data == .proc_value) {
+            return self.boxBoundaryBuiltinOp(expr.data.proc_value.proc);
         }
         return if (expr.data == .var_) self.boxBoundaryBuiltinOp(expr.data.var_) else null;
     }
@@ -9914,6 +9930,29 @@ const Planner = struct {
             .ty = final_expr.ty,
             .data = final_expr.data,
         };
+    }
+
+    fn specializeProcValueExpr(
+        self: *Planner,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        venv: []const EnvEntry,
+        proc_value: @FieldType(solved.Ast.Expr.Data, "proc_value"),
+        required_exec_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!SpecializedExprLowering {
+        const captures = self.input.store.sliceCaptureArgSpan(proc_value.captures);
+        if (captures.len != 0) {
+            debugPanic("lambdamono.exec_plan.specializeProcValueExpr explicit captured proc_value lowering requires lifted capture slots");
+        }
+        return try self.lowerExactCallableVarExpr(
+            inst,
+            mono_cache,
+            venv,
+            proc_value.proc,
+            &.{},
+            proc_value.fn_ty,
+            required_exec_ty,
+        );
     }
 
     fn specializeCallProcExpr(

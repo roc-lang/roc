@@ -1256,6 +1256,11 @@ pub const Lowerer = struct {
                 try self.finalizeExprById(eq.lhs, visited);
                 try self.finalizeExprById(eq.rhs, visited);
             },
+            .proc_value => |proc_value| {
+                for (self.program.store.sliceCaptureArgSpan(proc_value.captures)) |capture| {
+                    try self.finalizeExprById(capture.expr, visited);
+                }
+            },
             .let_ => |*let_expr| {
                 try self.finalizeLetDef(&let_expr.def, visited);
                 try self.finalizeExprById(let_expr.rest, visited);
@@ -1689,7 +1694,7 @@ pub const Lowerer = struct {
 
     fn specializeTopLevelFunctionSymbol(
         self: *Lowerer,
-        type_scope: *const TypeScope,
+        type_scope: *TypeScope,
         source_symbol: symbol_mod.Symbol,
         requested_scoped_var: Var,
         requested_fn_ty: type_mod.TypeId,
@@ -2753,6 +2758,9 @@ pub const Lowerer = struct {
             .e_str => unreachable,
             .e_lookup_local => |lookup| {
                 const symbol = try self.lookupLocalRuntimeSymbol(module_idx, env, lookup.pattern_idx);
+                if (try self.maybeLowerTopLevelProcValue(module_idx, type_scope, env, expr, symbol, ty)) |proc_value| {
+                    return proc_value;
+                }
                 return try self.program.store.addExpr(.{
                     .ty = ty,
                     .data = .{ .var_ = symbol },
@@ -2760,6 +2768,9 @@ pub const Lowerer = struct {
             },
             .e_lookup_external => |lookup| {
                 const symbol = try self.lookupExternalRuntimeSymbol(module_idx, lookup);
+                if (try self.maybeLowerTopLevelProcValue(module_idx, type_scope, env, expr, symbol, ty)) |proc_value| {
+                    return proc_value;
+                }
                 return try self.program.store.addExpr(.{
                     .ty = ty,
                     .data = .{ .var_ = symbol },
@@ -6377,7 +6388,7 @@ pub const Lowerer = struct {
 
     fn makeStaticDispatchCallExpr(
         self: *Lowerer,
-        type_scope: *const TypeScope,
+        type_scope: *TypeScope,
         result_ty: type_mod.TypeId,
         target_symbol: symbol_mod.Symbol,
         lowered_args: []const ast.ExprId,
@@ -6396,6 +6407,34 @@ pub const Lowerer = struct {
                 .proc = specialized_symbol,
                 .args = try self.program.store.addExprSpan(lowered_args),
                 .call_constraint_ty = requested_fn_ty,
+            } },
+        });
+    }
+
+    fn maybeLowerTopLevelProcValue(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeScope,
+        env: BindingEnv,
+        expr: typed_cir.Expr,
+        source_symbol: symbol_mod.Symbol,
+        fn_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!?ast.ExprId {
+        const top_level = self.top_level_defs_by_symbol.get(source_symbol) orelse return null;
+        if (!top_level.is_function) return null;
+        const requested_var = try self.exprResultVar(module_idx, type_scope, env, expr.idx);
+        const specialized_symbol = try self.specializeTopLevelFunctionSymbol(
+            type_scope,
+            source_symbol,
+            requested_var,
+            fn_ty,
+        );
+        return try self.program.store.addExpr(.{
+            .ty = fn_ty,
+            .data = .{ .proc_value = .{
+                .proc = specialized_symbol,
+                .captures = ast.Span(ast.CaptureArg).empty(),
+                .fn_ty = fn_ty,
             } },
         });
     }

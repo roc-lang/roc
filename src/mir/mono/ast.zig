@@ -87,6 +87,13 @@ pub const FieldExpr = struct {
     value: ExprId,
 };
 
+/// Public struct `CaptureArg`.
+pub const CaptureArg = struct {
+    slot: u32,
+    symbol: Symbol,
+    expr: ExprId,
+};
+
 /// Public struct `Expr`.
 pub const Expr = struct {
     ty: TypeId,
@@ -133,6 +140,11 @@ pub const Expr = struct {
             proc: Symbol,
             args: Span(ExprId),
             call_constraint_ty: TypeId,
+        },
+        proc_value: struct {
+            proc: Symbol,
+            captures: Span(CaptureArg),
+            fn_ty: TypeId,
         },
         inspect: ExprId,
         low_level: struct {
@@ -250,6 +262,7 @@ pub const Store = struct {
     stmt_ids: std.ArrayList(StmtId),
     branch_ids: std.ArrayList(BranchId),
     field_exprs: std.ArrayList(FieldExpr),
+    capture_args: std.ArrayList(CaptureArg),
     typed_symbols: std.ArrayList(TypedSymbol),
 
     pub fn init(allocator: std.mem.Allocator) Store {
@@ -265,6 +278,7 @@ pub const Store = struct {
             .stmt_ids = .empty,
             .branch_ids = .empty,
             .field_exprs = .empty,
+            .capture_args = .empty,
             .typed_symbols = .empty,
         };
     }
@@ -280,6 +294,7 @@ pub const Store = struct {
         self.stmt_ids.deinit(self.allocator);
         self.branch_ids.deinit(self.allocator);
         self.field_exprs.deinit(self.allocator);
+        self.capture_args.deinit(self.allocator);
         self.typed_symbols.deinit(self.allocator);
     }
 
@@ -388,6 +403,18 @@ pub const Store = struct {
     pub fn sliceFieldExprSpan(self: *const Store, span: Span(FieldExpr)) []const FieldExpr {
         if (span.len == 0) return &.{};
         return self.field_exprs.items[span.start..][0..span.len];
+    }
+
+    pub fn addCaptureArgSpan(self: *Store, values: []const CaptureArg) std.mem.Allocator.Error!Span(CaptureArg) {
+        if (values.len == 0) return Span(CaptureArg).empty();
+        const start: u32 = @intCast(self.capture_args.items.len);
+        try self.capture_args.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn sliceCaptureArgSpan(self: *const Store, span: Span(CaptureArg)) []const CaptureArg {
+        if (span.len == 0) return &.{};
+        return self.capture_args.items[span.start..][0..span.len];
     }
 
     pub fn addTypedSymbolSpan(self: *Store, values: []const TypedSymbol) std.mem.Allocator.Error!Span(TypedSymbol) {

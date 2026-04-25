@@ -376,6 +376,7 @@ const Lowerer = struct {
                 }
                 break :blk null;
             },
+            .proc_value => |proc_value| proc_value.proc,
             .call, .call_proc => null,
             .low_level => null,
             else => null,
@@ -436,6 +437,11 @@ const Lowerer = struct {
                 .proc = call.proc,
                 .args = try self.instantiateExprSpan(call.args),
                 .call_constraint_ty = try self.instantiateType(call.call_constraint_ty),
+            } },
+            .proc_value => |proc_value| .{ .proc_value = .{
+                .proc = proc_value.proc,
+                .captures = try self.instantiateCaptureArgSpan(proc_value.captures),
+                .fn_ty = try self.instantiateType(proc_value.fn_ty),
             } },
             .inspect => |value| .{ .inspect = try self.instantiateExpr(value) },
             .low_level => |ll| .{ .low_level = .{
@@ -509,6 +515,20 @@ const Lowerer = struct {
             };
         }
         return try self.output.addFieldExprSpan(out);
+    }
+
+    fn instantiateCaptureArgSpan(self: *Lowerer, span: LiftedAst.Span(LiftedAst.CaptureArg)) std.mem.Allocator.Error!ast.Span(ast.CaptureArg) {
+        const values = self.input.store.sliceCaptureArgSpan(span);
+        const out = try self.allocator.alloc(ast.CaptureArg, values.len);
+        defer self.allocator.free(out);
+        for (values, 0..) |value, i| {
+            out[i] = .{
+                .slot = value.slot,
+                .symbol = value.symbol,
+                .expr = try self.instantiateExpr(value.expr),
+            };
+        }
+        return try self.output.addCaptureArgSpan(out);
     }
 
     fn instantiatePat(self: *Lowerer, pat_id: LiftedAst.PatId) std.mem.Allocator.Error!ast.PatId {
@@ -1774,6 +1794,13 @@ const Lowerer = struct {
                 try self.assertCallResultNotGeneralized("call_proc", target_ty);
                 break :blk target_ty;
             },
+            .proc_value => |proc_value| blk: {
+                for (self.output.sliceCaptureArgSpan(proc_value.captures)) |capture| {
+                    _ = try self.inferExpr(venv, capture.expr);
+                }
+                try self.unify(target_ty, proc_value.fn_ty);
+                break :blk target_ty;
+            },
             .inspect => |value| blk: {
                 const value_ty = try self.inferExpr(venv, value);
                 try self.unify(value_ty, value_ty);
@@ -2356,6 +2383,11 @@ const Lowerer = struct {
                     self.debugCountExprSymbol(arg, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
                 }
             },
+            .proc_value => |proc_value| {
+                for (self.output.sliceCaptureArgSpan(proc_value.captures)) |capture| {
+                    self.debugCountExprSymbol(capture.expr, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+                }
+            },
             .inspect => |value| self.debugCountExprSymbol(value, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr),
             .low_level => |ll| for (self.output.sliceExprSpan(ll.args)) |arg| self.debugCountExprSymbol(arg, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr),
             .when => |when_expr| {
@@ -2693,6 +2725,12 @@ const Lowerer = struct {
                         else => unreachable,
                     }
                 }
+            },
+            .proc_value => |proc_value| {
+                for (self.output.sliceCaptureArgSpan(proc_value.captures)) |capture| {
+                    try self.propagateExprErasure(capture.expr, venv);
+                }
+                expr.ty = proc_value.fn_ty;
             },
             .inspect => |value| try self.propagateExprErasure(value, venv),
             .low_level => |ll| {
@@ -3487,6 +3525,14 @@ const Lowerer = struct {
                 }
                 for (self.output.sliceExprSpan(call.args)) |arg| {
                     try self.collectExprEdges(arg, edges);
+                }
+            },
+            .proc_value => |proc_value| {
+                if (self.def_id_by_symbol.contains(proc_value.proc) and !containsSymbol(edges.items, proc_value.proc)) {
+                    try edges.append(self.allocator, proc_value.proc);
+                }
+                for (self.output.sliceCaptureArgSpan(proc_value.captures)) |capture| {
+                    try self.collectExprEdges(capture.expr, edges);
                 }
             },
             .inspect => |value| try self.collectExprEdges(value, edges),
