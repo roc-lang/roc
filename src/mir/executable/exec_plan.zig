@@ -2193,12 +2193,7 @@ const Planner = struct {
                     tag_payload.payload_index,
                 ) orelse debugPanic("lambdamono.exec_plan.explicitExprSourceType missing solved tag payload");
             },
-            .tag => |tag| try self.exactTagSourceTypeForExpr(
-                inst,
-                venv,
-                tag.name,
-                self.input.store.sliceExprSpan(tag.args),
-            ),
+            .tag => try self.cloneInstType(inst, expr.ty),
             .int_lit, .dec_lit => try self.cloneInstType(inst, expr.ty),
             .list, .record => {
                 const current_ty = try self.cloneInstType(inst, expr.ty);
@@ -9430,26 +9425,6 @@ const Planner = struct {
         };
     }
 
-    fn exactTagSourceTypeForExpr(
-        self: *Planner,
-        inst: *InstScope,
-        venv: []const EnvEntry,
-        tag_name: base.Ident.Idx,
-        arg_expr_ids: []const solved.Ast.ExprId,
-    ) std.mem.Allocator.Error!TypeVarId {
-        const arg_tys = try self.allocator.alloc(TypeVarId, arg_expr_ids.len);
-        defer self.allocator.free(arg_tys);
-        for (arg_expr_ids, 0..) |arg_expr_id, i| {
-            arg_tys[i] = try self.explicitExprSourceType(inst, venv, arg_expr_id);
-        }
-        return try inst.types.freshContent(.{ .tag_union = .{
-            .tags = try inst.types.addTags(&.{.{
-                .name = tag_name,
-                .args = try inst.types.addTypeVarSpan(arg_tys),
-            }}),
-        } });
-    }
-
     fn tagArgSourceTypesForExpr(
         self: *Planner,
         inst: *InstScope,
@@ -9557,18 +9532,11 @@ const Planner = struct {
                 ) orelse debugPanic("lambdamono.exec_plan.refinedSourceTypeForExpr tag_payload missing explicit payload type");
             },
             .tag => |tag| blk: {
-                const explicit_result_ty = try self.exactTagSourceTypeForExpr(
-                    inst,
-                    venv,
-                    tag.name,
-                    self.input.store.sliceExprSpan(tag.args),
-                );
-                try self.unifyIn(inst.types, current_source_ty, explicit_result_ty);
                 const source_args = self.input.store.sliceExprSpan(tag.args);
                 const tag_arg_tys = try self.tagArgSourceTypesForExpr(
                     inst,
                     venv,
-                    explicit_result_ty,
+                    current_source_ty,
                     tag.name,
                     source_args,
                 );
@@ -9582,7 +9550,7 @@ const Planner = struct {
                     );
                     try self.unifyIn(inst.types, tag_arg_tys[i], refined_arg_ty);
                 }
-                break :blk explicit_result_ty;
+                break :blk current_source_ty;
             },
             .call => |call| blk: {
                 const arg_expr_ids = self.input.store.sliceExprSpan(call.args);
