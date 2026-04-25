@@ -97,6 +97,17 @@ compiler invariants.
 Backends must not think about reference counting. They lower explicit LIR
 `incref` and `decref` statements only.
 
+The final-state plan has no static alias-permission model, uniqueness inference,
+parameter-mode procedure contracts, escape-summary contracts, or static
+value-duration model. Those concepts are out of scope for this cutover. They
+must not appear as MIR, IR, LIR, cache, ABI, or verifier contracts.
+
+Reference counting remains automatic. LIR receives explicit `incref` and
+`decref` statements from a mechanical ARC insertion pass over explicit LIR
+values and control flow. Mutating operations rely only on a runtime uniqueness
+check: `refcount == 1` permits in-place mutation; any other refcount must take
+the copy path. The compiler must not statically prove uniqueness for this plan.
+
 When this plan says a type is fully resolved, it means all type-store links have
 been chased, all placeholders that must be solved for the current stage are
 solved, and the stage is consuming the actual current type rather than a stale
@@ -132,7 +143,7 @@ argument count. The compiler must not synthesize partial-application closures,
 curried call chains, or missing-argument wrappers unless Roc source syntax
 explicitly constructs a function value that returns another function.
 
-The cor prototype uses curried unary functions. This plan borrows cor's
+The cor prototype uses curried unary functions. This plan uses cor's
 lambda-set architecture, not cor's function arity model.
 
 Every Roc source snippet in this plan must use Roc syntax, not Haskell syntax
@@ -427,7 +438,8 @@ Every row operation in row-finalized mono MIR stores compact finalized IDs:
 ```zig
 record_construct: struct {
     shape: RecordShapeId,
-    fields: Span(RecordFieldInit),
+    eval_order: Span(RecordFieldEval),
+    assembly_order: Span(RecordFieldAssembly),
 }
 
 record_access: struct {
@@ -438,7 +450,8 @@ record_access: struct {
 tag_construct: struct {
     union_shape: TagUnionShapeId,
     tag: TagId,
-    payloads: Span(TagPayloadArg),
+    eval_order: Span(TagPayloadEval),
+    assembly_order: Span(TagPayloadAssembly),
 }
 
 tag_pattern: struct {
@@ -590,6 +603,50 @@ inside the lifted procedure body. Captured values are read only through
 `capture_ref(slot)`, where `slot` indexes the current procedure's
 `CaptureSlot` metadata.
 
+Capture discovery must be symbol- and version-based, not name-based.
+
+Lifted MIR must lower through an explicit lexical scope builder:
+
+```zig
+const LiftScopeFrame = struct {
+    bindings: Map(Symbol, BindingLocation),
+    mutable_versions: Map(Symbol, MutableVersionId),
+};
+
+const BindingLocation = union(enum) {
+    local_value: ExprId,
+    lambda_param: ParamId,
+    pattern_binder: PatternBinderId,
+    local_proc: Symbol,
+    captured_slot: CaptureSlot.Index,
+};
+```
+
+The exact Zig field names may differ, but the responsibility must not. Lambda
+parameters, local function names, recursive local-function group members, source
+`match` pattern binders, record destructuring binders, tuple destructuring
+binders, `for` binders, block-local declarations, and shadowed declarations all
+enter the lexical scope stack as resolved symbols. The builder must not compare
+display names to decide whether a reference is local or captured.
+
+Mutable source variables must already be represented as explicit versions or
+version records by the time capture discovery needs to reason about them. A
+captured mutable value is a captured version or phi input, not a captured
+physical mutable cell. Capturing a mutable value does not allow a later stage to
+reopen source mutation or infer representation from assignments.
+
+Recursive local-function groups must reserve every member symbol before capture
+analysis begins. Capture discovery then computes the least fixed point over the
+reserved member graph, including captures required to build `proc_value` values
+for self and sibling members. Only after the fixed point is complete may lifted
+MIR lower member bodies.
+
+Every captured read must lower to `capture_ref(slot)`. A captured source symbol,
+captured mutable version, captured pattern binder, or captured sibling procedure
+must not remain as an ordinary `var_` inside the lifted body. Debug verification
+must assert this immediately after lifting; release builds use `unreachable` for
+the equivalent compiler-invariant path.
+
 ### Lambda-Solved MIR
 
 Lambda-solved MIR owns callable/lambda-set solving.
@@ -621,6 +678,67 @@ must not have to rediscover it.
 
 The lambda-solved type store is the single source of callable representation for
 executable lowering.
+
+Lifted-to-lambda-solved type import is an explicit stage boundary.
+
+Every lifted MIR function type imported into lambda-solved MIR becomes a
+lambda-solved function type with a fresh callable slot:
+
+```zig
+const CallableVarId = enum(u32) { _ };
+
+const LambdaSolvedFnType = struct {
+    fixed_arity: u32,
+    args: Span(TypeId),
+    ret: TypeId,
+    callable: CallableVarId,
+};
+```
+
+The exact Zig names may differ, but the import rule must not. A lifted MIR
+function type does not enter lambda-solved MIR as only an argument list and a
+return type. It always gets an explicit callable variable that lambda-set
+solving will resolve to either a finite callable set or erased callable
+representation.
+
+This rule applies everywhere a function type can appear:
+
+- expression results
+- `let` binders
+- mutable variable versions
+- pattern binders
+- procedure parameters
+- procedure returns
+- capture slots
+- `proc_value.fn_ty`
+- `call_proc.requested_fn_ty`
+- `call_value.requested_fn_ty`
+- record fields
+- tuple elements
+- tag payloads
+- `List(T)` elements
+- `Box(T)` payloads
+- nominal backing slots
+- nested function argument and return positions
+
+Freshness is per imported type occurrence. Two expression roots that reference
+the same lifted MIR logical `TypeId` still receive distinct callable variables
+unless an explicit value-flow edge connects those roots later. The lifted
+logical type says the source type shape; it does not say that two runtime values
+must share callable representation.
+
+The import algorithm must still be cycle-safe. It uses a placeholder cache
+inside one structural import traversal so recursive source types remain finite
+and repeated references inside that one occurrence preserve recursion. That
+cache is not a global `TypeId -> lambda-solved TypeId` memo table, and it must
+not cause unrelated occurrences with equal source type to share callable slots.
+
+For example, two unrelated local values of source type `I64 -> I64` start with
+two callable variables. If one value later flows to the other through `let`,
+branch join, parameter passing, capture, return, or another explicit value-flow
+edge, representation solving unifies those callable variables. If no such edge
+exists, the two callable variables may solve to different callable sets even
+though their source function types are textually identical.
 
 Executable MIR must consume the fully resolved callable representation attached to:
 
@@ -684,6 +802,25 @@ Unification of two callable sets is exact:
    violations.
 5. A callable set unified with erased callable representation becomes erased.
 
+The "same procedure member" comparison is specialization-local. It compares
+callable member instances after mono specialization, lifting, clone-instantiation,
+and capture-slot instantiation. The comparable identity is conceptually:
+
+```zig
+const CallableMemberInstanceId = struct {
+    proc_base: ProcBaseKeyRef,
+    mono_specialization: MonoSpecializationKey,
+    lambda_solved_instance: ProcRepresentationInstanceId,
+};
+```
+
+The exact Zig field names may differ, but the scope must not. A capture-slot
+mismatch is an invariant violation only when both callable-set entries refer to
+the same `CallableMemberInstanceId` in the same specialization-local
+lambda-solved type store. The same source procedure may appear in different mono
+or executable specializations with different instantiated capture types; those
+are different callable member instances, not a global capture-slot conflict.
+
 This algebra is not an optimization. It is the exported lambda-solved contract
 that executable MIR consumes.
 
@@ -742,9 +879,95 @@ type, callable-set member, capture type, bridge endpoint, or erased function
 type may contain `for_a`, `flex_for_a`, `unbd`, unresolved links, or raw
 checker variables.
 
+Generalization is environment-sensitive.
+
+After solving a non-recursive procedure template, lambda-solved MIR computes the
+set of type variables, callable variables, and representation variables reachable
+from the current outer environment. The outer environment is the already-bound
+procedure/template environment outside the procedure being generalized. It does
+not include the current procedure's own parameters, capture slots, return slot,
+or body-local values. Variables reachable from the current procedure template
+but not reachable from the outer environment may be generalized.
+
+After solving a recursive procedure SCC, lambda-solved MIR generalizes the SCC
+as one template group. The outer environment is the already-bound environment
+outside the SCC. SCC member procedure types, member capture slots, member body
+locals, and member-to-member callable references are inside the group being
+generalized. Generalization must preserve sharing among the SCC members before
+marking variables generalized, so a callable variable shared by two members
+remains one template variable after generalization.
+
+This rule is the lambda-solved equivalent of Hindley-Milner let-generalization:
+generalize only variables owned by the newly solved template, never variables
+owned by already-bound outer entries. It applies to ordinary type variables,
+callable variables, and representation variables together. A callable slot in a
+captured function parameter may be generalized when that captured value is an
+input to the current template; a callable slot already reachable from an outer
+bound definition must not be generalized by the current template.
+
+At every executable specialization point for `call_proc`, `proc_value`, or
+`call_value`, lambda-solved MIR must:
+
+1. Clone-instantiate the generalized procedure or callable template into a
+   specialization-local lambda-solved type store.
+2. Allocate fresh type, callable, and representation variables for every
+   generalized template variable.
+3. Instantiate the capture slot table exactly once for the specialization.
+4. Unify the instantiated template with the requested fixed-arity function type
+   and the explicit value-flow roots for that occurrence.
+5. Solve all reachable callable and representation variables before publishing
+   any executable MIR input.
+
+No executable specialization may consume a generalized template directly. If a
+debug verifier sees a generalized variable in an executable input, the compiler
+must assert immediately in debug builds; release builds use `unreachable`.
+
 Representation solving is also specialization-local.
 
 Lambda-solved MIR must not use `TypeId` as representation identity.
+
+Generalized procedures store representation templates, not executable
+representation results.
+
+Conceptual shape:
+
+```zig
+const ProcRepresentationTemplate = struct {
+    proc: Symbol,
+    type_template_store: TypeStoreRef,
+    representation_template: RepresentationTemplateId,
+    capture_slot_templates: Span(CaptureSlotTemplate),
+};
+
+const ProcRepresentationInstance = struct {
+    proc: Symbol,
+    executable_specialization_key: ExecutableSpecializationKey,
+    type_store: TypeStoreRef,
+    representation_store: RepresentationStore,
+    capture_slot_instances: Span(CaptureSlotInstance),
+};
+```
+
+The exact Zig names may differ, but the boundary must not. A generalized
+procedure template may contain generalized type variables and template
+representation variables. It is not consumed directly by executable MIR. Before
+executable MIR consumes a procedure, callable value, `call_proc`, or
+`call_value`, lambda-solved MIR must clone-instantiate the template into a
+specialization-local type store, instantiate the capture slot table once, build
+the specialization-local `RepresentationStore`, and fully resolve all links.
+
+Recursive specialization SCCs must reserve all procedure symbols, callable
+representation nodes, capture-shape nodes, and erased-adapter keys before any
+body in the SCC is solved to completion. Re-entering an in-progress
+specialization returns the reserved symbol and records the dependency edge. It
+must not create a second specialization key from a partially solved body.
+
+SCC solving finishes before any executable specialization key is published.
+Executable specialization keys, callable-set keys, capture-shape keys, erased
+function signature keys, and layout-publication keys must be canonical
+structural keys computed from the instantiated representation. They must never
+contain raw type-store ids, generalized template ids, expression ids, or
+in-progress solver links.
 
 Lambda-solved MIR owns an explicit `RepresentationStore`:
 
@@ -839,6 +1062,32 @@ connect_proc_value_whole_function(...)
 The helper names may differ, but the contract must not. Each helper creates the
 whole-function edge, each argument edge, the return edge, and the callable child
 edge together.
+
+`FunctionRepShape` is a compile-time representation-solving shape. It is not a
+runtime object layout.
+
+The argument and return children are required because calls, bridges, erased
+function signatures, boxed payload transforms, specialization keys, and
+higher-order value flow must know how function-typed values are used. They do
+not become runtime fields of a function value. After representation solving, an
+executable value whose source type is a function is represented by the solved
+callable child of its `FunctionRepShape`:
+
+```text
+finite callable child -> callable-set executable value
+erased callable child -> erased-fn executable value
+```
+
+There is no executable "function object" whose runtime payload contains
+argument-type children, return-type children, and a callable child. Function
+argument and return representation remains compile-time metadata attached to
+the function representation root and to call/bridge plans. Runtime data for a
+function-typed value is only the callable-set value or packed erased function
+value selected by the solved callable child.
+
+If executable type lowering sees an unresolved callable child for a function
+value, that is a compiler invariant violation handled by debug-only assertion in
+debug builds and `unreachable` in release builds.
 
 Representation solving is a deterministic union-find plus worklist:
 
@@ -1049,6 +1298,13 @@ Lambda-solved MIR must preserve explicit boxed-boundary records for every erased
 `Box(T)` boundary. Erasure is not a callable-only operation, but it is a
 `Box(T)`-only operation.
 
+Hosted, platform, and intrinsic ABI metadata may describe how to pass or call an
+erased callable that already exists because an explicit `Box(T)` boundary
+requires it. That metadata must not introduce erasure for a non-`Box(T)` source
+slot. If a hosted, platform, or intrinsic API requires an erased callback, the
+checked source-facing type must expose that callback through an explicit
+`Box(T)` slot. There is no separate hosted erased-boundary root.
+
 The exported lambda-solved type contract includes:
 
 ```text
@@ -1075,6 +1331,23 @@ const BoxBoundary = struct {
 };
 ```
 
+Every solved representation class that contains an erased callable slot must
+record exactly which boxed boundaries introduced that erasure:
+
+```zig
+const ErasedCallableProvenance = struct {
+    boundaries: NonEmptySpan(BoxBoundaryId),
+};
+```
+
+The exact Zig shape may differ, but the semantics must not. A non-empty
+provenance set proves that erasure came from one or more explicit `Box(T)`
+boundaries. There is no `unknown`, `intrinsic`, `hosted`, `layout`, or
+`compatibility` provenance case. If a solved erased callable slot has an empty
+provenance set, or if any boundary in the set is not a checked `Box(T)`
+boundary, lambda-solved MIR must hit the compiler-invariant path: debug-only
+assertion in debug builds, `unreachable` in release builds.
+
 `erased_box_payload_type(boundary)` may be called only with a `BoxBoundaryId`
 from this table. It recursively walks that boundary's boxed payload type and
 rewrites every reachable function slot to erased callable representation.
@@ -1082,8 +1355,10 @@ rewrites every reachable function slot to erased callable representation.
 `require_box_erased(boundary)` may be created only from a `BoxBoundaryId`. It is
 a requirement in the `RepresentationStore`, not an executable conversion.
 Solving that requirement walks the boundary's `payload_root` representation
-graph and marks every reachable function representation slot as erased. The walk
-follows only explicit representation edges already present in the store.
+graph, marks every reachable function representation slot as erased, and attaches
+that `BoxBoundaryId` to the erased callable provenance set for the solved
+representation class. The walk follows only explicit representation edges already
+present in the store.
 
 There must be no helper that accepts an arbitrary type, expression, or
 `RepRootId` and makes it erased. Any API that introduces erasure must take a
@@ -1091,9 +1366,10 @@ There must be no helper that accepts an arbitrary type, expression, or
 is exactly `Box(payload_boundary_ty)`.
 
 Any recursion through records, tuples, tag unions, `List(T)`, nested `Box(T)`,
-or nominal backing types happens only because those types are inside the payload
-of an explicit `Box(T)`. Those types are not themselves erasure boundaries.
-Non-callable data is preserved structurally.
+function argument and return positions, or nominal backing types happens only
+because those types are inside the payload of an explicit `Box(T)`. Those types
+are not themselves erasure boundaries. Non-callable data is preserved
+structurally.
 
 Nominal recursion is allowed only when lambda-solved MIR has an explicit
 representation record for the nominal backing.
@@ -1157,7 +1433,7 @@ const NoReachableCallableSlotsProof = union(enum) {
     instantiated_args_no_callable_paths: struct {
         nominal: NominalKey,
         instantiated_args: Span(CanonicalTypeKey),
-        proof_terms: Span<NoCallableProofTerm>,
+        proof_terms: Span(NoCallableProofTerm),
     },
 };
 ```
@@ -1211,14 +1487,20 @@ source syntax, copied backing declarations, display names, layout shapes, or a
 request for executable MIR to inspect the value later.
 
 Hosted and platform procedures must declare their callable-containing argument
-and return representations as part of their explicit ABI metadata. A hosted
-procedure that accepts, returns, stores, or exposes a value containing function
-slots must state whether each slot is finite callable-set representation or
-erased function representation, including the erased fixed-arity signature and
-explicit `ErasedCallAbiPolicyKey` for erased calls. Executable MIR must consume
-that metadata.
-It must not infer hosted representation behavior from host symbol names,
-argument layouts, or the body of user code around the hosted call.
+and return representations as part of their explicit ABI metadata, but that
+metadata is not allowed to introduce erasure. For every callable-containing slot
+whose source-facing type is not inside an explicit `Box(T)` boundary, the hosted
+or platform metadata must describe a finite callable-set representation. It may
+describe an erased function representation only for a callable slot that checking
+has already proven to be inside an explicit `Box(T)` boundary, and the metadata
+must name that boundary, the erased fixed-arity signature, and the explicit
+`ErasedFnAbiKey` for erased calls. If hosted or platform metadata requests erased
+representation for a non-`Box(T)` source slot, checking rejects the program before
+artifact publication. If executable MIR sees such a request after checking, that
+is a compiler invariant violation: debug-only assertion in debug builds,
+`unreachable` in release builds. Executable MIR must consume the checked
+metadata; it must not infer hosted representation behavior from host symbol
+names, argument layouts, or the body of user code around the hosted call.
 
 This transform produces types and representation requirements. It does not
 describe runtime traversal, runtime container conversion, or executable shape
@@ -1320,14 +1602,47 @@ The required callable representation algebra is:
 
 ```text
 finite callable set + finite callable set = canonical finite callable-set union
-finite callable set + erased callable = erased callable
-erased callable + erased callable = erased callable with exactly matching ErasedFnSigKey
+finite callable set + erased callable = erased callable with the erased side's BoxBoundaryId provenance
+erased callable + erased callable = erased callable with exactly matching ErasedFnSigKey and unioned BoxBoundaryId provenance
 ```
 
-`ErasedFnSigKey` equality includes the erased-call ABI policy. Two erased
-callables with the same erased argument and return representations but different
-`ErasedCallAbiPolicyKey` values are different erased callable representations.
-They must not silently merge.
+The finite-callable plus erased-callable case can occur only in a representation
+class reached by `require_box_erased(boundary)` for an explicit `Box(T)`
+boundary. If that merge appears in a class that is not reached from such a
+boundary, lambda-solved MIR has introduced non-`Box(T)` erasure and must hit the
+compiler-invariant path.
+
+This merge is representation solving, not executable repair. Once the class is
+solved, every function-typed value occurrence assigned to that class receives an
+explicit callable emission plan:
+
+```zig
+const CallableValueEmissionPlan = union(enum) {
+    finite_callable_set: CanonicalCallableSetKey,
+    already_erased: struct {
+        sig_key: ErasedFnSigKey,
+        provenance: ErasedCallableProvenance,
+    },
+    proc_value_to_erased: ProcValueErasePlan,
+    finite_set_to_erased_adapter: ErasedAdapterKey,
+};
+```
+
+The exact Zig shape may differ, but the contract must not. Function-typed
+procedure returns, branch results, capture values, record fields, tuple elements,
+tag payloads, list elements, mutable versions, and ordinary expression results
+all consume a `CallableValueEmissionPlan` when their solved representation class
+contains a callable child. An erased plan is valid only when it carries non-empty
+`BoxBoundaryId` provenance. Executable MIR must consume this plan directly; it
+must not ask whether the current syntax is inside `Box.box(...)`, compare source
+and target executable shapes, recover erasedness from a physical layout, or
+re-run representation solving.
+
+`ErasedFnSigKey` equality includes the erased-call ABI shape and hidden capture
+type. Two erased callables with the same erased argument and return
+representations but different hidden capture types or different `ErasedFnAbiKey`
+values are different erased callable representations. They must not silently
+merge.
 
 The required structural representation algebra is separate and equally
 mandatory. Each solved representation class has exactly one `RepresentationShape`
@@ -1430,7 +1745,14 @@ const BoxPayloadRepresentationPlan = union(enum) {
     list: *BoxPayloadRepresentationPlan,
     nested_box: *BoxPayloadRepresentationPlan,
     nominal: NominalPayloadRepresentation,
-    callable_leaf: CallableBoxPlan,
+    function: FunctionPayloadRepresentation,
+};
+
+const FunctionPayloadRepresentation = struct {
+    args: Span(BoxPayloadRepresentationPlan),
+    ret: *BoxPayloadRepresentationPlan,
+    callable: CallableBoxPlan,
+    erased_fn_sig_key: ErasedFnSigKey,
 };
 
 const CallableBoxPlan = union(enum) {
@@ -1438,20 +1760,80 @@ const CallableBoxPlan = union(enum) {
     proc_value_to_erased: ProcValueErasePlan,
     finite_set_to_erased_adapter: ErasedAdapterKey,
 };
+
+const ProcValueErasePlan = struct {
+    source_proc: Symbol,
+    source_fn_ty: TypeId,
+    erased_fn_sig_key: ErasedFnSigKey,
+    capture_shape_key: CaptureShapeKey,
+    executable_specialization_key: ExecutableSpecializationKey,
+    capture_slots: Span(CaptureSlot.Index),
+};
 ```
 
 The exact Zig shape may differ, but the semantics must not. Structural nodes in
 `BoxPayloadRepresentationPlan` are expected-representation propagation plans.
-They are not executable runtime conversions. Only a `callable_leaf` may cause
-executable MIR to pack a callable or synthesize an erased adapter, and only while
-lowering a value occurrence whose enclosing root is an explicit `Box(T)`
-boundary.
+They are not executable runtime conversions. Only the `callable` child of a
+`function` node may cause executable MIR to pack a callable or synthesize an
+erased adapter. That packing decision is carried by the solved
+`CallableValueEmissionPlan` for the value occurrence being emitted. The plan must
+carry non-empty `BoxBoundaryId` provenance, but the value occurrence itself does
+not have to be syntactically enclosed by a `Box(T)` expression.
+
+For example:
+
+```roc
+choose : Bool, Box(I64 -> I64) -> (I64 -> I64)
+choose = |useBox, boxed|
+    if useBox then
+        Box.unbox(boxed)
+    else
+        |x| x + 1
+```
+
+The `else` branch closure is not inside `Box.box(...)`, but the branch result
+representation is erased because the `then` branch came from `Box.unbox(boxed)`.
+Lambda-solved MIR must therefore attach a `finite_set_to_erased_adapter` or
+`proc_value_to_erased` emission plan to the `else` branch result with provenance
+pointing back to the `Box.unbox` boundary. Executable MIR must consume that
+emission plan. It must not reject the branch merely because the branch syntax is
+not a `Box(T)` boundary, and it must not introduce erasure unless the plan names
+the boundary.
+
+A `function` node is not a leaf. For a function payload inside an explicit
+`Box(T)` boundary, lambda-solved MIR recursively transforms every fixed-arity
+argument representation and the return representation, and it also rewrites the
+callable representation to erased. This is the only correct shape for higher-order
+boxed payloads. A value of type `Box(A -> B)` therefore carries an erased payload
+function whose erased argument representation is the boxed-boundary transform of
+`A`, whose erased return representation is the boxed-boundary transform of `B`,
+and whose callable child is described by `CallableBoxPlan`.
+
+`ProcValueErasePlan` is a boundary-local lowering obligation for an explicit
+`proc_value` occurrence. It is not a global procedure summary and not a runtime
+conversion. `source_proc` and `source_fn_ty` identify the lambda-solved procedure
+value being packed. `erased_fn_sig_key` identifies the erased callable ABI and
+hidden capture type required by the boxed boundary. `capture_shape_key` is the
+canonical hidden capture record shape for this erased procedure value.
+`executable_specialization_key` is the erased executable specialization that
+must be reserved before the packed value is emitted. `capture_slots` is the
+logical slot order that executable MIR must use to read the occurrence's
+`proc_value.captures` and build the hidden capture value.
+
+`ProcValueErasePlan` must not contain expression ids, generated symbol text,
+layout ids, LIR temporaries, runtime function pointers, runtime capture pointers,
+ARC placement data, or backend-specific ABI handles. The actual capture operands
+come from the `proc_value.captures` of the value occurrence being lowered. The
+plan names the required procedure specialization and capture ordering; it does
+not rediscover them from the target body or the surrounding expression.
 
 For boxing, executable MIR lowers the payload expression under
-`payload_boundary_ty` and consumes the payload plan as follows:
+`payload_boundary_ty` and consumes callable emission plans as follows:
 
 - `proc_value -> erased` packs the explicit procedure member and explicit
-  capture payloads.
+  capture payloads by consuming `ProcValueErasePlan`, reserving its
+  `executable_specialization_key`, and emitting an `ErasedFnValue` whose
+  `sig_key` is exactly `erased_fn_sig_key`.
 - `finite callable-set value -> erased` synthesizes an erased adapter procedure
   that captures the finite callable-set value. The adapter body dispatches with
   `callable_match`.
@@ -1460,6 +1842,22 @@ For boxing, executable MIR lowers the payload expression under
 - structural payload components are already constrained by lambda-solved MIR to
   use the boxed erased representation.
 
+The same three callable cases apply at any solved value occurrence whose
+representation class is erased with `BoxBoundaryId` provenance: branch joins,
+mutable join versions, returns from functions that unbox and re-expose a boxed
+callable, aggregate construction, and captures. These are not additional erasure
+sources. They are uses of the solved erased representation that was introduced
+by the named `Box(T)` boundary.
+
+When executable MIR consumes `ProcValueErasePlan`, the hidden capture argument is
+present exactly when `erased_fn_sig_key.capture_ty` is non-null. A no-capture
+procedure value has no hidden capture argument and packs `ErasedCapture.none`. A
+zero-sized capture still has a non-null hidden capture type and packs
+`ErasedCapture.zero_sized_typed`. A runtime capture record packs
+`ErasedCapture.boxed` with the exact `capture_shape_key`. Runtime byte size,
+pointer nullness, and backend behavior must not decide whether a hidden capture
+argument exists.
+
 For unboxing, executable MIR performs the low-level unbox and gives the payload
 the explicit `payload_boundary_ty` representation. There is no
 `opaque_to_boundary` coercion and no recovery of the original finite callable-set
@@ -1467,10 +1865,10 @@ shape. Later field access or call lowering must consume the erased callable
 representation already present in `payload_boundary_ty`.
 
 Executable MIR must not synthesize generic runtime traversal or conversion for
-`List(T)`, records, tuples, tag unions, nominals, or any other non-`Box(T)`
-container. If such a value contains functions inside a boxed payload, the
-required erased representation must have been propagated by lambda-solved MIR to
-the producers and uses of that boxed payload.
+`List(T)`, records, tuples, tag unions, function argument/return slots, nominals,
+or any other non-`Box(T)` container. If such a value contains functions inside a
+boxed payload, the required erased representation must have been propagated by
+lambda-solved MIR to the producers and uses of that boxed payload.
 
 Executable MIR must not infer erasure from usage.
 
@@ -1489,107 +1887,178 @@ the boxed payload boundary. It captures exactly the finite callable-set value, o
 an explicit capture record containing that value. Its body receives the erased
 boundary arguments, dispatches with `callable_match`, and calls each finite
 member specialization using the same erased-boundary requested function type.
-The erased adapter procedure will later receive a `CallableCallOwnershipKey`
-from executable ownership solving for its body-level `callable_match`.
-`ErasedAdapterKey` itself is reserved before executable ownership solving and
-must not contain that later key. It must not contain expression ids, side-table ids,
-raw type ids, symbol freshening suffixes, or allocation-order-dependent data.
+`ErasedAdapterKey` is reserved before executable MIR lowers adapter bodies. It
+must not contain expression ids, side-table ids, raw type ids, symbol freshening
+suffixes, LIR temporaries, ARC placement records, or allocation-order-dependent
+data.
 
 `ErasedFnSigKey` must include the canonical erased argument types, canonical
-erased return type, fixed Roc arity, and an `ErasedCallAbiPolicyKey`.
+erased return type, fixed Roc arity, canonical hidden capture type, and an
+`ErasedFnAbiKey`.
 
-`ErasedCallAbiPolicyKey` interns an explicit erased-call ABI policy:
+Executable MIR values that have already been evaluated are referenced through
+explicit value handles:
 
 ```zig
-ErasedCallAbiPolicy {
-    kind: ErasedCallAbiKind,
+const ExecutableValueRef = union(enum) {
+    temp: TempId,
+    local: LocalValueId,
+    const_ref: ConstRef,
+    proc_value: Symbol,
+    capture_ref: CaptureSlot.Index,
+};
+```
+
+The exact Zig names may differ, but the boundary must not. An
+`ExecutableValueRef` names a value that is already available to the executable
+MIR node consuming it. It is not an arbitrary source expression and it does not
+authorize re-evaluation. Later executable MIR sections use this type
+conceptually for call arguments, bridge inputs, aggregate assembly operands,
+branch join inputs, and packed erased capture payloads.
+
+Packed erased function values have one ABI shape:
+
+```zig
+const ErasedFnValue = struct {
+    code_ptr: ErasedCodePtr,
+    sig_key: ErasedFnSigKey,
+    capture: ErasedCapture,
+};
+
+const ErasedCapture = union(enum) {
+    none,
+    zero_sized_typed: ErasedCaptureTypeKey,
+    boxed: ErasedCaptureBoxRef,
+};
+
+const ErasedCaptureBoxRef = struct {
+    value: ExecutableValueRef,
+    capture_type: ErasedCaptureTypeKey,
+    layout: LayoutId,
+    size: u32,
+};
+```
+
+The exact Zig names may differ, but the representation responsibilities must
+not. `code_ptr` names code whose erased ABI is exactly `sig_key`. `capture`
+records whether the erased function has no hidden capture argument, a typed
+zero-sized hidden capture argument, or a runtime boxed capture payload. Runtime
+boxed capture payloads carry the value handle, erased capture type key, physical
+layout id, and byte size explicitly.
+
+The erased code signature is keyed by `ErasedFnSigKey`:
+
+```zig
+const ErasedFnSigKey = struct {
     fixed_arity: u32,
-    packed_function_mode: ErasedValueMode,
-    arg_modes: Span(ErasedValueMode),
-    result_mode: ErasedResultMode,
-    retained_borrows: Span(ErasedBorrowRelation),
+    args: Span(CanonicalExecValueTypeKey),
+    ret: CanonicalExecValueTypeKey,
+    capture_ty: ?ErasedCaptureTypeKey,
+    abi: ErasedFnAbiKey,
+};
+```
+
+- `args` are the fixed-arity Roc source arguments after erased-boundary
+  representation rewriting.
+- `ret` is the erased-boundary return representation.
+- `capture_ty` is null when the callable has no capture argument.
+- `capture_ty` is non-null when erased code expects an explicit hidden capture
+  argument.
+- the hidden capture argument, when present, is appended after all fixed-arity
+  Roc source arguments.
+
+No-capture erased functions have `capture_ty = null`, no hidden capture
+argument, and `capture = none`.
+
+Zero-sized captures still have explicit capture typing when the erased code
+expects a capture argument. Their `ErasedFnSigKey` records the non-null capture
+type, and `ErasedFnValue.capture` must be `zero_sized_typed` when no runtime
+boxed payload is needed. A zero-sized capture is not the same ABI as no capture.
+If the concrete ABI carries zero-sized arguments as no bytes, hidden capture
+argument emission is still driven by `ErasedFnSigKey.capture_ty`, not by runtime
+pointer nullness, runtime byte size, or backend behavior.
+
+`call_erased` consumes the `ErasedFnSigKey` attached to the erased function
+value. It must not infer hidden capture arguments, capture layout, or erased
+argument shape from the runtime packed value, the target procedure body, the
+physical layout store, pointer nullness, or runtime capture size.
+
+`ErasedFnSigKey.capture_ty == null` requires `ErasedFnValue.capture = none`.
+`ErasedFnSigKey.capture_ty != null` requires `ErasedFnValue.capture` to be
+either `zero_sized_typed` with the exact capture type key or `boxed` with the
+same capture type key. A mismatch is a compiler invariant violation handled by
+debug-only assertion in debug builds and `unreachable` in release builds.
+
+`ErasedFnAbiKey` interns an explicit erased-call ABI shape:
+
+```zig
+ErasedFnAbi {
+    kind: ErasedFnAbiKind,
+    fixed_arity: u32,
+    packed_function_arg: ErasedPackedFunctionArgAbi,
+    arg_abis: Span(ErasedValueAbi),
+    result_abi: ErasedResultAbi,
+    capture_arg: ?ErasedCaptureArgAbi,
     hosted_owner: ?HostedAbiKey,
 }
 ```
 
-The policy describes the erased boundary's required calling convention. It says
-how the packed erased function value is passed, how each fixed-arity Roc
-argument is passed, how the result is materialized, and which retained borrow
-relations the erased ABI promises. `arg_modes.len` must equal `fixed_arity`.
-`hosted_owner` is set only for hosted, platform, or intrinsic ABI policies whose
+The ABI shape describes the erased boundary's required calling convention. It
+says how the packed erased function value is passed, how each fixed-arity Roc
+argument is represented at the boundary, how the result is materialized, and
+whether an explicit hidden capture argument exists. `arg_abis.len` must equal
+`fixed_arity`. `capture_arg` must agree exactly with
+`ErasedFnSigKey.capture_ty`.
+
+`hosted_owner` is set only for hosted, platform, or intrinsic ABI shapes whose
 ABI is defined outside ordinary Roc boxed-erased calling.
 
-The policy must not contain a future `CallableCallOwnershipKey`, procedure body
-ownership result, expression id, mutable type-store id, source syntax pointer,
-runtime function pointer, capture-layout pointer, or backend-specific layout
-handle. Those belong to later executable ownership records or lower-level ABI
-lowering, not to erased callable identity.
+The ABI shape must not contain expression ids, mutable type-store ids, source
+syntax pointers, runtime function pointers, capture-layout pointers, LIR
+temporaries, ARC placement records, or backend-specific layout handles. Those
+belong to executable MIR, LIR, or backend lowering, not to erased callable
+identity.
 
-That policy is part of key identity. Exact `ErasedFnSigKey` equality means:
+That ABI shape is part of key identity. Exact `ErasedFnSigKey` equality means:
 
 ```text
 same fixed Roc arity
 same canonical erased argument representations
 same canonical erased return representation
-same ErasedCallAbiPolicyKey
+same canonical hidden capture type, including null vs non-null
+same ErasedFnAbiKey
 ```
 
-Same erased arguments and same erased return with a different
-`ErasedCallAbiPolicyKey` is not the same erased callable representation. The
-compiler must either emit an explicit adapter or bridge at a boundary that names
-both policies. If no explicit adapter or bridge path exists after checking, that
-is a compiler invariant violation. A later stage must not repair the mismatch by
-inspecting an adapter body, capture layout, runtime function pointer, hosted
-symbol, or ownership result.
+Same erased arguments and same erased return with a different hidden capture
+type or a different `ErasedFnAbiKey` is not the same erased callable
+representation. The compiler must either emit an explicit adapter or bridge at a
+boundary that names both shapes. If no explicit adapter or bridge path exists
+after checking, that is a compiler invariant violation. A later stage must not
+repair the mismatch by inspecting an adapter body, capture layout, runtime
+function pointer, hosted symbol, or ARC placement result.
 
-`ErasedCallAbiPolicyKey` is produced before executable ownership solving. It is
-the erased-call ABI contract for the boundary, not the ownership result of a
-particular user procedure body.
+`ErasedFnAbiKey` is produced before executable MIR. It is the erased-call ABI
+shape for the boundary, not a body-derived summary for a particular procedure.
 
-For ordinary Roc boxed erased callables, the canonical policy is:
+For ordinary Roc boxed erased callables, the canonical ABI shape is:
 
 ```text
-borrow packed function value
-borrow every erased call argument
-fresh result materialization
+packed function value is passed as an ordinary refcounted value
+each fixed-arity erased argument is passed as an ordinary Roc value
+result is returned as an ordinary Roc value
+optional hidden capture argument is present exactly when `capture_ty` is non-null
 ```
 
-If a concrete callable-set member or adapter body consumes an argument or returns
-an alias/borrow relation that does not match this policy, executable ownership
-solving inserts an explicit branch-local or adapter-local bridge to satisfy the
-erased ABI. Hosted, platform, and intrinsic erased-call policies may use a
-different `ErasedCallAbiPolicyKey`, but only when that policy is explicit hosted,
-platform, or intrinsic ABI metadata.
+Hosted, platform, and intrinsic erased-call ABI shapes may use a different
+`ErasedFnAbiKey`, but only when that shape is explicit hosted, platform, or
+intrinsic ABI metadata.
 
-This split is mandatory because `ErasedAdapterKey` and boxed payload plans are
-reserved before executable ownership solving, while `CallableCallOwnershipKey`
-is produced by executable ownership solving. `ErasedFnSigKey` must not contain a
-future `CallableCallOwnershipKey`, procedure body ownership result, expression
-id, side-table id, or runtime function pointer. A later LIR or backend stage must not
-recover erased-call ownership from the adapter body, capture layout, host symbol,
-or runtime function pointer.
-
-Finite callable-set calls also have a single explicit call ownership key:
-
-```zig
-CallableCallOwnershipKey {
-    callable_set_key: CanonicalCallableSetKey,
-    requested_fn_key: CanonicalTypeKey,
-    arg_modes: Span(ArgOwnershipMode),
-    result_contract: ProcResultContract,
-}
-```
-
-This key is produced by executable ownership solving, not by branch-local
-lowering. A `callable_match` has exactly one `CallableCallOwnershipKey`.
-Every member specialization and erased adapter branch in that `callable_match`
-must expose the same argument modes and result contract at the branch boundary.
-If one member consumes an argument, the whole callable call consumes that
-argument. Members that only borrow it receive an explicit branch-local bridge
-from the normalized ownership state. A result may preserve an alias or borrow
-relation only when every branch returns the same compatible relation; otherwise
-the branch boundary must materialize a fresh result. Later stages must not infer
-these contracts from branch bodies.
+`ErasedAdapterKey` and boxed payload plans are reserved before executable MIR
+emits adapter bodies. `ErasedFnSigKey` must not contain procedure body summaries,
+expression ids, side-table ids, LIR temporaries, or runtime function pointers. A
+later LIR or backend stage must not recover erased-call ABI shape from the
+adapter body, capture layout, host symbol, runtime function pointer, or ARC
+placement.
 
 ### Executable MIR
 
@@ -1644,6 +2113,48 @@ Captured non-erased callables are not packed erased function pointers.
 
 Capture presence alone must never cause erased packing.
 
+Finite callable-set value construction is explicit executable MIR, not an
+environment lookup and not a delayed syntax interpretation.
+
+Concrete shape:
+
+```zig
+const CallableSetValue = struct {
+    id: CallableSetValueId,
+    callable_set_key: CanonicalCallableSetKey,
+    member: CallableSetMemberId,
+    member_proc: Symbol,
+    member_tag_index: u32,
+    capture_record: ?CallableCaptureRecord,
+    result_ty: ExecTypeId,
+    result_tmp: TempId,
+};
+
+const CallableCaptureRecord = struct {
+    capture_shape_key: CaptureShapeKey,
+    values: Span(CaptureValueRef),
+    record_tmp: TempId,
+};
+
+const CaptureValueRef = struct {
+    slot: CaptureSlot.Index,
+    value: ExecutableValueRef,
+    exec_ty: ExecTypeId,
+};
+```
+
+The exact Zig names may differ, but the representation responsibilities must
+not. A non-erased `proc_value` lowers to `CallableSetValue`. A member with no
+captures has no payload. A member with captures assembles one capture record in
+`CaptureSlot.index` order and stores that record as the member payload. Runtime
+byte size is not the source of truth for payload presence; a zero-sized capture
+still follows the explicit capture-slot metadata.
+
+Callable-set values produced by `match`, `if`, blocks, loops, constants, or
+bridges join through the same executable result-join rules as any other value.
+They must not become packed erased functions unless lambda-solved MIR explicitly
+requires an erased `Box(T)` boundary.
+
 This conversion must use only lambda-solved MIR metadata and executable MIR's own
 specialization queue. It must not inspect checked CIR, method registries, source
 syntax, or expression-derived records.
@@ -1667,6 +2178,38 @@ fully resolved requested callable type. It must lower and bridge every argument
 explicitly. A `call_proc` may return ordinary data, finite callable-set values,
 or erased callable values; direct-call lowering must not assume the result is
 non-callable.
+
+Executable MIR must represent `call_proc` lowering with an explicit executable
+plan before it emits `call_direct`:
+
+```zig
+const CallProcExecutablePlan = struct {
+    source_proc: Symbol,
+    requested_fn_ty: TypeId,
+    representation_root: RepClassId,
+    executable_specialization_key: ExecutableSpecializationKey,
+    direct_proc: Symbol,
+    arg_bridges: Span(BridgeId),
+    result_bridge: ?BridgeId,
+    result_ty: ExecTypeId,
+};
+```
+
+The exact Zig names may differ, but the plan must record the same decisions.
+`source_proc` is the source/MIR procedure target from lambda-solved MIR.
+`requested_fn_ty` is the fully resolved fixed-arity function type for this call.
+`representation_root` is the solved whole-function representation class, not
+only the callable child. `executable_specialization_key` is the canonical key
+used to reserve `direct_proc`. `arg_bridges` and `result_bridge` are explicit
+bridge obligations between the caller's executable values and the target
+specialization signature.
+
+A `call_proc` target identity never authorizes executable MIR to skip erased
+callable representation inside an explicit `Box(T)` payload. Direct target
+identity answers which procedure is called. It does not answer which
+representation every argument, result, capture, or boxed payload must use. Those
+come from the specialization-local lambda-solved representation store and the
+explicit bridge plan above.
 
 Finite callable-set calls are mandatory lowering, not an optimization.
 
@@ -1705,6 +2248,7 @@ CallableMatch {
     arg_temps: Span(TempId),
     branches: Span(CallableBranch),
     result_ty: ExecTypeId,
+    result_tmp: TempId,
 }
 ```
 
@@ -1712,7 +2256,9 @@ CallableMatch {
 node. `func_tmp` and `arg_temps` are the temporaries produced by those
 evaluations and consumed by every branch. `arg_temps.len` must equal the fixed
 Roc arity of the requested callable type. No branch may re-evaluate `func_expr`
-or any original argument expression.
+or any original argument expression. `result_ty` is the executable result type
+required by the original call expression. `result_tmp` is the single join value
+produced by the whole `callable_match`.
 
 Every `callable_match` branch must store:
 
@@ -1722,8 +2268,9 @@ CallableBranch {
     member_tag_index: u32,
     capture_payload: ?TypedSymbol,
     direct_proc: Symbol,
-    direct_args: Span(ExprId),
-    body: ExprId,
+    direct_args: Span(ExecutableValueRef),
+    direct_call_result: TempId,
+    bridge_to_result: ?BridgeId,
 }
 ```
 
@@ -1739,10 +2286,21 @@ all fixed-arity source call arguments in source order
 ```
 
 `direct_args` is the exact argument list supplied to the branch `call_direct`.
-It must be the original argument temporaries, followed by the destructured
-capture payload temporary when `capture_payload` is present. Branch `body` may
-wrap that direct call in bridges, but it must not add, remove, duplicate, or
-reorder direct-call arguments.
+It must be `ExecutableValueRef.temp` handles for the original argument
+temporaries, in source call order, followed by the destructured capture payload
+temporary when `capture_payload` is present. It must not contain source
+expressions, nested calls, field projections, box operations, or anything that
+could evaluate again inside the branch.
+`direct_call_result` is branch-local. If its executable type is not exactly
+`result_ty`, `bridge_to_result` names the explicit branch-local bridge into the
+single `result_tmp`. No branch-local layout or branch-local return type may
+escape the `callable_match` node. `no_return` branches do not constrain
+returning branches.
+
+Every returning branch must assign exactly one value to the shared
+`result_tmp`: either the `direct_call_result` itself when its type is already
+`result_ty`, or the result of `bridge_to_result`. Branch lowering may not add,
+remove, duplicate, or reorder direct-call arguments.
 
 `callable_match` is not a curried-call loop. It dispatches one fixed-arity Roc
 call. Every branch must call a member specialization whose source-argument arity
@@ -1768,6 +2326,446 @@ and printed control flow must use `match`.
 The executable MIR node is named `callable_match` so verifiers can distinguish
 callable-set dispatch from ordinary source `match` expressions. An ordinary
 source `match` does not satisfy the finite callable-set lowering requirement.
+
+Ordinary source `match` expressions must also have a concrete executable MIR
+node. They are not callable-set dispatch nodes, and callable-set
+`callable_match` nodes are not ordinary source `match` nodes.
+
+Ordinary source `match` lowering uses a checked pattern-decision plan. This is
+the production equivalent of the solid part of the old Rust compiler's
+`crates/compiler/mono/src/ir/decision_tree.rs` and
+`crates/compiler/mono/src/ir/pattern.rs`: checked patterns are flattened into
+path-specific tests, tests are compiled into an ordered decision tree, guards
+preserve fallback behavior, and branch bodies are joined through one result.
+
+The old Rust compiler is only a reference for the decision model. Production
+MIR must not copy its post-check error shape, curried-call assumptions, runtime
+global thunking, or late layout recovery.
+
+Conceptual shape:
+
+```zig
+const SourceMatch = struct {
+    id: SourceMatchId,
+    scrutinees: Span(MatchScrutinee),
+    decision_plan: PatternDecisionPlanId,
+    branches: Span(SourceMatchBranch),
+    result_ty: ExecTypeId,
+    result_tmp: TempId,
+};
+
+const MatchScrutinee = struct {
+    expr: ExprId,
+    tmp: TempId,
+    exec_ty: ExecTypeId,
+};
+
+const SourceMatchBranch = struct {
+    source_branch: CheckedBranchId,
+    materialized_paths: Span(MaterializedPatternPathValue),
+    bindings: Span(PatternBinding),
+    body: ExprId,
+    branch_result: TempId,
+    bridge_to_result: ?BridgeId,
+};
+
+const PatternPathValuePlanId = distinct u32;
+
+const PatternPathValuePlan = struct {
+    id: PatternPathValuePlanId,
+    path: PatternPath,
+    source: PatternPathValueSource,
+    exec_ty: ExecTypeId,
+};
+
+const MaterializedPatternPathValue = struct {
+    plan: PatternPathValuePlanId,
+    temp: TempId,
+};
+
+const PatternPathValueSource = union(enum) {
+    scrutinee: MatchScrutineeId,
+    tag_payload_record: struct {
+        parent: PatternPathValuePlanId,
+        tag: TagId,
+    },
+    tag_payload_field: struct {
+        parent_payload_record: PatternPathValuePlanId,
+        payload: TagPayloadId,
+    },
+    record_field: struct {
+        parent: PatternPathValuePlanId,
+        field: RecordFieldId,
+    },
+    tuple_field: struct {
+        parent: PatternPathValuePlanId,
+        field: TupleFieldId,
+    },
+    list_element: struct {
+        parent: PatternPathValuePlanId,
+        probe: ListElementProbeId,
+    },
+    list_rest: struct {
+        parent: PatternPathValuePlanId,
+        probe: ListRestProbeId,
+    },
+    opaque_payload: struct {
+        parent: PatternPathValuePlanId,
+        payload: OpaquePayloadId,
+    },
+    newtype_payload: struct {
+        parent: PatternPathValuePlanId,
+        payload: NewtypePayloadId,
+    },
+};
+
+const PatternBinding = struct {
+    binder: LocalValueId,
+    source: PatternPathValuePlanId,
+    exec_ty: ExecTypeId,
+    temp: TempId,
+};
+```
+
+Every scrutinee expression is evaluated exactly once, in source order, into its
+`MatchScrutinee.tmp`. The decision plan reads only those temporaries and
+explicit `PatternPathValuePlan` records derived from them. A path plan is a
+recipe keyed by finalized path ids and explicit parent path plans; it is not a
+global temporary. Decision nodes and selected branches materialize the path plans
+they need into control-flow-local `MaterializedPatternPathValue` temps. Branch
+bodies consume pattern-binding temporaries produced by the selected branch; they
+must not re-evaluate scrutinees or rediscover payloads from source syntax.
+
+The decision plan is explicit data:
+
+```zig
+const PatternDecisionPlan = struct {
+    id: PatternDecisionPlanId,
+    scrutinees: Span(PatternScrutineeId),
+    path_value_plans: Span(PatternPathValuePlan),
+    root: DecisionNodeId,
+    leaves: Span(DecisionLeaf),
+};
+
+const DecisionNode = union(enum) {
+    leaf: DecisionLeafId,
+    test: DecisionTestNode,
+};
+
+const DecisionTestNode = struct {
+    path_value: PatternPathValuePlanId,
+    edges: Span(DecisionEdge),
+    default: ?DecisionNodeId,
+};
+
+const DecisionEdge = struct {
+    test: PatternTest,
+    next: DecisionNodeId,
+};
+
+const PatternPath = struct {
+    scrutinee: PatternScrutineeId,
+    steps: Span(PatternPathStep),
+};
+
+const PatternPathStep = union(enum) {
+    tag_payload: TagPayloadId,
+    record_field: RecordFieldId,
+    tuple_field: TupleFieldId,
+    list_index: ListElementProbeId,
+    list_rest: ListRestProbeId,
+    opaque_payload: OpaquePayloadId,
+    newtype_payload: NewtypePayloadId,
+};
+
+const PatternTest = union(enum) {
+    tag: TagId,
+    bool_literal: bool,
+    byte_union_tag: TagId,
+    int_literal: IntPatternLiteralId,
+    float_literal: FloatPatternLiteralId,
+    decimal_literal: DecimalPatternLiteralId,
+    str_literal: StringLiteralId,
+    list_len_exact: u32,
+    list_len_at_least: u32,
+    guard: GuardPlanId,
+};
+
+const DecisionLeaf = struct {
+    source_branch: CheckedBranchId,
+    body: ExprId,
+};
+```
+
+The exact Zig names may differ, but the contract must not. The plan supports
+all checked source-pattern forms: identifiers, `_`, `as`, records, tuples,
+single-field newtypes, ordinary tag unions, opaque unwraps, list patterns with
+head/tail/rest probes, bool/byte union tests, numeric literals, string
+literals, and guards. Pattern tests are keyed by finalized row and literal ids,
+not by names, source text, physical layout indexes, or syntax-derived singleton
+tag shapes.
+
+Decision construction follows these rules:
+
+- The input is the checked pattern matrix plus row-finalized ids, fully resolved
+  pattern types, and guard plans. User-facing exhaustiveness, redundancy, and
+  invalid-pattern diagnostics have already happened before checked artifact
+  publication.
+- Flatten nested patterns into `(PatternPath, PatternTest)` pairs. A path starts
+  at a scrutinee and then steps through finalized payload, field, tuple,
+  list-probe, opaque, or newtype ids.
+- Deduplicate identical tests at the same path while preserving the first source
+  order at which each test can matter.
+- A default edge exists only when the tests at a path are incomplete for the
+  already-checked pattern matrix.
+- Guards are ordered decision tests. A branch whose structural tests pass but
+  whose guard fails must continue to the next source-compatible branch. This is
+  the same semantic requirement that old Rust handled with
+  `PlaceholderWithGuard`, `GuardedNoTest`, and `break_out_guard`.
+- List-length tests must preserve specificity ordering. More specific
+  `list_len_at_least` tests run before less-specific ones, and exact length
+  tests at the same length run before the at-least test for that length. This
+  preserves cases like `[x, y, ..]` before `[x, ..]`.
+- Single-tag non-nullable unions, single-field records, and newtypes may erase
+  a runtime tag/projection only when row-finalized representation metadata says
+  there is no runtime tag or no runtime wrapper. They must not make that choice
+  from source syntax.
+- A branch reached from multiple decision paths may use an explicit join point
+  or equivalent branch-sharing node. Pattern bindings required by the branch are
+  passed through that join explicitly.
+
+Path extraction is once per selected path value, not once per binder and not
+once per source branch. When a selected decision path needs a tag payload record,
+executable MIR first materializes the `PatternPathValuePlan` for that tag payload
+record from the already-materialized parent path value. Individual payload
+binders are then projected from that payload record through `tag_payload_field`
+path plans keyed by `TagPayloadId.payload_index`. It must not emit a separate
+union-payload extraction for every binder. A zero-payload tag has no
+payload-record path plan.
+
+This path-indexed model is required for nested patterns and multi-scrutinee
+matches. One reached source branch can require several payload records at
+different `PatternPath`s, for example one payload from the first scrutinee and
+another payload from a nested tag inside the second scrutinee. Those values are
+distinct `PatternPathValuePlan` records, each with its own `PatternPath`,
+`source`, and `exec_ty`, and distinct `MaterializedPatternPathValue` temps at
+the control-flow points where they are needed. A single branch-level
+payload-record temporary is not expressive enough and must not exist in the final
+design.
+
+`PatternPathValuePlan` records are reusable path recipes. Materialized path
+values are control-flow-local temps created only when a decision node or selected
+branch needs them. Guards and pattern binders consume these already-materialized
+path values. They must not ask executable MIR to reconstruct a path by scanning
+source patterns, sorting row names, or re-running decision tests.
+
+List element and rest bindings are also explicit probes. Head indexes, tail
+indexes, rest start, and rest length come from the checked list-pattern arity,
+not from ad hoc source parsing. If a tail index needs the list length, the
+decision plan names the length probe once for that branch path. List element and
+rest path values use the same `PatternPathValuePlan` table as tag payloads,
+records, tuples, opaque payloads, and newtype payloads.
+
+Optional record-field defaults are checking-time semantics. If a checked pattern
+requires a default expression for a missing optional field, the decision plan
+contains an explicit binding/default plan for that branch. Post-check lowering
+must not rediscover optional-field behavior by scanning record names.
+
+After type checking, branch coverage and pattern reachability are settled for
+the user. Executable MIR debug verification must assert that the decision plan
+and branch list exactly match the checked pattern matrix: no missing reachable
+branch, no impossible branch, no payload arity mismatch, no path id from the
+wrong finalized row shape, and no guard plan attached to the wrong branch.
+Release builds use `unreachable` for the equivalent compiler-invariant path.
+
+Executable MIR may canonicalize emitted IR switch arms by finalized `TagId`,
+literal value, or list length where that is a representation detail. It must
+not reorder scrutinee evaluation, guard evaluation, branch body evaluation, or
+branch-local payload/list/field extractions relative to the selected branch.
+
+Every returning source `match` branch must assign exactly one value to the
+shared `result_tmp`: either the `branch_result` itself when its executable type
+is already `result_ty`, or the result of `bridge_to_result`. Branch-local
+layouts and branch-local return types must not escape the `SourceMatch` node.
+`no_return` branches do not constrain returning branch result representation.
+
+The old Rust compiler's generated mono tests are useful regression inspiration
+for this area, especially nested patterns, guards that appear more than once in
+the compiled decision tree, matches over multiple values, record and tuple
+patterns, list exact/spread patterns, list rest bindings, and literal matches.
+Those tests must be ported or replaced with MIR-family tests using Roc's current
+`match` terminology.
+
+Payload and field bindings use explicit local ids:
+
+```zig
+const LocalValueId = distinct u32;
+
+const LetValue = struct {
+    local: LocalValueId,
+    expr: ExprId,
+    value: ExecutableValueRef,
+    exec_ty: ExecTypeId,
+};
+
+const Block = struct {
+    statements: Span(StmtId),
+    result: ExecutableValueRef,
+};
+
+const Stmt = union(enum) {
+    let_value: LetValue,
+    eval_boundary: EvalBoundary,
+    branch: BranchStmt,
+    runtime_uniqueness_mutation: RuntimeUniquenessMutation,
+};
+```
+
+`LocalValueId` is allocated by executable MIR's lexical-scope builder. Shadowed
+source names become distinct ids. A `let` evaluates its RHS exactly once before
+the body that uses it. Debug verification asserts no use-before-definition, no
+out-of-scope local use, no escaped branch-local binding, and no direct source
+name lookup after local ids have been assigned. Release builds use
+`unreachable` for the equivalent compiler-invariant path.
+
+Low-level operations are explicit nodes:
+
+```zig
+const LowLevelCall = struct {
+    op: LowLevelOpId,
+    arg_exprs: Span(ExprId),
+    arg_values: Span(ExecutableValueRef),
+    result_ty: ExecTypeId,
+    result_tmp: TempId,
+    abi: LowLevelAbiKey,
+    rc_effect: LowLevelRcEffect,
+    value_flow: LowLevelValueFlowSignature,
+};
+
+const LowLevelRcEffect = struct {
+    may_allocate: bool,
+    may_retain_or_release: bool,
+    may_runtime_uniqueness_check_args: BitSet,
+};
+
+const LowLevelValueFlowSignature = union(enum) {
+    no_value_flow,
+    flows: struct {
+        op: LowLevelOpId,
+        arg_tys: Span(TypeId),
+        result_ty: TypeId,
+        edges: Span(LowLevelValueFlowEdge),
+        box_boundary: ?BoxBoundaryIntrinsic,
+    },
+};
+
+const LowLevelValueFlowEdge = union(enum) {
+    arg_to_result: struct {
+        arg: u32,
+        projection: ValueProjectionPath,
+    },
+    arg_to_result_projection: struct {
+        arg: u32,
+        arg_projection: ValueProjectionPath,
+        result_projection: ValueProjectionPath,
+    },
+    produced_from_args: struct {
+        args: Span(u32),
+        result_projection: ValueProjectionPath,
+    },
+};
+
+const BoxBoundaryIntrinsic = struct {
+    boundary: BoxBoundaryId,
+    direction: BoxErasureDirection,
+};
+```
+
+`arg_exprs` evaluate exactly once in source order into `arg_values`. The ABI and
+RC-effect metadata are explicit inputs; later stages must not infer them from
+operation names. The value-flow signature is a separate explicit input. It
+records how representation edges for this low-level operation were created before
+executable MIR. Later stages must not derive those edges from the low-level
+operation name, argument layouts, result layout, or builtin implementation body.
+
+Every call-only intrinsic or low-level operation that can touch non-primitive
+values must publish a checked `LowLevelValueFlowSignature`:
+
+- pure numeric, boolean, and comparison operations use `no_value_flow`
+- `List.get_unsafe` links the selected element of argument 0 to the result
+- `List.set` links argument 0's element representation and argument 2's value
+  representation into the result list's element representation
+- `List.append`, `List.prepend`, `List.concat`, `List.split_first`, and
+  `List.split_last` explicitly describe element/container result flow
+- `Str` operations that return strings explicitly describe whether the result is
+  fresh, argument-derived, or structurally independent for representation
+  solving; reference-count behavior remains in `LowLevelRcEffect`
+- `Box.box` creates a `BoxBoundaryId`, links the payload argument to the boxed
+  payload representation, and creates `require_box_erased(boundary)`
+- `Box.unbox` creates a `BoxBoundaryId`, links the boxed payload representation
+  to the result, and gives any function slots in the result erased callable
+  provenance from that boundary
+
+Call-only intrinsics may lower directly to `LowLevelCall` only when they never
+flow as first-class values and when they have complete ABI, RC-effect, and
+value-flow signatures. First-class intrinsics still lower through wrapper
+procedures and `proc_value`. Missing value-flow signatures for non-primitive
+low-level operations are compiler invariant violations handled only by
+debug-only assertion in debug builds and `unreachable` in release builds.
+
+Executable MIR is not required to be in administrative normal form. It may keep
+nested expression structure where that structure does not cross a semantic
+boundary. The required invariant is narrower: nodes that branch, bridge, call,
+construct aggregates, pack erased functions, or join results must evaluate
+their semantically significant operands exactly once and expose those operands
+as `ExecutableValueRef` handles before the boundary consumes them.
+
+IR lowering and LIR lowering are responsible for introducing the mechanical
+temporaries needed by their own representation. LIR must be in administrative
+normal form before reference counting and backend consumption. MIR must not
+pretend to be ANF merely to paper over missing boundary value handles.
+
+Executable MIR bridge insertion must preserve single evaluation.
+
+Every source operand with evaluation, allocation, reference-counting, or
+control-flow significance
+must lower exactly once, in source order, to an executable MIR value handle
+before any bridge consumes it. Bridge nodes consume `ExecutableValueRef` handles
+only. They do not own source expressions and they must not re-run source
+expressions.
+
+This rule applies to:
+
+- `call_proc`
+- `call_value`
+- `callable_match`
+- `Box.box`
+- `Box.unbox`
+- record construction and update
+- tuple construction
+- tag construction
+- constant materialization
+- erased adapters
+- erased function packing
+- source `match` result joins
+- callable-match result joins
+
+Conceptual bridge input shape:
+
+```zig
+const BridgeInput = struct {
+    value: ExecutableValueRef,
+    from_ty: ExecTypeId,
+    to_ty: ExecTypeId,
+};
+```
+
+The exact Zig names may differ, but the restriction must not. A bridge source
+must already be an evaluated value handle. Debug verification must assert if a
+bridge directly contains an arbitrary source expression, a source `match`, a
+call, a box operation, a field projection, a tag payload extraction, or any
+expression with effects or reference-counting behavior. In release builds, the
+equivalent path is `unreachable`.
 
 Callable-set member tag assignment must be deterministic.
 
@@ -1850,137 +2848,101 @@ flow.
 It must not lower to a call-like fallback operation, erased-call fallback,
 indirect-call fallback, source dispatch operation, or method operation.
 
-### Executable Ownership Solve
+### Reference Counting And Mutation
 
-Executable ownership solving runs after executable MIR has reserved every user
-procedure specialization, lifted-local specialization, erased adapter, intrinsic
-wrapper, bridge procedure, entry wrapper, and hosted procedure target, and
-before executable MIR lowers to IR.
+There is no executable semantic parameter-mode pass and no procedure contract
+solve.
+Executable MIR lowers directly to IR after it has emitted explicit calls,
+bridges, matches, boxed-boundary operations, low-level operations, and value
+construction nodes.
 
-This stage consumes:
+Reference counting is handled by a mechanical LIR ARC insertion pass after LIR
+is in administrative normal form. That pass consumes:
 
-- executable MIR
-- explicit hosted/platform/intrinsic ABI metadata
-- explicit low-level ownership metadata
-- callable-set member metadata
-- erased function signature keys
-- bridge plans
+- LIR values and control flow
+- the committed layout graph, including which layouts are refcounted
+- explicit call ABI shapes
+- explicit low-level RC-effect metadata
+- explicit runtime-uniqueness mutation sites
 
-It produces:
-
-- `ProcOwnershipContract` for every executable procedure
-- `CallableCallOwnershipKey` for every `callable_match`
-- node-local ownership semantics for every value-producing executable MIR node
-- bridge ownership semantics
-- boxed-boundary ownership semantics
-
-Executable ownership solving is one fixed point over a single graph containing
-both executable procedures and callable-match sites. It must not solve procedure
-contracts first and callable-match contracts later as a separate sequential pass.
-
-Conceptual node set:
+It produces only explicit LIR reference-counting statements:
 
 ```text
-ProcOwnershipNode(proc_specialization)
-CallableMatchOwnershipNode(callable_match_id)
-ErasedAdapterOwnershipNode(erased_adapter_key)
-BridgeOwnershipNode(bridge_id)
+incref
+decref
+free
 ```
 
-Concrete graph record:
+It must not produce or consume semantic parameter modes, alias contracts,
+procedure result contracts, escape summaries, or interprocedural uniqueness
+summaries.
+
+The uniform Roc call boundary for this plan is:
+
+- Procedure parameters are ordinary live value references available during the
+  call.
+- Procedure results are ordinary live value references returned to the caller.
+- The callee must not release the caller's argument references merely because
+  they were passed as arguments.
+- If a callee returns a parameter value or stores a parameter into a returned
+  aggregate, capture, box, or other escaping value, ordinary local ARC insertion
+  emits the required `incref` before that escape.
+- The caller releases its argument references at their LIR last-use points.
+- Calls are mutation barriers. For any refcounted argument whose value is used
+  after a call that may perform a runtime uniqueness mutation, ARC insertion
+  emits a temporary `incref` before the call and a matching `decref` after the
+  call. This makes a callee's `refcount == 1` check fail while the caller still
+  needs the old value.
+
+This is a fixed ARC convention, not a heuristic and not a semantic
+parameter-mode system. It may retain more than a future alias-permission system
+would retain, but it preserves Roc value semantics without static uniqueness
+reasoning.
+
+Mutation is represented explicitly:
 
 ```zig
-OwnershipGraph {
-    nodes: IndexSet(OwnershipNode),
-    edges: Span(OwnershipEdge),
-    proc_inputs: Map(ExecutableProcId, ProcOwnershipInput),
-    callable_match_inputs: Map(CallableMatchId, CallableMatchOwnershipInput),
-    bridge_inputs: Map(BridgeId, BridgeOwnershipInput),
-    erased_adapter_inputs: Map(ErasedAdapterKey, ErasedAdapterOwnershipInput),
-    explicit_abi_inputs: ExplicitAbiOwnershipInputs,
-}
-
-OwnershipEdge {
-    from: OwnershipNodeId,
-    to: OwnershipNodeId,
-    reason: OwnershipEdgeReason,
-}
-
-CallableMatchOwnershipInput {
-    callable_match_id: CallableMatchId,
-    callable_set_key: CanonicalCallableSetKey,
-    func_tmp: TempId,
-    arg_temps: Span(TempId),
-    branches: Span(CallableMatchBranchOwnershipInput),
-    result_ty: ExecTypeId,
-}
-
-CallableMatchBranchOwnershipInput {
-    member_proc: Symbol,
-    direct_proc: Symbol,
-    direct_args: Span(ExprId),
-    bridge_ids: Span(BridgeId),
-}
+const RuntimeUniquenessMutation = struct {
+    id: MutationSiteId,
+    value: ExecutableValueRef,
+    value_ty: ExecTypeId,
+    unique_path: MutationUniquePathId,
+    shared_path: MutationSharedPathId,
+    result_tmp: TempId,
+};
 ```
 
-`OwnershipGraph` is built once from executable MIR plus explicit ABI metadata.
-The graph owns the SCC inputs for the fixed point; no solver step may look up a
-procedure body, callable branch, erased adapter body, bridge body, host symbol,
-or layout shape through an independent path after graph construction. The node
-ids above are graph-local ids. Semantic identity remains in `Symbol`,
-`CallableMatchId`, `ErasedAdapterKey`, and `BridgeId`.
+The exact Zig names may differ, but the operation must have the same shape.
+The unique path runs only after the runtime check proves `refcount == 1`. The
+shared path allocates or copies as required by the operation and then produces
+the same logical result. No MIR or LIR stage may statically mark a value unique
+for this plan.
 
-Required edges:
+Low-level, hosted, platform, and intrinsic operations that can allocate, retain,
+release, or attempt runtime uniqueness mutation must expose explicit
+`LowLevelRcEffect` or equivalent metadata before LIR ARC insertion. Later stages
+must not infer those effects from names, layout shapes, host symbols, or runtime
+function pointers.
 
-- procedure body to every direct callee procedure specialization
-- procedure body to every `callable_match` it contains
-- `callable_match` to every finite member procedure specialization branch
-- erased adapter procedure to the body-level `callable_match` it emits
-- procedure, adapter, and bridge nodes to explicit hosted/platform/intrinsic
-  ownership metadata and `ErasedCallAbiPolicyKey` inputs
+`Box.box` and `Box.unbox` are ordinary value operations for ARC purposes.
+`Box.unbox` does not mean a consuming move-out and does not have a special
+payload-reference contract. If the unboxed payload is refcounted and escapes or
+is duplicated, ARC insertion emits the required retains and releases from LIR
+use sites. Any future consuming unbox must be a separate explicit operation.
 
-The solver computes strongly connected components and iterates each SCC until
-all procedure contracts, callable-match ownership keys, and bridge obligations
-are stable. Non-convergence is a compiler invariant violation handled by
-debug-only assertion in debug builds and `unreachable` in release builds.
+Before IR lowering, executable MIR debug verification must assert:
 
-The ownership lattice is finite and deterministic:
+- there is no semantic parameter-mode pass configured in the pipeline
+- no executable MIR node contains parameter-mode or escape-summary contracts
+- every runtime mutation site has an explicit `RuntimeUniquenessMutation`
+  record or equivalent
+- every low-level, hosted, platform, or intrinsic operation with RC behavior has
+  explicit RC-effect metadata
+- bridges consume evaluated value handles only
+- callable-set calls, source matches, erased packing, boxed-boundary operations,
+  and aggregate assembly expose all values that ARC insertion will later see
 
-- argument mode join is `borrow < consume`
-- a callable-match argument is `consume` when any returning branch consumes it
-- a callable-match argument is `borrow` only when every returning branch borrows
-  it
-- result alias/borrow relations are preserved only when every returning branch
-  returns the same compatible relation to the same normalized input
-- otherwise the callable-match result materializes as `fresh`
-- `no_return` branches do not constrain returning branches
-- an all-`no_return` callable match has a `no_return` result contract
-
-Each callable-match branch receives explicit bridge obligations from the
-normalized `CallableCallOwnershipKey` to that branch member's
-`ProcOwnershipContract`. A branch may borrow a normalized consumed argument only
-through an explicit bridge. A branch may return an alias when the normalized
-result is fresh only by materializing the fresh result explicitly at the branch
-boundary.
-
-`CallableCallOwnershipKey` is assigned only after this fixed point. It is not a
-component of `ErasedAdapterKey`, `ErasedFnSigKey`, executable specialization
-keys, or layout keys.
-
-`ProcOwnershipContract` contains the owned/borrowed/consumed mode for every
-parameter, the result contract, and any retained-borrow relation needed by
-`RcInsert`. Recursive procedure groups, callable-match groups, erased adapters,
-and bridges are solved by fixed point over the ownership graph above. Hosted,
-platform, intrinsic wrapper, erased-call ABI, and low-level contracts are
-explicit inputs to the fixed point; they are not inferred from names, layout
-shapes, runtime function pointers, or backend behavior.
-
-Executable ownership solving is the only stage that may discover semantic
-procedure ownership. IR lowering and LIR lowering preserve these records. In the
-final architecture, any LIR ownership pass may only verify, normalize storage,
-or translate already-produced ownership records for `RcInsert`; it must not infer
-whether a user procedure owns a parameter or whether a call result borrows,
-aliases, or owns data.
+Release builds use `unreachable` for equivalent compiler-invariant paths.
 
 ### LIR And Backends
 
@@ -1991,52 +2953,37 @@ Reference counting is inserted before backends, as explicit LIR statements.
 Backends consume LIR only. They must not import MIR, IR builder internals,
 checked CIR, method registries, or reference-counting analysis.
 
-LIR ownership is a record pipeline, not a backend behavior.
+LIR ARC insertion is a value/control-flow pass, not a backend behavior and not a
+semantic procedure-summary pass. It computes where explicit `incref`, `decref`,
+and `free` statements belong from LIR uses, branch joins, call boundaries,
+runtime mutation sites, and refcounted layout metadata.
 
-Executable ownership solving and IR lowering must preserve enough ownership
-information for `RcInsert` to emit explicit `incref`, `decref`, and `free`
-statements. `RcInsert` is the only non-builtin stage that may turn those
-ownership records into concrete reference-counting statements. Backends and the
-ordinary interpreter path must execute those explicit LIR statements
-mechanically.
+Every value-producing LIR statement must expose enough explicit operands for ARC
+insertion to see what values are produced and consumed mechanically:
 
-Every executable MIR node introduced by this plan must have an explicit
-ownership contract before LIR:
+- `call_direct` and `call_erased` expose callee, argument values, result value,
+  fixed arity, and call ABI shape.
+- `callable_match` has already lowered to ordinary LIR control flow with
+  explicit branch inputs and result joins.
+- source `match` has already lowered to ordinary LIR control flow with explicit
+  scrutinee temporaries, test nodes, pattern bindings, and result joins.
+- `callable_set_value`, capture records, records, tuples, tags, boxes, and
+  packed erased functions expose their child values as explicit operands.
+- bridges expose input value and output value.
+- runtime mutation sites expose the checked value, unique path, shared path, and
+  joined result.
 
-- `call_direct` consumes, borrows, or returns values according to the callee's
-  explicit procedure ownership contract.
-- `call_erased` consumes, borrows, or returns values according to the
-  `ErasedCallAbiPolicyKey` inside `ErasedFnSigKey`. It must not infer ownership
-  from the runtime function pointer or capture layout.
-- `callable_match` evaluates the callable and source arguments once, then gives
-  every branch the same ownership state for those temporaries. Branches may
-  consume an argument only when the whole call consumes it; branch-local capture
-  destructuring must not duplicate ownership.
-- `callable_set_value` and callable-set member payload construction must state
-  whether each captured value is stored as an owned child or retained borrow.
-- `packed_erased_fn` must state the ownership of its function pointer and
-  capture payload. If it stores a finite callable-set value or capture record in
-  the packed function, that stored value must be owned by the packed function.
-- erased adapter procedures must expose ordinary procedure ownership contracts
-  for their erased arguments, capture record, and return value.
-- capture record construction must consume owned child values or retain borrowed
-  child values explicitly, following the same aggregate ownership rules as
-  records/tuples.
-- `Box.box` must state how the payload is materialized into the boxed storage.
-  If the payload is copied from a borrowed source, LIR ownership must retain the
-  produced boxed payload explicitly.
-- `Box.unbox` always borrows the box and materializes the payload as a copied
-  result from borrowed boxed storage. It is not a consuming move-out operation.
-  A consuming unbox would require a separate explicit builtin, low-level op, and
-  ownership contract.
-- bridge nodes must state whether they are direct aliases, copied values,
-  freshly materialized aggregates, or consuming transformations.
+`RcInsert` is the only non-builtin stage that emits explicit `incref`, `decref`,
+and `free`. Backends and the ordinary interpreter path execute those statements
+mechanically. They do not branch on layout shape to decide reference-counting
+behavior except while executing the explicit LIR RC statements already present.
 
 Before backend lowering, debug-only assertions must fire if any refcounted
-layout value produced by executable MIR or IR lacks ownership semantics needed
-by LIR, or if any backend/imported path branches on refcounted layout shape
-except while executing explicit LIR RC statements. Release builds use
-`unreachable` for the equivalent compiler-invariant path.
+layout value produced by executable MIR, IR, or LIR lacks the metadata needed by
+ARC insertion, if any mutation site lacks a runtime uniqueness check, or if any
+backend/imported path branches on refcounted layout shape except while executing
+explicit LIR RC statements. Release builds use `unreachable` for the equivalent
+compiler-invariant path.
 
 ### Checking Finalization: Compile-Time Constants
 
@@ -2047,7 +2994,7 @@ This stage consumes:
 
 - the checked module
 - the MIR-family lowering pipeline
-- LIR after executable ownership solving and reference-count insertion
+- LIR after reference-count insertion
 - explicit compile-time root records
 - explicit reification schemas built from the resolved source type and selected
   layout
@@ -2115,6 +3062,156 @@ execute, and which schema or callable-result record will reify or promote the
 result. Later stages must not recreate this information from source syntax,
 expression shape, naming conventions, or environment lookup.
 
+Compile-time roots must be evaluated through an explicit dependency graph.
+
+Conceptual shape:
+
+```zig
+const CompileTimeRootDependencyGraph = struct {
+    nodes: Span(CompileTimeRootNode),
+    edges: Span(CompileTimeRootEdge),
+};
+
+const CompileTimeRootNode = union(enum) {
+    serializable_constant_root: ComptimeRootId,
+    callable_binding_root: ComptimeRootId,
+    expect_root: ComptimeRootId,
+};
+
+const CompileTimeRootEdge = struct {
+    from: ComptimeRootId,
+    to: CompileTimeRootPrerequisite,
+    reason: CompileTimeRootDependencyReason,
+};
+
+const CompileTimeRootPrerequisite = union(enum) {
+    local_root: ComptimeRootId,
+    imported_value: ImportedTopLevelValueRef,
+};
+
+const CompileTimeRootDependencyReason = union(enum) {
+    top_level_serializable_constant: PatternId,
+    top_level_callable_binding: PatternId,
+    imported_checked_artifact: CheckedModuleArtifactKey,
+    reachable_procedure_body: ProcSpecializationKey,
+    callable_capture: CaptureSlot.Index,
+    erased_callable_promotion: ErasedFnSigKey,
+};
+```
+
+The exact Zig names may differ, but the dependency model must not. Direct
+top-level function declarations are procedure symbols, not compile-time
+evaluation roots. A root edge exists only when evaluating one compile-time root
+requires a serializable constant root, callable binding root, expect root, or
+imported checked artifact value to be available first.
+
+`CompileTimeRootEdge.from` is the dependent root. `CompileTimeRootEdge.to` is
+the prerequisite local root or imported top-level value that must be available
+first.
+
+The dependency graph must be built from monomorphic MIR after static dispatch has
+selected concrete call targets for the specialization being evaluated. Root
+expression scanning is not enough. Checking finalization must also compute a
+dependency summary for every procedure body that can execute while evaluating a
+compile-time root:
+
+```zig
+const ComptimeProcDependencySummary = struct {
+    proc: ProcSpecializationKey,
+    local_values: Span(TopLevelBindingId),
+    imported_values: Span(ImportedTopLevelValueRef),
+    direct_proc_deps: Span(ProcSpecializationKey),
+    static_dispatch_deps: Span(ProcSpecializationKey),
+    proc_value_deps: Span(ProcSpecializationKey),
+};
+
+const ComptimeDependencySummary = struct {
+    local_values: Span(TopLevelBindingId),
+    imported_values: Span(ImportedTopLevelValueRef),
+};
+```
+
+The exact Zig names may differ, but the staging must not. A procedure summary is
+computed over resolved monomorphic MIR, not source text, display names, import
+strings, or unchecked CIR. It records top-level values referenced by the body and
+the concrete procedure specializations that the body may call through
+`call_proc`, resolved static dispatch, or already-solved `proc_value` entries.
+The compiler then computes the fixed point over procedure-call SCCs. The summary
+for a compile-time root is the union of:
+
+- top-level values named directly by the root expression
+- imported top-level values named directly by the root expression
+- the fixed-point summaries of every direct procedure, static-dispatch target,
+  and `proc_value` target reachable while evaluating that root
+- top-level values captured by any callable value that can be returned from that
+  root and then promoted
+
+This is allowed to over-approximate within the resolved monomorphic call graph,
+but it must not approximate by scanning names or syntax after lowering. A
+spurious edge is acceptable only when it names a real resolved dependency that
+can be justified by the monomorphic call graph. Missing edges are compiler bugs.
+
+For example:
+
+```roc
+makeAdder : I64 -> (I64 -> I64)
+makeAdder = |n| |x| x + n
+
+add5 : I64 -> I64
+add5 = makeAdder(5)
+
+useAdd5 : I64 -> I64
+useAdd5 = |x| add5(x)
+
+answer : I64
+answer = useAdd5(37)
+```
+
+`add5` is a `callable_binding` root. `answer` is a
+`serializable_constant_root`. The expression for `answer` names only `useAdd5`,
+but the dependency graph still contains an edge from `answer` to `add5` because
+the monomorphic body summary for `useAdd5` names `add5`. `answer` cannot lower
+through `TopLevelValueTable` until `add5` has been promoted to
+`procedure_value`.
+
+Checking finalization must topologically evaluate compile-time roots. When a
+root depends on another local root, the dependency must be evaluated, reified or
+promoted, and published into the in-progress `TopLevelValueTable` before the
+dependent root is lowered. Serializable dependencies are consumed as `ConstRef`.
+Callable dependencies are consumed as promoted `procedure_value` symbols.
+Imported dependencies are consumed from imported checked artifacts; they are not
+evaluated again.
+
+`TopLevelValueTable` exists before compile-time root evaluation starts. Checking
+finalization first allocates direct procedure symbols and seeds the in-progress
+table with every direct top-level function declaration and every top-level lambda
+that is already a procedure declaration:
+
+```zig
+const TopLevelValue = union(enum) {
+    pending,
+    serializable_constant: ConstRef,
+    procedure_value: Symbol,
+};
+```
+
+Only checking finalization may create `pending` entries, and no published
+artifact may contain one. During root evaluation, each completed serializable
+constant publishes its `ConstRef`, and each completed callable binding publishes
+its promoted procedure symbol. Later lowering consumes the published table. It
+must not build the table for the first time after evaluating roots, and it must
+not interpret a missing entry as permission to synthesize a runtime initializer.
+
+Cycles among non-procedure compile-time roots are checking diagnostics before
+artifact publication. A cycle that reaches a later post-check stage is a
+compiler invariant violation handled by debug-only assertion in debug builds
+and `unreachable` in release builds.
+
+Private aggregate interpreter roots may group only roots whose dependencies are
+already satisfied or roots in a dependency-ordered batch with no internal
+cycle. Aggregate roots must not hide root dependency ordering or cause a later
+root to observe a missing `TopLevelValueTable` entry.
+
 #### Top-Level Callable Finalization
 
 Checking finalization handles top-level callable bindings before publishing the
@@ -2179,10 +3276,28 @@ listed compile-time roots and any procedures those roots call.
 Compile-time callable roots produce `ComptimeCallable` values:
 
 ```zig
-const ComptimeCallable = struct {
-    source_type: Var,
+const ComptimeCallable = union(enum) {
+    finite: FiniteComptimeCallable,
+    erased: ComptimeErasedCallable,
+};
+
+const FiniteComptimeCallable = struct {
+    source_type: TypeId,
     entry: CallableEntry,
     captures: CaptureValueSlice,
+};
+
+const ComptimeErasedCallable = struct {
+    source_type: TypeId,
+    sig_key: ErasedFnSigKey,
+    code: Symbol,
+    capture: ErasedComptimeCapture,
+};
+
+const ErasedComptimeCapture = union(enum) {
+    none,
+    zero_sized_typed: ErasedCaptureTypeKey,
+    values: Span(CaptureValue),
 };
 
 const CallableEntry = union(enum) {
@@ -2198,10 +3313,35 @@ const CaptureValue = union(enum) {
 ```
 
 The exact Zig names may differ, but the meaning must not. A compile-time
-callable value is a compiler-owned description of the selected callable entry
-and its evaluated captures. It is not a runtime function pointer, not a packed
-erased function value, not a heap closure object, not a global initializer, and
-not a thunk.
+callable value is a compiler-owned description of either a finite callable entry
+with evaluated captures or an erased callable with an explicit `ErasedFnSigKey`,
+erased code symbol, and compiler-owned capture value. It is not a runtime
+function pointer, not a heap closure object, not a global initializer, and not a
+thunk.
+
+Erased compile-time callable results are allowed only when their
+`ErasedFnSigKey` and callable provenance came from explicit `Box(T)` boundaries.
+Promotion of an erased compile-time callable creates a closed ordinary procedure
+symbol whose body performs the known erased call using the known erased capture.
+It must not publish a top-level packed erased callable object, runtime closure
+object, global callable object, or runtime thunk.
+
+For example:
+
+```roc
+makeBoxed : {} -> Box(I64 -> I64)
+makeBoxed = |_| Box.box(|x| x + 1)
+
+add1 : I64 -> I64
+add1 = Box.unbox(makeBoxed({}))
+```
+
+`add1` is a function-valued top-level binding. If checking finalization supports
+erased callable promotion, it promotes `add1` to a closed procedure that calls
+the known erased callable. If the implementation does not yet support that
+promotion path, checking finalization must report this as an unsupported
+top-level callable binding before publishing the artifact. It must not leave a
+runtime top-level erased callable object behind.
 
 Callable promotion turns each `ComptimeCallable` that is the result of a
 top-level binding into a closed top-level procedure symbol before artifact
@@ -2220,6 +3360,28 @@ publication. Promotion must:
 - record debug provenance from the promoted symbol back to the original
   top-level binding and callable expression
 
+Promotion consumes a precomputed promotion plan:
+
+```zig
+const CallablePromotionPlan = struct {
+    root: ComptimeRootId,
+    source_fn_ty: TypeId,
+    dependency_summary: ComptimeDependencySummaryId,
+    capture_reification: Span(CaptureReificationPlan),
+};
+```
+
+Every captured constant named by `capture_reification` must already have a
+published `ConstRef`, and every captured callable must already be a
+`procedure_value` or an in-progress recursively reserved promoted procedure.
+Promotion must not discover new top-level dependencies by looking through a
+runtime capture object, by scanning source syntax, by reading interpreter memory
+without a reification plan, or by lowering an additional root after dependency
+ordering has finished. If a required captured value is not already available,
+the dependency graph is wrong and checking finalization must hit the compiler
+invariant path: debug-only assertion in debug builds, `unreachable` in release
+builds.
+
 Serializable captured values are reified into `CompileTimeValueStore` and then
 referenced from the promoted procedure through `ConstRef`. Callable captured
 values are promoted recursively and then referenced as procedure values.
@@ -2227,6 +3389,15 @@ Aggregate captured values are allowed only when their entire source type has a
 supported serializable schema, or when a future explicit callable-containing
 constant representation has been designed. The current design must not publish
 an aggregate runtime closure environment for a top-level binding.
+
+Non-function top-level constants whose source type contains callable slots are
+not serializable constants in this design, even if the callable slots appear
+inside `Box(T)`, records, tuples, tags, `List(T)`, aliases, or nominals. Until
+there is an explicit callable-containing constant representation, checking
+finalization reports those bindings before artifact publication. They must not
+be represented as runtime globals, runtime initializer procedures, top-level
+closure objects, packed erased callable globals, or partially serialized
+interpreter pointers.
 
 Promotion is part of checking finalization. If promotion cannot produce a closed
 procedure from a top-level function-valued binding, checking has not completed.
@@ -2258,11 +3429,11 @@ Schema construction must not infer logical row structure from runtime bytes or
 physical layout order. Physical layout order may be used only to read bytes after
 the logical schema has identified the value being read.
 
-Compile-time evaluation uses the same LIR interpreter ownership boundary as
-ordinary interpreter execution. The interpreter executes explicit LIR
-`incref`, `decref`, and `free` statements. Compile-time `RocOps` may allocate
-temporary Roc heap data during evaluation, but reification must detach the
-result from that temporary allocation domain.
+Compile-time evaluation uses the same LIR interpreter reference-counting path as
+ordinary interpreter execution. The interpreter executes explicit LIR `incref`,
+`decref`, and `free` statements. Compile-time `RocOps` may allocate temporary
+Roc heap data during evaluation, but reification must detach the result from
+that temporary allocation domain.
 
 Compile-time evaluation problems are checking problems because this stage is
 part of checking finalization. A user-written compile-time crash, failed
@@ -2287,8 +3458,8 @@ materialization output.
 The compile-time value store inside a checked artifact is a logical value graph,
 not target-shaped storage. Reification copies interpreter results into logical
 schema/value nodes. Any later target-specific bytes, statics, layout IDs,
-alignment choices, or ownership materialization plans must be produced by a
-target-specific post-check cache or by normal lowering for that target.
+alignment choices, or reference-counting materialization plans must be produced
+by a target-specific post-check cache or by normal lowering for that target.
 
 A checked artifact cache hit must restore checked artifact data and compile-time
 values together or miss together. There must not be an independently accepted
@@ -2349,18 +3520,28 @@ Checking finalization order:
 4. Build hosted procedure and platform-required binding tables.
 5. Build public exports, provides/requires metadata, and interface capability
    records.
-6. Evaluate compile-time serializable constants and compile-time callable roots
-   through the MIR-family path and LIR interpreter.
-7. Reify serializable values into `CompileTimeValueStore`.
-8. Promote compile-time callable results to closed procedure symbols.
-9. Build `TopLevelValueTable` so every referenced top-level binding maps to
-   either `serializable_constant` or `procedure_value`.
-10. Store the complete `CompileTimeValueStore`, promoted procedure table, and
+6. Allocate direct procedure symbols and initialize an in-progress
+   `TopLevelValueTable` with every direct top-level function declaration and
+   already-procedure top-level lambda as `procedure_value`.
+7. Build the monomorphic procedure dependency summaries and the
+   `CompileTimeRootDependencyGraph` for serializable constants, callable binding
+   roots, and expect roots.
+8. Evaluate compile-time serializable constants and compile-time callable roots
+   through the MIR-family path and LIR interpreter in dependency order.
+9. Reify each serializable value into `CompileTimeValueStore` and immediately
+   publish its `ConstRef` into the in-progress `TopLevelValueTable`.
+10. Promote compile-time callable results to closed procedure symbols and
+    immediately publish their `procedure_value` entries into the in-progress
+    `TopLevelValueTable`.
+11. Verify that `TopLevelValueTable` has no `pending` entries and that every
+    referenced top-level binding maps to either `serializable_constant` or
+    `procedure_value`.
+12. Store the complete `CompileTimeValueStore`, promoted procedure table, and
     top-level value table in the artifact.
-11. Run debug-only artifact verification.
-12. Publish the immutable checked artifact.
+13. Run debug-only artifact verification.
+14. Publish the immutable checked artifact.
 
-If any user-facing problem is found in steps 1 through 9, checking reports it
+If any user-facing problem is found in steps 1 through 11, checking reports it
 and no artifact is published for that module. Later compiler stages never see a
 partial checked artifact.
 
@@ -2472,9 +3653,9 @@ target-specific materialization plan:
 ```zig
 const ConstMaterializationPlan = struct {
     const_ref: ConstRef,
-    target_type: CanonicalExecTypeKey,
+    target_type: CanonicalExecValueTypeKey,
     layout: LayoutId,
-    ownership: ConstOwnership,
+    rc_plan: ConstRcPlan,
     storage: ConstStoragePlan,
 };
 ```
@@ -2485,10 +3666,10 @@ logical constant value. If target-specific materialization is cached, that cache
 is keyed by the checked artifact key plus target/layout inputs, not by a
 separate compile-time value sidecar.
 
-Constant materialization must preserve the ordinary ownership contract:
+Constant materialization must preserve the ordinary ARC contract:
 
 - immutable static bytes may be referenced only through LIR operations whose
-  ownership semantics are explicit
+  reference-counting behavior is explicit
 - heap values materialized from constants must have explicit LIR `incref`,
   `decref`, and `free` behavior where needed
 - backends must only emit the requested static data or heap setup and follow
@@ -2777,7 +3958,7 @@ from display names such as `main`, from the last lowered procedure, from
 whether an expression syntactically looks like a lambda, or from which tool is
 currently calling the pipeline.
 
-`RootSource` points at checked source ownership. It does not name an executable
+`RootSource` points at checked source origin. It does not name an executable
 procedure. Mono MIR binds the request to a mono procedure or constant by
 lowering the source in the appropriate specialization.
 
@@ -2841,9 +4022,16 @@ const HostedProcEntry = struct {
     abi_name: HostedAbiName,
     order: HostedOrderKey,
     representation: HostedRepresentationCapabilityKey,
-    ownership_contract_template: ProcOwnershipContractTemplate,
+    call_boundary_rc_template: CallBoundaryRcTemplate,
 };
 ```
+
+`CallBoundaryRcTemplate` is explicit external ABI metadata for hosted,
+platform, and intrinsic wrapper procedures. It records only the reference-count
+actions required at the external boundary and whether the external call may
+attempt runtime-uniqueness mutation of any refcounted argument. Ordinary Roc
+user procedures do not get per-procedure semantic parameter-mode summaries in
+this plan.
 
 `HostedOrderKey` gives deterministic ordering for hosted procedure tables and
 generated ABI lists. It is not stored by writing an index into checked CIR.
@@ -2880,7 +4068,7 @@ platform-required functions.
 Hosted and platform methods that can be called through static dispatch must
 also appear in the checked method registry as explicit procedure targets with
 checked callable types. The hosted/platform tables provide ABI identity,
-ordering, representation capability keys, and ownership templates. The method
+ordering, representation capability keys, and call-boundary RC templates. The method
 registry provides method lookup identity. Later stages must consume both
 explicit records as needed; they must not rediscover hosted/platform behavior
 from names, expression shapes, or module scans.
@@ -3090,8 +4278,8 @@ MonoSpecializationKey {
 ExecutableSpecializationKey {
     base: ProcBaseKey,
     requested_fn_ty: CanonicalTypeKey,
-    exec_arg_tys: Span(CanonicalExecTypeKey),
-    exec_ret_ty: CanonicalExecTypeKey,
+    exec_arg_tys: Span(CanonicalExecValueTypeKey),
+    exec_ret_ty: CanonicalExecValueTypeKey,
     callable_repr_mode: CallableReprMode,
     capture_shape: CaptureShapeKey,
 }
@@ -3131,8 +4319,8 @@ const SyntheticOrigin = union(enum) {
         capture_shape_key: CaptureShapeKey,
     },
     bridge: struct {
-        from_exec_ty: CanonicalExecTypeKey,
-        to_exec_ty: CanonicalExecTypeKey,
+        from_exec_ty: CanonicalExecValueTypeKey,
+        to_exec_ty: CanonicalExecValueTypeKey,
         reason: BridgeReason,
     },
     intrinsic_wrapper: struct {
@@ -3153,9 +4341,14 @@ symbol, expression id, side-table id, or a payload-free origin kind.
 All key-like fields above are canonical keys, not handles into mutable stores.
 `CanonicalCallableSetKey` is the canonical ordered finite member map plus capture
 slot shape and capture types. `ErasedFnSigKey` is the canonical fixed-arity
-erased function argument and return signature plus `ErasedCallAbiPolicyKey`.
+erased function argument and return signature plus canonical hidden capture type
+and `ErasedFnAbiKey`.
 `CaptureShapeKey` is the canonical `CaptureSlot.index` ordered capture layout
-and capture types.
+and capture representation. Each capture slot in the key stores a
+`CanonicalExecValueTypeKey` for that captured value, or the canonical erased
+capture type key when the slot is part of an erased hidden capture record. It
+must not store a checked source type id, lambda-solved `TypeId`, executable
+`TypeId`, layout id, source name, generated symbol text, or expression id.
 `ProcBaseKeyRef` is a canonical reference to an already-keyed procedure.
 `BridgeReason`, `IntrinsicId`, and entry wrapper root names must be stable enum
 or source identities, never generated symbol text.
@@ -3164,6 +4357,45 @@ or source identities, never generated symbol text.
 deduplication. It contains `ProcBaseKey` and canonical fully resolved structural type
 keys. It must not contain `ProcOrderKey`, raw type-store ids, expression ids,
 side-table ids, or allocation-order-dependent data.
+
+`CanonicalExecValueTypeKey` is the canonical runtime value representation key.
+It is not the checked source type and not merely the logical executable type
+before callable lowering. For a function-typed value, it recursively encodes the
+solved callable child of that function representation:
+
+```text
+function value with finite callable child -> callable_set(CanonicalCallableSetKey)
+function value with erased callable child -> erased_fn(ErasedFnSigKey)
+```
+
+The key recursively applies this rule through records, tuples, tag payloads,
+`List(T)`, `Box(T)`, nominal backing slots when visible through an explicit
+capability, function argument slots, and function return slots. Therefore two
+values with the same source function type can have different executable value
+keys when their solved callable representations differ.
+
+For example, these two executable specializations must not share one key:
+
+```text
+id : (I64 -> I64) -> (I64 -> I64)
+
+id called with a closure whose callable child is [AddN { n : I64 }]
+id called with a closure whose callable child is [Identity]
+```
+
+The source argument type is `I64 -> I64` in both calls, but the executable
+argument value keys are different:
+
+```text
+callable_set([AddN { n : I64 }])
+callable_set([Identity])
+```
+
+A single `callable_repr_mode` field cannot stand in for this recursive
+representation. It may describe the procedure's own top-level callable packaging
+mode if the implementation keeps such a field, but nested callable
+representations in arguments, returns, captures, records, tags, lists, boxes, and
+nominals must be encoded inside `CanonicalExecValueTypeKey`.
 
 `ProcOrderKey` is for deterministic ordering and reproducibility only. A
 base-only `ProcOrderKey` may exist before executable specialization so lifted
@@ -3209,13 +4441,13 @@ const HostedProcTarget = struct {
     host_symbol: Ident.Idx,
     dispatch_index: u32,
     representation_abi: ProcRepresentationAbi,
-    ownership_contract_template: ProcOwnershipContractTemplate,
+    call_boundary_rc_template: CallBoundaryRcTemplate,
 };
 
 const IntrinsicWrapperTarget = struct {
     intrinsic_id: IntrinsicId,
     representation_abi: ProcRepresentationAbi,
-    ownership_contract_template: ProcOwnershipContractTemplate,
+    call_boundary_rc_template: CallBoundaryRcTemplate,
 };
 ```
 
@@ -3223,11 +4455,11 @@ const IntrinsicWrapperTarget = struct {
 still refer to the procedure's `Symbol`. Later stages read the target metadata
 from the procedure definition; they must not rediscover whether a procedure is
 user code, hosted code, or an intrinsic wrapper from names or source syntax.
-Hosted and intrinsic targets must carry their representation ABI and ownership
-contract templates here before mono MIR output is exported. Lambda-solved MIR,
-executable MIR, IR, LIR, and backends must consume this metadata; they must not
-recover it from method names, host symbol names, layout shapes, runtime function
-pointers, or surrounding user code.
+Hosted and intrinsic targets must carry their representation ABI and
+call-boundary RC templates here before mono MIR output is exported.
+Lambda-solved MIR, executable MIR, IR, LIR, and backends must consume this
+metadata; they must not recover it from method names, host symbol names, layout
+shapes, runtime function pointers, or surrounding user code.
 
 ### Proc Calls, Direct Calls, And Value Calls
 
@@ -3450,12 +4682,12 @@ Required executable distinction:
 ```zig
 call_direct {
     proc: Symbol,
-    args: Span(ExprId),
+    args: Span(ExecutableValueRef),
 }
 
 call_erased {
-    func: ExprId,
-    args: Span(ExprId),
+    func: ExecutableValueRef,
+    args: Span(ExecutableValueRef),
     erased_fn_ty: ExecTypeId,
 }
 
@@ -3468,6 +4700,18 @@ callable_match {
     arg_temps: Span(TempId),
     branches: Span(CallableBranch),
     result_ty: ExecTypeId,
+    result_tmp: TempId,
+}
+
+source_match {
+    id: SourceMatchId,
+    union_shape: TagUnionShapeId,
+    matched_expr: ExprId,
+    matched_tmp: TempId,
+    discr_tmp: TempId,
+    branches: Span(SourceMatchBranch),
+    result_ty: ExecTypeId,
+    result_tmp: TempId,
 }
 ```
 
@@ -3475,7 +4719,7 @@ callable_match {
 
 A `call_direct` target must be an executable specialization whose procedure
 definition is present in executable MIR. The verifier must check that the call's
-argument expressions and result type match that procedure definition exactly.
+argument value refs and result type match that procedure definition exactly.
 
 The names and stage boundaries are semantic. They must not be collapsed.
 
@@ -3513,7 +4757,7 @@ const HostedProcRef = struct {
     host_symbol: Ident.Idx,
     dispatch_index: u32,
     representation_abi: ProcRepresentationAbi,
-    ownership_contract_template: ProcOwnershipContractTemplate,
+    call_boundary_rc_template: CallBoundaryRcTemplate,
 };
 
 const MethodTarget = union(enum) {
@@ -3582,10 +4826,10 @@ normalized to a procedure symbol with `ProcTarget` metadata:
 - first-class intrinsic method references synthesize a wrapper procedure and
   become `ProcTarget.intrinsic_wrapper`
 
-The `ProcTarget` metadata must include representation ABI records and ownership
-contract templates for hosted, platform, and intrinsic-wrapper procedures before
-mono MIR is exported. Static dispatch lowering must not leave behind a method
-name or owner key for later ABI discovery.
+The `ProcTarget` metadata must include representation ABI records and
+call-boundary RC templates for hosted, platform, and intrinsic-wrapper
+procedures before mono MIR is exported. Static dispatch lowering must not leave
+behind a method name or owner key for later ABI discovery.
 
 An intrinsic may lower directly to executable `low_level` only when it is
 strictly call-only and never appears as a first-class value. If an intrinsic can
@@ -3602,8 +4846,8 @@ It must not reuse raw method registry symbols as executable direct-call targets.
 ### Dispatch Type Resolution
 
 The method owner is the semantic type identity used as the first component of a
-method registry key. It is not runtime ownership, reference-count ownership, or
-value ownership.
+method registry key. It is not a runtime value concept and is unrelated to
+reference counting.
 
 Dispatch type resolution takes a monomorphic type from `StaticDispatchCallPlan`,
 never an expression:
@@ -3681,10 +4925,19 @@ It must explicitly encode:
 
 - fixed-arity function parameter lists
 - return type
+- a fresh callable variable for every imported function type occurrence
 - lambda/callable members
 - captures for each callable member
 - erased callable representation when required
 - boxed erased-boundary payload type transforms for boxing and unboxing
+
+The lifted-to-lambda-solved import pass is the only place where lifted function
+types become lambda-solved function types. It must allocate callable variables
+for function types found in parameters, returns, captures, records, tuples,
+tags, `List(T)`, `Box(T)`, nominals, and nested function argument and return
+positions. It must not wait for executable MIR to add callable slots, and it
+must not use equal source `TypeId`s as a reason to reuse callable variables
+between unrelated value occurrences.
 
 It must not use ordinary source tag unions as a hidden carrier for unresolved
 static dispatch.
@@ -3697,10 +4950,16 @@ Lambda-solved MIR owns `erased_box_payload_type(T)`.
 This transform is structural only inside an explicit `Box(T)` payload. It
 recursively rewrites reachable function slots to erased callable representation
 inside the boxed payload, including through nested records, tuples, tags,
-`List(T)`, nested `Box(T)`, and nominal backing types when they are part of that
-payload. It is the same contract for boxing and unboxing boundaries. Executable
-MIR consumes the already-computed boxed payload boundary type and
-`BoxPayloadRepresentationPlan`.
+`List(T)`, nested `Box(T)`, function argument and return positions, and nominal
+backing types when they are part of that payload. It is the same contract for
+boxing and unboxing boundaries. Executable MIR consumes the already-computed
+boxed payload boundary type and `BoxPayloadRepresentationPlan`.
+
+The function case is explicit. For a boxed payload function type, lambda-solved
+MIR recursively transforms every fixed-arity argument slot and the return slot,
+then rewrites the callable child to erased callable representation. A function
+inside an explicit `Box(T)` payload is never treated as an opaque terminal leaf
+whose argument and return slots remain in natural representation.
 
 This transform is not a runtime conversion plan. It is a representation
 requirement propagated by lambda-solved MIR. Any structural node in the plan
@@ -3713,6 +4972,40 @@ release builds.
 ### Executable Types
 
 Executable MIR types are representation types.
+
+Executable value type keys use this conceptual shape:
+
+```zig
+const CanonicalExecValueTypeKey = union(enum) {
+    primitive: PrimitiveExecKey,
+    record: RecordExecKey,
+    tuple: TupleExecKey,
+    tag_union: TagUnionExecKey,
+    list: *CanonicalExecValueTypeKey,
+    box: *CanonicalExecValueTypeKey,
+    nominal: NominalExecKey,
+    callable_set: CanonicalCallableSetKey,
+    erased_fn: ErasedFnSigKey,
+};
+```
+
+The exact Zig layout may differ, but the semantic shape must not. Function-typed
+source values do not appear as a `function` case in executable value keys.
+Executable type lowering consumes the solved `FunctionRepShape.callable` child
+and produces either `callable_set` or `erased_fn`.
+
+Function argument and return executable value keys still exist as metadata for
+calls, bridges, erased signatures, boxed payload transforms, and specialization
+keys. They are reached from the lambda-solved `FunctionRepShape`, not from a
+runtime function-object field. A nested function argument such as:
+
+```text
+(I64 -> I64) -> I64
+```
+
+has an executable parameter key that is `callable_set(...)` or `erased_fn(...)`
+for the argument value, plus separate call metadata describing the outer
+function's fixed arity and return representation.
 
 They may include:
 
@@ -3742,6 +5035,10 @@ partial-application markers
 
 Executable type lowering consumes lambda-solved MIR types and metadata. It does
 not inspect source CIR or reconstruct from expressions.
+
+Executable type lowering must debug-assert that every function-typed value has a
+fully solved callable child before it publishes a `CanonicalExecValueTypeKey`.
+In release builds, the equivalent compiler-invariant path is `unreachable`.
 
 ### Logical Layout Indices
 
@@ -3786,6 +5083,60 @@ explicit checked or MIR row record before layout lowering consumes it. Row
 finalization is the last stage that may use a source/display name to select a
 logical row ID. Later stages must consume the finalized IDs directly and must
 not use names to look them up again.
+
+### Recursive Physical Layout Indirection
+
+MIR and IR carry executable types and logical layout graph references. They do
+not carry final physical layout indexes or physical offsets.
+
+Physical layout commitment happens after executable MIR has built the logical
+layout graph and before LIR needs physical storage operations. That commit must
+be graph-based:
+
+1. Reserve a logical layout graph node before lowering that node's children.
+2. Record every field, tag payload, tuple element, capture slot, callable-set
+   payload field, and erased capture field as an explicit slot edge.
+3. Run SCC detection over the logical layout graph.
+4. For every by-value slot edge whose source and target are in the same
+   recursive SCC, commit that slot edge as physical recursive indirection.
+5. Preserve the logical slot identity so constructors, pattern payload
+   extraction, field access, and reference-count insertion
+   all agree about which slot became indirect.
+
+This is physical recursive layout indirection. It is not source `Box(T)`, not a
+`BoxBoundary`, not erased callable representation, and not a semantic type
+change. The only source-level erased boundary in this plan remains explicit
+`Box(T)`.
+
+Recursive tag unions need careful edge identity. A tag-union-to-payload-struct
+edge is not automatically the slot that becomes indirect. The by-value payload
+struct field that points back to the recursive union is the slot edge that
+becomes indirect. For example, a recursive list-like union stores the payload
+fields logically, and the recursive tail field is the edge that becomes
+physically indirect.
+
+Layout commitment must publish one recursive-slot mapping consumed by all later
+layout users:
+
+```zig
+const RecursiveSlotCommit = struct {
+    owner_layout: LogicalLayoutId,
+    logical_slot: LogicalSlotId,
+    physical_indirection: RecursiveIndirectionId,
+};
+```
+
+The exact Zig names may differ, but the responsibility must not. Constructors,
+source `match` payload extraction, field access, capture access, callable-set
+payload access, erased capture access, and RC plans must consume the same
+committed recursive-slot mapping. A later stage must not independently decide
+that a recursive field is direct or indirect by inspecting type syntax, layout
+names, or physical offsets.
+
+Debug verification after layout commit must assert that every recursive
+by-value SCC edge has exactly one committed physical indirection and that no
+non-recursive edge was made indirect by this rule. Release builds use
+`unreachable` for the equivalent compiler-invariant path.
 
 ### Row Finalization Pass
 
@@ -3888,6 +5239,71 @@ The row-finalization algorithm is:
 8. Attach or preserve the mono type slot for each field or payload edge so
    representation solving can connect value flow without looking names up again.
 9. Export only row-finalized mono MIR.
+
+Row-finalized construction nodes must make construction order explicit.
+Construction evaluation order and construction assembly order are different
+things, and both must survive this pass.
+
+Conceptual shapes:
+
+```zig
+const RecordInit = struct {
+    shape: RecordShapeId,
+    eval_order: Span(RecordFieldEval),
+    assembly_order: Span(RecordFieldAssembly),
+};
+
+const RecordFieldEval = struct {
+    field: RecordFieldId,
+    expr: ExprId,
+};
+
+const RecordFieldAssembly = struct {
+    field: RecordFieldId,
+    eval_index: u32,
+};
+
+const TagInit = struct {
+    union_shape: TagUnionShapeId,
+    tag: TagId,
+    eval_order: Span(TagPayloadEval),
+    assembly_order: Span(TagPayloadAssembly),
+};
+
+const TagPayloadEval = struct {
+    payload: TagPayloadId,
+    expr: ExprId,
+};
+
+const TagPayloadAssembly = struct {
+    payload: TagPayloadId,
+    eval_index: u32,
+};
+```
+
+The exact Zig names may differ, but source-order ambiguity must not survive
+this pass. `eval_order` records the source evaluation order for field or
+payload expressions. `assembly_order` records how the already-evaluated
+temporaries are placed into finalized logical slots. Executable MIR must
+evaluate `eval_order` exactly once in source order and then assemble records,
+tuples, or tag payload records from the resulting temporaries according to
+`assembly_order`.
+
+`assembly_order` is a deterministic mechanical conversion from row-finalized
+IDs to logical slot order. It is not name lookup and it is not a layout
+decision. Later stages must not reorder evaluation to match finalized logical
+order, name sorting order, or physical layout order.
+
+Record update uses the same split. The base record expression is evaluated once
+before update field expressions when source semantics require that ordering.
+Update field expressions are evaluated in source update order. Assembly then
+uses finalized `RecordFieldId` values to construct the updated logical record.
+
+Tag construction stores the full `TagUnionShapeId`, the selected `TagId`, and
+payload entries keyed by `TagPayloadId`. Payload expressions evaluate in source
+payload order and assemble by finalized payload id. Later stages must not
+depend on source payload order beyond the preserved evaluation order and the
+explicit finalized payload ids.
 
 Caching is allowed only inside this pass. A cache key must be the canonical
 fully resolved row shape, not the first source expression that happened to use a
@@ -4246,18 +5662,16 @@ Executable MIR:
 - emits finite callable-set `callable_match` expressions for non-erased callable
   calls
 - reserves executable specializations before emitting `call_direct` branches
-- supplies `callable_match` branch `direct_args` as source args plus optional
-  trailing capture record
+- supplies `callable_match` branch `direct_args` as `ExecutableValueRef` handles
+  for source argument temps plus optional trailing capture record temp
 - preserves fixed arity in every direct, erased, and callable-set call
 - emits `packed_erased_fn` only for explicitly erased callable values
 - emits `call_erased`
 - emits `call_direct` where executable targets are exact
 - inserts explicit bridges
-- runs executable ownership solving after all executable targets are reserved
-- preserves solved ownership records for `call_direct`, `call_erased`,
-  `callable_match`, callable-set values, `packed_erased_fn`, erased adapters,
-  capture records, `Box.box`, `Box.unbox`, and bridges so IR/LIR can preserve
-  them for `RcInsert`
+- emits explicit runtime-uniqueness mutation sites
+- exposes enough explicit values, call ABI shapes, and low-level RC-effect
+  metadata for LIR ARC insertion
 
 The following are forbidden:
 
@@ -4299,8 +5713,8 @@ method lookup data threaded beyond mono MIR
 bare procedure-symbol `var_` values after lifted MIR
 non-`Box(T)` erased boundaries
 executable erased-shape compatibility as semantic decision logic
-LIR procedure ownership inference as semantic truth
-backend or interpreter ownership inference
+semantic parameter-mode inference after checking
+backend or interpreter reference-counting inference
 Cor-style runtime top-level constant thunks
 runtime global initializer procedures for compile-time constants
 runtime zero-argument constant wrappers
@@ -4370,7 +5784,7 @@ src/mir/lambda_solved/verify.zig
 src/mir/executable/ast.zig
 src/mir/executable/type.zig
 src/mir/executable/lower.zig
-src/mir/executable/ownership.zig
+src/mir/executable/rc_effects.zig
 src/mir/executable/layouts.zig
 src/mir/executable/verify.zig
 ```
@@ -4645,12 +6059,14 @@ Add a compact `RowShapeStore` or equivalent interner:
 
 Rewrite every row operation so it carries finalized IDs:
 
-- record construction carries `RecordShapeId` and `RecordFieldId` entries
+- record construction carries `RecordShapeId`, source evaluation order, and
+  finalized `RecordFieldId` assembly entries
 - record access carries `RecordFieldId`
-- record update carries `RecordShapeId` and `RecordFieldId` entries
+- record update carries `RecordShapeId`, source evaluation order, and finalized
+  `RecordFieldId` assembly entries
 - record destructuring patterns carry `RecordFieldId`
-- tag construction carries `TagUnionShapeId`, `TagId`, and `TagPayloadId`
-  entries for payloads
+- tag construction carries `TagUnionShapeId`, `TagId`, source payload
+  evaluation order, and finalized `TagPayloadId` assembly entries
 - tag patterns carry `TagUnionShapeId`, `TagId`, and `TagPayloadId` entries for
   payload patterns
 - tag payload projections carry `TagPayloadId`
@@ -4659,6 +6075,12 @@ For every row operation, the pass must resolve the operation's mono type in the
 specialization-local mono type store, derive the full logical row from that
 type, intern that full row shape, validate the requested field or tag against
 the full row, validate constructor payload arity, and then rewrite the MIR node.
+
+Record, record-update, and tag construction must preserve source evaluation
+order separately from finalized logical assembly order. A later stage that needs
+positional construction may assemble already-evaluated temporaries by finalized
+logical IDs only. It must not evaluate fields in finalized logical order, name
+sorting order, or physical layout order.
 
 The pass may cache finalized IDs while it runs. The cache key must be the
 canonical fully resolved row shape. The cache must not be exported as an API that
@@ -4676,6 +6098,8 @@ Commit when row-finalized mono MIR verification proves:
   onto every expression
 - row shape keys exclude payload slot types; payload slot types remain in the
   mono type store and later representation edges
+- record, record-update, and tag construction preserve source evaluation order
+  separately from finalized logical assembly order
 - every finalized row ID was derived from the full resolved mono type for that
   operation, never from singleton syntax such as `Err("x")`
 - no later-stage helper exists for computing logical row indexes by sorting
@@ -4693,6 +6117,17 @@ Add explicit `CaptureSlot` metadata to lifted procedure definitions.
 For recursive local-function groups, allocate procedure symbols first, then
 compute captures to a least fixed point across all members before exporting
 lifted MIR.
+
+Implement capture discovery with a lexical scope builder keyed by resolved
+symbols and mutable-version records. The builder must account for lambda
+parameters, local function names, recursive local-function group members,
+source `match` binders, record and tuple destructuring binders, `for` binders,
+block-local declarations, and shadowing. It must not decide capture status by
+comparing display names.
+
+Captured mutable values must be captured as explicit mutable versions, branch
+join versions, or loop phi values. They must not be represented as physical
+mutable cells.
 
 Rewrite every captured value reference inside a lifted procedure body to
 `capture_ref(slot)`.
@@ -4714,6 +6149,12 @@ Commit when lifted MIR verification proves:
 - all procedure captures are explicit `CaptureSlot`s
 - all captured value references are explicit `capture_ref` nodes
 - recursive local-function capture sets are fixed-point complete
+- capture discovery uses resolved symbols and mutable-version records, not
+  display-name comparisons
+- pattern, destructuring, `for`, block-local, and shadowed binders participate
+  in the lexical scope stack
+- captured mutable source values are explicit version or phi records, not
+  physical mutable cells
 - all `proc_value` captures are explicit `CaptureArg`s in slot order
 - no captured source symbol remains as ordinary `var_` inside a lifted body
 - no bare procedure-symbol `var_` values exist
@@ -4731,6 +6172,8 @@ propagation, and verification.
 Preserve and clean up the real responsibilities:
 
 - instantiate lifted types
+- import every lifted function type occurrence as a lambda-solved fixed-arity
+  function type with a fresh callable variable
 - infer callable sets
 - propagate erasure
 - compute `erased_box_payload_type(boundary)` plans for explicit `Box(T)`
@@ -4779,12 +6222,27 @@ Preserve and clean up the real responsibilities:
 - enforce canonical callable-set unification algebra
 - export fully resolved callable representations for every executable specialization
   input
+- generalize procedure and recursive-SCC templates only over type, callable, and
+  representation variables not reachable from the already-bound outer
+  environment
 - clone-instantiate generalized templates before executable lowering consumes
   them
+- clone-instantiate callable variables and representation variables together
+  with ordinary type variables
+- store generalized procedure representation templates separately from
+  executable representation instances
+- reserve all procedure symbols, callable representation nodes, capture-shape
+  nodes, and erased-adapter keys for a recursive specialization SCC before
+  solving any member body to completion
+- publish executable specialization keys only after specialization-local
+  representation solving has completed for the SCC
 
 Commit when lambda-solved MIR verification proves:
 
 - no dispatch terms exist
+- every imported function type occurrence has an explicit callable variable
+- unrelated equal source function `TypeId`s do not share callable variables unless
+  an explicit value-flow edge connects them
 - callable members and captures are explicit
 - callable-set member order is canonical
 - each repeated callable member has exactly the same capture slots
@@ -4826,6 +6284,10 @@ Commit when lambda-solved MIR verification proves:
   `BoxBoundaryId`
 - no executable specialization input contains generalized or unresolved type
   variables
+- no executable specialization input contains generalized or unresolved callable
+  variables or representation variables
+- generalized procedure and SCC templates generalize only variables not reachable
+  from the already-bound outer environment
 - canonical type keys and boxed payload transforms are cycle-safe graph
   transforms with stable recursion binders/backrefs
 - canonical callable-set keys, capture-shape keys, erased function signature
@@ -4847,13 +6309,49 @@ Commit when lambda-solved MIR verification proves:
 Rewrite executable MIR lowering so it consumes lambda-solved MIR and emits
 executable MIR without source-expression side tables.
 
-Executable MIR must run executable ownership solving after all executable
-specializations, erased adapters, intrinsic wrappers, bridge procedures, entry
-wrappers, and hosted targets have been reserved, and before lowering to IR.
-That solver is one SCC fixed point over procedure nodes, callable-match nodes,
-erased adapter nodes, and bridge nodes. It produces `ProcOwnershipContract`,
-`CallableCallOwnershipKey`, node ownership semantics, bridge ownership semantics,
-and boxed-boundary ownership semantics.
+Lower every `call_proc` through an explicit `CallProcExecutablePlan` that names
+the source/MIR procedure symbol, fully resolved requested function type, solved
+whole-function representation root, executable specialization key, reserved
+direct procedure symbol, argument bridges, result bridge, and executable result
+type. Do not treat direct procedure target identity as permission to skip boxed
+payload representation or argument/result bridge planning.
+
+Define packed erased function values with explicit `ErasedFnValue` fields:
+code pointer, `ErasedFnSigKey`, and typed capture metadata. The capture metadata
+must distinguish no capture, typed zero-sized capture, and boxed runtime capture
+payload. Boxed runtime capture payloads must carry value handle, capture type
+key, layout, and size explicitly. `ErasedFnSigKey` must distinguish
+no capture from a zero-sized typed capture, and must define whether a hidden
+capture argument exists. When present, the hidden capture argument is appended
+after all fixed-arity Roc source arguments.
+
+Make `callable_match` a whole-call result-join node. It must own one
+`result_ty` and one `result_tmp`. Every returning branch must produce a
+branch-local direct-call result and then either assign it directly to the shared
+result temp or bridge it through an explicit branch-local bridge. Branch-local
+layout choices must not escape the node.
+
+Make ordinary source `match` a concrete executable MIR result-join node distinct
+from callable-set `callable_match`. It must evaluate every scrutinee once,
+consume an explicit `PatternDecisionPlan`, materialize `PatternPathValuePlan`
+records once per selected path at the control-flow point where they are needed
+before projecting individual binders by finalized path ids, handle records,
+tuples, lists, literals, opaque unwraps, newtypes, and guards through explicit
+decision-path records, and join returning branches into one `result_tmp` through
+explicit bridges when needed.
+
+Enforce single-evaluation boundary discipline: source operands lower once to
+`ExecutableValueRef` handles in source order, and bridges, calls, aggregate
+assembly, erased packing, mutation sites, and branch joins consume only those
+value handles. Executable MIR may remain expression-based where no semantic
+boundary is crossed. LIR must be in administrative normal form before reference
+counting and backend consumption.
+
+Delete executable semantic parameter-mode solving entirely. Executable MIR must
+not compute per-procedure parameter modes, escape relations, result
+alias contracts, callable-call mode keys, or source-match mode joins. It must
+instead emit explicit value nodes, call ABI shapes, low-level RC-effect records,
+and runtime-uniqueness mutation sites for LIR ARC insertion.
 
 Delete:
 
@@ -4883,9 +6381,17 @@ ProcBaseKey
   branch
 + erased adapter key when specializing an erased adapter
 + capture slot shape and capture types for callable-set or erased captures
-+ executable argument and return types
++ executable argument and return value type keys
 + representation mode
 ```
+
+Executable argument and return value type keys are `CanonicalExecValueTypeKey`
+values. They recursively collapse function-typed value slots to their solved
+callable child, so nested higher-order arguments and returns participate in
+specialization identity. The key for a procedure that accepts a record
+containing `{ f : I64 -> I64 }` must distinguish whether `f` is represented as
+`callable_set([AddN { n : I64 }])`, `callable_set([Identity])`, or
+`erased_fn(sig)`.
 
 not:
 
@@ -4897,17 +6403,32 @@ ProcOrderKey
 Commit when executable MIR verification proves:
 
 - direct calls have explicit targets
+- every `call_proc` was lowered through an explicit executable call plan
 - direct call args match target signatures
+- executable value types collapse function-typed runtime values to
+  `callable_set` or `erased_fn`, never to runtime function objects with
+  argument and return fields
+- executable specialization keys recursively encode nested function-valued
+  argument, return, capture, record, tag, list, box, and nominal slots through
+  `CanonicalExecValueTypeKey`
 - direct, erased, and callable-set calls preserve fixed Roc arity
 - erased calls have explicit erased function types
-- erased function signature keys contain an explicit `ErasedCallAbiPolicyKey`,
-  not a future `CallableCallOwnershipKey`
+- packed erased function values carry code pointer, `ErasedFnSigKey`, and typed
+  capture metadata
+- packed erased capture metadata distinguishes no capture, typed zero-sized
+  capture, and boxed runtime capture payload
+- erased function signatures distinguish no capture from typed zero-sized
+  captures
+- hidden erased capture arguments appear only when `ErasedFnSigKey` records a
+  non-null capture type, and then appear after all fixed-arity source arguments
+- erased function signature keys contain an explicit `ErasedFnAbiKey`
 - erased callable equality requires exact `ErasedFnSigKey` equality, including
-  `ErasedCallAbiPolicyKey`
-- same erased args/return with different `ErasedCallAbiPolicyKey` values requires
-  an explicit adapter or bridge and must not silently merge
-- ordinary Roc boxed erased callables use the canonical erased ABI policy:
-  borrow packed function, borrow all erased arguments, fresh result
+  hidden capture type and `ErasedFnAbiKey`
+- same erased args/return with different hidden capture type or different
+  `ErasedFnAbiKey` values requires an explicit adapter or bridge and must not
+  silently merge
+- ordinary Roc boxed erased callables use the canonical erased ABI shape:
+  ordinary packed function value, ordinary erased arguments, ordinary result
 - erased adapters are synthesized for finite callable-set values crossing
   erased `Box(T)` boundaries
 - `callable_match` evaluates its callable expression and original arguments
@@ -4917,25 +6438,35 @@ Commit when executable MIR verification proves:
 - callable-set capture payload field ordering is deterministic
 - finite callable-set calls lower to explicit `callable_match`
 - every `callable_match` branch has a reserved executable specialization
-- every `callable_match` branch records exact `direct_args`
+- every `callable_match` branch records exact `direct_args` as
+  `ExecutableValueRef` handles
+- every `callable_match` has one result type and one result temp
+- every returning `callable_match` branch bridges its branch-local result into
+  the shared result temp when needed
+- no branch-local result layout escapes a `callable_match`
 - every callable member direct-call signature is source args plus optional
   trailing capture record
-- every `callable_match` has exactly one `CallableCallOwnershipKey`
-- every branch in a `callable_match` conforms to the same normalized argument
-  modes and result contract
-- `CallableCallOwnershipKey` values are produced by the executable ownership SCC
-  fixed point and are not present in erased adapter keys
-- callable-match ownership joins argument modes with `borrow < consume` and
-  preserves result alias/borrow relations only when all returning branches agree
 - no executable MIR node represents automatic currying or partial application
 - no ordinary source `match` satisfies callable-set lowering verification
+- every ordinary source `match` lowers to a concrete `SourceMatch` node distinct
+  from callable-set `callable_match`
+- every `SourceMatch` evaluates its scrutinees once, consumes an explicit
+  `PatternDecisionPlan`, and extracts selected tag payload records once before
+  projecting payload binders by finalized `TagPayloadId`
+- source matches cover records, tuples, lists, literals, opaque unwraps,
+  newtypes, tags, and guards through explicit decision-path records
 - packed erased functions have explicit captures
 - bridge nodes connect concrete executable MIR types
+- bridge nodes consume only `ExecutableValueRef` handles and never own arbitrary
+  source expressions
+- operands with evaluation, allocation, reference-counting, or control-flow
+  significance are lowered exactly once before any bridge consumes them
 - every executable MIR node introduced for callable lowering, erased packaging,
-  boxed payload boundaries, and bridges carries explicit ownership semantics for
-  LIR
-- every executable procedure has a `ProcOwnershipContract` before IR lowering
-- LIR ownership logic does not infer procedure contracts as semantic truth
+  boxed payload boundaries, mutation, and bridges exposes explicit operands and
+  RC-effect metadata needed by LIR ARC insertion
+- no executable semantic parameter-mode solver exists
+- LIR ARC insertion emits explicit `incref`, `decref`, and `free` from LIR
+  values and control flow, not from procedure contracts
 
 ### 9. Delete Source-Type Reconstruction
 
@@ -4962,7 +6493,17 @@ IR lowering must be source-blind and method-blind.
 It consumes executable MIR data only and emits existing IR direct/erased call
 forms.
 
-Commit when IR lowering has no imports of checked CIR or MIR builder internals.
+Wire logical layout graph commitment before LIR consumes physical storage
+operations. Layout commitment must reserve graph nodes before children, run SCC
+detection, commit recursive by-value slot edges to physical indirection, and
+publish one recursive-slot mapping consumed by constructors, field access,
+source `match` payload extraction, capture access, callable-set payload access,
+erased capture access, and RC plans.
+
+Commit when IR lowering has no imports of checked CIR or MIR builder internals,
+and layout verification proves every recursive by-value SCC edge has exactly
+one committed physical indirection while no stage treats that indirection as
+source `Box(T)` or erased callable representation.
 
 ### 11. Rewire Public Pipelines
 
@@ -5057,6 +6598,43 @@ selection must happen before the LIR interpreter runs. The interpreter must only
 execute listed roots; it must not decide which top-level declarations are
 constants or callable bindings.
 
+Introduce `CompileTimeRootDependencyGraph` before root evaluation. The graph
+must include serializable constant roots, callable binding roots, and expect
+roots. Its edges must be resolved-symbol dependencies between roots or imported
+checked artifacts, not name strings or source expression scans. Direct
+top-level functions are procedure symbols and must not be inserted as
+compile-time evaluation roots merely because another root calls them.
+
+Build the graph from monomorphic procedure dependency summaries, not merely from
+the root expression bodies. The summaries must be computed after static dispatch
+has resolved to concrete procedure targets for the specialization being lowered.
+Each summary records local top-level values, imported top-level values, direct
+procedure calls, static-dispatch calls, and already-resolved `proc_value` calls
+reachable from that procedure body. Checking finalization computes an SCC fixed
+point over those summaries so a root depends on top-level values referenced by
+procedures it can call during compile-time evaluation.
+
+Delete the current semantic-eval shortcuts: syntax predicates such as
+`topLevelExprNeedsEvaluation`, lowering every definition as a compile-time root,
+ordering roots with checked-CIR `evaluation_order` instead of the explicit
+dependency graph, and treating the last generated root procedure as a default
+interpreter entrypoint. Those helpers may remain only in tests that verify the
+deletion audit rejects them.
+
+Evaluate roots topologically. Before a dependent root lowers through the
+MIR-family pipeline, every local root it depends on must already have published
+its `ConstRef` or promoted `procedure_value` into the in-progress
+`TopLevelValueTable`. Cycles among non-procedure roots are checking diagnostics
+before artifact publication.
+
+Initialize the in-progress `TopLevelValueTable` before any root evaluation. The
+initial table contains direct top-level functions and already-procedure
+top-level lambdas as `procedure_value` entries. Other compile-time roots start
+as `pending` entries visible only inside checking finalization. Each evaluated
+serializable constant replaces its pending entry with `serializable_constant`;
+each promoted callable binding replaces its pending entry with
+`procedure_value`. The published artifact must contain no `pending` entry.
+
 Add compile-time callable promotion to checking finalization. Function-valued
 top-level bindings whose expressions are not already top-level functions must
 run as `callable_binding` roots. Their interpreter result must be reified as a
@@ -5065,6 +6643,31 @@ published as `procedure_value`. The promoted procedure must have no runtime
 capture environment. Serializable captures become `ConstRef` reads; callable
 captures are promoted recursively to private procedure symbols. Unsupported
 captures are checking problems before publication.
+
+`ComptimeCallable` has finite and erased cases. The finite case names the
+procedure, lifted lambda, or callable-set member plus compiler-owned captures.
+The erased case names the `ErasedFnSigKey`, erased code symbol, and
+compiler-owned erased capture value. Erased callable promotion is allowed only
+when the erased callable carries explicit `BoxBoundaryId` provenance. Promotion
+must either produce a closed ordinary procedure that performs the known erased
+call, or report the unsupported top-level callable binding before publication.
+It must not publish a runtime packed erased callable object, runtime top-level
+closure object, runtime global callable-value object, or runtime thunk.
+
+Promotion consumes `CallablePromotionPlan` records produced before evaluation.
+The plan names the root, source function type, dependency summary, and capture
+reification plan. During promotion, every captured constant must already have a
+published `ConstRef`, and every captured callable must already be a
+`procedure_value` or recursively reserved promoted procedure. Promotion must not
+discover new top-level dependencies by inspecting runtime capture memory,
+source syntax, or lowered procedure bodies after dependency ordering has
+finished.
+
+Non-function top-level constants whose source type contains callable slots are
+not serializable constants in this design. This includes callable slots inside
+`Box(T)`, records, tuples, tags, `List(T)`, aliases, and nominals. Until an
+explicit callable-containing constant representation is designed, checking
+finalization reports those bindings before publication.
 
 Private aggregate LIR roots are allowed only as `comptime_only` interpreter
 entrypoints. They must be excluded from runtime root lists, backend input, and
@@ -5085,9 +6688,10 @@ consume the published artifact data or hit a compiler invariant violation.
 Add `ConstRef` or the exact equivalent. Mono MIR lookup of a serializable
 top-level constant must emit a constant-reference node that carries this handle.
 Executable MIR/LIR must turn the handle into an explicit target-specific
-`ConstMaterializationPlan` containing target executable type, layout, ownership,
-and storage strategy. Backends must only emit requested static data or heap setup
-and follow explicit LIR `incref` and `decref` statements.
+`ConstMaterializationPlan` containing target executable type, layout,
+reference-counting plan, and storage strategy. Backends must only emit requested
+static data or heap setup and follow explicit LIR `incref` and `decref`
+statements.
 
 Replace the current checked-module cache shape with the checked artifact cache
 described above. The checked artifact key must use `source_hash`,
@@ -5159,6 +6763,19 @@ lowering decisions. Boxed erased-boundary decisions must come from lambda-solved
 `BoxBoundary` records and `BoxPayloadRepresentationPlan` values. They
 may be rechecked only by debug-only verifiers.
 
+Forbid executable MIR from deciding erased callable packaging by checking
+whether the current source expression is syntactically enclosed by `Box.box(...)`
+or `Box.unbox(...)`. Erased callable packaging must consume
+`CallableValueEmissionPlan` values with non-empty `BoxBoundaryId` provenance.
+
+Forbid solved erased callable representation without non-empty `BoxBoundaryId`
+provenance. Forbid any erased callable provenance case other than explicit
+`BoxBoundaryId`.
+
+Forbid non-primitive `LowLevelCall` nodes without a complete
+`LowLevelValueFlowSignature`. Low-level ABI metadata and RC-effect metadata are
+not allowed to stand in for representation value-flow metadata.
+
 Forbid any MIR, executable MIR, IR, or LIR operation whose semantic purpose is
 automatic currying or compiler-synthesized partial application.
 
@@ -5172,9 +6789,29 @@ tests that explicitly verify they never reach runtime codegen.
 Forbid compile-time root selection by late syntax filters in LIR evaluation.
 Compile-time roots must come from the explicit compile-time root table.
 
+Forbid compile-time dependency discovery by scanning only root expressions.
+Compile-time root dependencies must include the fixed-point summaries of
+monomorphic procedure bodies reachable through direct calls, resolved static
+dispatch, and resolved `proc_value` calls.
+
 Forbid post-check root selection by scanning exports, top-level declarations,
 checked expressions, procedure order, hosted lambda expressions, or generated
 symbol names. Root selection must consume `RootRequestTable`.
+
+Forbid the old semantic-eval helper family outside deletion-audit tests:
+
+```text
+topLevelExprNeedsEvaluation
+topLevelExprNeedsBindingSchema
+synthesizeSemanticEvalComptimeInitProc
+lowerTypedCIRToSemanticEvalProgram
+lowerTypedCIRToSemanticEvalProgramForTarget
+SemanticEvalTopLevelRoot
+SemanticEvalProgram
+evaluation_order as compile-time evaluation order
+allDefs as compile-time root selection
+last generated root proc as interpreter entrypoint
+```
 
 Forbid post-check mutation of hosted indices or platform-required lookup
 targets inside checked CIR or `ModuleEnv`. Hosted and platform data must come
@@ -5190,6 +6827,14 @@ come from `ModuleInterfaceCapabilities`.
 Forbid runtime constant materialization from hidden top-level thunks or imported
 module LIR re-execution. Serializable constants must be consumed through
 `ConstRef` and `CompileTimeValueStore`.
+
+Forbid publishing `TopLevelValueTable` entries in a `pending` state. The table
+may contain pending entries only inside checking finalization.
+
+Forbid non-function top-level constants whose source type contains callable
+slots from being serialized until an explicit callable-containing constant
+representation exists. Such bindings must be checking-finalization problems, not
+runtime globals or runtime initializer procedures.
 
 Forbid invalid Roc syntax in plan examples and tests that are intended to be Roc
 source. In particular, forbid Haskell-style run declarations, backslash-arrow
@@ -5267,6 +6912,13 @@ Checking finalization and compile-time constants:
   failures, and evaluation errors are reported as checking problems
 - every compile-time evaluation root appears in the explicit compile-time root
   table
+- compile-time roots are evaluated through an explicit dependency graph
+- direct top-level functions are procedure symbols, not compile-time evaluation
+  roots
+- dependent roots lower only after local root dependencies have published
+  `ConstRef` or promoted `procedure_value` entries into `TopLevelValueTable`
+- non-procedure compile-time root cycles are reported before artifact
+  publication
 - no LIR interpreter code path selects compile-time roots by inspecting source
   expression syntax
 - private aggregate LIR roots used by compile-time evaluation are marked
@@ -5277,8 +6929,8 @@ Checking finalization and compile-time constants:
   raw runtime addresses
 - compile-time schemas are built from resolved source types plus selected
   layouts
-- function source types are rejected as serializable constant schemas unless a
-  future explicit serialized function-value representation exists
+- function source types are not serializable constant schemas; function-valued
+  roots use callable promotion and then publish as `procedure_value`
 - function-valued top-level bindings that evaluate to closed callable values are
   promoted during checking finalization to closed procedure symbols
 - cached checked artifacts include serialized compile-time values and hit or
@@ -5293,8 +6945,8 @@ Checking finalization and compile-time constants:
   constants
 - imported constants are not evaluated by re-running imported module LIR roots
   after the imported artifact is published
-- target-specific constant materialization uses explicit layout, ownership, and
-  storage plans outside the checked artifact cache
+- target-specific constant materialization uses explicit layout,
+  reference-counting, and storage plans outside the checked artifact cache
 
 Mono MIR:
 
@@ -5327,6 +6979,13 @@ Row-finalized mono MIR:
 - shape interning reuses one logical shape record across repeated uses of the
   same field or tag-union shape
 - row shape keys do not include payload slot types
+- record construction stores source evaluation order separately from finalized
+  `RecordFieldId` assembly order
+- record update stores base/update evaluation order separately from finalized
+  `RecordFieldId` assembly order
+- tag construction stores source payload evaluation order separately from full
+  `TagUnionShapeId`, selected `TagId`, and finalized `TagPayloadId` assembly
+  order
 - `Err("x")` in a full `[Ok(I64), Err(Str)]` context uses the finalized `Err`
   ID from the full union, never a singleton `[Err(Str)]` shape
 - no later-stage API can lazily compute logical row indexes by sorting names,
@@ -5338,6 +6997,11 @@ Lifted MIR:
 - every procedure capture is an explicit `CaptureSlot`
 - every captured value reference is an explicit `capture_ref`
 - recursive local-function groups compute captures to a fixed point
+- capture discovery is keyed by resolved symbols and mutable-version records,
+  not display-name comparisons
+- source `match`, destructuring, `for`, block-local, and shadowed binders are
+  represented in the capture scope stack
+- captured mutable values are explicit version or phi records
 - every local function or closure value is an explicit `proc_value`
 - aliases of local functions and closures become explicit `proc_value`
 - every `proc_value` capture arg is explicit and in slot order
@@ -5352,13 +7016,16 @@ Lambda-solved MIR:
 - callable sets are explicit
 - captures are attached to callable members
 - callable-set members are canonical ordered finite maps
-- repeated callable members have identical capture slots
-- mismatched capture slots trigger debug-only assertions
+- repeated callable member instances have identical capture slots inside the same
+  specialization-local lambda-solved type store
+- mismatched capture slots for the same specialization-local callable member
+  instance trigger debug-only assertions
 - erasure requirements are explicit
 - `BoxBoundary` stores box type, payload source type, payload boundary type,
   direction, representation roots, and `BoxPayloadRepresentationPlan`
 - boxed payload boundary types structurally rewrite every reachable function
-  slot to erased callable representation
+  slot to erased callable representation, including function arguments and
+  returns reachable inside the explicit `Box(T)` payload
 - `RepresentationStore` has distinct roots for every expression result, binder,
   pattern binder, procedure parameter, procedure return, capture slot,
   callable requested-function occurrence, mutable variable version, and loop phi
@@ -5394,6 +7061,8 @@ Lambda-solved MIR:
   rebuilding
 - no erased boundary exists for non-boxed `List(T)`, records, tuples, tag unions,
   functions, or nominals
+- hosted, platform, and intrinsic callable ABI metadata never introduces
+  non-`Box(T)` erasure
 - imported, opaque, hosted, and platform-owned boxed payload traversal requires
   explicit representation capabilities
 - opaque nominal atomic traversal requires an explicit
@@ -5402,14 +7071,33 @@ Lambda-solved MIR:
 - finite callable-set erasure preserves source member metadata for executable
   adapter synthesis
 - erased adapter keys include finite callable-set identity, erased function
-  signature with `ErasedCallAbiPolicyKey`, and capture shape
+  signature with `ErasedFnAbiKey`, and capture shape
 - generalized templates are clone-instantiated and fully resolved before executable
   lowering consumes them
+- generalized template instantiation allocates fresh callable variables and
+  representation variables together with ordinary type variables
+- generalized procedure templates are never consumed directly by executable MIR
+- procedure and recursive-SCC template generalization excludes variables
+  reachable from the already-bound outer environment
+- recursive specialization SCCs reserve all procedure/callable/capture/adapter
+  nodes before body solving publishes executable keys
+- executable specialization keys are canonical structural keys from
+  specialization-local instantiated representation stores
+- executable specialization keys recursively encode nested function-valued
+  argument, return, capture, record, tag, list, box, and nominal slots as
+  callable-set or erased-fn executable value keys
 - boxed payload representation plans, callable-set keys, capture-shape keys,
   erased signature keys, and erased adapter keys are computed from the
   specialization-local lambda-solved type store
+- every erased callable representation carries non-empty `BoxBoundaryId`
+  provenance
+- every erased `CallableValueEmissionPlan` names either an already-erased value,
+  a `ProcValueErasePlan`, or an `ErasedAdapterKey`
 - instantiated capture refs get their types from `CaptureSlotInstance`, not from
   environment lookup or body scanning
+- every `CaptureShapeKey` slot is encoded as `CanonicalExecValueTypeKey` or the
+  canonical erased capture type key, never as a source type id, lambda-solved
+  type id, layout id, source name, generated symbol text, or expression id
 - canonical type keys and boxed payload transforms handle recursive types without
   raw type ids or infinite recursion
 - canonical callable-set keys, capture-shape keys, erased signature keys, and
@@ -5424,6 +7112,8 @@ Lambda-solved MIR:
 Executable MIR:
 
 - every direct call target exists
+- every `call_proc` lowers through `CallProcExecutablePlan` before becoming
+  `call_direct`
 - direct call arg/result types match signatures
 - direct, erased, and callable-set calls preserve fixed Roc arity
 - every finite callable-set call lowers to an explicit `callable_match`
@@ -5431,42 +7121,79 @@ Executable MIR:
   arguments once, before member branching
 - every `callable_match` branch corresponds to exactly one callable-set member
 - every `callable_match` branch has a reserved executable specialization
-- every `callable_match` branch stores exact `direct_args`
+- every `callable_match` branch stores exact `direct_args` as
+  `ExecutableValueRef` handles, never as arbitrary expressions
 - every `callable_match` branch passes all fixed-arity source arguments exactly
   once, plus only the optional trailing capture record
-- every `callable_match` has exactly one `CallableCallOwnershipKey`
-- every branch conforms to that key's normalized argument modes and result
-  contract
+- every `callable_match` branch produces a branch-local result and bridges it
+  into one shared result temp when needed
+- `no_return` callable-match branches do not constrain returning branch result
+  representation
 - ordinary source `match` does not satisfy callable-set lowering verification
+- every ordinary source `match` lowers to a concrete `SourceMatch` node
+- every `SourceMatch` evaluates its scrutinees exactly once
+- every `SourceMatch` consumes an explicit `PatternDecisionPlan`
+- every `SourceMatch` extracts selected tag payload records once before
+  projecting payload binders by finalized `TagPayloadId`
+- every `SourceMatch` supports records, tuples, lists, literals, opaque unwraps,
+  newtypes, tags, and guards through explicit decision-path records
+- every returning `SourceMatch` branch joins into one shared result temp through
+  explicit bridges when needed
 - singleton finite callable-set calls still lower to `callable_match`
 - every callable-set value has explicit member capture payload metadata
 - every callable-set value has deterministic member tag ordering
 - every callable-set capture payload has deterministic field ordering
 - callable-set member tag ordering uses `ProcOrderKey`, not `Symbol.raw()`
 - every packed erased function has explicit capture metadata
+- packed erased functions distinguish no capture from typed zero-sized captures
+- hidden erased capture arguments are appended after fixed-arity source
+  arguments only when the erased signature records a capture type
 - finite callable-set values crossing erased `Box(T)` boundaries synthesize
   erased adapters
+- finite callable-set values crossing erased representation at a branch join,
+  return, capture, mutable join, or aggregate field also synthesize adapters
+  when the solved `CallableValueEmissionPlan` has `BoxBoundaryId` provenance
 - executable MIR consumes `BoxPayloadRepresentationPlan` and does not make
   semantic erased-shape compatibility decisions
+- executable MIR consumes `CallableValueEmissionPlan` and does not decide erased
+  packaging by checking whether the value occurrence is syntactically inside a
+  `Box(T)` expression
 - checking reports erased-boundary roots other than `Box(T)` before executable
   MIR; executable MIR only debug-verifies that none reached it
+- checking or lambda-solved debug verification rejects erased callable
+  representation with empty or non-`Box(T)` provenance before executable MIR can
+  consume it
 - checking reports imported, opaque, hosted, and platform-owned boxed payload
   traversal without explicit representation capabilities before executable MIR;
   executable MIR only debug-verifies that none reached it
 - every erased capture record has deterministic field ordering
 - every erased call has an explicit erased function type
-- every erased call has an explicit ownership contract from the
-  `ErasedCallAbiPolicyKey` inside `ErasedFnSigKey`
-- every executable procedure has a `ProcOwnershipContract` before IR lowering
-- executable ownership solving is one SCC fixed point over procedure,
-  callable-match, erased-adapter, and bridge nodes
-- `CallableCallOwnershipKey` values are produced by that fixed point and never
-  stored in `ErasedAdapterKey`
+- every erased call has an explicit `ErasedFnAbiKey` inside `ErasedFnSigKey`
+- every runtime mutation site has an explicit runtime uniqueness check
+- executable MIR contains no semantic parameter-mode solver output
 - first-class intrinsic references use explicit wrapper procedures
+- every non-primitive `LowLevelCall` has a complete
+  `LowLevelValueFlowSignature`
+- `Box.box` low-level value-flow creates a `BoxBoundaryId`, links the payload
+  argument to the boxed payload representation, and creates
+  `require_box_erased(boundary)`
+- `Box.unbox` low-level value-flow creates a `BoxBoundaryId`, links the boxed
+  payload representation to the result, and attaches that boundary as erased
+  callable provenance when the payload contains callable slots
+- list low-level value-flow signatures connect element and container
+  representations explicitly for `List.get_unsafe`, `List.set`,
+  `List.append`, `List.prepend`, `List.concat`, `List.split_first`, and
+  `List.split_last`
 - logical field indexes are preserved until LIR resolves physical offsets
 - bridges connect concrete executable types
-- callable lowering, erased packaging, boxed payload boundaries, and bridges
-  preserve explicit ownership records for LIR
+- bridges consume `ExecutableValueRef` handles only, never arbitrary source
+  expressions
+- every bridged operand with evaluation, allocation, reference-counting, or
+  control-flow significance is evaluated exactly once before the bridge consumes
+  it
+- callable lowering, erased packaging, boxed payload boundaries, mutation sites,
+  and bridges expose explicit operands and RC-effect metadata for LIR ARC
+  insertion
 - no source-expression side tables exist
 
 IR/LIR:
@@ -5479,10 +7206,18 @@ IR/LIR:
 - direct calls lower to direct calls
 - erased calls lower to erased calls
 - no method/dispatch operation exists
-- every value-producing LIR statement has sufficient ownership semantics for
-  `RcInsert`
-- LIR ownership code verifies, normalizes, or translates explicit ownership
-  records only; it does not infer procedure ownership contracts as semantic truth
+- logical layout graph commitment reserves nodes before children and handles
+  recursive physical indirection by SCC over slot edges
+- recursive physical indirection is not source `Box(T)` and not erased callable
+  representation
+- constructors, source `match` payload extraction, field access, capture access,
+  callable-set payload access, erased capture access, and RC plans consume the
+  same committed recursive-slot mapping
+- every value-producing LIR statement exposes sufficient operands and
+  refcounted-layout metadata for ARC insertion
+- LIR ARC insertion computes explicit `incref`, `decref`, and `free` from LIR
+  values and control flow; it does not infer procedure contracts as semantic
+  truth
 - `RcInsert` is the only non-builtin stage that emits explicit `incref`,
   `decref`, and `free`
 - backends execute explicit LIR RC statements and perform no ordinary RC
@@ -5542,19 +7277,30 @@ Callable/capture behavior:
   fixed-point capture propagation
 - closure returned from a function
 - closure passed as an argument
-- direct `call_proc` becomes executable direct call without erased packaging
+- `call_proc` with exact executable argument and result representations lowers
+  through `CallProcExecutablePlan` to `call_direct`
+- `call_proc` whose argument or result contains an explicit `Box(T)` erased
+  payload still honors the boxed payload representation plan before emitting its
+  direct call
 - singleton `call_value(proc_value(...))` lowers to `callable_match`
 - captured local function calls lower through explicit `proc_value` captures
 - finite callable-set calls evaluate callable and arguments exactly once before
   branch dispatch
 - finite callable-set branch direct calls receive source args plus optional
   trailing capture record
+- finite callable-set branch results bridge into one shared callable-match
+  result temp
+- bridges around calls, boxes, tag construction, record construction, constants,
+  erased adapters, and result joins consume already-evaluated values only
 - boxed erased-boundary packaging with capture record
 - finite callable-set value crossing an erased `Box(T)` boundary synthesizes an
   erased adapter whose body uses `callable_match`
+- finite callable-set branch joined with `Box.unbox(...)` result synthesizes an
+  erased adapter from solved `CallableValueEmissionPlan` provenance even though
+  the finite branch is not syntactically inside `Box.box(...)`
 - structural erased-boundary coercion through records, tuples, tags, `List(T)`,
-  nested `Box(T)`, and nominal backing types only inside an explicit `Box(T)`
-  payload
+  nested `Box(T)`, function arguments and returns, and nominal backing types only
+  inside an explicit `Box(T)` payload
 - two unrelated values with the same logical type do not share erased
   representation when only one flows into `Box(T)`
 - a shared value used both normally and inside `Box(T)` has one representation
@@ -5589,14 +7335,101 @@ Callable/capture behavior:
   compiler invariant violation handled by debug-only assertion in debug builds
   and `unreachable` in release builds
 - hosted function with callable-containing args or returns consumes explicit ABI
-  representation and erased-call ownership metadata
-- finite callable-set call where one branch consumes an argument and another
-  branch borrows it normalizes to one `CallableCallOwnershipKey` for the whole
-  `callable_match`
-- `Box.unbox` borrows the box and materializes a copied payload result; no test
-  may rely on move-out semantics for `Box.unbox`
+  representation metadata; erased-call ABI metadata is allowed only for callable
+  slots that are already erased because of explicit `Box(T)` boundaries
+- finite callable-set calls use the uniform ARC call boundary; no branch
+  computes or exposes a special parameter mode for the whole `callable_match`
+- `Box.unbox` is an ordinary value operation for ARC purposes; no test may rely
+  on move-out semantics for `Box.unbox`
 - `packed_erased_fn`, erased adapters, `callable_match`, `Box.box`,
-  `Box.unbox`, and bridges produce LIR ownership records consumed by `RcInsert`
+  `Box.unbox`, mutation sites, and bridges expose explicit operands and
+  RC-effect metadata consumed by LIR ARC insertion
+
+Cor-derived lowering stress tests:
+
+These tests use `~/code/cor/experiments/lss` as a semantic reference for
+lambda-set and closure lowering, not as syntax to copy. Cor uses `when`, curried
+functions, whitespace application, and runtime top-level thunks. The production
+tests must use current Roc syntax: `match`, fixed-arity functions, `|x| x`
+lambdas, parenthesized comma-separated calls, and no runtime top-level callable
+objects.
+
+- port the generic higher-order callable specialization shape from
+  `test/generic-higher-order-call.roc`: one generic identity-like procedure
+  instantiated at two concrete callable shapes, one captureless and one with
+  captures. The MIR-family assertion is that the two executable specializations
+  have distinct recursive `CanonicalExecValueTypeKey` argument keys, distinct
+  callable-set keys, and no raw type-store ids in their keys.
+- add a same-source-function-type test with two unrelated local values of type
+  `I64 -> I64`, one captureless and one capturing an `I64`. The expected
+  lambda-solved output must allocate distinct callable variables at import, and
+  the expected executable keys must remain distinct unless an explicit
+  value-flow edge joins the two values.
+- port the generic guarded-closure shape from
+  `test/generic-call-with-guarded-closure.roc`: a local identity function inside a
+  generic procedure specializes independently for each concrete argument type.
+  The MIR-family assertion is that lifted local procedure identity includes the
+  owning mono specialization, so capture-slot equality is checked only within the
+  specialization-local callable member instance.
+- port the recursive captured callable shapes from
+  `test/capture-recursive-function.roc`,
+  `test/lambda-set-basic/captures-call-recursive.roc`, and
+  `test/lambda-set-basic/recursive-call.roc`: recursive local functions that
+  return or capture procedure values must compute captures to a fixed point,
+  build explicit `proc_value` payloads for self/sibling references, and produce
+  finite canonical callable/capture keys.
+- port the task/CPS encodings from `test/task/handler-simple.roc`,
+  `test/task/stdin-stdout-annotated.roc`, and `test/task/roc-issue-5464.roc`.
+  These stress recursive tag unions containing function values, continuations
+  stored in tag payloads, nested callable dispatch, and repeated specialization.
+  The assertions must target MIR-family invariants, not Cor's runtime thunking or
+  curried call shape.
+- add boxed erased callable tests where a direct `proc_value` with captures crosses
+  an explicit `Box(T)` boundary. The expected executable MIR must contain
+  `ProcValueErasePlan`, reserve the erased executable specialization before
+  packing, and emit `ErasedFnValue` with the exact `ErasedFnSigKey`.
+- add boxed erased callable tests where a finite callable-set value crosses an
+  explicit `Box(T)` boundary. The expected executable MIR must synthesize an
+  erased adapter keyed by `ErasedAdapterKey`, and the adapter body must dispatch
+  with `callable_match`.
+- add branch-join erased callable tests where one branch returns
+  `Box.unbox(boxed)` and another branch returns a finite closure. The expected
+  lambda-solved output must put both branch results in one erased representation
+  class with `BoxBoundaryId` provenance, and executable MIR must pack the finite
+  closure from its `CallableValueEmissionPlan` even though that branch is not
+  syntactically inside `Box.box(...)`.
+- add higher-order boxed erased tests where the boxed payload type contains a
+  function in an argument position, a return position, and both positions. The
+  expected lambda-solved output must show `BoxPayloadRepresentationPlan.function`
+  recursively transforming function arguments and returns before rewriting the
+  callable child to erased representation.
+- add non-boxed higher-order container tests where records, tags, lists, and
+  nominals contain function values but do not flow into `Box(T)`. The expected
+  executable value types must contain `callable_set` or `erased_fn` for the
+  function-valued slots, never a runtime function object with argument and return
+  fields, and never erased representation unless an explicit `Box(T)` boundary
+  reaches that slot.
+- add hosted/platform callable ABI tests proving that hosted metadata does not
+  introduce erasure for non-`Box(T)` callable slots. A hosted callable slot that
+  requires erased representation must be exposed through an explicit `Box(T)`
+  slot during checking; otherwise checking reports the problem before artifact
+  publication.
+- add debug-verifier tests that intentionally construct invalid internal MIR in
+  test-only helpers: unresolved callable variables in executable inputs,
+  generalized variables in executable inputs, and function-typed executable
+  values that did not collapse to `callable_set` or `erased_fn`. Debug builds
+  must assert immediately; release builds use `unreachable` for the equivalent
+  compiler-invariant path.
+- add hidden-capture ABI tests distinguishing no capture, typed zero-sized
+  capture, and boxed runtime capture. The expected keys must prove
+  `ErasedFnSigKey.capture_ty` participates in equality; same args, same return,
+  and same `ErasedFnAbiKey` with different `capture_ty` must not merge.
+- add source `match` tests with nested tag patterns, multi-scrutinee patterns,
+  record and tuple patterns, list exact/spread/rest patterns, guards that can
+  fail after structural tests pass, and binders under several nested paths. The
+  expected executable MIR must contain `PatternPathValuePlan` records and
+  materialize them once per selected path at the control-flow points where they
+  are needed. It must not contain a single branch-level payload-record temporary.
 
 Compile-time constants:
 
@@ -5604,6 +7437,15 @@ Compile-time constants:
   the compile-time value store
 - top-level constants that call helper functions evaluate through the same LIR
   interpreter path
+- compile-time root dependencies are evaluated in topological order
+- compile-time root dependencies include monomorphic procedure body summaries for
+  direct calls, resolved static-dispatch calls, and resolved `proc_value` calls
+- a serializable constant that calls a direct function whose body references a
+  callable binding depends on that callable binding root even when the root
+  expression does not name it directly
+- a serializable constant that calls a promoted function-valued binding depends
+  on that callable binding root and consumes it as `procedure_value`
+- non-procedure compile-time root cycles are checking diagnostics
 - compile-time constants containing strings, lists, records, tuples, tag unions,
   boxes, aliases, and nominals reify to logical constant nodes
 - top-level function declarations do not become runtime constant thunks
@@ -5620,11 +7462,23 @@ Compile-time constants:
 - top-level function-valued declarations that evaluate to closed callable values
   are promoted before artifact publication to closed top-level procedures and
   then consumed as `procedure_value`
+- top-level function-valued declarations that evaluate to erased callable values
+  are promoted to closed ordinary procedures that perform the known erased call,
+  or checking finalization reports the unsupported binding before publication
 - promoted procedures have no runtime capture environment; serializable
   captures are consumed through `ConstRef`, and callable captures are promoted
   recursively to private procedure symbols
+- promotion consumes `CallablePromotionPlan` records and does not discover new
+  root dependencies by inspecting runtime capture memory or source syntax after
+  dependency ordering is complete
 - `TopLevelValueTable` is the only post-check source for deciding whether a
   top-level binding is a `serializable_constant` or `procedure_value`
+- `TopLevelValueTable` is seeded before root evaluation with direct top-level
+  functions and already-procedure top-level lambdas as `procedure_value`
+- no published `TopLevelValueTable` entry is `pending`
+- non-function top-level constants whose source type contains callable slots are
+  checking-finalization problems until an explicit callable-containing constant
+  representation is designed
 - user-written compile-time crashes and failed `expect` statements are reported
   before checked artifacts are published
 - division by zero and numeric conversion failures during compile-time constant
@@ -5729,6 +7583,11 @@ The cutover is complete only when all of these are true:
 - checked artifact data is not published until compile-time constant evaluation
   has either produced a complete compile-time value store or appended all
   user-facing checking problems
+- compile-time roots are evaluated through an explicit dependency graph; direct
+  top-level functions are procedure symbols, not compile-time evaluation roots
+- dependent compile-time roots lower only after local dependencies have
+  published `ConstRef` or promoted `procedure_value` entries into
+  `TopLevelValueTable`
 - no runtime top-level constant thunks, runtime global initializer procedures
   for constants, runtime zero-argument constant wrappers, runtime top-level
   closure objects, or runtime global callable-value objects exist for top-level
@@ -5738,8 +7597,8 @@ The cutover is complete only when all of these are true:
 - imported constants are consumed through `ConstRef` from serialized
   compile-time value stores, not by re-running imported module LIR roots after
   checking
-- target-specific constant materialization uses explicit layout, ownership, and
-  storage plans outside the checked artifact cache
+- target-specific constant materialization uses explicit layout,
+  reference-counting, and storage plans outside the checked artifact cache
 - no public pipeline imports old top-level post-check modules
 - static dispatch exists only in checked CIR and mono MIR input pattern matching
 - every checked static-dispatch node exported to mono MIR carries a
@@ -5768,6 +7627,8 @@ The cutover is complete only when all of these are true:
 - lifted MIR has explicit `CaptureSlot` metadata for every lifted procedure
 - lifted MIR uses `capture_ref` for every captured value reference
 - lifted MIR computes recursive local-function captures to a fixed point
+- lifted MIR capture discovery uses resolved symbols and mutable-version
+  records, not display-name comparison
 - lifted MIR procedure values are explicit `proc_value` nodes with
   `CaptureArg`s
 - lifted MIR has no captured source symbols represented as ordinary `var_`
@@ -5814,6 +7675,9 @@ The cutover is complete only when all of these are true:
 - row finalization emits explicit `RecordShapeId`, `RecordFieldId`,
   `TagUnionShapeId`, `TagId`, and `TagPayloadId` records before representation
   solving
+- row-finalized construction nodes preserve source evaluation order separately
+  from finalized logical assembly order before later stages need positional
+  construction
 - representation merge consumes finalized row IDs and never sorts names, scans
   rows, or relies on physical layout order to compute logical indexes
 - tag construction representation edges use the full checked tag-union type,
@@ -5821,6 +7685,10 @@ The cutover is complete only when all of these are true:
 - lambda-solved MIR computes boxed payload representation plans and
   callable/capture keys only from specialization-local clone-instantiated and
   fully resolved type stores
+- lambda-solved MIR stores generalized representation templates separately from
+  executable representation instances
+- lambda-solved MIR reserves procedure/callable/capture/adapter nodes for a
+  recursive specialization SCC before publishing executable keys
 - lambda-solved MIR requires explicit module-interface representation
   capabilities before traversing imported or opaque nominal boxed payloads
 - opaque nominal atomic traversal requires an explicit
@@ -5837,41 +7705,57 @@ The cutover is complete only when all of these are true:
   cycle-safe graph transforms with stable recursion binders/backrefs
 - executable MIR output has no dispatch nodes
 - executable MIR is the first stage that emits `call_direct`
+- executable MIR lowers `call_proc` through `CallProcExecutablePlan` before
+  emitting `call_direct`
 - executable MIR lowers every finite non-erased callable-set call to explicit
   `callable_match`
 - executable MIR synthesizes erased adapters for finite callable-set values
   crossing erased `Box(T)` boundaries
-- executable MIR records exact branch `direct_args`
-- executable MIR records one `CallableCallOwnershipKey` for every
-  `callable_match`
+- executable MIR records exact branch `direct_args` as `ExecutableValueRef`
+  handles
+- executable MIR gives every `callable_match` one result type and one result
+  temp, and every returning branch bridges into that temp when needed
 - executable MIR direct, erased, and callable-set calls preserve fixed Roc arity
 - executable MIR ordinary source `match` and callable-set `callable_match` are
   structurally distinguishable
+- executable MIR ordinary source `match` evaluates scrutinees once, consumes an
+  explicit `PatternDecisionPlan`, materializes `PatternPathValuePlan` records
+  once per selected path at the control-flow points where they are needed before
+  projecting binders by finalized path ids, and joins returning branches into one
+  shared result temp
 - executable MIR keeps callable-set values distinct from packed erased function
   values
+- packed erased function values carry an `ErasedFnSigKey` that distinguishes no
+  capture from typed zero-sized captures and defines hidden capture-argument ABI
+- packed erased function values carry typed capture metadata that distinguishes
+  no capture, zero-sized typed capture, and boxed runtime capture payload
 - callable-set member ordering uses `ProcOrderKey`, not `Symbol.raw()`
 - executable specialization keys use semantic base/type/representation keys,
   not `ProcOrderKey`, raw type ids, expression ids, or side-table ids
 - executable MIR consumes `BoxPayloadRepresentationPlan` instead of making
   semantic erased-shape compatibility decisions
-- executable MIR consumes erased-call ownership contracts from `ErasedFnSigKey`
-  through explicit `ErasedCallAbiPolicyKey` values instead of recovering
-  ownership from runtime function pointers or capture layouts
+- executable MIR consumes erased-call ABI shapes from `ErasedFnSigKey` through
+  explicit `ErasedFnAbiKey` values instead of recovering ABI behavior from
+  runtime function pointers or capture layouts
 - erased callable merge requires exact `ErasedFnSigKey` equality, including
-  `ErasedCallAbiPolicyKey`; policy mismatches require explicit adapters or
-  bridges
-- executable ownership solving produces `ProcOwnershipContract` values before
-  IR lowering
-- executable ownership solving is one SCC fixed point over procedure,
-  callable-match, erased-adapter, and bridge nodes
-- `CallableCallOwnershipKey` values are produced by that fixed point and are not
-  semantic components of erased adapter keys
-- executable MIR preserves ownership records for callable lowering, erased
-  packaging, boxed payload boundaries, and bridges
-- `Box.unbox` is borrowed/copy materialization only; consuming move-out requires
+  hidden capture type and `ErasedFnAbiKey`; hidden-capture or ABI-shape
+  mismatches require explicit adapters or bridges
+- executable MIR has no semantic parameter-mode solver and produces no
+  procedure parameter-mode contracts before IR lowering
+- executable MIR preserves explicit values, call ABI shapes, low-level
+  RC-effect records, and runtime-uniqueness mutation sites for LIR
+- executable MIR bridges consume only `ExecutableValueRef` handles; every bridged
+  operand with evaluation, allocation, reference-counting, or control-flow
+  significance is evaluated exactly once before bridging
+- `Box.unbox` is ordinary value materialization only; consuming move-out requires
   a separate explicit operation
 - logical field indexes are resolved to physical offsets only through the layout
   store
+- recursive physical layout indirection is committed once by SCC over logical
+  layout slot edges, and all constructors/accessors/RC plans consume the same
+  recursive-slot mapping
+- recursive physical layout indirection is not source `Box(T)` and not erased
+  callable representation
 - no exact callable alias side tables remain
 - requested function type verifiers are debug-only compiler assertions and do not
   add runtime checks to user programs
@@ -5881,9 +7765,10 @@ The cutover is complete only when all of these are true:
 - checked static dispatch exports only normalized `StaticDispatchCallPlan`
   values; mono MIR consumes those plans and the checked method registry
 - IR lowering consumes executable MIR only
-- IR lowering preserves executable ownership records for LIR
-- LIR ownership code verifies or translates ownership records but does not infer
-  procedure ownership contracts as semantic truth
+- IR lowering preserves explicit values, ABI shapes, RC-effect records, and
+  runtime-uniqueness mutation sites for LIR
+- LIR ARC insertion computes explicit RC statements from LIR values and control
+  flow; it does not infer procedure contracts as semantic truth
 - LIR `RcInsert` is the only non-builtin stage that emits explicit `incref`,
   `decref`, and `free`
 - LIR/backends do not know about source methods
