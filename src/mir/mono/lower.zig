@@ -23,6 +23,7 @@ const type_mod = @import("type.zig");
 const clone_inst = @import("clone_inst.zig");
 const symbol_mod = @import("symbol");
 const typed_cir = check.TypedCIR;
+const static_dispatch = check.StaticDispatchRegistry;
 
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
@@ -102,6 +103,7 @@ const Ctx = struct {
     types: type_mod.Store,
     idents: base.Ident.Store,
     source_modules: *typed_cir.Modules,
+    static_dispatch_plans: []static_dispatch.StaticDispatchPlanTable,
     builtin_module_idx: u32,
     executable_start_ident: base.Ident.Idx,
     executable_len_ident: base.Ident.Idx,
@@ -315,12 +317,30 @@ const Ctx = struct {
         errdefer idents.deinit(allocator);
         const executable_start_ident = try idents.insert(allocator, base.Ident.for_text("start"));
         const executable_len_ident = try idents.insert(allocator, base.Ident.for_text("len"));
+
+        const module_count = typed_cir_modules.moduleCount();
+        const static_dispatch_plans = try allocator.alloc(static_dispatch.StaticDispatchPlanTable, module_count);
+        errdefer allocator.free(static_dispatch_plans);
+        var static_dispatch_plan_count: usize = 0;
+        errdefer {
+            for (static_dispatch_plans[0..static_dispatch_plan_count]) |*plans| {
+                plans.deinit(allocator);
+            }
+        }
+        while (static_dispatch_plan_count < module_count) : (static_dispatch_plan_count += 1) {
+            static_dispatch_plans[static_dispatch_plan_count] = try static_dispatch.StaticDispatchPlanTable.fromModule(
+                allocator,
+                typed_cir_modules.module(@intCast(static_dispatch_plan_count)),
+            );
+        }
+
         return .{
             .allocator = allocator,
             .symbols = symbol_mod.Store.init(allocator),
             .types = type_mod.Store.init(allocator),
             .idents = idents,
             .source_modules = typed_cir_modules,
+            .static_dispatch_plans = static_dispatch_plans,
             .builtin_module_idx = builtin_module_idx,
             .executable_start_ident = executable_start_ident,
             .executable_len_ident = executable_len_ident,
@@ -330,6 +350,10 @@ const Ctx = struct {
     }
 
     fn deinit(self: *Ctx) void {
+        for (self.static_dispatch_plans) |*plans| {
+            plans.deinit(self.allocator);
+        }
+        self.allocator.free(self.static_dispatch_plans);
         self.pattern_symbols.deinit();
         self.top_level_symbols.deinit();
         self.idents.deinit(self.allocator);
@@ -345,6 +369,18 @@ const Ctx = struct {
 
     fn moduleCount(self: *const Ctx) usize {
         return self.source_modules.moduleCount();
+    }
+
+    fn staticDispatchPlan(
+        self: *const Ctx,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?*const static_dispatch.StaticDispatchCallPlan {
+        const plans = self.static_dispatch_plans[module_idx].plans;
+        for (plans) |*plan| {
+            if (plan.expr == expr_idx) return plan;
+        }
+        return null;
     }
 
     fn getOrCreateTopLevelSymbol(
@@ -2277,7 +2313,6 @@ pub const Lowerer = struct {
         env: BindingEnv,
         expr: typed_cir.Expr,
     ) std.mem.Allocator.Error!ast.ExprId {
-        const typed_cir_module = expr.module();
         switch (expr.data) {
             .e_nominal => |nominal| return self.lowerTransparentNominalExprWithType(
                 module_idx,
@@ -2334,11 +2369,19 @@ pub const Lowerer = struct {
         }
 
         if (expr.data == .e_method_eq) {
-            return self.lowerMethodEqExpr(module_idx, type_scope, env, expr.data.e_method_eq, ty);
+            return self.lowerMethodEqExpr(module_idx, type_scope, env, expr.idx, expr.data.e_method_eq, ty);
         }
 
         if (expr.data == .e_structural_eq) {
             return self.lowerStructuralEqExpr(module_idx, type_scope, env, expr.data.e_structural_eq, ty);
+        }
+
+        if (expr.data == .e_dispatch_call) {
+            return self.lowerDispatchCallExpr(module_idx, type_scope, env, expr.idx, expr.data.e_dispatch_call, ty);
+        }
+
+        if (expr.data == .e_type_dispatch_call) {
+            return self.lowerTypeDispatchCallExpr(module_idx, type_scope, env, expr.idx, expr.data.e_type_dispatch_call, ty);
         }
 
         const data: ast.Expr.Data = switch (expr.data) {
@@ -2586,37 +2629,8 @@ pub const Lowerer = struct {
             },
             .e_structural_eq => unreachable,
             .e_method_eq => unreachable,
-            .e_dispatch_call => |method_call| blk: {
-                const lowered_receiver = try self.lowerExpr(module_idx, type_scope, env, method_call.receiver);
-                const lowered_args = try self.lowerExprSlice(module_idx, type_scope, env, typed_cir_module.sliceExpr(method_call.args));
-                break :blk .{ .dispatch_call = .{
-                    .receiver = lowered_receiver,
-                    .method_name = try self.ctx.copyExecutableIdent(module_idx, method_call.method_name),
-                    .args = lowered_args,
-                    .dispatch_constraint_ty = try self.instantiateSourceVarType(
-                        module_idx,
-                        type_scope,
-                        method_call.constraint_fn_var,
-                    ),
-                } };
-            },
-            .e_type_dispatch_call => |method_call| blk: {
-                const alias_stmt = typed_cir_module.getStatement(method_call.type_var_alias_stmt);
-                break :blk .{ .type_dispatch_call = .{
-                    .dispatcher_ty = try self.instantiateSourceVarType(
-                        module_idx,
-                        type_scope,
-                        ModuleEnv.varFrom(alias_stmt.s_type_var_alias.type_var_anno),
-                    ),
-                    .method_name = try self.ctx.copyExecutableIdent(module_idx, method_call.method_name),
-                    .args = try self.lowerExprSlice(module_idx, type_scope, env, typed_cir_module.sliceExpr(method_call.args)),
-                    .dispatch_constraint_ty = try self.instantiateSourceVarType(
-                        module_idx,
-                        type_scope,
-                        method_call.constraint_fn_var,
-                    ),
-                } };
-            },
+            .e_dispatch_call => unreachable,
+            .e_type_dispatch_call => unreachable,
             .e_tag => |tag| try self.lowerTagExprWithExpectedType(
                 module_idx,
                 type_scope,
@@ -5822,34 +5836,44 @@ pub const Lowerer = struct {
         module_idx: u32,
         type_scope: *TypeScope,
         env: BindingEnv,
+        expr_idx: CIR.Expr.Idx,
         eq: @FieldType(CIR.Expr, "e_method_eq"),
         result_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.ExprId {
+        _ = eq;
+        const plan = self.requireStaticDispatchPlan(module_idx, expr_idx, .equality);
         const dispatch_constraint_ty = try self.instantiateSourceVarType(
             module_idx,
             type_scope,
-            eq.constraint_fn_var,
+            plan.callable_var,
         );
+        const dispatch_shape = self.requireFunctionType(dispatch_constraint_ty);
+        if (plan.args.len != 2 or dispatch_shape.args.len != 2) {
+            debugPanic(
+                "monotype static dispatch invariant violated: equality plan for expr {d} must have exactly two args",
+                .{@intFromEnum(expr_idx)},
+            );
+        }
+
+        const lowered_args = try self.lowerStaticDispatchPlanArgs(
+            module_idx,
+            type_scope,
+            env,
+            plan,
+            dispatch_shape.args,
+        );
+        defer self.allocator.free(lowered_args);
+
+        const equality = switch (plan.result_mode) {
+            .equality => |equality| equality,
+            .value => unreachable,
+        };
         return try self.program.store.addExpr(.{
             .ty = result_ty,
             .data = .{ .method_eq = .{
-                .lhs = try self.lowerExprWithExpectedType(
-                    module_idx,
-                    type_scope,
-                    env,
-                    eq.lhs,
-                    try self.requireExprType(module_idx, type_scope, eq.lhs),
-                    try self.exprResultVar(module_idx, type_scope, env, eq.lhs),
-                ),
-                .rhs = try self.lowerExprWithExpectedType(
-                    module_idx,
-                    type_scope,
-                    env,
-                    eq.rhs,
-                    try self.requireExprType(module_idx, type_scope, eq.rhs),
-                    try self.exprResultVar(module_idx, type_scope, env, eq.rhs),
-                ),
-                .negated = eq.negated,
+                .lhs = lowered_args[0],
+                .rhs = lowered_args[1],
+                .negated = equality.negated,
                 .dispatch_constraint_ty = dispatch_constraint_ty,
             } },
         });
@@ -5894,43 +5918,39 @@ pub const Lowerer = struct {
         module_idx: u32,
         type_scope: *TypeScope,
         env: BindingEnv,
+        expr_idx: CIR.Expr.Idx,
         dispatch_call: @FieldType(CIR.Expr, "e_dispatch_call"),
         result_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.ExprId {
-        const receiver_expr_idx = dispatch_call.receiver;
-        const receiver_ty = try self.requireExprType(module_idx, type_scope, receiver_expr_idx);
-        const explicit_arg_exprs = self.ctx.typedCirModule(module_idx).sliceExpr(dispatch_call.args);
-        const lowered_receiver = try self.lowerExprWithExpectedType(
-            module_idx,
-            type_scope,
-            env,
-            receiver_expr_idx,
-            receiver_ty,
-            try self.exprResultVar(module_idx, type_scope, env, receiver_expr_idx),
-        );
-        const lowered_args = try self.allocator.alloc(ast.ExprId, explicit_arg_exprs.len);
-        defer self.allocator.free(lowered_args);
-        for (explicit_arg_exprs, 0..) |arg_expr_idx, i| {
-            lowered_args[i] = try self.lowerExprWithExpectedType(
-                module_idx,
-                type_scope,
-                env,
-                arg_expr_idx,
-                try self.requireExprType(module_idx, type_scope, arg_expr_idx),
-                try self.exprResultVar(module_idx, type_scope, env, arg_expr_idx),
-            );
-        }
+        _ = dispatch_call;
+        const plan = self.requireStaticDispatchPlan(module_idx, expr_idx, .value);
         const dispatch_constraint_ty = try self.instantiateSourceVarType(
             module_idx,
             type_scope,
-            dispatch_call.constraint_fn_var,
+            plan.callable_var,
         );
+        const dispatch_shape = self.requireFunctionType(dispatch_constraint_ty);
+        if (plan.args.len == 0 or dispatch_shape.args.len != plan.args.len) {
+            debugPanic(
+                "monotype static dispatch invariant violated: receiver dispatch plan arg mismatch for expr {d}",
+                .{@intFromEnum(expr_idx)},
+            );
+        }
+
+        const lowered_args = try self.lowerStaticDispatchPlanArgs(
+            module_idx,
+            type_scope,
+            env,
+            plan,
+            dispatch_shape.args,
+        );
+        defer self.allocator.free(lowered_args);
         return try self.program.store.addExpr(.{
             .ty = result_ty,
             .data = .{ .dispatch_call = .{
-                .receiver = lowered_receiver,
-                .method_name = try self.ctx.copyExecutableIdent(module_idx, dispatch_call.method_name),
-                .args = try self.program.store.addExprSpan(lowered_args),
+                .receiver = lowered_args[0],
+                .method_name = try self.ctx.copyExecutableIdent(module_idx, plan.method_ident),
+                .args = try self.program.store.addExprSpan(lowered_args[1..]),
                 .dispatch_constraint_ty = dispatch_constraint_ty,
             } },
         });
@@ -5941,42 +5961,110 @@ pub const Lowerer = struct {
         module_idx: u32,
         type_scope: *TypeScope,
         env: BindingEnv,
+        expr_idx: CIR.Expr.Idx,
         method_call: @FieldType(CIR.Expr, "e_type_dispatch_call"),
         result_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.ExprId {
-        const typed_cir_module = self.ctx.typedCirModule(module_idx);
-        const alias_stmt = typed_cir_module.getStatement(method_call.type_var_alias_stmt);
+        _ = method_call;
+        const plan = self.requireStaticDispatchPlan(module_idx, expr_idx, .value);
         const dispatcher_ty = try self.instantiateSourceVarType(
             module_idx,
             type_scope,
-            ModuleEnv.varFrom(alias_stmt.s_type_var_alias.type_var_anno),
+            plan.dispatcher_var,
         );
-        const explicit_arg_exprs = typed_cir_module.sliceExpr(method_call.args);
-        const lowered_args = try self.allocator.alloc(ast.ExprId, explicit_arg_exprs.len);
+        const dispatch_constraint_ty = try self.instantiateSourceVarType(
+            module_idx,
+            type_scope,
+            plan.callable_var,
+        );
+        const dispatch_shape = self.requireFunctionType(dispatch_constraint_ty);
+        if (dispatch_shape.args.len != plan.args.len) {
+            debugPanic(
+                "monotype static dispatch invariant violated: type dispatch plan arg mismatch for expr {d}",
+                .{@intFromEnum(expr_idx)},
+            );
+        }
+        const lowered_args = try self.lowerStaticDispatchPlanArgs(
+            module_idx,
+            type_scope,
+            env,
+            plan,
+            dispatch_shape.args,
+        );
         defer self.allocator.free(lowered_args);
-        for (explicit_arg_exprs, 0..) |arg_expr_idx, i| {
+        return try self.program.store.addExpr(.{
+            .ty = result_ty,
+            .data = .{ .type_dispatch_call = .{
+                .dispatcher_ty = dispatcher_ty,
+                .method_name = try self.ctx.copyExecutableIdent(module_idx, plan.method_ident),
+                .args = try self.program.store.addExprSpan(lowered_args),
+                .dispatch_constraint_ty = dispatch_constraint_ty,
+            } },
+        });
+    }
+
+    const RequiredStaticDispatchMode = enum {
+        value,
+        equality,
+    };
+
+    fn requireStaticDispatchPlan(
+        self: *const Lowerer,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        mode: RequiredStaticDispatchMode,
+    ) *const static_dispatch.StaticDispatchCallPlan {
+        const plan = self.ctx.staticDispatchPlan(module_idx, expr_idx) orelse debugPanic(
+            "monotype static dispatch invariant violated: missing checked StaticDispatchCallPlan for module {d} expr {d}",
+            .{ module_idx, @intFromEnum(expr_idx) },
+        );
+        switch (mode) {
+            .value => switch (plan.result_mode) {
+                .value => {},
+                .equality => debugPanic(
+                    "monotype static dispatch invariant violated: expected value dispatch plan for module {d} expr {d}",
+                    .{ module_idx, @intFromEnum(expr_idx) },
+                ),
+            },
+            .equality => switch (plan.result_mode) {
+                .equality => {},
+                .value => debugPanic(
+                    "monotype static dispatch invariant violated: expected equality dispatch plan for module {d} expr {d}",
+                    .{ module_idx, @intFromEnum(expr_idx) },
+                ),
+            },
+        }
+        return plan;
+    }
+
+    fn lowerStaticDispatchPlanArgs(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeScope,
+        env: BindingEnv,
+        plan: *const static_dispatch.StaticDispatchCallPlan,
+        expected_arg_tys: []const type_mod.TypeId,
+    ) std.mem.Allocator.Error![]ast.ExprId {
+        if (plan.args.len != expected_arg_tys.len) {
+            debugPanic(
+                "monotype static dispatch invariant violated: checked plan/function arity mismatch for module {d} expr {d}",
+                .{ module_idx, @intFromEnum(plan.expr) },
+            );
+        }
+
+        const lowered_args = try self.allocator.alloc(ast.ExprId, plan.args.len);
+        errdefer self.allocator.free(lowered_args);
+        for (plan.args, expected_arg_tys, 0..) |arg_expr_idx, expected_arg_ty, i| {
             lowered_args[i] = try self.lowerExprWithExpectedType(
                 module_idx,
                 type_scope,
                 env,
                 arg_expr_idx,
-                try self.requireExprType(module_idx, type_scope, arg_expr_idx),
+                expected_arg_ty,
                 try self.exprResultVar(module_idx, type_scope, env, arg_expr_idx),
             );
         }
-        return try self.program.store.addExpr(.{
-            .ty = result_ty,
-            .data = .{ .type_dispatch_call = .{
-                .dispatcher_ty = dispatcher_ty,
-                .method_name = try self.ctx.copyExecutableIdent(module_idx, method_call.method_name),
-                .args = try self.program.store.addExprSpan(lowered_args),
-                .dispatch_constraint_ty = try self.instantiateSourceVarType(
-                    module_idx,
-                    type_scope,
-                    method_call.constraint_fn_var,
-                ),
-            } },
-        });
+        return lowered_args;
     }
 
     fn lowerCall(
@@ -6310,6 +6398,7 @@ pub const Lowerer = struct {
                     module_idx,
                     type_scope,
                     env,
+                    expr.idx,
                     eq,
                     target_ty,
                 );
@@ -6319,6 +6408,7 @@ pub const Lowerer = struct {
                     module_idx,
                     type_scope,
                     env,
+                    expr.idx,
                     method_call,
                     target_ty,
                 );
@@ -6327,6 +6417,7 @@ pub const Lowerer = struct {
                 module_idx,
                 type_scope,
                 env,
+                expr.idx,
                 method_call,
                 target_ty,
             ),
@@ -7254,6 +7345,23 @@ pub const Lowerer = struct {
         return self.collectSolvedExprInfo(module_idx, type_scope, env, self.ctx.typedCirModule(module_idx).expr(expr_idx));
     }
 
+    fn collectStaticDispatchPlanExprInfo(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeScope,
+        env: BindingEnv,
+        expr_idx: CIR.Expr.Idx,
+    ) std.mem.Allocator.Error!void {
+        const plan = self.ctx.staticDispatchPlan(module_idx, expr_idx) orelse debugPanic(
+            "monotype static dispatch invariant violated: missing checked StaticDispatchCallPlan for collection module {d} expr {d}",
+            .{ module_idx, @intFromEnum(expr_idx) },
+        );
+        const solved_module = self.ctx.typedCirModule(module_idx);
+        for (plan.args) |arg_expr| {
+            try self.collectSolvedExprInfo(module_idx, type_scope, env, solved_module.expr(arg_expr));
+        }
+    }
+
     fn collectSolvedExprInfo(
         self: *Lowerer,
         module_idx: u32,
@@ -7388,21 +7496,18 @@ pub const Lowerer = struct {
                 break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
             .e_method_eq => |eq| blk: {
-                try self.collectSolvedExprInfo(module_idx, type_scope, env, solved_module.expr(eq.lhs));
-                try self.collectSolvedExprInfo(module_idx, type_scope, env, solved_module.expr(eq.rhs));
+                _ = eq;
+                try self.collectStaticDispatchPlanExprInfo(module_idx, type_scope, env, expr.idx);
                 break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
             .e_dispatch_call => |method_call| blk: {
-                try self.collectSolvedExprInfo(module_idx, type_scope, env, solved_module.expr(method_call.receiver));
-                for (typed_cir_module.sliceExpr(method_call.args)) |arg_expr| {
-                    try self.collectSolvedExprInfo(module_idx, type_scope, env, solved_module.expr(arg_expr));
-                }
+                _ = method_call;
+                try self.collectStaticDispatchPlanExprInfo(module_idx, type_scope, env, expr.idx);
                 break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
             .e_type_dispatch_call => |method_call| blk: {
-                for (typed_cir_module.sliceExpr(method_call.args)) |arg_expr| {
-                    try self.collectSolvedExprInfo(module_idx, type_scope, env, solved_module.expr(arg_expr));
-                }
+                _ = method_call;
+                try self.collectStaticDispatchPlanExprInfo(module_idx, type_scope, env, expr.idx);
                 break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
             .e_match => |match_expr| blk: {
