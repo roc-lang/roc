@@ -76,6 +76,8 @@ my @RULES = (
     { category => 'source-exec-retired-carrier', regex => camel(qw(collect Planned Exec Bindings)), allowed => {} },
     { category => 'source-exec-retired-carrier', regex => camel(qw(plan Executable Type From Solved With Bindings)), allowed => {} },
     { category => 'source-exec-retired-carrier', regex => camel(qw(current Required Return Exec Ty)), allowed => {} },
+    { category => 'source-type-reconstruction', regex => qr/\bexactTagSourceTypeForExpr\b/, allowed => {} },
+    { category => 'source-type-reconstruction', regex => camel(qw(exact Tag Source Type For Expr)), allowed => {} },
 );
 
 sub iter_zig_files {
