@@ -12,7 +12,7 @@ my_fn = |arg1, arg2| arg1 + arg2
 Some languages have alternative syntaxes for defining functions. Roc intentionally does not,
 for the same reason that it doesn't have alternative syntax for defining any other type of
 value (such as numbers or strings): functions are ordinary values, just like any other value,
-and all values in Roc are declared using the same sytnax. This syntax design decision is
+and all values in Roc are declared using the same syntax. This syntax design decision is
 intended to emphasize that functions are ordinary values like any other.
 
 ## Pure Functions
@@ -26,7 +26,7 @@ Roc makes a first-class distinction between _pure functions_ and _effectful func
 that are not pure), and uses that distinction to enable automatic performance optimizations. A
 function is effectful if it calls another effectful function, and otherwise it's pure. Effectful
 functions can only be called by other effectful functions; pure functions and top-level
-contants can only call pure functions.
+constants can only call pure functions.
 
 A common example of a performance optimization where Roc's compiler makes use of this
 distinction: all top-level values are evaluated at compile time. Pure functions always return 
@@ -43,7 +43,7 @@ that can reasonably be considered side effects:
 
 ## Function Type Annotations
 
-Here's a type annotation for a pure fucntion, and then right below it, 
+Here's a type annotation for a pure function, and then right below it, 
 an annotation for an effectful function:
 
 ```roc
@@ -96,7 +96,7 @@ effectful—and so can't be run at compile time.
 > which provides their implementations using low-level code that has been compiled for a 
 > specific target system. Roc's compiler does not run platform-provided low-level code
 > during compilation, which means that when you run `roc check` or `roc build`, none of
-> your dependencies—inclduing platforms—are permitted to perform arbitrary I/O operations 
+> your dependencies—including platforms—are permitted to perform arbitrary I/O operations 
 > on your system. You have to actually run the compiled Roc program for that.
 
 ## Recursive Functions
