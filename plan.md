@@ -1001,6 +1001,7 @@ const ProcRepresentationTemplate = struct {
     proc: Symbol,
     type_template_store: TypeStoreRef,
     representation_template: RepresentationTemplateId,
+    value_template: ValueInfoTemplateId,
     capture_slot_templates: Span(CaptureSlotTemplate),
 };
 
@@ -1009,17 +1010,19 @@ const ProcRepresentationInstance = struct {
     executable_specialization_key: ExecutableSpecializationKey,
     type_store: TypeStoreRef,
     representation_store: RepresentationStore,
+    value_store: ValueInfoStore,
     capture_slot_instances: Span(CaptureSlotInstance),
 };
 ```
 
 The exact Zig names may differ, but the boundary must not. A generalized
 procedure template may contain generalized type variables and template
-representation variables. It is not consumed directly by executable MIR. Before
-executable MIR consumes a procedure, callable value, `call_proc`, or
-`call_value`, lambda-solved MIR must clone-instantiate the template into a
-specialization-local type store, instantiate the capture slot table once, build
-the specialization-local `RepresentationStore`, and fully resolve all links.
+representation variables plus template value metadata. It is not consumed
+directly by executable MIR. Before executable MIR consumes a procedure,
+callable value, `call_proc`, or `call_value`, lambda-solved MIR must
+clone-instantiate the template into a specialization-local type store,
+instantiate the capture slot table once, build the specialization-local
+`RepresentationStore` and `ValueInfoStore`, and fully resolve all links.
 
 Recursive specialization SCCs must reserve all procedure symbols, callable
 representation nodes, capture-shape nodes, and erased-adapter keys before any
@@ -1179,16 +1182,17 @@ Conceptual builder state:
 
 ```zig
 const ValueFlowGraphBuilder = struct {
-    store: *RepresentationStore,
+    representation_store: *RepresentationStore,
+    value_store: *ValueInfoStore,
     current_proc: Symbol,
     current_return_root: RepVarId,
-    locals: Map(Symbol, CurrentValueRoot),
+    scopes: LexicalScopeStack,
     loop_stack: Stack(LoopValueFlowFrame),
 };
 
-const CurrentValueRoot = union(enum) {
-    immutable: RepVarId,
-    mutable_version: MutableVersionId,
+const LexicalScope = struct {
+    bindings: Map(Symbol, BindingInfoId),
+    mutable_current: Map(Symbol, MutableVersionId),
 };
 
 const LoopValueFlowFrame = struct {
@@ -1204,6 +1208,288 @@ set of roots, edges, loop phi records, branch joins, and boxed-boundary
 requirements. It is the only place that interprets source control flow for
 representation purposes. Executable MIR may verify the exported graph in debug
 builds, but it must not add missing edges.
+
+Lambda-solved MIR also owns an explicit value-metadata store. This store is the
+long-term replacement for `exact_callable_aliases`, executable callable records,
+expression-indexed semantic maps, and ad hoc lexical-environment fields such as
+`EnvEntry.proc`.
+
+This is the single value-semantic channel for later lowering stages. If a later
+stage needs to know a value-level property such as callable identity, boxed
+payload provenance, aggregate membership, projection slot, call-site dispatch,
+capture payload, or compile-time constant origin, that property belongs in
+lambda-solved value metadata and the MIR node that produced the value must carry
+the corresponding ID. Do not add a parallel map, builder-environment field,
+expression scan, source-name lookup, or procedure-name lookup for an individual
+feature.
+
+The implementation storage should be dense and ID-addressed: arena arrays for
+metadata, compact IDs on MIR nodes, and temporary lexical maps only inside the
+lambda-solved builder. Executable MIR should mostly follow IDs already present
+on nodes. This gives one uniform mechanism for all value-sensitive lowering
+without keeping hash maps keyed by source expressions in the hot executable
+lowering path.
+
+The value-metadata store is not a compatibility side table. Every lambda-solved
+expression, binder, pattern binder, mutable version, capture slot, projection,
+call result, and procedure-value occurrence must carry or reference its
+`ValueInfoId` directly in the exported MIR. Later stages may follow those IDs;
+they must not recover equivalent information from expression syntax, source
+definitions, environment lookup, procedure names, or type shapes.
+
+Conceptual shape:
+
+```zig
+const ValueInfoId = enum(u32) { _ };
+const BindingInfoId = enum(u32) { _ };
+const ProjectionInfoId = enum(u32) { _ };
+const CallSiteInfoId = enum(u32) { _ };
+
+const ValueInfoStore = struct {
+    values: Store(ValueInfo),
+    bindings: Store(BindingInfo),
+    projections: Store(ProjectionInfo),
+    call_sites: Store(CallSiteInfo),
+};
+
+const ValueInfo = struct {
+    logical_ty: TypeId,
+    rep_root: RepRootId,
+    solved_class: RepClassId,
+    origin: ValueOrigin,
+    callable: ?CallableValueInfo,
+    boxed: ?BoxedValueInfo,
+    aggregate: ?AggregateValueInfo,
+};
+
+const BindingInfo = struct {
+    symbol: Symbol,
+    value: ValueInfoId,
+    version: ?MutableVersionId,
+    scope_depth: u32,
+};
+
+const ValueOrigin = union(enum) {
+    expression: ExprId,
+    binder: BinderId,
+    pattern_binder: PatternBinderId,
+    mutable_version: MutableVersionId,
+    proc_param: struct { proc: Symbol, index: u32 },
+    proc_return: Symbol,
+    capture_slot: struct { proc: Symbol, slot: CaptureSlot.Index },
+    projection: ProjectionInfoId,
+    call_result: CallSiteInfoId,
+    compile_time_const: ConstRef,
+};
+
+const CallableValueInfo = struct {
+    whole_function_root: RepVarId,
+    callable_root: RepVarId,
+    source: CallableValueSource,
+    emission_plan: CallableValueEmissionPlanId,
+};
+
+const CallableValueSource = union(enum) {
+    proc_value: struct {
+        expr: ExprId,
+        proc: Symbol,
+        captures: Span(ValueInfoId),
+        fn_ty: TypeId,
+    },
+    finite_set: CanonicalCallableSetKey,
+    already_erased: ErasedFnSigKey,
+    erased_adapter: ErasedAdapterKey,
+};
+
+const BoxedValueInfo = struct {
+    box_root: RepVarId,
+    payload_root: RepVarId,
+    boundary: ?BoxBoundaryId,
+};
+
+const AggregateValueInfo = union(enum) {
+    record: Span(FieldValueInfo),
+    tuple: Span(ElemValueInfo),
+    tag: struct {
+        union_shape: TagUnionShapeId,
+        tag: TagId,
+        payloads: Span(TagPayloadValueInfo),
+    },
+    list: struct {
+        elem_root: RepVarId,
+        elems: Span(ValueInfoId),
+    },
+};
+```
+
+The exact Zig names may differ, but the ownership rule must not. Callable
+identity, capture payload identity, boxed-erased provenance, aggregate member
+identity, projection identity, and call-result identity are value metadata
+attached to MIR values. They are not separate lookup channels.
+
+`ValueInfo.logical_ty` is the fully resolved lambda-solved logical type for the
+value occurrence. `ValueInfo.rep_root` is that occurrence's representation root.
+`ValueInfo.solved_class` is the solved representation class after representation
+solving. Logical type equality never substitutes for `rep_root` identity.
+
+`ValueInfo.callable` exists when the value's solved representation contains a
+function callable child. It records the whole function root and the callable
+child root so executable MIR can lower the occurrence without inspecting the
+callee expression or the surrounding source shape. It also records the
+occurrence-specific `CallableValueEmissionPlanId`; an erased plan is valid only
+when its underlying plan carries non-empty `BoxBoundaryId` provenance.
+
+`CallableValueSource.proc_value` is occurrence-local. It names the exact
+procedure value occurrence and the `ValueInfoId` values for the explicit
+captures on that occurrence. It is not a global procedure summary and not an
+alias map. If the same procedure value is mentioned twice, those two mentions
+have distinct `ValueInfoId` records, even when they ultimately solve to the same
+canonical callable-set member.
+
+`BindingInfo` is the only thing a lexical environment may carry for an ordinary
+source symbol. The environment maps `Symbol -> BindingInfoId`. It may not grow
+special-purpose fields such as `proc`, `boxed`, `record_fields`, `tag_payloads`,
+or `callable_target`. A variable occurrence resolves its `BindingInfoId`, emits
+a representation edge from the binding's current value root to the occurrence's
+own value root, and assigns the occurrence a `ValueInfoId`. The occurrence then
+gets all callable, boxed, aggregate, projection, and emission information from
+the value-metadata store and solved representation class.
+
+This rule is what makes aliases correct by construction. For example:
+
+```roc
+inc : I64 -> I64
+inc = |n| n + 1
+
+main =
+    f = inc
+    f(41)
+```
+
+Mono MIR lowers the use of `inc` as a value to `proc_value(proc=inc, captures=[])`.
+Lambda-solved MIR assigns that `proc_value` a `ValueInfoId`, connects its result
+root to the whole `proc_value.fn_ty` representation root, and records a
+`CallableValueInfo` whose source is that occurrence. The binder `f` gets its own
+`BindingInfoId` and `ValueInfoId`, plus a value-flow edge from the
+`proc_value` occurrence to the binder. The later variable occurrence `f` gets a
+new expression `ValueInfoId` by following the lexical `BindingInfoId` and adding
+a value-flow edge from the current binding root to the use root. Executable MIR
+does not ask whether `f` aliases `inc`; it consumes the solved callable
+representation and emission plan attached to the `f` occurrence.
+
+The same rule applies through records, tuples, tags, lists, captures, branch
+joins, mutable versions, procedure parameters, procedure returns, and
+compile-time values. A callable value stored in `{ f: inc }`, `Ok(inc)`,
+`[inc]`, a captured local, or a top-level compile-time constant is still lowered
+from explicit `ValueInfoId` and representation roots. Later stages must not
+recover the callable member by walking the aggregate expression or by following
+source aliases.
+
+Call expressions also have explicit value metadata:
+
+```zig
+const CallSiteInfo = struct {
+    expr: ExprId,
+    result: ValueInfoId,
+    callee: ?ValueInfoId,
+    args: Span(ValueInfoId),
+    requested_fn_root: RepVarId,
+    dispatch: CallDispatchInfo,
+};
+
+const CallDispatchInfo = union(enum) {
+    call_proc: CallProcExecutablePlanId,
+    call_value_finite: CallableMatchPlanId,
+    call_value_erased: ErasedCallPlanId,
+};
+```
+
+For `call_proc`, `callee` is null because the callee is a procedure target in
+the MIR node, not a first-class value. For `call_value`, `callee` names the
+function value occurrence. `dispatch` is computed from the solved whole-function
+representation root and the solved callable child; executable MIR consumes it
+directly. A singleton finite callable set still produces
+`call_value_finite`/`callable_match`. The only source-level direct-call case is
+`call_proc`.
+
+Intrinsic and low-level value-flow behavior is also represented through this
+same value-metadata path. A call to `Box.box` or `Box.unbox` may appear as:
+
+- direct `call_proc` to an intrinsic wrapper procedure
+- first-class `proc_value` for the intrinsic wrapper, followed by `call_value`
+- a finite callable-set branch inside `callable_match`
+
+All three cases must create `BoxBoundaryId` records from checked procedure
+metadata and the solved call-site metadata, not from syntax. `ProcTarget` for
+the intrinsic wrapper records the intrinsic role and checked
+`LowLevelValueFlowSignature`; `CallSiteInfo.dispatch` records which branch or
+direct target is being applied. If a finite callable-set call has a branch whose
+member is `Box.box`, that branch's callable-match plan owns the corresponding
+`BoxBoundaryId` and branch-local payload/result value metadata. If another
+branch returns an existing boxed value, the ordinary branch join connects that
+branch result to the same call result root. The representation solver then
+merges those roots according to the explicit edges. No stage may infer a boxed
+boundary merely because a result type is `Box(T)`.
+
+Projection metadata is mandatory for aggregates:
+
+```zig
+const ProjectionInfo = struct {
+    source: ValueInfoId,
+    result: ValueInfoId,
+    path: ValueProjectionPath,
+    finalized_slot: ProjectionSlot,
+};
+
+const ProjectionSlot = union(enum) {
+    record_field: RecordFieldId,
+    tuple_elem: u32,
+    tag_payload: TagPayloadId,
+    list_elem,
+    box_payload,
+    nominal_backing: NominalKey,
+};
+```
+
+Record field access, tuple access, tag payload access, pattern binders, and
+low-level operations that project values must emit `ProjectionInfo` records.
+The projection slot must use row-finalized IDs where rows are involved. It must
+not use field display names, tag display names, physical layout indexes, or a
+synthetic singleton tag shape.
+
+The value-metadata store must be built at the same time as the
+`RepresentationStore`, by the same `ValueFlowGraphBuilder`, in one traversal per
+specialization. This is important for correctness and performance:
+
+1. Each visited expression allocates its `ValueInfoId` and representation root
+   together.
+2. Each binder allocates its `BindingInfoId`, `ValueInfoId`, and representation
+   root together.
+3. Each variable occurrence resolves only to a `BindingInfoId` in the lexical
+   scope stack, then emits a value-flow edge from the binding value root to the
+   occurrence value root.
+4. Each aggregate construction allocates aggregate member metadata and structural
+   representation edges at the same time.
+5. Each projection allocates its `ProjectionInfoId` and representation edge at
+   the same time.
+6. Each call allocates `CallSiteInfoId`, argument/result value metadata, whole
+   requested-function representation edges, and dispatch metadata at the same
+   time.
+7. Representation solving fills each exported `ValueInfo.solved_class` and
+   occurrence-specific callable emission plan.
+
+There must not be a second pass that scans expressions to reconstruct missing
+callable identity or aggregate member metadata. A debug verifier may walk the
+finished MIR and recompute cheap consistency checks, but verifier success is not
+an input to executable lowering.
+
+Current Cor/LSS uses a lexical type environment during `lambdamono` lowering to
+decide how `Var(proc)` becomes a callable-set tag, packed erased function, or
+ordinary variable. That works in the prototype because Cor's AST keeps the
+language small and curried. Production Roc must preserve the same semantic idea
+but move the decision earlier: lambda-solved MIR exports the value metadata and
+solved representation for the occurrence, and executable MIR consumes those
+records. Executable MIR must not reimplement Cor's `Var` inspection path.
 
 Semantic source mutation must be converted to SSA before representation solving.
 The representation store must not model a source `var` as a physical mutable
@@ -2223,6 +2509,40 @@ requires an erased `Box(T)` boundary.
 This conversion must use only lambda-solved MIR metadata and executable MIR's own
 specialization queue. It must not inspect checked CIR, method registries, source
 syntax, or expression-derived records.
+
+Executable MIR consumes `ValueInfoId`, `BindingInfoId`, `ProjectionInfoId`, and
+`CallSiteInfoId` values from lambda-solved MIR. It may maintain a lexical
+runtime environment while lowering, but that environment maps source symbols to
+already-exported `BindingInfoId`/executable value handles. It must not contain
+special-purpose semantic fields such as `proc`, `callable_target`,
+`boxed_payload`, `record_fields`, or `tag_payloads`.
+
+When executable MIR lowers a variable occurrence, it follows the occurrence's
+exported `ValueInfoId`. If the value is callable, it consumes
+`ValueInfo.callable` and the solved `CallableValueEmissionPlan`. If the value is
+boxed, aggregate-shaped, or a projection, it consumes the corresponding
+`BoxedValueInfo`, `AggregateValueInfo`, or `ProjectionInfo`. The variable name
+itself is only a lexical handle; it is never evidence that the value is a
+procedure, a boxed payload, a record field, or a tag payload.
+
+When executable MIR lowers `call_value`, it consumes the lambda-solved
+`CallSiteInfo.dispatch`:
+
+- `call_value_finite` lowers to `callable_match`, including singleton finite
+  callable sets.
+- `call_value_erased` lowers to `call_erased` using the exact
+  `ErasedFnSigKey` and callable emission plan.
+- direct procedure calls are represented only by `call_proc`; executable MIR
+  must not turn a `call_value` into direct singleton dispatch by inspecting the
+  callee expression.
+
+When an intrinsic wrapper such as `Box.box` or `Box.unbox` is used as a
+first-class function, executable MIR still receives the intrinsic role through
+the selected callable member's `ProcTarget` metadata and the call site's
+dispatch plan. Member-specific `BoxBoundaryId` records are explicit
+lambda-solved data. Executable MIR must not decide that a first-class call is a
+box boundary from the callee's name, from a result type of `Box(T)`, or from the
+source expression shape.
 
 If executable MIR needs to cross a boxed erased boundary, it consumes the
 lambda-solved `BoxBoundary` record and its
@@ -6442,6 +6762,14 @@ Preserve and clean up the real responsibilities:
 - compute `erased_box_payload_type(boundary)` plans for explicit `Box(T)`
   boundaries
 - build the specialization-local `RepresentationStore`
+- build the specialization-local `ValueInfoStore` in the same traversal as the
+  `RepresentationStore`
+- attach `ValueInfoId` or `BindingInfoId` directly to every exported expression,
+  binder, pattern binder, mutable version, capture slot, projection, call result,
+  and procedure-value occurrence
+- ensure lexical scope maps source symbols only to `BindingInfoId` values; it
+  must not carry ad hoc semantic fields such as procedure target, boxed payload,
+  record-field, tag-payload, or callable-target data
 - create distinct representation roots for every expression result, binder,
   pattern binder, procedure parameter, procedure return, capture slot,
   callable requested-function occurrence, mutable variable version, and loop phi
@@ -6463,6 +6791,8 @@ Preserve and clean up the real responsibilities:
   `BoxPayloadRepresentationPlan`
 - solve boxed payload representation requirements through aliases, binders,
   captures, function parameters, function returns, and expression occurrences
+- solve callable aliases through `ValueInfoId`/`BindingInfoId` value flow rather
+  than `exact_callable_aliases` or any replacement global alias map
 - solve boxed payload representation requirements through branch joins, source
   `match` condition/pattern edges, pattern binders, projections, loops, and
   returned values
@@ -6504,6 +6834,14 @@ Commit when lambda-solved MIR verification proves:
 
 - no dispatch terms exist
 - every imported function type occurrence has an explicit callable variable
+- every exported expression, binder, pattern binder, mutable version, capture
+  slot, projection, call result, and procedure-value occurrence has explicit
+  value metadata
+- every `BindingInfo` points to a `ValueInfoId` and a representation root
+- lexical environments used during lambda-solved construction map source symbols
+  only to `BindingInfoId` records
+- no lambda-solved builder environment contains ad hoc procedure-target,
+  boxed-payload, aggregate-member, or callable-target fields
 - unrelated equal source function `TypeId`s do not share callable variables unless
   an explicit value-flow edge connects them
 - callable members and captures are explicit
@@ -6529,6 +6867,21 @@ Commit when lambda-solved MIR verification proves:
 - every `proc_value` has representation edges that merge the value result with
   the whole `proc_value.fn_ty` function root and connect every capture argument
   to the corresponding procedure capture slot
+- every `proc_value` occurrence has `CallableValueInfo` that names the occurrence
+  procedure, occurrence capture values, whole function root, callable child root,
+  and emission plan
+- every callable alias has value-flow edges from producer occurrence to binder
+  and from binder to every use; no exported callable alias map exists
+- every callable value inside a record, tuple, tag payload, list, capture,
+  compile-time value, branch join, mutable version, parameter, or return is
+  reachable through explicit `ValueInfoId` metadata
+- every `call_value` has `CallSiteInfo` that names callee value, argument values,
+  result value, requested whole-function root, and finite/erased dispatch plan
+- `Box.box` and `Box.unbox` called through first-class procedure values create
+  `BoxBoundaryId` records from checked procedure metadata and `CallSiteInfo`,
+  never from callee syntax
+- every aggregate access and pattern projection has `ProjectionInfo` with a
+  finalized row slot where rows are involved
 - every mutable use reads from a current mutable version root
 - every `reassign` creates a new mutable version root
 - every branch join and loop-carried mutable value has an explicit join or loop
@@ -6625,6 +6978,10 @@ expression-indexed side-table maps
 semantic side-table keys
 semantic side-table-id usage
 exact_callable_aliases
+any replacement exact-callable alias map
+ad hoc EnvEntry.proc or equivalent procedure-target fields
+ad hoc EnvEntry.boxed, EnvEntry.record_fields, EnvEntry.tag_payloads, or
+EnvEntry.callable_target fields
 expression-to-callable-target lookup helper
 expression-to-callable-captures lookup helper
 authoritativeCallableValue
@@ -7330,6 +7687,25 @@ Lambda-solved MIR:
 - `RepresentationStore` has distinct roots for every expression result, binder,
   pattern binder, procedure parameter, procedure return, capture slot,
   callable requested-function occurrence, mutable variable version, and loop phi
+- `ValueInfoStore` has explicit value metadata for every expression result,
+  binder, pattern binder, mutable version, capture slot, projection, call result,
+  and procedure-value occurrence
+- every expression and binder references its `ValueInfoId`/`BindingInfoId`
+  directly instead of relying on an expression-indexed map
+- lexical scope construction maps source symbols only to `BindingInfoId` values
+  and no ad hoc procedure-target or boxed/aggregate/callable semantic fields
+- aliases such as `f = inc` produce value-flow edges and callable metadata on
+  the binder/use, not an `exact_callable_aliases` entry
+- callable values stored in records, tuples, tags, lists, captures,
+  compile-time constants, branch joins, mutable versions, parameters, and
+  returns remain reachable through explicit `ValueInfoId` metadata
+- `CallSiteInfo` exists for every `call_value` and names the callee value,
+  argument values, result value, requested whole-function root, and dispatch
+  plan
+- first-class `Box.box` and `Box.unbox` calls create `BoxBoundaryId` records
+  through checked procedure metadata and call-site metadata
+- every aggregate projection has `ProjectionInfo`; record and tag projections
+  use row-finalized IDs
 - representation variables unify only through explicit value-flow edges, never
   merely through equal logical `TypeId`s
 - every `call_value` exports representation edges that merge the callee with the
@@ -7459,6 +7835,13 @@ Executable MIR:
 - executable MIR consumes `CallableValueEmissionPlan` and does not decide erased
   packaging by checking whether the value occurrence is syntactically inside a
   `Box(T)` expression
+- executable MIR consumes `ValueInfoId`, `BindingInfoId`, `ProjectionInfoId`,
+  and `CallSiteInfoId` records and does not recover callable identity from
+  syntax, source aliases, environment fields, or procedure-name lookup
+- executable MIR variable lowering uses the occurrence's exported value metadata;
+  the variable name is only a lexical handle
+- executable MIR lowers first-class intrinsic calls from call-site dispatch
+  metadata and `ProcTarget` intrinsic role, not from callee expression shape
 - checking reports erased-boundary roots other than `Box(T)` before executable
   MIR; executable MIR only debug-verifies that none reached it
 - checking or lambda-solved debug verification rejects erased callable
