@@ -8,7 +8,7 @@
 
 ### `var` keyword
 
-### `$` suffix
+### `$` prefix
 
 ## Type Variables
 

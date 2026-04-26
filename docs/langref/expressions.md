@@ -138,3 +138,19 @@ following are not known at compile time:
 If a [`crash`](statements#crash) is encountered during compile-time evaluation,
 it will be reported at compile time just like any other compilation errors (such as
 syntax errors, naming errors, and type mismatches).
+
+Note that functions are values! If you define a top-level function by calling other
+top-level functions, all of that work will be done at compile time:
+
+```
+make_adder = |amount_to_add| |num| num + amount_to_add
+
+add_one = make_adder(1)
+add_two = make_adder(2)
+add_three = |num| num + 3
+```
+
+Here, the `add_one`, `add_two`, and `add_three` functions will be identical in the compiled
+Roc binary (aside from the number being added). The fact that the first two were defined by
+calling other functions is irrelevant, as that work happens at build time when `add_one` and
+`add_two` are being evaluated.
