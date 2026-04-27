@@ -125,8 +125,9 @@ pub fn bundle(
     file_path_iter: anytype,
     compression_level: c_int,
     allocator: *std.mem.Allocator,
+    io: std.Io,
     output_writer: *std.Io.Writer,
-    base_dir: std.fs.Dir,
+    base_dir: std.Io.Dir,
     path_prefix: ?[]const u8,
     error_context: ?*ErrorContext,
 ) BundleError![]u8 {
@@ -147,15 +148,15 @@ pub fn bundle(
 
     // Process files one at a time
     while (try file_path_iter.next()) |file_path| {
-        const file = base_dir.openFile(file_path, .{}) catch |err| switch (err) {
+        const file = base_dir.openFile(io, file_path, .{}) catch |err| switch (err) {
             error.FileNotFound => return error.FileNotFound,
             error.AccessDenied => return error.AccessDenied,
             error.IsDir => return error.IsDir,
             else => return error.FileOpenFailed,
         };
-        defer file.close();
+        defer file.close(io);
 
-        const stat = file.stat() catch |err| switch (err) {
+        const stat = file.stat(io) catch |err| switch (err) {
             error.SystemResources => return error.SystemResources,
             else => return error.FileStatFailed,
         };
@@ -180,7 +181,7 @@ pub fn bundle(
             @memcpy(path_buf, unescaped_path);
             std.mem.replaceScalar(u8, path_buf, '\\', '/');
             break :blk path_buf;
-        } else if (std.mem.indexOf(u8, unescaped_path, "\\") == null) unescaped_path else {
+        } else if (std.mem.find(u8, unescaped_path, "\\") == null) unescaped_path else {
             if (error_context) |ctx| {
                 ctx.path = unescaped_path;
                 ctx.reason = .contained_backslash_on_unix;
@@ -211,7 +212,7 @@ pub fn bundle(
 
         // Create a reader for the file
         var reader_buffer: [4096]u8 = undefined;
-        var file_reader = file.reader(&reader_buffer);
+        var file_reader = file.reader(io, &reader_buffer);
 
         // Stream the file to tar
         tar_writer.writeFileStream(tar_path, file_size, &file_reader.interface, options) catch {
@@ -307,7 +308,7 @@ pub const PathValidationError = struct {
 /// there's no security concern; if the OS doesn't accept the path,
 /// it will give an error.
 pub fn pathHasBundleErr(path: []const u8) ?PathValidationError {
-    std.debug.assert(std.mem.indexOf(u8, path, "\\") == null);
+    std.debug.assert(std.mem.find(u8, path, "\\") == null);
 
     // Start by doing the validation checks we'd do on unbundle.
     // If unbundling would fail, then bundling should too!
@@ -334,7 +335,7 @@ pub fn pathHasBundleErr(path: []const u8) ?PathValidationError {
         // Check for Windows reserved names (case-insensitive)
         for (WINDOWS_RESERVED_NAMES) |reserved| {
             // Check base name without extension
-            const dot_pos = std.mem.indexOfScalar(u8, component, '.');
+            const dot_pos = std.mem.findScalar(u8, component, '.');
             const base_name = if (dot_pos) |pos| component[0..pos] else component;
 
             if (base_name.len == reserved.len) {
@@ -510,10 +511,11 @@ const TarEntryReader = struct {
 
 /// Directory-based extract writer
 pub const DirExtractWriter = struct {
-    dir: std.fs.Dir,
+    dir: std.Io.Dir,
+    io: std.Io,
 
-    pub fn init(dir: std.fs.Dir) DirExtractWriter {
-        return .{ .dir = dir };
+    pub fn init(dir: std.Io.Dir, io: std.Io) DirExtractWriter {
+        return .{ .dir = dir, .io = io };
     }
 
     pub fn extractWriter(self: *DirExtractWriter) ExtractWriter {
@@ -526,7 +528,7 @@ pub const DirExtractWriter = struct {
 
     fn makeDir(ptr: *anyopaque, path: []const u8) anyerror!void {
         const self = @as(*DirExtractWriter, @ptrCast(@alignCast(ptr)));
-        try self.dir.makePath(path);
+        try self.dir.createDirPath(self.io, path);
     }
 
     fn streamFile(ptr: *anyopaque, path: []const u8, reader: *std.Io.Reader, size: usize) anyerror!void {
@@ -534,11 +536,11 @@ pub const DirExtractWriter = struct {
 
         // Create parent directories if needed
         if (std.fs.path.dirname(path)) |dir_name| {
-            try self.dir.makePath(dir_name);
+            try self.dir.createDirPath(self.io, dir_name);
         }
 
-        const file = try self.dir.createFile(path, .{});
-        defer file.close();
+        const file = try self.dir.createFile(self.io, path, .{});
+        defer file.close(self.io);
 
         // Stream from reader to file
         // Note: std.tar has a known issue where it may not provide all bytes for large files
@@ -546,7 +548,7 @@ pub const DirExtractWriter = struct {
         // available rather than treating it as an error.
         // See: https://github.com/ziglang/zig/issues/[TODO: file issue and add number]
         var file_writer_buffer: [STREAM_BUFFER_SIZE]u8 = undefined;
-        var file_writer = file.writer(&file_writer_buffer);
+        var file_writer = file.writer(self.io, &file_writer_buffer);
         var total_written: usize = 0;
 
         while (total_written < size) {
@@ -663,7 +665,8 @@ pub fn unbundleStream(
 /// If an InvalidPath error is returned, error_context will contain details about the invalid path.
 pub fn unbundle(
     input_reader: anytype,
-    extract_dir: std.fs.Dir,
+    extract_dir: std.Io.Dir,
+    io: std.Io,
     allocator: *std.mem.Allocator,
     filename: []const u8,
     error_context: ?*ErrorContext,
@@ -677,6 +680,6 @@ pub fn unbundle(
         return error.InvalidFilename;
     };
 
-    var dir_writer = DirExtractWriter.init(extract_dir);
+    var dir_writer = DirExtractWriter.init(extract_dir, io);
     return unbundleStream(input_reader, dir_writer.extractWriter(), allocator, &expected_hash, error_context);
 }

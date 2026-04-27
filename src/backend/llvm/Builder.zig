@@ -4086,7 +4086,7 @@ pub const Function = struct {
     section: String = .none,
     alignment: Alignment = .default,
     blocks: []const Block = &.{},
-    instructions: std.MultiArrayList(Instruction) = .{},
+    instructions: std.MultiArrayList(Instruction) = .empty,
     names: [*]const String = &[0]String{},
     value_indices: [*]const u32 = &[0]u32{},
     strip: bool,
@@ -9048,7 +9048,7 @@ pub fn attrs(self: *Builder, attributes: []Attribute.Index) Allocator.Error!Attr
 pub fn fnAttrs(self: *Builder, fn_attributes: []const Attributes) Allocator.Error!FunctionAttributes {
     try self.function_attributes_set.ensureUnusedCapacity(self.gpa, 1);
     const function_attributes: FunctionAttributes = @enumFromInt(try self.attrGeneric(@ptrCast(
-        fn_attributes[0..if (std.mem.lastIndexOfNone(Attributes, fn_attributes, &.{.none})) |last|
+        fn_attributes[0..if (std.mem.findLastNone(Attributes, fn_attributes, &.{.none})) |last|
             last + 1
         else
             0],
@@ -9690,23 +9690,24 @@ pub fn asmValue(
 }
 
 /// Dumps the LLVM IR to stderr for debugging.
-pub fn dump(b: *Builder) void {
+pub fn dump(b: *Builder, std_io: std.Io) void {
     var buffer: [4000]u8 = undefined;
-    const stderr: std.fs.File = .stderr();
-    b.printToFile(stderr, &buffer) catch {};
+    const stderr: std.Io.File = .{ .handle = std.posix.STDERR_FILENO, .flags = .{ .nonblocking = false } };
+    b.printToFile(stderr, std_io, &buffer) catch {};
 }
 
 /// Prints the LLVM IR to a file at the given path.
-pub fn printToFilePath(b: *Builder, dir: std.fs.Dir, path: []const u8) !void {
+pub fn printToFilePath(b: *Builder, std_io: std.Io, path: []const u8) !void {
     var buffer: [4000]u8 = undefined;
-    const file = try dir.createFile(path, .{});
-    defer file.close();
-    try b.printToFile(file, &buffer);
+    const cwd: std.Io.Dir = .cwd();
+    const file = try cwd.createFile(std_io, path, .{});
+    defer file.close(std_io);
+    try b.printToFile(file, std_io, &buffer);
 }
 
 /// Prints the LLVM IR to a file handle.
-pub fn printToFile(b: *Builder, file: std.fs.File, buffer: []u8) !void {
-    var fw = file.writer(buffer);
+pub fn printToFile(b: *Builder, file: std.Io.File, std_io: std.Io, buffer: []u8) !void {
+    var fw = file.writer(std_io, buffer);
     try print(b, &fw.interface);
     try fw.interface.flush();
 }

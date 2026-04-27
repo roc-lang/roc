@@ -334,7 +334,7 @@ pub const WorkerResult = union(enum) {
                 for (r.reports.items) |*rep| rep.deinit();
                 r.reports.deinit(gpa);
             },
-            .cache_hit => |_| {
+            .cache_hit => {
                 // Module env ownership is transferred to ModuleState, nothing to free here
             },
         }

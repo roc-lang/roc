@@ -8,6 +8,7 @@ const can = @import("can");
 const check = @import("check");
 const compile_build = @import("compile_build");
 const compiled_builtins = @import("compiled_builtins");
+const CoreCtx = @import("ctx").CoreCtx;
 const ComptimeEvaluator = @import("../comptime_evaluator.zig").ComptimeEvaluator;
 const DevEvaluator = @import("../mod.zig").DevEvaluator;
 const BuiltinTypes = @import("../builtins.zig").BuiltinTypes;
@@ -18,7 +19,6 @@ const roc_target = @import("roc_target");
 const Can = can.Can;
 const Check = check.Check;
 const ModuleEnv = can.ModuleEnv;
-const Allocators = base.Allocators;
 const testing = std.testing;
 // Use page_allocator for interpreter tests (doesn't track leaks)
 const test_allocator = std.heap.page_allocator;
@@ -48,11 +48,7 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
     try module_env.common.calcLineStarts(module_env.gpa);
 
     // Parse the source code
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.parse(gpa, &module_env.common);
     defer parse_ast.deinit();
 
     // Empty scratch space (required before canonicalization)
@@ -76,7 +72,8 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
     };
 
     // Create canonicalizer
-    var czer = try Can.initModule(&allocators, module_env, parse_ast, .{
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
+    var czer = try Can.initModule(roc_ctx, module_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
@@ -137,11 +134,7 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     try module_env.common.calcLineStarts(module_env.gpa);
 
     // Parse the source code
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.parse(gpa, &module_env.common);
     defer parse_ast.deinit();
 
     // Empty scratch space (required before canonicalization)
@@ -177,7 +170,8 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     try module_envs.put(import_ident, .{ .env = imported_module, .qualified_type_ident = import_qualified_ident });
 
     // Create canonicalizer with imports
-    var czer = try Can.initModule(&allocators, module_env, parse_ast, .{
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
+    var czer = try Can.initModule(roc_ctx, module_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
@@ -1255,7 +1249,7 @@ fn errorContains(problems: *check.problem.Store, expected: []const u8) bool {
     for (problems.problems.items) |problem| {
         switch (problem) {
             .comptime_eval_error => |comptime_eval_error| {
-                return std.mem.indexOf(u8, problems.getExtraString(comptime_eval_error.error_name), expected) != null;
+                return std.mem.find(u8, problems.getExtraString(comptime_eval_error.error_name), expected) != null;
             },
             else => {},
         }
@@ -3314,10 +3308,10 @@ test "issue 9281: dev evaluator stack overflow with nested recursive opaque type
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const tmp_path = try tmp_dir.dir.realpathAlloc(test_allocator, ".");
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", test_allocator);
     defer test_allocator.free(tmp_path);
 
-    const repo_root = try std.fs.cwd().realpathAlloc(test_allocator, ".");
+    const repo_root = try CoreCtx.os(test_allocator, test_allocator, std.testing.io).canonicalize(".", test_allocator);
     defer test_allocator.free(repo_root);
 
     const platform_main_path = try std.fs.path.join(test_allocator, &.{ repo_root, "test", "fx", "platform", "main.roc" });
@@ -3327,12 +3321,12 @@ test "issue 9281: dev evaluator stack overflow with nested recursive opaque type
     defer test_allocator.free(platform_header_path);
     std.mem.replaceScalar(u8, platform_header_path, '\\', '/');
 
-    try tmp_dir.dir.makePath("pkg");
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.createDirPath(std.testing.io, "pkg");
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "pkg/main.roc",
         .data = "package [Inner, Outer] {}\n",
     });
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "pkg/Inner.roc",
         .data =
         \\Inner := [
@@ -3341,7 +3335,7 @@ test "issue 9281: dev evaluator stack overflow with nested recursive opaque type
         \\]
         ,
     });
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "pkg/Outer.roc",
         .data =
         \\import Inner exposing [Inner]
@@ -3380,7 +3374,7 @@ test "issue 9281: dev evaluator stack overflow with nested recursive opaque type
     , .{platform_header_path});
     defer test_allocator.free(app_source);
 
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "app.roc",
         .data = app_source,
     });
@@ -3388,7 +3382,7 @@ test "issue 9281: dev evaluator stack overflow with nested recursive opaque type
     const app_path = try std.fs.path.join(test_allocator, &.{ tmp_path, "app.roc" });
     defer test_allocator.free(app_path);
 
-    var build_env = try compile_build.BuildEnv.init(test_allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), tmp_path);
+    var build_env = try compile_build.BuildEnv.init(test_allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), tmp_path, std.testing.io);
     defer build_env.deinit();
 
     try build_env.discoverDependencies(app_path);

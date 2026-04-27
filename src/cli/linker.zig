@@ -8,8 +8,8 @@ const build_options = @import("build_options");
 const libc_finder = @import("libc_finder.zig");
 const stack_probe = @import("stack_probe.zig");
 const RocTarget = @import("roc_target").RocTarget;
-const cli_ctx = @import("CliContext.zig");
-const CliContext = cli_ctx.CliContext;
+const cli_ctx = @import("CliCtx.zig");
+const CliCtx = cli_ctx.CliCtx;
 const Io = cli_ctx.Io;
 
 /// External C functions from zig_llvm.cpp - only available when LLVM is enabled
@@ -127,20 +127,49 @@ pub const LinkError = error{
     DarwinSysrootNotFound,
 } || std.zig.system.DetectError;
 
+/// Resolve the path of the currently running executable, host-OS specific.
+///
+/// Zig 0.16 removed `std.fs.selfExePath` and the private std helpers live inside
+/// `std.Io.Threaded` / `std.Io.Dispatch`. We need a cross-host implementation
+/// because the linker runs on Linux/macOS/Windows but may target any OS.
+fn selfExePath(std_io: std.Io, buf: []u8) ![]const u8 {
+    switch (comptime builtin.os.tag) {
+        .macos, .ios, .tvos, .watchos, .visionos => {
+            var n: u32 = @intCast(buf.len);
+            if (std.c._NSGetExecutablePath(buf.ptr, &n) != 0) return error.NameTooLong;
+            return std.mem.sliceTo(buf, 0);
+        },
+        .linux => {
+            const len = try std.Io.Dir.readLinkAbsolute(std_io, "/proc/self/exe", buf);
+            return buf[0..len];
+        },
+        .windows => {
+            // The PEB's ImagePathName contains the full path to the running exe.
+            const image_path_name = std.os.windows.peb().ProcessParameters.ImagePathName;
+            const wide = image_path_name.sliceZ();
+            const written = std.unicode.wtf16LeToWtf8(buf, wide);
+            return buf[0..written];
+        },
+        else => return error.UnsupportedOs,
+    }
+}
+
+/// Get the directory containing the currently running executable.
+fn getSelfExeDir(allocator: std.mem.Allocator, std_io: std.Io) ![]const u8 {
+    var symlink_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const symlink_path = try selfExePath(std_io, &symlink_path_buf);
+    var real_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const exe_path_len = std.Io.Dir.cwd().realPathFile(std_io, symlink_path, &real_path_buf) catch return error.OutOfMemory;
+    const exe_path = real_path_buf[0..exe_path_len];
+    return allocator.dupe(u8, std.fs.path.dirname(exe_path) orelse return error.OutOfMemory);
+}
+
 /// Find the Darwin sysroot directory at runtime.
 /// First looks for a 'darwin' directory next to the executable (for distributed builds),
 /// then falls back to the compile-time path (for local development builds).
-fn findDarwinSysroot(allocator: std.mem.Allocator) ![]const u8 {
-    // Get the path to the currently running executable
-    var exe_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const exe_path = std.fs.selfExePath(&exe_path_buf) catch |err| {
-        std.log.warn("Failed to get executable path: {}, falling back to compile-time path", .{err});
-        return build_options.darwin_sysroot;
-    };
-
-    // Get the directory containing the executable
-    const exe_dir = std.fs.path.dirname(exe_path) orelse {
-        std.log.warn("Failed to get executable directory, falling back to compile-time path", .{});
+fn findDarwinSysroot(allocator: std.mem.Allocator, std_io: std.Io) ![]const u8 {
+    const exe_dir = getSelfExeDir(allocator, std_io) catch |err| {
+        std.log.warn("Failed to resolve executable path: {}, falling back to compile-time path", .{err});
         return build_options.darwin_sysroot;
     };
 
@@ -154,7 +183,7 @@ fn findDarwinSysroot(allocator: std.mem.Allocator) ![]const u8 {
         return build_options.darwin_sysroot;
     };
 
-    std.fs.cwd().access(tbd_path, .{}) catch {
+    std.Io.Dir.cwd().access(std_io, tbd_path, .{}) catch {
         // Runtime path doesn't exist, fall back to compile-time path (local dev builds)
         return build_options.darwin_sysroot;
     };
@@ -166,7 +195,7 @@ fn findDarwinSysroot(allocator: std.mem.Allocator) ![]const u8 {
 /// Looks for 'macos-sysroot' directory in the platform's files directory.
 /// For example, if platform_files_dir is "/path/to/platform/targets",
 /// this looks for "/path/to/platform/targets/macos-sysroot/".
-fn findPlatformSysroot(allocator: std.mem.Allocator, platform_files_dir: ?[]const u8) ?[]const u8 {
+fn findPlatformSysroot(allocator: std.mem.Allocator, std_io: std.Io, platform_files_dir: ?[]const u8) ?[]const u8 {
     const files_dir = platform_files_dir orelse return null;
 
     // Look for macos-sysroot in the platform files directory
@@ -174,7 +203,7 @@ fn findPlatformSysroot(allocator: std.mem.Allocator, platform_files_dir: ?[]cons
 
     // Verify it exists and has the expected structure (usr/lib/libSystem.tbd)
     const lib_path = std.fs.path.join(allocator, &.{ sysroot_path, "usr", "lib", "libSystem.tbd" }) catch return null;
-    std.fs.cwd().access(lib_path, .{}) catch return null;
+    std.Io.Dir.cwd().access(std_io, lib_path, .{}) catch return null;
 
     std.log.info("Using platform-provided macOS sysroot: {s}", .{sysroot_path});
     return sysroot_path;
@@ -184,15 +213,15 @@ fn findPlatformSysroot(allocator: std.mem.Allocator, platform_files_dir: ?[]cons
 /// This allows platforms to control their framework dependencies by choosing
 /// which frameworks to bundle in their sysroot.
 /// Only links frameworks that have a .tbd file (skips header-only frameworks).
-fn discoverAndLinkFrameworks(allocator: std.mem.Allocator, args: *std.array_list.Managed([]const u8), frameworks_dir: []const u8) LinkError!void {
-    var dir = std.fs.cwd().openDir(frameworks_dir, .{ .iterate = true }) catch {
+fn discoverAndLinkFrameworks(allocator: std.mem.Allocator, std_io: std.Io, args: *std.array_list.Managed([]const u8), frameworks_dir: []const u8) LinkError!void {
+    var dir = std.Io.Dir.cwd().openDir(std_io, frameworks_dir, .{ .iterate = true }) catch {
         // No frameworks directory - that's fine, just skip
         return;
     };
-    defer dir.close();
+    defer dir.close(std_io);
 
     var iter = dir.iterate();
-    while (iter.next() catch return) |entry| {
+    while (iter.next(std_io) catch return) |entry| {
         if (entry.kind != .directory) continue;
 
         // Framework directories end with .framework
@@ -206,7 +235,7 @@ fn discoverAndLinkFrameworks(allocator: std.mem.Allocator, args: *std.array_list
             const tbd_path1 = std.fs.path.join(allocator, &.{ frameworks_dir, entry.name, tbd_name }) catch return LinkError.OutOfMemory;
             const tbd_path2 = std.fs.path.join(allocator, &.{ frameworks_dir, entry.name, "Versions", "Current", tbd_name }) catch return LinkError.OutOfMemory;
 
-            const has_tbd = std.fs.cwd().access(tbd_path1, .{}) catch std.fs.cwd().access(tbd_path2, .{}) catch null;
+            const has_tbd = std.Io.Dir.cwd().access(std_io, tbd_path1, .{}) catch std.Io.Dir.cwd().access(std_io, tbd_path2, .{}) catch null;
             if (has_tbd == null) continue; // Skip frameworks without TBD files
 
             const fw_name_copy = allocator.dupe(u8, fw_name) catch return LinkError.OutOfMemory;
@@ -219,7 +248,7 @@ fn discoverAndLinkFrameworks(allocator: std.mem.Allocator, args: *std.array_list
 /// Build the linker command arguments for the given configuration.
 /// Returns the args array that would be passed to LLD.
 /// This is used both by link() and formatLinkCommand().
-fn buildLinkArgs(ctx: *CliContext, config: LinkConfig) LinkError!std.array_list.Managed([]const u8) {
+fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Managed([]const u8) {
     // Use arena allocator for all temporary allocations
     // Pre-allocate capacity to avoid reallocations (typical command has 20-40 args)
     var args = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 64) catch return LinkError.OutOfMemory;
@@ -258,7 +287,7 @@ fn buildLinkArgs(ctx: *CliContext, config: LinkConfig) LinkError!std.array_list.
             // Try to find a platform-provided sysroot first (for cross-compilation with bundled frameworks)
             // Falls back to Roc's bundled darwin sysroot (minimal, only has libSystem.tbd)
             try args.append("-syslibroot");
-            if (findPlatformSysroot(ctx.arena, config.platform_files_dir)) |platform_sysroot| {
+            if (findPlatformSysroot(ctx.arena, ctx.io.std_io, config.platform_files_dir)) |platform_sysroot| {
                 try args.append(platform_sysroot);
 
                 // Add framework search path to help linker resolve framework dependencies
@@ -274,9 +303,9 @@ fn buildLinkArgs(ctx: *CliContext, config: LinkConfig) LinkError!std.array_list.
                 // Auto-discover and link all frameworks bundled in the platform sysroot.
                 // This keeps the compiler generic - platforms explicitly control their
                 // dependencies by choosing which frameworks to bundle in their sysroot.
-                try discoverAndLinkFrameworks(ctx.arena, &args, fw_path);
+                try discoverAndLinkFrameworks(ctx.arena, ctx.io.std_io, &args, fw_path);
             } else {
-                const darwin_sysroot = findDarwinSysroot(ctx.arena) catch return LinkError.DarwinSysrootNotFound;
+                const darwin_sysroot = findDarwinSysroot(ctx.arena, ctx.io.std_io) catch return LinkError.DarwinSysrootNotFound;
                 try args.append(darwin_sysroot);
             }
 
@@ -358,11 +387,13 @@ fn buildLinkArgs(ctx: *CliContext, config: LinkConfig) LinkError!std.array_list.
                 .ofmt = .coff,
             };
 
-            const target = try std.zig.system.resolveTargetQuery(query);
+            const target = try std.zig.system.resolveTargetQuery(ctx.io.std_io, query);
 
-            const native_libc = std.zig.LibCInstallation.findNative(.{
-                .allocator = ctx.arena,
+            var environ_map = std.process.Environ.empty.createMap(ctx.arena) catch return error.WindowsSDKNotFound;
+            defer environ_map.deinit();
+            const native_libc = std.zig.LibCInstallation.findNative(ctx.arena, ctx.io.std_io, .{
                 .target = &target,
+                .environ_map = &environ_map,
             }) catch return error.WindowsSDKNotFound;
 
             if (native_libc.crt_dir) |lib_dir| {
@@ -421,11 +452,12 @@ fn buildLinkArgs(ctx: *CliContext, config: LinkConfig) LinkError!std.array_list.
             if (target_arch == .x86_64) {
                 const stack_probe_obj = stack_probe.generateStackProbeObject(ctx.arena) catch return LinkError.OutOfMemory;
                 // Write to a temp file and add to link line
+                const exe_dir = getSelfExeDir(ctx.arena, ctx.io.std_io) catch return LinkError.OutOfMemory;
                 const stack_probe_path = std.fs.path.join(ctx.arena, &.{
-                    std.fs.selfExeDirPathAlloc(ctx.arena) catch return LinkError.OutOfMemory,
+                    exe_dir,
                     "stack_probe.obj",
                 }) catch return LinkError.OutOfMemory;
-                std.fs.cwd().writeFile(.{
+                std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{
                     .sub_path = stack_probe_path,
                     .data = stack_probe_obj,
                 }) catch return LinkError.OutOfMemory;
@@ -549,7 +581,7 @@ fn buildLinkArgs(ctx: *CliContext, config: LinkConfig) LinkError!std.array_list.
 }
 
 /// Link object files into an executable using LLD
-pub fn link(ctx: *CliContext, config: LinkConfig) LinkError!void {
+pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
     // Check if LLVM is available at compile time
     if (comptime !llvm_available) {
         return LinkError.LLVMNotAvailable;
@@ -606,7 +638,7 @@ pub fn link(ctx: *CliContext, config: LinkConfig) LinkError!void {
 
 /// Format link configuration as a shell command string for manual reproduction.
 /// Useful for debugging linking issues by allowing users to run the linker manually.
-pub fn formatLinkCommand(ctx: *CliContext, config: LinkConfig) LinkError![]const u8 {
+pub fn formatLinkCommand(ctx: *CliCtx, config: LinkConfig) LinkError![]const u8 {
     const args = try buildLinkArgs(ctx, config);
 
     // Join args with spaces, quoting paths that contain spaces or special chars
@@ -616,7 +648,7 @@ pub fn formatLinkCommand(ctx: *CliContext, config: LinkConfig) LinkError![]const
         if (i > 0) result.append(' ') catch return LinkError.OutOfMemory;
 
         // Quote if contains spaces or shell metacharacters
-        const needs_quoting = std.mem.indexOfAny(u8, arg, " \t'\"\\$`") != null;
+        const needs_quoting = std.mem.findAny(u8, arg, " \t'\"\\$`") != null;
         if (needs_quoting) {
             result.append('\'') catch return LinkError.OutOfMemory;
             // Escape single quotes within the string
@@ -637,7 +669,7 @@ pub fn formatLinkCommand(ctx: *CliContext, config: LinkConfig) LinkError![]const
 }
 
 /// Convenience function to link two object files into an executable
-pub fn linkTwoObjects(ctx: *CliContext, obj1: []const u8, obj2: []const u8, output: []const u8) LinkError!void {
+pub fn linkTwoObjects(ctx: *CliCtx, obj1: []const u8, obj2: []const u8, output: []const u8) LinkError!void {
     if (comptime !llvm_available) {
         return LinkError.LLVMNotAvailable;
     }
@@ -651,7 +683,7 @@ pub fn linkTwoObjects(ctx: *CliContext, obj1: []const u8, obj2: []const u8, outp
 }
 
 /// Convenience function to link multiple object files into an executable
-pub fn linkObjects(ctx: *CliContext, object_files: []const []const u8, output: []const u8) LinkError!void {
+pub fn linkObjects(ctx: *CliCtx, object_files: []const []const u8, output: []const u8) LinkError!void {
     if (comptime !llvm_available) {
         return LinkError.LLVMNotAvailable;
     }
@@ -688,8 +720,8 @@ test "target format detection" {
 
 test "link error when LLVM not available" {
     if (comptime !llvm_available) {
-        var io = Io.init();
-        var ctx = CliContext.init(std.testing.allocator, std.testing.allocator, &io, .build);
+        var io = Io.create(std.testing.io);
+        var ctx = CliCtx.init(std.testing.allocator, std.testing.allocator, &io, .build);
         ctx.initIo();
         defer ctx.deinit();
 

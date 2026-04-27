@@ -1296,7 +1296,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                     @as(CIR.Pattern.Idx, @enumFromInt(list_data.pattern_idx))
                 else
                     null;
-                break :blk @as(@TypeOf(@as(CIR.Pattern, undefined).list.rest_info), .{
+                break :blk @as(@FieldType(@FieldType(CIR.Pattern, "list"), "rest_info"), .{
                     .index = list_data.rest_index,
                     .pattern = rest_pattern,
                 });
@@ -1696,7 +1696,7 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
                 .body = @intFromEnum(s.body),
             } });
         },
-        .s_break => |_| {
+        .s_break => {
             node.tag = .statement_break;
         },
         .s_return => |s| {
@@ -1836,7 +1836,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .elems_len = e.elems.span.len,
             } });
         },
-        .e_empty_list => |_| {
+        .e_empty_list => {
             node.tag = .expr_empty_list;
         },
         .e_tuple => |e| {
@@ -1994,7 +1994,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .expr = @intFromEnum(d.expr),
             } });
         },
-        .e_ellipsis => |_| {
+        .e_ellipsis => {
             node.tag = .expr_ellipsis;
         },
         .e_anno_only => |anno| {
@@ -2101,7 +2101,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .fields_ext_idx = fields_ext_idx,
             } });
         },
-        .e_empty_record => |_| {
+        .e_empty_record => {
             node.tag = .expr_empty_record;
         },
         .e_zero_argument_tag => |e| {
@@ -2544,7 +2544,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
                 .name = @intFromEnum(tv.ref),
             } });
         },
-        .underscore => |_| {
+        .underscore => {
             node.tag = .ty_underscore;
         },
         .lookup => |t| {
@@ -4223,14 +4223,14 @@ pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []c
                 }
 
                 // Extract base module name for qualified imports (e.g., "pf.Stdout" -> "Stdout")
-                const base_import_name = if (std.mem.lastIndexOfScalar(u8, import_name, '.')) |dot_idx|
+                const base_import_name = if (std.mem.findScalarLast(u8, import_name, '.')) |dot_idx|
                     import_name[dot_idx + 1 ..]
                 else
                     import_name;
 
                 // Extract base member name (e.g., "pf.Stdout.line!" -> "line!")
                 // The member_name may be fully qualified, so we take everything after the last dot
-                const base_member_name = if (std.mem.lastIndexOfScalar(u8, member_name, '.')) |dot_idx|
+                const base_member_name = if (std.mem.findScalarLast(u8, member_name, '.')) |dot_idx|
                     member_name[dot_idx + 1 ..]
                 else
                     member_name;
@@ -4338,7 +4338,7 @@ pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []c
                     }
 
                     // Extract base module name for qualified imports (e.g., "pf.Simple" -> "Simple")
-                    const base_import_name = if (std.mem.lastIndexOfScalar(u8, import_name, '.')) |dot_idx|
+                    const base_import_name = if (std.mem.findScalarLast(u8, import_name, '.')) |dot_idx|
                         import_name[dot_idx + 1 ..]
                     else
                         import_name;
@@ -4409,7 +4409,7 @@ pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []c
                     }
 
                     // Extract base module name for qualified imports
-                    const base_import_name = if (std.mem.lastIndexOfScalar(u8, import_name, '.')) |dot_idx|
+                    const base_import_name = if (std.mem.findScalarLast(u8, import_name, '.')) |dot_idx|
                         import_name[dot_idx + 1 ..]
                     else
                         import_name;
@@ -4479,8 +4479,8 @@ test "NodeStore empty CompactWriter roundtrip" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_empty_nodestore.dat", .{ .read = true });
-    defer file.close();
+    const file = try tmp_dir.dir.createFile(std.testing.io, "test_empty_nodestore.dat", .{ .read = true });
+    defer file.close(std.testing.io);
 
     // Serialize using CompactWriter
     var writer = CompactWriter.init();
@@ -4490,15 +4490,13 @@ test "NodeStore empty CompactWriter roundtrip" {
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, file);
+    try writer.writeGather(file, std.testing.io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(writer.total_bytes));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    _ = try file.readPositionalAll(std.testing.io, buffer, 0);
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
@@ -4544,8 +4542,8 @@ test "NodeStore basic CompactWriter roundtrip" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_basic_nodestore.dat", .{ .read = true });
-    defer file.close();
+    const file = try tmp_dir.dir.createFile(std.testing.io, "test_basic_nodestore.dat", .{ .read = true });
+    defer file.close(std.testing.io);
 
     // Serialize
     var writer = CompactWriter.init();
@@ -4555,15 +4553,13 @@ test "NodeStore basic CompactWriter roundtrip" {
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, file);
+    try writer.writeGather(file, std.testing.io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(writer.total_bytes));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    _ = try file.readPositionalAll(std.testing.io, buffer, 0);
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
@@ -4635,8 +4631,8 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_multiple_nodestore.dat", .{ .read = true });
-    defer file.close();
+    const file = try tmp_dir.dir.createFile(std.testing.io, "test_multiple_nodestore.dat", .{ .read = true });
+    defer file.close(std.testing.io);
 
     // Serialize
     var writer = CompactWriter.init();
@@ -4646,15 +4642,13 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, file);
+    try writer.writeGather(file, std.testing.io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(writer.total_bytes));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    _ = try file.readPositionalAll(std.testing.io, buffer, 0);
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));

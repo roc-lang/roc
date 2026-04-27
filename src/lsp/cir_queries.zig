@@ -469,7 +469,7 @@ pub fn collectLookupReferences(
     target_pattern: CIR.Pattern.Idx,
     allocator: std.mem.Allocator,
 ) std.ArrayList(LspRange) {
-    var results = std.ArrayList(LspRange){};
+    var results: std.ArrayList(LspRange) = .empty;
 
     var ctx = CollectReferencesContext{
         .store = &module_env.store,

@@ -35,11 +35,11 @@ pub const cleanup = if (!threading_mod.is_freestanding) @import("cache_cleanup.z
 
     pub const CleanupThread = struct {};
 
-    pub fn startBackgroundCleanup(_: std.mem.Allocator, _: Io) !?CleanupThread {
+    pub fn startBackgroundCleanup(_: std.mem.Allocator, _: CoreCtx) !?CleanupThread {
         return null;
     }
 
-    pub fn deleteTempDir(_: std.mem.Allocator, _: []const u8) void {}
+    pub fn deleteTempDir(_: std.mem.Allocator, _: CoreCtx, _: []const u8) void {}
 };
 
 pub const Header = module.Header;
@@ -54,7 +54,7 @@ pub const CacheCleanup = cleanup;
 pub const CleanupStats = cleanup.CleanupStats;
 pub const PackageEnv = package.PackageEnv;
 pub const BuildEnv = build.BuildEnv;
-pub const Io = @import("io").Io;
+pub const CoreCtx = @import("ctx").CoreCtx;
 
 // /// Global cache statistics (optional, for debugging)
 // var global_stats: Stats = .{};
@@ -71,10 +71,8 @@ pub const Io = @import("io").Io;
 
 // /// Print global stats to stderr
 // pub fn printGlobalStats() !void {
-//     var stderr_buffer: [1024]u8 = undefined;
-//     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
-//     const stderr = &stderr_writer.interface;
-//     try global_stats.print(stderr.any());
+//     // TODO: Use CoreCtx abstraction for stderr output
+//     // try global_stats.print(stderr);
 // }
 
 test "compile tests" {

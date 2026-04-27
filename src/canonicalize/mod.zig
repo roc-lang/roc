@@ -1,10 +1,8 @@
 //! This module contains the canonicalizer and the Canonical Intermediate Representation (CIR).
 
 const std = @import("std");
-const base = @import("base");
 const parse = @import("parse");
 
-const Allocators = base.Allocators;
 const AST = parse.AST;
 
 /// The canonicalizer (the thing that canonicalizes the AST).
@@ -24,6 +22,8 @@ pub const RocEmitter = @import("RocEmitter.zig");
 /// Node storage for CIR nodes (used internally by ModuleEnv)
 pub const NodeStore = @import("NodeStore.zig");
 
+/// Re-export CoreCtx for callers that need to create a canonicalizer
+pub const CoreCtx = @import("ctx").CoreCtx;
 /// Re-export AutoImportedType for callers
 pub const AutoImportedType = Can.AutoImportedType;
 
@@ -38,17 +38,17 @@ pub const AutoImportedType = Can.AutoImportedType;
 /// Results are stored in module_env (all_defs, all_statements, diagnostics, etc).
 ///
 /// Memory ownership:
-/// - allocators: Caller provides and manages
+/// - roc_ctx: Caller provides and manages
 /// - module_env: Caller provides; results stored here
 /// - parse_ast: Caller provides and manages
 /// - context: Builtin type context plus optional explicit imported module environments
 pub fn canonicalizeModule(
-    allocators: *Allocators,
+    roc_ctx: CoreCtx,
     module_env: *ModuleEnv,
     parse_ast: *AST,
     context: Can.ModuleInitContext,
 ) std.mem.Allocator.Error!void {
-    var czer = try Can.initModule(allocators, module_env, parse_ast, context);
+    var czer = try Can.initModule(roc_ctx, module_env, parse_ast, context);
     defer czer.deinit();
     try czer.canonicalizeFile();
     try czer.validateForChecking();
@@ -60,17 +60,17 @@ pub fn canonicalizeModule(
 /// Check module_env.getDiagnostics() for any errors.
 ///
 /// Memory ownership:
-/// - allocators: Caller provides and manages
+/// - roc_ctx: Caller provides and manages
 /// - module_env: Caller provides; results stored here
 /// - parse_ast: Caller provides (root_node_idx should point to expression)
 /// - context: Builtin type context plus optional explicit imported module environments
 pub fn canonicalizeExpr(
-    allocators: *Allocators,
+    roc_ctx: CoreCtx,
     module_env: *ModuleEnv,
     parse_ast: *AST,
     context: Can.ModuleInitContext,
 ) std.mem.Allocator.Error!?Can.CanonicalizedExpr {
-    var czer = try Can.initModule(allocators, module_env, parse_ast, context);
+    var czer = try Can.initModule(roc_ctx, module_env, parse_ast, context);
     defer czer.deinit();
     const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
     return try czer.canonicalizeExpr(expr_idx);

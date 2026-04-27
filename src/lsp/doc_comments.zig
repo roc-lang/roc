@@ -91,10 +91,10 @@ pub fn extractDocCommentBefore(allocator: Allocator, source: []const u8, offset:
 /// Type annotations in Roc look like: `add : I64, I64 -> I64`
 fn isTypeAnnotation(trimmed: []const u8) bool {
     // Look for ':' character
-    const colon_pos = std.mem.indexOfScalar(u8, trimmed, ':') orelse return false;
+    const colon_pos = std.mem.findScalar(u8, trimmed, ':') orelse return false;
 
     // Make sure there's no '=' after the colon (which would indicate a definition like `x : I64 = 42`)
-    const equals_pos = std.mem.indexOfScalarPos(u8, trimmed, colon_pos, '=');
+    const equals_pos = std.mem.findScalarPos(u8, trimmed, colon_pos, '=');
     return equals_pos == null;
 }
 
@@ -316,7 +316,7 @@ test "extractDocCommentBefore: handles type annotation between doc and definitio
         \\add = |a, b| a + b
     ;
     // Find offset of the definition line (not the type annotation)
-    const offset: u32 = @intCast(std.mem.indexOf(u8, source, "add = |a, b|") orelse unreachable);
+    const offset: u32 = @intCast(std.mem.find(u8, source, "add = |a, b|") orelse unreachable);
     const result = try extractDocCommentBefore(allocator, source, offset);
     defer if (result) |r| allocator.free(r);
 
@@ -336,7 +336,7 @@ test "extractDocCommentBefore: complex multi-line with formatting" {
         \\len : Str -> U64
     ;
     // Find offset of "len"
-    const offset: u32 = @intCast(std.mem.indexOf(u8, source, "len : Str") orelse unreachable);
+    const offset: u32 = @intCast(std.mem.find(u8, source, "len : Str") orelse unreachable);
     const result = try extractDocCommentBefore(allocator, source, offset);
     defer if (result) |r| allocator.free(r);
 

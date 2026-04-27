@@ -1,13 +1,19 @@
 ///! Platform host that tests effectful functions with open union error types.
 const std = @import("std");
+const shim_io = @import("shim_io");
 const builtins = @import("builtins");
 const build_options = @import("build_options");
 
 const trace_refcount = build_options.trace_refcount;
 
-/// Host environment - contains GeneralPurposeAllocator for leak detection
+pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
+pub const std_options_debug_io = shim_io.io();
+pub const std_options_debug_threaded_io = null;
+
+/// Host environment - contains DebugAllocator for leak detection
 const HostEnv = struct {
-    gpa: std.heap.GeneralPurposeAllocator(.{}),
+    gpa: std.heap.DebugAllocator(.{ .thread_safe = false }),
+    std_io: std.Io,
 };
 
 /// Roc allocation function with size-tracking metadata
@@ -25,13 +31,12 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
     const result = allocator.rawAlloc(total_size, align_enum, @returnAddress());
 
     const base_ptr = result orelse {
-        const stderr: std.fs.File = .stderr();
         var buf: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "\x1b[31mHost error:\x1b[0m allocation failed for size={d} align={d}\n", .{
             total_size,
             roc_alloc.alignment,
         }) catch "\x1b[31mHost error:\x1b[0m allocation failed, out of memory\n";
-        stderr.writeAll(msg) catch {};
+        std.debug.print("{s}", .{msg});
         std.process.exit(1);
     };
 
@@ -98,8 +103,7 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
     // Perform reallocation
     const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
     const new_slice = allocator.realloc(old_slice, new_total_size) catch {
-        const stderr: std.fs.File = .stderr();
-        stderr.writeAll("\x1b[31mHost error:\x1b[0m reallocation failed, out of memory\n") catch {};
+        std.debug.print("{s}", .{"\x1b[31mHost error:\x1b[0m reallocation failed, out of memory\n"});
         std.process.exit(1);
     };
 
@@ -134,11 +138,9 @@ fn rocExpectFailedFn(roc_expect: *const builtins.host_abi.RocExpectFailed, env: 
 fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) noreturn {
     _ = env;
     const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
-    const stderr: std.fs.File = .stderr();
-    var buf: [256]u8 = undefined;
-    var w = stderr.writer(&buf);
-    w.interface.print("\n\x1b[31mRoc crashed:\x1b[0m {s}\n", .{message}) catch {};
-    w.interface.flush() catch {};
+    var buf: [512]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "\n\x1b[31mRoc crashed:\x1b[0m {s}\n", .{message}) catch "\n\x1b[31mRoc crashed\x1b[0m\n";
+    std.debug.print("{s}", .{msg});
     std.process.exit(1);
 }
 
@@ -165,10 +167,9 @@ fn __main() callconv(.c) void {}
 // C compatible main for runtime
 fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     const exit_code = platform_main(argc, argv) catch |err| {
-        const stderr: std.fs.File = .stderr();
-        stderr.writeAll("HOST ERROR: ") catch {};
-        stderr.writeAll(@errorName(err)) catch {};
-        stderr.writeAll("\n") catch {};
+        std.debug.print("{s}", .{"HOST ERROR: "});
+        std.debug.print("{s}", .{@errorName(err)});
+        std.debug.print("{s}", .{"\n"});
         return 1;
     };
     return exit_code;
@@ -184,19 +185,18 @@ const RocOps = builtins.host_abi.RocOps;
 /// Returns {} and takes Str as argument
 fn hostedStderrLine(_: *anyopaque, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
     const message = args.str.asSlice();
-    const stderr: std.fs.File = .stderr();
-    stderr.writeAll(message) catch {};
-    stderr.writeAll("\n") catch {};
+    std.debug.print("{s}", .{message});
+    std.debug.print("{s}", .{"\n"});
 }
 
 /// Hosted function: Stdin.line! (index 1 - sorted alphabetically)
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns Str and takes {} as argument
 fn hostedStdinLine(ops: *RocOps, result: *RocStr, _: *anyopaque) callconv(.c) void {
+    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     // Read a line from stdin
     var buffer: [4096]u8 = undefined;
-    const stdin_file: std.fs.File = .stdin();
-    const bytes_read = stdin_file.read(&buffer) catch {
+    const bytes_read = std.Io.File.stdin().readStreaming(host.std_io, &.{&buffer}) catch {
         // Return empty string on error
         result.* = RocStr.empty();
         return;
@@ -210,7 +210,7 @@ fn hostedStdinLine(ops: *RocOps, result: *RocStr, _: *anyopaque) callconv(.c) vo
 
     // Find newline and trim it (handle both \n and \r\n)
     const line_with_newline = buffer[0..bytes_read];
-    var line = if (std.mem.indexOfScalar(u8, line_with_newline, '\n')) |newline_idx|
+    var line = if (std.mem.findScalar(u8, line_with_newline, '\n')) |newline_idx|
         line_with_newline[0..newline_idx]
     else
         line_with_newline;
@@ -229,11 +229,12 @@ fn hostedStdinLine(ops: *RocOps, result: *RocStr, _: *anyopaque) callconv(.c) vo
 /// Hosted function: Stdout.line! (index 2 - sorted alphabetically)
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns {} and takes Str as argument
-fn hostedStdoutLine(_: *anyopaque, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
+fn hostedStdoutLine(ops_ptr: *anyopaque, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
+    const ops: *RocOps = @ptrCast(@alignCast(ops_ptr));
+    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     const message = args.str.asSlice();
-    const stdout: std.fs.File = .stdout();
-    stdout.writeAll(message) catch {};
-    stdout.writeAll("\n") catch {};
+    std.Io.File.stdout().writeStreamingAll(host.std_io, message) catch {};
+    std.Io.File.stdout().writeStreamingAll(host.std_io, "\n") catch {};
 }
 
 /// Array of hosted function pointers, sorted alphabetically by fully-qualified name
@@ -270,7 +271,8 @@ fn buildArgsList(ops: *builtins.host_abi.RocOps, argc: c_int, argv: [*][*:0]u8) 
 /// Platform host entrypoint
 fn platform_main(argc: c_int, argv: [*][*:0]u8) !c_int {
     var host_env = HostEnv{
-        .gpa = std.heap.GeneralPurposeAllocator(.{}){},
+        .gpa = std.heap.DebugAllocator(.{ .thread_safe = false }){},
+        .std_io = shim_io.io(),
     };
     defer {
         const leaked = host_env.gpa.deinit();

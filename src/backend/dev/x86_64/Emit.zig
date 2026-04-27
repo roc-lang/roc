@@ -102,8 +102,8 @@ pub fn Emit(comptime target: RocTarget) type {
         pub fn init(allocator: std.mem.Allocator) Self {
             return .{
                 .allocator = allocator,
-                .buf = .{},
-                .relocs = .{},
+                .buf = .empty,
+                .relocs = .empty,
             };
         }
 

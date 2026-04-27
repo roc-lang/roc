@@ -42,8 +42,8 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
         .pos = 0,
         .tok_buf = tokens,
         .store = store,
-        .scratch_nodes = .{},
-        .diagnostics = .{},
+        .scratch_nodes = .empty,
+        .diagnostics = .empty,
         .cached_malformed_node = null,
         .nesting_counter = MAX_NESTING_LEVELS,
     };

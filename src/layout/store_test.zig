@@ -289,7 +289,7 @@ test "fromTypeVar - bool type" {
     try testing.expectEqual(layout.Idx.bool, bool_layout_idx);
     const retrieved_layout = lt.layout_store.getLayout(bool_layout_idx);
     try testing.expect(retrieved_layout.tag == .tag_union);
-    const tu_data = lt.layout_store.getTagUnionData(retrieved_layout.data.tag_union.idx);
+    const tu_data = lt.layout_store.getTagUnionData(retrieved_layout.getTagUnion().idx);
     try testing.expectEqual(@as(u8, 1), tu_data.discriminant_size);
     try testing.expectEqual(@as(u16, 0), tu_data.discriminant_offset);
     try testing.expectEqual(@as(u32, 2), tu_data.variants.count);
@@ -403,7 +403,7 @@ test "fromTypeVar - record with only zero-sized fields" {
     const record_idx = try resolveTypeVar(&lt, record_var);
     const record_layout = lt.layout_store.getLayout(record_idx);
     try testing.expect(record_layout.tag == .struct_);
-    const field_slice = lt.layout_store.struct_fields.sliceRange(lt.layout_store.getStructData(record_layout.data.struct_.idx).getFields());
+    const field_slice = lt.layout_store.struct_fields.sliceRange(lt.layout_store.getStructData(record_layout.getStruct().idx).getFields());
     try testing.expectEqual(@as(usize, 2), field_slice.len); // Both ZST fields are kept
 
     // Box of such a record should be box_of_zst since the record only contains ZST fields
@@ -433,7 +433,7 @@ test "single-tag union with zero-sized payload keeps tag_union layout and size 0
     try testing.expectEqual(layout.LayoutTag.tag_union, tag_union_layout.tag);
     try testing.expectEqual(@as(u32, 0), lt.layout_store.layoutSize(tag_union_layout));
 
-    const tu_data = lt.layout_store.getTagUnionData(tag_union_layout.data.tag_union.idx);
+    const tu_data = lt.layout_store.getTagUnionData(tag_union_layout.getTagUnion().idx);
     try testing.expectEqual(@as(u8, 0), tu_data.discriminant_size);
     try testing.expectEqual(@as(u16, 0), tu_data.discriminant_offset);
     try testing.expectEqual(@as(u32, 1), tu_data.variants.count);
@@ -471,7 +471,7 @@ test "single-tag union with non-zero-sized payload keeps tag_union layout and pa
     try testing.expectEqual(layout.LayoutTag.tag_union, tag_union_layout.tag);
     try testing.expectEqual(@as(u32, 8), lt.layout_store.layoutSize(tag_union_layout));
 
-    const tu_data = lt.layout_store.getTagUnionData(tag_union_layout.data.tag_union.idx);
+    const tu_data = lt.layout_store.getTagUnionData(tag_union_layout.getTagUnion().idx);
     try testing.expectEqual(@as(u8, 0), tu_data.discriminant_size);
     try testing.expectEqual(@as(u16, 8), tu_data.discriminant_offset);
     try testing.expectEqual(@as(u32, 1), tu_data.variants.count);
@@ -542,14 +542,14 @@ test "deeply nested containers with inner ZST" {
     const outer_list_layout = lt.layout_store.getLayout(result_idx);
     try testing.expect(outer_list_layout.tag == .list);
 
-    const outer_box_layout = lt.layout_store.getLayout(outer_list_layout.data.list);
+    const outer_box_layout = lt.layout_store.getLayout(outer_list_layout.getIdx());
     try testing.expect(outer_box_layout.tag == .box);
 
-    const inner_list_layout = lt.layout_store.getLayout(outer_box_layout.data.box);
+    const inner_list_layout = lt.layout_store.getLayout(outer_box_layout.getIdx());
     try testing.expect(inner_list_layout.tag == .list);
 
     // The innermost element is Box(empty_record), which should resolve to box_of_zst
-    const inner_box_layout = lt.layout_store.getLayout(inner_list_layout.data.list);
+    const inner_box_layout = lt.layout_store.getLayout(inner_list_layout.getIdx());
     try testing.expect(inner_box_layout.tag == .box_of_zst);
 }
 
@@ -1277,7 +1277,7 @@ test "fromTypeVar - recursive nominal with Box has no double-boxing (issue #8916
     try testing.expect(nat_layout.tag == .tag_union);
 
     // Get the tag union data to inspect the Suc variant's payload layout
-    const tu_data = lt.layout_store.getTagUnionData(nat_layout.data.tag_union.idx);
+    const tu_data = lt.layout_store.getTagUnionData(nat_layout.getTagUnion().idx);
     const variants = lt.layout_store.getTagUnionVariants(tu_data);
 
     // Find the Suc variant
@@ -1299,7 +1299,7 @@ test "fromTypeVar - recursive nominal with Box has no double-boxing (issue #8916
     const suc_payload_layout = lt.layout_store.getLayout(variants.get(suc_variant_idx).payload_layout);
     try testing.expect(suc_payload_layout.tag == .struct_);
 
-    const payload_data = lt.layout_store.getStructData(suc_payload_layout.data.struct_.idx);
+    const payload_data = lt.layout_store.getStructData(suc_payload_layout.getStruct().idx);
     const payload_fields = lt.layout_store.struct_fields.sliceRange(payload_data.getFields());
     try testing.expectEqual(@as(usize, 1), payload_fields.len);
     try testing.expectEqual(@as(u16, 0), payload_fields.get(0).index);
@@ -1307,7 +1307,7 @@ test "fromTypeVar - recursive nominal with Box has no double-boxing (issue #8916
 
     // CRITICAL: The element of this Box should be a tag_union, NOT another box.
     // Before the fix, this would be .box (double-boxing bug).
-    const box_elem_idx = lt.layout_store.getLayout(payload_fields.get(0).layout).data.box;
+    const box_elem_idx = lt.layout_store.getLayout(payload_fields.get(0).layout).getIdx();
     const box_elem_layout = lt.layout_store.getLayout(box_elem_idx);
     try testing.expect(box_elem_layout.tag == .tag_union);
 }
@@ -1324,7 +1324,7 @@ test "putRecord - same alignment preserves canonical field order" {
     const u64_layout = layout.Layout.int(.u64);
     const record_idx = try lt.layout_store.putRecord(&.{ u64_layout, u64_layout });
     const record_layout = lt.layout_store.getLayout(record_idx);
-    const rid = record_layout.data.struct_.idx;
+    const rid = record_layout.getStruct().idx;
 
     try testing.expectEqual(@as(u32, 0), lt.layout_store.getStructFieldOffsetByOriginalIndex(rid, 0));
     try testing.expectEqual(@as(u32, 8), lt.layout_store.getStructFieldOffsetByOriginalIndex(rid, 1));
@@ -1339,7 +1339,7 @@ test "putRecord - alignment overrides canonical order" {
     const u64_layout = layout.Layout.int(.u64);
     const record_idx = try lt.layout_store.putRecord(&.{ u8_layout, u64_layout });
     const record_layout = lt.layout_store.getLayout(record_idx);
-    const rid = record_layout.data.struct_.idx;
+    const rid = record_layout.getStruct().idx;
 
     try testing.expectEqual(@as(u32, 8), lt.layout_store.getStructFieldOffsetByOriginalIndex(rid, 0));
     try testing.expectEqual(@as(u32, 0), lt.layout_store.getStructFieldOffsetByOriginalIndex(rid, 1));
@@ -1353,7 +1353,7 @@ test "putRecord - equal-alignment ties do not depend on sort stability" {
     const u64_layout = layout.Layout.int(.u64);
     const record_idx = try lt.layout_store.putRecord(&.{ u64_layout, u64_layout, u64_layout });
     const record_layout = lt.layout_store.getLayout(record_idx);
-    const rid = record_layout.data.struct_.idx;
+    const rid = record_layout.getStruct().idx;
 
     try testing.expectEqual(@as(u32, 0), lt.layout_store.getStructFieldOffsetByOriginalIndex(rid, 0));
     try testing.expectEqual(@as(u32, 8), lt.layout_store.getStructFieldOffsetByOriginalIndex(rid, 1));
@@ -1629,7 +1629,7 @@ test "type and monotype layout resolvers preserve singleton ordinary-data struct
     const record_layout_idx = try resolveTypeVar(&lt, record_var);
     const record_layout = lt.layout_store.getLayout(record_layout_idx);
     try testing.expect(record_layout.tag == .struct_);
-    const record_data = lt.layout_store.getStructData(record_layout.data.struct_.idx);
+    const record_data = lt.layout_store.getStructData(record_layout.getStruct().idx);
     const record_layout_fields = lt.layout_store.struct_fields.sliceRange(record_data.getFields());
     try testing.expectEqual(@as(usize, 1), record_layout_fields.len);
     try testing.expectEqual(@as(u16, 0), record_layout_fields.get(0).index);
@@ -1638,7 +1638,7 @@ test "type and monotype layout resolvers preserve singleton ordinary-data struct
     const tuple_layout_idx = try resolveTypeVar(&lt, tuple_var);
     const tuple_layout = lt.layout_store.getLayout(tuple_layout_idx);
     try testing.expect(tuple_layout.tag == .struct_);
-    const tuple_data = lt.layout_store.getStructData(tuple_layout.data.struct_.idx);
+    const tuple_data = lt.layout_store.getStructData(tuple_layout.getStruct().idx);
     const tuple_layout_fields = lt.layout_store.struct_fields.sliceRange(tuple_data.getFields());
     try testing.expectEqual(@as(usize, 1), tuple_layout_fields.len);
     try testing.expectEqual(@as(u16, 0), tuple_layout_fields.get(0).index);
@@ -1679,7 +1679,7 @@ test "type and monotype layout resolvers preserve singleton tag payload containe
     const union_layout = lt.layout_store.getLayout(union_layout_idx);
     try testing.expect(union_layout.tag == .tag_union);
 
-    const tu_data = lt.layout_store.getTagUnionData(union_layout.data.tag_union.idx);
+    const tu_data = lt.layout_store.getTagUnionData(union_layout.getTagUnion().idx);
     const variants = lt.layout_store.getTagUnionVariants(tu_data);
     try testing.expectEqual(@as(usize, 1), variants.len);
 
@@ -1687,7 +1687,7 @@ test "type and monotype layout resolvers preserve singleton tag payload containe
     const payload_layout = lt.layout_store.getLayout(payload_layout_idx);
     try testing.expect(payload_layout.tag == .struct_);
 
-    const payload_data = lt.layout_store.getStructData(payload_layout.data.struct_.idx);
+    const payload_data = lt.layout_store.getStructData(payload_layout.getStruct().idx);
     const payload_fields = lt.layout_store.struct_fields.sliceRange(payload_data.getFields());
     try testing.expectEqual(@as(usize, 1), payload_fields.len);
     try testing.expectEqual(@as(u16, 0), payload_fields.get(0).index);
@@ -1787,7 +1787,7 @@ test "type and monotype layout resolvers agree for directly recursive tag union 
     const size = lt.layout_store.layoutSize(inner_layout);
     try testing.expect(size > 0);
 
-    const disc_offset = lt.layout_store.getTagUnionDiscriminantOffset(inner_layout.data.tag_union.idx);
+    const disc_offset = lt.layout_store.getTagUnionDiscriminantOffset(inner_layout.getTagUnion().idx);
     try testing.expect(disc_offset < size);
     try testing.expect(lt.layout_store.layoutContainsRefcounted(inner_layout));
 }

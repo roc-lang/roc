@@ -26,12 +26,17 @@
 //! - 0: All expectations matched in order
 //! - 1: Test failed (mismatch, missing output, extra output, or invalid spec)
 const std = @import("std");
+const shim_io = @import("shim_io");
 const builtin = @import("builtin");
 const builtins = @import("builtins");
 const build_options = @import("build_options");
 const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi) std.posix else undefined;
 
 const trace_refcount = build_options.trace_refcount;
+
+pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
+pub const std_options_debug_io = shim_io.io();
+pub const std_options_debug_threaded_io = null;
 
 pub const std_options: std.Options = .{
     .logFn = std.log.defaultLog,
@@ -42,15 +47,14 @@ pub const std_options: std.Options = .{
 pub const panic = std.debug.FullPanic(panicImpl);
 
 fn panicImpl(msg: []const u8, addr: ?usize) noreturn {
-    const stderr: std.fs.File = .stderr();
-    stderr.writeAll("\n=== PANIC (no stack trace) ===\n") catch {};
-    stderr.writeAll(msg) catch {};
+    std.debug.print("{s}", .{"\n=== PANIC (no stack trace) ===\n"});
+    std.debug.print("{s}", .{msg});
     if (addr) |a| {
         var buf: [32]u8 = undefined;
         const hex = std.fmt.bufPrint(&buf, " at address 0x{x}\n", .{a}) catch "";
-        stderr.writeAll(hex) catch {};
+        std.debug.print("{s}", .{hex});
     } else {
-        stderr.writeAll("\n") catch {};
+        std.debug.print("{s}", .{"\n"});
     }
     std.process.abort();
 }
@@ -80,8 +84,8 @@ fn handleRocStackOverflow() noreturn {
         _ = kernel32.TerminateProcess(kernel32.GetCurrentProcess(), 134);
         @trap();
     } else if (comptime builtin.os.tag != .wasi) {
-        _ = posix.write(posix.STDERR_FILENO, STACK_OVERFLOW_MESSAGE) catch {};
-        posix.exit(134);
+        std.debug.print("{s}", .{STACK_OVERFLOW_MESSAGE});
+        std.process.exit(134);
     } else {
         std.process.exit(134);
     }
@@ -114,13 +118,13 @@ fn handleRocAccessViolation(fault_addr: usize) noreturn {
     } else {
         // POSIX (and WASI fallback)
         const msg = "\nSegmentation fault (SIGSEGV) in this Roc program.\nFault address: ";
-        _ = posix.write(posix.STDERR_FILENO, msg) catch {};
+        std.debug.print("{s}", .{msg});
 
         var addr_buf: [18]u8 = undefined;
         const addr_str = builtins.handlers.formatHex(fault_addr, &addr_buf);
-        _ = posix.write(posix.STDERR_FILENO, addr_str) catch {};
-        _ = posix.write(posix.STDERR_FILENO, "\n\n") catch {};
-        posix.exit(139);
+        std.debug.print("{s}", .{addr_str});
+        std.debug.print("{s}", .{"\n\n"});
+        std.process.exit(139);
     }
 }
 
@@ -145,8 +149,8 @@ fn handleRocArithmeticError() noreturn {
         _ = kernel32.WriteFile(stderr_handle, DIVISION_BY_ZERO_MESSAGE.ptr, DIVISION_BY_ZERO_MESSAGE.len, &bytes_written, null);
         kernel32.ExitProcess(136);
     } else if (comptime builtin.os.tag != .wasi) {
-        _ = posix.write(posix.STDERR_FILENO, DIVISION_BY_ZERO_MESSAGE) catch {};
-        posix.exit(136); // 128 + 8 (SIGFPE)
+        std.debug.print("{s}", .{DIVISION_BY_ZERO_MESSAGE});
+        std.process.exit(136); // 128 + 8 (SIGFPE)
     } else {
         std.process.exit(136);
     }
@@ -198,7 +202,7 @@ fn triggerSelfTestDivisionByZero() noreturn {
         kernel32.RaiseException(EXCEPTION_INT_DIVIDE_BY_ZERO, 0, 0, null);
     } else if (comptime builtin.os.tag != .wasi) {
         posix.raise(posix.SIG.FPE) catch {};
-        posix.exit(136);
+        std.process.exit(136);
     } else {
         std.process.exit(136);
     }
@@ -257,7 +261,7 @@ const ParseError = error{
 /// Always returns an allocated copy (simplifies cleanup)
 fn unescapeSpecValue(allocator: std.mem.Allocator, input: []const u8) ParseError![]u8 {
     // Quick check: if no backslash, just duplicate
-    if (std.mem.indexOfScalar(u8, input, '\\') == null) {
+    if (std.mem.findScalar(u8, input, '\\') == null) {
         return allocator.dupe(u8, input) catch return ParseError.OutOfMemory;
     }
 
@@ -320,10 +324,9 @@ fn parseTestSpec(allocator: std.mem.Allocator, spec: []const u8) ParseError![]Sp
 
         // Check for valid pattern prefix
         if (segment.len < 2) {
-            const stderr_file: std.fs.File = .stderr();
-            stderr_file.writeAll("Error: Invalid spec segment '") catch {};
-            stderr_file.writeAll(segment) catch {};
-            stderr_file.writeAll("' - must start with 0<, 1>, or 2>\n") catch {};
+            std.debug.print("{s}", .{"Error: Invalid spec segment '"});
+            std.debug.print("{s}", .{segment});
+            std.debug.print("{s}", .{"' - must start with 0<, 1>, or 2>\n"});
             return ParseError.InvalidSpecFormat;
         }
 
@@ -332,10 +335,9 @@ fn parseTestSpec(allocator: std.mem.Allocator, spec: []const u8) ParseError![]Sp
             if (segment[0] == '1' and segment[1] == '>') break :blk .stdout_expect;
             if (segment[0] == '2' and segment[1] == '>') break :blk .stderr_expect;
             // Invalid pattern - report error
-            const stderr_file: std.fs.File = .stderr();
-            stderr_file.writeAll("Error: Invalid spec segment '") catch {};
-            stderr_file.writeAll(segment) catch {};
-            stderr_file.writeAll("' - must start with 0<, 1>, or 2>\n") catch {};
+            std.debug.print("{s}", .{"Error: Invalid spec segment '"});
+            std.debug.print("{s}", .{segment});
+            std.debug.print("{s}", .{"' - must start with 0<, 1>, or 2>\n"});
             return ParseError.InvalidSpecFormat;
         };
 
@@ -359,12 +361,13 @@ const RocAllocation = struct {
     alignment: std.mem.Alignment,
 };
 
-/// Host environment - contains GeneralPurposeAllocator for leak detection
+/// Host environment - contains DebugAllocator for leak detection
 const HostEnv = struct {
-    gpa: std.heap.GeneralPurposeAllocator(.{ .safety = true }),
+    gpa: std.heap.DebugAllocator(.{ .safety = true, .thread_safe = false }),
     test_state: TestState,
+    std_io: std.Io,
     /// Track Roc allocations for cleanup on test failure
-    roc_allocations: std.ArrayListUnmanaged(RocAllocation) = .{},
+    roc_allocations: std.ArrayListUnmanaged(RocAllocation) = .empty,
     /// Allocation counters for diagnostics
     alloc_count: usize = 0,
     dealloc_count: usize = 0,
@@ -404,13 +407,12 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
     const result = allocator.rawAlloc(total_size, align_enum, @returnAddress());
 
     const base_ptr = result orelse {
-        const stderr: std.fs.File = .stderr();
         var buf: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "\x1b[31mHost error:\x1b[0m allocation failed for size={d} align={d}\n", .{
             total_size,
             roc_alloc.alignment,
         }) catch "\x1b[31mHost error:\x1b[0m allocation failed, out of memory\n";
-        stderr.writeAll(msg) catch {};
+        std.debug.print("{s}", .{msg});
         std.process.exit(1);
     };
 
@@ -525,8 +527,7 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
 
     // Allocate new memory with proper alignment
     const new_ptr = allocator.rawAlloc(new_total_size, align_enum, @returnAddress()) orelse {
-        const stderr: std.fs.File = .stderr();
-        stderr.writeAll("\x1b[31mHost error:\x1b[0m reallocation failed, out of memory\n") catch {};
+        std.debug.print("{s}", .{"\x1b[31mHost error:\x1b[0m reallocation failed, out of memory\n"});
         std.process.exit(1);
     };
 
@@ -584,11 +585,9 @@ fn rocExpectFailedFn(roc_expect: *const builtins.host_abi.RocExpectFailed, env: 
 fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) noreturn {
     _ = env;
     const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
-    const stderr: std.fs.File = .stderr();
-    var buf: [256]u8 = undefined;
-    var w = stderr.writer(&buf);
-    w.interface.print("\n\x1b[31mRoc crashed:\x1b[0m {s}\n", .{message}) catch {};
-    w.interface.flush() catch {};
+    var buf: [512]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "\n\x1b[31mRoc crashed:\x1b[0m {s}\n", .{message}) catch "\n\x1b[31mRoc crashed\x1b[0m\n";
+    std.debug.print("{s}", .{msg});
     std.process.exit(1);
 }
 
@@ -619,7 +618,6 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     var self_test: HostSelfTest = .none;
     var i: usize = 1;
     const arg_count: usize = @intCast(argc);
-    const stderr_file: std.fs.File = .stderr();
     while (i < arg_count) : (i += 1) {
         const arg = std.mem.span(argv[i]);
         if (std.mem.eql(u8, arg, "--test-verbose")) {
@@ -628,7 +626,7 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
                 test_spec = std.mem.span(argv[i]);
                 test_verbose = true;
             } else {
-                stderr_file.writeAll("Error: --test-verbose requires a spec argument\n") catch {};
+                std.debug.print("{s}", .{"Error: --test-verbose requires a spec argument\n"});
                 return 1;
             }
         } else if (std.mem.eql(u8, arg, "--test")) {
@@ -636,7 +634,7 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
                 i += 1;
                 test_spec = std.mem.span(argv[i]);
             } else {
-                stderr_file.writeAll("Error: --test requires a spec argument\n") catch {};
+                std.debug.print("{s}", .{"Error: --test requires a spec argument\n"});
                 return 1;
             }
         } else if (std.mem.eql(u8, arg, "--host-test-stack-overflow")) {
@@ -644,10 +642,10 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
         } else if (std.mem.eql(u8, arg, "--host-test-division-by-zero")) {
             self_test = .division_by_zero;
         } else if (arg.len >= 2 and arg[0] == '-' and arg[1] == '-') {
-            stderr_file.writeAll("Error: unknown flag '") catch {};
-            stderr_file.writeAll(arg) catch {};
-            stderr_file.writeAll("'\n") catch {};
-            stderr_file.writeAll("Usage: <app> [--test <spec>] [--test-verbose <spec>] [--host-test-stack-overflow] [--host-test-division-by-zero]\n") catch {};
+            std.debug.print("{s}", .{"Error: unknown flag '"});
+            std.debug.print("{s}", .{arg});
+            std.debug.print("{s}", .{"'\n"});
+            std.debug.print("{s}", .{"Usage: <app> [--test <spec>] [--test-verbose <spec>] [--host-test-stack-overflow] [--host-test-division-by-zero]\n"});
             return 1;
         }
     }
@@ -657,9 +655,9 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     }
 
     const exit_code = platform_main(test_spec, test_verbose) catch |err| {
-        stderr_file.writeAll("HOST ERROR: ") catch {};
-        stderr_file.writeAll(@errorName(err)) catch {};
-        stderr_file.writeAll("\n") catch {};
+        std.debug.print("{s}", .{"HOST ERROR: "});
+        std.debug.print("{s}", .{@errorName(err)});
+        std.debug.print("{s}", .{"\n"});
         return 1;
     };
     return exit_code;
@@ -678,15 +676,14 @@ fn hostedStderrLine(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: *const 
 
     // Test mode: verify output matches expected
     if (host.test_state.enabled) {
-        const stderr_file: std.fs.File = .stderr();
         if (host.test_state.current_index < host.test_state.entries.len) {
             const entry = host.test_state.entries[host.test_state.current_index];
             if (entry.effect_type == .stderr_expect and std.mem.eql(u8, entry.value, message)) {
                 host.test_state.current_index += 1;
                 if (host.test_state.verbose) {
-                    stderr_file.writeAll("[OK] stderr: \"") catch {};
-                    stderr_file.writeAll(message) catch {};
-                    stderr_file.writeAll("\"\n") catch {};
+                    std.debug.print("{s}", .{"[OK] stderr: \""});
+                    std.debug.print("{s}", .{message});
+                    std.debug.print("{s}", .{"\"\n"});
                 }
                 return; // Match!
             }
@@ -707,13 +704,13 @@ fn hostedStderrLine(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: *const 
                 .spec_line = entry.spec_line,
             };
             if (host.test_state.verbose) {
-                stderr_file.writeAll("[FAIL] stderr: \"") catch {};
-                stderr_file.writeAll(message) catch {};
-                stderr_file.writeAll("\" (expected ") catch {};
-                stderr_file.writeAll(effectTypeName(entry.effect_type)) catch {};
-                stderr_file.writeAll(": \"") catch {};
-                stderr_file.writeAll(entry.value) catch {};
-                stderr_file.writeAll("\")\n") catch {};
+                std.debug.print("{s}", .{"[FAIL] stderr: \""});
+                std.debug.print("{s}", .{message});
+                std.debug.print("{s}", .{"\" (expected "});
+                std.debug.print("{s}", .{effectTypeName(entry.effect_type)});
+                std.debug.print("{s}", .{": \""});
+                std.debug.print("{s}", .{entry.value});
+                std.debug.print("{s}", .{"\")\n"});
             }
         } else {
             // Extra output not in spec - must allocate a copy of the message
@@ -733,18 +730,17 @@ fn hostedStderrLine(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: *const 
                 .spec_line = 0,
             };
             if (host.test_state.verbose) {
-                stderr_file.writeAll("[FAIL] stderr: \"") catch {};
-                stderr_file.writeAll(message) catch {};
-                stderr_file.writeAll("\" (unexpected - no more expected operations)\n") catch {};
+                std.debug.print("{s}", .{"[FAIL] stderr: \""});
+                std.debug.print("{s}", .{message});
+                std.debug.print("{s}", .{"\" (unexpected - no more expected operations)\n"});
             }
         }
         return;
     }
 
     // Normal mode: write to stderr
-    const stderr: std.fs.File = .stderr();
-    stderr.writeAll(message) catch {};
-    stderr.writeAll("\n") catch {};
+    std.debug.print("{s}", .{message});
+    std.debug.print("{s}", .{"\n"});
 }
 
 /// Hosted function: Stdin.line! (index 1 - sorted alphabetically)
@@ -755,16 +751,15 @@ fn hostedStdinLine(ops: *builtins.host_abi.RocOps, result: *RocStr, _: *anyopaqu
 
     // Test mode: consume next stdin_input entry from spec
     if (host.test_state.enabled) {
-        const stderr_file: std.fs.File = .stderr();
         if (host.test_state.current_index < host.test_state.entries.len) {
             const entry = host.test_state.entries[host.test_state.current_index];
             if (entry.effect_type == .stdin_input) {
                 host.test_state.current_index += 1;
                 result.* = RocStr.fromSlice(entry.value, ops);
                 if (host.test_state.verbose) {
-                    stderr_file.writeAll("[OK] stdin: \"") catch {};
-                    stderr_file.writeAll(entry.value) catch {};
-                    stderr_file.writeAll("\"\n") catch {};
+                    std.debug.print("{s}", .{"[OK] stdin: \""});
+                    std.debug.print("{s}", .{entry.value});
+                    std.debug.print("{s}", .{"\"\n"});
                 }
                 return;
             }
@@ -778,11 +773,11 @@ fn hostedStdinLine(ops: *builtins.host_abi.RocOps, result: *RocStr, _: *anyopaqu
                 .spec_line = entry.spec_line,
             };
             if (host.test_state.verbose) {
-                stderr_file.writeAll("[FAIL] stdin read (expected ") catch {};
-                stderr_file.writeAll(effectTypeName(entry.effect_type)) catch {};
-                stderr_file.writeAll(": \"") catch {};
-                stderr_file.writeAll(entry.value) catch {};
-                stderr_file.writeAll("\")\n") catch {};
+                std.debug.print("{s}", .{"[FAIL] stdin read (expected "});
+                std.debug.print("{s}", .{effectTypeName(entry.effect_type)});
+                std.debug.print("{s}", .{": \""});
+                std.debug.print("{s}", .{entry.value});
+                std.debug.print("{s}", .{"\")\n"});
             }
         } else {
             // Ran out of entries - app tried to read more stdin than provided
@@ -795,7 +790,7 @@ fn hostedStdinLine(ops: *builtins.host_abi.RocOps, result: *RocStr, _: *anyopaqu
                 .spec_line = 0,
             };
             if (host.test_state.verbose) {
-                stderr_file.writeAll("[FAIL] stdin read (unexpected - no more expected operations)\n") catch {};
+                std.debug.print("{s}", .{"[FAIL] stdin read (unexpected - no more expected operations)\n"});
             }
         }
         result.* = RocStr.empty();
@@ -804,8 +799,7 @@ fn hostedStdinLine(ops: *builtins.host_abi.RocOps, result: *RocStr, _: *anyopaqu
 
     // Normal mode: Read a line from stdin
     var buffer: [4096]u8 = undefined;
-    const stdin_file: std.fs.File = .stdin();
-    const bytes_read = stdin_file.read(&buffer) catch {
+    const bytes_read = std.Io.File.stdin().readStreaming(host.std_io, &.{&buffer}) catch {
         // Return empty string on error
         result.* = RocStr.empty();
         return;
@@ -819,7 +813,7 @@ fn hostedStdinLine(ops: *builtins.host_abi.RocOps, result: *RocStr, _: *anyopaqu
 
     // Find newline and trim it (handle both \n and \r\n)
     const line_with_newline = buffer[0..bytes_read];
-    var line = if (std.mem.indexOfScalar(u8, line_with_newline, '\n')) |newline_idx|
+    var line = if (std.mem.findScalar(u8, line_with_newline, '\n')) |newline_idx|
         line_with_newline[0..newline_idx]
     else
         line_with_newline;
@@ -845,15 +839,14 @@ fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: *const 
 
     // Test mode: verify output matches expected
     if (host.test_state.enabled) {
-        const stderr_file: std.fs.File = .stderr();
         if (host.test_state.current_index < host.test_state.entries.len) {
             const entry = host.test_state.entries[host.test_state.current_index];
             if (entry.effect_type == .stdout_expect and std.mem.eql(u8, entry.value, message)) {
                 host.test_state.current_index += 1;
                 if (host.test_state.verbose) {
-                    stderr_file.writeAll("[OK] stdout: \"") catch {};
-                    stderr_file.writeAll(message) catch {};
-                    stderr_file.writeAll("\"\n") catch {};
+                    std.debug.print("{s}", .{"[OK] stdout: \""});
+                    std.debug.print("{s}", .{message});
+                    std.debug.print("{s}", .{"\"\n"});
                 }
                 return; // Match!
             }
@@ -874,13 +867,13 @@ fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: *const 
                 .spec_line = entry.spec_line,
             };
             if (host.test_state.verbose) {
-                stderr_file.writeAll("[FAIL] stdout: \"") catch {};
-                stderr_file.writeAll(message) catch {};
-                stderr_file.writeAll("\" (expected ") catch {};
-                stderr_file.writeAll(effectTypeName(entry.effect_type)) catch {};
-                stderr_file.writeAll(": \"") catch {};
-                stderr_file.writeAll(entry.value) catch {};
-                stderr_file.writeAll("\")\n") catch {};
+                std.debug.print("{s}", .{"[FAIL] stdout: \""});
+                std.debug.print("{s}", .{message});
+                std.debug.print("{s}", .{"\" (expected "});
+                std.debug.print("{s}", .{effectTypeName(entry.effect_type)});
+                std.debug.print("{s}", .{": \""});
+                std.debug.print("{s}", .{entry.value});
+                std.debug.print("{s}", .{"\")\n"});
             }
         } else {
             // Extra output not in spec - must allocate a copy of the message
@@ -900,18 +893,17 @@ fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: *const 
                 .spec_line = 0,
             };
             if (host.test_state.verbose) {
-                stderr_file.writeAll("[FAIL] stdout: \"") catch {};
-                stderr_file.writeAll(message) catch {};
-                stderr_file.writeAll("\" (unexpected - no more expected operations)\n") catch {};
+                std.debug.print("{s}", .{"[FAIL] stdout: \""});
+                std.debug.print("{s}", .{message});
+                std.debug.print("{s}", .{"\" (unexpected - no more expected operations)\n"});
             }
         }
         return;
     }
 
     // Normal mode: write to stdout
-    const stdout: std.fs.File = .stdout();
-    stdout.writeAll(message) catch {};
-    stdout.writeAll("\n") catch {};
+    std.Io.File.stdout().writeStreamingAll(host.std_io, message) catch {};
+    std.Io.File.stdout().writeStreamingAll(host.std_io, "\n") catch {};
 }
 
 /// Hosted function: Builder.print_value! (index 0 - sorted alphabetically: "Builder.print_value!" comes before "Stderr.line!")
@@ -978,8 +970,9 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
     installRuntimeSignalHandlers();
 
     var host_env = HostEnv{
-        .gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){},
+        .gpa = std.heap.DebugAllocator(.{ .safety = true, .thread_safe = false }){},
         .test_state = TestState.init(),
+        .std_io = shim_io.io(),
     };
 
     // Parse test spec if provided
@@ -1018,7 +1011,6 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
         // Only report remaining allocations if test passed (otherwise it's expected
         // that cleanup may be incomplete due to test failure)
         if (remaining_count > 0 and test_passed) {
-            const stderr_file: std.fs.File = .stderr();
             var buf: [512]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf,
                 \\[Roc Memory Info] {d} allocation(s) not freed by Roc runtime.
@@ -1026,7 +1018,7 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
                 \\  not a bug in the application code. Cleaning up {d} allocations...
                 \\
             , .{ remaining_count, remaining_count }) catch "";
-            stderr_file.writeAll(msg) catch {};
+            std.debug.print("{s}", .{msg});
         }
 
         for (host_env.roc_allocations.items) |alloc| {
@@ -1038,14 +1030,13 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
 
         const leaked = host_env.gpa.deinit();
         if (leaked == .leak) {
-            const stderr_file: std.fs.File = .stderr();
-            stderr_file.writeAll(
+            std.debug.print("{s}", .{
                 \\
                 \\[Roc Memory Info] Additional memory leak detected by GPA.
                 \\  This indicates memory allocated outside of rocAllocFn was not freed.
                 \\  This is internal to Roc's compiler/runtime, not application code.
                 \\
-            ) catch {};
+            });
         }
     }
 
@@ -1073,17 +1064,15 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
     if (host_env.test_state.enabled) {
         // Check if test failed or not all entries were consumed
         if (host_env.test_state.failed or host_env.test_state.current_index != host_env.test_state.entries.len) {
-            const stderr_file: std.fs.File = .stderr();
-
             // Print failure info
             if (host_env.test_state.failure_info) |info| {
                 if (info.spec_line == 0) {
                     // Extra/unexpected output
-                    stderr_file.writeAll("TEST FAILED: Unexpected ") catch {};
-                    stderr_file.writeAll(effectTypeName(info.actual_type)) catch {};
-                    stderr_file.writeAll(" output: \"") catch {};
-                    stderr_file.writeAll(info.actual_value) catch {};
-                    stderr_file.writeAll("\"\n") catch {};
+                    std.debug.print("{s}", .{"TEST FAILED: Unexpected "});
+                    std.debug.print("{s}", .{effectTypeName(info.actual_type)});
+                    std.debug.print("{s}", .{" output: \""});
+                    std.debug.print("{s}", .{info.actual_value});
+                    std.debug.print("{s}", .{"\"\n"});
                 } else {
                     var buf: [512]u8 = undefined;
                     const msg = std.fmt.bufPrint(&buf, "TEST FAILED at spec line {d}:\n  Expected: {s} \"{s}\"\n  Got:      {s} \"{s}\"\n", .{
@@ -1093,32 +1082,32 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
                         effectTypeName(info.actual_type),
                         info.actual_value,
                     }) catch "TEST FAILED\n";
-                    stderr_file.writeAll(msg) catch {};
+                    std.debug.print("{s}", .{msg});
                 }
             } else if (host_env.test_state.current_index < host_env.test_state.entries.len) {
                 // Not all entries were consumed - list what's remaining
                 const remaining = host_env.test_state.entries.len - host_env.test_state.current_index;
                 var buf: [256]u8 = undefined;
                 const msg = std.fmt.bufPrint(&buf, "TEST FAILED: {d} expected IO operation(s) not performed:\n", .{remaining}) catch "TEST FAILED: expected IO operations not performed\n";
-                stderr_file.writeAll(msg) catch {};
+                std.debug.print("{s}", .{msg});
 
                 // List up to 5 unconsumed entries
                 const max_to_show: usize = 5;
                 var shown: usize = 0;
                 for (host_env.test_state.entries[host_env.test_state.current_index..]) |entry| {
                     if (shown >= max_to_show) {
-                        stderr_file.writeAll("  ...\n") catch {};
+                        std.debug.print("{s}", .{"  ...\n"});
                         break;
                     }
-                    stderr_file.writeAll("  - ") catch {};
-                    stderr_file.writeAll(effectTypeName(entry.effect_type)) catch {};
-                    stderr_file.writeAll(": \"") catch {};
-                    stderr_file.writeAll(entry.value) catch {};
-                    stderr_file.writeAll("\"\n") catch {};
+                    std.debug.print("{s}", .{"  - "});
+                    std.debug.print("{s}", .{effectTypeName(entry.effect_type)});
+                    std.debug.print("{s}", .{": \""});
+                    std.debug.print("{s}", .{entry.value});
+                    std.debug.print("{s}", .{"\"\n"});
                     shown += 1;
                 }
             } else {
-                stderr_file.writeAll("TEST FAILED\n") catch {};
+                std.debug.print("{s}", .{"TEST FAILED\n"});
             }
 
             return 1;

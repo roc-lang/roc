@@ -27,6 +27,7 @@ target
 generated-docs
 
 zig-out
+zig-pkg
 .zig-cache
 .direnv
 .envrc

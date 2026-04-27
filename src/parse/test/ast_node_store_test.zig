@@ -798,5 +798,7 @@ test "NodeStore debug function" {
     });
 
     // Call debug function - it should not crash (use null writer to avoid polluting test output)
-    try store.debugTo(std.io.null_writer.any());
+    var discard_buf: [4096]u8 = undefined;
+    var discard = std.Io.Writer.Discarding.init(&discard_buf);
+    try store.debugTo(&discard.writer);
 }

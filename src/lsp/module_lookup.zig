@@ -239,7 +239,7 @@ pub fn findDefinitionsWithPrefix(
 /// Returns null if the module is not found or the build environment is null.
 pub fn findModuleByName(build_env: *BuildEnv, module_name: []const u8) ?ModuleInfo {
     // Extract the base module name (e.g., "Stdout" from "pf.Stdout")
-    const base_name = if (std.mem.lastIndexOf(u8, module_name, ".")) |dot_pos|
+    const base_name = if (std.mem.findLast(u8, module_name, ".")) |dot_pos|
         module_name[dot_pos + 1 ..]
     else
         module_name;
@@ -268,7 +268,7 @@ pub fn findModuleByNameWithBuiltinCheck(
     builtin_types: []const []const u8,
 ) ?ModuleInfo {
     // Extract the base module name
-    const base_name = if (std.mem.lastIndexOf(u8, module_name, ".")) |dot_pos|
+    const base_name = if (std.mem.findLast(u8, module_name, ".")) |dot_pos|
         module_name[dot_pos + 1 ..]
     else
         module_name;

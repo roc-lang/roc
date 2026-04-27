@@ -15,7 +15,7 @@ const CIR = @import("../CIR.zig");
 const TestEnv = @import("TestEnv.zig").TestEnv;
 const BuiltinTestContext = @import("./BuiltinTestContext.zig").BuiltinTestContext;
 const ModuleEnv = @import("../ModuleEnv.zig");
-const Allocators = base.Allocators;
+const CoreCtx = @import("ctx").CoreCtx;
 const parseIntWithUnderscores = Can.parseIntWithUnderscores;
 const RocDec = builtins.dec.RocDec;
 
@@ -524,7 +524,7 @@ test "hexadecimal integer literals" {
         .{ .literal = "-0x8000000000000001", .expected_value = @as(i128, -9223372036854775809) },
     };
 
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
     var builtin_ctx = try BuiltinTestContext.init(gpa);
@@ -536,14 +536,12 @@ test "hexadecimal integer literals" {
 
         try env.initCIRFields("test");
 
-        var allocators: Allocators = undefined;
-        allocators.initInPlace(gpa);
-        defer allocators.deinit();
+        const roc_ctx = CoreCtx.testing(gpa, gpa);
 
-        const ast = try parse.parseExpr(&allocators, &env.common);
+        const ast = try parse.parseExpr(gpa, &env.common);
         defer ast.deinit();
 
-        var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+        var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -589,7 +587,7 @@ test "binary integer literals" {
         .{ .literal = "-0b1000000000000001", .expected_value = -32769 },
     };
 
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
     var builtin_ctx = try BuiltinTestContext.init(gpa);
@@ -601,14 +599,12 @@ test "binary integer literals" {
 
         try env.initCIRFields("test");
 
-        var allocators: Allocators = undefined;
-        allocators.initInPlace(gpa);
-        defer allocators.deinit();
+        const roc_ctx = CoreCtx.testing(gpa, gpa);
 
-        const ast = try parse.parseExpr(&allocators, &env.common);
+        const ast = try parse.parseExpr(gpa, &env.common);
         defer ast.deinit();
 
-        var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+        var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -654,7 +650,7 @@ test "octal integer literals" {
         .{ .literal = "-0o100001", .expected_value = -32769 },
     };
 
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
     var builtin_ctx = try BuiltinTestContext.init(gpa);
@@ -666,14 +662,12 @@ test "octal integer literals" {
 
         try env.initCIRFields("test");
 
-        var allocators: Allocators = undefined;
-        allocators.initInPlace(gpa);
-        defer allocators.deinit();
+        const roc_ctx = CoreCtx.testing(gpa, gpa);
 
-        const ast = try parse.parseExpr(&allocators, &env.common);
+        const ast = try parse.parseExpr(gpa, &env.common);
         defer ast.deinit();
 
-        var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+        var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -719,7 +713,7 @@ test "integer literals with uppercase base prefixes" {
         .{ .literal = "0XaBcD", .expected_value = 43981 },
     };
 
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
     var builtin_ctx = try BuiltinTestContext.init(gpa);
@@ -731,14 +725,12 @@ test "integer literals with uppercase base prefixes" {
 
         try env.initCIRFields("test");
 
-        var allocators: Allocators = undefined;
-        allocators.initInPlace(gpa);
-        defer allocators.deinit();
+        const roc_ctx = CoreCtx.testing(gpa, gpa);
 
-        const ast = try parse.parseExpr(&allocators, &env.common);
+        const ast = try parse.parseExpr(gpa, &env.common);
         defer ast.deinit();
 
-        var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+        var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -757,7 +749,7 @@ test "integer literals with uppercase base prefixes" {
 }
 
 test "numeric literal patterns use pattern idx as type var" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
 
@@ -810,7 +802,7 @@ test "numeric literal patterns use pattern idx as type var" {
 }
 
 test "pattern numeric literal value edge cases" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
 

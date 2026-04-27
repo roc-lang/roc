@@ -4,7 +4,6 @@
 //! the AST.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const base = @import("base");
 
 const AST = @import("AST.zig");
@@ -138,22 +137,13 @@ pub fn emptyScratch(store: *NodeStore) void {
     store.scratch_requires_entries.clearFrom(0);
 }
 
-const StderrWriter = std.io.GenericWriter(std.fs.File, std.fs.File.WriteError, struct {
-    fn write(file: std.fs.File, bytes: []const u8) std.fs.File.WriteError!usize {
-        return file.write(bytes);
-    }
-}.write);
-
 /// Prints debug information about all nodes and scratch buffers in the store.
-pub fn debug(store: *NodeStore) void {
-    if (comptime builtin.target.os.tag != .freestanding) {
-        const stderr_writer: StderrWriter = .{ .context = std.fs.File.stderr() };
-        store.debugTo(stderr_writer.any()) catch {};
-    }
+pub fn debug(store: *NodeStore, writer: *std.Io.Writer) void {
+    store.debugTo(writer) catch {};
 }
 
 /// Writes debug information about all nodes and scratch buffers to the given writer.
-pub fn debugTo(store: *NodeStore, writer: std.io.AnyWriter) !void {
+pub fn debugTo(store: *NodeStore, writer: *std.Io.Writer) !void {
     try writer.print("\n==> IR.NodeStore DEBUG <==\n", .{});
     try writer.print("Nodes:\n", .{});
     var nodes_iter = store.nodes.iterIndices();
@@ -713,7 +703,7 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             try store.extra_data.append(store.gpa, @intFromEnum(app.@"fn"));
             node.main_token = @as(u32, @intCast(fn_ed_idx));
         },
-        .record_updater => |_| {},
+        .record_updater => {},
         .field_access => |fa| {
             node.tag = .field_access;
             node.region = fa.region;

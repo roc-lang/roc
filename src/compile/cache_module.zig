@@ -6,7 +6,6 @@
 const std = @import("std");
 const can = @import("can");
 const collections = @import("collections");
-
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 // Note: We use SHA256 instead of Blake3 because std.crypto.hash.Blake3 has a bug
@@ -274,96 +273,20 @@ pub const CacheModule = struct {
         }
     };
 
-    /// Read cache file using memory mapping for better performance when available
+    /// Read cache file using memory mapping for better performance when available.
+    /// Mmap is temporarily disabled — always uses allocated memory.
+    // TODO: When re-enabling mmap, use CoreCtx filesystem methods instead of
+    // direct OS access. The mmap path needs:
+    //   - roc_ctx.stat(path) for file size
+    //   - A way to get the raw fd for mmap (may need a new CoreCtx method)
     pub fn readFromFileMapped(
         allocator: Allocator,
         file_path: []const u8,
         filesystem: anytype,
     ) !CacheData {
         // TEMPORARILY DISABLED: mmap for debugging - always use allocated memory
-        // Try to use memory mapping on supported platforms
-        if (false and comptime @hasDecl(std.posix, "mmap") and @import("builtin").target.os.tag != .windows and @import("builtin").target.os.tag != .freestanding) {
-            // Open the file
-            const file = std.fs.cwd().openFile(file_path, .{ .mode = .read_only }) catch {
-                // Fall back to regular reading on open error
-                const data = try readFromFile(allocator, file_path, filesystem);
-                return CacheData{ .allocated = data };
-            };
-            defer file.close();
-
-            // Get file size
-            const stat = try file.stat();
-            const file_size = stat.size;
-
-            // Check if file size exceeds usize limits on 32-bit systems
-            if (file_size > std.math.maxInt(usize)) {
-                // Fall back to regular reading for very large files
-                const data = try readFromFile(allocator, file_path, filesystem);
-                return CacheData{ .allocated = data };
-            }
-
-            const file_size_usize = @as(usize, @intCast(file_size));
-
-            // Memory map the file
-            const mapped_memory = if (comptime @import("builtin").target.os.tag == .macos or
-                @import("builtin").target.os.tag == .ios or
-                @import("builtin").target.os.tag == .tvos or
-                @import("builtin").target.os.tag == .watchos)
-                std.posix.mmap(
-                    null,
-                    file_size_usize,
-                    std.posix.PROT.READ,
-                    .{ .TYPE = .PRIVATE },
-                    file.handle,
-                    0,
-                )
-            else
-                std.posix.mmap(
-                    null,
-                    file_size_usize,
-                    std.posix.PROT.READ,
-                    .{ .TYPE = .PRIVATE },
-                    file.handle,
-                    0,
-                );
-
-            const result = mapped_memory catch {
-                // Fall back to regular reading on mmap error
-                const data = try readFromFile(allocator, file_path, filesystem);
-                return CacheData{ .allocated = data };
-            };
-
-            // Find the aligned portion within the mapped memory
-            const unaligned_ptr = @as([*]const u8, @ptrCast(result.ptr));
-            const addr = @intFromPtr(unaligned_ptr);
-            const aligned_addr = std.mem.alignForward(usize, addr, SERIALIZATION_ALIGNMENT.toByteUnits());
-            const offset = aligned_addr - addr;
-
-            if (offset >= file_size_usize) {
-                // File is too small to contain aligned data
-                if (comptime @hasDecl(std.posix, "munmap") and @import("builtin").target.os.tag != .windows and @import("builtin").target.os.tag != .freestanding) {
-                    std.posix.munmap(result);
-                }
-                const data = try readFromFile(allocator, file_path, filesystem);
-                return CacheData{ .allocated = data };
-            }
-
-            const aligned_ptr = @as([*]align(SERIALIZATION_ALIGNMENT.toByteUnits()) const u8, @ptrFromInt(aligned_addr));
-            const aligned_len = file_size_usize - offset;
-
-            return CacheData{
-                .mapped = .{
-                    .ptr = aligned_ptr,
-                    .len = aligned_len,
-                    .unaligned_ptr = unaligned_ptr,
-                    .unaligned_len = file_size_usize,
-                },
-            };
-        } else {
-            // Platform doesn't support mmap, use regular file reading
-            const data = try readFromFile(allocator, file_path, filesystem);
-            return CacheData{ .allocated = data };
-        }
+        const data = try readFromFile(allocator, file_path, filesystem);
+        return CacheData{ .allocated = data };
     }
 };
 

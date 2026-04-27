@@ -17,6 +17,13 @@ const import_mapping_mod = types.import_mapping;
 const eval = @import("eval");
 const tracy = @import("tracy");
 const roc_target = @import("roc_target");
+const shim_io = @import("shim_io");
+
+pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
+/// Minimal std.Io override for debug output; avoids pulling in the full threaded IO vtable.
+pub const std_options_debug_io = shim_io.io();
+/// Disables threaded debug IO to prevent the threaded vtable from being linked into user programs.
+pub const std_options_debug_threaded_io = null;
 
 // Module tracing flag - enabled via `zig build -Dtrace-modules`
 const trace_modules = if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
@@ -55,8 +62,11 @@ const ipc = if (is_wasm32) struct {
     };
 } else @import("ipc");
 
-// Debug allocator for native platforms (not wasm32) - provides leak detection in Debug/ReleaseSafe builds
-var debug_allocator: if (is_wasm32) void else std.heap.DebugAllocator(.{}) =
+var app_std_io: std.Io = shim_io.io();
+
+// Debug allocator for native platforms (not wasm32) - provides leak detection in Debug/ReleaseSafe builds.
+// Keep it single-threaded so static shim archives do not pull in std.Io.Threaded.
+var debug_allocator: if (is_wasm32) void else std.heap.DebugAllocator(.{ .thread_safe = false }) =
     if (is_wasm32) {} else .{ .backing_allocator = std.heap.c_allocator };
 
 // Get the base allocator based on platform and build mode
@@ -152,20 +162,20 @@ const InitializationFlag = struct {
 /// On wasm32: no-op (single-threaded environment)
 /// On native: actual mutex for thread safety
 const PlatformMutex = struct {
-    inner: if (is_wasm32) void else std.Thread.Mutex,
+    inner: if (is_wasm32) void else std.Io.Mutex,
 
     const Self = @This();
 
     pub fn init() Self {
-        return .{ .inner = if (is_wasm32) {} else .{} };
+        return .{ .inner = if (is_wasm32) {} else std.Io.Mutex.init };
     }
 
     pub fn lock(self: *Self) void {
-        if (!is_wasm32) self.inner.lock();
+        if (!is_wasm32) self.inner.lockUncancelable(app_std_io);
     }
 
     pub fn unlock(self: *Self) void {
-        if (!is_wasm32) self.inner.unlock();
+        if (!is_wasm32) self.inner.unlock(app_std_io);
     }
 };
 
@@ -178,8 +188,7 @@ extern var roc__serialized_size: usize;
 
 // Global state for shared memory - initialized once per process
 var shared_memory_initialized = InitializationFlag.init();
-var global_shm: if (is_wasm32) void else ?SharedMemoryAllocator = if (is_wasm32)
-{} else null;
+var global_shm: if (is_wasm32) void else ?SharedMemoryAllocator = if (is_wasm32) {} else null;
 var global_env_ptr: ?*ModuleEnv = null; // Primary env for entry point lookups (platform or app)
 var global_app_env_ptr: ?*ModuleEnv = null; // App env for e_lookup_required resolution
 var global_builtin_modules: ?eval.BuiltinModules = null;
@@ -294,7 +303,7 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
 
         // Create shared memory allocator from coordination info
         // Note shm last the lifetime of the program and is never freed.
-        var shm = SharedMemoryAllocator.fromCoordination(allocator, page_size) catch |err| {
+        var shm = SharedMemoryAllocator.fromCoordination(allocator, app_std_io, page_size) catch |err| {
             const msg2 = std.fmt.bufPrint(&buf, "Failed to create shared memory allocator: {s}", .{@errorName(err)}) catch "Failed to create shared memory allocator";
             roc_ops.crash(msg2);
             return error.SharedMemoryError;

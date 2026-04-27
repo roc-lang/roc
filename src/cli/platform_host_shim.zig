@@ -218,31 +218,31 @@ fn addRocSerializedModule(builder: *Builder, target: RocTarget, serialized_modul
         const internal_name = try builder.strtabString(".roc_serialized_data");
         const array_var = try builder.addVariable(internal_name, str_const.typeOf(builder), .default);
         try array_var.setInitializer(str_const, builder);
-        array_var.setLinkage(.internal, builder);
+        array_var.ptrConst(builder).global.setLinkage(.internal, builder);
         array_var.setMutability(.global, builder);
         array_var.setAlignment(Builder.Alignment.fromByteUnits(16), builder);
 
         // Create the external base_ptr variable pointing to the internal array
         const base_ptr_var = try builder.addVariable(base_ptr_name, ptr_type, .default);
         try base_ptr_var.setInitializer(array_var.toConst(builder), builder);
-        base_ptr_var.setLinkage(.external, builder);
+        base_ptr_var.ptrConst(builder).global.setLinkage(.external, builder);
 
         // Create the external size variable
         const size_const = try builder.intConst(usize_type, bytes.len);
         const size_var = try builder.addVariable(size_name, usize_type, .default);
         try size_var.setInitializer(size_const, builder);
-        size_var.setLinkage(.external, builder);
+        size_var.ptrConst(builder).global.setLinkage(.external, builder);
     } else {
         // Create null pointer for base_ptr
         const null_ptr = try builder.nullConst(ptr_type);
         const base_ptr_var = try builder.addVariable(base_ptr_name, ptr_type, .default);
         try base_ptr_var.setInitializer(null_ptr, builder);
-        base_ptr_var.setLinkage(.external, builder);
+        base_ptr_var.ptrConst(builder).global.setLinkage(.external, builder);
 
         // Create zero size
         const zero_size = try builder.intConst(usize_type, 0);
         const size_var = try builder.addVariable(size_name, usize_type, .default);
         try size_var.setInitializer(zero_size, builder);
-        size_var.setLinkage(.external, builder);
+        size_var.ptrConst(builder).global.setLinkage(.external, builder);
     }
 }

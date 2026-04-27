@@ -6,6 +6,7 @@ If you run into any problems getting Roc built from source, please ask for help 
 
 ## Recommended way
 
+<!-- TODO ZIG 16: update version to 0.16.x -->
 [Download zig 0.15.2](https://ziglang.org/download/) and add it to your PATH.
 [Search "Setting up PATH"](https://ziglang.org/learn/getting-started/) for more details.
 

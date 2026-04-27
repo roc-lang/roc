@@ -880,7 +880,7 @@ comptime {
 }
 
 test {
-    _ = std.testing.refAllDeclsRecursive(@This());
+    _ = std.testing.refAllDecls(@This());
 }
 
 /// Helper function to convert the AST to a human friendly representation in S-expression format

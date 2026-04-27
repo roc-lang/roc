@@ -289,7 +289,7 @@ pub const Generalizer = struct {
 
     fn adjustRankContent(self: *Self, content: Content, group_rank: Rank, vars_to_generalize: []Var) std.mem.Allocator.Error!Rank {
         return switch (content) {
-            .flex => |_| {
+            .flex => {
                 // Here, we start at group_rank (since flex should be generalized),
                 // then we recurse into the constraints.
                 const next_rank = group_rank;
@@ -298,7 +298,7 @@ pub const Generalizer = struct {
                 // }
                 return next_rank;
             },
-            .rigid => |_| {
+            .rigid => {
                 // Here, we start at group_rank (since rigid should be generalized),
                 // then we recurse into the constraints.
                 const next_rank = group_rank;

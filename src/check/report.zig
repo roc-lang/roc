@@ -3246,7 +3246,9 @@ pub const ReportBuilder = struct {
     /// Get a number string ("1", "2", ...)
     fn getNumOwned(self: *Self, report: *Report, n: u32) ![]const u8 {
         self.bytes_buf.clearRetainingCapacity();
-        try self.bytes_buf.writer().print("{d}", .{n});
+        var tmp: [20]u8 = undefined;
+        const formatted = std.fmt.bufPrint(&tmp, "{d}", .{n}) catch unreachable;
+        try self.bytes_buf.appendSlice(formatted);
         return try report.addOwnedString(self.bytes_buf.items);
     }
 
@@ -3283,7 +3285,9 @@ pub const ReportBuilder = struct {
                     3 => &[_]u8{ 'r', 'd' },
                     else => &[_]u8{ 't', 'h' },
                 };
-                try buf.writer().print("{d}{s}", .{ n, suffix });
+                var tmp: [32]u8 = undefined;
+                const formatted = std.fmt.bufPrint(&tmp, "{d}{s}", .{ n, suffix }) catch unreachable;
+                try buf.appendSlice(formatted);
             },
         }
     }

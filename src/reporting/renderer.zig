@@ -21,8 +21,8 @@ pub const ReportingConfig = @import("config.zig").ReportingConfig;
 fn sanitisePathForSnapshots(path: []const u8) []const u8 {
 
     // Check if this is a snapshot file (contains /snapshots/ or \snapshots\)
-    if (std.mem.indexOf(u8, path, "/snapshots/") != null or
-        std.mem.indexOf(u8, path, "\\snapshots\\") != null)
+    if (std.mem.find(u8, path, "/snapshots/") != null or
+        std.mem.find(u8, path, "\\snapshots\\") != null)
     {
         // For snapshot files, just return the basename
         return std.fs.path.basename(path);
@@ -875,8 +875,8 @@ test "render report to markdown" {
 
     try renderReportToMarkdown(&report, &writer.writer, ReportingConfig.initMarkdown());
 
-    try testing.expect(std.mem.indexOf(u8, writer.written(), "**TEST ERROR**") != null);
-    try testing.expect(std.mem.indexOf(u8, writer.written(), "This is a test error message.") != null);
+    try testing.expect(std.mem.find(u8, writer.written(), "**TEST ERROR**") != null);
+    try testing.expect(std.mem.find(u8, writer.written(), "This is a test error message.") != null);
 }
 
 test "render document with annotations to markdown" {
@@ -906,8 +906,8 @@ test "render HTML escaping" {
 
     try renderDocumentToHtml(&doc, &writer.writer, ReportingConfig.initHtml());
 
-    try testing.expect(std.mem.indexOf(u8, writer.written(), "&lt;script&gt;") != null);
-    try testing.expect(std.mem.indexOf(u8, writer.written(), "<script>") == null);
+    try testing.expect(std.mem.find(u8, writer.written(), "&lt;script&gt;") != null);
+    try testing.expect(std.mem.find(u8, writer.written(), "<script>") == null);
 }
 
 test "render indentation and spacing" {

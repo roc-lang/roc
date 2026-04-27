@@ -31,7 +31,8 @@ const glibc_cross_targets = [_]CrossTarget{
 /// Windows cross-compile targets
 const windows_cross_targets = [_]CrossTarget{
     .{ .name = "x64win", .query = .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .msvc } },
-    .{ .name = "arm64win", .query = .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .msvc } },
+    // TODO: re-enable when Zig 0.16 fixes @ptrCast alignment bug in std/debug/SelfInfo/Windows.zig:569
+    // .{ .name = "arm64win", .query = .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .msvc } },
 };
 
 /// All Linux cross-compile targets (musl + glibc)
@@ -120,7 +121,7 @@ const TestsSummaryStep = struct {
     /// Returns true if the test name contains any of the user's filter strings.
     fn matchesUserFilter(test_filters: []const []const u8, name: []const u8) bool {
         for (test_filters) |filter| {
-            if (std.mem.indexOf(u8, name, filter) != null) return true;
+            if (std.mem.find(u8, name, filter) != null) return true;
         }
         return false;
     }
@@ -222,12 +223,13 @@ const CheckTypeCheckerPatternsStep = struct {
         // TODO: uncomment "src/canonicalize" once its std.mem violations are fixed
         const dirs_to_scan = [_][]const u8{ "src/check", "src/layout", "src/eval" };
         for (dirs_to_scan) |dir_path| {
-            var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
+            const io = step.owner.graph.io;
+            var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch |err| {
                 return step.fail("Failed to open {s} directory: {}", .{ dir_path, err });
             };
-            defer dir.close();
+            defer dir.close(io);
 
-            try scanDirectory(allocator, dir, dir_path, &violations);
+            try scanDirectory(allocator, io, dir, dir_path, &violations);
         }
 
         if (violations.items.len > 0) {
@@ -320,29 +322,27 @@ const CheckTypeCheckerPatternsStep = struct {
 
     fn scanDirectory(
         allocator: std.mem.Allocator,
-        dir: std.fs.Dir,
+        io: std.Io,
+        dir: std.Io.Dir,
         path_prefix: []const u8,
         violations: *std.ArrayList(Violation),
     ) !void {
         var walker = try dir.walk(allocator);
         defer walker.deinit();
 
-        while (try walker.next()) |entry| {
+        while (try walker.next(io)) |entry| {
             if (entry.kind != .file) continue;
             if (!std.mem.endsWith(u8, entry.path, ".zig")) continue;
 
             // Skip test files - they may legitimately need string comparison for assertions
             if (std.mem.endsWith(u8, entry.path, "_test.zig")) continue;
-            if (std.mem.indexOf(u8, entry.path, "test/") != null) continue;
+            if (std.mem.find(u8, entry.path, "test/") != null) continue;
             if (std.mem.startsWith(u8, entry.path, "test")) continue;
             if (std.mem.endsWith(u8, entry.path, "test_runner.zig")) continue;
 
             const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ path_prefix, entry.path });
 
-            const file = dir.openFile(entry.path, .{}) catch continue;
-            defer file.close();
-
-            const content = file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch continue;
+            const content = dir.readFileAlloc(io, entry.path, allocator, .limited(10 * 1024 * 1024)) catch continue;
             defer allocator.free(content);
 
             var line_number: usize = 1;
@@ -361,7 +361,7 @@ const CheckTypeCheckerPatternsStep = struct {
                     }
 
                     // Check for std.mem. usage (but allow safe patterns)
-                    if (std.mem.indexOf(u8, line, "std.mem.")) |idx| {
+                    if (std.mem.find(u8, line, "std.mem.")) |idx| {
                         const after_match = line[idx + 8 ..];
 
                         // Allow these safe patterns that don't involve string/byte comparison:
@@ -393,7 +393,7 @@ const CheckTypeCheckerPatternsStep = struct {
                     }
 
                     // Check for findByString usage - should use Ident.Idx comparison instead
-                    if (std.mem.indexOf(u8, line, "findByString") != null and !isInExcludedRange(full_path, line_number)) {
+                    if (std.mem.find(u8, line, "findByString") != null and !isInExcludedRange(full_path, line_number)) {
                         try violations.append(allocator, .{
                             .file_path = full_path,
                             .line_number = line_number,
@@ -402,7 +402,7 @@ const CheckTypeCheckerPatternsStep = struct {
                     }
 
                     // Check for findIdent usage - should use pre-stored Ident.Idx instead
-                    if (std.mem.indexOf(u8, line, "findIdent") != null and !isInExcludedRange(full_path, line_number)) {
+                    if (std.mem.find(u8, line, "findIdent") != null and !isInExcludedRange(full_path, line_number)) {
                         try violations.append(allocator, .{
                             .file_path = full_path,
                             .line_number = line_number,
@@ -411,7 +411,7 @@ const CheckTypeCheckerPatternsStep = struct {
                     }
 
                     // Check for getMethodIdent usage - should use pre-stored Ident.Idx instead
-                    if (std.mem.indexOf(u8, line, "getMethodIdent") != null and !isInExcludedRange(full_path, line_number)) {
+                    if (std.mem.find(u8, line, "getMethodIdent") != null and !isInExcludedRange(full_path, line_number)) {
                         try violations.append(allocator, .{
                             .file_path = full_path,
                             .line_number = line_number,
@@ -458,12 +458,13 @@ const CheckEnumFromIntZeroStep = struct {
         defer violations.deinit(allocator);
 
         // Recursively scan src/ for .zig files
-        var dir = std.fs.cwd().openDir("src", .{ .iterate = true }) catch |err| {
+        const io = step.owner.graph.io;
+        var dir = std.Io.Dir.cwd().openDir(io, "src", .{ .iterate = true }) catch |err| {
             return step.fail("Failed to open src directory: {}", .{err});
         };
-        defer dir.close();
+        defer dir.close(io);
 
-        try scanDirectoryForEnumFromIntZero(allocator, dir, "src", &violations);
+        try scanDirectoryForEnumFromIntZero(allocator, io, dir, "src", &violations);
 
         if (violations.items.len > 0) {
             std.debug.print("\n", .{});
@@ -526,23 +527,21 @@ const CheckEnumFromIntZeroStep = struct {
 
     fn scanDirectoryForEnumFromIntZero(
         allocator: std.mem.Allocator,
-        dir: std.fs.Dir,
+        io: std.Io,
+        dir: std.Io.Dir,
         path_prefix: []const u8,
         violations: *std.ArrayList(Violation),
     ) !void {
         var walker = try dir.walk(allocator);
         defer walker.deinit();
 
-        while (try walker.next()) |entry| {
+        while (try walker.next(io)) |entry| {
             if (entry.kind != .file) continue;
             if (!std.mem.endsWith(u8, entry.path, ".zig")) continue;
 
             const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ path_prefix, entry.path });
 
-            const file = dir.openFile(entry.path, .{}) catch continue;
-            defer file.close();
-
-            const content = file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch continue;
+            const content = dir.readFileAlloc(io, entry.path, allocator, .limited(10 * 1024 * 1024)) catch continue;
             defer allocator.free(content);
 
             var line_number: usize = 1;
@@ -561,7 +560,7 @@ const CheckEnumFromIntZeroStep = struct {
                     }
 
                     // Check for @enumFromInt(0) usage
-                    if (std.mem.indexOf(u8, line, "@enumFromInt(0)") != null) {
+                    if (std.mem.find(u8, line, "@enumFromInt(0)") != null) {
                         try violations.append(allocator, .{
                             .file_path = full_path,
                             .line_number = line_number,
@@ -605,12 +604,13 @@ const CheckUnusedSuppressionStep = struct {
         defer violations.deinit(allocator);
 
         // Scan all src/ directories for .zig files
-        var dir = std.fs.cwd().openDir("src", .{ .iterate = true }) catch |err| {
+        const io = step.owner.graph.io;
+        var dir = std.Io.Dir.cwd().openDir(io, "src", .{ .iterate = true }) catch |err| {
             return step.fail("Failed to open src/ directory: {}", .{err});
         };
-        defer dir.close();
+        defer dir.close(io);
 
-        try scanDirectoryForUnusedSuppression(allocator, dir, "src", &violations);
+        try scanDirectoryForUnusedSuppression(allocator, io, dir, "src", &violations);
 
         if (violations.items.len > 0) {
             std.debug.print("\n", .{});
@@ -656,23 +656,21 @@ const CheckUnusedSuppressionStep = struct {
 
     fn scanDirectoryForUnusedSuppression(
         allocator: std.mem.Allocator,
-        dir: std.fs.Dir,
+        io: std.Io,
+        dir: std.Io.Dir,
         path_prefix: []const u8,
         violations: *std.ArrayList(Violation),
     ) !void {
         var walker = try dir.walk(allocator);
         defer walker.deinit();
 
-        while (try walker.next()) |entry| {
+        while (try walker.next(io)) |entry| {
             if (entry.kind != .file) continue;
             if (!std.mem.endsWith(u8, entry.path, ".zig")) continue;
 
             const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ path_prefix, entry.path });
 
-            const file = dir.openFile(entry.path, .{}) catch continue;
-            defer file.close();
-
-            const content = file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch continue;
+            const content = dir.readFileAlloc(io, entry.path, allocator, .limited(10 * 1024 * 1024)) catch continue;
             defer allocator.free(content);
 
             var line_number: usize = 1;
@@ -791,7 +789,7 @@ const CheckPanicStep = struct {
 
     fn isAllowlisted(line: []const u8) bool {
         for (allowlist_patterns) |pattern| {
-            if (std.mem.indexOf(u8, line, pattern) != null) return true;
+            if (std.mem.find(u8, line, pattern) != null) return true;
         }
         return false;
     }
@@ -807,14 +805,8 @@ const CheckPanicStep = struct {
         return false;
     }
 
-    fn scanFile(allocator: std.mem.Allocator, file_path: []const u8, violations: *std.ArrayList(Violation)) !void {
-        const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
-            std.debug.print("Warning: Failed to open {s}: {}\n", .{ file_path, err });
-            return;
-        };
-        defer file.close();
-
-        const content = file.readToEndAlloc(allocator, 50 * 1024 * 1024) catch |err| {
+    fn scanFile(allocator: std.mem.Allocator, io: std.Io, file_path: []const u8, violations: *std.ArrayList(Violation)) !void {
+        const content = std.Io.Dir.cwd().readFileAlloc(io, file_path, allocator, .limited(50 * 1024 * 1024)) catch |err| {
             std.debug.print("Warning: Failed to read {s}: {}\n", .{ file_path, err });
             return;
         };
@@ -831,9 +823,9 @@ const CheckPanicStep = struct {
                 // Skip comments
                 if (!std.mem.startsWith(u8, trimmed, "//")) {
                     // Check for @panic usage
-                    const has_panic = std.mem.indexOf(u8, line, "@panic(") != null;
+                    const has_panic = std.mem.find(u8, line, "@panic(") != null;
                     // Check for std.debug.panic usage
-                    const has_debug_panic = std.mem.indexOf(u8, line, "std.debug.panic") != null;
+                    const has_debug_panic = std.mem.find(u8, line, "std.debug.panic") != null;
 
                     if (has_panic or has_debug_panic) {
                         if (!isAllowlisted(line) and !isInExcludedRange(file_path, line_number)) {
@@ -859,26 +851,28 @@ const CheckPanicStep = struct {
         var violations = std.ArrayList(Violation).empty;
         defer violations.deinit(allocator);
 
+        const io = b.graph.io;
+
         // Scan individual files
         for (scan_files) |file_path| {
-            try scanFile(allocator, file_path, &violations);
+            try scanFile(allocator, io, file_path, &violations);
         }
 
         // Scan directories
         for (scan_dirs) |dir_path| {
-            var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
+            var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch |err| {
                 std.debug.print("Warning: Failed to open directory {s}: {}\n", .{ dir_path, err });
                 continue;
             };
-            defer dir.close();
+            defer dir.close(io);
 
             var iter = dir.iterate();
-            while (try iter.next()) |entry| {
+            while (try iter.next(io)) |entry| {
                 if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".zig")) {
                     if (!isExcludedFile(entry.name)) {
                         const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir_path, entry.name });
                         defer allocator.free(full_path);
-                        try scanFile(allocator, full_path, &violations);
+                        try scanFile(allocator, io, full_path, &violations);
                     }
                 }
             }
@@ -977,12 +971,8 @@ const CheckCliGlobalStdioStep = struct {
 
         // Only scan src/cli/main.zig
         const file_path = "src/cli/main.zig";
-        const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
-            return step.fail("Failed to open {s}: {}", .{ file_path, err });
-        };
-        defer file.close();
-
-        const content = file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch |err| {
+        const io = step.owner.graph.io;
+        const content = std.Io.Dir.cwd().readFileAlloc(io, file_path, allocator, .limited(10 * 1024 * 1024)) catch |err| {
             return step.fail("Failed to read {s}: {}", .{ file_path, err });
         };
         defer allocator.free(content);
@@ -1005,7 +995,7 @@ const CheckCliGlobalStdioStep = struct {
                 };
 
                 for (forbidden_patterns) |pattern| {
-                    if (std.mem.indexOf(u8, trimmed, pattern) != null) {
+                    if (std.mem.find(u8, trimmed, pattern) != null) {
                         try violations.append(allocator, .{
                             .file_path = file_path,
                             .line_number = line_number,
@@ -1040,7 +1030,7 @@ const CheckCliGlobalStdioStep = struct {
                 \\     and I/O. This provides a uniform interface for resources.
                 \\
                 \\WHAT TO DO INSTEAD:
-                \\  Access stdout/stderr through the CliContext:
+                \\  Access stdout/stderr through the CliCtx:
                 \\
                 \\  Example - WRONG:
                 \\    const stdout = std.io.getStdOut().writer();
@@ -1094,6 +1084,7 @@ const CoverageSummaryStep = struct {
     /// - macOS (ARM64 and x86_64): Uses libdwarf for DWARF parsing
     /// - Linux ARM64: Uses libdw (elfutils) for DWARF parsing
     ///
+    /// TODO ZIG 16: re-check if this DWARF bug is fixed in 0.16 — may be able to enable x86_64 coverage
     /// Coverage does NOT work on Linux x86_64 due to a Zig 0.15.2 compiler bug that
     /// generates invalid DWARF .debug_line sections. libdw fails with "invalid
     /// .debug_line section" when parsing user code compilation units, while stdlib
@@ -1127,7 +1118,8 @@ const CoverageSummaryStep = struct {
         const json_path = try std.fmt.allocPrint(allocator, "{s}/parse_unit_coverage/coverage.json", .{self.coverage_dir});
         defer allocator.free(json_path);
 
-        const json_file = std.fs.cwd().openFile(json_path, .{}) catch |err| {
+        const io = b.graph.io;
+        const json_content = std.Io.Dir.cwd().readFileAlloc(io, json_path, allocator, .limited(10 * 1024 * 1024)) catch |err| {
             std.debug.print("\n", .{});
             std.debug.print("=" ** 60 ++ "\n", .{});
             std.debug.print("COVERAGE ERROR\n", .{});
@@ -1139,9 +1131,6 @@ const CoverageSummaryStep = struct {
             std.debug.print("=" ** 60 ++ "\n", .{});
             return;
         };
-        defer json_file.close();
-
-        const json_content = try json_file.readToEndAlloc(allocator, 10 * 1024 * 1024);
         defer allocator.free(json_content);
 
         // Parse and summarize coverage
@@ -1215,10 +1204,10 @@ const CoverageSummaryStep = struct {
                     const filename = filename_val.string;
 
                     // Only include src/parse files
-                    if (std.mem.indexOf(u8, filename, "src/parse") == null) continue;
+                    if (std.mem.find(u8, filename, "src/parse") == null) continue;
 
                     // Skip test files
-                    if (std.mem.indexOf(u8, filename, "/test/") != null) continue;
+                    if (std.mem.find(u8, filename, "/test/") != null) continue;
 
                     // Get coverage percentage (stored as string in kcov JSON)
                     const percent_val = file_obj.object.get("percent_covered") orelse continue;
@@ -1305,8 +1294,9 @@ fn checkFxPlatformTestCoverage(step: *Step) !void {
     const allocator = b.allocator;
 
     // Get all .roc files in test/fx (excluding subdirectories)
-    var fx_dir = try std.fs.cwd().openDir("test/fx", .{ .iterate = true });
-    defer fx_dir.close();
+    const io = b.graph.io;
+    var fx_dir = try std.Io.Dir.cwd().openDir(io, "test/fx", .{ .iterate = true });
+    defer fx_dir.close(io);
 
     var roc_files = std.ArrayList([]const u8).empty;
     defer {
@@ -1317,7 +1307,7 @@ fn checkFxPlatformTestCoverage(step: *Step) !void {
     }
 
     var dir_iter = fx_dir.iterate();
-    while (try dir_iter.next()) |entry| {
+    while (try dir_iter.next(io)) |entry| {
         if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".roc")) {
             const file_name = try allocator.dupe(u8, entry.name);
             try roc_files.append(allocator, file_name);
@@ -1348,7 +1338,7 @@ fn checkFxPlatformTestCoverage(step: *Step) !void {
     };
 
     for (test_files_to_scan) |test_file_path| {
-        const test_file_contents = std.fs.cwd().readFileAlloc(allocator, test_file_path, 1024 * 1024) catch |err| {
+        const test_file_contents = std.Io.Dir.cwd().readFileAlloc(io, test_file_path, allocator, .limited(1024 * 1024)) catch |err| {
             std.debug.print("Warning: Could not read {s}: {}\n", .{ test_file_path, err });
             continue;
         };
@@ -1358,15 +1348,15 @@ fn checkFxPlatformTestCoverage(step: *Step) !void {
         while (line_iter.next()) |line| {
             // Look for patterns like "test/fx/filename.roc"
             var search_start: usize = 0;
-            while (std.mem.indexOfPos(u8, line, search_start, "test/fx/")) |idx| {
+            while (std.mem.findPos(u8, line, search_start, "test/fx/")) |idx| {
                 const rest_of_line = line[idx..];
                 // Find the end of the filename
-                if (std.mem.indexOf(u8, rest_of_line, ".roc")) |roc_pos| {
+                if (std.mem.find(u8, rest_of_line, ".roc")) |roc_pos| {
                     const full_path = rest_of_line[0 .. roc_pos + 4]; // Include ".roc"
                     // Extract just the filename (after "test/fx/")
                     const filename = full_path["test/fx/".len..];
                     // Only count files in test/fx (not subdirectories like test/fx/subdir/)
-                    if (std.mem.indexOf(u8, filename, "/") == null) {
+                    if (std.mem.find(u8, filename, "/") == null) {
                         // Dupe the filename since the source buffer will be freed
                         const duped_filename = try allocator.dupe(u8, filename);
                         try tested_files.put(duped_filename, {});
@@ -1470,15 +1460,11 @@ const MiniCiStep = struct {
         try child_argv.append(b.allocator, "run");
         try child_argv.append(b.allocator, "ci/zig_lints.zig");
 
-        var child = std.process.Child.init(child_argv.items, b.allocator);
-        child.stdin_behavior = .Inherit;
-        child.stdout_behavior = .Inherit;
-        child.stderr_behavior = .Inherit;
-
-        const term = try child.spawnAndWait();
+        var child = try std.process.spawn(b.graph.io, .{ .argv = child_argv.items });
+        const term = try child.wait(b.graph.io);
 
         switch (term) {
-            .Exited => |code| {
+            .exited => |code| {
                 if (code != 0) {
                     return step.fail("Zig lints failed. Run 'zig run ci/zig_lints.zig' to see details.", .{});
                 }
@@ -1500,15 +1486,11 @@ const MiniCiStep = struct {
         try child_argv.append(b.allocator, "run");
         try child_argv.append(b.allocator, "ci/tidy.zig");
 
-        var child = std.process.Child.init(child_argv.items, b.allocator);
-        child.stdin_behavior = .Inherit;
-        child.stdout_behavior = .Inherit;
-        child.stderr_behavior = .Inherit;
-
-        const term = try child.spawnAndWait();
+        var child = try std.process.spawn(b.graph.io, .{ .argv = child_argv.items });
+        const term = try child.wait(b.graph.io);
 
         switch (term) {
-            .Exited => |code| {
+            .exited => |code| {
                 if (code != 0) {
                     return step.fail("Tidy checks failed. Run 'zig run ci/tidy.zig' to see details.", .{});
                 }
@@ -1531,15 +1513,11 @@ const MiniCiStep = struct {
         try child_argv.append(b.allocator, "--check");
         try child_argv.append(b.allocator, "src/build/roc/Builtin.roc");
 
-        var child = std.process.Child.init(child_argv.items, b.allocator);
-        child.stdin_behavior = .Inherit;
-        child.stdout_behavior = .Inherit;
-        child.stderr_behavior = .Inherit;
-
-        const term = try child.spawnAndWait();
+        var child = try std.process.spawn(b.graph.io, .{ .argv = child_argv.items });
+        const term = try child.wait(b.graph.io);
 
         switch (term) {
-            .Exited => |code| {
+            .exited => |code| {
                 if (code != 0) {
                     return step.fail(
                         "src/build/roc/Builtin.roc is not formatted. " ++
@@ -1566,15 +1544,11 @@ const MiniCiStep = struct {
         try child_argv.append(b.allocator, "--exit-code");
         try child_argv.append(b.allocator, "test/snapshots");
 
-        var child = std.process.Child.init(child_argv.items, b.allocator);
-        child.stdin_behavior = .Inherit;
-        child.stdout_behavior = .Inherit;
-        child.stderr_behavior = .Inherit;
-
-        const term = try child.spawnAndWait();
+        var child = try std.process.spawn(b.graph.io, .{ .argv = child_argv.items });
+        const term = try child.wait(b.graph.io);
 
         switch (term) {
-            .Exited => |code| {
+            .exited => |code| {
                 if (code != 0) {
                     return step.fail(
                         "Snapshots in 'test/snapshots' have changed. " ++
@@ -1608,15 +1582,12 @@ const MiniCiStep = struct {
             try child_argv.append(b.allocator, name);
         }
 
-        var child = std.process.Child.init(child_argv.items, b.allocator);
-        child.stdin_behavior = .Inherit;
-        child.stdout_behavior = .Inherit;
-        child.stderr_behavior = .Inherit;
-
-        const term = try child.spawnAndWait();
+        const io = b.graph.io;
+        var child = try std.process.spawn(io, .{ .argv = child_argv.items });
+        const term = try child.wait(io);
 
         switch (term) {
-            .Exited => |code| {
+            .exited => |code| {
                 if (code != 0) {
                     return step.fail("`{s}` failed with exit code {d}", .{ display, code });
                 }
@@ -1638,15 +1609,12 @@ const MiniCiStep = struct {
         try child_argv.append(b.allocator, "run");
         try child_argv.append(b.allocator, "ci/check_test_wiring.zig");
 
-        var child = std.process.Child.init(child_argv.items, b.allocator);
-        child.stdin_behavior = .Inherit;
-        child.stdout_behavior = .Inherit;
-        child.stderr_behavior = .Inherit;
-
-        const term = try child.spawnAndWait();
+        const io = b.graph.io;
+        var child = try std.process.spawn(io, .{ .argv = child_argv.items });
+        const term = try child.wait(io);
 
         switch (term) {
-            .Exited => |code| {
+            .exited => |code| {
                 if (code != 0) {
                     return step.fail(
                         "Test wiring check failed. Run 'zig run ci/check_test_wiring.zig' to see details.",
@@ -1688,15 +1656,11 @@ const TidyStep = struct {
         try child_argv.append(b.allocator, "run");
         try child_argv.append(b.allocator, "ci/tidy.zig");
 
-        var child = std.process.Child.init(child_argv.items, b.allocator);
-        child.stdin_behavior = .Inherit;
-        child.stdout_behavior = .Inherit;
-        child.stderr_behavior = .Inherit;
-
-        const term = try child.spawnAndWait();
+        var child = try std.process.spawn(b.graph.io, .{ .argv = child_argv.items });
+        const term = try child.wait(b.graph.io);
 
         switch (term) {
-            .Exited => |code| {
+            .exited => |code| {
                 if (code != 0) {
                     return step.fail("Tidy checks failed. Run 'zig run ci/tidy.zig' to see details.", .{});
                 }
@@ -1727,7 +1691,11 @@ fn createAndRunBuiltinCompiler(
             .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
             .target = b.graph.host, // this runs at build time on the *host* machine!
             .optimize = .Debug, // No need to optimize - only compiles builtin modules
-            // Note: libc linking is handled by add_tracy below (required when tracy is enabled)
+            // ctx.CoreCtx reads env vars via std.c.getenv; Zig 0.16 requires
+            // link_libc=true on any compile unit that references std.c.*.
+            // (add_tracy below also sets this when tracy is enabled, but tracy is
+            // always disabled for the build-time builtin compiler.)
+            .link_libc = true,
         }),
     });
     configureBackend(builtin_compiler_exe, b.graph.host);
@@ -1788,6 +1756,9 @@ fn createTestPlatformHostLib(
     configureBackend(lib, target);
     lib.root_module.addImport("builtins", roc_modules.builtins);
     lib.root_module.addImport("build_options", roc_modules.build_options);
+    lib.root_module.addImport("shim_io", b.addModule("shim_io", .{
+        .root_source_file = b.path("src/shim_io.zig"),
+    }));
     // Bundle compiler-rt when LLVM is used (e.g. x64mac), so that LLVM-generated
     // symbols like __zig_probe_stack are available at link time. Otherwise skip it
     // to avoid duplicate symbol errors (e.g. on Windows).
@@ -1839,6 +1810,33 @@ fn buildAndCopyTestPlatformHostLib(
     return &copy_step.step;
 }
 
+// Custom step to remove a directory tree (replaces removed addRemoveDirTree)
+const RemoveDirTreeStep = struct {
+    step: Step,
+    dir_path: []const u8,
+
+    fn create(b: *std.Build, dir_path: []const u8) *RemoveDirTreeStep {
+        const self = b.allocator.create(RemoveDirTreeStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "remove-dir-tree",
+                .owner = b,
+                .makeFn = make,
+            }),
+            .dir_path = dir_path,
+        };
+        return self;
+    }
+
+    fn make(step: *Step, options: Step.MakeOptions) !void {
+        _ = options;
+        const self: *RemoveDirTreeStep = @fieldParentPtr("step", step);
+        const io = step.owner.graph.io;
+        std.Io.Dir.cwd().deleteTree(io, self.dir_path) catch {};
+    }
+};
+
 // Workaround for Zig bug https://codeberg.org/ziglang/zig/issues/30572
 const FixArchivePaddingStep = struct {
     step: Step,
@@ -1861,14 +1859,15 @@ const FixArchivePaddingStep = struct {
     fn make(step: *Step, options: Step.MakeOptions) !void {
         _ = options;
         const self: *FixArchivePaddingStep = @fieldParentPtr("step", step);
+        const io = step.owner.graph.io;
 
-        const file = std.fs.cwd().openFile(self.archive_path, .{ .mode = .read_write }) catch {
+        const file = std.Io.Dir.cwd().openFile(io, self.archive_path, .{ .mode = .read_write }) catch {
             // Archive doesn't exist yet (e.g. cross-compilation target not built) — skip silently.
             return;
         };
-        defer file.close();
+        defer file.close(io);
 
-        const stat = try file.stat();
+        const stat = try file.stat(io);
         var file_size = stat.size;
 
         // AR format requires archives to end on an even byte boundary.
@@ -1876,16 +1875,14 @@ const FixArchivePaddingStep = struct {
         // This fixes Zig bug https://codeberg.org/ziglang/zig/issues/30572
         // where Zig's archiver doesn't add required padding after odd-sized members.
         if (file_size % 2 == 1) {
-            try file.seekTo(file_size);
-            try file.writeAll("\n");
+            try file.writePositionalAll(io, "\n", file_size);
             file_size += 1;
         }
 
         // Parse the archive to verify member offsets are valid.
         // This catches cases where lld would fail with "truncated or malformed archive".
-        try file.seekTo(0);
         var header_buf: [8]u8 = undefined;
-        _ = try file.read(&header_buf);
+        _ = try file.readPositionalAll(io, &header_buf, 0);
         if (!std.mem.eql(u8, &header_buf, "!<arch>\n")) {
             std.debug.print("Warning: Invalid archive magic in {s}\n", .{self.archive_path});
             return;
@@ -1893,9 +1890,8 @@ const FixArchivePaddingStep = struct {
 
         var offset: u64 = 8; // After magic
         while (offset + 60 <= file_size) {
-            try file.seekTo(offset + 48); // Seek to size field (offset 48 within 60-byte header)
             var size_buf: [10]u8 = undefined;
-            _ = try file.read(&size_buf);
+            _ = try file.readPositionalAll(io, &size_buf, offset + 48); // Read size field (offset 48 within 60-byte header)
 
             // Parse size (ASCII decimal, space-padded)
             var size: u64 = 0;
@@ -1917,9 +1913,8 @@ const FixArchivePaddingStep = struct {
             // If next offset would be past EOF, we have a problem - add missing padding
             if (offset > file_size) {
                 const missing = offset - file_size;
-                try file.seekTo(file_size);
                 const padding = "\n\n"; // At most 1 byte needed, but be safe
-                try file.writeAll(padding[0..@min(missing, 2)]);
+                try file.writePositionalAll(io, padding[0..@min(missing, 2)], file_size);
                 break;
             }
         }
@@ -1947,24 +1942,26 @@ const ClearRocCacheStep = struct {
     fn make(step: *Step, options: Step.MakeOptions) !void {
         _ = options;
 
-        const allocator = step.owner.allocator;
+        const b = step.owner;
+        const allocator = b.allocator;
+        const io = b.graph.io;
 
         // Get the cache directory path using the same logic as cache_config.zig
-        const cache_dir = getCacheDir(allocator) catch |err| {
+        const cache_dir = getCacheDir(allocator, b.graph.environ_map) catch |err| {
             std.debug.print("Warning: Could not determine cache directory: {s}\n", .{@errorName(err)});
             return;
         };
         defer allocator.free(cache_dir);
 
         // Check if cache directory exists before trying to delete
-        std.fs.cwd().access(cache_dir, .{}) catch {
+        std.Io.Dir.cwd().access(io, cache_dir, .{}) catch {
             // Cache doesn't exist, nothing to do
             std.debug.print("Roc cache not found (nothing to clear)\n", .{});
             return;
         };
 
         // Try to delete the cache directory
-        std.fs.cwd().deleteTree(cache_dir) catch |err| {
+        std.Io.Dir.cwd().deleteTree(io, cache_dir) catch |err| {
             std.debug.print("Warning: Could not clear cache at {s}: {s}\n", .{ cache_dir, @errorName(err) });
             return;
         };
@@ -1973,27 +1970,25 @@ const ClearRocCacheStep = struct {
     }
 
     /// Get the Roc cache directory path (matches cache_config.zig logic)
-    fn getCacheDir(allocator: std.mem.Allocator) ![]u8 {
+    fn getCacheDir(allocator: std.mem.Allocator, environ_map: std.process.Environ.Map) ![]u8 {
         const cache_dir_name = switch (builtin.os.tag) {
             .windows => "Roc",
             else => "roc",
         };
 
         // Respect XDG_CACHE_HOME if set
-        if (std.process.getEnvVarOwned(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
-            defer allocator.free(xdg_cache);
+        if (environ_map.get("XDG_CACHE_HOME")) |xdg_cache| {
             return std.fs.path.join(allocator, &[_][]const u8{ xdg_cache, cache_dir_name });
-        } else |_| {
+        } else {
             // Fall back to platform defaults
             const home_env = switch (builtin.os.tag) {
                 .windows => "APPDATA",
                 else => "HOME",
             };
 
-            const home_dir = std.process.getEnvVarOwned(allocator, home_env) catch {
+            const home_dir = environ_map.get(home_env) orelse {
                 return error.NoHomeDirectory;
             };
-            defer allocator.free(home_dir);
 
             return switch (builtin.os.tag) {
                 .linux => std.fs.path.join(allocator, &[_][]const u8{ home_dir, ".cache", cache_dir_name }),
@@ -2133,7 +2128,7 @@ fn setupTestPlatforms(
 
 pub fn build(b: *std.Build) void {
     // Ensure zig-out/bin exists — Zig's install step can silently fail after `rm -rf zig-out`
-    std.fs.cwd().makePath("zig-out/bin") catch {};
+    std.Io.Dir.cwd().createDirPath(b.graph.io, "zig-out/bin") catch {};
 
     // build steps
     const run_step = b.step("run", "Build and run the roc cli");
@@ -2376,6 +2371,9 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{},
+            // runner_core.zig uses std.c.{timespec,clock_gettime,environ}; Zig 0.16 requires
+            // explicit libc linkage for any module that touches std.c.
+            .link_libc = true,
         }),
     });
     b.installArtifact(test_runner_exe);
@@ -2460,6 +2458,8 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path("src/cli/test/roc_subcommands.zig"),
                 .target = target,
                 .optimize = optimize,
+                // roc_subcommands.zig reads std.c.environ (Zig 0.16 requires explicit link_libc).
+                .link_libc = true,
             }),
             .filters = test_filters,
         });
@@ -2481,6 +2481,8 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path("src/cli/test/glue_test.zig"),
                 .target = target,
                 .optimize = optimize,
+                // Imports util/roc_subcommands which touch std.c; Zig 0.16 requires link_libc.
+                .link_libc = true,
             }),
             .filters = test_filters,
         });
@@ -2504,7 +2506,7 @@ pub fn build(b: *std.Build) void {
 
     // Clean zig-out/ to ensure a fresh rebuild of builtins
     // Note: We don't delete .zig-cache because it contains build options needed during compilation.
-    const clean_out_step = b.addRemoveDirTree(b.path("zig-out"));
+    const clean_out_step = RemoveDirTreeStep.create(b, "zig-out");
 
     // Also clear the roc cache to avoid stale cached modules with old struct layouts
     const clear_roc_cache_step = createClearCacheStep(b);
@@ -2529,6 +2531,7 @@ pub fn build(b: *std.Build) void {
     });
     llvm_codegen_module.addImport("layout", roc_modules.layout);
     llvm_codegen_module.addImport("lir", roc_modules.lir);
+    llvm_codegen_module.addImport("ctx", roc_modules.ctx);
 
     roc_modules.eval.addAnonymousImport("llvm_compile", .{
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
@@ -2554,6 +2557,9 @@ pub fn build(b: *std.Build) void {
     });
     builtins_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub_bc", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+    }));
+    builtins_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io_bc", .{
+        .root_source_file = b.path("src/shim_io.zig"),
     }));
     builtins_bc_obj.root_module.omit_frame_pointer = true;
     builtins_bc_obj.root_module.stack_check = false;
@@ -2675,7 +2681,7 @@ pub fn build(b: *std.Build) void {
         echo_wasm.root_module.addImport("WasmFilesystem.zig", b.createModule(.{
             .root_source_file = b.path("src/playground_wasm/WasmFilesystem.zig"),
             .target = echo_wasm_target,
-            .imports = &.{.{ .name = "io", .module = roc_modules.io }},
+            .imports = &.{.{ .name = "ctx", .module = roc_modules.ctx }},
         }));
         echo_wasm.step.dependOn(&write_compiled_builtins.step);
 
@@ -2826,7 +2832,7 @@ pub fn build(b: *std.Build) void {
             });
             compile_build_module.addImport("tracy", roc_modules.tracy);
             compile_build_module.addImport("build_options", roc_modules.build_options);
-            compile_build_module.addImport("io", roc_modules.io);
+            compile_build_module.addImport("ctx", roc_modules.ctx);
             compile_build_module.addImport("builtins", roc_modules.builtins);
             compile_build_module.addImport("collections", roc_modules.collections);
             compile_build_module.addImport("base", roc_modules.base);
@@ -2944,7 +2950,7 @@ pub fn build(b: *std.Build) void {
             .filters = test_filters,
         });
         roc_modules.addAll(cli_test);
-        cli_test.linkLibrary(zstd.artifact("zstd"));
+        cli_test.root_module.linkLibrary(zstd.artifact("zstd"));
         add_tracy(b, roc_modules.build_options, cli_test, target, false, flag_enable_tracy);
         cli_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
         cli_test.step.dependOn(&write_compiled_builtins.step);
@@ -2974,10 +2980,10 @@ pub fn build(b: *std.Build) void {
 
         // Link platform-specific libraries for file watching
         if (target.result.os.tag == .macos and target_is_native) {
-            watch_test.linkFramework("CoreFoundation");
-            watch_test.linkFramework("CoreServices");
+            watch_test.root_module.linkFramework("CoreFoundation", .{});
+            watch_test.root_module.linkFramework("CoreServices", .{});
         } else if (target.result.os.tag == .windows) {
-            watch_test.linkSystemLibrary("kernel32");
+            watch_test.root_module.linkSystemLibrary("kernel32", .{});
         }
 
         const run_watch_test = b.addRunArtifact(watch_test);
@@ -3025,6 +3031,7 @@ pub fn build(b: *std.Build) void {
 
     // Parser code coverage with kcov
     // Only supported on Linux ARM64 and macOS (kcov doesn't work on Windows)
+    // TODO ZIG 16: re-check if DWARF bug is fixed — may be able to enable x86_64 coverage
     // Linux x86_64 is NOT supported due to Zig 0.15.2 generating invalid DWARF .debug_line
     // sections that cause kcov to fail (see CoverageSummaryStep comments for details)
     const is_linux_x86_64 = target.result.os.tag == .linux and target.result.cpu.arch == .x86_64;
@@ -3032,6 +3039,7 @@ pub fn build(b: *std.Build) void {
     if (is_coverage_supported and isNativeishOrMusl(target)) {
         // Get the kcov dependency and build it from source
         // lazyDependency returns null on first pass; Zig re-runs build() after fetching
+        // TODO ZIG 16: re-check if lazy dependency bug is fixed — may be able to restructure this block
         // ALL coverage-related code must be inside this block due to Zig 0.15.2 lazy dependency bug
         // where dependencies added to a step outside the lazy block are not executed when the step
         // also has dependencies added inside the lazy block.
@@ -3099,6 +3107,7 @@ pub fn build(b: *std.Build) void {
             summary_step.step.dependOn(&run_parse_coverage.step);
 
             // Cross-compile for Windows to verify comptime branches compile
+            // TODO ZIG 16: re-check if this lazy dependency bug is fixed
             // NOTE: This must be inside the lazy block due to Zig 0.15.2 bug where
             // dependencies added outside the lazy block prevent those inside from executing
             const windows_target = b.resolveTargetQuery(.{
@@ -3119,6 +3128,7 @@ pub fn build(b: *std.Build) void {
             coverage_step.dependOn(&windows_parse_build.step);
 
             // Add explicit dependencies on install steps to coverage_step itself
+            // TODO ZIG 16: re-check if lazy dependency issues are fixed
             // to work around Zig 0.15.2 lazy dependency issues
             coverage_step.dependOn(&install_parse_test.step);
             coverage_step.dependOn(&install_kcov.step);
@@ -3225,6 +3235,8 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path("src/cli/test/fx_platform_test.zig"),
                 .target = target,
                 .optimize = optimize,
+                // util.buildIsolatedTestEnvMap touches std.c (Zig 0.16 requires explicit link_libc).
+                .link_libc = true,
             }),
             .filters = test_filters,
         });
@@ -3292,7 +3304,7 @@ pub fn build(b: *std.Build) void {
 
                 // Ensure the target directory exists
                 const dir_path = b.pathJoin(&.{ "src/glue/platform/targets", target_dir });
-                std.fs.cwd().makePath(dir_path) catch {};
+                std.Io.Dir.cwd().createDirPath(b.graph.io, dir_path) catch {};
 
                 copy_glue_host.addCopyFileToSource(glue_platform_host_lib.getEmittedBin(), target_path);
 
@@ -3350,15 +3362,16 @@ pub fn build(b: *std.Build) void {
 }
 
 fn discoverBuiltinRocFiles(b: *std.Build) ![]const []const u8 {
+    const io = b.graph.io;
     const builtin_roc_path = try b.build_root.join(b.allocator, &.{ "src", "build", "roc" });
-    var builtin_roc_dir = try std.fs.openDirAbsolute(builtin_roc_path, .{ .iterate = true });
-    defer builtin_roc_dir.close();
+    var builtin_roc_dir = try std.Io.Dir.openDirAbsolute(io, builtin_roc_path, .{ .iterate = true });
+    defer builtin_roc_dir.close(io);
 
     var roc_files = std.ArrayList([]const u8).empty;
     errdefer roc_files.deinit(b.allocator);
 
     var iter = builtin_roc_dir.iterate();
-    while (try iter.next()) |entry| {
+    while (try iter.next(io)) |entry| {
         if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".roc")) {
             const full_path = b.fmt("src/build/roc/{s}", .{entry.name});
             try roc_files.append(b.allocator, full_path);
@@ -3528,6 +3541,9 @@ fn addMainExe(
     builtins_obj.root_module.addImport("tracy", b.addModule("tracy_stub", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
+    builtins_obj.root_module.addImport("shim_io", b.addModule("shim_io", .{
+        .root_source_file = b.path("src/shim_io.zig"),
+    }));
     builtins_obj.bundle_compiler_rt = false;
     configureBackend(builtins_obj, target);
 
@@ -3549,11 +3565,14 @@ fn addMainExe(
     configureBackend(shim_lib, target);
     // Add all modules from roc_modules that the shim needs
     roc_modules.addAll(shim_lib);
+    shim_lib.root_module.addImport("shim_io", b.addModule("shim_io", .{
+        .root_source_file = b.path("src/shim_io.zig"),
+    }));
     // Add compiled builtins module for loading builtin types
     shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
     shim_lib.step.dependOn(&write_compiled_builtins.step);
     // Include the pre-built builtins object
-    shim_lib.addObjectFile(builtins_obj.getEmittedBin());
+    shim_lib.root_module.addObjectFile(builtins_obj.getEmittedBin());
     shim_lib.bundle_compiler_rt = true;
     // Install shim library to the output directory
     const install_shim = b.addInstallArtifact(shim_lib, .{});
@@ -3592,9 +3611,12 @@ fn addMainExe(
     });
     configureBackend(dev_shim_lib, target);
     roc_modules.addAll(dev_shim_lib);
+    dev_shim_lib.root_module.addImport("shim_io", b.addModule("shim_io", .{
+        .root_source_file = b.path("src/shim_io.zig"),
+    }));
     dev_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
     dev_shim_lib.step.dependOn(&write_compiled_builtins.step);
-    dev_shim_lib.addObjectFile(builtins_obj.getEmittedBin());
+    dev_shim_lib.root_module.addObjectFile(builtins_obj.getEmittedBin());
     dev_shim_lib.bundle_compiler_rt = true;
     const install_dev_shim = b.addInstallArtifact(dev_shim_lib, .{});
     b.getInstallStep().dependOn(&install_dev_shim.step);
@@ -3640,6 +3662,10 @@ fn addMainExe(
             b.fmt("tracy_stub_{s}", .{cross_target.name}),
             .{ .root_source_file = b.path("src/builtins/tracy_stub.zig") },
         ));
+        cross_builtins_obj.root_module.addImport("shim_io", b.addModule(
+            b.fmt("shim_io_{s}", .{cross_target.name}),
+            .{ .root_source_file = b.path("src/shim_io.zig") },
+        ));
         cross_builtins_obj.bundle_compiler_rt = false;
         configureBackend(cross_builtins_obj, cross_resolved_target);
 
@@ -3660,13 +3686,13 @@ fn addMainExe(
     exe.root_module.addAnonymousImport("legal_details", .{ .root_source_file = b.path("legal_details") });
 
     const llvm_paths_exe = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return null;
-    exe.addLibraryPath(.{ .cwd_relative = llvm_paths_exe.lib });
-    exe.addIncludePath(.{ .cwd_relative = llvm_paths_exe.include });
+    exe.root_module.addLibraryPath(.{ .cwd_relative = llvm_paths_exe.lib });
+    exe.root_module.addIncludePath(.{ .cwd_relative = llvm_paths_exe.include });
     try addStaticLlvmOptionsToModule(exe.root_module);
 
     add_tracy(b, roc_modules.build_options, exe, target, true, tracy);
 
-    exe.linkLibrary(zstd.artifact("zstd"));
+    exe.root_module.linkLibrary(zstd.artifact("zstd"));
 
     return exe;
 }
@@ -3717,8 +3743,8 @@ fn addLlvmSupportToStep(
     zstd: *Dependency,
 ) !void {
     const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return;
-    step.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
-    step.addIncludePath(.{ .cwd_relative = llvm_paths.include });
+    step.root_module.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
+    step.root_module.addIncludePath(.{ .cwd_relative = llvm_paths.include });
     step.step.dependOn(builtins_bc_step);
     try addStaticLlvmOptionsToModule(step.root_module);
     step.root_module.addAnonymousImport("llvm_compile", .{
@@ -3731,7 +3757,7 @@ fn addLlvmSupportToStep(
             .{ .name = "build_options", .module = roc_modules.build_options },
         },
     });
-    step.linkLibrary(zstd.artifact("zstd"));
+    step.root_module.linkLibrary(zstd.artifact("zstd"));
 }
 
 const ParsedBuildArgs = struct {
@@ -3861,8 +3887,8 @@ fn llvmPaths(
             std.log.err("Failed to find system llvm-config binary. Is LLVM installed?", .{});
             std.process.exit(1);
         };
-        const llvm_lib_dir = std.mem.trimRight(u8, b.run(&.{ llvm_config_path, "--libdir" }), "\n");
-        const llvm_include_dir = std.mem.trimRight(u8, b.run(&.{ llvm_config_path, "--includedir" }), "\n");
+        const llvm_lib_dir = std.mem.trimEnd(u8, b.run(&.{ llvm_config_path, "--libdir" }), "\n");
+        const llvm_include_dir = std.mem.trimEnd(u8, b.run(&.{ llvm_config_path, "--includedir" }), "\n");
 
         return .{
             .include = llvm_include_dir,
@@ -4147,6 +4173,7 @@ const llvm_libs = [_][]const u8{
     "LLVMDebugInfoPDB",
     "LLVMDebugInfoMSF",
     "LLVMDebugInfoDWARF",
+    "LLVMDebugInfoDWARFLowLevel",
     "LLVMObject",
     "LLVMTextAPI",
     "LLVMMCParser",
@@ -4176,9 +4203,8 @@ fn getCompilerVersion(b: *std.Build, optimize: OptimizeMode) []const u8 {
         .ReleaseSmall => "release-small",
     };
 
-    // Try to get git commit SHA using std.process.Child.run
-    const result = std.process.Child.run(.{
-        .allocator = b.allocator,
+    // Try to get git commit SHA
+    const result = std.process.run(b.allocator, b.graph.io, .{
         .argv = &[_][]const u8{ "git", "rev-parse", "--short=8", "HEAD" },
     }) catch {
         // Git command failed, use fallback
@@ -4187,7 +4213,7 @@ fn getCompilerVersion(b: *std.Build, optimize: OptimizeMode) []const u8 {
     defer b.allocator.free(result.stdout);
     defer b.allocator.free(result.stderr);
 
-    if (result.term == .Exited and result.term.Exited == 0) {
+    if (result.term == .exited and result.term.exited == 0) {
         // Git succeeded, use the commit SHA
         const commit_sha = std.mem.trim(u8, result.stdout, " \n\r\t");
         if (commit_sha.len > 0) {
@@ -4216,10 +4242,10 @@ fn generateGlibcStub(b: *std.Build, target: ResolvedTarget, target_name: []const
     var assembly_buf = std.ArrayList(u8).empty;
     defer assembly_buf.deinit(b.allocator);
 
-    const writer = assembly_buf.writer(b.allocator);
+    var aw = std.Io.Writer.Allocating.fromArrayList(b.allocator, &assembly_buf);
     const target_arch = target.result.cpu.arch;
 
-    glibc_stub_build.generateComprehensiveStub(writer, target_arch) catch |err| {
+    glibc_stub_build.generateComprehensiveStub(&aw.writer, target_arch) catch |err| {
         std.log.warn("Failed to generate comprehensive stub assembly for {s}: {}, using minimal ELF", .{ target_name, err });
         // Fall back to minimal ELF
         const stub_content = switch (target.result.cpu.arch) {
@@ -4246,6 +4272,7 @@ fn generateGlibcStub(b: *std.Build, target: ResolvedTarget, target_name: []const
 
     // Write the assembly file to the targets directory
     const write_stub = b.addWriteFiles();
+    assembly_buf = aw.toArrayList();
     const asm_file = write_stub.add("libc_stub.s", assembly_buf.items);
 
     // Compile the assembly into a proper shared library using Zig's build system

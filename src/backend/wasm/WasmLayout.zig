@@ -50,7 +50,7 @@ pub fn wasmReprWithStore(layout_idx: layout.Idx, ls: *const layout.Store) WasmRe
                 .struct_ => .{ .stack_memory = ls.layoutSize(l) },
                 .tag_union => blk: {
                     const size2 = ls.layoutSize(l);
-                    const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
+                    const tu_data = ls.getTagUnionData(l.getTagUnion().idx);
                     // Discriminant-only tag unions (enums, disc_offset == 0) with size ≤ 4
                     // are treated as i32 primitives. Tag unions with payloads
                     // (disc_offset > 0) always use stack memory so the payload
@@ -64,7 +64,7 @@ pub fn wasmReprWithStore(layout_idx: layout.Idx, ls: *const layout.Store) WasmRe
                 .closure => blk: {
                     // For unwrapped_capture closures, the runtime value IS the capture
                     // value itself (not a pointer). Resolve the captures layout to check.
-                    const captures_repr = wasmReprWithStore(l.data.closure.captures_layout_idx, ls);
+                    const captures_repr = wasmReprWithStore(l.getClosure().captures_layout_idx, ls);
                     break :blk switch (captures_repr) {
                         .primitive => captures_repr,
                         .stack_memory => .{ .stack_memory = ls.layoutSize(l) },
@@ -77,13 +77,13 @@ pub fn wasmReprWithStore(layout_idx: layout.Idx, ls: *const layout.Store) WasmRe
 
 /// Extract ValType from a scalar Layout.
 fn scalarValType(l: layout.Layout) ValType {
-    return switch (l.data.scalar.tag) {
-        .int => switch (l.data.scalar.data.int) {
+    return switch (l.getScalar().tag) {
+        .int => switch (l.getScalar().getInt()) {
             .u8, .i8, .u16, .i16, .u32, .i32 => .i32,
             .u64, .i64 => .i64,
             .u128, .i128 => .i32, // pointer to stack memory
         },
-        .frac => switch (l.data.scalar.data.frac) {
+        .frac => switch (l.getScalar().getFrac()) {
             .f32 => .f32,
             .f64 => .f64,
             .dec => .i32, // pointer to stack memory

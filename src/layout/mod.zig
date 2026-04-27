@@ -22,11 +22,11 @@ const std = @import("std");
 // Re-export the main layout types and functionality
 pub const Layout = @import("layout.zig").Layout;
 pub const LayoutTag = @import("layout.zig").LayoutTag;
-pub const LayoutUnion = @import("layout.zig").LayoutUnion;
+pub const LayoutData = @import("layout.zig").LayoutData;
 pub const Idx = @import("layout.zig").Idx;
 pub const Scalar = @import("layout.zig").Scalar;
 pub const ScalarTag = @import("layout.zig").ScalarTag;
-pub const ScalarUnion = @import("layout.zig").ScalarUnion;
+pub const ScalarData = @import("layout.zig").ScalarData;
 pub const Closure = @import("layout.zig").Closure;
 // Unified struct types (records and tuples are both structs at the layout level)
 pub const StructField = @import("layout.zig").StructField;

@@ -11,7 +11,10 @@ const base = @import("base");
 const parse = @import("parse");
 const types = @import("types");
 const builtins = @import("builtins");
+const ctx_mod = @import("ctx");
 const tracy = @import("tracy");
+
+const CoreCtx = ctx_mod.CoreCtx;
 
 const trace_modules = if (builtin.cpu.arch == .wasm32) false else if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
 
@@ -61,7 +64,6 @@ const PlaceholderInfo = struct {
     item_name_idx: Ident.Idx, // The unqualified item name (e.g., "baz")
 };
 
-allocators: *base.Allocators,
 env: *ModuleEnv,
 parse_ir: *AST,
 /// Track whether we're in statement position (true) or expression position (false)
@@ -71,7 +73,7 @@ in_statement_position: bool = true,
 /// Track whether we're inside an expect block.
 /// When true, the ? operator crashes on Err instead of returning early.
 in_expect: bool = false,
-scopes: std.ArrayList(Scope) = .{},
+scopes: std.ArrayList(Scope) = .empty,
 /// Special scope for rigid type variables in annotations
 type_vars_scope: base.Scratch(TypeVarScope),
 /// Set of identifiers exposed from this module header (values not used)
@@ -154,6 +156,9 @@ defining_pattern: ?Pattern.Idx = null,
 enclosing_lambda: ?Expr.Idx = null,
 /// Directory containing the source file, used to resolve file imports.
 source_dir: ?[]const u8 = null,
+/// I/O for file operations (e.g., file imports).
+/// Defaults to undefined — callers that need file imports must provide a real CoreCtx.
+roc_ctx: CoreCtx = undefined,
 const Ident = base.Ident;
 const Region = base.Region;
 // ModuleEnv is already imported at the top
@@ -261,30 +266,26 @@ pub fn deinit(
     self.scratch_local_type_decls.deinit(gpa);
 }
 
-/// Initialize the canonicalizer.
-/// NOTE: The allocators parameter is stored for future arena support but not currently used.
-/// All allocations use env.gpa for consistency with internal methods that use self.env.gpa.
-/// TODO: Future optimization - use allocators.arena for temporary allocations
-/// (scratch buffers, intermediate data) during canonicalization.
+/// Initialize the canonicalizer for a module.
 pub fn initModule(
-    allocators: *base.Allocators,
+    roc_ctx: CoreCtx,
     env: *ModuleEnv,
     parse_ir: *AST,
     context: ModuleInitContext,
 ) std.mem.Allocator.Error!Self {
-    return try initInternal(allocators, env, parse_ir, context);
+    return try initInternal(roc_ctx, env, parse_ir, context);
 }
 
 pub fn initBuiltin(
-    allocators: *base.Allocators,
+    roc_ctx: CoreCtx,
     env: *ModuleEnv,
     parse_ir: *AST,
 ) std.mem.Allocator.Error!Self {
-    return try initInternal(allocators, env, parse_ir, null);
+    return try initInternal(roc_ctx, env, parse_ir, null);
 }
 
 fn initInternal(
-    allocators: *base.Allocators,
+    roc_ctx: CoreCtx,
     env: *ModuleEnv,
     parse_ir: *AST,
     maybe_context: ?ModuleInitContext,
@@ -294,10 +295,10 @@ fn initInternal(
 
     // Create the canonicalizer with scopes
     var result = Self{
-        .allocators = allocators,
+        .roc_ctx = roc_ctx,
         .env = env,
         .parse_ir = parse_ir,
-        .scopes = .{},
+        .scopes = .empty,
         .function_regions = std.array_list.Managed(Region).init(gpa),
         .var_function_regions = std.AutoHashMapUnmanaged(Pattern.Idx, Region){},
         .var_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
@@ -2300,7 +2301,7 @@ pub fn canonicalizeFile(
             name_ident: Ident.Idx,
             region: Region,
         };
-        var type_decls = std.ArrayList(TypeDeclInfo){};
+        var type_decls: std.ArrayList(TypeDeclInfo) = .empty;
         defer type_decls.deinit(gpa);
 
         // Map from type name to index in type_decls
@@ -2334,7 +2335,7 @@ pub fn canonicalizeFile(
         } else {
             // Step 2: Build dependency graph (edges from referencer to referenced)
             // For each type, collect which other types it references
-            var dependencies = std.ArrayList(std.ArrayList(usize)){};
+            var dependencies: std.ArrayList(std.ArrayList(usize)) = .empty;
             defer {
                 for (dependencies.items) |*dep_list| {
                     dep_list.deinit(gpa);
@@ -2350,7 +2351,7 @@ pub fn canonicalizeFile(
                 try self.collectTypeReferencesFromAST(info.type_decl.anno, &refs);
 
                 // Convert to indices in our type_decls array
-                var dep_list = std.ArrayList(usize){};
+                var dep_list: std.ArrayList(usize) = .empty;
                 var ref_iter = refs.keyIterator();
                 while (ref_iter.next()) |ref_ident| {
                     if (name_to_idx.get(ref_ident.*)) |idx| {
@@ -2381,8 +2382,8 @@ pub fn canonicalizeFile(
 
             var scc_result = blk: {
                 var result = SccResult{
-                    .sccs = std.ArrayList(std.ArrayList(usize)){},
-                    .is_recursive = std.ArrayList(bool){},
+                    .sccs = .empty,
+                    .is_recursive = .empty,
                     .allocator = gpa,
                 };
 
@@ -2393,7 +2394,7 @@ pub fn canonicalizeFile(
                 defer lowlinks.deinit(gpa);
                 var on_stack = std.AutoHashMapUnmanaged(usize, void){};
                 defer on_stack.deinit(gpa);
-                var stack = std.ArrayList(usize){};
+                var stack: std.ArrayList(usize) = .empty;
                 defer stack.deinit(gpa);
 
                 // Tarjan's strongconnect function (iterative to avoid stack overflow)
@@ -2403,7 +2404,7 @@ pub fn canonicalizeFile(
                     phase: enum { init, process_deps, finish },
                     last_child: ?usize, // Track which child we just finished processing
                 };
-                var call_stack = std.ArrayList(Frame){};
+                var call_stack: std.ArrayList(Frame) = .empty;
                 defer call_stack.deinit(gpa);
 
                 for (0..type_decls.items.len) |start_v| {
@@ -2460,7 +2461,7 @@ pub fn canonicalizeFile(
                                 const v_index = indices.get(v).?;
                                 if (v_lowlink == v_index) {
                                     // v is root of an SCC
-                                    var scc = std.ArrayList(usize){};
+                                    var scc: std.ArrayList(usize) = .empty;
                                     while (true) {
                                         const w = stack.pop() orelse unreachable;
                                         _ = on_stack.remove(w);
@@ -3788,7 +3789,10 @@ fn canonicalizeFileImport(self: *Self, fi: @TypeOf(@as(AST.Statement, undefined)
     defer self.env.gpa.free(full_path);
 
     // Read the file
-    const file_contents = std.fs.cwd().readFileAlloc(self.env.gpa, full_path, std.math.maxInt(u32)) catch |err| {
+    const file_contents: []u8 = self.roc_ctx.readFile(
+        full_path,
+        self.env.gpa,
+    ) catch |err| {
         const path_string = try self.env.insertString(path_text);
         const diag: Diagnostic = switch (err) {
             error.FileNotFound => .{ .file_import_not_found = .{
@@ -3956,7 +3960,7 @@ fn convertASTExposesToCIR(
                 .lower_ident => |ident| .{ ident.ident, ident.as, false },
                 .upper_ident => |ident| .{ ident.ident, ident.as, false },
                 .upper_ident_star => |star_ident| .{ star_ident.ident, null, true },
-                .malformed => |_| continue, // Skip malformed exposed items
+                .malformed => continue, // Skip malformed exposed items
             };
 
             // Resolve the main identifier name
@@ -5198,7 +5202,7 @@ pub fn canonicalizeExpr(
                             const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
                             // Create the forward reference with an ArrayList for regions
-                            var reference_regions = std.ArrayList(Region){};
+                            var reference_regions: std.ArrayList(Region) = .empty;
                             try reference_regions.append(self.env.gpa, region);
 
                             const forward_ref: Scope.ForwardReference = .{
@@ -6826,11 +6830,16 @@ pub fn canonicalizeExpr(
                     };
                     // Filter guard's free vars (pattern-bound vars are not truly free)
                     if (can_guard_result.free_vars.len > 0) {
-                        const guard_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_guard_result.free_vars);
+                        // Copy before clearing — clearFrom poisons memory in debug mode
+                        const guard_fv_slice = self.scratch_free_vars.sliceFromSpan(can_guard_result.free_vars);
+                        const guard_free_vars_copy = try self.env.gpa.alloc(Pattern.Idx, guard_fv_slice.len);
+                        defer self.env.gpa.free(guard_free_vars_copy);
+                        @memcpy(guard_free_vars_copy, guard_fv_slice);
+
                         self.scratch_free_vars.clearFrom(body_free_vars_start);
                         var bound_vars_view = self.scratch_bound_vars.setViewFrom(branch_bound_vars_top);
                         defer bound_vars_view.deinit();
-                        for (guard_free_vars_slice) |fv| {
+                        for (guard_free_vars_copy) |fv| {
                             if (!bound_vars_view.contains(fv)) {
                                 try self.scratch_free_vars.append(fv);
                             }
@@ -6857,14 +6866,20 @@ pub fn canonicalizeExpr(
                 // Only truly free variables (not bound by this branch's pattern) should
                 // propagate up to the match expression's free_vars
                 if (can_body.free_vars.len > 0) {
-                    // Copy the free vars we need to filter
-                    const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_body.free_vars);
+                    // Copy the free vars to a temporary buffer before clearing,
+                    // because clearFrom poisons the memory in debug mode (Zig 0.16)
+                    // and the slice points into the same ArrayList we're clearing.
+                    const body_fv_slice = self.scratch_free_vars.sliceFromSpan(can_body.free_vars);
+                    const body_free_vars_copy = try self.env.gpa.alloc(Pattern.Idx, body_fv_slice.len);
+                    defer self.env.gpa.free(body_free_vars_copy);
+                    @memcpy(body_free_vars_copy, body_fv_slice);
+
                     // Clear back to before body canonicalization
                     self.scratch_free_vars.clearFrom(body_free_vars_start_after_guard);
                     // Re-add only filtered vars (not bound by branch patterns)
                     var bound_vars_view = self.scratch_bound_vars.setViewFrom(branch_bound_vars_top);
                     defer bound_vars_view.deinit();
-                    for (body_free_vars_slice) |fv| {
+                    for (body_free_vars_copy) |fv| {
                         if (!bound_vars_view.contains(fv)) {
                             try self.scratch_free_vars.append(fv);
                         }
@@ -8056,7 +8071,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
 /// Handles: \n, \r, \t, \\, \", \', \$, and \u(XXXX) unicode escapes.
 fn processEscapeSequences(allocator: std.mem.Allocator, input: []const u8) std.mem.Allocator.Error![]const u8 {
     // Quick check: if no backslashes, return the input as-is
-    if (std.mem.indexOfScalar(u8, input, '\\') == null) {
+    if (std.mem.findScalar(u8, input, '\\') == null) {
         return input;
     }
 
@@ -8098,7 +8113,7 @@ fn processEscapeSequences(allocator: std.mem.Allocator, input: []const u8) std.m
                     // Unicode escape: \u(XXXX)
                     if (i + 2 < input.len and input[i + 2] == '(') {
                         // Find the closing paren
-                        if (std.mem.indexOfScalarPos(u8, input, i + 3, ')')) |close_paren| {
+                        if (std.mem.findScalarPos(u8, input, i + 3, ')')) |close_paren| {
                             const hex_code = input[i + 3 .. close_paren];
                             if (std.fmt.parseInt(u21, hex_code, 16)) |codepoint| {
                                 if (std.unicode.utf8ValidCodepoint(codepoint)) {
@@ -9258,7 +9273,7 @@ fn parseSmallDec(token_text: []const u8) ?struct { numerator: i16, denominator_p
     }
 
     // Parse as a whole number by removing the decimal point
-    const dot_pos = std.mem.indexOf(u8, token_text, ".") orelse {
+    const dot_pos = std.mem.find(u8, token_text, ".") orelse {
         // No decimal point, parse as integer
         const val = std.fmt.parseInt(i32, token_text, 10) catch return null;
         if (val < -32768 or val > 32767) return null;
@@ -9457,7 +9472,7 @@ fn scopeIntroduceVar(
                 },
             });
         },
-        .var_across_function_boundary => |_| {
+        .var_across_function_boundary => {
             // Generate crash expression for var reassignment across function boundary
             return try self.env.pushMalformed(T, Diagnostic{ .var_across_function_boundary = .{
                 .region = region,
@@ -10663,7 +10678,7 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
         const current_scope = &self.scopes.items[self.scopes.items.len - 1];
         try current_scope.forward_references.put(self.env.gpa, ident_idx, .{
             .pattern_idx = pattern_idx,
-            .reference_regions = std.ArrayList(Region){},
+            .reference_regions = .empty,
         });
         try current_scope.idents.put(self.env.gpa, ident_idx, pattern_idx);
     }
@@ -11655,7 +11670,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
         .file_import => |fi| {
             try self.canonicalizeFileImport(fi);
         },
-        .malformed => |_| {
+        .malformed => {
             // Stmt was malformed, parse reports this error, so do nothing here
             mb_canonicailzed_stmt = null;
         },
@@ -12841,7 +12856,7 @@ fn extractModuleName(self: *Self, module_name_ident: Ident.Idx) std.mem.Allocato
     const module_text = self.env.getIdent(module_name_ident);
 
     // Find the last dot and extract the part after it
-    if (std.mem.lastIndexOf(u8, module_text, ".")) |last_dot_idx| {
+    if (std.mem.findLast(u8, module_text, ".")) |last_dot_idx| {
         const extracted_name = module_text[last_dot_idx + 1 ..];
         return try self.env.insertIdent(base.Ident.for_text(extracted_name));
     } else {

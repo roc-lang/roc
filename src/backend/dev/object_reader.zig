@@ -102,7 +102,7 @@ fn extractElfTextSection(bytes: []const u8) Error![]const u8 {
         // Get section name from string table
         if (sh_name < strtab.len) {
             const name_start = strtab[sh_name..];
-            const name_end = std.mem.indexOfScalar(u8, name_start, 0) orelse name_start.len;
+            const name_end = std.mem.findScalar(u8, name_start, 0) orelse name_start.len;
             const name = name_start[0..name_end];
 
             // Look for .text section or .text.* sections (when function_sections is enabled)
@@ -128,7 +128,7 @@ fn extractElfTextSection(bytes: []const u8) Error![]const u8 {
 
         if (sh_name < strtab.len) {
             const name_start = strtab[sh_name..];
-            const name_end = std.mem.indexOfScalar(u8, name_start, 0) orelse name_start.len;
+            const name_end = std.mem.findScalar(u8, name_start, 0) orelse name_start.len;
             const name = name_start[0..name_end];
 
             if (std.mem.eql(u8, name, ".text")) {
@@ -229,7 +229,7 @@ fn extractCoffTextSection(bytes: []const u8) Error![]const u8 {
 
         // Section name is first 8 bytes (null-padded)
         const name = sh[0..8];
-        const name_end = std.mem.indexOfScalar(u8, name, 0) orelse 8;
+        const name_end = std.mem.findScalar(u8, name, 0) orelse 8;
 
         if (std.mem.eql(u8, name[0..name_end], ".text")) {
             const sec_size = std.mem.readInt(u32, sh[16..20], .little);
@@ -315,7 +315,7 @@ fn findRocEvalOffsetElf(bytes: []const u8, code: []const u8) Error!usize {
         // Check if this is the .text section that corresponds to our code
         if (sh_name_idx < shstrtab.len) {
             const name_start = shstrtab[sh_name_idx..];
-            const name_end = std.mem.indexOfScalar(u8, name_start, 0) orelse name_start.len;
+            const name_end = std.mem.findScalar(u8, name_start, 0) orelse name_start.len;
             const name = name_start[0..name_end];
             const sec_offset = std.mem.readInt(u64, sh[24..32], .little);
             if (sec_offset == code_start) {
@@ -362,7 +362,7 @@ fn findRocEvalOffsetElf(bytes: []const u8, code: []const u8) Error!usize {
 
         if (st_name < strtab.len) {
             const name_start = strtab[st_name..];
-            const name_end = std.mem.indexOfScalar(u8, name_start, 0) orelse name_start.len;
+            const name_end = std.mem.findScalar(u8, name_start, 0) orelse name_start.len;
             const name = name_start[0..name_end];
             if (std.mem.eql(u8, name, "roc_eval") or std.mem.eql(u8, name, "_roc_eval")) {
                 // Compute offset within the extracted code
@@ -442,7 +442,7 @@ fn findRocEvalOffsetMachO(bytes: []const u8, _: []const u8) Error!usize {
 
                     if (n_strx < strtab.len) {
                         const name_start = strtab[n_strx..];
-                        const name_end = std.mem.indexOfScalar(u8, name_start, 0) orelse name_start.len;
+                        const name_end = std.mem.findScalar(u8, name_start, 0) orelse name_start.len;
                         const name = name_start[0..name_end];
                         if (std.mem.eql(u8, name, "_roc_eval") or std.mem.eql(u8, name, "roc_eval")) {
                             if (text_section_addr > 0 and n_value >= text_section_addr) {
@@ -491,14 +491,14 @@ fn findRocEvalOffsetCoff(bytes: []const u8) Error!usize {
             const abs_offset = strtab_offset + str_offset;
             if (abs_offset < bytes.len) {
                 const name_start = bytes[@intCast(abs_offset)..];
-                const name_end = std.mem.indexOfScalar(u8, name_start, 0) orelse name_start.len;
+                const name_end = std.mem.findScalar(u8, name_start, 0) orelse name_start.len;
                 name = name_start[0..name_end];
             } else {
                 continue;
             }
         } else {
             // Short name: inline in the 8-byte field
-            const name_end = std.mem.indexOfScalar(u8, sym[0..8], 0) orelse 8;
+            const name_end = std.mem.findScalar(u8, sym[0..8], 0) orelse 8;
             name = sym[0..name_end];
         }
 
@@ -1006,7 +1006,7 @@ fn getSectionData(bytes: []const u8, e_shoff: u64, e_shentsize: u16, index: u16)
 fn getSectionName(strtab: []const u8, name_idx: u32) []const u8 {
     if (name_idx >= strtab.len) return "";
     const start = strtab[name_idx..];
-    const end = std.mem.indexOfScalar(u8, start, 0) orelse start.len;
+    const end = std.mem.findScalar(u8, start, 0) orelse start.len;
     return start[0..end];
 }
 

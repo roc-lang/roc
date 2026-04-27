@@ -108,7 +108,7 @@ pub const Resolver = struct {
 
         return switch (l.tag) {
             .zst => .noop,
-            .scalar => if (l.data.scalar.tag == .str)
+            .scalar => if (l.getScalar().tag == .str)
                 switch (helper_key.op) {
                     .incref => .str_incref,
                     .decref => .str_decref,
@@ -127,16 +127,16 @@ pub const Resolver = struct {
                 .free => .{ .box_free = self.boxPlan(l) },
             },
             .struct_ => .{ .struct_ = .{
-                .struct_idx = l.data.struct_.idx,
+                .struct_idx = l.getStruct().idx,
                 .child_op = nestedDropOp(helper_key.op),
             } },
             .tag_union => .{ .tag_union = .{
-                .tag_union_idx = l.data.tag_union.idx,
+                .tag_union_idx = l.getTagUnion().idx,
                 .child_op = nestedDropOp(helper_key.op),
             } },
             .closure => .{ .closure = .{
                 .op = nestedDropOp(helper_key.op),
-                .layout_idx = l.data.closure.captures_layout_idx,
+                .layout_idx = l.getClosure().captures_layout_idx,
             } },
         };
     }

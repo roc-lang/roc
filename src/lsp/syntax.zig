@@ -5,7 +5,7 @@ const std = @import("std");
 const compile = @import("compile");
 const reporting = @import("reporting");
 const build_options = @import("build_options");
-const Io = @import("io").Io;
+const CoreCtx = @import("ctx").CoreCtx;
 const Allocator = std.mem.Allocator;
 const base = @import("base");
 const can = @import("can");
@@ -44,7 +44,8 @@ pub const DebugFlags = struct {
 /// Runs BuildEnv-backed syntax/type checks and converts reports to LSP diagnostics.
 pub const SyntaxChecker = struct {
     allocator: std.mem.Allocator,
-    mutex: std.Thread.Mutex = .{},
+    std_io: std.Io,
+    mutex: std.Io.Mutex = std.Io.Mutex.init,
     /// Current build environment owned by the live check path.
     build_env: ?*BuildEnvHandle = null,
     /// Previous successful BuildEnv kept for module lookups (e.g., semantic tokens).
@@ -55,7 +56,7 @@ pub const SyntaxChecker = struct {
     /// Dependency graph for tracking module relationships and invalidation.
     dependency_graph: DependencyGraph,
     cache_config: CacheConfig = .{},
-    log_file: ?std.fs.File = null,
+    log_file: ?std.Io.File = null,
     debug: DebugFlags,
 
     // Owner tags used for BuildEnvHandle debugging.
@@ -63,9 +64,10 @@ pub const SyntaxChecker = struct {
     const owner_previous = "previous_build_env";
     const owner_snapshot = "snapshot";
 
-    pub fn init(allocator: std.mem.Allocator, debug: DebugFlags, log_file: ?std.fs.File) SyntaxChecker {
+    pub fn init(allocator: std.mem.Allocator, std_io: std.Io, debug: DebugFlags, log_file: ?std.Io.File) SyntaxChecker {
         return .{
             .allocator = allocator,
+            .std_io = std_io,
             .dependency_graph = DependencyGraph.init(allocator),
             .debug = debug,
             .log_file = log_file,
@@ -96,8 +98,8 @@ pub const SyntaxChecker = struct {
     pub fn check(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8, workspace_root: ?[]const u8) ![]Diagnostics.PublishDiagnostics {
         _ = workspace_root; // Reserved for future use
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
 
         // Check if content has changed using hash comparison BEFORE building.
         // This avoids unnecessary rebuilds on focus/blur events.
@@ -105,8 +107,8 @@ pub const SyntaxChecker = struct {
             const path = uri_util.uriToPath(self.allocator, uri) catch null;
             defer if (path) |p| self.allocator.free(p);
 
-            const abs_path = if (path) |p|
-                std.fs.cwd().realpathAlloc(self.allocator, p) catch self.allocator.dupe(u8, p) catch null
+            const abs_path: ?[:0]u8 = if (path) |p|
+                std.Io.Dir.cwd().realPathFileAlloc(self.std_io, p, self.allocator) catch null
             else
                 null;
             defer if (abs_path) |a| self.allocator.free(a);
@@ -144,7 +146,7 @@ pub const SyntaxChecker = struct {
         const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();
 
-        var session = try BuildSession.init(self.allocator, env, uri, override_text);
+        var session = try BuildSession.init(self.allocator, self.std_io, env, uri, override_text);
         defer session.deinit();
 
         const absolute_path = session.absolute_path;
@@ -152,7 +154,7 @@ pub const SyntaxChecker = struct {
         // Update dependency graph from successful build
         self.updateDependencyGraph(env);
 
-        var publish_list = std.ArrayList(Diagnostics.PublishDiagnostics){};
+        var publish_list: std.ArrayList(Diagnostics.PublishDiagnostics) = .empty;
         errdefer {
             for (publish_list.items) |*set| set.deinit(self.allocator);
             publish_list.deinit(self.allocator);
@@ -166,7 +168,7 @@ pub const SyntaxChecker = struct {
                 const mapped_path = if (entry.abs_path.len == 0) session.absolute_path else entry.abs_path;
                 const module_uri = try uri_util.pathToUri(self.allocator, mapped_path);
 
-                var diags = std.ArrayList(Diagnostics.Diagnostic){};
+                var diags: std.ArrayList(Diagnostics.Diagnostic) = .empty;
                 errdefer {
                     for (diags.items) |diag| {
                         self.allocator.free(diag.message);
@@ -240,14 +242,14 @@ pub const SyntaxChecker = struct {
         }
 
         // Create a fresh BuildEnv
-        const cwd = try std.process.getCwdAlloc(self.allocator);
+        const cwd = try std.Io.Dir.cwd().realPathFileAlloc(self.std_io, ".", self.allocator);
         defer self.allocator.free(cwd);
-        var env = try BuildEnv.init(self.allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd);
+        var env = try BuildEnv.init(self.allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, self.std_io);
         env.compiler_version = build_options.compiler_version;
 
         if (self.cache_config.enabled) {
             const cache_manager = try self.allocator.create(CacheManager);
-            cache_manager.* = CacheManager.init(self.allocator, self.cache_config, Io.default());
+            cache_manager.* = CacheManager.init(self.allocator, self.cache_config, CoreCtx.default(self.allocator, self.allocator, self.std_io));
             env.setCacheManager(cache_manager);
         }
 
@@ -299,9 +301,9 @@ pub const SyntaxChecker = struct {
     fn clearSnapshots(self: *SyntaxChecker) void {
         // Collect all handles and keys before clearing the map so we can
         // release snapshot ownership without mutating the map mid-iteration.
-        var envs: std.ArrayListUnmanaged(*BuildEnvHandle) = .{};
+        var envs: std.ArrayListUnmanaged(*BuildEnvHandle) = .empty;
         defer envs.deinit(self.allocator);
-        var keys: std.ArrayListUnmanaged([]const u8) = .{};
+        var keys: std.ArrayListUnmanaged([]const u8) = .empty;
         defer keys.deinit(self.allocator);
 
         var it = self.snapshot_envs.iterator();
@@ -400,7 +402,7 @@ pub const SyntaxChecker = struct {
         const imports = target_module_imports orelse return null;
 
         // Collect ModuleEnvs for all imports
-        var imported_envs: std.ArrayListUnmanaged(*ModuleEnv) = .{};
+        var imported_envs: std.ArrayListUnmanaged(*ModuleEnv) = .empty;
         errdefer imported_envs.deinit(self.allocator);
 
         // Local imports (within same package)
@@ -512,7 +514,7 @@ pub const SyntaxChecker = struct {
             .runtime_error, .fatal => 1,
         };
 
-        var writer: std.io.Writer.Allocating = .init(self.allocator);
+        var writer: std.Io.Writer.Allocating = .init(self.allocator);
         defer writer.deinit();
         try reporting.renderReportToLsp(&rep, &writer.writer, reporting.ReportingConfig.initLsp());
         const message = writer.toOwnedSlice() catch return error.OutOfMemory;
@@ -574,9 +576,9 @@ pub const SyntaxChecker = struct {
         var log_file = self.log_file orelse return;
         var buffer: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buffer, fmt, args) catch return;
-        log_file.writeAll(msg) catch return;
-        log_file.writeAll("\n") catch {};
-        log_file.sync() catch {};
+        log_file.writeStreamingAll(self.std_io, msg) catch return;
+        log_file.writeStreamingAll(self.std_io, "\n") catch {};
+        log_file.sync(self.std_io) catch {};
     }
 
     /// Temporary suppression to avoid noisy undefined-variable diagnostics from BuildEnv.
@@ -618,7 +620,7 @@ pub const SyntaxChecker = struct {
 
     fn textHasAny(text: []const u8, needles: []const []const u8) bool {
         for (needles) |needle| {
-            if (std.mem.indexOf(u8, text, needle) != null) return true;
+            if (std.mem.find(u8, text, needle) != null) return true;
         }
         return false;
     }
@@ -678,13 +680,13 @@ pub const SyntaxChecker = struct {
         line: u32,
         character: u32,
     ) !?HoverResult {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
 
         const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();
 
-        var session = try BuildSession.init(self.allocator, env, uri, override_text);
+        var session = try BuildSession.init(self.allocator, self.std_io, env, uri, override_text);
         defer session.deinit();
 
         self.logDebug(.build, "hover: building {s}", .{session.absolute_path});
@@ -912,7 +914,7 @@ pub const SyntaxChecker = struct {
             .e_lookup_external => |lookup| {
                 // External lookup - parse "Module.function" and find docs in that module
                 const region_text = module_env.getSource(lookup.region);
-                if (std.mem.indexOf(u8, region_text, ".")) |dot_pos| {
+                if (std.mem.find(u8, region_text, ".")) |dot_pos| {
                     const module_name = region_text[0..dot_pos];
                     const function_name = region_text[dot_pos + 1 ..];
 
@@ -932,7 +934,7 @@ pub const SyntaxChecker = struct {
                 }
 
                 // If the pending lookup is qualified, try external module docs.
-                if (std.mem.indexOfScalar(u8, region_text, '.')) |dot_pos| {
+                if (std.mem.findScalar(u8, region_text, '.')) |dot_pos| {
                     const module_name = region_text[0..dot_pos];
                     const function_name = region_text[dot_pos + 1 ..];
                     if (findExternalModuleEnv(env, module_name)) |external_env| {
@@ -1011,7 +1013,7 @@ pub const SyntaxChecker = struct {
 
     /// Find a module environment by name (handles builtins and regular modules).
     fn findExternalModuleEnv(env: *BuildEnv, module_name: []const u8) ?*ModuleEnv {
-        const base_name = if (std.mem.lastIndexOf(u8, module_name, ".")) |dot_pos|
+        const base_name = if (std.mem.findLast(u8, module_name, ".")) |dot_pos|
             module_name[dot_pos + 1 ..]
         else
             module_name;
@@ -1109,13 +1111,13 @@ pub const SyntaxChecker = struct {
         line: u32,
         character: u32,
     ) !?DefinitionResult {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
 
         const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();
 
-        var session = try BuildSession.init(self.allocator, env, uri, override_text);
+        var session = try BuildSession.init(self.allocator, self.std_io, env, uri, override_text);
         defer session.deinit();
 
         self.logDebug(.build, "definition: building {s}", .{session.absolute_path});
@@ -1274,7 +1276,7 @@ pub const SyntaxChecker = struct {
                     // Extract module name from source text (handles builtins correctly)
                     const region_text = module_env.getSource(lookup.region);
                     // Module.function format - extract the module name (before the dot)
-                    if (std.mem.indexOf(u8, region_text, ".")) |dot_pos| {
+                    if (std.mem.find(u8, region_text, ".")) |dot_pos| {
                         const module_name = region_text[0..dot_pos];
                         self.logDebug(.build, "[DEF] e_lookup_external: extracted module='{s}' from '{s}'", .{ module_name, region_text });
                         return self.findModuleByName(module_name);
@@ -1298,7 +1300,7 @@ pub const SyntaxChecker = struct {
                         };
                     }
 
-                    if (std.mem.indexOfScalar(u8, region_text, '.')) |dot_pos| {
+                    if (std.mem.findScalar(u8, region_text, '.')) |dot_pos| {
                         const module_name = region_text[0..dot_pos];
                         return self.findModuleByName(module_name);
                     }
@@ -1348,7 +1350,7 @@ pub const SyntaxChecker = struct {
         const env = self.getModuleLookupEnv() orelse return null;
 
         // Extract the base module name (e.g., "Stdout" from "pf.Stdout")
-        const base_name = if (std.mem.lastIndexOf(u8, module_name, ".")) |dot_pos|
+        const base_name = if (std.mem.findLast(u8, module_name, ".")) |dot_pos|
             module_name[dot_pos + 1 ..]
         else
             module_name;
@@ -1366,19 +1368,19 @@ pub const SyntaxChecker = struct {
             self.allocator.free(cache_dir);
 
             // Write file if it doesn't exist
-            if (std.fs.cwd().access(builtin_cache_path, .{})) |_| {
+            if (std.Io.Dir.cwd().access(self.std_io, builtin_cache_path, .{})) |_| {
                 // Already exists
             } else |_| {
                 // Create parent dirs and write embedded source
                 if (std.fs.path.dirname(builtin_cache_path)) |dir| {
-                    std.fs.cwd().makePath(dir) catch {};
+                    std.Io.Dir.cwd().createDirPath(self.std_io, dir) catch {};
                 }
-                const file = std.fs.cwd().createFile(builtin_cache_path, .{}) catch {
+                const file = std.Io.Dir.cwd().createFile(self.std_io, builtin_cache_path, .{}) catch {
                     self.allocator.free(builtin_cache_path);
                     return null;
                 };
-                defer file.close();
-                file.writeAll(compiled_builtins.builtin_source) catch {
+                defer file.close(self.std_io);
+                file.writeStreamingAll(self.std_io, compiled_builtins.builtin_source) catch {
                     self.allocator.free(builtin_cache_path);
                     return null;
                 };
@@ -1703,13 +1705,13 @@ pub const SyntaxChecker = struct {
         line: u32,
         character: u32,
     ) !?HighlightResult {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
 
         const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();
 
-        var session = try BuildSession.init(self.allocator, env, uri, override_text);
+        var session = try BuildSession.init(self.allocator, self.std_io, env, uri, override_text);
         defer session.deinit();
 
         self.logDebug(.build, "highlights: building {s}", .{session.absolute_path});
@@ -1729,7 +1731,7 @@ pub const SyntaxChecker = struct {
         const target_pattern = cir_queries.findPatternAtOffset(module_env, target_offset) orelse return null;
 
         // Collect all references to this pattern
-        var regions = std.ArrayList(LspRange){};
+        var regions: std.ArrayList(LspRange) = .empty;
         errdefer regions.deinit(self.allocator);
 
         // Add the definition itself
@@ -1759,8 +1761,8 @@ pub const SyntaxChecker = struct {
     ) ![]document_symbol_handler.SymbolInformation {
         const SymbolInformation = document_symbol_handler.SymbolInformation;
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
 
         const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();
@@ -1769,12 +1771,12 @@ pub const SyntaxChecker = struct {
         const path = uri_util.uriToPath(allocator, uri) catch return &[_]SymbolInformation{};
         defer allocator.free(path);
 
-        const absolute_path = std.fs.cwd().realpathAlloc(allocator, path) catch
-            allocator.dupe(u8, path) catch return &[_]SymbolInformation{};
+        const absolute_path: [:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(self.std_io, path, allocator) catch
+            allocator.dupeZ(u8, path) catch return &[_]SymbolInformation{};
         defer allocator.free(absolute_path);
 
         // Override readFile for the current file so in-memory source is used.
-        var override = Io.ReadFileOverride{ .path = absolute_path, .content = source };
+        var override = CoreCtx.ReadFileOverride{ .path = absolute_path, .content = source, .base = env.filesystem };
         const saved_io = env.filesystem;
         env.filesystem = override.io();
         defer env.filesystem = saved_io;
@@ -1816,7 +1818,7 @@ pub const SyntaxChecker = struct {
         const line_offsets = pos.buildLineOffsets(allocator, source) catch return &[_]SymbolInformation{};
         defer line_offsets.deinit();
 
-        var symbols = std.ArrayList(SymbolInformation){};
+        var symbols: std.ArrayList(SymbolInformation) = .empty;
         errdefer {
             for (symbols.items) |*sym| {
                 allocator.free(sym.name);
@@ -2045,7 +2047,7 @@ pub const SyntaxChecker = struct {
     /// Get the next segment in a dotted access chain.
     fn nextChainSegment(chain: []const u8, start: usize) ?struct { segment: []const u8, next: usize } {
         if (start >= chain.len) return null;
-        const dot_idx = std.mem.indexOfScalarPos(u8, chain, start, '.') orelse chain.len;
+        const dot_idx = std.mem.findScalarPos(u8, chain, start, '.') orelse chain.len;
         const segment = chain[start..dot_idx];
         const next = if (dot_idx < chain.len) dot_idx + 1 else chain.len;
         return .{ .segment = segment, .next = next };
@@ -2053,7 +2055,7 @@ pub const SyntaxChecker = struct {
 
     /// Get the last segment in a dotted access chain.
     fn lastChainSegment(chain: []const u8) []const u8 {
-        const dot_idx = std.mem.lastIndexOfScalar(u8, chain, '.') orelse return chain;
+        const dot_idx = std.mem.findScalarLast(u8, chain, '.') orelse return chain;
         if (dot_idx + 1 >= chain.len) return chain;
         return chain[dot_idx + 1 ..];
     }
@@ -2099,13 +2101,13 @@ pub const SyntaxChecker = struct {
         line: u32,
         character: u32,
     ) !?completion_handler.CompletionResult {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
 
         const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();
 
-        var session = try BuildSession.init(self.allocator, env, uri, override_text);
+        var session = try BuildSession.init(self.allocator, self.std_io, env, uri, override_text);
         defer session.deinit();
 
         self.logDebug(.completion, "completion: building {s}", .{session.absolute_path});
@@ -2131,7 +2133,7 @@ pub const SyntaxChecker = struct {
         const cursor_offset = completion_context.computeOffset(source, line, character);
 
         // Collect completions based on context
-        var items = std.ArrayList(completion_handler.CompletionItem){};
+        var items: std.ArrayList(completion_handler.CompletionItem) = .empty;
         errdefer {
             for (items.items) |item| {
                 self.allocator.free(item.label);
@@ -2187,7 +2189,7 @@ pub const SyntaxChecker = struct {
 
         // Initialize CompletionBuilder for deduplication and organized completion item building
         // Provide the builtin module env so completion can resolve builtin method data.
-        var builder = completion_builder.CompletionBuilder.initWithDebug(self.allocator, &items, env.builtin_modules.builtin_module.env, self.debug, self.log_file);
+        var builder = completion_builder.CompletionBuilder.initWithDebug(self.allocator, self.std_io, &items, env.builtin_modules.builtin_module.env, self.debug, self.log_file);
         defer builder.deinit();
 
         switch (context) {

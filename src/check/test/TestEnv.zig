@@ -8,7 +8,7 @@ const CIR = @import("can").CIR;
 const Can = @import("can").Can;
 const ModuleEnv = @import("can").ModuleEnv;
 const collections = @import("collections");
-const Allocators = base.Allocators;
+const CoreCtx = @import("can").CoreCtx;
 
 const Check = @import("../Check.zig");
 const report_mod = @import("../report.zig");
@@ -131,9 +131,7 @@ const TestEnv = @This();
 pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_test_env: *const TestEnv) !TestEnv {
     const gpa = std.testing.allocator;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
 
     // Allocate our ModuleEnv and Can on the heap
     // so we can keep them around for testing purposes...
@@ -193,14 +191,14 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     });
 
     // Parse the AST
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.parse(gpa, &module_env.common);
     errdefer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 
     // Canonicalize
     try module_env.initCIRFields(module_name);
 
-    can.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+    can.* = try Can.initModule(roc_ctx, module_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_env,
             .builtin_indices = builtin_indices,
@@ -282,9 +280,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
 pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     const gpa = std.testing.allocator;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
 
     // Allocate our ModuleEnv and Can on the heap
     // so we can keep them around for testing purposes...
@@ -313,14 +309,14 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     try module_env.common.calcLineStarts(gpa);
 
     // Parse the AST
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.parse(gpa, &module_env.common);
     errdefer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 
     // Canonicalize
     try module_env.initCIRFields(module_name);
 
-    can.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+    can.* = try Can.initModule(roc_ctx, module_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
@@ -505,7 +501,7 @@ pub fn assertLastDefTypeContains(self: *TestEnv, expected_substring: []const u8)
 
     try self.type_writer.write(last_def_var, .wrap);
     const type_str = self.type_writer.get();
-    if (std.mem.indexOf(u8, type_str, expected_substring) == null) {
+    if (std.mem.find(u8, type_str, expected_substring) == null) {
         std.debug.print("Expected type to contain '{s}', but got: {s}\n", .{ expected_substring, type_str });
         return error.TestExpectedEqual;
     }
@@ -677,7 +673,7 @@ fn assertNoCanProblems(self: *TestEnv) !void {
         try renderReportToMarkdownBuffer(&report_buf, &report);
 
         // Ignore "MISSING MAIN! FUNCTION" error - it's expected in test modules
-        if (std.mem.indexOf(u8, report_buf.items, "MISSING MAIN! FUNCTION") != null) {
+        if (std.mem.find(u8, report_buf.items, "MISSING MAIN! FUNCTION") != null) {
             continue;
         }
 

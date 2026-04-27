@@ -112,7 +112,7 @@ pub const ExecutableMemory = struct {
 fn allocateMemory(size: usize) ![]align(std.heap.page_size_min) u8 {
     switch (builtin.os.tag) {
         .macos, .ios, .tvos, .watchos, .linux, .freebsd, .openbsd, .netbsd => {
-            const prot = std.posix.PROT.READ | std.posix.PROT.WRITE;
+            const prot: std.posix.PROT = .{ .READ = true, .WRITE = true };
             const flags = std.posix.MAP{ .TYPE = .PRIVATE, .ANONYMOUS = true };
             const result = std.posix.mmap(null, size, prot, flags, -1, 0) catch {
                 return error.MmapFailed;
@@ -137,8 +137,8 @@ fn allocateMemory(size: usize) ![]align(std.heap.page_size_min) u8 {
 fn makeExecutable(memory: []align(std.heap.page_size_min) u8) !void {
     switch (builtin.os.tag) {
         .macos, .ios, .tvos, .watchos, .linux, .freebsd, .openbsd, .netbsd => {
-            const prot = std.posix.PROT.READ | std.posix.PROT.EXEC;
-            std.posix.mprotect(memory, prot) catch return error.MprotectFailed;
+            const prot: std.posix.PROT = .{ .READ = true, .EXEC = true };
+            if (std.c.mprotect(@ptrCast(memory.ptr), memory.len, prot) != 0) return error.MprotectFailed;
         },
         .windows => {
             var old_protect: std.os.windows.DWORD = undefined;

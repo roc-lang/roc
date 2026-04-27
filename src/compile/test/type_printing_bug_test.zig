@@ -8,8 +8,8 @@ const eval = @import("eval");
 const compile_package = @import("../compile_package.zig");
 const BuiltinModules = eval.BuiltinModules;
 
-const Allocators = base.Allocators;
 const ModuleEnv = can.ModuleEnv;
+const CoreCtx = @import("../mod.zig").CoreCtx;
 
 test "canonicalizeAndTypeCheckModule preserves Try types in type printing" {
     const testing = std.testing;
@@ -30,16 +30,11 @@ test "canonicalizeAndTypeCheckModule preserves Try types in type printing" {
         \\main = |_| "done"
     ;
 
-    // Create ModuleEnv
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
     var env = try ModuleEnv.init(gpa, source);
     defer env.deinit();
 
     // Parse
-    const parse_ast = try parse.parse(&allocators, &env.common);
+    const parse_ast = try parse.parse(gpa, &env.common);
     defer parse_ast.deinit();
 
     // Load builtin modules
@@ -53,9 +48,10 @@ test "canonicalizeAndTypeCheckModule preserves Try types in type printing" {
     var module_envs = std.AutoHashMap(base.Ident.Idx, can.Can.AutoImportedType).init(gpa);
     defer module_envs.deinit();
 
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
     const imported_envs: []const *ModuleEnv = &[_]*ModuleEnv{builtin_env};
     var result = try compile_package.PackageEnv.canonicalizeAndTypeCheckModule(
-        &allocators,
+        roc_ctx,
         gpa,
         &env,
         parse_ast,
@@ -95,6 +91,6 @@ test "canonicalizeAndTypeCheckModule preserves Try types in type printing" {
     const type_str = type_writer.get();
 
     // Check that the type contains "Try" and not "Error"
-    try testing.expect(std.mem.indexOf(u8, type_str, "Try") != null);
-    try testing.expect(std.mem.indexOf(u8, type_str, "Error") == null);
+    try testing.expect(std.mem.find(u8, type_str, "Try") != null);
+    try testing.expect(std.mem.find(u8, type_str, "Error") == null);
 }

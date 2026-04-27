@@ -33,11 +33,12 @@ const CompletionItemKind = completion_handler.CompletionItemKind;
 /// Handles deduplication and provides methods for adding different types of completions.
 pub const CompletionBuilder = struct {
     allocator: Allocator,
+    std_io: std.Io,
     items: *std.ArrayList(CompletionItem),
     seen_labels: std.StringHashMap(void),
     builtin_module_env: ?*ModuleEnv,
     debug: DebugFlags = .{},
-    log_file: ?std.fs.File = null,
+    log_file: ?std.Io.File = null,
     /// Lazily-built scope map, shared across methods that need scope info.
     cached_scope: ?scope_map.ScopeMap = null,
     /// The qualified module ident idx the cached scope was built for (to detect
@@ -46,9 +47,10 @@ pub const CompletionBuilder = struct {
     cached_scope_module_ident: base.Ident.Idx = base.Ident.Idx.NONE,
 
     /// Initialize a new CompletionBuilder.
-    pub fn init(allocator: Allocator, items: *std.ArrayList(CompletionItem), builtin_module_env: ?*ModuleEnv) CompletionBuilder {
+    pub fn init(allocator: Allocator, std_io: std.Io, items: *std.ArrayList(CompletionItem), builtin_module_env: ?*ModuleEnv) CompletionBuilder {
         return .{
             .allocator = allocator,
+            .std_io = std_io,
             .items = items,
             .seen_labels = std.StringHashMap(void).init(allocator),
             .builtin_module_env = builtin_module_env,
@@ -56,9 +58,10 @@ pub const CompletionBuilder = struct {
     }
 
     /// Initialize a new CompletionBuilder with debug logging.
-    pub fn initWithDebug(allocator: Allocator, items: *std.ArrayList(CompletionItem), builtin_module_env: ?*ModuleEnv, debug: DebugFlags, log_file: ?std.fs.File) CompletionBuilder {
+    pub fn initWithDebug(allocator: Allocator, std_io: std.Io, items: *std.ArrayList(CompletionItem), builtin_module_env: ?*ModuleEnv, debug: DebugFlags, log_file: ?std.Io.File) CompletionBuilder {
         return .{
             .allocator = allocator,
+            .std_io = std_io,
             .items = items,
             .seen_labels = std.StringHashMap(void).init(allocator),
             .builtin_module_env = builtin_module_env,
@@ -98,9 +101,9 @@ pub const CompletionBuilder = struct {
         var log_file = self.log_file orelse return;
         var buffer: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buffer, fmt, args) catch return;
-        log_file.writeAll(msg) catch return;
-        log_file.writeAll("\n") catch {};
-        log_file.sync() catch {};
+        log_file.writeStreamingAll(self.std_io, msg) catch return;
+        log_file.writeStreamingAll(self.std_io, "\n") catch {};
+        log_file.sync(self.std_io) catch {};
     }
 
     /// Add a completion item, returning true if it was added (not a duplicate).
@@ -278,7 +281,7 @@ pub const CompletionBuilder = struct {
                 // Module exports can be qualified (Module.member) or unqualified (member).
                 // Prefer matching the actual module name to avoid leaking unrelated items,
                 // but allow unqualified names when we are completing the module itself.
-                const dot_index = std.mem.indexOfScalar(u8, without_module, '.');
+                const dot_index = std.mem.findScalar(u8, without_module, '.');
                 if (dot_index == null) {
                     if (!std.mem.eql(u8, module_env.module_name, module_name)) continue;
                     break :blk without_module;
@@ -507,7 +510,7 @@ pub const CompletionBuilder = struct {
 
             const name = module_env.getIdentText(ident_idx);
             if (name.len == 0) continue;
-            if (std.mem.indexOfScalar(u8, name, '.') != null) continue;
+            if (std.mem.findScalar(u8, name, '.') != null) continue;
 
             // Determine completion kind based on the expression type
             const expr = module_env.store.getExpr(def.expr);
@@ -561,7 +564,7 @@ pub const CompletionBuilder = struct {
 
                 const name = module_env.getIdentText(ident_idx);
                 if (name.len == 0) continue;
-                if (std.mem.indexOfScalar(u8, name, '.') != null) continue;
+                if (std.mem.findScalar(u8, name, '.') != null) continue;
 
                 // Determine completion kind
                 var kind: u32 = @intFromEnum(CompletionItemKind.variable);
@@ -1435,7 +1438,7 @@ pub const CompletionBuilder = struct {
     }
 
     fn formatTagSignatureInner(self: *CompletionBuilder, module_env: *ModuleEnv, tag_name: []const u8, args_slice: []const CIR.TypeAnno.Idx) ![]const u8 {
-        var buf = std.ArrayList(u8){};
+        var buf: std.ArrayList(u8) = .empty;
         errdefer buf.deinit(self.allocator);
         try buf.appendSlice(self.allocator, tag_name);
         try buf.append(self.allocator, '(');
@@ -1588,7 +1591,7 @@ fn stripModulePrefix(name: []const u8, module_name: []const u8) []const u8 {
     var i: usize = 0;
     while (i < name.len) {
         const seg_start = i;
-        const dot_idx = std.mem.indexOfScalarPos(u8, name, seg_start, '.') orelse name.len;
+        const dot_idx = std.mem.findScalarPos(u8, name, seg_start, '.') orelse name.len;
         const seg = name[seg_start..dot_idx];
 
         if (std.mem.eql(u8, seg, module_name)) {
@@ -1605,13 +1608,13 @@ fn stripModulePrefix(name: []const u8, module_name: []const u8) []const u8 {
 
 /// Get the first segment of a dotted name.
 fn firstSegment(name: []const u8) []const u8 {
-    const dot_idx = std.mem.indexOfScalar(u8, name, '.') orelse name.len;
+    const dot_idx = std.mem.findScalar(u8, name, '.') orelse name.len;
     return name[0..dot_idx];
 }
 
 /// Get the last segment of a dotted name.
 fn lastSegment(name: []const u8) []const u8 {
-    const dot_idx = std.mem.lastIndexOfScalar(u8, name, '.') orelse return name;
+    const dot_idx = std.mem.findScalarLast(u8, name, '.') orelse return name;
     if (dot_idx + 1 >= name.len) return name;
     return name[dot_idx + 1 ..];
 }

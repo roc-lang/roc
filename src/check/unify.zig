@@ -488,7 +488,7 @@ const Unifier = struct {
                     try self.unifyGuarded(backing_var, vars.b.var_);
                 }
             },
-            .rigid => |_| {
+            .rigid => {
                 try self.unifyGuarded(backing_var, vars.b.var_);
             },
             .alias => |b_alias| {

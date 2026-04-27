@@ -49,7 +49,7 @@ inline fn writeChecked(comptime T: type, raw_ptr: [*]u8, value: i128) error{Inte
 /// Read the discriminant for a tag union, handling single-tag unions which don't store one.
 fn readTagUnionDiscriminant(layout: Layout, base_ptr: [*]const u8, layout_cache: *LayoutStore) usize {
     std.debug.assert(layout.tag == .tag_union);
-    const tu_idx = layout.data.tag_union.idx;
+    const tu_idx = layout.getTagUnion().idx;
     const tu_data = layout_cache.getTagUnionData(tu_idx);
     const disc_offset = layout_cache.getTagUnionDiscriminantOffset(tu_idx);
     // Always read the actual discriminant from memory, even for single-variant unions.
@@ -70,7 +70,7 @@ fn readTagUnionDiscriminant(layout: Layout, base_ptr: [*]const u8, layout_cache:
 /// When original_tu_idx is provided and the discriminant is out of range for the current layout,
 /// uses the original layout to correctly handle refcounting for values that crossed type boundaries.
 fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore, roc_ops: *RocOps, original_tu_idx: ?layout_mod.TagUnionIdx) void {
-    if (layout.tag == .scalar and layout.data.scalar.tag == .str) {
+    if (layout.tag == .scalar and layout.getScalar().tag == .str) {
         const raw_ptr = ptr orelse return;
         const roc_str: *const RocStr = builtins.utils.alignedPtrCast(*const RocStr, @as([*]u8, @ptrCast(raw_ptr)), @src());
         roc_str.incref(1, roc_ops);
@@ -103,7 +103,7 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         while (field_index < field_layouts.len) : (field_index += 1) {
             const field_data = field_layouts.get(field_index);
             const field_layout = layout_cache.getLayout(field_data.layout);
-            const field_offset = layout_cache.getStructFieldOffset(layout.data.struct_.idx, @intCast(field_index));
+            const field_offset = layout_cache.getStructFieldOffset(layout.getStruct().idx, @intCast(field_index));
             const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
             increfLayoutPtr(field_layout, field_ptr, layout_cache, roc_ops, null);
         }
@@ -114,7 +114,7 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
 
         // Use the captures_layout_idx from the passed-in layout, not from the raw
         // memory header. The layout parameter is authoritative.
-        const captures_layout_idx = layout.data.closure.captures_layout_idx;
+        const captures_layout_idx = layout.getClosure().captures_layout_idx;
         const idx_as_usize = @intFromEnum(captures_layout_idx);
         std.debug.assert(idx_as_usize < layout_cache.layouts.len());
 
@@ -122,7 +122,7 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
 
         // Only incref if there are actual captures (struct with fields).
         if (captures_layout.tag == .struct_) {
-            const struct_data = layout_cache.getStructData(captures_layout.data.struct_.idx);
+            const struct_data = layout_cache.getStructData(captures_layout.getStruct().idx);
             if (struct_data.fields.count > 0) {
                 if (comptime trace_refcount) {
                     traceRefcount("INCREF closure captures (increfLayoutPtr) ptr=0x{x} fields={}", .{
@@ -177,7 +177,7 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
 /// When original_tu_idx is provided and the discriminant is out of range for the current layout,
 /// uses the original layout to correctly handle refcounting for values that crossed type boundaries.
 fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore, ops: *RocOps, original_tu_idx: ?layout_mod.TagUnionIdx) void {
-    if (layout.tag == .scalar and layout.data.scalar.tag == .str) {
+    if (layout.tag == .scalar and layout.getScalar().tag == .str) {
         const raw_ptr = ptr orelse return;
         const roc_str: *const RocStr = builtins.utils.alignedPtrCast(*const RocStr, @as([*]u8, @ptrCast(raw_ptr)), @src());
         roc_str.decref(ops);
@@ -249,7 +249,7 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         while (field_index < field_layouts.len) : (field_index += 1) {
             const field_data = field_layouts.get(field_index);
             const field_layout = layout_cache.getLayout(field_data.layout);
-            const field_offset = layout_cache.getStructFieldOffset(layout.data.struct_.idx, @intCast(field_index));
+            const field_offset = layout_cache.getStructFieldOffset(layout.getStruct().idx, @intCast(field_index));
             const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
             decrefLayoutPtr(field_layout, field_ptr, layout_cache, ops, null);
         }
@@ -262,7 +262,7 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         // Use the captures_layout_idx from the passed-in layout, NOT from the raw memory header.
         // The layout parameter is authoritative and was set when the closure was created.
         // Reading from raw memory could give stale/incorrect values.
-        const captures_layout_idx = layout.data.closure.captures_layout_idx;
+        const captures_layout_idx = layout.getClosure().captures_layout_idx;
         const idx_as_usize = @intFromEnum(captures_layout_idx);
         if (comptime trace_refcount) {
             traceRefcount("DECREF closure detail: ptr=0x{x} captures_layout_idx={}", .{
@@ -283,7 +283,7 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
 
         // Only decref if there are actual captures (struct with fields)
         if (captures_layout.tag == .struct_) {
-            const struct_data = layout_cache.getStructData(captures_layout.data.struct_.idx);
+            const struct_data = layout_cache.getStructData(captures_layout.getStruct().idx);
             if (comptime trace_refcount) {
                 traceRefcount("DECREF closure struct fields={}", .{struct_data.fields.count});
             }
@@ -361,7 +361,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     }
 
     if (self.layout.tag == .scalar) {
-        switch (self.layout.data.scalar.tag) {
+        switch (self.layout.getScalar().tag) {
             .str => {
                 // Copy the RocStr struct and incref the underlying data.
                 // This is more efficient than clone() which allocates new memory.
@@ -391,7 +391,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                 std.debug.assert(self.ptr != null);
                 const value = self.asI128();
                 const dest_bytes: [*]u8 = @ptrCast(dest_ptr);
-                switch (self.layout.data.scalar.data.int) {
+                switch (self.layout.getScalar().getInt()) {
                     .u8 => try writeChecked(u8, dest_bytes, value),
                     .i8 => try writeChecked(i8, dest_bytes, value),
                     .u16 => try writeChecked(u16, dest_bytes, value),
@@ -493,7 +493,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
             const field_data = struct_info.fields.get(field_index);
             const field_layout = layout_cache.getLayout(field_data.layout);
 
-            const field_offset = layout_cache.getStructFieldOffset(self.layout.data.struct_.idx, @intCast(field_index));
+            const field_offset = layout_cache.getStructFieldOffset(self.layout.getStruct().idx, @intCast(field_index));
             const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
 
             increfLayoutPtr(field_layout, field_ptr, layout_cache, roc_ops, null);
@@ -521,7 +521,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
 
         // Only incref if there are actual captures (struct with fields)
         if (captures_layout.tag == .struct_) {
-            const struct_data = layout_cache.getStructData(captures_layout.data.struct_.idx);
+            const struct_data = layout_cache.getStructData(captures_layout.getStruct().idx);
             if (struct_data.fields.count > 0) {
                 if (comptime trace_refcount) {
                     traceRefcount("INCREF closure captures ptr=0x{x} fields={}", .{
@@ -605,10 +605,10 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
 pub fn asI128(self: StackValue) i128 {
     std.debug.assert(self.is_initialized); // Ensure initialized before reading
     std.debug.assert(self.ptr != null);
-    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
+    std.debug.assert(self.layout.tag == .scalar and self.layout.getScalar().tag == .int);
 
     const raw_ptr: [*]u8 = @ptrCast(self.ptr.?);
-    return switch (self.layout.data.scalar.data.int) {
+    return switch (self.layout.getScalar().getInt()) {
         .u8 => readAligned(u8, raw_ptr),
         .i8 => readAligned(i8, raw_ptr),
         .u16 => readAligned(u16, raw_ptr),
@@ -628,10 +628,10 @@ pub fn asI128(self: StackValue) i128 {
 pub fn asU128(self: StackValue) u128 {
     std.debug.assert(self.is_initialized); // Ensure initialized before reading
     std.debug.assert(self.ptr != null);
-    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
+    std.debug.assert(self.layout.tag == .scalar and self.layout.getScalar().tag == .int);
 
     const raw_ptr: [*]u8 = @ptrCast(self.ptr.?);
-    return switch (self.layout.data.scalar.data.int) {
+    return switch (self.layout.getScalar().getInt()) {
         .u8 => readAligned(u8, raw_ptr),
         .u16 => readAligned(u16, raw_ptr),
         .u32 => readAligned(u32, raw_ptr),
@@ -648,19 +648,19 @@ pub fn asU128(self: StackValue) u128 {
 
 /// Get the integer precision of this StackValue
 pub fn getIntPrecision(self: StackValue) types.Int.Precision {
-    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
-    return self.layout.data.scalar.data.int;
+    std.debug.assert(self.layout.tag == .scalar and self.layout.getScalar().tag == .int);
+    return self.layout.getScalar().getInt();
 }
 
 /// Initialise the StackValue integer value
 /// Returns error.IntegerOverflow if the value doesn't fit in the target type
 pub fn setInt(self: *StackValue, value: i128) error{IntegerOverflow}!void {
     std.debug.assert(self.ptr != null);
-    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
+    std.debug.assert(self.layout.tag == .scalar and self.layout.getScalar().tag == .int);
     std.debug.assert(!self.is_initialized); // Avoid accidental overwrite
 
     const raw_ptr: [*]u8 = @ptrCast(self.ptr.?);
-    switch (self.layout.data.scalar.data.int) {
+    switch (self.layout.getScalar().getInt()) {
         .u8 => try writeChecked(u8, raw_ptr, value),
         .i8 => try writeChecked(i8, raw_ptr, value),
         .u16 => try writeChecked(u16, raw_ptr, value),
@@ -684,12 +684,12 @@ pub fn setIntFromBytes(self: *StackValue, bytes: [16]u8, is_u128: bool) error{In
     std.debug.assert(self.ptr != null);
 
     // Assert this is an integer
-    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
+    std.debug.assert(self.layout.tag == .scalar and self.layout.getScalar().tag == .int);
 
     // Assert this is uninitialised memory
     std.debug.assert(!self.is_initialized);
 
-    const precision = self.layout.data.scalar.data.int;
+    const precision = self.layout.getScalar().getInt();
     const raw_ptr = @as([*]u8, @ptrCast(self.ptr.?));
 
     // For u128 values, use bitcast directly; for i128 values, use the signed path
@@ -734,8 +734,8 @@ pub fn setBool(self: *StackValue, value: u8) void {
     std.debug.assert(self.ptr != null);
 
     // Assert this is a boolean (u8 int)
-    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
-    std.debug.assert(self.layout.data.scalar.data.int == .u8);
+    std.debug.assert(self.layout.tag == .scalar and self.layout.getScalar().tag == .int);
+    std.debug.assert(self.layout.getScalar().getInt() == .u8);
 
     // Assert this is uninitialised memory
     //
@@ -751,8 +751,8 @@ pub fn setBool(self: *StackValue, value: u8) void {
 pub fn asBool(self: StackValue) bool {
     std.debug.assert(self.is_initialized); // Ensure initialized before reading
     std.debug.assert(self.ptr != null);
-    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
-    std.debug.assert(self.layout.data.scalar.data.int == .u8);
+    std.debug.assert(self.layout.tag == .scalar and self.layout.getScalar().tag == .int);
+    std.debug.assert(self.layout.getScalar().getInt() == .u8);
 
     // Read the boolean value as a byte
     const bool_ptr = @as(*const u8, @ptrCast(@alignCast(self.ptr.?)));
@@ -763,8 +763,8 @@ pub fn asBool(self: StackValue) bool {
 pub fn asF32(self: StackValue) f32 {
     std.debug.assert(self.is_initialized); // Ensure initialized before reading
     std.debug.assert(self.ptr != null);
-    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .frac);
-    std.debug.assert(self.layout.data.scalar.data.frac == .f32);
+    std.debug.assert(self.layout.tag == .scalar and self.layout.getScalar().tag == .frac);
+    std.debug.assert(self.layout.getScalar().getFrac() == .f32);
 
     // Use memcpy for safe misaligned access in Release modes
     var result: f32 = undefined;
@@ -777,8 +777,8 @@ pub fn asF32(self: StackValue) f32 {
 pub fn asF64(self: StackValue) f64 {
     std.debug.assert(self.is_initialized); // Ensure initialized before reading
     std.debug.assert(self.ptr != null);
-    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .frac);
-    std.debug.assert(self.layout.data.scalar.data.frac == .f64);
+    std.debug.assert(self.layout.tag == .scalar and self.layout.getScalar().tag == .frac);
+    std.debug.assert(self.layout.getScalar().getFrac() == .f64);
 
     // Use memcpy for safe misaligned access in Release modes
     var result: f64 = undefined;
@@ -791,8 +791,8 @@ pub fn asF64(self: StackValue) f64 {
 pub fn asDec(self: StackValue, roc_ops: *RocOps) RocDec {
     std.debug.assert(self.is_initialized); // Ensure initialized before reading
     std.debug.assert(self.ptr != null);
-    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .frac);
-    std.debug.assert(self.layout.data.scalar.data.frac == .dec);
+    std.debug.assert(self.layout.tag == .scalar and self.layout.getScalar().tag == .frac);
+    std.debug.assert(self.layout.getScalar().getFrac() == .dec);
     _ = roc_ops; // Unused after removing debug-only alignment check
 
     // Use memcpy for safe misaligned access in Release modes
@@ -808,8 +808,8 @@ pub fn setF32(self: *StackValue, value: f32) void {
     std.debug.assert(self.ptr != null);
 
     // Assert this is an f32
-    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .frac);
-    std.debug.assert(self.layout.data.scalar.data.frac == .f32);
+    std.debug.assert(self.layout.tag == .scalar and self.layout.getScalar().tag == .frac);
+    std.debug.assert(self.layout.getScalar().getFrac() == .f32);
 
     // Assert this is uninitialised memory
     //
@@ -827,8 +827,8 @@ pub fn setF64(self: *StackValue, value: f64) void {
     std.debug.assert(self.ptr != null);
 
     // Assert this is an f64
-    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .frac);
-    std.debug.assert(self.layout.data.scalar.data.frac == .f64);
+    std.debug.assert(self.layout.tag == .scalar and self.layout.getScalar().tag == .frac);
+    std.debug.assert(self.layout.getScalar().getFrac() == .f64);
 
     // Assert this is uninitialised memory
     //
@@ -846,8 +846,8 @@ pub fn setDec(self: *StackValue, value: RocDec, roc_ops: *RocOps) void {
     std.debug.assert(self.ptr != null);
 
     // Assert this is a Dec
-    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .frac);
-    std.debug.assert(self.layout.data.scalar.data.frac == .dec);
+    std.debug.assert(self.layout.tag == .scalar and self.layout.getScalar().tag == .frac);
+    std.debug.assert(self.layout.getScalar().getFrac() == .dec);
 
     // Assert this is uninitialised memory
     //
@@ -905,7 +905,7 @@ pub const TupleAccessor = struct {
         const element_layout = self.layout_cache.getLayout(element_layout_info.layout);
 
         // Get the offset for this element within the tuple (using sorted index)
-        const element_offset = self.layout_cache.getTupleElementOffset(self.tuple_layout.data.struct_.idx, @intCast(sorted_index));
+        const element_offset = self.layout_cache.getTupleElementOffset(self.tuple_layout.getStruct().idx, @intCast(sorted_index));
 
         // Calculate the element pointer with proper alignment
         const base_ptr = @as([*]u8, @ptrCast(self.base_value.ptr.?));
@@ -929,7 +929,7 @@ pub const TupleAccessor = struct {
         const sorted_index = self.findElementIndexByOriginal(original_index) orelse return error.TupleIndexOutOfBounds;
         std.debug.assert(self.base_value.is_initialized);
         std.debug.assert(self.base_value.ptr != null);
-        const element_offset = self.layout_cache.getTupleElementOffset(self.tuple_layout.data.struct_.idx, @intCast(sorted_index));
+        const element_offset = self.layout_cache.getTupleElementOffset(self.tuple_layout.getStruct().idx, @intCast(sorted_index));
         const base_ptr = @as([*]u8, @ptrCast(self.base_value.ptr.?));
         return @as(*anyopaque, @ptrCast(base_ptr + element_offset));
     }
@@ -1140,7 +1140,7 @@ pub const RecordAccessor = struct {
         const field_layout = self.layout_cache.getLayout(field_layout_info.layout);
 
         // Get the offset for this field within the record
-        const field_offset = self.layout_cache.getRecordFieldOffset(self.record_layout.data.struct_.idx, @intCast(index));
+        const field_offset = self.layout_cache.getRecordFieldOffset(self.record_layout.getStruct().idx, @intCast(index));
 
         // Calculate the field pointer with proper alignment
         const base_ptr = @as([*]u8, @ptrCast(self.base_value.ptr.?));
@@ -1222,7 +1222,7 @@ pub const RecordAccessor = struct {
 
 /// Get this value as a string pointer, or null if the pointer is null.
 pub fn asRocStr(self: StackValue) ?*RocStr {
-    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .str);
+    std.debug.assert(self.layout.tag == .scalar and self.layout.getScalar().tag == .str);
     if (self.ptr) |ptr| {
         return @ptrCast(@alignCast(ptr));
     }
@@ -1232,7 +1232,7 @@ pub fn asRocStr(self: StackValue) ?*RocStr {
 /// Set this value's contents to a RocStr.
 /// Panics if ptr is null or layout is not a string type.
 pub fn setRocStr(self: StackValue, value: RocStr) void {
-    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .str);
+    std.debug.assert(self.layout.tag == .scalar and self.layout.getScalar().tag == .str);
     const str_ptr: *RocStr = @ptrCast(@alignCast(self.ptr.?));
     str_ptr.* = value;
 }
@@ -1329,7 +1329,7 @@ pub fn copyTo(self: StackValue, dest: StackValue, layout_cache: *LayoutStore, ro
     const size = if (self.layout.tag == .closure) self.getTotalSize(layout_cache, roc_ops) else layout_cache.layoutSize(self.layout);
     if (size == 0) return;
 
-    if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
+    if (self.layout.tag == .scalar and self.layout.getScalar().tag == .str) {
         // String: use proper struct copy and increment ref count
         const src_str: *const RocStr = @ptrCast(@alignCast(self.ptr.?));
         const dest_str: *RocStr = @ptrCast(@alignCast(dest.ptr.?));
@@ -1407,7 +1407,7 @@ pub fn copyWithoutRefcount(self: StackValue, dest: StackValue, layout_cache: *La
     const size = if (self.layout.tag == .closure) self.getTotalSize(layout_cache, roc_ops) else layout_cache.layoutSize(self.layout);
     if (size == 0) return;
 
-    if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
+    if (self.layout.tag == .scalar and self.layout.getScalar().tag == .str) {
         // String: use proper struct copy WITHOUT incrementing ref count (move semantics)
         const src_str: *const RocStr = @ptrCast(@alignCast(self.ptr.?));
         const dest_str: *RocStr = @ptrCast(@alignCast(dest.ptr.?));
@@ -1435,7 +1435,7 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore, roc_ops: *RocOps) vo
         traceRefcount("INCREF layout.tag={} ptr=0x{x}", .{ @intFromEnum(self.layout.tag), @intFromPtr(self.ptr) });
     }
 
-    if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
+    if (self.layout.tag == .scalar and self.layout.getScalar().tag == .str) {
         const roc_str = self.asRocStr().?;
         if (comptime trace_refcount) {
             // Small strings have no allocation - skip refcount tracing for them
@@ -1546,7 +1546,7 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore, roc_ops: *RocOps) vo
 
         // Only incref if there are actual captures (struct with fields)
         if (captures_layout.tag == .struct_) {
-            const struct_data = layout_cache.getStructData(captures_layout.data.struct_.idx);
+            const struct_data = layout_cache.getStructData(captures_layout.getStruct().idx);
             if (struct_data.fields.count > 0) {
                 if (comptime trace_refcount) {
                     traceRefcount("INCREF closure captures ptr=0x{x} fields={}", .{
@@ -1571,20 +1571,14 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore, roc_ops: *RocOps) vo
 /// Note: Tracing is disabled on freestanding targets (wasm) as they have no stderr.
 fn traceRefcount(comptime fmt: []const u8, args: anytype) void {
     if (comptime trace_refcount and builtin.os.tag != .freestanding) {
-        const stderr_file: std.fs.File = .stderr();
-        var buf: [512]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "[REFCOUNT] " ++ fmt ++ "\n", args) catch return;
-        stderr_file.writeAll(msg) catch {};
+        std.debug.print("[REFCOUNT] " ++ fmt ++ "\n", args);
     }
 }
 
 /// Trace helper with source location for debugging where decrefs originate
 pub fn traceRefcountWithSource(comptime src: std.builtin.SourceLocation, comptime fmt: []const u8, args: anytype) void {
     if (comptime trace_refcount and builtin.os.tag != .freestanding) {
-        const stderr_file: std.fs.File = .stderr();
-        var buf: [512]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "[REFCOUNT @{s}:{d}] " ++ fmt ++ "\n", .{ src.file, src.line } ++ args) catch return;
-        stderr_file.writeAll(msg) catch {};
+        std.debug.print("[REFCOUNT @{s}:{d}] " ++ fmt ++ "\n", .{ src.file, src.line } ++ args);
     }
 }
 
@@ -1595,7 +1589,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
     }
 
     switch (self.layout.tag) {
-        .scalar => switch (self.layout.data.scalar.tag) {
+        .scalar => switch (self.layout.getScalar().tag) {
             .str => {
                 const roc_str = self.asRocStr().?;
                 if (comptime trace_refcount) {

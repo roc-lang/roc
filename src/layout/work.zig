@@ -41,13 +41,13 @@ pub const Work = struct {
     resolved_tag_union_variants: std.MultiArrayList(ResolvedTagUnionVariant),
     /// Vars currently being processed - used to detect recursive type references.
     /// Keyed by (module_idx, var) to distinguish vars across modules.
-    in_progress_vars: std.AutoArrayHashMap(ModuleVarKey, void),
+    in_progress_vars: std.AutoArrayHashMapUnmanaged(ModuleVarKey, void),
     /// Nominal types currently being processed - used to detect recursive nominal types.
     /// Unlike in_progress_vars, this tracks by nominal identity (ident + origin_module)
     /// because recursive references to the same nominal type may have different vars.
     /// The value contains the nominal's var (for cache lookup) and its backing var
     /// (to know when to update the placeholder).
-    in_progress_nominals: std.AutoArrayHashMap(NominalKey, NominalProgress),
+    in_progress_nominals: std.AutoArrayHashMapUnmanaged(NominalKey, NominalProgress),
 
     /// Info about a nominal type being processed
     pub const NominalProgress = struct {
@@ -188,8 +188,8 @@ pub const Work = struct {
             .resolved_tuple_fields = resolved_tuple_fields,
             .pending_tag_union_variants = pending_tag_union_variants,
             .resolved_tag_union_variants = resolved_tag_union_variants,
-            .in_progress_vars = std.AutoArrayHashMap(ModuleVarKey, void).init(allocator),
-            .in_progress_nominals = std.AutoArrayHashMap(NominalKey, NominalProgress).init(allocator),
+            .in_progress_vars = .{},
+            .in_progress_nominals = .{},
         };
     }
 
@@ -203,8 +203,8 @@ pub const Work = struct {
         self.resolved_tuple_fields.deinit(allocator);
         self.pending_tag_union_variants.deinit(allocator);
         self.resolved_tag_union_variants.deinit(allocator);
-        self.in_progress_vars.deinit();
-        self.in_progress_nominals.deinit();
+        self.in_progress_vars.deinit(allocator);
+        self.in_progress_nominals.deinit(allocator);
     }
 
     // NOTE: We do NOT have a clearRetainingCapacity function because all work fields

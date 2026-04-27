@@ -200,13 +200,13 @@ pub const CoffWriter = struct {
         var self = Self{
             .allocator = allocator,
             .arch = arch,
-            .text = .{},
-            .data = .{},
-            .rdata = .{},
-            .symbols = .{},
-            .text_relocs = .{},
-            .strtab = .{},
-            .functions = .{},
+            .text = .empty,
+            .data = .empty,
+            .rdata = .empty,
+            .symbols = .empty,
+            .text_relocs = .empty,
+            .strtab = .empty,
+            .functions = .empty,
         };
 
         // String table starts with 4-byte size (will be filled in later)
@@ -378,7 +378,7 @@ pub const CoffWriter = struct {
         const num_symbols: u32 = @intCast(self.symbols.items.len);
 
         // Build symbol table entries and string table
-        var symtab: std.ArrayList(u8) = .{};
+        var symtab: std.ArrayList(u8) = .empty;
         defer symtab.deinit(self.allocator);
 
         for (self.symbols.items, 0..) |sym, idx| {
@@ -519,7 +519,7 @@ pub const CoffWriter = struct {
         }
 
         // Write .xdata section content (UNWIND_INFO structures)
-        var xdata_offsets: std.ArrayList(u32) = .{};
+        var xdata_offsets: std.ArrayList(u32) = .empty;
         defer xdata_offsets.deinit(self.allocator);
 
         if (need_unwind) {
@@ -528,7 +528,7 @@ pub const CoffWriter = struct {
                 try xdata_offsets.append(self.allocator, current_xdata_offset);
 
                 // Calculate unwind codes for this function
-                var unwind_codes: std.ArrayList(u8) = .{};
+                var unwind_codes: std.ArrayList(u8) = .empty;
                 defer unwind_codes.deinit(self.allocator);
 
                 // Track prologue offset for each code
@@ -661,7 +661,7 @@ test "create minimal coff object" {
         .is_function = true,
     });
 
-    var output: std.ArrayList(u8) = .{};
+    var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
 
     try writer.write(&output);
@@ -688,7 +688,7 @@ test "coff with external symbol" {
     // Add relocation for the call
     try writer.addTextRelocation(1, ext_idx);
 
-    var output: std.ArrayList(u8) = .{};
+    var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
 
     try writer.write(&output);
@@ -713,7 +713,7 @@ test "coff with long symbol name" {
         .is_function = true,
     });
 
-    var output: std.ArrayList(u8) = .{};
+    var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
 
     try writer.write(&output);
@@ -738,7 +738,7 @@ test "coff aarch64" {
         .is_function = true,
     });
 
-    var output: std.ArrayList(u8) = .{};
+    var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
 
     try writer.write(&output);
