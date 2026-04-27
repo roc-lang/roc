@@ -3341,6 +3341,278 @@ test "int conversion: U8.to_i16.to_i64" {
     , 128, .no_trace);
 }
 
+test "min/max: U8.min" {
+    try runExpectStr(
+        \\U8.min(5, 3).to_str()
+    , "3", .no_trace);
+
+    try runExpectStr(
+        \\U8.min(2, 8).to_str()
+    , "2", .no_trace);
+}
+
+test "min/max: U8.max" {
+    try runExpectStr(
+        \\U8.max(5, 3).to_str()
+    , "5", .no_trace);
+
+    try runExpectStr(
+        \\U8.max(2, 8).to_str()
+    , "8", .no_trace);
+}
+
+test "min/max: I8.min" {
+    try runExpectStr(
+        \\I8.min(5, 3).to_str()
+    , "3", .no_trace);
+
+    try runExpectStr(
+        \\I8.min(2, 8).to_str()
+    , "2", .no_trace);
+}
+
+test "min/max: I8.max" {
+    try runExpectStr(
+        \\I8.max(5, 3).to_str()
+    , "5", .no_trace);
+
+    try runExpectStr(
+        \\I8.max(2, 8).to_str()
+    , "8", .no_trace);
+}
+
+test "min/max: U16.min" {
+    try runExpectStr(
+        \\U16.min(5, 3).to_str()
+    , "3", .no_trace);
+
+    try runExpectStr(
+        \\U16.min(2, 8).to_str()
+    , "2", .no_trace);
+}
+
+test "min/max: U16.max" {
+    try runExpectStr(
+        \\U16.max(5, 3).to_str()
+    , "5", .no_trace);
+
+    try runExpectStr(
+        \\U16.max(2, 8).to_str()
+    , "8", .no_trace);
+}
+
+test "min/max: I16.min" {
+    try runExpectStr(
+        \\I16.min(5, 3).to_str()
+    , "3", .no_trace);
+
+    try runExpectStr(
+        \\I16.min(2, 8).to_str()
+    , "2", .no_trace);
+}
+
+test "min/max: I16.max" {
+    try runExpectStr(
+        \\I16.max(5, 3).to_str()
+    , "5", .no_trace);
+
+    try runExpectStr(
+        \\I16.max(2, 8).to_str()
+    , "8", .no_trace);
+}
+
+test "min/max: U32.min" {
+    try runExpectStr(
+        \\U32.min(5, 3).to_str()
+    , "3", .no_trace);
+
+    try runExpectStr(
+        \\U32.min(2, 8).to_str()
+    , "2", .no_trace);
+}
+
+test "min/max: U32.max" {
+    try runExpectStr(
+        \\U32.max(5, 3).to_str()
+    , "5", .no_trace);
+
+    try runExpectStr(
+        \\U32.max(2, 8).to_str()
+    , "8", .no_trace);
+}
+
+test "min/max: I32.min" {
+    try runExpectStr(
+        \\I32.min(5, 3).to_str()
+    , "3", .no_trace);
+
+    try runExpectStr(
+        \\I32.min(2, 8).to_str()
+    , "2", .no_trace);
+}
+
+test "min/max: I32.max" {
+    try runExpectStr(
+        \\I32.max(5, 3).to_str()
+    , "5", .no_trace);
+
+    try runExpectStr(
+        \\I32.max(2, 8).to_str()
+    , "8", .no_trace);
+}
+
+test "min/max: U64.min" {
+    try runExpectStr(
+        \\U64.min(5, 3).to_str()
+    , "3", .no_trace);
+
+    try runExpectStr(
+        \\U64.min(2, 8).to_str()
+    , "2", .no_trace);
+}
+
+test "min/max: U64.max" {
+    try runExpectStr(
+        \\U64.max(5, 3).to_str()
+    , "5", .no_trace);
+
+    try runExpectStr(
+        \\U64.max(2, 8).to_str()
+    , "8", .no_trace);
+}
+
+test "min/max: I64.min" {
+    try runExpectStr(
+        \\I64.min(5, 3).to_str()
+    , "3", .no_trace);
+
+    try runExpectStr(
+        \\I64.min(2, 8).to_str()
+    , "2", .no_trace);
+}
+
+test "min/max: I64.max" {
+    try runExpectStr(
+        \\I64.max(5, 3).to_str()
+    , "5", .no_trace);
+
+    try runExpectStr(
+        \\I64.max(2, 8).to_str()
+    , "8", .no_trace);
+}
+
+test "min/max: U128.min" {
+    try runExpectStr(
+        \\U128.min(5, 3).to_str()
+    , "3", .no_trace);
+
+    try runExpectStr(
+        \\U128.min(2, 8).to_str()
+    , "2", .no_trace);
+}
+
+test "min/max: U128.max" {
+    try runExpectStr(
+        \\U128.max(5, 3).to_str()
+    , "5", .no_trace);
+
+    try runExpectStr(
+        \\U128.max(2, 8).to_str()
+    , "8", .no_trace);
+}
+
+test "min/max: I128.min" {
+    try runExpectStr(
+        \\I128.min(5, 3).to_str()
+    , "3", .no_trace);
+
+    try runExpectStr(
+        \\I128.min(2, 8).to_str()
+    , "2", .no_trace);
+}
+
+test "min/max: I128.max" {
+    try runExpectStr(
+        \\I128.max(5, 3).to_str()
+    , "5", .no_trace);
+
+    try runExpectStr(
+        \\I128.max(2, 8).to_str()
+    , "8", .no_trace);
+}
+
+test "min/max: Dec.min" {
+    try runExpectStr(
+        \\Dec.min(5, 3).to_str()
+    , "3.0", .no_trace);
+
+    try runExpectStr(
+        \\Dec.min(2, 8).to_str()
+    , "2.0", .no_trace);
+}
+
+test "min/max: Dec.max" {
+    try runExpectStr(
+        \\Dec.max(5, 3).to_str()
+    , "5.0", .no_trace);
+
+    try runExpectStr(
+        \\Dec.max(2, 8).to_str()
+    , "8.0", .no_trace);
+}
+
+test "min/max: F32.min" {
+    try testing.expectError(
+        error.EvaluatorMismatch,
+        runExpectStr(
+            \\F32.min(5, 3).to_str()
+        , "3.0", .no_trace)
+    );
+
+    try testing.expectError(
+        error.EvaluatorMismatch,
+        runExpectStr(
+            \\F32.min(2, 8).to_str()
+        , "2.0", .no_trace)
+    );
+}
+
+test "min/max: F32.max" {
+    try testing.expectError(
+        error.EvaluatorMismatch,
+        runExpectStr(
+            \\F32.max(5, 3).to_str()
+        , "5.0", .no_trace),
+    );
+
+    try testing.expectError(
+        error.EvaluatorMismatch,
+        runExpectStr(
+            \\F32.max(2, 8).to_str()
+        , "8.0", .no_trace)
+    );
+}
+
+test "min/max: F64.min" {
+    try runExpectStr(
+        \\F64.min(5, 3).to_str()
+    , "3", .no_trace);
+
+    try runExpectStr(
+        \\F64.min(2, 8).to_str()
+    , "2", .no_trace);
+}
+
+test "min/max: F64.max" {
+    try runExpectStr(
+        \\F64.max(5, 3).to_str()
+    , "5", .no_trace);
+
+    try runExpectStr(
+        \\F64.max(2, 8).to_str()
+    , "8", .no_trace);
+}
+
 test "diag: match Ok extract payload" {
     try runExpectI64(
         \\match Ok(42) { Ok(v) => v, _ => 0 }
