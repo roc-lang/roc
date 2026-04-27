@@ -3447,3 +3447,45 @@ test "issue 9281: dev evaluator stack overflow with nested recursive opaque type
     try testing.expect(code_result.code.len > 0);
     try testing.expect(code_result.entry_offset < code_result.code.len);
 }
+
+test "TODO RE-ENABLE: issue #9349: top-level expect with type-erroneous condition does not panic in dev codegen" {
+    // This test currently triggers a panic in dev backend LIR codegen.
+    // Keep this skipped repro so we can re-enable once the compiler bug is fixed.
+    const run_repro = false;
+    if (!run_repro) return error.SkipZigTest;
+
+    const src =
+        \\foo : U64 -> U64
+        \\foo = |x| x
+        \\
+        \\expect foo(Dynamite) == 5
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    // Locate the top-level `expect` statement so we can ask the dev
+    // backend to generate code for it, the same way `roc test` does
+    // (see rocTest in src/cli/main.zig).
+    const statements = result.module_env.store.sliceStatements(result.module_env.all_statements);
+    var expect_body: ?can.CIR.Expr.Idx = null;
+    for (statements) |stmt_idx| {
+        const stmt = result.module_env.store.getStatement(stmt_idx);
+        if (stmt == .s_expect) {
+            expect_body = stmt.s_expect.body;
+            break;
+        }
+    }
+    try testing.expect(expect_body != null);
+
+    var dev_eval = try DevEvaluator.init(test_allocator, null);
+    defer dev_eval.deinit();
+
+    const all_module_envs = [_]*ModuleEnv{ result.builtin_module.env, result.module_env };
+
+    // Returning an error is acceptable; panicking is the bug.
+    if (dev_eval.generateCode(result.module_env, expect_body.?, &all_module_envs, null)) |code_result_ok| {
+        var code_result = code_result_ok;
+        code_result.deinit();
+    } else |_| {}
+}
