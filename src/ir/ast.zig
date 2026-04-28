@@ -1,10 +1,8 @@
-//! Cor-style lowered executable IR.
-//!
-//! This keeps cor's "vars + let/switch" shape, with Roc-only extensions only
-//! for explicit early-return, crash/runtime-error, and list iteration.
+//! Source-blind executable IR.
 
 const std = @import("std");
 const base = @import("base");
+const mir = @import("mir");
 const types = @import("types");
 const symbol_mod = @import("symbol");
 const layout_mod = @import("layout.zig");
@@ -13,6 +11,8 @@ const layout_mod = @import("layout.zig");
 pub const Symbol = symbol_mod.Symbol;
 /// Logical layout references assigned during IR lowering.
 pub const LayoutRef = layout_mod.Ref;
+/// Executable procedure selected before IR lowering.
+pub const ProcRef = mir.Executable.Ast.ExecutableProcId;
 
 /// Identifier for a lowered IR expression node.
 pub const ExprId = enum(u32) { _ };
@@ -82,7 +82,7 @@ pub const BridgePlan = union(enum) {
 pub const Expr = union(enum) {
     var_: Var,
     lit: Lit,
-    fn_ptr: Symbol,
+    fn_ptr: ProcRef,
     null_ptr,
     make_union: struct {
         discriminant: u16,
@@ -109,7 +109,7 @@ pub const Expr = union(enum) {
     },
     layout_size: LayoutRef,
     call_direct: struct {
-        proc: Symbol,
+        proc: ProcRef,
         args: Span(Var),
     },
     call_erased: struct {
@@ -177,7 +177,8 @@ pub const Stmt = union(enum) {
 
 /// Lowered IR definition.
 pub const Def = struct {
-    name: Symbol,
+    proc: ProcRef,
+    debug_name: ?Symbol = null,
     args: Span(Var),
     body: ?BlockId = null,
     ret_layout: LayoutRef,

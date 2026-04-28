@@ -6,6 +6,8 @@ const std = @import("std");
 pub const LIR = @import("LIR.zig");
 /// Flat storage for statement-only LIR nodes and spans.
 pub const LirStore = @import("LirStore.zig");
+/// Mechanical ARC insertion over explicit LIR values and control flow.
+pub const Arc = @import("arc.zig");
 
 /// Symbol identifiers used throughout statement-only LIR.
 pub const Symbol = LIR.Symbol;
@@ -44,4 +46,5 @@ test "lir tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(LIR);
     std.testing.refAllDecls(LirStore);
+    std.testing.refAllDecls(Arc);
 }
