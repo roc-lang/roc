@@ -36,7 +36,6 @@ fn aggregatorFilters(module_type: ModuleType) []const []const u8 {
         .values => &.{"values tests"},
         .eval => &.{"eval tests"},
         .ipc => &.{"ipc tests"},
-        .repl => &.{"repl tests"},
         .fmt => &.{"fmt tests"},
         else => &.{},
     };
@@ -296,7 +295,6 @@ pub const ModuleType = enum {
     values,
     eval,
     ipc,
-    repl,
     fmt,
     watch,
     bundle,
@@ -335,7 +333,6 @@ pub const ModuleType = enum {
             .eval => &.{ .tracy, .io, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .interpreter_layout, .values, .build_options, .reporting, .backend, .lir, .symbol, .mir, .ir, .roc_target, .sljmp },
             .compile => &.{ .tracy, .build_options, .io, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target, .backend, .lir, .symbol, .mir, .ir, .sljmp },
             .ipc => &.{},
-            .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .values, .eval, .backend, .roc_target, .lir, .mir, .ir },
             .fmt => &.{ .base, .parse, .collections, .can, .io, .tracy },
             .watch => &.{.build_options},
             .bundle => &.{ .base, .collections, .base58, .unbundle },
@@ -376,7 +373,6 @@ pub const RocModules = struct {
     values: *Module,
     eval: *Module,
     ipc: *Module,
-    repl: *Module,
     fmt: *Module,
     watch: *Module,
     bundle: *Module,
@@ -420,7 +416,6 @@ pub const RocModules = struct {
             .values = b.addModule("values", .{ .root_source_file = b.path("src/values/mod.zig") }),
             .eval = b.addModule("eval", .{ .root_source_file = b.path("src/eval/mod.zig") }),
             .ipc = b.addModule("ipc", .{ .root_source_file = b.path("src/ipc/mod.zig") }),
-            .repl = b.addModule("repl", .{ .root_source_file = b.path("src/repl/mod.zig") }),
             .fmt = b.addModule("fmt", .{ .root_source_file = b.path("src/fmt/mod.zig") }),
             .watch = b.addModule("watch", .{ .root_source_file = b.path("src/watch/watch.zig") }),
             .bundle = b.addModule("bundle", .{ .root_source_file = b.path("src/bundle/mod.zig") }),
@@ -470,7 +465,6 @@ pub const RocModules = struct {
             .values,
             .eval,
             .ipc,
-            .repl,
             .fmt,
             .watch,
             .bundle,
@@ -518,7 +512,6 @@ pub const RocModules = struct {
         step.root_module.addImport("layout", self.layout);
         step.root_module.addImport("interpreter_layout", self.interpreter_layout);
         step.root_module.addImport("eval", self.eval);
-        step.root_module.addImport("repl", self.repl);
         step.root_module.addImport("fmt", self.fmt);
         step.root_module.addImport("unbundle", self.unbundle);
         step.root_module.addImport("base58", self.base58);
@@ -569,7 +562,6 @@ pub const RocModules = struct {
             .values => self.values,
             .eval => self.eval,
             .ipc => self.ipc,
-            .repl => self.repl,
             .fmt => self.fmt,
             .watch => self.watch,
             .bundle => self.bundle,
@@ -621,7 +613,6 @@ pub const RocModules = struct {
             .interpreter_layout,
             .values,
             .ipc,
-            .repl,
             .fmt,
             .watch,
             .bundle,
@@ -657,10 +648,10 @@ pub const RocModules = struct {
                     .optimize = optimize,
                     // IPC module needs libc for mmap, munmap, close on POSIX systems
                     // Bundle module needs libc for C zstd (unbundle uses stdlib zstd)
-                    // Eval/repl modules need libc for setjmp/longjmp crash protection
+                    // Eval module needs libc for setjmp/longjmp crash protection
                     // sljmp module needs libc for setjmp/longjmp functions
                     // compile/lsp modules transitively depend on eval->sljmp, so also need libc
-                    .link_libc = (module_type == .ipc or module_type == .bundle or module_type == .eval or module_type == .repl or module_type == .sljmp or module_type == .compile or module_type == .lsp),
+                    .link_libc = (module_type == .ipc or module_type == .bundle or module_type == .eval or module_type == .sljmp or module_type == .compile or module_type == .lsp),
                 }),
                 .filters = filter_injection.filters,
             });

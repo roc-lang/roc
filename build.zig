@@ -2507,8 +2507,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    roc_modules.repl.addImport("compiled_builtins", compiled_builtins_module);
-    roc_modules.repl.addImport("bytebox", bytebox.module("bytebox"));
     roc_modules.compile.addImport("compiled_builtins", compiled_builtins_module);
     roc_modules.eval.addImport("compiled_builtins", compiled_builtins_module);
     roc_modules.eval.addImport("bytebox", bytebox.module("bytebox"));
@@ -3125,27 +3123,9 @@ pub fn build(b: *std.Build) void {
     const tests_summary = TestsSummaryStep.create(b, test_filters, module_tests_result.forced_passes);
     for (module_tests_result.tests) |module_test| {
         // Add compiled builtins to tests that canonicalize ordinary modules.
-        if (std.mem.eql(u8, module_test.test_step.name, "can") or std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "repl") or std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "compile") or std.mem.eql(u8, module_test.test_step.name, "lsp") or std.mem.eql(u8, module_test.test_step.name, "mir")) {
+        if (std.mem.eql(u8, module_test.test_step.name, "can") or std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "compile") or std.mem.eql(u8, module_test.test_step.name, "lsp") or std.mem.eql(u8, module_test.test_step.name, "mir")) {
             module_test.test_step.root_module.addImport("compiled_builtins", compiled_builtins_module);
             module_test.test_step.step.dependOn(&write_compiled_builtins.step);
-        }
-
-        if (std.mem.eql(u8, module_test.test_step.name, "repl")) {
-            module_test.test_step.root_module.addImport("bytebox", bytebox.module("bytebox"));
-        }
-
-        if (std.mem.eql(u8, module_test.test_step.name, "repl")) {
-            try addLlvmSupportToStep(
-                b,
-                module_test.test_step,
-                target,
-                use_system_llvm,
-                user_llvm_path,
-                roc_modules,
-                llvm_codegen_module,
-                &copy_builtins_bc.step,
-                zstd,
-            );
         }
 
         if (run_args.len != 0) {
