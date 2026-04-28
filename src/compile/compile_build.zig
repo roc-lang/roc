@@ -515,7 +515,7 @@ pub const BuildEnv = struct {
             }
         }
 
-        // Create schedulers for compatibility with existing code paths
+        // Create schedulers used by package-level build state.
         try self.createSchedulers();
         try self.processPendingKnownModules();
 
@@ -567,7 +567,7 @@ pub const BuildEnv = struct {
             std.debug.print("[BUILD] Coordinator loop complete, transferring results...\n", .{});
         }
 
-        // Transfer results back to PackageEnv for compatibility
+        // Transfer results back to PackageEnv before platform validation and emission.
         try self.transferCoordinatorResults();
 
         if (comptime trace_build) {
@@ -589,7 +589,7 @@ pub const BuildEnv = struct {
         }
     }
 
-    /// Transfer compilation results from Coordinator to PackageEnv (for compatibility)
+    /// Transfer compilation results from Coordinator to PackageEnv.
     fn transferCoordinatorResults(self: *BuildEnv) !void {
         const coord = self.coordinator orelse return;
 
@@ -2055,12 +2055,6 @@ pub const BuildEnv = struct {
             return coord.getBuildStats();
         }
         return .{};
-    }
-
-    // Keep old name for backwards compatibility during transition
-    pub const BuildCacheStats = BuildStats;
-    pub fn getCacheStats(self: *BuildEnv) BuildStats {
-        return self.getBuildStats();
     }
 
     /// Information about a compiled module, ready for serialization.

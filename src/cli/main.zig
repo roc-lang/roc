@@ -784,7 +784,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
 /// If serialized_module is provided, it will be embedded in the binary (for roc build).
 /// If serialized_module is null, the binary will use IPC to get module data (for roc run).
 /// If debug is true, include debug information in the generated object file.
-fn generatePlatformHostShim(ctx: *CliContext, cache_dir: []const u8, entrypoint_names: []const []const u8, target: builder.RocTarget, serialized_module: ?[]const u8, debug: bool) !?[]const u8 {
+fn generatePlatformHostShim(ctx: *CliContext, cache_dir: []const u8, entrypoint_names: []const []const u8, target: RocTarget, serialized_module: ?[]const u8, debug: bool) !?[]const u8 {
     // Check if LLVM is available (this is a compile-time check)
     if (!llvm_available) {
         std.log.debug("LLVM not available, skipping platform host shim generation", .{});
@@ -1034,7 +1034,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
                     link_spec = validation.config.getLinkSpec(compatible_target, .exe);
                 } else {
                     // No compatible exe target found
-                    const native_target = builder.RocTarget.detectNative();
+                    const native_target = RocTarget.detectNative();
                     const result = platform_validation.createUnsupportedTargetResult(
                         platform_source,
                         native_target,
@@ -1372,7 +1372,7 @@ fn rocRunDevShim(ctx: *CliContext, args: cli_args.RunArgs) !void {
                 if (validation.config.getDefaultTarget(.exe)) |compatible_target| {
                     link_spec = validation.config.getLinkSpec(compatible_target, .exe);
                 } else {
-                    const native_target = builder.RocTarget.detectNative();
+                    const native_target = RocTarget.detectNative();
                     const result = platform_validation.createUnsupportedTargetResult(
                         platform_source,
                         native_target,
@@ -4666,7 +4666,7 @@ fn checkFileWithBuildEnv(
         }
 
         // Get cache stats even on error
-        const cache_stats = build_env.getCacheStats();
+        const cache_stats = build_env.getBuildStats();
 
         return CheckResult{
             .reports = reports,
@@ -4727,7 +4727,7 @@ fn checkFileWithBuildEnv(
         build_env.getTimingInfo();
 
     // Get cache stats from coordinator
-    const cache_stats = build_env.getCacheStats();
+    const cache_stats = build_env.getBuildStats();
 
     if (comptime build_options.trace_build) {
         std.debug.print("[CLI] checkFileWithBuildEnv returning (defer deinit will run)\n", .{});

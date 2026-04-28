@@ -367,7 +367,7 @@ pub const Store = struct {
 
         const root_content = self.types.items[@intFromEnum(root)];
         switch (root_content) {
-            .placeholder => debugPanic("lambdamono.type internTypeId encountered unresolved placeholder", .{}),
+            .placeholder => debugPanic("executable.type internTypeId encountered unresolved placeholder", .{}),
             .link => unreachable,
             else => {},
         }
@@ -669,14 +669,14 @@ pub const Store = struct {
             }
 
             if (prev.args.len != tag.args.len) {
-                debugPanic("lambdamono.type duplicate tag constructor had different arity", .{});
+                debugPanic("executable.type duplicate tag constructor had different arity", .{});
             }
             for (prev.args, tag.args) |prev_arg, tag_arg| {
                 if (!self.equalIds(prev_arg, tag_arg)) {
-                    debugPanic("lambdamono.type duplicate tag constructor had different payload types", .{});
+                    debugPanic("executable.type duplicate tag constructor had different payload types", .{});
                 }
             }
-            debugPanic("lambdamono.type duplicate tag constructor reached interning", .{});
+            debugPanic("executable.type duplicate tag constructor reached interning", .{});
         }
     }
 
@@ -831,7 +831,7 @@ pub const Store = struct {
     }
 };
 
-test "lambdamono type tests" {
+test "executable type tests" {
     std.testing.refAllDecls(@This());
 }
 

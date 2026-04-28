@@ -1,5 +1,5 @@
 //! Builds the explicit logical executable layouts that later IR lowering
-//! consumes. This is the one place where `lambdamono.TypeId` is lowered into
+//! consumes. This is the one place where `executable.TypeId` is lowered into
 //! the shared logical layout graph before `IR -> LIR/layout` commits physical
 //! layout exactly once.
 
@@ -83,7 +83,7 @@ fn containsLayoutAbstractLeafVisited(
     };
 }
 
-/// Explicit logical layouts derived from executable lambdamono types and nodes.
+/// Explicit logical layouts derived from executable MIR types and nodes.
 pub const Layouts = struct {
     graph: layout_mod.Graph,
     cache: LayoutCache,
@@ -143,7 +143,7 @@ pub const Layouts = struct {
     }
 
     pub fn layoutForType(self: *const Layouts, ty: type_mod.TypeId) layout_mod.GraphRef {
-        return self.type_layouts.get(ty) orelse debugPanic("lambdamono.layouts.layoutForType missing lowered type");
+        return self.type_layouts.get(ty) orelse debugPanic("executable.layouts.layoutForType missing lowered type");
     }
 
     pub fn exprLayout(self: *const Layouts, expr_id: ast.ExprId) layout_mod.GraphRef {
@@ -164,7 +164,7 @@ pub const Layouts = struct {
 
     pub fn exprFieldLayout(self: *const Layouts, expr_id: ast.ExprId) layout_mod.GraphRef {
         return self.expr_field_layouts[@intFromEnum(expr_id)] orelse
-            debugPanic("lambdamono.layouts.exprFieldLayout missing explicit field layout");
+            debugPanic("executable.layouts.exprFieldLayout missing explicit field layout");
     }
 
     pub fn exprDiscriminantLayout(self: *const Layouts, expr_id: ast.ExprId) ?layout_mod.GraphRef {
@@ -173,7 +173,7 @@ pub const Layouts = struct {
 
     pub fn exprTagPayloadLayout(self: *const Layouts, expr_id: ast.ExprId) layout_mod.GraphRef {
         return self.expr_tag_payload_layouts[@intFromEnum(expr_id)] orelse
-            debugPanic("lambdamono.layouts.exprTagPayloadLayout missing explicit payload layout");
+            debugPanic("executable.layouts.exprTagPayloadLayout missing explicit payload layout");
     }
 
     pub fn payloadLayoutForUnionLayout(
@@ -186,12 +186,12 @@ pub const Layouts = struct {
 
     pub fn patTagPayloadLayout(self: *const Layouts, pat_id: ast.PatId) layout_mod.GraphRef {
         return self.pat_tag_payload_layouts[@intFromEnum(pat_id)] orelse
-            debugPanic("lambdamono.layouts.patTagPayloadLayout missing explicit payload layout");
+            debugPanic("executable.layouts.patTagPayloadLayout missing explicit payload layout");
     }
 
     pub fn patSourceLayout(self: *const Layouts, pat_id: ast.PatId) layout_mod.GraphRef {
         return self.pat_source_layouts[@intFromEnum(pat_id)] orelse
-            debugPanic("lambdamono.layouts.patSourceLayout missing explicit source layout");
+            debugPanic("executable.layouts.patSourceLayout missing explicit source layout");
     }
 
     pub fn recordTypedSymbol(
@@ -204,7 +204,7 @@ pub const Layouts = struct {
     ) std.mem.Allocator.Error!void {
         if (containsLayoutAbstractLeaf(mono_types, value.ty)) {
             debugPanicFmt(
-                "lambdamono.layouts.recordTypedSymbol abstract executable type leaked before layout typed_symbol={d} symbol={d} ty={d} ({s})",
+                "executable.layouts.recordTypedSymbol abstract executable type leaked before layout typed_symbol={d} symbol={d} ty={d} ({s})",
                 .{
                     index,
                     value.symbol.raw(),
@@ -362,7 +362,7 @@ pub const Layouts = struct {
         if (containsLayoutAbstractLeaf(mono_types, expr.ty)) {
             if (expr.data == .low_level) {
                 debugPanicFmt(
-                    "lambdamono.layouts.recordExpr abstract executable type leaked before layout expr={d} tag={s} ty={d} ({s}) low_level={s}",
+                    "executable.layouts.recordExpr abstract executable type leaked before layout expr={d} tag={s} ty={d} ({s}) low_level={s}",
                     .{
                         i,
                         @tagName(expr.data),
@@ -373,7 +373,7 @@ pub const Layouts = struct {
                 );
             }
             debugPanicFmt(
-                "lambdamono.layouts.recordExpr abstract executable type leaked before layout expr={d} tag={s} ty={d} ({s})",
+                "executable.layouts.recordExpr abstract executable type leaked before layout expr={d} tag={s} ty={d} ({s})",
                 .{
                     i,
                     @tagName(expr.data),
@@ -477,7 +477,7 @@ pub const Layouts = struct {
         const i = @intFromEnum(pat_id);
         if (containsLayoutAbstractLeaf(mono_types, pat.ty)) {
             debugPanicFmt(
-                "lambdamono.layouts.recordPat abstract executable type leaked before layout pat={d} tag={s} ty={d} ({s})",
+                "executable.layouts.recordPat abstract executable type leaked before layout pat={d} tag={s} ty={d} ({s})",
                 .{
                     i,
                     @tagName(pat.data),
@@ -547,10 +547,10 @@ pub const Layouts = struct {
     ) std.mem.Allocator.Error!layout_mod.GraphRef {
         const resolved = try self.resolveUnionLayout(union_layout);
         return switch (resolved) {
-            .canonical => debugPanic("lambdamono.layouts.unionPayloadLayout expected local union layout"),
+            .canonical => debugPanic("executable.layouts.unionPayloadLayout expected local union layout"),
             .local => |node_id| switch (self.graph.getNode(node_id)) {
                 .tag_union => |variants| self.graph.getRefs(variants)[discriminant],
-                else => debugPanic("lambdamono.layouts.unionPayloadLayout expected tag union layout"),
+                else => debugPanic("executable.layouts.unionPayloadLayout expected tag union layout"),
             },
         };
     }
@@ -562,10 +562,10 @@ pub const Layouts = struct {
     ) std.mem.Allocator.Error!layout_mod.GraphRef {
         const resolved = try self.resolveStructLayout(struct_layout);
         return switch (resolved) {
-            .canonical => debugPanic("lambdamono.layouts.structFieldLayout expected local struct layout"),
+            .canonical => debugPanic("executable.layouts.structFieldLayout expected local struct layout"),
             .local => |node_id| switch (self.graph.getNode(node_id)) {
                 .struct_ => |fields| self.unwrapNominalRef(self.graph.getFields(fields)[field_index].child),
-                else => debugPanic("lambdamono.layouts.structFieldLayout expected struct layout"),
+                else => debugPanic("executable.layouts.structFieldLayout expected struct layout"),
             },
         };
     }
@@ -666,11 +666,11 @@ pub const Layouts = struct {
         var current = layout_ref;
         while (true) {
             switch (current) {
-                .canonical => debugPanic("lambdamono.layouts.resolveUnionLayout expected local layout"),
+                .canonical => debugPanic("executable.layouts.resolveUnionLayout expected local layout"),
                 .local => |node_id| switch (self.graph.getNode(node_id)) {
                     .nominal => |nominal| current = nominal,
                     .tag_union => return current,
-                    else => debugPanic("lambdamono.layouts.resolveUnionLayout expected nominal or tag union"),
+                    else => debugPanic("executable.layouts.resolveUnionLayout expected nominal or tag union"),
                 },
             }
         }
@@ -680,11 +680,11 @@ pub const Layouts = struct {
         var current = layout_ref;
         while (true) {
             switch (current) {
-                .canonical => debugPanic("lambdamono.layouts.resolveStructLayout expected local layout"),
+                .canonical => debugPanic("executable.layouts.resolveStructLayout expected local layout"),
                 .local => |node_id| switch (self.graph.getNode(node_id)) {
                     .nominal => |nominal| current = nominal,
                     .struct_ => return current,
-                    else => debugPanic("lambdamono.layouts.resolveStructLayout expected nominal or struct"),
+                    else => debugPanic("executable.layouts.resolveStructLayout expected nominal or struct"),
                 },
             }
         }
@@ -718,8 +718,8 @@ fn lowerTypeRec(
     if (cache.active_by_type.get(keyed_ty)) |active| return active;
 
     return switch (mono_types.getTypePreservingNominal(keyed_ty)) {
-        .placeholder => debugPanic("lambdamono.layouts.lowerTypeRec unresolved executable type"),
-        .unbd => debugPanic("lambdamono.layouts.lowerTypeRec abstract executable type leaked to layouts"),
+        .placeholder => debugPanic("executable.layouts.lowerTypeRec unresolved executable type"),
+        .unbd => debugPanic("executable.layouts.lowerTypeRec abstract executable type leaked to layouts"),
         .link => unreachable,
         .primitive => |prim| blk: {
             const resolved: layout_mod.GraphRef = .{ .canonical = lowerPrim(prim) };
@@ -754,10 +754,10 @@ fn lowerNode(
     ty: type_mod.TypeId,
 ) std.mem.Allocator.Error!layout_mod.GraphNode {
     return switch (mono_types.getTypePreservingNominal(ty)) {
-        .placeholder => debugPanic("lambdamono.layouts.lowerNode unresolved executable type"),
-        .unbd => debugPanic("lambdamono.layouts.lowerNode abstract executable type leaked to layouts"),
+        .placeholder => debugPanic("executable.layouts.lowerNode unresolved executable type"),
+        .unbd => debugPanic("executable.layouts.lowerNode abstract executable type leaked to layouts"),
         .link => unreachable,
-        .primitive => debugPanic("lambdamono.layouts.lowerNode primitive should have been returned directly"),
+        .primitive => debugPanic("executable.layouts.lowerNode primitive should have been returned directly"),
         .nominal => |nominal| .{ .nominal = try lowerTypeRec(allocator, mono_types, idents, graph, cache, nominal.backing) },
         .list => |elem| .{ .list = try lowerTypeRec(allocator, mono_types, idents, graph, cache, elem) },
         .box => |elem| .{ .box = try lowerTypeRec(allocator, mono_types, idents, graph, cache, elem) },

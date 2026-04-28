@@ -1438,7 +1438,7 @@ pub const SyntaxChecker = struct {
             self.logDebug(.build, "[DEF] '{s}' is a builtin type", .{base_name});
 
             // Write embedded builtin source to roc cache
-            const cache_dir = self.cache_config.getCacheEntriesDir(self.allocator) catch return null;
+            const cache_dir = self.cache_config.getModuleCacheDir(self.allocator) catch return null;
             const builtin_cache_path = std.fs.path.join(self.allocator, &.{ cache_dir, "Builtin.roc" }) catch {
                 self.allocator.free(cache_dir);
                 return null;

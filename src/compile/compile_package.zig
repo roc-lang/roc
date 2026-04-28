@@ -736,12 +736,12 @@ pub const PackageEnv = struct {
         return self.module_names.contains(module_name);
     }
 
-    /// Public API to iterate over module names (for BuildEnv compatibility)
+    /// Iterate over module names.
     pub fn moduleNamesIterator(self: *PackageEnv) std.StringHashMapUnmanaged(ModuleId).Iterator {
         return self.module_names.iterator();
     }
 
-    /// Public API to get module state by name (for BuildEnv compatibility)
+    /// Get module state by name.
     pub fn getModuleState(self: *PackageEnv, module_name: []const u8) ?*ModuleState {
         if (self.module_names.get(module_name)) |module_id| {
             return &self.modules.items[module_id];

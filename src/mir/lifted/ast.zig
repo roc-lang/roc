@@ -417,6 +417,6 @@ pub const Store = struct {
     }
 };
 
-test "monotype_lifted ast tests" {
+test "lifted ast tests" {
     std.testing.refAllDecls(@This());
 }

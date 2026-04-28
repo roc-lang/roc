@@ -236,8 +236,6 @@ pub const Interpreter = struct {
     /// Bound recursive function-call depth so the interpreter reports a Roc crash
     /// instead of overflowing the native stack.
     call_depth: usize = 0,
-    /// Kept for compatibility with existing callers; strongest-form LIR has no while loops.
-    detect_infinite_while_loops: bool = false,
     /// Active proc call stack for the current evaluation.
     call_stack: std.ArrayList(LirProcSpecId),
     /// Call stack captured at the first failed exit in the current evaluation.

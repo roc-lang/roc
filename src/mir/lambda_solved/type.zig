@@ -338,9 +338,9 @@ pub const Store = struct {
                     .lset = func.lset,
                     .ret = func.ret,
                 },
-                else => debugPanic("lambdasolved.type fnShape expected function"),
+                else => debugPanic("lambda_solved.type fnShape expected function"),
             },
-            else => debugPanic("lambdasolved.type fnShape expected function"),
+            else => debugPanic("lambda_solved.type fnShape expected function"),
         };
     }
 
@@ -352,12 +352,12 @@ pub const Store = struct {
                 .lambda_set => |span| .{ .lset = self.sliceLambdas(span) },
                 .primitive => |prim| switch (prim) {
                     .erased => .erased,
-                    else => debugPanic("lambdasolved.type lambdaRepr expected lambda set"),
+                    else => debugPanic("lambda_solved.type lambdaRepr expected lambda set"),
                 },
-                else => debugPanic("lambdasolved.type lambdaRepr expected lambda set"),
+                else => debugPanic("lambda_solved.type lambdaRepr expected lambda set"),
             },
             .unbd, .for_a, .flex_for_a => .erased,
-            else => debugPanic("lambdasolved.type lambdaRepr expected lambda set"),
+            else => debugPanic("lambda_solved.type lambdaRepr expected lambda set"),
         };
     }
 
@@ -400,7 +400,7 @@ pub const Store = struct {
 
     pub fn requireLambdaMember(self: *const Store, fn_ty: TypeVarId, symbol: Symbol) LambdaMember {
         return self.maybeLambdaMember(fn_ty, symbol) orelse
-            debugPanic("lambdasolved.type requireLambdaMember missing lambda in lambda set");
+            debugPanic("lambda_solved.type requireLambdaMember missing lambda in lambda set");
     }
 
     pub fn requireLambdaCaptures(self: *const Store, fn_ty: TypeVarId, symbol: Symbol) []const Capture {
@@ -583,20 +583,20 @@ pub const Store = struct {
                 continue;
             }
             if (@as(u32, @bitCast(tag.name)) < @as(u32, @bitCast(prev.name))) {
-                debugPanic("lambdasolved.type tag constructors were not pre-sorted");
+                debugPanic("lambda_solved.type tag constructors were not pre-sorted");
             }
 
             const prev_args = self.sliceTypeVarSpan(prev.args);
             const tag_args = self.sliceTypeVarSpan(tag.args);
             if (prev_args.len != tag_args.len) {
-                debugPanic("lambdasolved.type duplicate tag constructor had different arity");
+                debugPanic("lambda_solved.type duplicate tag constructor had different arity");
             }
             for (prev_args, tag_args) |prev_arg, tag_arg| {
                 if (!self.equalIds(prev_arg, tag_arg)) {
-                    debugPanic("lambdasolved.type duplicate tag constructor had different payload types");
+                    debugPanic("lambda_solved.type duplicate tag constructor had different payload types");
                 }
             }
-            debugPanic("lambdasolved.type duplicate tag constructor reached addTags");
+            debugPanic("lambda_solved.type duplicate tag constructor reached addTags");
         }
     }
 };
@@ -724,9 +724,9 @@ fn assertDistinctSortedCaptures(values: []const Capture) void {
             continue;
         }
         if (capture.symbol.raw() < prev.symbol.raw()) {
-            debugPanic("lambdasolved.type captures were not pre-sorted");
+            debugPanic("lambda_solved.type captures were not pre-sorted");
         }
-        debugPanic("lambdasolved.type duplicate capture symbol reached addCaptures");
+        debugPanic("lambda_solved.type duplicate capture symbol reached addCaptures");
     }
 }
 
@@ -736,7 +736,7 @@ fn assertDistinctFields(values: []const Field) void {
     for (values, 0..) |field, i| {
         for (values[i + 1 ..]) |other| {
             if (field.name == other.name) {
-                debugPanic("lambdasolved.type duplicate record field reached addFields");
+                debugPanic("lambda_solved.type duplicate record field reached addFields");
             }
         }
     }
@@ -752,13 +752,13 @@ fn assertDistinctSortedLambdas(values: []const Lambda) void {
             continue;
         }
         if (lambda.symbol.raw() < prev.symbol.raw()) {
-            debugPanic("lambdasolved.type lambdas were not pre-sorted");
+            debugPanic("lambda_solved.type lambdas were not pre-sorted");
         }
-        debugPanic("lambdasolved.type duplicate lambda symbol reached addLambdas");
+        debugPanic("lambda_solved.type duplicate lambda symbol reached addLambdas");
     }
 }
 
-test "lambdasolved type tests" {
+test "lambda_solved type tests" {
     std.testing.refAllDecls(@This());
 }
 

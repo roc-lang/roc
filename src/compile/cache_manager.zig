@@ -253,7 +253,7 @@ pub const CacheManager = struct {
     /// Get the full cache file path for a given cache key.
     /// Uses subdirectory splitting: first 2 chars for subdir, rest for filename.
     pub fn getCacheFilePath(self: *Self, cache_key: [32]u8) ![]u8 {
-        const entries_dir = try self.config.getCacheEntriesDir(self.allocator);
+        const entries_dir = try self.config.getModuleCacheDir(self.allocator);
         defer self.allocator.free(entries_dir);
         return self.computeCacheFilePath(cache_key, entries_dir);
     }
@@ -277,7 +277,7 @@ pub const CacheManager = struct {
 
     /// Ensure the cache subdirectory exists for the given cache key.
     fn ensureCacheSubdir(self: *Self, cache_key: [32]u8) !void {
-        const entries_dir = try self.config.getCacheEntriesDir(self.allocator);
+        const entries_dir = try self.config.getModuleCacheDir(self.allocator);
         defer self.allocator.free(entries_dir);
         return self.ensureCacheSubdirIn(cache_key, entries_dir);
     }
@@ -473,7 +473,7 @@ pub const CacheManager = struct {
 
     /// Get the metadata file path for a given source hash.
     fn getMetadataFilePath(self: *Self, source_hash: [32]u8) ![]u8 {
-        const entries_dir = try self.config.getCacheEntriesDir(self.allocator);
+        const entries_dir = try self.config.getModuleCacheDir(self.allocator);
         defer self.allocator.free(entries_dir);
 
         // Use same subdirectory structure as cache entries

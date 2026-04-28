@@ -6,7 +6,7 @@ pub const Type = @import("type.zig");
 pub const Ast = @import("ast.zig");
 pub const Layouts = @import("layouts.zig");
 
-test "lambdamono tests" {
+test "executable tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(Type);
     std.testing.refAllDecls(Ast);

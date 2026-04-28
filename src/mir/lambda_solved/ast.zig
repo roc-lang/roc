@@ -416,6 +416,6 @@ pub const Store = struct {
     }
 };
 
-test "lambdasolved ast tests" {
+test "lambda_solved ast tests" {
     std.testing.refAllDecls(@This());
 }

@@ -20,9 +20,6 @@ fn stderrWriter() *std.Io.Writer {
     return &stderr_file_writer.interface;
 }
 
-// Re-export RocTarget from target.zig for backward compatibility
-pub const RocTarget = target.RocTarget;
-
 /// Optimization levels for compilation
 pub const OptimizationLevel = enum {
     none, // --opt none (no optimizations)
@@ -44,14 +41,14 @@ pub const CompileConfig = struct {
     input_path: []const u8,
     output_path: []const u8,
     optimization: OptimizationLevel,
-    target: RocTarget,
+    target: target.RocTarget,
     cpu: []const u8 = "",
     features: []const u8 = "",
     debug: bool = false, // Enable debug info generation in output
 
     /// Check if compiling for the current machine
     pub fn isNative(self: CompileConfig) bool {
-        return self.target == RocTarget.detectNative();
+        return self.target == target.RocTarget.detectNative();
     }
 };
 

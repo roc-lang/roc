@@ -394,6 +394,6 @@ pub const Store = struct {
     }
 };
 
-test "lambdamono ast tests" {
+test "executable ast tests" {
     std.testing.refAllDecls(@This());
 }

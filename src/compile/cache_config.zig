@@ -125,11 +125,6 @@ pub const CacheConfig = struct {
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "test" });
     }
 
-    /// Alias for getModuleCacheDir for backwards compatibility.
-    pub fn getCacheEntriesDir(self: Self, allocator: Allocator) ![]u8 {
-        return self.getModuleCacheDir(allocator);
-    }
-
     /// Get maximum cache size in bytes.
     pub fn getMaxSizeBytes(self: Self) u64 {
         return @as(u64, self.max_size_mb) * 1024 * 1024;
