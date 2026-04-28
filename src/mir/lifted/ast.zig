@@ -1,27 +1,28 @@
-//! Cor-style lambda-lifted AST, extended only where Roc still needs explicit
-//! loops, mutable statements, blocks, and returns.
+//! Lifted MIR AST.
+//!
+//! Lifted MIR consumes row-finalized mono MIR. Local functions and closures have
+//! been lifted, captured values are explicit `capture_ref` expressions, and
+//! procedure values carry capture arguments in capture-slot order.
 
 const std = @import("std");
 const base = @import("base");
+const check = @import("check");
 const types = @import("types");
 const symbol_mod = @import("symbol");
 const type_mod = @import("type.zig");
+const row = @import("../mono_row/mod.zig");
+
+const canonical = check.CanonicalNames;
 
 pub const Symbol = symbol_mod.Symbol;
 pub const TypeId = type_mod.TypeId;
 
-/// Public enum `ExprId`.
 pub const ExprId = enum(u32) { _ };
-/// Public enum `PatId`.
 pub const PatId = enum(u32) { _ };
-/// Public enum `DefId`.
 pub const DefId = enum(u32) { _ };
-/// Public enum `StmtId`.
 pub const StmtId = enum(u32) { _ };
-/// Public enum `BranchId`.
 pub const BranchId = enum(u32) { _ };
 
-/// Public function `Span`.
 pub fn Span(comptime _: type) type {
     return extern struct {
         start: u32,
@@ -33,13 +34,28 @@ pub fn Span(comptime _: type) type {
     };
 }
 
-/// Public struct `TypedSymbol`.
 pub const TypedSymbol = struct {
     ty: TypeId,
     symbol: Symbol,
 };
 
-/// Public struct `Pat`.
+pub const CaptureSlot = struct {
+    index: u32,
+    source_symbol: Symbol,
+    ty: TypeId,
+};
+
+pub const CaptureArg = struct {
+    slot: u32,
+    symbol: Symbol,
+    expr: ExprId,
+};
+
+pub const TagPayloadPattern = struct {
+    payload: row.TagPayloadId,
+    pattern: PatId,
+};
+
 pub const Pat = struct {
     ty: TypeId,
     data: Data,
@@ -47,79 +63,76 @@ pub const Pat = struct {
     pub const Data = union(enum) {
         bool_lit: bool,
         tag: struct {
-            name: base.Ident.Idx,
-            discriminant: u16,
-            args: Span(PatId),
+            union_shape: row.TagUnionShapeId,
+            tag: row.TagId,
+            payloads: Span(TagPayloadPattern),
         },
         var_: Symbol,
     };
 };
 
-/// Public struct `Branch`.
 pub const Branch = struct {
     pat: PatId,
     body: ExprId,
 };
 
-/// Public struct `FieldExpr`.
-pub const FieldExpr = struct {
-    name: base.Ident.Idx,
-    value: ExprId,
-};
+pub const RecordFieldEval = row.Ast.RecordFieldEval;
+pub const RecordFieldAssembly = row.Ast.RecordFieldAssembly;
+pub const TagPayloadEval = row.Ast.TagPayloadEval;
+pub const TagPayloadAssembly = row.Ast.TagPayloadAssembly;
 
-/// Public struct `CaptureArg`.
-pub const CaptureArg = struct {
-    slot: u32,
-    symbol: Symbol,
-    expr: ExprId,
-};
-
-/// Public struct `Expr`.
 pub const Expr = struct {
     ty: TypeId,
     data: Data,
 
     pub const Data = union(enum) {
         var_: Symbol,
+        capture_ref: u32,
         int_lit: i128,
         frac_f32_lit: f32,
         frac_f64_lit: f64,
         dec_lit: i128,
         bool_lit: bool,
         str_lit: base.StringLiteral.Idx,
+        const_ref: check.CheckedArtifact.ConstRef,
         tag: struct {
-            name: base.Ident.Idx,
-            discriminant: u16,
-            args: Span(ExprId),
+            union_shape: row.TagUnionShapeId,
+            tag: row.TagId,
+            eval_order: Span(TagPayloadEval),
+            assembly_order: Span(TagPayloadAssembly),
             constructor_ty: TypeId,
         },
-        record: Span(FieldExpr),
+        record: struct {
+            shape: row.RecordShapeId,
+            eval_order: Span(RecordFieldEval),
+            assembly_order: Span(RecordFieldAssembly),
+        },
         access: struct {
             record: ExprId,
-            field: base.Ident.Idx,
-            field_index: u16,
+            field: row.RecordFieldId,
         },
         structural_eq: struct {
             lhs: ExprId,
             rhs: ExprId,
         },
+        bool_not: ExprId,
         let_: struct {
             bind: TypedSymbol,
             body: ExprId,
             rest: ExprId,
         },
-        call: struct {
+        call_value: struct {
             func: ExprId,
             args: Span(ExprId),
-            call_constraint_ty: TypeId,
+            requested_fn_ty: TypeId,
         },
         call_proc: struct {
-            proc: Symbol,
+            proc: canonical.ProcedureValueRef,
             args: Span(ExprId),
-            call_constraint_ty: TypeId,
+            requested_fn_ty: TypeId,
         },
         proc_value: struct {
-            proc: Symbol,
+            proc: canonical.ProcedureValueRef,
             captures: Span(CaptureArg),
             fn_ty: TypeId,
         },
@@ -129,7 +142,7 @@ pub const Expr = struct {
             args: Span(ExprId),
             source_constraint_ty: TypeId,
         },
-        when: struct {
+        match_: struct {
             cond: ExprId,
             branches: Span(BranchId),
             is_try_suffix: bool,
@@ -146,9 +159,7 @@ pub const Expr = struct {
         tuple: Span(ExprId),
         tag_payload: struct {
             tag_union: ExprId,
-            tag_name: base.Ident.Idx,
-            tag_discriminant: u16,
-            payload_index: u16,
+            payload: row.TagPayloadId,
         },
         tuple_access: struct {
             tuple: ExprId,
@@ -166,7 +177,6 @@ pub const Expr = struct {
     };
 };
 
-/// Public union `Stmt`.
 pub const Stmt = union(enum) {
     decl: struct {
         bind: TypedSymbol,
@@ -197,27 +207,23 @@ pub const Stmt = union(enum) {
     },
 };
 
-/// Public struct `FnDef`.
 pub const FnDef = struct {
     args: Span(TypedSymbol),
-    captures: Span(TypedSymbol),
+    captures: Span(CaptureSlot),
     body: ExprId,
 };
 
-/// Public struct `RunDef`.
 pub const RunDef = struct {
     body: ExprId,
     entry_ty: types.Var,
 };
 
-/// Public struct `HostedFnDef`.
 pub const HostedFnDef = struct {
-    bind: TypedSymbol,
+    proc: canonical.ProcedureValueRef,
     args: Span(TypedSymbol),
     hosted: base.HostedProc,
 };
 
-/// Public union `DefVal`.
 pub const DefVal = union(enum) {
     fn_: FnDef,
     hosted_fn: HostedFnDef,
@@ -225,13 +231,12 @@ pub const DefVal = union(enum) {
     run: RunDef,
 };
 
-/// Public struct `Def`.
 pub const Def = struct {
-    bind: TypedSymbol,
+    proc: canonical.ProcedureValueRef,
+    debug_name: ?Symbol = null,
     value: DefVal,
 };
 
-/// Public struct `Store`.
 pub const Store = struct {
     allocator: std.mem.Allocator,
     exprs: std.ArrayList(Expr),
@@ -243,7 +248,8 @@ pub const Store = struct {
     pat_ids: std.ArrayList(PatId),
     stmt_ids: std.ArrayList(StmtId),
     branch_ids: std.ArrayList(BranchId),
-    field_exprs: std.ArrayList(FieldExpr),
+    tag_payload_patterns: std.ArrayList(TagPayloadPattern),
+    capture_slots: std.ArrayList(CaptureSlot),
     capture_args: std.ArrayList(CaptureArg),
     typed_symbols: std.ArrayList(TypedSymbol),
 
@@ -259,161 +265,40 @@ pub const Store = struct {
             .pat_ids = .empty,
             .stmt_ids = .empty,
             .branch_ids = .empty,
-            .field_exprs = .empty,
+            .tag_payload_patterns = .empty,
+            .capture_slots = .empty,
             .capture_args = .empty,
             .typed_symbols = .empty,
         };
     }
 
     pub fn deinit(self: *Store) void {
-        self.exprs.deinit(self.allocator);
-        self.pats.deinit(self.allocator);
-        self.branches.deinit(self.allocator);
-        self.stmts.deinit(self.allocator);
-        self.defs.deinit(self.allocator);
-        self.expr_ids.deinit(self.allocator);
-        self.pat_ids.deinit(self.allocator);
-        self.stmt_ids.deinit(self.allocator);
-        self.branch_ids.deinit(self.allocator);
-        self.field_exprs.deinit(self.allocator);
-        self.capture_args.deinit(self.allocator);
         self.typed_symbols.deinit(self.allocator);
+        self.capture_args.deinit(self.allocator);
+        self.capture_slots.deinit(self.allocator);
+        self.tag_payload_patterns.deinit(self.allocator);
+        self.branch_ids.deinit(self.allocator);
+        self.stmt_ids.deinit(self.allocator);
+        self.pat_ids.deinit(self.allocator);
+        self.expr_ids.deinit(self.allocator);
+        self.defs.deinit(self.allocator);
+        self.stmts.deinit(self.allocator);
+        self.branches.deinit(self.allocator);
+        self.pats.deinit(self.allocator);
+        self.exprs.deinit(self.allocator);
     }
 
-    pub fn addExpr(self: *Store, expr: Expr) std.mem.Allocator.Error!ExprId {
+    pub fn addExpr(self: *Store, ty: TypeId, data: Expr.Data) std.mem.Allocator.Error!ExprId {
         const idx: u32 = @intCast(self.exprs.items.len);
-        try self.exprs.append(self.allocator, expr);
+        try self.exprs.append(self.allocator, .{ .ty = ty, .data = data });
         return @enumFromInt(idx);
     }
 
-    pub fn getExpr(self: *const Store, id: ExprId) Expr {
-        return self.exprs.items[@intFromEnum(id)];
-    }
-
-    pub fn addPat(self: *Store, pat: Pat) std.mem.Allocator.Error!PatId {
-        const idx: u32 = @intCast(self.pats.items.len);
-        try self.pats.append(self.allocator, pat);
-        return @enumFromInt(idx);
-    }
-
-    pub fn getPat(self: *const Store, id: PatId) Pat {
-        return self.pats.items[@intFromEnum(id)];
-    }
-
-    pub fn addBranchSpan(self: *Store, values: []const Branch) std.mem.Allocator.Error!Span(BranchId) {
-        if (values.len == 0) return Span(BranchId).empty();
-        const start_ids: u32 = @intCast(self.branch_ids.items.len);
-        for (values) |value| {
-            const idx: u32 = @intCast(self.branches.items.len);
-            try self.branches.append(self.allocator, value);
-            try self.branch_ids.append(self.allocator, @enumFromInt(idx));
-        }
-        return .{ .start = start_ids, .len = @intCast(values.len) };
-    }
-
-    pub fn getBranch(self: *const Store, id: BranchId) Branch {
-        return self.branches.items[@intFromEnum(id)];
-    }
-
-    pub fn addStmt(self: *Store, stmt: Stmt) std.mem.Allocator.Error!StmtId {
-        const idx: u32 = @intCast(self.stmts.items.len);
-        try self.stmts.append(self.allocator, stmt);
-        return @enumFromInt(idx);
-    }
-
-    pub fn getStmt(self: *const Store, id: StmtId) Stmt {
-        return self.stmts.items[@intFromEnum(id)];
-    }
-
-    pub fn addExprSpan(self: *Store, ids: []const ExprId) std.mem.Allocator.Error!Span(ExprId) {
-        if (ids.len == 0) return Span(ExprId).empty();
-        const start: u32 = @intCast(self.expr_ids.items.len);
-        try self.expr_ids.appendSlice(self.allocator, ids);
-        return .{ .start = start, .len = @intCast(ids.len) };
-    }
-
-    pub fn addPatSpan(self: *Store, ids: []const PatId) std.mem.Allocator.Error!Span(PatId) {
-        if (ids.len == 0) return Span(PatId).empty();
-        const start: u32 = @intCast(self.pat_ids.items.len);
-        try self.pat_ids.appendSlice(self.allocator, ids);
-        return .{ .start = start, .len = @intCast(ids.len) };
-    }
-
-    pub fn addStmtSpan(self: *Store, ids: []const StmtId) std.mem.Allocator.Error!Span(StmtId) {
-        if (ids.len == 0) return Span(StmtId).empty();
-        const start: u32 = @intCast(self.stmt_ids.items.len);
-        try self.stmt_ids.appendSlice(self.allocator, ids);
-        return .{ .start = start, .len = @intCast(ids.len) };
-    }
-
-    pub fn addFieldExprSpan(self: *Store, values: []const FieldExpr) std.mem.Allocator.Error!Span(FieldExpr) {
-        if (values.len == 0) return Span(FieldExpr).empty();
-        const start: u32 = @intCast(self.field_exprs.items.len);
-        try self.field_exprs.appendSlice(self.allocator, values);
+    pub fn addCaptureSlotSpan(self: *Store, values: []const CaptureSlot) std.mem.Allocator.Error!Span(CaptureSlot) {
+        if (values.len == 0) return Span(CaptureSlot).empty();
+        const start: u32 = @intCast(self.capture_slots.items.len);
+        try self.capture_slots.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
-    }
-
-    pub fn addCaptureArgSpan(self: *Store, values: []const CaptureArg) std.mem.Allocator.Error!Span(CaptureArg) {
-        if (values.len == 0) return Span(CaptureArg).empty();
-        const start: u32 = @intCast(self.capture_args.items.len);
-        try self.capture_args.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
-    }
-
-    pub fn addTypedSymbolSpan(self: *Store, values: []const TypedSymbol) std.mem.Allocator.Error!Span(TypedSymbol) {
-        if (values.len == 0) return Span(TypedSymbol).empty();
-        const start: u32 = @intCast(self.typed_symbols.items.len);
-        try self.typed_symbols.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
-    }
-
-    pub fn addDef(self: *Store, def: Def) std.mem.Allocator.Error!DefId {
-        const idx: u32 = @intCast(self.defs.items.len);
-        try self.defs.append(self.allocator, def);
-        return @enumFromInt(idx);
-    }
-
-    pub fn getDef(self: *const Store, id: DefId) Def {
-        return self.defs.items[@intFromEnum(id)];
-    }
-
-    pub fn defsSlice(self: *const Store) []const Def {
-        return self.defs.items;
-    }
-
-    pub fn sliceExprSpan(self: *const Store, span: Span(ExprId)) []const ExprId {
-        if (span.len == 0) return &.{};
-        return self.expr_ids.items[span.start..][0..span.len];
-    }
-
-    pub fn slicePatSpan(self: *const Store, span: Span(PatId)) []const PatId {
-        if (span.len == 0) return &.{};
-        return self.pat_ids.items[span.start..][0..span.len];
-    }
-
-    pub fn sliceStmtSpan(self: *const Store, span: Span(StmtId)) []const StmtId {
-        if (span.len == 0) return &.{};
-        return self.stmt_ids.items[span.start..][0..span.len];
-    }
-
-    pub fn sliceBranchSpan(self: *const Store, span: Span(BranchId)) []const BranchId {
-        if (span.len == 0) return &.{};
-        return self.branch_ids.items[span.start..][0..span.len];
-    }
-
-    pub fn sliceFieldExprSpan(self: *const Store, span: Span(FieldExpr)) []const FieldExpr {
-        if (span.len == 0) return &.{};
-        return self.field_exprs.items[span.start..][0..span.len];
-    }
-
-    pub fn sliceCaptureArgSpan(self: *const Store, span: Span(CaptureArg)) []const CaptureArg {
-        if (span.len == 0) return &.{};
-        return self.capture_args.items[span.start..][0..span.len];
-    }
-
-    pub fn sliceTypedSymbolSpan(self: *const Store, span: Span(TypedSymbol)) []const TypedSymbol {
-        if (span.len == 0) return &.{};
-        return self.typed_symbols.items[span.start..][0..span.len];
     }
 };
 

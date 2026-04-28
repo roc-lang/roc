@@ -1,4 +1,4 @@
-//! Lifted monotype program uses the same type graph as the monotype stage.
+//! Lifted MIR uses the row-finalized mono type graph.
 
 const mono_type = @import("../mono/mod.zig").Type;
 
