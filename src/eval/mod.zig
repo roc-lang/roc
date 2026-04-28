@@ -27,10 +27,6 @@ pub fn backendAvailable(backend_kind: EvalBackend) bool {
 
 /// Compile-time value representation for the dev backend
 pub const comptime_value = @import("comptime_value.zig");
-/// Compile-time evaluator for top-level declarations
-pub const ComptimeEvaluator = @import("comptime_evaluator.zig").ComptimeEvaluator;
-/// Dev backend evaluator for tests/CLI expect execution.
-pub const DevEvaluator = @import("dev_evaluator.zig").DevEvaluator;
 /// Executable memory for running generated code (re-exported from backend module)
 const backend = @import("backend");
 pub const ExecutableMemory = backend.ExecutableMemory;
@@ -88,14 +84,6 @@ pub const LirInterpreter = real_interpreter.Interpreter;
 pub const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
 /// Backward-compatible export for existing eval test helpers and tests.
 pub const TestEnv = RuntimeHostEnv;
-/// Snapshot/eval runner for expect statements.
-pub const TestRunner = @import("test_runner.zig").TestRunner;
-/// Shared cor-style eval test helpers.
-pub const test_helpers = @import("test/helpers.zig");
-/// Shared parsing/checking/lowering pipeline.
-pub const pipeline = @import("pipeline.zig");
-/// LIR-backed wasm evaluator.
-pub const wasm_evaluator = @import("wasm_evaluator.zig");
 /// Bytebox runner for wasm modules.
 pub const wasm_runner = if (builtin.target.os.tag == .freestanding) struct {
     pub const EvalError = error{WasmExecFailed};
@@ -115,16 +103,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("interpreter_values.zig"));
     std.testing.refAllDecls(@import("interpreter.zig"));
     std.testing.refAllDecls(@import("stack.zig"));
-    std.testing.refAllDecls(@import("comptime_evaluator.zig"));
     std.testing.refAllDecls(@import("test/RuntimeHostEnv.zig"));
     std.testing.refAllDecls(@import("test/TestEnv.zig"));
-    std.testing.refAllDecls(@import("test/helpers.zig"));
-    std.testing.refAllDecls(@import("test/anno_only_interp_test.zig"));
-    std.testing.refAllDecls(@import("test/comptime_eval_test.zig"));
-    std.testing.refAllDecls(@import("test/cor_pipeline_test.zig"));
-    std.testing.refAllDecls(@import("test/module_env_serialization_test.zig"));
-    std.testing.refAllDecls(@import("test/mono_emit_test.zig"));
     std.testing.refAllDecls(@import("test/stack_test.zig"));
-    std.testing.refAllDecls(@import("pipeline.zig"));
-    std.testing.refAllDecls(@import("wasm_evaluator.zig"));
 }

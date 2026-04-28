@@ -4,7 +4,7 @@
 //! All value-producing work is expressed through explicit local assignments;
 //! there is no runtime expression-tree interpretation in the active code path.
 //!
-//! Ownership boundary:
+//! RC boundary:
 //! - explicit RC lowering happens through `generateRcStmt`
 //! - builtin/runtime helper implementations may perform primitive-internal RC
 //! - ordinary wasm lowering is forbidden from inventing ownership policy
@@ -17,7 +17,6 @@ const layout = @import("layout");
 const lir = @import("lir");
 const LIR = lir.LIR;
 const LirStore = lir.LirStore;
-const ownership_boundary = lir.OwnershipBoundary;
 const RcHelperKey = layout.RcHelperKey;
 const RcHelperPlan = layout.RcHelperPlan;
 const RcListPlan = layout.ListPlan;
@@ -44,12 +43,12 @@ const wasm_roc_ops_crashed_offset: u32 = 24;
 const Self = @This();
 
 fn builtinInternalLayoutContainsRefcounted(ls: *const LayoutStore, comptime site: []const u8, layout_idx: layout.Idx) bool {
-    ownership_boundary.builtinRuntimeInternal(site);
+    _ = site;
     return ls.layoutContainsRefcounted(ls.getLayout(layout_idx));
 }
 
 fn explicitRcLayoutContainsRefcounted(ls: *const LayoutStore, comptime site: []const u8, layout_idx: layout.Idx) bool {
-    ownership_boundary.explicitLirRcExecution(site);
+    _ = site;
     return ls.layoutContainsRefcounted(ls.getLayout(layout_idx));
 }
 
@@ -62,7 +61,7 @@ const BuiltinListAbi = struct {
 };
 
 fn builtinInternalListAbi(self: *const Self, comptime site: []const u8, list_layout_idx: layout.Idx) BuiltinListAbi {
-    ownership_boundary.builtinRuntimeInternal(site);
+    _ = site;
     const abi = self.getLayoutStore().builtinListAbi(list_layout_idx);
     return .{
         .elem_layout_idx = abi.elem_layout_idx,
@@ -715,7 +714,6 @@ fn emitExplicitRcForValueLocal(
     layout_idx: layout.Idx,
     inc_count: u16,
 ) Allocator.Error!void {
-    ownership_boundary.explicitLirRcExecution("wasm.emitExplicitRcForValueLocal");
     try self.emitRawRcForValueLocal(kind, value_local, value_vt, layout_idx, inc_count);
 }
 

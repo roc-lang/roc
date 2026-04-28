@@ -1334,23 +1334,6 @@ fn processSnapshotContent(
         }
     }
 
-    // Lambda lifting and lambda set inference are now handled during CIR→MIR and MIR→LIR lowering
-
-    // Run compile-time evaluation for mono tests through the shared LIR path.
-    if (content.meta.node_type == .mono) {
-        if (config.builtin_module) |builtin_env| {
-            const BuiltinTypes = eval_mod.BuiltinTypes;
-            const ComptimeEvaluator = eval_mod.ComptimeEvaluator;
-            const builtin_types = BuiltinTypes.init(config.builtin_indices, builtin_env, builtin_env, builtin_env);
-            const imported_envs: []const *const ModuleEnv = builtin_modules.items;
-            var comptime_evaluator = try ComptimeEvaluator.init(allocator, can_ir, imported_envs, &solver.problems, builtin_types, builtin_env, &solver.import_mapping, roc_target.RocTarget.detectNative(), null);
-            defer comptime_evaluator.deinit();
-
-            // Evaluate top-level compile-time defs through the shared LIR path.
-            _ = try comptime_evaluator.evalAll();
-        }
-    }
-
     // Buffer all output in memory before writing files
     var md_buffer_unmanaged = std.ArrayList(u8).empty;
     var md_writer_allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &md_buffer_unmanaged);
@@ -1374,69 +1357,6 @@ fn processSnapshotContent(
             report.deinit();
         }
         generated_reports.deinit();
-    }
-
-    // Evaluate expect statements for snippet tests (same as `roc test`).
-    // Only runs when there are no compilation errors.
-    if (content.meta.node_type == .snippet) snippet_expects: {
-        const builtin_env = config.builtin_module orelse unreachable;
-        if (generated_reports.items.len > 0) break :snippet_expects;
-
-        // Resolve imports so the interpreter can look up external functions (e.g. List.first).
-        // Type checking also requires explicit resolved import indices now.
-        can_ir.imports.clearResolvedModules();
-        can_ir.imports.resolveImportsByExactModuleName(can_ir, builtin_modules.items);
-
-        const TestRunner = eval_mod.TestRunner;
-        const builtin_types = eval_mod.BuiltinTypes.init(
-            config.builtin_indices,
-            builtin_env,
-            builtin_env,
-            builtin_env,
-        );
-
-        // Use an arena for the test runner so that roc heap allocations
-        // (made via testRocAlloc during interpretation) are all freed
-        // when the arena is deinited, avoiding leaks from intermediate values.
-        var eval_arena = std.heap.ArenaAllocator.init(allocator);
-        defer eval_arena.deinit();
-        const eval_allocator = eval_arena.allocator();
-
-        var test_runner = TestRunner.init(
-            eval_allocator,
-            can_ir,
-            builtin_types,
-            builtin_modules.items,
-            builtin_env,
-            &solver.import_mapping,
-        ) catch |err| {
-            std.log.err("Failed to create test runner for {s}: {}", .{ output_path, err });
-            success = false;
-            break :snippet_expects;
-        };
-        defer test_runner.deinit();
-
-        const summary = test_runner.eval_all() catch |err| {
-            std.log.err("Failed to evaluate expects in {s}: {}", .{ output_path, err });
-            success = false;
-            break :snippet_expects;
-        };
-
-        if (summary.failed > 0) {
-            std.debug.print(
-                \\
-                \\-- EXPECT FAILURES --------------------------------
-                \\
-                \\{d} expect(s) failed in {s}
-                \\({d} passed, {d} failed)
-                \\
-                \\
-            , .{
-                summary.failed, output_path,
-                summary.passed, summary.failed,
-            });
-            success = false;
-        }
     }
 
     // Generate all sections

@@ -723,57 +723,6 @@ const CheckUnusedSuppressionStep = struct {
     }
 };
 
-/// Build step that checks for ownership-boundary violations in interpreter/backends.
-///
-/// This enforces the rule that non-builtin ownership semantics must be explicit
-/// in LIR rather than inferred in interpreter/dev/wasm code paths.
-const CheckOwnershipBoundaryStep = struct {
-    step: Step,
-
-    fn create(b: *std.Build) *CheckOwnershipBoundaryStep {
-        const self = b.allocator.create(CheckOwnershipBoundaryStep) catch @panic("OOM");
-        self.* = .{
-            .step = Step.init(.{
-                .id = Step.Id.custom,
-                .name = "check-ownership-boundary",
-                .owner = b,
-                .makeFn = make,
-            }),
-        };
-        return self;
-    }
-
-    fn make(step: *Step, _: Step.MakeOptions) !void {
-        const b = step.owner;
-
-        var child_argv = std.ArrayList([]const u8).empty;
-        defer child_argv.deinit(b.allocator);
-
-        try child_argv.append(b.allocator, "ci/check_ownership_boundaries.py");
-
-        var child = std.process.Child.init(child_argv.items, b.allocator);
-        child.stdin_behavior = .Inherit;
-        child.stdout_behavior = .Inherit;
-        child.stderr_behavior = .Inherit;
-
-        const term = try child.spawnAndWait();
-
-        switch (term) {
-            .Exited => |code| {
-                if (code != 0) {
-                    return step.fail(
-                        "Ownership boundary check failed. Run 'ci/check_ownership_boundaries.py' to see details.",
-                        .{},
-                    );
-                }
-            },
-            else => {
-                return step.fail("ci/check_ownership_boundaries.py terminated abnormally", .{});
-            },
-        }
-    }
-};
-
 /// Build step that checks for deleted post-check architecture APIs being reintroduced.
 ///
 /// This enforces the cor-style lowering contract:
@@ -1593,9 +1542,6 @@ const MiniCiStep = struct {
         try runTidy(step);
         recordTiming(&timings, &count, "tidy checks", &timer);
 
-        try checkOwnershipBoundary(step);
-        recordTiming(&timings, &count, "ownership boundary", &timer);
-
         try checkPostcheckArchitecture(step);
         recordTiming(&timings, &count, "post-check architecture", &timer);
 
@@ -1861,37 +1807,6 @@ const MiniCiStep = struct {
             },
             else => {
                 return step.fail("zig run ci/check_test_wiring.zig terminated abnormally", .{});
-            },
-        }
-    }
-
-    fn checkOwnershipBoundary(step: *Step) !void {
-        const b = step.owner;
-        std.debug.print("---- minici: checking ownership boundary ----\n", .{});
-
-        var child_argv = std.ArrayList([]const u8).empty;
-        defer child_argv.deinit(b.allocator);
-
-        try child_argv.append(b.allocator, "ci/check_ownership_boundaries.py");
-
-        var child = std.process.Child.init(child_argv.items, b.allocator);
-        child.stdin_behavior = .Inherit;
-        child.stdout_behavior = .Inherit;
-        child.stderr_behavior = .Inherit;
-
-        const term = try child.spawnAndWait();
-
-        switch (term) {
-            .Exited => |code| {
-                if (code != 0) {
-                    return step.fail(
-                        "Ownership boundary check failed. Run 'ci/check_ownership_boundaries.py' to see details.",
-                        .{},
-                    );
-                }
-            },
-            else => {
-                return step.fail("ci/check_ownership_boundaries.py terminated abnormally", .{});
             },
         }
     }
@@ -2412,13 +2327,11 @@ pub fn build(b: *std.Build) void {
     const checkfx_step = b.step("checkfx", "Check that every .roc file in test/fx has a corresponding test");
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
-    const check_ownership_boundary_step = b.step("check-ownership-boundary", "Check that ownership stays centralized in explicit LIR RC plus builtin internals");
     const check_postcheck_architecture_step = b.step("check-postcheck-architecture", "Check that deleted post-check publication/remapping APIs stay gone");
     const check_semantic_audit_step = b.step("check-semantic-audit", "Check that semantic reconstruction/fallback paths stay gone");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
     const eval_test_step = b.step("test-eval", "Run eval tests in parallel across all backends");
     const eval_host_effects_step = b.step("test-eval-host-effects", "Run runtime host-effects eval tests across supported backends");
-    const cor_pipeline_test_step = b.step("test-cor-pipeline", "Run focused cor-style pipeline eval tests");
     const playground_step = b.step("playground", "Build the WASM playground");
     const playground_test_step = b.step("test-playground", "Build the integration test suite for the WASM playground");
     const serialization_size_step = b.step("test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
@@ -3010,89 +2923,6 @@ pub fn build(b: *std.Build) void {
     }
     eval_test_step.dependOn(&run_eval_legacy_test.step);
 
-    const module_env_serialization_test = b.addTest(.{
-        .name = "module_env_serialization_test",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/eval/module_env_serialization_test_root.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-        }),
-        .filters = test_filters,
-    });
-    configureBackend(module_env_serialization_test, target);
-    roc_modules.addModuleDependencies(module_env_serialization_test, .eval);
-    module_env_serialization_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
-    module_env_serialization_test.step.dependOn(&write_compiled_builtins.step);
-
-    const run_module_env_serialization_test = b.addRunArtifact(module_env_serialization_test);
-    if (run_args.len != 0) {
-        run_module_env_serialization_test.addArgs(run_args);
-    }
-    eval_test_step.dependOn(&run_module_env_serialization_test.step);
-
-    const mono_emit_test = b.addTest(.{
-        .name = "mono_emit_test",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/eval/mono_emit_test_root.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-        }),
-        .filters = test_filters,
-    });
-    configureBackend(mono_emit_test, target);
-    roc_modules.addModuleDependencies(mono_emit_test, .eval);
-    mono_emit_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
-    mono_emit_test.root_module.addImport("bytebox", bytebox.module("bytebox"));
-    mono_emit_test.step.dependOn(&write_compiled_builtins.step);
-
-    const run_mono_emit_test = b.addRunArtifact(mono_emit_test);
-    if (run_args.len != 0) {
-        run_mono_emit_test.addArgs(run_args);
-    }
-    eval_test_step.dependOn(&run_mono_emit_test.step);
-
-    const ownership_boundary_test = b.addTest(.{
-        .name = "ownership_boundary_test",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("test/ownership_boundary_test_root.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-        }),
-        .filters = test_filters,
-    });
-    configureBackend(ownership_boundary_test, target);
-    const run_ownership_boundary_test = b.addRunArtifact(ownership_boundary_test);
-    if (run_args.len != 0) {
-        run_ownership_boundary_test.addArgs(run_args);
-    }
-    test_step.dependOn(&run_ownership_boundary_test.step);
-
-    const cor_pipeline_test = b.addTest(.{
-        .name = "cor_pipeline_eval",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/eval/cor_pipeline_test_root.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-        }),
-        .filters = test_filters,
-    });
-    configureBackend(cor_pipeline_test, target);
-    roc_modules.addModuleDependencies(cor_pipeline_test, .eval);
-    cor_pipeline_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
-    cor_pipeline_test.root_module.addImport("bytebox", bytebox.module("bytebox"));
-    cor_pipeline_test.root_module.addImport("check_test_env", check_test_env_module);
-    cor_pipeline_test.step.dependOn(&write_compiled_builtins.step);
-
-    const run_cor_pipeline_test = b.addRunArtifact(cor_pipeline_test);
-    if (run_args.len != 0) {
-        run_cor_pipeline_test.addArgs(run_args);
-    }
-    cor_pipeline_test_step.dependOn(&run_cor_pipeline_test.step);
-
     const playground_exe = b.addExecutable(.{
         .name = "playground",
         .root_module = b.createModule(.{
@@ -3461,11 +3291,6 @@ pub fn build(b: *std.Build) void {
     const check_unused = CheckUnusedSuppressionStep.create(b);
     test_step.dependOn(&check_unused.step);
 
-    // Add check for ownership-boundary violations in interpreter/backends
-    const check_ownership_boundary = CheckOwnershipBoundaryStep.create(b);
-    test_step.dependOn(&check_ownership_boundary.step);
-    check_ownership_boundary_step.dependOn(&check_ownership_boundary.step);
-
     // Add check that deleted post-check publication/remapping APIs do not reappear
     const check_postcheck_architecture = CheckPostcheckArchitectureStep.create(b);
     test_step.dependOn(&check_postcheck_architecture.step);
@@ -3476,7 +3301,6 @@ pub fn build(b: *std.Build) void {
     check_semantic_audit_step.dependOn(&run_semantic_audit.step);
     test_step.dependOn(&run_semantic_audit.step);
     eval_test_step.dependOn(&run_semantic_audit.step);
-    cor_pipeline_test_step.dependOn(&run_semantic_audit.step);
     test_glue_step.dependOn(&run_semantic_audit.step);
     minici_step.dependOn(&run_semantic_audit.step);
 

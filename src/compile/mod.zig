@@ -12,7 +12,6 @@ pub const module_discovery = @import("module_discovery.zig");
 pub const dependency_sort = @import("dependency_sort.zig");
 pub const serialize_modules = @import("serialize_modules.zig");
 pub const platform_requirements = @import("platform_requirements.zig");
-pub const runner = @import("runner.zig");
 pub const threading = @import("threading.zig");
 
 // Actor model components
@@ -95,7 +94,6 @@ test "compile tests" {
     std.testing.refAllDecls(@import("dependency_sort.zig"));
     std.testing.refAllDecls(@import("serialize_modules.zig"));
     std.testing.refAllDecls(@import("platform_requirements.zig"));
-    std.testing.refAllDecls(@import("runner.zig"));
 
     // Actor model components
     std.testing.refAllDecls(@import("messages.zig"));

@@ -1301,27 +1301,15 @@ pub const PackageEnv = struct {
             try checker.checkFile();
         }
 
-        // After type checking, evaluate top-level declarations at compile time
-        const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module_env, builtin_module_env, builtin_module_env);
-        var comptime_evaluator = try eval.ComptimeEvaluator.init(
-            gpa,
-            env,
-            imported_envs,
-            &checker.problems,
-            builtin_types_for_eval,
-            builtin_module_env,
-            &checker.import_mapping,
-            target,
-            io,
-        );
-        defer comptime_evaluator.deinit();
-        _ = try comptime_evaluator.evalAll();
-
         module_envs_map.deinit();
+
+        _ = target;
+        _ = io;
+        @compileError("Phase 2 must publish compile-time values during checked artifact finalization");
 
         return .{
             .checker = checker,
-            .comptime_values = comptime_evaluator.takeValues(),
+            .comptime_values = undefined,
         };
     }
 

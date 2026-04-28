@@ -6,18 +6,6 @@ const std = @import("std");
 pub const LIR = @import("LIR.zig");
 /// Flat storage for statement-only LIR nodes and spans.
 pub const LirStore = @import("LirStore.zig");
-/// Tail-recursion rewriting for statement-only LIR procs.
-pub const TailRecursion = @import("TailRecursion.zig");
-/// Ownership fact inference for statement-only LIR.
-pub const Ownership = @import("Ownership.zig");
-/// Explicit RC statement insertion for statement-only LIR.
-pub const RcInsert = @import("RcInsert.zig");
-/// Explicitize shared switch tails into join/jump form.
-pub const SharedSwitchTail = @import("SharedSwitchTail.zig");
-/// Ownership-boundary markers and invariant traps for non-builtin RC sites.
-pub const OwnershipBoundary = @import("OwnershipBoundary.zig");
-/// Lower cor-style IR into statement-only LIR.
-pub const FromIr = @import("FromIr.zig");
 
 /// Symbol identifiers used throughout statement-only LIR.
 pub const Symbol = LIR.Symbol;
@@ -29,34 +17,14 @@ pub const LocalId = LIR.LocalId;
 pub const LocalSpan = LIR.LocalSpan;
 /// Identifier for LIR join points.
 pub const JoinPointId = LIR.JoinPointId;
-/// Identifier for lexical borrow scopes.
-pub const BorrowScopeId = LIR.BorrowScopeId;
 /// Literal RHS values assignable in statement-only LIR.
 pub const LiteralValue = LIR.LiteralValue;
 /// Platform-hosted proc metadata.
 pub const HostedProc = LIR.HostedProc;
-/// Alias provenance rooted in another local.
-pub const AliasedRef = LIR.AliasedRef;
-/// Lifetime region for borrowed values.
-pub const BorrowRegion = LIR.BorrowRegion;
-/// Borrow provenance rooted in another local.
-pub const BorrowedRef = LIR.BorrowedRef;
-/// Ownership/provenance summary for a statement result.
-pub const ResultSemantics = LIR.ResultSemantics;
 /// Physical result materialization kind attached to value-producing statements.
 pub const ResultMaterialization = LIR.ResultMaterialization;
-/// Extra ownership data attached to value-producing statements.
-pub const OwnershipSemantics = LIR.OwnershipSemantics;
 /// Ref-producing operations lowerable by `assign_ref`.
 pub const RefOp = LIR.RefOp;
-/// Projection step applied when tracking aliases and borrows.
-pub const RefProjection = LIR.RefProjection;
-/// Span into flat ref-projection storage.
-pub const RefProjectionSpan = LIR.RefProjectionSpan;
-/// Param-relative provenance contract.
-pub const ParamRefContract = LIR.ParamRefContract;
-/// Proc-level return provenance contract.
-pub const ProcResultContract = LIR.ProcResultContract;
 /// Canonical statement/control-flow node.
 pub const CFStmt = LIR.CFStmt;
 /// Identifier of a stored `CFStmt`.
@@ -76,10 +44,4 @@ test "lir tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(LIR);
     std.testing.refAllDecls(LirStore);
-    std.testing.refAllDecls(TailRecursion);
-    std.testing.refAllDecls(Ownership);
-    std.testing.refAllDecls(RcInsert);
-    std.testing.refAllDecls(SharedSwitchTail);
-    std.testing.refAllDecls(OwnershipBoundary);
-    std.testing.refAllDecls(FromIr);
 }

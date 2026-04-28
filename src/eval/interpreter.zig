@@ -3,7 +3,7 @@
 //! Evaluates proc-root, post-RC LIR directly, producing concrete runtime values.
 //! All evaluation follows explicit `CFStmt` control flow and explicit RC ops.
 //!
-//! Ownership boundary:
+//! RC boundary:
 //! - builtin/runtime callbacks in this file may perform primitive-internal RC
 //! - explicit `.incref` / `.decref` / `.free` statement handlers may execute RC
 //! - all ordinary eval paths are forbidden from deciding ownership policy
@@ -15,7 +15,6 @@ const layout_mod = @import("layout");
 const lir = @import("lir");
 const LIR = lir.LIR;
 const LirStore = lir.LirStore;
-const ownership_boundary = lir.OwnershipBoundary;
 const lir_value = @import("value.zig");
 const builtins = @import("builtins");
 const sljmp = @import("sljmp");
@@ -160,7 +159,6 @@ const InterpreterRocEnv = struct {
     }
 
     fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
-        ownership_boundary.builtinRuntimeInternal("interpreter.rocAllocFn");
         const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
         const caller_roc_ops = self.currentRocOps();
         caller_roc_ops.roc_alloc(roc_alloc, caller_roc_ops.env);
@@ -168,7 +166,6 @@ const InterpreterRocEnv = struct {
     }
 
     fn rocDeallocFn(roc_dealloc: *RocDealloc, env: *anyopaque) callconv(.c) void {
-        ownership_boundary.builtinRuntimeInternal("interpreter.rocDeallocFn");
         const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
         trace_rc.log("dealloc: ptr=0x{x} align={d}", .{ @intFromPtr(roc_dealloc.ptr), roc_dealloc.alignment });
         const caller_roc_ops = self.currentRocOps();
@@ -176,7 +173,6 @@ const InterpreterRocEnv = struct {
     }
 
     fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
-        ownership_boundary.builtinRuntimeInternal("interpreter.rocReallocFn");
         const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
         const caller_roc_ops = self.currentRocOps();
         const old_ptr = roc_realloc.answer;
@@ -2598,7 +2594,6 @@ pub const Interpreter = struct {
     }
 
     fn performExplicitRcStmt(self: *LirInterpreter, op: RcOp, val: Value, layout_idx: layout_mod.Idx, count: u16) void {
-        ownership_boundary.explicitLirRcExecution("interpreter.performExplicitRcStmt");
         self.performRawRc(op, val, layout_idx, count);
     }
 
@@ -2610,17 +2605,16 @@ pub const Interpreter = struct {
         layout_idx: layout_mod.Idx,
         count: u16,
     ) void {
-        ownership_boundary.builtinRuntimeInternal(site);
+        _ = site;
         self.performRawRc(op, val, layout_idx, count);
     }
 
     fn performInterpreterApiRc(self: *LirInterpreter, op: RcOp, val: Value, layout_idx: layout_mod.Idx, count: u16) void {
-        ownership_boundary.explicitLirRcExecution("interpreter.performInterpreterApiRc");
         self.performRawRc(op, val, layout_idx, count);
     }
 
     fn builtinInternalContainsRefcounted(self: *LirInterpreter, comptime site: []const u8, layout_idx: layout_mod.Idx) bool {
-        ownership_boundary.builtinRuntimeInternal(site);
+        _ = site;
         return self.helper.containsRefcounted(layout_idx);
     }
 

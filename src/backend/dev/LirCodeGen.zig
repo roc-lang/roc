@@ -16,7 +16,7 @@
 //! - Generates position-independent code with relocations
 //! - Supports x86_64 and aarch64 architectures
 //!
-//! Ownership boundary:
+//! RC boundary:
 //! - this backend may lower explicit LIR RC statements
 //! - builtin helper implementations may perform primitive-internal RC
 //! - ordinary codegen paths are forbidden from inventing RC policy
@@ -26,7 +26,6 @@ const builtin = @import("builtin");
 const base = @import("base");
 const layout = @import("layout");
 const lir = @import("lir");
-const ownership_boundary = lir.OwnershipBoundary;
 const builtins = @import("builtins");
 const dev_wrappers = builtins.dev_wrappers;
 
@@ -90,7 +89,7 @@ const RcHelperKey = layout.RcHelperKey;
 const CFStmtId = lir.CFStmtId;
 
 fn explicitRcLayoutValContainsRefcounted(ls: *const LayoutStore, comptime site: []const u8, layout_val: layout.Layout) bool {
-    ownership_boundary.explicitLirRcExecution(site);
+    _ = site;
     return ls.layoutContainsRefcounted(layout_val);
 }
 
@@ -103,7 +102,7 @@ const BuiltinListAbi = struct {
 };
 
 fn builtinInternalListAbi(ls: *const LayoutStore, comptime site: []const u8, list_layout_idx: layout.Idx) BuiltinListAbi {
-    ownership_boundary.builtinRuntimeInternal(site);
+    _ = site;
     const abi = ls.builtinListAbi(list_layout_idx);
     return .{
         .elem_layout_idx = abi.elem_layout_idx,
@@ -7830,7 +7829,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             layout_idx: layout.Idx,
             count: u16,
         ) Allocator.Error!void {
-            ownership_boundary.explicitLirRcExecution("dev.emitExplicitRcHelperCallForValue");
             try self.emitRawRcHelperCallForValue(op, value_loc, layout_idx, count);
         }
 
@@ -7841,7 +7839,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             layout_idx: layout.Idx,
             count: u16,
         ) Allocator.Error!void {
-            ownership_boundary.explicitLirRcExecution("dev.emitExplicitRcHelperCallAtStackOffset");
             try self.emitRawRcHelperCallAtStackOffset(op, base_offset, layout_idx, count);
         }
 
@@ -7862,7 +7859,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             op: RcOp,
             layout_idx: layout.Idx,
         ) Allocator.Error!?GeneralReg {
-            ownership_boundary.builtinRuntimeInternal("dev.emitBuiltinInternalOptionalRcHelperAddress");
             const helper_key = RcHelperKey{ .op = op, .layout_idx = layout_idx };
             if (self.layout_store.rcHelperPlan(helper_key) == .noop) return null;
 

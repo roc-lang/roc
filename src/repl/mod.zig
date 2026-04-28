@@ -5,13 +5,10 @@
 
 const std = @import("std");
 
-const eval_zig = @import("eval.zig");
-pub const Repl = eval_zig.Repl;
 pub const Backend = @import("eval").EvalBackend;
 
 test "repl tests" {
     std.testing.refAllDecls(@This());
 
-    std.testing.refAllDecls(@import("repl_test.zig"));
     std.testing.refAllDecls(@import("repl_test_env.zig"));
 }

@@ -17,8 +17,6 @@ const LirProcSpecId = ir.LirProcSpecId;
 const Local = ir.Local;
 const LocalId = ir.LocalId;
 const LocalSpan = ir.LocalSpan;
-const RefProjection = ir.RefProjection;
-const RefProjectionSpan = ir.RefProjectionSpan;
 const Symbol = ir.Symbol;
 
 const Self = @This();
@@ -27,7 +25,6 @@ cf_stmts: std.ArrayList(CFStmt),
 cf_switch_branches: std.ArrayList(CFSwitchBranch),
 locals: std.ArrayList(Local),
 local_ids: std.ArrayList(LocalId),
-ref_projections: std.ArrayList(RefProjection),
 proc_specs: std.ArrayList(LirProcSpec),
 strings: base.StringLiteral.Store,
 allocator: Allocator,
@@ -40,7 +37,6 @@ pub fn init(allocator: Allocator) Self {
         .cf_switch_branches = std.ArrayList(CFSwitchBranch).empty,
         .locals = std.ArrayList(Local).empty,
         .local_ids = std.ArrayList(LocalId).empty,
-        .ref_projections = std.ArrayList(RefProjection).empty,
         .proc_specs = std.ArrayList(LirProcSpec).empty,
         .strings = base.StringLiteral.Store{},
         .allocator = allocator,
@@ -54,7 +50,6 @@ pub fn deinit(self: *Self) void {
     self.cf_switch_branches.deinit(self.allocator);
     self.locals.deinit(self.allocator);
     self.local_ids.deinit(self.allocator);
-    self.ref_projections.deinit(self.allocator);
     self.proc_specs.deinit(self.allocator);
     self.strings.deinit(self.allocator);
 }
@@ -115,30 +110,6 @@ pub fn getLocalSpan(self: *const Self, span: LocalSpan) []const LocalId {
         }
     }
     return self.local_ids.items[span.start..][0..span.len];
-}
-
-/// Appends ref projections and returns the corresponding flat-storage span.
-pub fn addRefProjectionSpan(self: *Self, projections: []const RefProjection) Allocator.Error!RefProjectionSpan {
-    if (projections.len == 0) return RefProjectionSpan.empty();
-
-    const start = @as(u32, @intCast(self.ref_projections.items.len));
-    try self.ref_projections.appendSlice(self.allocator, projections);
-    return .{ .start = start, .len = @intCast(projections.len) };
-}
-
-/// Resolves a ref-projection span to its stored slice.
-pub fn getRefProjectionSpan(self: *const Self, span: RefProjectionSpan) []const RefProjection {
-    if (span.len == 0) return &.{};
-    if (builtin.mode == .Debug) {
-        const end = @as(u64, span.start) + @as(u64, span.len);
-        if (end > self.ref_projections.items.len) {
-            std.debug.panic(
-                "LirStore invariant violated: ref-projection span start={d} len={d} exceeds ref-projection storage len={d}",
-                .{ span.start, span.len, self.ref_projections.items.len },
-            );
-        }
-    }
-    return self.ref_projections.items[span.start..][0..span.len];
 }
 
 /// Appends a statement/control-flow node and returns its id.
