@@ -5,13 +5,13 @@
 //! field-name, tag-name, payload-position, or display-name lookup.
 
 const std = @import("std");
-const base = @import("base");
+const check = @import("check");
 const Mono = @import("../mono/mod.zig");
 const ids = @import("../ids.zig");
 const verify = @import("../debug_verify.zig");
 
 const Allocator = std.mem.Allocator;
-const Ident = base.Ident;
+const canonical = check.CanonicalNames;
 const MonoType = Mono.Type;
 const TypeId = MonoType.TypeId;
 
@@ -22,7 +22,7 @@ pub const TagId = ids.TagId;
 pub const TagPayloadId = ids.TagPayloadId;
 
 pub const RecordField = struct {
-    name: Ident.Idx,
+    label: canonical.RecordFieldLabelId,
     ty: TypeId,
     logical_index: u32,
 };
@@ -37,7 +37,7 @@ pub const TagPayload = struct {
 };
 
 pub const Tag = struct {
-    name: Ident.Idx,
+    label: canonical.TagLabelId,
     logical_index: u32,
     payloads: ids.Span(TagPayloadId),
 };
@@ -120,7 +120,7 @@ pub const Store = struct {
         for (fields, 0..) |field, i| {
             const field_id: RecordFieldId = @enumFromInt(@as(u32, @intCast(self.record_fields.items.len)));
             try self.record_fields.append(self.allocator, .{
-                .name = field.name,
+                .label = field.name,
                 .ty = field.ty,
                 .logical_index = @intCast(i),
             });
@@ -156,7 +156,7 @@ pub const Store = struct {
 
             const tag_id: TagId = @enumFromInt(@as(u32, @intCast(self.tags.items.len)));
             try self.tags.append(self.allocator, .{
-                .name = source_tag.name,
+                .label = source_tag.name,
                 .logical_index = @intCast(tag_i),
                 .payloads = .{ .start = payload_start, .len = @intCast(source_tag.args.len) },
             });
@@ -207,7 +207,7 @@ pub const Store = struct {
         try self.scratch_key.writer(self.allocator).print("record:{d}|", .{fields.len});
         for (fields) |field| {
             try self.scratch_key.writer(self.allocator).print("{d}:{d}|", .{
-                @as(u32, @bitCast(field.name)),
+                @intFromEnum(field.name),
                 @intFromEnum(field.ty),
             });
         }
@@ -218,7 +218,7 @@ pub const Store = struct {
         try self.scratch_key.writer(self.allocator).print("tag_union:{d}|", .{source_tags.len});
         for (source_tags) |source_tag| {
             try self.scratch_key.writer(self.allocator).print("{d}:{d}|", .{
-                @as(u32, @bitCast(source_tag.name)),
+                @intFromEnum(source_tag.name),
                 source_tag.args.len,
             });
             for (source_tag.args) |payload_ty| {
@@ -230,7 +230,7 @@ pub const Store = struct {
 };
 
 pub const Result = struct {
-    mono: Mono.Lower.Result,
+    mono: Mono.Specialize.Program,
     shapes: Store,
 
     pub fn deinit(self: *Result) void {
@@ -238,15 +238,11 @@ pub const Result = struct {
         self.shapes.deinit();
     }
 
-    pub fn takeMono(self: *Result, allocator: Allocator) Allocator.Error!Mono.Lower.Result {
-        return try self.mono.take(allocator);
-    }
 };
 
-pub fn run(allocator: Allocator, mono: *Mono.Lower.Result) Allocator.Error!Result {
-    var owned_mono = try mono.take(allocator);
+pub fn run(allocator: Allocator, mono: Mono.Specialize.Program) Allocator.Error!Result {
+    var owned_mono = mono;
     errdefer owned_mono.deinit();
-
     var shapes = Store.init(allocator);
     errdefer shapes.deinit();
 

@@ -1,11 +1,15 @@
-//! Cor-style monotype AST, with explicit Roc-only extensions for loops, returns,
-//! and mutable statements.
+//! Mono MIR AST, with explicit Roc extensions for loops, returns, and mutable
+//! statements.
 
 const std = @import("std");
 const base = @import("base");
+const check = @import("check");
 const types = @import("types");
 const symbol_mod = @import("symbol");
 const type_mod = @import("type.zig");
+
+const canonical = check.CanonicalNames;
+const checked_artifact = check.CheckedArtifact;
 
 pub const Symbol = symbol_mod.Symbol;
 pub const TypeId = type_mod.TypeId;
@@ -47,7 +51,7 @@ pub const Pat = struct {
     pub const Data = union(enum) {
         bool_lit: bool,
         tag: struct {
-            name: base.Ident.Idx,
+            name: canonical.TagLabelId,
             discriminant: u16,
             args: Span(PatId),
         },
@@ -83,7 +87,7 @@ pub const Branch = struct {
 
 /// Public struct `FieldExpr`.
 pub const FieldExpr = struct {
-    name: base.Ident.Idx,
+    field: canonical.RecordFieldLabelId,
     value: ExprId,
 };
 
@@ -108,7 +112,7 @@ pub const Expr = struct {
         bool_lit: bool,
         str_lit: base.StringLiteral.Idx,
         tag: struct {
-            name: base.Ident.Idx,
+            name: canonical.TagLabelId,
             discriminant: u16,
             args: Span(ExprId),
             constructor_ty: TypeId,
@@ -116,13 +120,15 @@ pub const Expr = struct {
         record: Span(FieldExpr),
         access: struct {
             record: ExprId,
-            field: base.Ident.Idx,
+            field: canonical.RecordFieldLabelId,
             field_index: u16,
         },
+        const_ref: checked_artifact.ConstRef,
         structural_eq: struct {
             lhs: ExprId,
             rhs: ExprId,
         },
+        bool_not: ExprId,
         let_: struct {
             def: LetDef,
             rest: ExprId,
@@ -131,18 +137,18 @@ pub const Expr = struct {
             args: Span(TypedSymbol),
             body: ExprId,
         },
-        call: struct {
+        call_value: struct {
             func: ExprId,
             args: Span(ExprId),
-            call_constraint_ty: TypeId,
+            requested_fn_ty: TypeId,
         },
         call_proc: struct {
-            proc: Symbol,
+            proc: canonical.ProcedureValueRef,
             args: Span(ExprId),
-            call_constraint_ty: TypeId,
+            requested_fn_ty: TypeId,
         },
         proc_value: struct {
-            proc: Symbol,
+            proc: canonical.ProcedureValueRef,
             captures: Span(CaptureArg),
             fn_ty: TypeId,
         },
@@ -152,7 +158,7 @@ pub const Expr = struct {
             args: Span(ExprId),
             source_constraint_ty: TypeId,
         },
-        when: struct {
+        match_: struct {
             cond: ExprId,
             branches: Span(BranchId),
             is_try_suffix: bool,
@@ -169,7 +175,7 @@ pub const Expr = struct {
         tuple: Span(ExprId),
         tag_payload: struct {
             tag_union: ExprId,
-            tag_name: base.Ident.Idx,
+            tag_name: canonical.TagLabelId,
             tag_discriminant: u16,
             payload_index: u16,
         },
@@ -230,7 +236,7 @@ pub const RunDef = struct {
 
 /// Public struct `HostedFnDef`.
 pub const HostedFnDef = struct {
-    bind: TypedSymbol,
+    proc: canonical.ProcedureValueRef,
     args: Span(TypedSymbol),
     hosted: base.HostedProc,
 };
@@ -245,7 +251,8 @@ pub const DefVal = union(enum) {
 
 /// Public struct `Def`.
 pub const Def = struct {
-    bind: TypedSymbol,
+    proc: canonical.ProcedureValueRef,
+    debug_name: ?Symbol = null,
     value: DefVal,
 };
 
@@ -298,9 +305,9 @@ pub const Store = struct {
         self.typed_symbols.deinit(self.allocator);
     }
 
-    pub fn addExpr(self: *Store, expr: Expr) std.mem.Allocator.Error!ExprId {
+    pub fn addExpr(self: *Store, ty: TypeId, data: Expr.Data) std.mem.Allocator.Error!ExprId {
         const idx: u32 = @intCast(self.exprs.items.len);
-        try self.exprs.append(self.allocator, expr);
+        try self.exprs.append(self.allocator, .{ .ty = ty, .data = data });
         return @enumFromInt(idx);
     }
 
@@ -449,6 +456,6 @@ pub const Store = struct {
     }
 };
 
-test "monotype ast tests" {
+test "mono ast tests" {
     std.testing.refAllDecls(@This());
 }

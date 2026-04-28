@@ -1,14 +1,16 @@
-//! Monomorphic type graph used by the first cor-style lowering pass.
+//! Monomorphic type graph used by mono MIR.
 
 const std = @import("std");
 const builtin = @import("builtin");
-const base = @import("base");
+const check = @import("check");
 const symbol_mod = @import("symbol");
+
+const canonical = check.CanonicalNames;
 /// Public enum `TypeId`.
 pub const TypeId = enum(u32) { _ };
 /// Public value `TypeIds`.
 pub const TypeIds = []const TypeId;
-/// Binding symbol used by monotype function and lambda-set types.
+/// Binding symbol used by mono function and callable metadata.
 pub const Symbol = symbol_mod.Symbol;
 /// Dense slice of binding symbols.
 pub const Symbols = []const Symbol;
@@ -35,7 +37,7 @@ pub const Prim = enum(u16) {
 
 /// Public struct `Tag`.
 pub const Tag = struct {
-    name: base.Ident.Idx,
+    name: canonical.TagLabelId,
     args: TypeIds,
 };
 
@@ -44,7 +46,7 @@ pub const Tags = []const Tag;
 
 /// Public struct `Field`.
 pub const Field = struct {
-    name: base.Ident.Idx,
+    name: canonical.RecordFieldLabelId,
     ty: TypeId,
 };
 
@@ -53,8 +55,7 @@ pub const Fields = []const Field;
 
 /// Public struct `Nominal`.
 pub const Nominal = struct {
-    module_idx: u32,
-    ident: base.Ident.Idx,
+    nominal: canonical.NominalTypeKey,
     is_opaque: bool,
     args: TypeIds,
     backing: TypeId,
@@ -575,8 +576,7 @@ pub const Store = struct {
                     lowered_args[i] = try self.internTypeIdInner(arg, active);
                 }
                 break :blk .{ .nominal = .{
-                    .module_idx = nominal.module_idx,
-                    .ident = nominal.ident,
+                    .nominal = nominal.nominal,
                     .is_opaque = nominal.is_opaque,
                     .args = lowered_args,
                     .backing = try self.internTypeIdInner(nominal.backing, active),
@@ -736,8 +736,8 @@ pub const Store = struct {
                     },
                     .nominal => |nominal| {
                         try self_builder.store.appendInternKeyValue(@as(u8, 12));
-                        try self_builder.store.appendInternKeyValue(nominal.module_idx);
-                        try self_builder.store.appendInternKeyValue(@as(u32, @bitCast(nominal.ident)));
+                        try self_builder.store.appendInternKeyValue(@intFromEnum(nominal.nominal.module_name));
+                        try self_builder.store.appendInternKeyValue(@intFromEnum(nominal.nominal.type_name));
                         try self_builder.store.appendInternKeyValue(@as(u8, @intFromBool(nominal.is_opaque)));
                         try self_builder.store.appendInternKeyValue(@as(u32, @intCast(nominal.args.len)));
                         for (nominal.args) |arg| {
@@ -764,7 +764,7 @@ pub const Store = struct {
                         try self_builder.store.appendInternKeyValue(@as(u8, 16));
                         try self_builder.store.appendInternKeyValue(@as(u32, @intCast(tag_union.tags.len)));
                         for (tag_union.tags) |tag| {
-                            try self_builder.store.appendInternKeyValue(@as(u32, @bitCast(tag.name)));
+                            try self_builder.store.appendInternKeyValue(@intFromEnum(tag.name));
                             try self_builder.store.appendInternKeyValue(@as(u32, @intCast(tag.args.len)));
                             for (tag.args) |arg| {
                                 try self_builder.serializeType(arg);
@@ -775,7 +775,7 @@ pub const Store = struct {
                         try self_builder.store.appendInternKeyValue(@as(u8, 17));
                         try self_builder.store.appendInternKeyValue(@as(u32, @intCast(record.fields.len)));
                         for (record.fields) |field| {
-                            try self_builder.store.appendInternKeyValue(@as(u32, @bitCast(field.name)));
+                            try self_builder.store.appendInternKeyValue(@intFromEnum(field.name));
                             try self_builder.serializeType(field.ty);
                         }
                     },
@@ -799,11 +799,11 @@ pub const Store = struct {
 
         var prev = tags[0];
         for (tags[1..]) |tag| {
-            if (@as(u32, @bitCast(tag.name)) > @as(u32, @bitCast(prev.name))) {
+            if (@intFromEnum(tag.name) > @intFromEnum(prev.name)) {
                 prev = tag;
                 continue;
             }
-            if (@as(u32, @bitCast(tag.name)) < @as(u32, @bitCast(prev.name))) {
+            if (@intFromEnum(tag.name) < @intFromEnum(prev.name)) {
                 debugPanic("mono.type tag constructors were not pre-sorted", .{});
             }
             if (prev.args.len != tag.args.len) {
@@ -846,8 +846,8 @@ pub const Store = struct {
             .link => unreachable,
             .nominal => |nominal| blk: {
                 const right_nominal = right.nominal;
-                if (nominal.module_idx != right_nominal.module_idx) break :blk false;
-                if (nominal.ident != right_nominal.ident) break :blk false;
+                if (nominal.nominal.module_name != right_nominal.nominal.module_name) break :blk false;
+                if (nominal.nominal.type_name != right_nominal.nominal.type_name) break :blk false;
                 if (nominal.is_opaque != right_nominal.is_opaque) break :blk false;
                 if (nominal.args.len != right_nominal.args.len) break :blk false;
                 for (nominal.args, right_nominal.args) |left_arg, right_arg| {
@@ -903,7 +903,7 @@ pub const Store = struct {
     }
 };
 
-test "monotype type tests" {
+test "mono type tests" {
     std.testing.refAllDecls(@This());
 }
 
@@ -914,28 +914,25 @@ test "nominal identity preserves generic arguments" {
     const bool_ty = try store.internResolved(.{ .primitive = .bool });
     const u8_ty = try store.internResolved(.{ .primitive = .u8 });
     const i64_ty = try store.internResolved(.{ .primitive = .i64 });
-    const foo_ident: base.Ident.Idx = .{
-        .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
-        .idx = 1,
+    const foo_nominal = canonical.NominalTypeKey{
+        .module_name = @enumFromInt(7),
+        .type_name = @enumFromInt(1),
     };
 
     const foo_u8 = try store.internResolved(.{ .nominal = .{
-        .module_idx = 7,
-        .ident = foo_ident,
+        .nominal = foo_nominal,
         .is_opaque = true,
         .args = try store.dupeTypeIds(&.{u8_ty}),
         .backing = bool_ty,
     } });
     const foo_i64 = try store.internResolved(.{ .nominal = .{
-        .module_idx = 7,
-        .ident = foo_ident,
+        .nominal = foo_nominal,
         .is_opaque = true,
         .args = try store.dupeTypeIds(&.{i64_ty}),
         .backing = bool_ty,
     } });
     const foo_u8_again = try store.internResolved(.{ .nominal = .{
-        .module_idx = 7,
-        .ident = foo_ident,
+        .nominal = foo_nominal,
         .is_opaque = true,
         .args = try store.dupeTypeIds(&.{u8_ty}),
         .backing = bool_ty,
@@ -1012,11 +1009,11 @@ test "keyId does not intern containers with function leaves" {
         .ret = i64_ty,
     } });
     const record_a = try store.addType(.{ .record = .{ .fields = try store.dupeFields(&.{.{
-        .name = base.Ident.Idx.NONE,
+        .name = @enumFromInt(0),
         .ty = fn_ty,
     }}) } });
     const record_b = try store.addType(.{ .record = .{ .fields = try store.dupeFields(&.{.{
-        .name = base.Ident.Idx.NONE,
+        .name = @enumFromInt(0),
         .ty = fn_ty,
     }}) } });
 
