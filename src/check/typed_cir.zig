@@ -27,7 +27,6 @@ const OwnedCheckedModule = struct {
 const ModuleData = struct {
     env: *ModuleEnv,
     top_level_defs_by_ident: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Def.Idx) = .{},
-    required_lookup_targets: std.AutoHashMapUnmanaged(u32, CIR.Def.Idx) = .{},
     ownership: union(enum) {
         borrowed,
         owned_checked: OwnedCheckedModule,
@@ -63,7 +62,6 @@ const ModuleData = struct {
 
     fn deinit(self: *ModuleData, allocator: Allocator) void {
         self.top_level_defs_by_ident.deinit(allocator);
-        self.required_lookup_targets.deinit(allocator);
         switch (self.ownership) {
             .borrowed => {},
             .owned_checked => |owned| {
@@ -186,18 +184,6 @@ pub const Modules = struct {
         return self.module_idxs_by_name.get(target_name);
     }
 
-    pub fn setRequiredLookupTarget(
-        self: *Modules,
-        source_module_idx: u32,
-        requires_idx: u32,
-        target_def_idx: CIR.Def.Idx,
-    ) Allocator.Error!void {
-        try self.modules[source_module_idx].required_lookup_targets.put(
-            self.allocator,
-            requires_idx,
-            target_def_idx,
-        );
-    }
 };
 
 fn ensureModuleNameIdents(env: *ModuleEnv) Allocator.Error!void {
@@ -214,7 +200,7 @@ fn ensureModuleNameIdents(env: *ModuleEnv) Allocator.Error!void {
     }
 }
 
-/// Read-only view over one typed CIR module and its explicit facts.
+/// Read-only view over one typed CIR module and its explicit checked data.
 pub const Module = struct {
     allocator: Allocator,
     module_idx: u32,
@@ -294,10 +280,6 @@ pub const Module = struct {
 
     pub fn requiresTypes(self: @This()) []const ModuleEnv.RequiredType {
         return self.env().requires_types.items.items;
-    }
-
-    pub fn requiredLookupTarget(self: @This(), requires_idx: u32) ?CIR.Def.Idx {
-        return self.data_store.required_lookup_targets.get(requires_idx);
     }
 
     pub fn nodeTag(self: @This(), idx: CIR.Node.Idx) CIR.Node.Tag {

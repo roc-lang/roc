@@ -3,10 +3,8 @@
 const std = @import("std");
 const base = @import("base");
 const can = @import("can");
-const check = @import("check");
 
 const ModuleEnv = can.ModuleEnv;
-const TypedCIR = check.TypedCIR;
 
 /// Public value `IdentMap`.
 pub const IdentMap = std.AutoHashMap(base.Ident.Idx, base.Ident.Idx);
@@ -44,33 +42,4 @@ pub fn buildPlatformToAppIdents(
     }
 
     return platform_to_app_idents;
-}
-
-/// Public function `populateRequiredLookupTargets`.
-pub fn populateRequiredLookupTargets(
-    typed_modules: *TypedCIR.Modules,
-    app_module_idx: ?u32,
-) !void {
-    const resolved_app_module_idx = app_module_idx orelse return;
-    const app_module = typed_modules.module(resolved_app_module_idx);
-
-    var source_module_idx: u32 = 0;
-    while (source_module_idx < typed_modules.moduleCount()) : (source_module_idx += 1) {
-        if (source_module_idx == resolved_app_module_idx) continue;
-
-        const source_module = typed_modules.module(source_module_idx);
-        const requires_items = source_module.requiresTypes();
-
-        for (requires_items, 0..) |required_type, requires_idx| {
-            const app_ident = app_module.identStoreConst().findByString(
-                source_module.getIdent(required_type.ident),
-            ) orelse continue;
-            const target_def_idx = app_module.topLevelDefByIdent(app_ident) orelse continue;
-            try typed_modules.setRequiredLookupTarget(
-                source_module_idx,
-                @intCast(requires_idx),
-                target_def_idx,
-            );
-        }
-    }
 }

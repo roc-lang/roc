@@ -248,7 +248,6 @@ pub const PlatformRequiredBinding = struct {
     requires_idx: u32,
     ident: Ident.Idx,
     type_anno: CIR.TypeAnno.Idx,
-    lookup_target: ?CIR.Def.Idx,
 };
 
 pub const PlatformRequiredBindingTable = struct {
@@ -265,7 +264,6 @@ pub const PlatformRequiredBindingTable = struct {
                 .requires_idx = @intCast(i),
                 .ident = required_type.ident,
                 .type_anno = required_type.type_anno,
-                .lookup_target = module.requiredLookupTarget(@intCast(i)),
             };
         }
 
