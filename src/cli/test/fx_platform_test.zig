@@ -1309,7 +1309,7 @@ test "fx platform issue8943 error message memory corruption" {
     // a non-Try type.
     //
     // The root cause was:
-    // 1. ComptimeEvaluator.deinit() freed crash messages before reports were built
+    // 1. Compile-time evaluation cleanup freed crash messages before reports were built
     // 2. addSourceCodeWithUnderlines didn't dupe the filename from SourceCodeDisplayRegion
     const allocator = testing.allocator;
 

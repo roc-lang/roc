@@ -21,7 +21,6 @@ const builtins = @import("builtins");
 const build_options = @import("build_options");
 const parse = @import("parse");
 const reporting = @import("reporting");
-const repl = @import("repl");
 const eval = @import("eval");
 const types = @import("types");
 const can = @import("can");
@@ -36,17 +35,12 @@ const layout = @import("layout");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 
-const CrashContext = eval.CrashContext;
-
 const Can = can.Can;
 const Check = check.Check;
 const SExprTree = base.SExprTree;
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 const AST = parse.AST;
-const Repl = repl.Repl;
-const RocOps = builtins.host_abi.RocOps;
-const TestRunner = eval.TestRunner;
 
 var allocator: Allocator = std.heap.wasm_allocator;
 
@@ -237,11 +231,7 @@ var current_state: State = .START;
 var compiler_data: ?CompilerStageData = null;
 
 /// REPL state management
-const ReplSession = struct {
-    repl: *Repl,
-    crash_ctx: *CrashContext,
-    roc_ops: *RocOps,
-};
+const ReplSession = struct {};
 
 var repl_session: ?ReplSession = null;
 
@@ -395,118 +385,8 @@ const ResponseWriteError = error{
     WriteFailed,
 };
 
-/// Clean up REPL state and free associated memory.
-/// This function safely deallocates the REPL instance and RocOps, then sets them to null.
-/// It's called during RESET operations and module initialization.
 fn cleanupReplState() void {
-    if (repl_session) |session| {
-        session.repl.deinit();
-        allocator.destroy(session.repl);
-        allocator.destroy(session.roc_ops);
-        session.crash_ctx.deinit();
-        allocator.destroy(session.crash_ctx);
-        repl_session = null;
-    }
-}
-
-/// Create WASM-compatible RocOps for REPL initialization.
-/// This function allocates and initializes a RocOps structure with WASM-specific
-/// memory management functions. The returned pointer must be freed by the caller.
-/// Returns an error if allocation fails.
-fn createWasmRocOps(crash_ctx: *CrashContext) !*RocOps {
-    const roc_ops = try allocator.create(RocOps);
-    roc_ops.* = RocOps{
-        .env = @as(*anyopaque, @ptrCast(crash_ctx)),
-        .roc_alloc = wasmRocAlloc,
-        .roc_dealloc = wasmRocDealloc,
-        .roc_realloc = wasmRocRealloc,
-        .roc_dbg = wasmRocDbg,
-        .roc_expect_failed = wasmRocExpectFailed,
-        .roc_crashed = wasmRocCrashed,
-        .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
-    };
-    return roc_ops;
-}
-
-fn wasmRocAlloc(alloc_args: *builtins.host_abi.RocAlloc, _: *anyopaque) callconv(.c) void {
-    const alignment: usize = @intCast(alloc_args.alignment);
-    const align_enum = std.mem.Alignment.fromByteUnits(alignment);
-    const header_size = @max(alignment, @sizeOf(usize));
-    const total_size = alloc_args.length + header_size;
-    const result = allocator.rawAlloc(total_size, align_enum, @returnAddress());
-    if (result) |ptr| {
-        const size_ptr: *usize = @ptrCast(@alignCast(ptr));
-        size_ptr.* = alloc_args.length;
-        alloc_args.answer = @ptrCast(ptr + header_size);
-    } else {
-        // In WASM, we can't use null pointers, so we'll just crash
-        // This is a limitation of the WASM target
-        unreachable;
-    }
-}
-
-fn wasmRocDealloc(dealloc_args: *builtins.host_abi.RocDealloc, _: *anyopaque) callconv(.c) void {
-    const alignment: usize = @intCast(dealloc_args.alignment);
-    const align_enum = std.mem.Alignment.fromByteUnits(alignment);
-    const header_size = @max(alignment, @sizeOf(usize));
-    const user_ptr: [*]u8 = @ptrCast(dealloc_args.ptr);
-    const base_ptr = user_ptr - header_size;
-    const size_ptr: *const usize = @ptrCast(@alignCast(base_ptr));
-    const total_size = size_ptr.* + header_size;
-    allocator.rawFree(base_ptr[0..total_size], align_enum, @returnAddress());
-}
-
-fn wasmRocRealloc(realloc_args: *builtins.host_abi.RocRealloc, _: *anyopaque) callconv(.c) void {
-    const alignment: usize = @intCast(realloc_args.alignment);
-    const align_enum = std.mem.Alignment.fromByteUnits(alignment);
-    const header_size = @max(alignment, @sizeOf(usize));
-    const old_user_ptr: [*]u8 = @ptrCast(realloc_args.answer);
-    const old_base_ptr = old_user_ptr - header_size;
-    const old_size_ptr: *const usize = @ptrCast(@alignCast(old_base_ptr));
-    const old_size = old_size_ptr.*;
-
-    const total_size = realloc_args.new_length + header_size;
-    const result = allocator.rawAlloc(total_size, align_enum, @returnAddress());
-    if (result) |ptr| {
-        const size_ptr: *usize = @ptrCast(@alignCast(ptr));
-        size_ptr.* = realloc_args.new_length;
-
-        const new_user_ptr = ptr + header_size;
-        const copy_size = @min(old_size, realloc_args.new_length);
-        @memcpy(new_user_ptr[0..copy_size], old_user_ptr[0..copy_size]);
-        allocator.rawFree(old_base_ptr[0 .. old_size + header_size], align_enum, @returnAddress());
-
-        realloc_args.answer = @ptrCast(new_user_ptr);
-    } else {
-        // In WASM, we can't use null pointers, so we'll just crash
-        // This is a limitation of the WASM target
-        unreachable;
-    }
-}
-
-fn wasmRocDbg(_: *const builtins.host_abi.RocDbg, _: *anyopaque) callconv(.c) void {
-    // No-op in WASM playground
-}
-
-fn wasmRocExpectFailed(expect_failed_args: *const builtins.host_abi.RocExpectFailed, env: *anyopaque) callconv(.c) void {
-    const ctx: *CrashContext = @ptrCast(@alignCast(env));
-    const source_bytes = expect_failed_args.utf8_bytes[0..expect_failed_args.len];
-    const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
-    // Format and record the message
-    const formatted = std.fmt.allocPrint(allocator, "Expect failed: {s}", .{trimmed}) catch {
-        @trap();
-    };
-    ctx.recordCrash(formatted) catch {
-        allocator.free(formatted);
-        @trap();
-    };
-}
-
-fn wasmRocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) void {
-    const ctx: *CrashContext = @ptrCast(@alignCast(env));
-    ctx.recordCrash(crashed_args.utf8_bytes[0..crashed_args.len]) catch {
-        @trap();
-    };
+    repl_session = null;
 }
 
 /// Initialize the WASM module in START state
@@ -677,43 +557,9 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
             try writeLoadedResponse(response_buffer, result);
         },
         .INIT_REPL => {
-            // Clean up any existing REPL state
             cleanupReplState();
-
-            const crash_ctx = allocator.create(CrashContext) catch |err| {
-                try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
-                return;
-            };
-            crash_ctx.* = CrashContext.init(allocator);
-
-            const roc_ops = createWasmRocOps(crash_ctx) catch |err| {
-                allocator.destroy(crash_ctx);
-                try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
-                return;
-            };
-
-            const repl_ptr = allocator.create(Repl) catch |err| {
-                allocator.destroy(roc_ops);
-                crash_ctx.deinit();
-                allocator.destroy(crash_ctx);
-                try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
-                return;
-            };
-
-            repl_ptr.* = Repl.init(allocator, roc_ops, crash_ctx) catch |err| {
-                allocator.destroy(roc_ops);
-                crash_ctx.deinit();
-                allocator.destroy(crash_ctx);
-                allocator.destroy(repl_ptr);
-                try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
-                return;
-            };
-
-            repl_session = .{ .repl = repl_ptr, .crash_ctx = crash_ctx, .roc_ops = roc_ops };
-            current_state = .REPL_ACTIVE;
-
-            // Return success with REPL info
-            try writeReplInitResponse(response_buffer);
+            _ = response_buffer;
+            @compileError("Phase 2 must route playground REPL initialization through checked artifacts");
         },
         .RESET => {
             resetGlobalState();
@@ -778,86 +624,12 @@ fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, re
 /// The REPL instance must be initialized before calling this function.
 /// Returns an error if the response buffer is too small or if internal errors occur.
 fn handleReplState(message_type: MessageType, root: std.json.Value, response_buffer: []u8) ResponseWriteError!void {
-    const session = repl_session orelse {
-        try writeErrorResponse(response_buffer, .ERROR, "REPL not initialized");
-        return;
-    };
-    const repl_ptr = session.repl;
-    const crash_ctx = session.crash_ctx;
-
-    switch (message_type) {
-        .REPL_STEP => {
-            const input_value = root.object.get("input") orelse {
-                try writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Missing input for REPL_STEP");
-                return;
-            };
-            const input = input_value.string;
-            const structured_result = repl_ptr.stepStructured(input) catch |err| {
-                // Handle hard errors (like OOM) that aren't caught by the REPL
-                // Create a static error message to avoid allocation issues
-                const error_msg = @errorName(err);
-                const step_result = ReplStepResult{
-                    .output = error_msg,
-                    .try_type = .@"error",
-                    .error_stage = .runtime,
-                    .error_details = error_msg,
-                };
-                try writeReplStepResultJson(response_buffer, step_result);
-                return;
-            };
-
-            if (crash_ctx.state == .crashed) {
-                const crash_details = crash_ctx.crashMessage();
-                crash_ctx.reset();
-
-                const output = structured_result.getMessage() orelse "";
-                const step_result = ReplStepResult{
-                    .output = output,
-                    .try_type = .@"error",
-                    .error_stage = .evaluation,
-                    .error_details = crash_details,
-                };
-                try writeReplStepResultJson(response_buffer, step_result);
-                structured_result.deinit(allocator);
-                return;
-            }
-
-            // Convert StepResult to ReplStepResult
-            const step_result = convertStepResult(structured_result);
-            try writeReplStepResultJson(response_buffer, step_result);
-            structured_result.deinit(allocator);
-        },
-        .CLEAR_REPL => {
-            repl_ptr.clearDefinitions();
-            try writeReplClearResponse(response_buffer);
-        },
-        .RESET => {
-            resetGlobalState();
-
-            current_state = .READY;
-
-            const compiler_version = build_options.compiler_version;
-            try writeSuccessResponse(response_buffer, compiler_version, null);
-        },
-        .QUERY_CIR => {
-            // For REPL mode, we need to generate CIR from the REPL's last module env
-            const module_env = repl_ptr.getLastModuleEnv() orelse {
-                try writeErrorResponse(response_buffer, .ERROR, "No REPL evaluation has occurred yet");
-                return;
-            };
-
-            // Write CIR response directly using the REPL's module env
-            try writeReplCanCirResponse(response_buffer, module_env);
-        },
-        .QUERY_TYPES, .QUERY_FORMATTED, .GET_HOVER_INFO => {
-            // These queries need parse/type information which isn't readily available in REPL mode
-            try writeErrorResponse(response_buffer, .ERROR, "Parse/type queries not available in REPL mode");
-        },
-        else => {
-            try writeErrorResponse(response_buffer, .INVALID_STATE, "Invalid message type for REPL state");
-        },
-    }
+    _ = message_type;
+    _ = root;
+    _ = response_buffer;
+    @compileError("Phase 2 must route playground REPL through checked artifacts");
 }
+
 
 /// Compile source through all compiler stages.
 /// module_name should be the filename without the .roc extension (e.g., "Person" for "Person.roc")
@@ -1375,65 +1147,6 @@ fn writeReplInitResponse(response_buffer: []u8) ResponseWriteError!void {
     try resp_writer.finalize();
 }
 
-/// Convert REPL StepResult to playground's ReplStepResult
-fn convertStepResult(result: repl.Repl.StepResult) ReplStepResult {
-    return switch (result) {
-        .expression => |output| ReplStepResult{
-            .output = output,
-            .try_type = .expression,
-        },
-        .definition => |output| ReplStepResult{
-            .output = output,
-            .try_type = .definition,
-        },
-        .help => |output| ReplStepResult{
-            .output = output,
-            .try_type = .expression, // Treat help as expression output
-        },
-        .quit => ReplStepResult{
-            .output = "Goodbye!",
-            .try_type = .expression,
-        },
-        .empty => ReplStepResult{
-            .output = "",
-            .try_type = .expression,
-        },
-        .parse_error => |output| ReplStepResult{
-            .output = output,
-            .try_type = .@"error",
-            .error_stage = .parse,
-            .error_details = extractErrorDetails(output),
-        },
-        .canonicalize_error => |output| ReplStepResult{
-            .output = output,
-            .try_type = .@"error",
-            .error_stage = .canonicalize,
-            .error_details = extractErrorDetails(output),
-        },
-        .type_error => |output| ReplStepResult{
-            .output = output,
-            .try_type = .@"error",
-            .error_stage = .typecheck,
-            .error_details = extractErrorDetails(output),
-        },
-        .eval_error => |output| ReplStepResult{
-            .output = output,
-            .try_type = .@"error",
-            .error_stage = .evaluation,
-            .error_details = extractErrorDetails(output),
-        },
-    };
-}
-
-/// Extract error details from an error message (part after ": ")
-fn extractErrorDetails(message: []const u8) ?[]const u8 {
-    if (std.mem.indexOf(u8, message, ": ")) |idx| {
-        return message[idx + 2 ..];
-    }
-    return null;
-}
-
-/// Write REPL step result as JSON
 fn writeReplStepResultJson(response_buffer: []u8, result: ReplStepResult) ResponseWriteError!void {
     var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
@@ -1610,56 +1323,11 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 }
 
 fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
-
-    // use arena for test evaluation
-    const env = data.module_env;
-    var local_arena = std.heap.ArenaAllocator.init(allocator);
-    defer local_arena.deinit();
-
-    // Create interpreter infrastructure for test evaluation
-    const empty_modules: []const *const ModuleEnv = &.{};
-    const builtin_module_env: ?*const ModuleEnv = if (data.builtin_module) |bm| bm.env else null;
-    const builtin_types = data.builtin_types orelse {
-        try writeErrorResponse(response_buffer, .ERROR, "Missing builtin types for test runner.");
-        return;
-    };
-    var test_runner = TestRunner.init(
-        local_arena.allocator(),
-        env,
-        builtin_types,
-        empty_modules,
-        builtin_module_env,
-        &env.import_mapping,
-    ) catch {
-        try writeErrorResponse(response_buffer, .ERROR, "Failed to initialize test runner.");
-        return;
-    };
-    defer test_runner.deinit();
-
-    _ = test_runner.eval_all() catch {
-        try writeErrorResponse(response_buffer, .ERROR, "Failed to evaluate tests.");
-        return;
-    };
-
-    var html_writer_allocating: std.Io.Writer.Allocating = .init(local_arena.allocator());
-
-    test_runner.write_html_report(&html_writer_allocating.writer) catch {
-        try writeErrorResponse(response_buffer, .ERROR, "Failed to generate test report.");
-        return;
-    };
-
-    var resp_writer = ResponseWriter.init(response_buffer);
-    resp_writer.pos = @sizeOf(u32);
-    const w = &resp_writer.interface;
-
-    try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
-
-    try writeJsonString(w, html_writer_allocating.written());
-
-    try w.writeAll("\"}");
-    try resp_writer.finalize();
-    return;
+    _ = response_buffer;
+    _ = data;
+    @compileError("Phase 2 must route playground test evaluation through checked artifacts");
 }
+
 
 const HoverInfo = struct {
     name: []const u8,

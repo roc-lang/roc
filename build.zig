@@ -3972,7 +3972,7 @@ fn addMainExe(
     // Add tracy support (required by parse/can/check modules)
     add_tracy(b, roc_modules.build_options, shim_lib, b.graph.host, false, flag_enable_tracy);
 
-    // Create dev shim static library - uses DevEvaluator for JIT compilation
+    // Create dev shim static library
     // instead of the interpreter. Only supports x86_64/aarch64 (no wasm32).
     const dev_shim_lib = b.addLibrary(.{
         .name = "roc_dev_shim",

@@ -406,13 +406,6 @@ pub const LowLevel = enum {
         consume,
     };
 
-    pub const ProcResultSemantics = union(enum) {
-        fresh,
-        alias_arg: usize,
-        borrow_arg: usize,
-        no_return,
-    };
-
     pub const ResultMaterialization = enum {
         direct,
         // The result is materialized by copying bytes from a borrowed source,
@@ -781,49 +774,6 @@ pub const LowLevel = enum {
             .box_box, .box_unbox => &.{.borrow},
             .crash => &.{.consume},
             .compare => &.{ .borrow, .borrow },
-        };
-    }
-
-    pub fn procResultSemantics(self: LowLevel) ProcResultSemantics {
-        return switch (self) {
-            .crash => .no_return,
-            // These low-levels consume an owned container/string argument and
-            // return a fresh owned value whose ownership is transferred from
-            // that input. Even if the runtime reuses the same allocation, the
-            // source value has been consumed; later stages must not treat the
-            // result as an alias of the pre-call local.
-            .str_concat,
-            .str_trim,
-            .str_trim_start,
-            .str_trim_end,
-            .str_with_ascii_lowercased,
-            .str_with_ascii_uppercased,
-            .str_reserve,
-            .str_release_excess_capacity,
-            .list_concat,
-            .list_append_unsafe,
-            .list_drop_at,
-            .list_sublist,
-            .list_drop_first,
-            .list_drop_last,
-            .list_take_first,
-            .list_take_last,
-            .list_reserve,
-            .list_set,
-            .list_prepend,
-            .list_reverse,
-            .list_release_excess_capacity,
-            => .fresh,
-
-            .list_first,
-            .list_last,
-            .list_split_first,
-            .list_split_last,
-            => .fresh,
-
-            .list_get_unsafe => .fresh,
-
-            else => .fresh,
         };
     }
 
