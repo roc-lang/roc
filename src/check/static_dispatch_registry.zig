@@ -5,24 +5,29 @@
 //! type variable explicitly.
 
 const std = @import("std");
-const base = @import("base");
 const can = @import("can");
 const types = @import("types");
-const symbol = @import("symbol");
 const TypedCIR = @import("typed_cir.zig");
+const canonical = @import("canonical_names.zig");
 
 const Allocator = std.mem.Allocator;
-const Ident = base.Ident;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const Var = types.Var;
 
+pub const ProcedureTemplateLookup = struct {
+    module_idx: u32,
+    by_def: []const ?canonical.ProcedureTemplateRef,
+
+    pub fn templateForDef(self: *const ProcedureTemplateLookup, def_idx: CIR.Def.Idx) ?canonical.ProcedureTemplateRef {
+        const raw = @intFromEnum(def_idx);
+        if (raw >= self.by_def.len) return null;
+        return self.by_def[raw];
+    }
+};
+
 pub const MethodOwner = union(enum) {
-    nominal: struct {
-        module_idx: u32,
-        type_ident: Ident.Idx,
-        qualified_module_ident: Ident.Idx,
-    },
+    nominal: canonical.NominalTypeKey,
     builtin: BuiltinOwner,
 };
 
@@ -48,15 +53,15 @@ pub const BuiltinOwner = enum {
 
 pub const MethodKey = struct {
     owner: MethodOwner,
-    method_ident: Ident.Idx,
+    method: canonical.MethodNameId,
 };
 
 pub const MethodTarget = struct {
     module_idx: u32,
     def_idx: CIR.Def.Idx,
-    qualified_ident: Ident.Idx,
+    proc: canonical.ProcedureValueRef,
+    template: ?canonical.ProcedureTemplateRef,
     callable_var: Var,
-    proc_symbol: symbol.Symbol = .none,
 };
 
 pub const MethodRegistryEntry = struct {
@@ -72,7 +77,12 @@ pub const MethodRegistry = struct {
         self.* = .{};
     }
 
-    pub fn fromTypedModules(allocator: Allocator, modules: *const TypedCIR.Modules) Allocator.Error!MethodRegistry {
+    pub fn fromTypedModules(
+        allocator: Allocator,
+        modules: *const TypedCIR.Modules,
+        names: *canonical.CanonicalNameStore,
+        local_templates: ?*const ProcedureTemplateLookup,
+    ) Allocator.Error!MethodRegistry {
         var entries = std.ArrayList(MethodRegistryEntry).empty;
         errdefer entries.deinit(allocator);
 
@@ -80,6 +90,8 @@ pub const MethodRegistry = struct {
         while (module_idx < modules.moduleCount()) : (module_idx += 1) {
             const module = modules.module(module_idx);
             const module_env = module.moduleEnvConst();
+            const idents = module.identStoreConst();
+            const module_name = try names.internModuleIdent(idents, module.qualifiedModuleIdent());
 
             for (module.methodIdentEntries()) |entry| {
                 const def_node_idx = module_env.getExposedNodeIndexById(entry.value) orelse {
@@ -89,20 +101,31 @@ pub const MethodRegistry = struct {
                     );
                 };
                 const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(def_node_idx)));
+                const export_name = try names.internExportIdent(idents, entry.value);
+                const proc_base = try names.internProcBase(.{
+                    .module_name = module_name,
+                    .export_name = export_name,
+                    .kind = .checked_source,
+                    .ordinal = @intFromEnum(def_idx),
+                });
+                const template = if (local_templates != null and module_idx == local_templates.?.module_idx)
+                    local_templates.?.templateForDef(def_idx)
+                else
+                    null;
 
                 try entries.append(allocator, .{
                     .key = .{
                         .owner = .{ .nominal = .{
-                            .module_idx = module_idx,
-                            .type_ident = entry.key.type_ident,
-                            .qualified_module_ident = module.qualifiedModuleIdent(),
+                            .module_name = module_name,
+                            .type_name = try names.internTypeIdent(idents, entry.key.type_ident),
                         } },
-                        .method_ident = entry.key.method_ident,
+                        .method = try names.internMethodIdent(idents, entry.key.method_ident),
                     },
                     .target = .{
                         .module_idx = module_idx,
                         .def_idx = def_idx,
-                        .qualified_ident = entry.value,
+                        .proc = .{ .proc_base = proc_base },
+                        .template = template,
                         .callable_var = ModuleEnv.varFrom(def_idx),
                     },
                 });
@@ -123,7 +146,7 @@ pub const StaticDispatchResultMode = union(enum) {
 
 pub const StaticDispatchCallPlan = struct {
     expr: CIR.Expr.Idx,
-    method_ident: Ident.Idx,
+    method: canonical.MethodNameId,
     dispatcher_var: Var,
     callable_var: Var,
     args: []const CIR.Expr.Idx,
@@ -133,7 +156,11 @@ pub const StaticDispatchCallPlan = struct {
 pub const StaticDispatchPlanTable = struct {
     plans: []StaticDispatchCallPlan = &.{},
 
-    pub fn fromModule(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!StaticDispatchPlanTable {
+    pub fn fromModule(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        names: *canonical.CanonicalNameStore,
+    ) Allocator.Error!StaticDispatchPlanTable {
         var plans = std.ArrayList(StaticDispatchCallPlan).empty;
         errdefer {
             for (plans.items) |plan| allocator.free(plan.args);
@@ -153,6 +180,7 @@ pub const StaticDispatchPlanTable = struct {
 
             const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
             const expr = module.expr(expr_idx);
+            const idents = module.identStoreConst();
             switch (expr.data) {
                 .e_dispatch_call => |dispatch_call| {
                     const explicit_args = module.sliceExpr(dispatch_call.args);
@@ -162,7 +190,7 @@ pub const StaticDispatchPlanTable = struct {
 
                     try plans.append(allocator, .{
                         .expr = expr_idx,
-                        .method_ident = dispatch_call.method_name,
+                        .method = try names.internMethodIdent(idents, dispatch_call.method_name),
                         .dispatcher_var = module.exprType(dispatch_call.receiver),
                         .callable_var = dispatch_call.constraint_fn_var,
                         .args = args,
@@ -175,7 +203,7 @@ pub const StaticDispatchPlanTable = struct {
 
                     try plans.append(allocator, .{
                         .expr = expr_idx,
-                        .method_ident = dispatch_call.method_name,
+                        .method = try names.internMethodIdent(idents, dispatch_call.method_name),
                         .dispatcher_var = ModuleEnv.varFrom(alias_stmt.s_type_var_alias.type_var_anno),
                         .callable_var = dispatch_call.constraint_fn_var,
                         .args = args,
@@ -187,7 +215,7 @@ pub const StaticDispatchPlanTable = struct {
 
                     try plans.append(allocator, .{
                         .expr = expr_idx,
-                        .method_ident = module.commonIdents().is_eq,
+                        .method = try names.internMethodIdent(idents, module.commonIdents().is_eq),
                         .dispatcher_var = module.exprType(eq.lhs),
                         .callable_var = eq.constraint_fn_var,
                         .args = args,

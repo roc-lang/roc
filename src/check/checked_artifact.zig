@@ -5,15 +5,13 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const base = @import("base");
 const can = @import("can");
 const types = @import("types");
-const symbol = @import("symbol");
 const TypedCIR = @import("typed_cir.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
+const canonical = @import("canonical_names.zig");
 
 const Allocator = std.mem.Allocator;
-const Ident = base.Ident;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const Var = types.Var;
@@ -24,9 +22,9 @@ pub const CheckedModuleArtifactKey = struct {
 
 pub const ModuleIdentity = struct {
     module_idx: u32,
-    module_name: []const u8,
-    display_module_name: Ident.Idx,
-    qualified_module_ident: Ident.Idx,
+    module_name: canonical.ModuleNameId,
+    display_module_name: canonical.ModuleNameId,
+    qualified_module_name: canonical.ModuleNameId,
     kind: ModuleEnv.ModuleKind,
 };
 
@@ -205,18 +203,158 @@ fn topLevelExprIsAlreadyProcedure(expr: CIR.Expr) bool {
     };
 }
 
+fn isHostedProcedureExpr(expr: CIR.Expr) bool {
+    return switch (expr) {
+        .e_hosted_lambda => true,
+        else => false,
+    };
+}
+
+pub const CheckedProcedureBody = union(enum) {
+    source_expr: CIR.Expr.Idx,
+    promoted_callable_wrapper: canonical.PromotedCallableWrapperId,
+    hosted_wrapper: canonical.HostedWrapperId,
+    intrinsic_wrapper: canonical.IntrinsicWrapperId,
+    entry_wrapper: canonical.EntryWrapperId,
+};
+
+pub const StaticDispatchPlanTableRef = struct {
+    start: u32 = 0,
+    len: u32 = 0,
+};
+
+pub const ResolvedValueRefTableRef = struct {
+    start: u32 = 0,
+    len: u32 = 0,
+};
+
+pub const TopLevelUseSummaryRef = struct {
+    start: u32 = 0,
+    len: u32 = 0,
+};
+
+pub const NestedProcSiteTableRef = struct {
+    start: u32 = 0,
+    len: u32 = 0,
+};
+
+pub const ProcTarget = union(enum) {
+    roc,
+    hosted,
+    platform_required,
+    intrinsic,
+    entry,
+    promoted_callable,
+};
+
+pub const CheckedProcedureTemplate = struct {
+    proc_base: canonical.ProcBaseKeyRef,
+    template_id: canonical.CheckedProcedureTemplateId,
+    body: CheckedProcedureBody,
+    checked_fn_var: Var,
+    static_dispatch_plans: StaticDispatchPlanTableRef,
+    resolved_value_refs: ResolvedValueRefTableRef,
+    top_level_value_uses: TopLevelUseSummaryRef,
+    nested_proc_sites: NestedProcSiteTableRef,
+    target: ProcTarget,
+};
+
+pub const CheckedProcedureTemplateTable = struct {
+    templates: []CheckedProcedureTemplate = &.{},
+    by_def: []?canonical.ProcedureTemplateRef = &.{},
+
+    pub fn fromModule(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        names: *canonical.CanonicalNameStore,
+    ) Allocator.Error!CheckedProcedureTemplateTable {
+        var templates = std.ArrayList(CheckedProcedureTemplate).empty;
+        errdefer templates.deinit(allocator);
+
+        const by_def = try allocator.alloc(?canonical.ProcedureTemplateRef, module.nodeCount());
+        errdefer allocator.free(by_def);
+        @memset(by_def, null);
+
+        const module_name = try names.internModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent());
+
+        for (module.allDefs()) |def_idx| {
+            const def = module.def(def_idx);
+            if (!topLevelExprIsAlreadyProcedure(def.expr.data)) continue;
+
+            const export_name = if (def.patternName()) |name|
+                try names.internExportIdent(module.identStoreConst(), name)
+            else
+                null;
+            const proc_base = try names.internProcBase(.{
+                .module_name = module_name,
+                .export_name = export_name,
+                .kind = if (isHostedProcedureExpr(def.expr.data)) .hosted_wrapper else .checked_source,
+                .ordinal = @intFromEnum(def_idx),
+            });
+            const template_id: canonical.CheckedProcedureTemplateId = @enumFromInt(@as(u32, @intCast(templates.items.len)));
+            const template_ref = canonical.ProcedureTemplateRef{
+                .proc_base = proc_base,
+                .template = template_id,
+            };
+            by_def[@intFromEnum(def_idx)] = template_ref;
+
+            try templates.append(allocator, .{
+                .proc_base = proc_base,
+                .template_id = template_id,
+                .body = .{ .source_expr = def.expr.idx },
+                .checked_fn_var = module.defType(def_idx),
+                .static_dispatch_plans = .{},
+                .resolved_value_refs = .{},
+                .top_level_value_uses = .{},
+                .nested_proc_sites = .{},
+                .target = if (isHostedProcedureExpr(def.expr.data)) .hosted else .roc,
+            });
+        }
+
+        return .{
+            .templates = try templates.toOwnedSlice(allocator),
+            .by_def = by_def,
+        };
+    }
+
+    pub fn lookupByDef(self: *const CheckedProcedureTemplateTable, def_idx: CIR.Def.Idx) ?canonical.ProcedureTemplateRef {
+        const raw = @intFromEnum(def_idx);
+        if (raw >= self.by_def.len) return null;
+        return self.by_def[raw];
+    }
+
+    pub fn asLookup(self: *const CheckedProcedureTemplateTable, module_idx: u32) static_dispatch.ProcedureTemplateLookup {
+        return .{
+            .module_idx = module_idx,
+            .by_def = self.by_def,
+        };
+    }
+
+    pub fn deinit(self: *CheckedProcedureTemplateTable, allocator: Allocator) void {
+        allocator.free(self.by_def);
+        allocator.free(self.templates);
+        self.* = .{};
+    }
+};
+
 pub const HostedProc = struct {
     module_idx: u32,
     def_idx: CIR.Def.Idx,
     expr_idx: CIR.Expr.Idx,
-    symbol_name: Ident.Idx,
+    external_symbol_name: canonical.ExternalSymbolNameId,
     deterministic_index: u32,
+    proc: canonical.ProcedureValueRef,
 };
 
 pub const HostedProcTable = struct {
     procs: []HostedProc = &.{},
 
-    pub fn fromModule(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!HostedProcTable {
+    pub fn fromModule(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        names: *canonical.CanonicalNameStore,
+        templates: *const CheckedProcedureTemplateTable,
+    ) Allocator.Error!HostedProcTable {
         var procs = std.ArrayList(HostedProc).empty;
         errdefer procs.deinit(allocator);
 
@@ -227,8 +365,9 @@ pub const HostedProcTable = struct {
                     .module_idx = module.moduleIndex(),
                     .def_idx = def_idx,
                     .expr_idx = def.expr.idx,
-                    .symbol_name = hosted.symbol_name,
+                    .external_symbol_name = try names.internExternalSymbolIdent(module.identStoreConst(), hosted.symbol_name),
                     .deterministic_index = @intCast(procs.items.len),
+                    .proc = .{ .proc_base = templates.lookupByDef(def_idx).?.proc_base },
                 }),
                 else => {},
             }
@@ -246,24 +385,38 @@ pub const HostedProcTable = struct {
 pub const PlatformRequiredBinding = struct {
     module_idx: u32,
     requires_idx: u32,
-    ident: Ident.Idx,
+    ident: canonical.ExternalSymbolNameId,
     type_anno: CIR.TypeAnno.Idx,
+    proc: canonical.ProcedureValueRef,
 };
 
 pub const PlatformRequiredBindingTable = struct {
     bindings: []PlatformRequiredBinding = &.{},
 
-    pub fn fromModule(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!PlatformRequiredBindingTable {
+    pub fn fromModule(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        names: *canonical.CanonicalNameStore,
+    ) Allocator.Error!PlatformRequiredBindingTable {
         const module_env = module.moduleEnvConst();
         const bindings = try allocator.alloc(PlatformRequiredBinding, module_env.requires_types.items.items.len);
         errdefer allocator.free(bindings);
+        const module_name = try names.internModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent());
 
         for (module_env.requires_types.items.items, 0..) |required_type, i| {
+            const external_name = try names.internExternalSymbolIdent(module.identStoreConst(), required_type.ident);
+            const proc_base = try names.internProcBase(.{
+                .module_name = module_name,
+                .export_name = null,
+                .kind = .platform_required_wrapper,
+                .ordinal = @intCast(i),
+            });
             bindings[i] = .{
                 .module_idx = module.moduleIndex(),
                 .requires_idx = @intCast(i),
-                .ident = required_type.ident,
+                .ident = external_name,
                 .type_anno = required_type.type_anno,
+                .proc = .{ .proc_base = proc_base },
             };
         }
 
@@ -305,10 +458,15 @@ pub const ConstRef = struct {
     source_type: Var,
 };
 
+pub const TopLevelProcedureBindingRef = struct {
+    proc: canonical.ProcedureValueRef,
+    template: ?canonical.ProcedureTemplateRef,
+};
+
 pub const TopLevelValueKind = union(enum) {
-    pending,
-    serializable_constant: ConstRef,
-    procedure_value: symbol.Symbol,
+    const_ref: ConstRef,
+    procedure_binding: TopLevelProcedureBindingRef,
+    callable_eval_template: u32,
 };
 
 pub const TopLevelValueEntry = struct {
@@ -321,21 +479,30 @@ pub const TopLevelValueEntry = struct {
 pub const TopLevelValueTable = struct {
     entries: []TopLevelValueEntry = &.{},
 
-    pub fn fromModule(allocator: Allocator, module: TypedCIR.Module, proc_symbols: *symbol.Store) Allocator.Error!TopLevelValueTable {
+    pub fn fromModule(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        templates: *const CheckedProcedureTemplateTable,
+    ) Allocator.Error!TopLevelValueTable {
         var entries = std.ArrayList(TopLevelValueEntry).empty;
         errdefer entries.deinit(allocator);
 
         for (module.allDefs()) |def_idx| {
             const def = module.def(def_idx);
-            const value: TopLevelValueKind = if (topLevelExprIsAlreadyProcedure(def.expr.data))
-                .{ .procedure_value = try proc_symbols.add(def.patternName() orelse Ident.Idx.NONE, .{
-                    .top_level_def = .{
-                        .module_idx = module.moduleIndex(),
-                        .def_idx = @intFromEnum(def_idx),
-                    },
-                }) }
-            else
-                .pending;
+            const value: TopLevelValueKind = if (topLevelExprIsAlreadyProcedure(def.expr.data)) blk: {
+                const template = templates.lookupByDef(def_idx) orelse unreachable;
+                break :blk .{ .procedure_binding = .{
+                    .proc = .{ .proc_base = template.proc_base },
+                    .template = template,
+                } };
+            } else .{ .const_ref = .{
+                .artifact = .{},
+                .module_idx = module.moduleIndex(),
+                .pattern = def.pattern.idx,
+                .schema = @enumFromInt(@intFromEnum(def_idx)),
+                .value = @enumFromInt(@intFromEnum(def_idx)),
+                .source_type = module.defType(def_idx),
+            } };
 
             try entries.append(allocator, .{
                 .module_idx = module.moduleIndex(),
@@ -355,7 +522,8 @@ pub const TopLevelValueTable = struct {
 };
 
 pub const PromotedProcedure = struct {
-    symbol: symbol.Symbol,
+    proc: canonical.ProcedureValueRef,
+    template: canonical.ProcedureTemplateRef,
     source_binding: CIR.Pattern.Idx,
     source_type: Var,
 };
@@ -378,6 +546,7 @@ pub const CompileTimeValueStore = struct {
 
 pub const CheckedModuleArtifact = struct {
     key: CheckedModuleArtifactKey,
+    canonical_names: canonical.CanonicalNameStore,
     module_identity: ModuleIdentity,
     checking_context_identity: CheckingContextIdentity,
     module_env: *const ModuleEnv,
@@ -385,6 +554,7 @@ pub const CheckedModuleArtifact = struct {
     provides_requires: ProvidesRequiresMetadata,
     method_registry: static_dispatch.MethodRegistry,
     static_dispatch_plans: static_dispatch.StaticDispatchPlanTable,
+    checked_procedure_templates: CheckedProcedureTemplateTable,
     root_requests: RootRequestTable,
     hosted_procs: HostedProcTable,
     platform_required_bindings: PlatformRequiredBindingTable,
@@ -393,28 +563,27 @@ pub const CheckedModuleArtifact = struct {
     promoted_procedures: PromotedProcedureTable,
     compile_time_roots_present: bool = false,
     comptime_values: CompileTimeValueStore,
-    proc_symbols: symbol.Store,
 
     pub fn deinit(self: *CheckedModuleArtifact, allocator: Allocator) void {
-        self.proc_symbols.deinit();
         self.comptime_values.deinit(allocator);
         self.promoted_procedures.deinit(allocator);
         self.top_level_values.deinit(allocator);
         self.platform_required_bindings.deinit(allocator);
         self.hosted_procs.deinit(allocator);
         self.root_requests.deinit(allocator);
+        self.checked_procedure_templates.deinit(allocator);
         self.static_dispatch_plans.deinit(allocator);
         self.method_registry.deinit(allocator);
         self.provides_requires.deinit(allocator);
         self.exports.deinit(allocator);
         self.checking_context_identity.deinit(allocator);
+        self.canonical_names.deinit();
     }
 
     pub fn verifyPublished(self: *const CheckedModuleArtifact) void {
         if (builtin.mode != .Debug) return;
 
         std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
-        std.debug.assert(self.module_env.module_name.ptr == self.module_identity.module_name.ptr);
 
         for (self.root_requests.requests, 0..) |request, i| {
             std.debug.assert(request.order == i);
@@ -430,15 +599,29 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(binding.requires_idx == i);
             std.debug.assert(binding.module_idx == self.module_identity.module_idx);
         }
+
+        for (self.top_level_values.entries) |entry| {
+            switch (entry.value) {
+                .const_ref => |const_ref| std.debug.assert(const_ref.module_idx == self.module_identity.module_idx),
+                .procedure_binding => |proc_binding| {
+                    _ = self.canonical_names.procBase(proc_binding.proc.proc_base);
+                    if (proc_binding.template) |template| std.debug.assert(template.proc_base == proc_binding.proc.proc_base);
+                },
+                .callable_eval_template => {},
+            }
+        }
     }
 };
 
 pub const ImportedModuleView = struct {
     key: CheckedModuleArtifactKey,
     module_identity: ModuleIdentity,
+    canonical_names: *const canonical.CanonicalNameStore,
     exports: *const ExportTable,
+    checked_procedure_templates: *const CheckedProcedureTemplateTable,
     method_registry: *const static_dispatch.MethodRegistry,
     interface_capabilities: *const ModuleInterfaceCapabilities,
+    top_level_values: *const TopLevelValueTable,
     comptime_values: *const CompileTimeValueStore,
 };
 
@@ -451,9 +634,12 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
     return .{
         .key = artifact.key,
         .module_identity = artifact.module_identity,
+        .canonical_names = &artifact.canonical_names,
         .exports = &artifact.exports,
+        .checked_procedure_templates = &artifact.checked_procedure_templates,
         .method_registry = &artifact.method_registry,
         .interface_capabilities = &artifact.interface_capabilities,
+        .top_level_values = &artifact.top_level_values,
         .comptime_values = &artifact.comptime_values,
     };
 }
@@ -472,9 +658,13 @@ pub fn publishFromTypedModule(
 ) Allocator.Error!CheckedModuleArtifact {
     const module = modules.module(module_idx);
     const module_env = module.moduleEnvConst();
+    const idents = module.identStoreConst();
 
-    var proc_symbols = symbol.Store.init(allocator);
-    errdefer proc_symbols.deinit();
+    var canonical_names = canonical.CanonicalNameStore.init(allocator);
+    errdefer canonical_names.deinit();
+    const module_name = try canonical_names.internModuleName(module_env.module_name);
+    const display_module_name = try canonical_names.internModuleIdent(idents, module_env.display_module_name_idx);
+    const qualified_module_name = try canonical_names.internModuleIdent(idents, module_env.qualified_module_ident);
 
     const exports = try allocator.dupe(CIR.Def.Idx, module_env.store.sliceDefs(module_env.exports));
     errdefer allocator.free(exports);
@@ -485,31 +675,36 @@ pub fn publishFromTypedModule(
     const requires = try allocator.dupe(ModuleEnv.RequiredType, module_env.requires_types.items.items);
     errdefer allocator.free(requires);
 
-    var method_registry = try static_dispatch.MethodRegistry.fromTypedModules(allocator, modules);
+    var checked_procedure_templates = try CheckedProcedureTemplateTable.fromModule(allocator, module, &canonical_names);
+    errdefer checked_procedure_templates.deinit(allocator);
+    const template_lookup = checked_procedure_templates.asLookup(module_idx);
+
+    var method_registry = try static_dispatch.MethodRegistry.fromTypedModules(allocator, modules, &canonical_names, &template_lookup);
     errdefer method_registry.deinit(allocator);
 
-    var static_dispatch_plans = try static_dispatch.StaticDispatchPlanTable.fromModule(allocator, module);
+    var static_dispatch_plans = try static_dispatch.StaticDispatchPlanTable.fromModule(allocator, module, &canonical_names);
     errdefer static_dispatch_plans.deinit(allocator);
 
     var root_requests = try RootRequestTable.fromModule(allocator, module);
     errdefer root_requests.deinit(allocator);
 
-    var hosted_procs = try HostedProcTable.fromModule(allocator, module);
+    var hosted_procs = try HostedProcTable.fromModule(allocator, module, &canonical_names, &checked_procedure_templates);
     errdefer hosted_procs.deinit(allocator);
 
-    var platform_required_bindings = try PlatformRequiredBindingTable.fromModule(allocator, module);
+    var platform_required_bindings = try PlatformRequiredBindingTable.fromModule(allocator, module, &canonical_names);
     errdefer platform_required_bindings.deinit(allocator);
 
-    var top_level_values = try TopLevelValueTable.fromModule(allocator, module, &proc_symbols);
+    var top_level_values = try TopLevelValueTable.fromModule(allocator, module, &checked_procedure_templates);
     errdefer top_level_values.deinit(allocator);
 
     var artifact = CheckedModuleArtifact{
         .key = .{},
+        .canonical_names = canonical_names,
         .module_identity = .{
             .module_idx = module_idx,
-            .module_name = module_env.module_name,
-            .display_module_name = module_env.display_module_name_idx,
-            .qualified_module_ident = module_env.qualified_module_ident,
+            .module_name = module_name,
+            .display_module_name = display_module_name,
+            .qualified_module_name = qualified_module_name,
             .kind = module_env.module_kind,
         },
         .checking_context_identity = .{},
@@ -521,6 +716,7 @@ pub fn publishFromTypedModule(
         },
         .method_registry = method_registry,
         .static_dispatch_plans = static_dispatch_plans,
+        .checked_procedure_templates = checked_procedure_templates,
         .root_requests = root_requests,
         .hosted_procs = hosted_procs,
         .platform_required_bindings = platform_required_bindings,
@@ -528,20 +724,23 @@ pub fn publishFromTypedModule(
         .top_level_values = top_level_values,
         .promoted_procedures = .{},
         .comptime_values = .{},
-        .proc_symbols = proc_symbols,
     };
     artifact.verifyPublished();
     return artifact;
 }
 
 test "artifact views are read-only projections" {
-    const artifact = CheckedModuleArtifact{
+    var names = canonical.CanonicalNameStore.init(std.testing.allocator);
+    const test_module = try names.internModuleName("Test");
+
+    var artifact = CheckedModuleArtifact{
         .key = .{},
+        .canonical_names = names,
         .module_identity = .{
             .module_idx = 0,
-            .module_name = "Test",
-            .display_module_name = Ident.Idx.NONE,
-            .qualified_module_ident = Ident.Idx.NONE,
+            .module_name = test_module,
+            .display_module_name = test_module,
+            .qualified_module_name = test_module,
             .kind = .package,
         },
         .checking_context_identity = .{},
@@ -550,6 +749,7 @@ test "artifact views are read-only projections" {
         .provides_requires = .{},
         .method_registry = .{},
         .static_dispatch_plans = .{},
+        .checked_procedure_templates = .{},
         .root_requests = .{},
         .hosted_procs = .{},
         .platform_required_bindings = .{},
@@ -562,8 +762,8 @@ test "artifact views are read-only projections" {
         .top_level_values = .{},
         .promoted_procedures = .{},
         .comptime_values = .{},
-        .proc_symbols = symbol.Store.init(std.testing.allocator),
     };
+    defer artifact.deinit(std.testing.allocator);
 
     const imported = importedView(&artifact);
     const lowering = loweringView(&artifact);
