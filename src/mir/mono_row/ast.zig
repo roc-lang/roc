@@ -1,0 +1,333 @@
+//! Row-finalized mono MIR AST.
+//!
+//! This type-state exists after mono MIR and before lifting. Name-bearing record
+//! and tag operations have been rewritten to finalized row ids.
+
+const std = @import("std");
+const base = @import("base");
+const check = @import("check");
+const types = @import("types");
+const symbol_mod = @import("symbol");
+const mono_type = @import("../mono/type.zig");
+const ids = @import("../ids.zig");
+
+const canonical = check.CanonicalNames;
+const checked_artifact = check.CheckedArtifact;
+
+pub const Symbol = symbol_mod.Symbol;
+pub const TypeId = mono_type.TypeId;
+
+pub const ExprId = enum(u32) { _ };
+pub const PatId = enum(u32) { _ };
+pub const DefId = enum(u32) { _ };
+pub const StmtId = enum(u32) { _ };
+pub const BranchId = enum(u32) { _ };
+
+pub const RecordShapeId = ids.RecordShapeId;
+pub const RecordFieldId = ids.RecordFieldId;
+pub const TagUnionShapeId = ids.TagUnionShapeId;
+pub const TagId = ids.TagId;
+pub const TagPayloadId = ids.TagPayloadId;
+
+pub fn Span(comptime _: type) type {
+    return extern struct {
+        start: u32,
+        len: u32,
+
+        pub fn empty() @This() {
+            return .{ .start = 0, .len = 0 };
+        }
+    };
+}
+
+pub const TypedSymbol = struct {
+    ty: TypeId,
+    symbol: Symbol,
+};
+
+pub const Pat = struct {
+    ty: TypeId,
+    data: Data,
+
+    pub const Data = union(enum) {
+        bool_lit: bool,
+        tag: struct {
+            union_shape: TagUnionShapeId,
+            tag: TagId,
+            payloads: Span(TagPayloadPattern),
+        },
+        var_: Symbol,
+    };
+};
+
+pub const TagPayloadPattern = struct {
+    payload: TagPayloadId,
+    pattern: PatId,
+};
+
+pub const Branch = struct {
+    pat: PatId,
+    body: ExprId,
+};
+
+pub const RecordFieldEval = struct {
+    field: RecordFieldId,
+    value: ExprId,
+};
+
+pub const RecordFieldAssembly = struct {
+    field: RecordFieldId,
+    value: ExprId,
+};
+
+pub const TagPayloadEval = struct {
+    payload: TagPayloadId,
+    value: ExprId,
+};
+
+pub const TagPayloadAssembly = struct {
+    payload: TagPayloadId,
+    value: ExprId,
+};
+
+pub const CaptureArg = struct {
+    slot: u32,
+    symbol: Symbol,
+    expr: ExprId,
+};
+
+pub const Expr = struct {
+    ty: TypeId,
+    data: Data,
+
+    pub const Data = union(enum) {
+        var_: Symbol,
+        int_lit: i128,
+        frac_f32_lit: f32,
+        frac_f64_lit: f64,
+        dec_lit: i128,
+        bool_lit: bool,
+        str_lit: base.StringLiteral.Idx,
+        const_ref: checked_artifact.ConstRef,
+        tag: struct {
+            union_shape: TagUnionShapeId,
+            tag: TagId,
+            eval_order: Span(TagPayloadEval),
+            assembly_order: Span(TagPayloadAssembly),
+            constructor_ty: TypeId,
+        },
+        record: struct {
+            shape: RecordShapeId,
+            eval_order: Span(RecordFieldEval),
+            assembly_order: Span(RecordFieldAssembly),
+        },
+        access: struct {
+            record: ExprId,
+            field: RecordFieldId,
+        },
+        structural_eq: struct {
+            lhs: ExprId,
+            rhs: ExprId,
+        },
+        bool_not: ExprId,
+        let_: struct {
+            bind: TypedSymbol,
+            body: ExprId,
+            rest: ExprId,
+        },
+        clos: struct {
+            args: Span(TypedSymbol),
+            body: ExprId,
+        },
+        call_value: struct {
+            func: ExprId,
+            args: Span(ExprId),
+            requested_fn_ty: TypeId,
+        },
+        call_proc: struct {
+            proc: canonical.ProcedureValueRef,
+            args: Span(ExprId),
+            requested_fn_ty: TypeId,
+        },
+        proc_value: struct {
+            proc: canonical.ProcedureValueRef,
+            captures: Span(CaptureArg),
+            fn_ty: TypeId,
+        },
+        inspect: ExprId,
+        low_level: struct {
+            op: base.LowLevel,
+            args: Span(ExprId),
+            source_constraint_ty: TypeId,
+        },
+        match_: struct {
+            cond: ExprId,
+            branches: Span(BranchId),
+            is_try_suffix: bool,
+        },
+        if_: struct {
+            cond: ExprId,
+            then_body: ExprId,
+            else_body: ExprId,
+        },
+        block: struct {
+            stmts: Span(StmtId),
+            final_expr: ExprId,
+        },
+        tuple: Span(ExprId),
+        tag_payload: struct {
+            tag_union: ExprId,
+            payload: TagPayloadId,
+        },
+        tuple_access: struct {
+            tuple: ExprId,
+            elem_index: u32,
+        },
+        list: Span(ExprId),
+        unit,
+        return_: ExprId,
+        runtime_error: base.StringLiteral.Idx,
+        for_: struct {
+            patt: PatId,
+            iterable: ExprId,
+            body: ExprId,
+        },
+    };
+};
+
+pub const Stmt = union(enum) {
+    decl: struct {
+        bind: TypedSymbol,
+        body: ExprId,
+    },
+    var_decl: struct {
+        bind: TypedSymbol,
+        body: ExprId,
+    },
+    reassign: struct {
+        target: Symbol,
+        body: ExprId,
+    },
+    expr: ExprId,
+    debug: ExprId,
+    expect: ExprId,
+    crash: base.StringLiteral.Idx,
+    return_: ExprId,
+    break_,
+    for_: struct {
+        patt: PatId,
+        iterable: ExprId,
+        body: ExprId,
+    },
+    while_: struct {
+        cond: ExprId,
+        body: ExprId,
+    },
+};
+
+pub const FnDef = struct {
+    args: Span(TypedSymbol),
+    captures: Span(TypedSymbol),
+    body: ExprId,
+};
+
+pub const RunDef = struct {
+    body: ExprId,
+    entry_ty: types.Var,
+};
+
+pub const HostedFnDef = struct {
+    proc: canonical.ProcedureValueRef,
+    args: Span(TypedSymbol),
+    hosted: base.HostedProc,
+};
+
+pub const DefVal = union(enum) {
+    fn_: FnDef,
+    hosted_fn: HostedFnDef,
+    val: ExprId,
+    run: RunDef,
+};
+
+pub const Def = struct {
+    proc: canonical.ProcedureValueRef,
+    debug_name: ?Symbol = null,
+    value: DefVal,
+};
+
+pub const Store = struct {
+    allocator: std.mem.Allocator,
+    exprs: std.ArrayList(Expr),
+    pats: std.ArrayList(Pat),
+    branches: std.ArrayList(Branch),
+    stmts: std.ArrayList(Stmt),
+    defs: std.ArrayList(Def),
+    expr_ids: std.ArrayList(ExprId),
+    pat_ids: std.ArrayList(PatId),
+    stmt_ids: std.ArrayList(StmtId),
+    branch_ids: std.ArrayList(BranchId),
+    tag_payload_patterns: std.ArrayList(TagPayloadPattern),
+    record_field_evals: std.ArrayList(RecordFieldEval),
+    record_field_assemblies: std.ArrayList(RecordFieldAssembly),
+    tag_payload_evals: std.ArrayList(TagPayloadEval),
+    tag_payload_assemblies: std.ArrayList(TagPayloadAssembly),
+    capture_args: std.ArrayList(CaptureArg),
+    typed_symbols: std.ArrayList(TypedSymbol),
+
+    pub fn init(allocator: std.mem.Allocator) Store {
+        return .{
+            .allocator = allocator,
+            .exprs = .empty,
+            .pats = .empty,
+            .branches = .empty,
+            .stmts = .empty,
+            .defs = .empty,
+            .expr_ids = .empty,
+            .pat_ids = .empty,
+            .stmt_ids = .empty,
+            .branch_ids = .empty,
+            .tag_payload_patterns = .empty,
+            .record_field_evals = .empty,
+            .record_field_assemblies = .empty,
+            .tag_payload_evals = .empty,
+            .tag_payload_assemblies = .empty,
+            .capture_args = .empty,
+            .typed_symbols = .empty,
+        };
+    }
+
+    pub fn deinit(self: *Store) void {
+        self.typed_symbols.deinit(self.allocator);
+        self.capture_args.deinit(self.allocator);
+        self.tag_payload_assemblies.deinit(self.allocator);
+        self.tag_payload_evals.deinit(self.allocator);
+        self.record_field_assemblies.deinit(self.allocator);
+        self.record_field_evals.deinit(self.allocator);
+        self.tag_payload_patterns.deinit(self.allocator);
+        self.branch_ids.deinit(self.allocator);
+        self.stmt_ids.deinit(self.allocator);
+        self.pat_ids.deinit(self.allocator);
+        self.expr_ids.deinit(self.allocator);
+        self.defs.deinit(self.allocator);
+        self.stmts.deinit(self.allocator);
+        self.branches.deinit(self.allocator);
+        self.pats.deinit(self.allocator);
+        self.exprs.deinit(self.allocator);
+    }
+
+    pub fn addExpr(self: *Store, ty: TypeId, data: Expr.Data) std.mem.Allocator.Error!ExprId {
+        const idx: u32 = @intCast(self.exprs.items.len);
+        try self.exprs.append(self.allocator, .{ .ty = ty, .data = data });
+        return @enumFromInt(idx);
+    }
+
+    pub fn addDef(self: *Store, def: Def) std.mem.Allocator.Error!DefId {
+        const idx: u32 = @intCast(self.defs.items.len);
+        try self.defs.append(self.allocator, def);
+        return @enumFromInt(idx);
+    }
+};
+
+test "row-finalized mono ast tests" {
+    std.testing.refAllDecls(@This());
+}

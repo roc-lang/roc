@@ -7,6 +7,7 @@
 const std = @import("std");
 const check = @import("check");
 const Mono = @import("../mono/mod.zig");
+pub const Ast = @import("ast.zig");
 const ids = @import("../ids.zig");
 const verify = @import("../debug_verify.zig");
 
@@ -229,15 +230,44 @@ pub const Store = struct {
     }
 };
 
+pub const Proc = struct {
+    key: canonical.MonoSpecializationKey,
+    proc: canonical.ProcedureValueRef,
+    local_handle: Mono.Specialize.MonoProcHandle,
+    body: ?Ast.DefId = null,
+};
+
+pub const Program = struct {
+    allocator: Allocator,
+    types: Mono.Type.Store,
+    ast: Ast.Store,
+    procs: std.ArrayList(Proc),
+
+    pub fn init(allocator: Allocator) Program {
+        return .{
+            .allocator = allocator,
+            .types = Mono.Type.Store.init(allocator),
+            .ast = Ast.Store.init(allocator),
+            .procs = .empty,
+        };
+    }
+
+    pub fn deinit(self: *Program) void {
+        self.procs.deinit(self.allocator);
+        self.ast.deinit();
+        self.types.deinit();
+        self.* = Program.init(self.allocator);
+    }
+};
+
 pub const Result = struct {
-    mono: Mono.Specialize.Program,
+    program: Program,
     shapes: Store,
 
     pub fn deinit(self: *Result) void {
-        self.mono.deinit();
+        self.program.deinit();
         self.shapes.deinit();
     }
-
 };
 
 pub fn run(allocator: Allocator, mono: Mono.Specialize.Program) Allocator.Error!Result {
@@ -255,8 +285,25 @@ pub fn run(allocator: Allocator, mono: Mono.Specialize.Program) Allocator.Error!
         }
     }
 
+    var program = Program.init(allocator);
+    errdefer program.deinit();
+    program.types = owned_mono.types;
+    owned_mono.types = Mono.Type.Store.init(allocator);
+
+    try program.procs.ensureTotalCapacity(allocator, owned_mono.procs.items.len);
+    for (owned_mono.procs.items) |proc| {
+        program.procs.appendAssumeCapacity(.{
+            .key = proc.key,
+            .proc = proc.proc,
+            .local_handle = proc.local_handle,
+            .body = null,
+        });
+    }
+    owned_mono.ast.deinit();
+    owned_mono.procs.deinit(allocator);
+
     const result = Result{
-        .mono = owned_mono,
+        .program = program,
         .shapes = shapes,
     };
     verifyResult(&result);
@@ -296,6 +343,8 @@ fn freeStringHashMapKeysTag(map: *std.StringHashMap(TagUnionShapeId), allocator:
 }
 
 test "mono_row store interns empty record shape once" {
+    std.testing.refAllDecls(Ast);
+
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
