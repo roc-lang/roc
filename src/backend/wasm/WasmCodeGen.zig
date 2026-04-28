@@ -1792,11 +1792,6 @@ fn collectProcLocals(
             try self.collectProcLocals(for_stmt.body, locals, visited);
             try self.collectProcLocals(for_stmt.next, locals, visited);
         },
-        .borrow_scope => |scope| {
-            try self.collectProcLocals(scope.body, locals, visited);
-            try self.collectProcLocals(scope.remainder, locals, visited);
-        },
-        .scope_exit => {},
         .join => |join_stmt| {
             for (self.store.getLocalSpan(join_stmt.params)) |param| try recordProcLocal(locals, param);
             try self.collectProcLocals(join_stmt.body, locals, visited);
@@ -5224,11 +5219,6 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
             self.body.append(self.allocator, Op.br) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, br_target) catch return error.OutOfMemory;
         },
-        .borrow_scope => |scope| {
-            try self.generateCFStmt(scope.body);
-            try self.generateCFStmt(scope.remainder);
-        },
-        .scope_exit => {},
         .incref => |inc| {
             try self.generateRcStmt(.incref, inc.value, inc.count);
             try self.generateCFStmt(inc.next);

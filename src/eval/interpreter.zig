@@ -314,7 +314,6 @@ pub const Interpreter = struct {
 
     const ExecOutcome = union(enum) {
         returned: LocalId,
-        scope_exit,
         loop_continue,
     };
 
@@ -936,11 +935,9 @@ pub const Interpreter = struct {
                 .incref => |stmt_next| stmt_next.next,
                 .decref => |stmt_next| stmt_next.next,
                 .free => |stmt_next| stmt_next.next,
-                .borrow_scope => |scope| scope.body,
                 .join => |join_stmt| join_stmt.body,
                 .switch_stmt,
                 .runtime_error,
-                .scope_exit,
                 .for_list,
                 .jump,
                 .ret,
@@ -1075,7 +1072,7 @@ pub const Interpreter = struct {
                 ),
             );
         }
-        const outcome = try self.execStmtChain(&frame, self.requireProcBody(proc_id, proc_spec), null);
+        const outcome = try self.execStmtChain(&frame, self.requireProcBody(proc_id, proc_spec));
         return switch (outcome) {
             .returned => |ret_local| blk: {
                 trace.log(
@@ -1101,10 +1098,6 @@ pub const Interpreter = struct {
                 }
                 break :blk try self.materializeLocalValue(coerced_result, proc_spec.ret_layout);
             },
-            .scope_exit => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: proc {d} terminated via scope_exit",
-                .{proc_spec.name.raw()},
-            ),
             .loop_continue => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: proc {d} terminated via loop_continue",
                 .{proc_spec.name.raw()},
@@ -1163,10 +1156,6 @@ pub const Interpreter = struct {
                 }
                 try self.collectJoinPoints(join_points, switch_stmt.default_branch);
             },
-            .borrow_scope => |scope_stmt| {
-                try self.collectJoinPoints(join_points, scope_stmt.body);
-                try self.collectJoinPoints(join_points, scope_stmt.remainder);
-            },
             .for_list => |for_stmt| {
                 try self.collectJoinPoints(join_points, for_stmt.body);
                 try self.collectJoinPoints(join_points, for_stmt.next);
@@ -1180,7 +1169,6 @@ pub const Interpreter = struct {
                 try self.collectJoinPoints(join_points, join_stmt.remainder);
             },
             .runtime_error,
-            .scope_exit,
             .loop_continue,
             .jump,
             .ret,
@@ -1193,7 +1181,6 @@ pub const Interpreter = struct {
         self: *LirInterpreter,
         frame: *Frame,
         start_stmt: CFStmtId,
-        stop_scope: ?LIR.BorrowScopeId,
     ) Error!ExecOutcome {
         var current = start_stmt;
         while (true) {
@@ -1205,7 +1192,7 @@ pub const Interpreter = struct {
                 },
                 .assign_ref => |assign| {
                     const target_layout = self.store.getLocal(assign.target).layout_idx;
-                    const value = try self.evalAssignRef(frame, assign.op, assign.result, target_layout);
+                    const value = try self.evalAssignRef(frame, assign.op, target_layout);
                     self.setLocalChecked(frame, current, assign.target, value);
                     current = assign.next;
                 },
@@ -1388,27 +1375,7 @@ pub const Interpreter = struct {
                             break;
                         }
                     }
-                    return try self.execStmtChain(frame, target, stop_scope);
-                },
-                .borrow_scope => |scope_stmt| {
-                    const outcome = try self.execStmtChain(frame, scope_stmt.body, scope_stmt.id);
-                    switch (outcome) {
-                        .returned => |ret_local| return .{ .returned = ret_local },
-                        .scope_exit => current = scope_stmt.remainder,
-                        .loop_continue => return self.invariantFailedError(
-                            "LIR/interpreter invariant violated: loop_continue escaped borrow scope in proc {d}",
-                            .{@intFromEnum(frame.proc_id)},
-                        ),
-                    }
-                },
-                .scope_exit => |scope_stmt| {
-                    if (stop_scope == null or stop_scope.? != scope_stmt.id) {
-                        return self.invariantFailedError(
-                            "LIR/interpreter invariant violated: unexpected scope_exit {d} in proc {d}",
-                            .{ @intFromEnum(scope_stmt.id), @intFromEnum(frame.proc_id) },
-                        );
-                    }
-                    return .scope_exit;
+                    return try self.execStmtChain(frame, target);
                 },
                 .for_list => |for_stmt| {
                     const iterable = try self.getLocalChecked(frame, for_stmt.iterable);
@@ -1432,14 +1399,10 @@ pub const Interpreter = struct {
                         const elem_value = try self.materializeLocalValue(normalized_elem, elem_layout);
 
                         self.setLocalChecked(frame, current, for_stmt.elem, elem_value);
-                        const outcome = try self.execStmtChain(frame, for_stmt.body, null);
+                        const outcome = try self.execStmtChain(frame, for_stmt.body);
                         switch (outcome) {
                             .returned => |ret_local| return .{ .returned = ret_local },
                             .loop_continue => {},
-                            .scope_exit => return self.invariantFailedError(
-                                "LIR/interpreter invariant violated: unexpected scope_exit escaped for_list body in proc {d}",
-                                .{@intFromEnum(frame.proc_id)},
-                            ),
                         }
                     }
 
@@ -1531,14 +1494,6 @@ pub const Interpreter = struct {
             for (args) |arg| {
                 const layout_idx = self.store.getLocal(arg).layout_idx;
                 debugPrint(" {d}:{d}", .{ @intFromEnum(arg), @intFromEnum(layout_idx) });
-            }
-            debugPrint("\n", .{});
-        }
-        const owned_params = self.store.getLocalSpan(proc_spec.owned_params);
-        if (owned_params.len > 0) {
-            debugPrint("  owned_params:", .{});
-            for (owned_params) |param| {
-                debugPrint(" {d}", .{@intFromEnum(param)});
             }
             debugPrint("\n", .{});
         }
@@ -1745,21 +1700,6 @@ pub const Interpreter = struct {
                         stack.append(self.allocator, branch.body) catch return;
                     }
                 },
-                .borrow_scope => |scope| {
-                    debugPrint("    {d}: borrow_scope body={d} remainder={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(scope.body),
-                        @intFromEnum(scope.remainder),
-                    });
-                    stack.append(self.allocator, scope.body) catch return;
-                    stack.append(self.allocator, scope.remainder) catch return;
-                },
-                .scope_exit => |scope| {
-                    debugPrint("    {d}: scope_exit id={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(scope.id),
-                    });
-                },
                 .for_list => |for_list| {
                     debugPrint("    {d}: for_list elem={d} iterable={d} body={d} next={d}\n", .{
                         @intFromEnum(stmt_id),
@@ -1881,22 +1821,6 @@ pub const Interpreter = struct {
         );
     }
 
-    fn materializeRefResult(
-        self: *LirInterpreter,
-        value: Value,
-        result: LIR.ResultSemantics,
-        target_layout: layout_mod.Idx,
-    ) Error!Value {
-        if (result != .fresh) return value;
-
-        const size = self.helper.sizeOf(target_layout);
-        if (size == 0 or value.isZst()) return Value.zst;
-
-        const copy = try self.alloc(target_layout);
-        copy.copyFrom(value, size);
-        return copy;
-    }
-
     fn materializeLocalValue(
         self: *LirInterpreter,
         value: Value,
@@ -1914,7 +1838,6 @@ pub const Interpreter = struct {
         self: *LirInterpreter,
         frame: *const Frame,
         op: LIR.RefOp,
-        result: LIR.ResultSemantics,
         target_layout: layout_mod.Idx,
     ) Error!Value {
         return switch (op) {
@@ -1924,7 +1847,7 @@ pub const Interpreter = struct {
                     self.store.getLocal(source).layout_idx,
                     target_layout,
                 );
-                break :blk try self.materializeRefResult(local_value, result, target_layout);
+                break :blk try self.materializeLocalValue(local_value, target_layout);
             },
             .field => |field| blk: {
                 const source_val = try self.getLocalChecked(frame, field.source);
@@ -1962,7 +1885,7 @@ pub const Interpreter = struct {
                         },
                     );
                 }
-                break :blk try self.materializeRefResult(field_value, result, target_layout);
+                break :blk try self.materializeLocalValue(field_value, target_layout);
             },
             .tag_payload => |payload| blk: {
                 const source_val = try self.getLocalChecked(frame, payload.source);
@@ -1992,7 +1915,7 @@ pub const Interpreter = struct {
                             actual_field_layout,
                             target_layout,
                         );
-                        break :blk try self.materializeRefResult(payload_value, result, target_layout);
+                        break :blk try self.materializeLocalValue(payload_value, target_layout);
                     },
                     else => {
                         if (builtin.mode == .Debug and payload.payload_idx != 0) {
@@ -2002,7 +1925,7 @@ pub const Interpreter = struct {
                             );
                         }
                         const payload_value = try self.coerceExplicitRefValueToLayout(tag_base.value, actual_payload_layout, target_layout);
-                        break :blk try self.materializeRefResult(payload_value, result, target_layout);
+                        break :blk try self.materializeLocalValue(payload_value, target_layout);
                     },
                 }
             },
@@ -2019,7 +1942,7 @@ pub const Interpreter = struct {
                 }
                 const actual_payload_layout = self.tagPayloadLayout(source_layout, payload.tag_discriminant);
                 const payload_value = try self.coerceExplicitRefValueToLayout(tag_base.value, actual_payload_layout, target_layout);
-                break :blk try self.materializeRefResult(payload_value, result, target_layout);
+                break :blk try self.materializeLocalValue(payload_value, target_layout);
             },
             .list_reinterpret => |list_bridge| blk: {
                 const bridged = try self.coerceExplicitListValueToLayout(
@@ -2027,7 +1950,7 @@ pub const Interpreter = struct {
                     self.store.getLocal(list_bridge.backing_ref).layout_idx,
                     target_layout,
                 );
-                break :blk try self.materializeRefResult(bridged, result, target_layout);
+                break :blk try self.materializeLocalValue(bridged, target_layout);
             },
             .nominal => |nominal| blk: {
                 const bridged = try self.coerceExplicitNominalValueToLayout(
@@ -2035,7 +1958,7 @@ pub const Interpreter = struct {
                     self.store.getLocal(nominal.backing_ref).layout_idx,
                     target_layout,
                 );
-                break :blk try self.materializeRefResult(bridged, result, target_layout);
+                break :blk try self.materializeLocalValue(bridged, target_layout);
             },
             .discriminant => |discriminant| blk: {
                 const source_val = try self.getLocalChecked(frame, discriminant.source);
@@ -2053,7 +1976,7 @@ pub const Interpreter = struct {
                         .{@intFromEnum(target_layout)},
                     ),
                 }
-                break :blk try self.materializeRefResult(disc_value, result, target_layout);
+                break :blk try self.materializeLocalValue(disc_value, target_layout);
             },
         };
     }

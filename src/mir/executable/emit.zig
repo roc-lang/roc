@@ -51,28 +51,28 @@ pub const Result = struct {
 };
 
 /// Emit the final executable program from a completed representation plan.
-pub fn run(allocator: std.mem.Allocator, exec_plan: *plan_mod.ExecPlan) std.mem.Allocator.Error!Result {
+pub fn run(allocator: std.mem.Allocator, executable_plan: *plan_mod.ExecPlan) std.mem.Allocator.Error!Result {
     var empty_store = plan_mod.Store.init(allocator);
     errdefer empty_store.deinit();
     const empty_layouts = try layouts_mod.Layouts.initEmpty(allocator, &empty_store);
 
     const result = Result{
-        .store = takeStore(&exec_plan.store),
-        .root_defs = exec_plan.root_defs,
-        .symbols = exec_plan.symbols,
-        .types = exec_plan.types,
-        .layouts = exec_plan.layouts,
-        .strings = exec_plan.strings,
-        .entrypoint_wrappers = exec_plan.entrypoint_wrappers,
+        .store = takeStore(&executable_plan.store),
+        .root_defs = executable_plan.root_defs,
+        .symbols = executable_plan.symbols,
+        .types = executable_plan.types,
+        .layouts = executable_plan.layouts,
+        .strings = executable_plan.strings,
+        .entrypoint_wrappers = executable_plan.entrypoint_wrappers,
     };
 
-    exec_plan.store = empty_store;
-    exec_plan.root_defs = .empty;
-    exec_plan.symbols = symbol_mod.Store.init(allocator);
-    exec_plan.types = type_mod.Store.init(allocator);
-    exec_plan.layouts = empty_layouts;
-    exec_plan.strings = .{};
-    exec_plan.entrypoint_wrappers = &.{};
+    executable_plan.store = empty_store;
+    executable_plan.root_defs = .empty;
+    executable_plan.symbols = symbol_mod.Store.init(allocator);
+    executable_plan.types = type_mod.Store.init(allocator);
+    executable_plan.layouts = empty_layouts;
+    executable_plan.strings = .{};
+    executable_plan.entrypoint_wrappers = &.{};
 
     return result;
 }

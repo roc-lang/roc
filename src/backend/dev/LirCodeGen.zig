@@ -4550,11 +4550,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.collectStmtReadLocals(for_stmt.body, locals, visited);
                     try self.collectStmtReadLocals(for_stmt.next, locals, visited);
                 },
-                .borrow_scope => |scope| {
-                    try self.collectStmtReadLocals(scope.body, locals, visited);
-                    try self.collectStmtReadLocals(scope.remainder, locals, visited);
-                },
-                .scope_exit => {},
                 .join => |join| {
                     try self.collectStmtReadLocals(join.body, locals, visited);
                     try self.collectStmtReadLocals(join.remainder, locals, visited);
@@ -4673,11 +4668,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.collectStmtLocals(for_stmt.body, locals, visited);
                     try self.collectStmtLocals(for_stmt.next, locals, visited);
                 },
-                .borrow_scope => |scope| {
-                    try self.collectStmtLocals(scope.body, locals, visited);
-                    try self.collectStmtLocals(scope.remainder, locals, visited);
-                },
-                .scope_exit => {},
                 .join => |join| {
                     for (self.store.getLocalSpan(join.params)) |param| {
                         try locals.put(localKey(param), param);
@@ -12604,17 +12594,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .for_list => |for_stmt| {
                     try self.generateForListStmt(for_stmt);
                 },
-
-                .borrow_scope => |scope| {
-                    try self.ensureStableLocationsForStmtReads(scope.remainder);
-                    var remainder_env = try self.captureStmtEnv();
-                    defer remainder_env.deinit();
-                    try self.generateStmt(scope.body);
-                    try self.restoreStmtEnv(&remainder_env);
-                    try self.generateStmt(scope.remainder);
-                },
-
-                .scope_exit => {},
 
                 .incref => |inc| {
                     _ = try self.generateIncref(.{

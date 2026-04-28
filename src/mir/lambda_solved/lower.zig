@@ -29,7 +29,6 @@ pub const Result = struct {
     builtin_box_ident: base.Ident.Idx,
     builtin_primitive_owner_idents: symbol_mod.PrimitiveMethodOwnerIdents,
     runtime_inspect_symbols: std.AutoHashMap(Symbol, Symbol),
-    exact_callable_aliases: std.AutoHashMap(Symbol, Symbol),
 
     pub fn deinit(self: *Result) void {
         self.store.deinit();
@@ -40,7 +39,6 @@ pub const Result = struct {
         self.idents.deinit(self.store.allocator);
         self.attached_method_index.deinit();
         self.runtime_inspect_symbols.deinit();
-        self.exact_callable_aliases.deinit();
     }
 
     pub fn take(self: *Result, allocator: std.mem.Allocator) std.mem.Allocator.Error!Result {
@@ -58,7 +56,6 @@ pub const Result = struct {
             .builtin_box_ident = base.Ident.Idx.NONE,
             .builtin_primitive_owner_idents = symbol_mod.PrimitiveMethodOwnerIdents.none(),
             .runtime_inspect_symbols = std.AutoHashMap(Symbol, Symbol).init(allocator),
-            .exact_callable_aliases = std.AutoHashMap(Symbol, Symbol).init(allocator),
         };
         return result;
     }
@@ -83,7 +80,6 @@ const Lowerer = struct {
     types: type_mod.Store,
     def_id_by_symbol: std.AutoHashMap(Symbol, ast.DefId),
     lifted_fn_capture_spans: std.AutoHashMap(Symbol, LiftedAst.Span(LiftedAst.TypedSymbol)),
-    exact_callable_aliases: std.AutoHashMap(Symbol, Symbol),
     fn_infer_states: std.AutoHashMap(Symbol, FnInferState),
     current_instantiate_cache: ?*std.AutoHashMap(LiftedType.TypeId, TypeVarId),
     current_expr_instantiate_cache: ?*std.AutoHashMap(LiftedAst.ExprId, ast.ExprId),
@@ -136,7 +132,6 @@ const Lowerer = struct {
             .types = type_mod.Store.init(allocator),
             .def_id_by_symbol = std.AutoHashMap(Symbol, ast.DefId).init(allocator),
             .lifted_fn_capture_spans = std.AutoHashMap(Symbol, LiftedAst.Span(LiftedAst.TypedSymbol)).init(allocator),
-            .exact_callable_aliases = std.AutoHashMap(Symbol, Symbol).init(allocator),
             .fn_infer_states = std.AutoHashMap(Symbol, FnInferState).init(allocator),
             .current_instantiate_cache = null,
             .current_expr_instantiate_cache = null,
@@ -153,7 +148,6 @@ const Lowerer = struct {
         if (self.current_call_context) |ctx| self.freeDebugCallContext(ctx);
         self.def_id_by_symbol.deinit();
         self.lifted_fn_capture_spans.deinit();
-        self.exact_callable_aliases.deinit();
         self.fn_infer_states.deinit();
         self.types.deinit();
         self.root_defs.deinit(self.allocator);
@@ -175,7 +169,6 @@ const Lowerer = struct {
             .builtin_box_ident = self.input.builtin_box_ident,
             .builtin_primitive_owner_idents = self.input.builtin_primitive_owner_idents,
             .runtime_inspect_symbols = self.input.runtime_inspect_symbols,
-            .exact_callable_aliases = self.exact_callable_aliases,
         };
 
         self.output = ast.Store.init(self.allocator);
@@ -190,7 +183,6 @@ const Lowerer = struct {
         self.input.builtin_box_ident = base.Ident.Idx.NONE;
         self.input.builtin_primitive_owner_idents = symbol_mod.PrimitiveMethodOwnerIdents.none();
         self.input.runtime_inspect_symbols = std.AutoHashMap(Symbol, Symbol).init(self.allocator);
-        self.exact_callable_aliases = std.AutoHashMap(Symbol, Symbol).init(self.allocator);
         return result;
     }
 
@@ -254,7 +246,6 @@ const Lowerer = struct {
 
                 const bind = try self.instantiateTypedSymbol(def.bind);
                 const body = try self.instantiateExpr(expr_id);
-                try self.recordExactCallableAlias(bind.symbol, body);
                 break :blk self.emitDef(.{
                     .bind = bind,
                     .value = .{ .val = body },
@@ -361,33 +352,6 @@ const Lowerer = struct {
         return out;
     }
 
-    fn maybeExactCallableSymbolForExpr(self: *Lowerer, expr_id: ast.ExprId) ?Symbol {
-        const expr = self.output.getExpr(expr_id);
-        return switch (expr.data) {
-            .var_ => |symbol| blk: {
-                if (symbol.isNone()) break :blk null;
-                if (self.exact_callable_aliases.get(symbol)) |exact| break :blk exact;
-                if (self.def_id_by_symbol.get(symbol)) |def_id| {
-                    const def = self.output.getDef(def_id);
-                    break :blk switch (def.value) {
-                        .fn_, .hosted_fn => symbol,
-                        else => null,
-                    };
-                }
-                break :blk null;
-            },
-            .proc_value => |proc_value| proc_value.proc,
-            .call, .call_proc => null,
-            .low_level => null,
-            else => null,
-        };
-    }
-
-    fn recordExactCallableAlias(self: *Lowerer, bind_symbol: Symbol, body_expr: ast.ExprId) std.mem.Allocator.Error!void {
-        const exact_symbol = self.maybeExactCallableSymbolForExpr(body_expr) orelse return;
-        try self.exact_callable_aliases.put(bind_symbol, exact_symbol);
-    }
-
     fn instantiateExpr(self: *Lowerer, expr_id: LiftedAst.ExprId) std.mem.Allocator.Error!ast.ExprId {
         if (self.current_expr_instantiate_cache) |cache| {
             if (cache.get(expr_id)) |existing| return existing;
@@ -486,10 +450,6 @@ const Lowerer = struct {
         const lowered = try self.output.addExpr(.{ .ty = ty, .data = data });
         if (self.current_expr_instantiate_cache) |cache| {
             try cache.put(expr_id, lowered);
-        }
-        if (self.output.getExpr(lowered).data == .let_) {
-            const let_expr = self.output.getExpr(lowered).data.let_;
-            try self.recordExactCallableAlias(let_expr.bind.symbol, let_expr.body);
         }
         return lowered;
     }
@@ -602,11 +562,6 @@ const Lowerer = struct {
             } },
         };
         const stmt_out = try self.output.addStmt(lowered);
-        switch (self.output.getStmt(stmt_out)) {
-            .decl => |decl| try self.recordExactCallableAlias(decl.bind.symbol, decl.body),
-            .var_decl => |decl| try self.recordExactCallableAlias(decl.bind.symbol, decl.body),
-            else => {},
-        }
         return stmt_out;
     }
 
@@ -2669,62 +2624,13 @@ const Lowerer = struct {
                 for (self.output.sliceExprSpan(call.args)) |arg| {
                     try self.propagateExprErasure(arg, venv);
                 }
-                const func_expr = self.output.getExpr(call.func);
                 expr.ty = self.types.fnShape(call.call_constraint_ty).ret;
-                const boundary_symbol = self.maybeExactCallableSymbolForExpr(call.func) orelse blk_boundary: {
-                    if (func_expr.data != .var_) break :blk_boundary null;
-                    break :blk_boundary func_expr.data.var_;
-                };
-                if (boundary_symbol) |symbol| {
-                    if (self.boxBoundaryBuiltinOpForSymbol(symbol)) |op| {
-                        const call_args = self.output.sliceExprSpan(call.args);
-                        if (call_args.len != 1) {
-                            debugPanic("lambdasolved.propagateExprErasure box boundary builtin expected exactly one arg", .{});
-                        }
-                        const arg_ty = self.output.getExpr(call_args[0]).ty;
-                        switch (op) {
-                            .box_box => {
-                                const boxed_arg_ty = try self.eraseBoundaryCallableType(arg_ty);
-                                expr.ty = try self.types.freshContent(.{
-                                    .box = boxed_arg_ty,
-                                });
-                            },
-                            .box_unbox => {
-                                const boxed_elem_ty = self.boxedPayloadType(arg_ty) orelse
-                                    return debugPanic("lambdasolved.propagateExprErasure box_unbox call expected boxed arg", .{});
-                                expr.ty = try self.eraseBoundaryCallableType(boxed_elem_ty);
-                            },
-                            else => unreachable,
-                        }
-                    }
-                }
             },
             .call_proc => |call| {
                 for (self.output.sliceExprSpan(call.args)) |arg| {
                     try self.propagateExprErasure(arg, venv);
                 }
                 expr.ty = self.types.fnShape(call.call_constraint_ty).ret;
-                if (self.boxBoundaryBuiltinOpForSymbol(call.proc)) |op| {
-                    const call_args = self.output.sliceExprSpan(call.args);
-                    if (call_args.len != 1) {
-                        debugPanic("lambdasolved.propagateExprErasure box boundary call_proc expected exactly one arg", .{});
-                    }
-                    const arg_ty = self.output.getExpr(call_args[0]).ty;
-                    switch (op) {
-                        .box_box => {
-                            const boxed_arg_ty = try self.eraseBoundaryCallableType(arg_ty);
-                            expr.ty = try self.types.freshContent(.{
-                                .box = boxed_arg_ty,
-                            });
-                        },
-                        .box_unbox => {
-                            const boxed_elem_ty = self.boxedPayloadType(arg_ty) orelse
-                                return debugPanic("lambdasolved.propagateExprErasure box_unbox call_proc expected boxed arg", .{});
-                            expr.ty = try self.eraseBoundaryCallableType(boxed_elem_ty);
-                        },
-                        else => unreachable,
-                    }
-                }
             },
             .proc_value => |proc_value| {
                 for (self.output.sliceCaptureArgSpan(proc_value.captures)) |capture| {
@@ -3328,40 +3234,6 @@ const Lowerer = struct {
             .content => |content| switch (content) {
                 .box => |elem| elem,
                 else => null,
-            },
-            else => null,
-        };
-    }
-
-    fn boxBoundaryBuiltinOpForSymbol(self: *Lowerer, symbol: Symbol) ?base.LowLevel {
-        if (self.exact_callable_aliases.get(symbol)) |exact| {
-            if (exact != symbol) return self.boxBoundaryBuiltinOpForSymbol(exact);
-        }
-        const def_id = self.def_id_by_symbol.get(symbol) orelse return null;
-        const def = self.output.getDef(def_id);
-        const fn_def = switch (def.value) {
-            .fn_ => |fn_def| fn_def,
-            .val => |expr_id| {
-                const exact = self.maybeExactCallableSymbolForExpr(expr_id) orelse return null;
-                if (exact == symbol) return null;
-                return self.boxBoundaryBuiltinOpForSymbol(exact);
-            },
-            else => return null,
-        };
-        if (!self.types.hasCapturelessLambda(def.bind.ty, def.bind.symbol)) return null;
-        const body = self.output.getExpr(fn_def.body);
-        return switch (body.data) {
-            .low_level => |ll| blk: {
-                const args = self.output.sliceExprSpan(ll.args);
-                if (args.len != 1) break :blk null;
-                const arg_expr = self.output.getExpr(args[0]);
-                const fn_args = self.output.sliceTypedSymbolSpan(fn_def.args);
-                if (fn_args.len != 1) break :blk null;
-                if (arg_expr.data != .var_ or arg_expr.data.var_ != fn_args[0].symbol) break :blk null;
-                break :blk switch (ll.op) {
-                    .box_box, .box_unbox => ll.op,
-                    else => null,
-                };
             },
             else => null,
         };
