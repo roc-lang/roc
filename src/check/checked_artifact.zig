@@ -334,6 +334,465 @@ pub const ResolvedValueRefTableRef = struct {
     len: u32 = 0,
 };
 
+pub const ResolvedValueRefId = enum(u32) { _ };
+
+pub const LocalBindingRef = struct {
+    pattern: CIR.Pattern.Idx,
+};
+
+pub const TopLevelBindingRef = struct {
+    module_idx: u32,
+    def: CIR.Def.Idx,
+    pattern: CIR.Pattern.Idx,
+};
+
+pub const ImportedTopLevelValueRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    module_idx: u32,
+    def: CIR.Def.Idx,
+    pattern: CIR.Pattern.Idx,
+};
+
+pub const HostedProcRef = struct {
+    module_idx: u32,
+    def: CIR.Def.Idx,
+    proc: canonical.ProcedureValueRef,
+};
+
+pub const PlatformProcRef = struct {
+    module_idx: u32,
+    requires_idx: u32,
+    proc: canonical.ProcedureValueRef,
+};
+
+pub const PromotedProcedureRef = struct {
+    module_idx: u32,
+    proc: canonical.ProcedureValueRef,
+};
+
+pub const ConstUseTemplate = struct {
+    const_ref: ConstRef,
+    requested_source_ty_template: canonical.CanonicalTypeKey,
+};
+
+pub const ProcedureBindingRef = union(enum) {
+    top_level: TopLevelProcedureBindingRef,
+    imported: ImportedProcedureBindingRef,
+    hosted: HostedProcRef,
+    platform: PlatformProcRef,
+    promoted: PromotedProcedureRef,
+};
+
+pub const TopLevelProcedureBindingRef = struct {
+    proc: canonical.ProcedureValueRef,
+    template: ?canonical.ProcedureTemplateRef,
+};
+
+pub const ImportedProcedureBindingRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    module_idx: u32,
+    def: CIR.Def.Idx,
+    pattern: CIR.Pattern.Idx,
+};
+
+pub const ProcedureUseTemplate = struct {
+    binding: ProcedureBindingRef,
+    source_fn_ty_template: canonical.CanonicalTypeKey,
+};
+
+pub const ResolvedValueRef = union(enum) {
+    local_param: LocalBindingRef,
+    local_value: LocalBindingRef,
+    local_mutable_version: LocalBindingRef,
+    pattern_binder: LocalBindingRef,
+    local_proc: LocalBindingRef,
+
+    top_level_const: ConstUseTemplate,
+    imported_const: ConstUseTemplate,
+
+    top_level_proc: ProcedureUseTemplate,
+    imported_proc: ProcedureUseTemplate,
+    hosted_proc: ProcedureUseTemplate,
+    platform_proc: ProcedureUseTemplate,
+    promoted_top_level_proc: ProcedureUseTemplate,
+};
+
+pub const ResolvedValueRefRecord = struct {
+    expr: CIR.Expr.Idx,
+    ref: ResolvedValueRef,
+    checked_ty: Var,
+    scope_depth: u32,
+};
+
+pub const ResolvedValueRefTable = struct {
+    records: []ResolvedValueRefRecord = &.{},
+    by_expr: std.AutoHashMapUnmanaged(CIR.Expr.Idx, ResolvedValueRefId) = .{},
+
+    pub fn fromModule(
+        allocator: Allocator,
+        modules: *const TypedCIR.Modules,
+        module_idx: u32,
+        imports: []const PublishImportArtifact,
+        templates: *const CheckedProcedureTemplateTable,
+        hosted_procs: *const HostedProcTable,
+        platform_required_bindings: *const PlatformRequiredBindingTable,
+        top_level_values: *const TopLevelValueTable,
+    ) Allocator.Error!ResolvedValueRefTable {
+        const module = modules.module(module_idx);
+        var records = std.ArrayList(ResolvedValueRefRecord).empty;
+        errdefer records.deinit(allocator);
+
+        var by_expr: std.AutoHashMapUnmanaged(CIR.Expr.Idx, ResolvedValueRefId) = .{};
+        errdefer by_expr.deinit(allocator);
+
+        var node_idx: u32 = 0;
+        while (node_idx < module.nodeCount()) : (node_idx += 1) {
+            const tag = module.nodeTag(@enumFromInt(node_idx));
+            switch (tag) {
+                .expr_var,
+                .expr_external_lookup,
+                .expr_required_lookup,
+                => {},
+                else => continue,
+            }
+
+            const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
+            const resolved_ref = try classifyValueRef(
+                modules,
+                module,
+                expr_idx,
+                imports,
+                templates,
+                hosted_procs,
+                platform_required_bindings,
+                top_level_values,
+            );
+
+            const id: ResolvedValueRefId = @enumFromInt(@as(u32, @intCast(records.items.len)));
+            try records.append(allocator, .{
+                .expr = expr_idx,
+                .ref = resolved_ref,
+                .checked_ty = module.exprType(expr_idx),
+                .scope_depth = 0,
+            });
+            try by_expr.put(allocator, expr_idx, id);
+        }
+
+        return .{
+            .records = try records.toOwnedSlice(allocator),
+            .by_expr = by_expr,
+        };
+    }
+
+    pub fn lookupByExpr(self: *const ResolvedValueRefTable, expr: CIR.Expr.Idx) ?ResolvedValueRefRecord {
+        const id = self.by_expr.get(expr) orelse return null;
+        return self.records[@intFromEnum(id)];
+    }
+
+    pub fn deinit(self: *ResolvedValueRefTable, allocator: Allocator) void {
+        self.by_expr.deinit(allocator);
+        allocator.free(self.records);
+        self.* = .{};
+    }
+};
+
+fn classifyValueRef(
+    modules: *const TypedCIR.Modules,
+    module: TypedCIR.Module,
+    expr_idx: CIR.Expr.Idx,
+    imports: []const PublishImportArtifact,
+    templates: *const CheckedProcedureTemplateTable,
+    hosted_procs: *const HostedProcTable,
+    platform_required_bindings: *const PlatformRequiredBindingTable,
+    top_level_values: *const TopLevelValueTable,
+) Allocator.Error!ResolvedValueRef {
+    _ = templates;
+    const expr = module.expr(expr_idx);
+    return switch (expr.data) {
+        .e_lookup_local => |local| classifyLocalValueRef(
+            module,
+            local.pattern_idx,
+            hosted_procs,
+            top_level_values,
+        ),
+        .e_lookup_external => |external| classifyImportedValueRef(
+            modules,
+            module,
+            external.module_idx,
+            external.target_node_idx,
+            imports,
+        ),
+        .e_lookup_required => |required| classifyRequiredValueRef(
+            module,
+            required.requires_idx.toU32(),
+            platform_required_bindings,
+        ),
+        else => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "checked artifact invariant violated: expression {d} is not a value reference",
+                    .{@intFromEnum(expr_idx)},
+                );
+            }
+            unreachable;
+        },
+    };
+}
+
+fn classifyLocalValueRef(
+    module: TypedCIR.Module,
+    pattern: CIR.Pattern.Idx,
+    hosted_procs: *const HostedProcTable,
+    top_level_values: *const TopLevelValueTable,
+) ResolvedValueRef {
+    if (topLevelDefByPattern(module, pattern)) |def_idx| {
+        const entry = topLevelValueForPattern(top_level_values, pattern) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "checked artifact invariant violated: top-level pattern {d} has no top-level value entry",
+                    .{@intFromEnum(pattern)},
+                );
+            }
+            unreachable;
+        };
+
+        switch (entry.value) {
+            .const_ref => |const_ref| return .{ .top_level_const = .{
+                .const_ref = const_ref,
+                .requested_source_ty_template = .{},
+            } },
+            .procedure_binding => |binding| {
+                if (hostedProcForDef(hosted_procs, def_idx)) |hosted| {
+                    return .{ .hosted_proc = .{
+                        .binding = .{ .hosted = .{
+                            .module_idx = hosted.module_idx,
+                            .def = hosted.def_idx,
+                            .proc = hosted.proc,
+                        } },
+                        .source_fn_ty_template = .{},
+                    } };
+                }
+                return .{ .top_level_proc = .{
+                    .binding = .{ .top_level = binding },
+                    .source_fn_ty_template = .{},
+                } };
+            },
+            .callable_eval_template => {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: callable top-level binding {d} was not sealed before publication",
+                        .{@intFromEnum(pattern)},
+                    );
+                }
+                unreachable;
+            },
+        }
+    }
+
+    if (patternIsLambdaArg(module, pattern)) {
+        return .{ .local_param = .{ .pattern = pattern } };
+    }
+
+    if (localStatementForPattern(module, pattern)) |statement| {
+        switch (statement) {
+            .s_var => return .{ .local_mutable_version = .{ .pattern = pattern } },
+            .s_decl => |decl| {
+                if (isLocalProcExpr(module, decl.expr)) {
+                    return .{ .local_proc = .{ .pattern = pattern } };
+                }
+                return .{ .local_value = .{ .pattern = pattern } };
+            },
+            else => {},
+        }
+    }
+
+    if (patternIsBinder(module, pattern)) {
+        return .{ .pattern_binder = .{ .pattern = pattern } };
+    }
+
+    if (builtin.mode == .Debug) {
+        std.debug.panic(
+            "checked artifact invariant violated: local lookup pattern {d} has no classified binding",
+            .{@intFromEnum(pattern)},
+        );
+    }
+    unreachable;
+}
+
+fn classifyImportedValueRef(
+    modules: *const TypedCIR.Modules,
+    module: TypedCIR.Module,
+    import_idx: CIR.Import.Idx,
+    target_node_idx: u16,
+    imports: []const PublishImportArtifact,
+) ResolvedValueRef {
+    const resolved_module_idx = module.resolvedImportModule(import_idx) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "checked artifact invariant violated: external lookup import {d} has no resolved module",
+                .{@intFromEnum(import_idx)},
+            );
+        }
+        unreachable;
+    };
+    const import_key = publishImportKeyForModule(imports, resolved_module_idx) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "checked artifact invariant violated: external lookup import {d} resolved to module {d} without a published artifact key",
+                .{ @intFromEnum(import_idx), resolved_module_idx },
+            );
+        }
+        unreachable;
+    };
+
+    const imported_module = modules.module(resolved_module_idx);
+    const target_def: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(target_node_idx)));
+    if (imported_module.nodeTag(@enumFromInt(@as(u32, @intCast(target_node_idx)))) != .def) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "checked artifact invariant violated: external value lookup target {d} in module {d} is not a definition",
+                .{ target_node_idx, resolved_module_idx },
+            );
+        }
+        unreachable;
+    }
+    const def = imported_module.def(target_def);
+    if (topLevelExprIsAlreadyProcedure(def.expr.data)) {
+        return .{ .imported_proc = .{
+            .binding = .{ .imported = .{
+                .artifact = import_key,
+                .module_idx = resolved_module_idx,
+                .def = target_def,
+                .pattern = def.pattern.idx,
+            } },
+            .source_fn_ty_template = .{},
+        } };
+    }
+
+    return .{ .imported_const = .{
+        .const_ref = .{
+            .artifact = import_key,
+            .module_idx = resolved_module_idx,
+            .pattern = def.pattern.idx,
+            .schema = @enumFromInt(@intFromEnum(target_def)),
+            .value = @enumFromInt(@intFromEnum(target_def)),
+            .source_type = imported_module.defType(target_def),
+        },
+        .requested_source_ty_template = .{},
+    } };
+}
+
+fn classifyRequiredValueRef(
+    module: TypedCIR.Module,
+    requires_idx: u32,
+    platform_required_bindings: *const PlatformRequiredBindingTable,
+) ResolvedValueRef {
+    const binding = platformBindingForIndex(platform_required_bindings, requires_idx) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "checked artifact invariant violated: required lookup {d} has no platform binding",
+                .{requires_idx},
+            );
+        }
+        unreachable;
+    };
+
+    return .{ .platform_proc = .{
+        .binding = .{ .platform = .{
+            .module_idx = module.moduleIndex(),
+            .requires_idx = requires_idx,
+            .proc = binding.proc,
+        } },
+        .source_fn_ty_template = .{},
+    } };
+}
+
+fn topLevelDefByPattern(module: TypedCIR.Module, pattern: CIR.Pattern.Idx) ?CIR.Def.Idx {
+    for (module.allDefs()) |def_idx| {
+        if (module.def(def_idx).pattern.idx == pattern) return def_idx;
+    }
+    return null;
+}
+
+fn topLevelValueForPattern(table: *const TopLevelValueTable, pattern: CIR.Pattern.Idx) ?TopLevelValueEntry {
+    for (table.entries) |entry| {
+        if (entry.pattern == pattern) return entry;
+    }
+    return null;
+}
+
+fn hostedProcForDef(table: *const HostedProcTable, def_idx: CIR.Def.Idx) ?HostedProc {
+    for (table.procs) |proc| {
+        if (proc.def_idx == def_idx) return proc;
+    }
+    return null;
+}
+
+fn platformBindingForIndex(table: *const PlatformRequiredBindingTable, requires_idx: u32) ?PlatformRequiredBinding {
+    for (table.bindings) |binding| {
+        if (binding.requires_idx == requires_idx) return binding;
+    }
+    return null;
+}
+
+fn localStatementForPattern(module: TypedCIR.Module, pattern: CIR.Pattern.Idx) ?CIR.Statement {
+    const statements = module.moduleEnvConst().store.sliceStatements(module.moduleEnvConst().all_statements);
+    for (statements) |statement_idx| {
+        const statement = module.getStatement(statement_idx);
+        switch (statement) {
+            .s_decl => |decl| if (decl.pattern == pattern) return statement,
+            .s_var => |var_| if (var_.pattern_idx == pattern) return statement,
+            else => {},
+        }
+    }
+    return null;
+}
+
+fn patternIsLambdaArg(module: TypedCIR.Module, pattern: CIR.Pattern.Idx) bool {
+    var node_idx: u32 = 0;
+    while (node_idx < module.nodeCount()) : (node_idx += 1) {
+        if (module.nodeTag(@enumFromInt(node_idx)) != .expr_lambda) continue;
+        const expr = module.expr(@enumFromInt(node_idx));
+        const lambda = switch (expr.data) {
+            .e_lambda => |lambda| lambda,
+            else => unreachable,
+        };
+        for (module.slicePatterns(lambda.args)) |arg| {
+            if (arg == pattern) return true;
+        }
+    }
+    return false;
+}
+
+fn patternIsBinder(module: TypedCIR.Module, pattern: CIR.Pattern.Idx) bool {
+    var node_idx: u32 = 0;
+    while (node_idx < module.nodeCount()) : (node_idx += 1) {
+        const tag = module.nodeTag(@enumFromInt(node_idx));
+        switch (tag) {
+            .pattern_identifier,
+            .pattern_as,
+            .pattern_applied_tag,
+            .pattern_nominal,
+            .pattern_nominal_external,
+            .pattern_record_destructure,
+            .pattern_list,
+            .pattern_tuple,
+            => {},
+            else => continue,
+        }
+        if (node_idx == @intFromEnum(pattern)) return true;
+    }
+    return false;
+}
+
+fn isLocalProcExpr(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) bool {
+    const expr = module.expr(expr_idx);
+    return switch (expr.data) {
+        .e_lambda, .e_closure => true,
+        else => false,
+    };
+}
+
 pub const TopLevelUseSummaryRef = struct {
     start: u32 = 0,
     len: u32 = 0,
@@ -603,11 +1062,6 @@ pub const ConstRef = struct {
     source_type: Var,
 };
 
-pub const TopLevelProcedureBindingRef = struct {
-    proc: canonical.ProcedureValueRef,
-    template: ?canonical.ProcedureTemplateRef,
-};
-
 pub const TopLevelValueKind = union(enum) {
     const_ref: ConstRef,
     procedure_binding: TopLevelProcedureBindingRef,
@@ -628,6 +1082,7 @@ pub const TopLevelValueTable = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         templates: *const CheckedProcedureTemplateTable,
+        artifact_key: CheckedModuleArtifactKey,
     ) Allocator.Error!TopLevelValueTable {
         var entries = std.ArrayList(TopLevelValueEntry).empty;
         errdefer entries.deinit(allocator);
@@ -641,7 +1096,7 @@ pub const TopLevelValueTable = struct {
                     .template = template,
                 } };
             } else .{ .const_ref = .{
-                .artifact = .{},
+                .artifact = artifact_key,
                 .module_idx = module.moduleIndex(),
                 .pattern = def.pattern.idx,
                 .schema = @enumFromInt(@intFromEnum(def_idx)),
@@ -700,6 +1155,7 @@ pub const CheckedModuleArtifact = struct {
     provides_requires: ProvidesRequiresMetadata,
     method_registry: static_dispatch.MethodRegistry,
     static_dispatch_plans: static_dispatch.StaticDispatchPlanTable,
+    resolved_value_refs: ResolvedValueRefTable,
     checked_procedure_templates: CheckedProcedureTemplateTable,
     root_requests: RootRequestTable,
     hosted_procs: HostedProcTable,
@@ -718,6 +1174,7 @@ pub const CheckedModuleArtifact = struct {
         self.hosted_procs.deinit(allocator);
         self.root_requests.deinit(allocator);
         self.checked_procedure_templates.deinit(allocator);
+        self.resolved_value_refs.deinit(allocator);
         self.static_dispatch_plans.deinit(allocator);
         self.method_registry.deinit(allocator);
         self.provides_requires.deinit(allocator);
@@ -763,6 +1220,10 @@ pub const CheckedModuleArtifact = struct {
                 .callable_eval_template => {},
             }
         }
+
+        for (self.resolved_value_refs.records) |record| {
+            std.debug.assert(self.resolved_value_refs.by_expr.get(record.expr) != null);
+        }
     }
 };
 
@@ -773,6 +1234,7 @@ pub const ImportedModuleView = struct {
     exports: *const ExportTable,
     checked_procedure_templates: *const CheckedProcedureTemplateTable,
     method_registry: *const static_dispatch.MethodRegistry,
+    resolved_value_refs: *const ResolvedValueRefTable,
     interface_capabilities: *const ModuleInterfaceCapabilities,
     top_level_values: *const TopLevelValueTable,
     comptime_values: *const CompileTimeValueStore,
@@ -791,6 +1253,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .exports = &artifact.exports,
         .checked_procedure_templates = &artifact.checked_procedure_templates,
         .method_registry = &artifact.method_registry,
+        .resolved_value_refs = &artifact.resolved_value_refs,
         .interface_capabilities = &artifact.interface_capabilities,
         .top_level_values = &artifact.top_level_values,
         .comptime_values = &artifact.comptime_values,
@@ -902,8 +1365,20 @@ pub fn publishFromTypedModule(
     var platform_required_bindings = try PlatformRequiredBindingTable.fromModule(allocator, module, &canonical_names);
     errdefer platform_required_bindings.deinit(allocator);
 
-    var top_level_values = try TopLevelValueTable.fromModule(allocator, module, &checked_procedure_templates);
+    var top_level_values = try TopLevelValueTable.fromModule(allocator, module, &checked_procedure_templates, artifact_key);
     errdefer top_level_values.deinit(allocator);
+
+    var resolved_value_refs = try ResolvedValueRefTable.fromModule(
+        allocator,
+        modules,
+        module_idx,
+        inputs.imports,
+        &checked_procedure_templates,
+        &hosted_procs,
+        &platform_required_bindings,
+        &top_level_values,
+    );
+    errdefer resolved_value_refs.deinit(allocator);
 
     var artifact = CheckedModuleArtifact{
         .key = artifact_key,
@@ -919,6 +1394,7 @@ pub fn publishFromTypedModule(
         },
         .method_registry = method_registry,
         .static_dispatch_plans = static_dispatch_plans,
+        .resolved_value_refs = resolved_value_refs,
         .checked_procedure_templates = checked_procedure_templates,
         .root_requests = root_requests,
         .hosted_procs = hosted_procs,
@@ -952,6 +1428,7 @@ test "artifact views are read-only projections" {
         .provides_requires = .{},
         .method_registry = .{},
         .static_dispatch_plans = .{},
+        .resolved_value_refs = .{},
         .checked_procedure_templates = .{},
         .root_requests = .{},
         .hosted_procs = .{},
