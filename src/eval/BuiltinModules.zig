@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const can = @import("can");
+const check = @import("check");
 const builtin_loading = @import("builtin_loading.zig");
 const builtins = @import("builtins.zig");
 
@@ -27,6 +28,7 @@ pub const BuiltinModules = struct {
     allocator: Allocator,
     builtin_module: LoadedModule,
     builtin_indices: BuiltinIndices,
+    checked_artifact: check.CheckedArtifact.CheckedModuleArtifact,
 
     /// Get an array of all builtin modules for iteration
     /// For compatibility, we expose the Builtin module for each auto-imported type
@@ -57,15 +59,30 @@ pub const BuiltinModules = struct {
         var builtin_module = try builtin_loading.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
         errdefer builtin_module.deinit();
 
+        var typed_modules = try check.TypedCIR.Modules.init(allocator, &.{
+            .{ .precompiled = builtin_module.env },
+        });
+        defer typed_modules.deinit();
+
+        var checked_artifact = try check.CheckedArtifact.publishFromTypedModule(
+            allocator,
+            &typed_modules,
+            0,
+            .{},
+        );
+        errdefer checked_artifact.deinit(allocator);
+
         return BuiltinModules{
             .allocator = allocator,
             .builtin_module = builtin_module,
             .builtin_indices = indices,
+            .checked_artifact = checked_artifact,
         };
     }
 
     /// Clean up all resources
     pub fn deinit(self: *BuiltinModules) void {
+        self.checked_artifact.deinit(self.allocator);
         self.builtin_module.deinit();
     }
 };

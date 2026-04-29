@@ -1328,6 +1328,10 @@ pub const PackageEnv = struct {
         var imported_artifacts = std.ArrayList(CheckedArtifact.PublishImportArtifact).empty;
         // Always include Builtin first
         try imported_envs.append(self.gpa, self.builtin_modules.builtin_module.env);
+        try imported_artifacts.append(self.gpa, .{
+            .module_idx = 0,
+            .key = self.builtin_modules.checked_artifact.key,
+        });
         env.imports.clearResolvedModules();
 
         // Add external and local modules

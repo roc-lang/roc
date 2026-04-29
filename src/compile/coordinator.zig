@@ -1910,10 +1910,11 @@ pub const Coordinator = struct {
             const resolved_module_idx = module_env.imports.getResolvedModule(import_idx) orelse continue;
 
             if (std.mem.eql(u8, import_name, "Builtin")) {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic("checked artifact publication invariant violated: Builtin import has no published artifact", .{});
-                }
-                unreachable;
+                try imports.append(self.gpa, .{
+                    .module_idx = resolved_module_idx,
+                    .key = self.builtin_modules.checked_artifact.key,
+                });
+                continue;
             }
 
             if (pkg.module_names.get(import_name)) |imp_id| {
