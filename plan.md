@@ -769,7 +769,7 @@ plans are executable inputs, not verifier hints.
 Checking finalization must classify every value-like reference that can reach
 mono MIR before the checked artifact is published. Mono MIR must consume that
 classification. It must not decide whether a reference is local, top-level,
-imported, hosted, platform-provided, promoted, or callable by scanning names,
+   imported, hosted, platform-required, promoted, or callable by scanning names,
 source syntax, export tables, declaration order, or the later capture graph.
 
 Conceptual shape:
@@ -786,7 +786,7 @@ const ProcedureBindingRef = union(enum) {
     top_level: TopLevelProcedureBindingRef,
     imported: ImportedProcedureBindingRef,
     hosted: HostedProcRef,
-    platform: PlatformProcRef,
+    platform_required: RequiredAppProcedureRef,
     promoted: PromotedProcedureRef,
 };
 
@@ -808,7 +808,9 @@ const ResolvedValueRef = union(enum) {
     top_level_proc: ProcedureUseTemplate,
     imported_proc: ProcedureUseTemplate,
     hosted_proc: ProcedureUseTemplate,
-    platform_proc: ProcedureUseTemplate,
+    platform_required_declaration: PlatformRequiredDeclarationId,
+    platform_required_const: ConstUseTemplate,
+    platform_required_proc: ProcedureUseTemplate,
     promoted_top_level_proc: ProcedureUseTemplate,
 };
 
@@ -874,19 +876,30 @@ Mono MIR lowering consumes `ResolvedValueRef` as follows:
   and only then creates the concrete `ConstInstantiationKey` used by runnable
   MIR. The checked artifact must not store a concrete `ConstInstantiationKey` for
   a generic procedure body or generic constant template.
-- `top_level_proc`, `imported_proc`, `hosted_proc`, `platform_proc`, and
-  `promoted_top_level_proc` carry `ProcedureUseTemplate`. In callee position,
+- `top_level_proc`, `imported_proc`, `hosted_proc`,
+  `platform_required_proc`, and `promoted_top_level_proc` carry
+  `ProcedureUseTemplate`. In callee position,
   mono MIR clone-instantiates `source_fn_ty_template`, resolves any static
   dispatch required by the function type, resolves the named procedure binding at
   that concrete function type, and then creates the concrete
   `ProcedureCallableRef`/mono specialization request needed for `call_proc`.
+- `platform_required_const` carries `ConstUseTemplate`. Mono MIR treats it like
+  an imported constant use owned by the app artifact and addressed through the
+  platform/app relation; it must not synthesize a platform-local procedure.
+- `platform_required_declaration` is allowed only in standalone platform
+  artifacts that publish requirement declarations for checking, docs, or glue
+  metadata without an app-specific relation. Executable platform artifacts must
+  replace every required lookup with `platform_required_const` or
+  `platform_required_proc` before publication. Mono MIR and later executable
+  lowering must treat `platform_required_declaration` as a compiler invariant
+  violation if it appears in any executable lowering input.
 - The same procedure cases in value position become `proc_value` with empty
   captures after mono specialization has resolved the binding to the exact
   callable procedure template and monomorphic source function type.
 
 `ProcedureUseTemplate` deliberately does not store a
 `CallableProcedureTemplateRef`. A function-valued top-level binding can be a
-direct checked/imported/hosted/platform/promoted procedure binding, or it can be
+direct checked/imported/hosted/platform-required/promoted procedure binding, or it can be
 an instantiable compile-time callable evaluation template. The concrete callable
 procedure template is available only after the use's `source_fn_ty_template` has
 been clone-instantiated in a concrete lowering context. Mono MIR must not
@@ -900,7 +913,7 @@ template in the artifact being lowered or imported. Mono MIR is not allowed to
 accept a generated symbol, display name, or placeholder procedure value as a
 promise that a body will be produced later.
 
-Mono MIR must not lower a top-level, imported, hosted, platform-provided, or
+Mono MIR must not lower a top-level, imported, hosted, platform-required, or
 promoted procedure as `call_value(var_(proc), args)`. It must not lower a
 top-level or imported constant as an ordinary local `var_`. It must not leave a
 raw source symbol for lifted MIR to classify later.
@@ -916,12 +929,14 @@ Debug-only verification after mono MIR must assert:
 
 - every checked value reference that reached mono MIR consumed exactly one
   `ResolvedValueRefRecord`
-- no top-level, imported, hosted, platform-provided, or promoted value was
+- no top-level, imported, hosted, platform-required, or promoted value was
   emitted as an ordinary local value reference
-- every `const_ref` came from `top_level_const` or `imported_const`
-- every top-level/imported/hosted/platform/promoted procedure call was emitted
+- no `platform_required_declaration` reached an executable mono lowering input
+- every `const_ref` came from `top_level_const`, `imported_const`, or
+  `platform_required_const`
+- every top-level/imported/hosted/platform-required/promoted procedure call was emitted
   as `call_proc`, not as `call_value(var_(proc), args)`
-- every top-level/imported/hosted/platform/promoted procedure value was emitted
+- every top-level/imported/hosted/platform-required/promoted procedure value was emitted
   as empty-capture `proc_value`
 - local shadowing uses binding identity: a local binder with the same display
   name as a top-level binding is still local and may be captured later
@@ -1210,18 +1225,18 @@ must not compare display names to decide whether a reference is local or
 captured.
 
 Top-level constants, imported constants, top-level procedures, imported
-procedures, hosted procedures, platform procedures, and promoted top-level
-procedures must not enter `LiftScopeFrame.bindings`. They are already explicit
-mono MIR operations:
+procedures, hosted procedures, platform-required procedure bindings, and
+promoted top-level procedures must not enter `LiftScopeFrame.bindings`. They are
+already explicit mono MIR operations:
 
 - `const_ref` for top-level and imported compile-time constants
 - `call_proc` for resolved direct procedure calls
-- empty-capture `proc_value` for resolved top-level/imported/hosted/platform or
-  promoted procedure values
+- empty-capture `proc_value` for resolved
+  top-level/imported/hosted/platform-required/promoted procedure values
 
 Lifted MIR must not implement Cor/LSS-style free-variable capture by collecting
 raw symbols and subtracting a `toplevels` set. A debug verifier may assert that
-no top-level/imported/hosted/platform/promoted value appears in a capturable
+no top-level/imported/hosted/platform-required/promoted value appears in a capturable
 binding set, but successful verification is not part of the lowering algorithm.
 The lowering algorithm consumes the explicit value-reference partition produced
 before mono MIR.
@@ -4974,7 +4989,8 @@ lowering.
 A generalized `ConstValueGraphTemplate` may contain a finite callable leaf
 template only when that leaf's callable procedure template identity is already
 sealed without a future owner mono specialization. This is true for an existing
-checked/imported/hosted/platform/promoted procedure template such as `id` above.
+checked/imported/hosted/platform-required/promoted procedure template such as
+`id` above.
 It is not true for an inline lambda or local function whose lifted identity
 requires an owning mono specialization that does not exist until the constant is
 instantiated at a concrete type:
@@ -5188,9 +5204,10 @@ publication. Promotion must:
   `ConstInstantiationKey` values and whose callable leaves are `procedure_value`
   references
 - resolve callable leaves to sealed procedure values before the outer promoted
-  procedure is published. Existing source/imported/hosted/platform procedures
-  remain existing procedure values; local closure leaves and evaluated callable
-  leaves are recursively promoted to private closed procedure values.
+  procedure is published. Existing source/imported/hosted/platform-required
+  procedure bindings remain existing procedure values; local closure leaves and
+  evaluated callable leaves are recursively promoted to private closed procedure
+  values.
 - require every captured value to have a complete `CaptureSlotReificationPlan`.
   Missing capture data after type checking is a compiler invariant violation:
   debug-only assertion in debug builds and `unreachable` in release builds.
@@ -5389,9 +5406,9 @@ Callable promotion uses a reserve/fill/seal lifecycle:
    leaves only for serializable leaves, and carry concrete instantiation keys at
    every use.
 5. Connect callable leaves to already-reserved checked procedure templates.
-   Existing source/imported/hosted/platform procedures remain those procedure
-   templates; only genuinely promoted callable leaves point at reserved promoted
-   procedure templates.
+   Existing source/imported/hosted/platform-required procedure bindings remain
+   those procedure templates; only genuinely promoted callable leaves point at
+   reserved promoted procedure templates.
 6. Preserve structural containers as compiler-owned private capture nodes; when
    a promoted body reads a field, element, tag payload, list element, boxed
    payload, or nominal payload, it reads through the explicit private capture
@@ -5602,6 +5619,7 @@ const CheckedModuleArtifact = struct {
     procedure_templates: CheckedProcedureTemplateTable,
     root_requests: RootRequestTable,
     hosted_procs: HostedProcTable,
+    platform_required_declarations: PlatformRequiredDeclarationTable,
     platform_required_bindings: PlatformRequiredBindingTable,
     interface_capabilities: ModuleInterfaceCapabilities,
     top_level_values: TopLevelValueTable,
@@ -5633,7 +5651,12 @@ Checking finalization order:
 4. Build root requests for concrete runtime, tool, test, REPL, development, and
    compile-time entrypoints. Generic exports are not root requests merely because
    they are exported.
-5. Build hosted procedure and platform-required binding tables.
+5. Build hosted procedure tables and platform-required declaration tables.
+   Platform-required binding tables are built only for an executable
+   app/platform co-finalization group, after the app's top-level values and
+   callable promotions have been sealed. Standalone platform checking and glue
+   contexts may publish platform-required declarations without app-specific
+   bindings, but executable lowering may not consume such an artifact.
 6. Build public exports, provides/requires metadata, and interface capability
    records.
 7. Reserve `ConstRef` identities for every non-function top-level constant,
@@ -5674,17 +5697,31 @@ Checking finalization order:
 12. Replace promoted root `pending_callable_root` entries in the in-progress
     `TopLevelValueTable` with `procedure_binding` entries only after their
     promoted procedure values have sealed checked procedure templates.
-13. Verify that `TopLevelValueTable` has no `pending_callable_root` entries and
+13. If this module is the app root of an executable app/platform group, use the
+    sealed app `TopLevelValueTable`, `CompileTimeValueStore`,
+    `ConstInstantiationStore`, `CallableBindingInstantiationStore`,
+    `SemanticInstantiationProcedureTable`, and promoted procedure table to build
+    the app-specific `PlatformRequiredBindingTable` for the platform root
+    artifact. This happens before either root artifact is published. A
+    platform-required binding for a non-function value stores a
+    `PlatformRequiredValueUse.const_value` that points at the app `ConstRef` and
+    exact requested source type. A binding for a function value stores a
+    `PlatformRequiredValueUse.procedure_value` that points at the sealed app
+    `TopLevelProcedureBindingRef` or concrete callable-binding instance required
+    by the platform's requested function type. No binding may be created from a
+    raw app name, pattern lookup, generated wrapper name, or unsealed
+    `pending_callable_root`.
+14. Verify that `TopLevelValueTable` has no `pending_callable_root` entries and
     that every referenced top-level binding maps to either a `ConstRef`-backed
     constant template or `procedure_binding`.
-14. Seal the resolved value-reference table by replacing every builder-only
+15. Seal the resolved value-reference table by replacing every builder-only
     top-level binding reference with `ConstUseTemplate` or `ProcedureUseTemplate`
     data from the completed `TopLevelValueTable` and imported artifact views.
-15. Store the complete checked procedure template table, sealed resolved
+16. Store the complete checked procedure template table, sealed resolved
     value-reference table, `CompileTimeValueStore`, `ConstInstantiationStore`,
     `CallableBindingInstantiationStore`, `SemanticInstantiationProcedureTable`,
     promoted procedure table, and top-level value table in the artifact.
-16. Run debug-only artifact verification. This verification must assert that
+17. Run debug-only artifact verification. This verification must assert that
     every published `ConstRef` has a complete constant template and source type
     scheme; every callable leaf template points at a sealed
     `CallableProcedureTemplateRef`; every
@@ -5698,7 +5735,7 @@ Checking finalization order:
     `SemanticInstantiationProcedureTable`;
     and no generalized type or callable variable appears in an executable-stage
     input without an explicit concrete instantiation key.
-17. Publish the immutable checked artifact.
+18. Publish the immutable checked artifact.
 
 If any user-facing problem is found in steps 1 through 14, checking reports it
 and no artifact is published for that module. Later compiler stages never see a
@@ -6222,9 +6259,9 @@ template and the exact canonical function type for that occurrence. When the
 template names a promoted procedure, the artifact must contain a
 `PromotedProcedure` row for that procedure value, and that row must point at a
 sealed `CheckedProcedureTemplate`. Existing source procedures, imported
-procedures, hosted procedures, and platform procedures are valid callable leaves
-when their procedure templates or capability records are already published. A
-private capture graph cannot contain a callable leaf that is only a symbol
+procedures, hosted procedures, and platform-required procedure bindings are valid
+callable leaves when their procedure templates or capability records are already
+published. A private capture graph cannot contain a callable leaf that is only a symbol
 reservation, and it cannot contain a bare procedure value without
 `source_fn_ty`. This is what allows promoted wrapper lowering to materialize
 callable leaves as ordinary `proc_value` values without consulting the
@@ -6504,6 +6541,39 @@ and different shorthand resolution must not share a checked artifact.
 `checking_context_identity` records the resolution context. The imported
 artifact keys record the checked artifacts that were resolved.
 
+For executable app/platform builds, app and platform root artifacts are
+published as one co-finalization group. The app root artifact is checked in a
+context that includes the platform's requirement interface, because platform
+requirements can constrain app numeric defaults, static dispatch, where-clause
+resolution, and exported type aliases. The platform root artifact used for
+executable lowering is checked in a context that includes the sealed app artifact
+key or an equivalent `PlatformAppRelationKey`, because required lookups in
+platform code are app values, not platform-local declarations. Therefore:
+
+- the executable platform root artifact is app-specific
+- the app root artifact key changes when the platform requirement interface
+  changes in a way that can affect app checking
+- the executable platform root artifact key changes when the app artifact key or
+  platform/app relation key changes
+- `PlatformRequirementContextKey` is derived from the platform module identity
+  and a hash of the platform-required declaration table. App artifacts checked
+  against a platform include this key in `checking_context_identity`; this is
+  what makes the app artifact key change when the platform requirement interface
+  changes, without depending on the app artifact key itself.
+- A published platform declaration artifact must expose a read-only
+  `platformRequirementContextKey()` view so the app checker can consume the exact
+  checked requirement interface instead of reconstructing it from source text.
+- `PlatformAppRelationKey` is derived from the sealed app artifact key and
+  `PlatformRequirementContextKey`. It must not be a name-only or
+  requirement-count-only key.
+- standalone platform checking and glue generation may publish requirement
+  declarations without app-specific bindings, but those artifacts are not valid
+  inputs for executable lowering
+- no artifact in the co-finalization group is published until platform
+  requirement checking, numeric default finalization, static-dispatch
+  finalization, compile-time constant evaluation, callable promotion, and
+  platform-required binding construction have all completed
+
 #### `direct_import_artifact_keys`
 
 The key must include checked artifact keys for each direct import, not source
@@ -6687,6 +6757,7 @@ const ImportedTemplateClosureView = struct {
 const LoweringModuleView = struct {
     artifact: *const CheckedModuleArtifact,
     roots: RootRequestSet,
+    relation_artifacts: Span(ImportedModuleView),
 };
 ```
 
@@ -6753,6 +6824,13 @@ The executable pipeline consumes `LoweringModuleView` values. It may lower only
 roots named by `RootRequestSet`. It must not discover additional roots by
 scanning exports, source declarations, checked CIR expression shapes, or
 procedure order.
+
+For executable platform lowering, `relation_artifacts` must include the sealed
+app artifact view named by `PlatformAppRelationKey`. This is not a source import
+and must not be discovered through import scanning. It exists solely because
+`PlatformRequiredBindingTable` entries can point at app `ConstRef` and app
+procedure bindings, and mono MIR needs the app checked artifact view to resolve
+those explicit references.
 
 ### Root Requests And Root Binding
 
@@ -6923,24 +7001,69 @@ The final architecture must delete or make non-authoritative any
 for diagnostics while checking is running, post-check stages must ignore it and
 consume `HostedProcTable`.
 
-Conceptual platform-required binding table:
+Conceptual platform-required declaration and binding tables:
 
 ```zig
+const PlatformAppRelationKey = struct {
+    bytes: [32]u8,
+};
+
+const PlatformRequirementContextKey = struct {
+    bytes: [32]u8,
+};
+
+const PlatformRequiredDeclarationTable = struct {
+    entries: Span(PlatformRequiredDeclaration),
+    by_platform_required: Map(RequiredTypeId, PlatformRequiredDeclarationId),
+};
+
+const PlatformRequiredDeclaration = struct {
+    id: PlatformRequiredDeclarationId,
+    platform_required: RequiredTypeId,
+    platform_name: ExportNameId,
+    declared_source_ty: CanonicalTypeSchemeKey,
+    for_clause_aliases: Span(PlatformRequiredAlias),
+};
+
 const PlatformRequiredBindingTable = struct {
     entries: Span(PlatformRequiredBinding),
-    by_platform_required: Map(RequiredTypeId, PlatformRequiredBindingId),
+    by_declaration: Map(PlatformRequiredDeclarationId, PlatformRequiredBindingId),
 };
 
 const PlatformRequiredBinding = struct {
     id: PlatformRequiredBindingId,
-    platform_required: RequiredTypeId,
-    platform_name: ExportNameId,
-    app_module: ModuleId,
-    app_def: DefId,
-    app_pattern: PatternId,
+    relation: PlatformAppRelationKey,
+    declaration: PlatformRequiredDeclarationId,
+    app_value: TopLevelValueRef,
+    requested_source_ty: CanonicalTypeKey,
     checked_relation: PlatformRequirementRelationId,
+    value_use: PlatformRequiredValueUse,
+};
+
+const TopLevelValueRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    pattern: PatternId,
+};
+
+const PlatformRequiredValueUse = union(enum) {
+    const_value: ConstUseTemplate,
+    procedure_value: ProcedureUseTemplate,
 };
 ```
+
+`PlatformAppRelationKey.bytes` is the hash of the sealed app
+`CheckedModuleArtifactKey` and `PlatformRequirementContextKey`.
+`PlatformRequirementContextKey.bytes` is the hash of the platform
+`ModuleIdentity` plus the identity hash of `PlatformRequiredDeclarationTable`,
+including each requirement's canonical platform name and declared source type
+scheme. The app root artifact includes `PlatformRequirementContextKey` in its
+`checking_context_identity`; the executable platform root artifact includes
+`PlatformAppRelationKey` in its `checking_context_identity`. These keys
+deliberately do not hash target/layout ABI inputs. Platform-required bindings
+are checked-artifact data, and checked artifacts are target-independent. They
+also deliberately do not use only a requirement count; changing
+`requires {} { main : Str }` to `requires {} { main : I64 }` with the same app
+artifact must produce a different platform/app relation key.
 
 These tables use canonical published names. `source_name`, `abi_name`, and
 `platform_name` are not raw `Ident.Idx` handles; they have already crossed the
@@ -6949,10 +7072,60 @@ canonical identity boundary while the owning `Ident.Store` was still known.
 use. `source_name` and `platform_name` are the checked Roc names used for
 diagnostics, ordering, and artifact identity.
 
-This table replaces post-check lookup-target population. It records exactly
-which app binding satisfies each platform requirement and which checked relation
-proved it. Mono MIR consumes the table when producing roots and calls for
-platform-required functions.
+The declaration table is platform-owned source data. It records what the
+platform requires, using canonical names and canonical checked source type
+schemes, without guessing which app will satisfy the requirement.
+
+The binding table must never copy artifact-local canonical-name ids from the app
+artifact into the platform artifact. A required app value is identified by the
+app `CheckedModuleArtifactKey` plus a source binding id such as `PatternId` or a
+sealed app `TopLevelProcedureBindingRef`. Any app display names needed for
+diagnostics are used while checking is still running; post-check platform
+artifacts do not store foreign `ModuleIdentity` ids from another artifact's
+`CanonicalNameStore`.
+
+The binding table is app-specific executable data. It replaces post-check
+lookup-target population. It records exactly which sealed app top-level value
+satisfies each platform requirement and which checked relation proved it. It is
+built only after the app root artifact has sealed its `TopLevelValueTable`,
+`CompileTimeValueStore`, `ConstInstantiationStore`,
+`CallableBindingInstantiationStore`, `SemanticInstantiationProcedureTable`, and
+promoted procedure table. A required value can be a non-function constant or a
+procedure value:
+
+- non-function required values use `PlatformRequiredValueUse.const_value` and
+  point at an app `ConstRef` plus the exact requested source type
+- function required values use `PlatformRequiredValueUse.procedure_value` and
+  point at a sealed app procedure binding or concrete callable-binding instance
+  at the platform-requested function type
+
+Required values are not always procedures. For example, this is valid Roc:
+
+```roc
+platform "echo-in-zig"
+    requires {} { main : Str }
+    exposes []
+    packages {}
+    provides [main_for_host]
+
+main_for_host : Str
+main_for_host = main
+```
+
+Here `main` is a required constant. The platform root artifact must classify the
+`main` lookup as `platform_required_const`, not synthesize a procedure wrapper.
+
+Mono MIR consumes the binding table when producing roots and when lowering
+required lookups in platform code. It must not lower `e_lookup_required` by
+looking up a platform-local procedure, by constructing a generated
+`platform_required_wrapper`, or by re-searching the app exports.
+
+Debug-only artifact verification must assert that every `e_lookup_required`
+reachable from an executable platform artifact has a binding and that the
+binding kind matches the final required source type. If the required type is not
+a function, later stages must see a constant use. If the required type is a
+function, later stages must see a procedure use. In release builds, the
+equivalent invariant path is `unreachable`.
 
 Hosted and platform methods that can be called through static dispatch must
 also appear in the checked method registry as explicit procedure targets with
@@ -8705,9 +8878,9 @@ Mono MIR:
 - preserves Roc fixed arity on every function type and call
 - consumes checked `ResolvedValueRef` records for every value-like reference
 - lowers top-level/imported constants only as `const_ref`
-- lowers top-level/imported/hosted/platform/promoted procedure calls only as
+- lowers top-level/imported/hosted/platform-required/promoted procedure calls only as
   `call_proc`
-- lowers top-level/imported/hosted/platform/promoted procedure values only as
+- lowers top-level/imported/hosted/platform-required/promoted procedure values only as
   empty-capture `proc_value`
 - stores the exact requested mono source function type on every `call_proc` and
   `call_value`
@@ -8745,7 +8918,7 @@ Lifted MIR:
 - rewrites `call_proc` and `proc_value` targets only through explicit procedure-id
   maps
 - forbids bare procedure-symbol `var_` values
-- forbids top-level/imported/hosted/platform/promoted values as capture sources
+- forbids top-level/imported/hosted/platform-required/promoted values as capture sources
 - does not subtract a global/top-level symbol set as part of capture discovery
 
 Lambda-solved MIR:
@@ -10034,8 +10207,8 @@ artifact-private `ConstRef` templates, callable leaves become explicit
 records at concrete use sites. A finite callable leaf instance records both the
 sealed procedure template and the exact canonical source function type for that
 occurrence; a bare procedure value is not enough. Existing
-source/imported/hosted/platform procedures remain existing procedure templates
-and are mono-specialized from explicit requests; local closure leaves and
+source/imported/hosted/platform-required procedure bindings remain existing
+procedure templates and are mono-specialized from explicit requests; local closure leaves and
 evaluated callable leaves are recursively promoted to private procedure values
 with sealed checked templates. Records, tuples, tags, lists, boxes, transparent
 aliases, and nominals preserve the source container shape as private
@@ -10562,7 +10735,7 @@ Lifted MIR:
   part of the algorithm
 - lifted MIR capturable scopes contain only local params, local binders, pattern
   binders, mutable versions, and local procedures
-- top-level/imported/hosted/platform/promoted values cannot appear as
+- top-level/imported/hosted/platform-required/promoted values cannot appear as
   `CaptureSlot` sources
 - no dispatch nodes exist
 
@@ -10880,11 +11053,12 @@ Callable/capture behavior:
 - local closure with no captures
 - local closure with captures
 - closure references to top-level constants, imported constants, top-level
-  procedures, imported procedures, hosted procedures, platform procedures, and
-  promoted top-level procedures do not create `CaptureSlot`s
+  procedures, imported procedures, hosted procedures, platform-required
+  procedure bindings, and promoted top-level procedures do not create
+  `CaptureSlot`s
 - closure references to local bindings that shadow top-level or imported names
   do create ordinary local captures when used from an inner procedure
-- top-level/imported/hosted/platform/promoted procedure values inside closures
+- top-level/imported/hosted/platform-required/promoted procedure values inside closures
   lower as empty-capture `proc_value`, not as captured variables
 - recursive local function
 - mutually recursive local functions

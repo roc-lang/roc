@@ -113,7 +113,7 @@ pub fn run(
     defer queue.deinit();
 
     for (roots) |root| {
-        const template = templateForRoot(input.root.artifact, root) orelse continue;
+        const template = templateForRoot(input, root) orelse continue;
         const requested_mono_fn_ty = try canonical_type_keys.fromVar(
             allocator,
             &input.root.artifact.moduleEnvConst().types,
@@ -190,14 +190,115 @@ fn lowerTemplateFnType(
 }
 
 fn templateForRoot(
-    artifact: *const checked_artifact.CheckedModuleArtifact,
+    input: Input,
     root: checked_artifact.RootRequest,
 ) ?canonical.ProcedureTemplateRef {
+    const artifact = input.root.artifact;
     switch (root.source) {
         .def => |def_idx| return artifact.checked_procedure_templates.lookupByDef(def_idx),
-        .required_binding => |requires_idx| return artifact.checked_procedure_templates.lookupByRequiredBinding(requires_idx),
+        .required_binding => |binding_id| {
+            const binding = artifact.platform_required_bindings.lookupByBindingId(binding_id) orelse {
+                if (@import("builtin").mode == .Debug) {
+                    std.debug.panic(
+                        "mono specialization invariant violated: platform-required root {d} has no sealed binding",
+                        .{binding_id},
+                    );
+                }
+                unreachable;
+            };
+            return switch (binding.value_use) {
+                .const_value => null,
+                .procedure_value => |proc_use| templateForProcedureUse(input, proc_use),
+            };
+        },
         .expr, .statement => return null,
     }
+}
+
+fn templateForProcedureUse(
+    input: Input,
+    proc_use: checked_artifact.ProcedureUseTemplate,
+) ?canonical.ProcedureTemplateRef {
+    return switch (proc_use.binding) {
+        .top_level => |binding_ref| templateFromTopLevelBinding(
+            &input.root.artifact.top_level_procedure_bindings,
+            binding_ref,
+        ),
+        .platform_required => |required| {
+            const bindings = topLevelProcedureBindingsForKey(input, required.artifact) orelse {
+                if (@import("builtin").mode == .Debug) {
+                    std.debug.panic(
+                        "mono specialization invariant violated: platform-required procedure binding references unavailable app artifact",
+                        .{},
+                    );
+                }
+                unreachable;
+            };
+            return templateFromTopLevelBinding(
+                bindings,
+                required.procedure_binding,
+            );
+        },
+        .imported, .hosted, .promoted => {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.panic(
+                    "mono specialization invariant violated: platform-required root resolved to unsupported procedure binding kind",
+                    .{},
+                );
+            }
+            unreachable;
+        },
+    };
+}
+
+fn templateFromTopLevelBinding(
+    bindings: *const checked_artifact.TopLevelProcedureBindingTable,
+    binding_ref: checked_artifact.TopLevelProcedureBindingRef,
+) ?canonical.ProcedureTemplateRef {
+    const binding = bindings.get(binding_ref);
+    return switch (binding.body) {
+        .direct_template => |direct| switch (direct.template) {
+            .checked => |template| template,
+            .lifted, .synthetic => {
+                if (@import("builtin").mode == .Debug) {
+                    std.debug.panic(
+                        "mono specialization invariant violated: root procedure binding must have a checked template before mono lowering",
+                        .{},
+                    );
+                }
+                unreachable;
+            },
+        },
+        .callable_eval_template => {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.panic(
+                    "mono specialization invariant violated: callable-eval platform-required roots need a sealed concrete callable binding instance before mono lowering",
+                    .{},
+                );
+            }
+            unreachable;
+        },
+    };
+}
+
+fn topLevelProcedureBindingsForKey(
+    input: Input,
+    key: checked_artifact.CheckedModuleArtifactKey,
+) ?*const checked_artifact.TopLevelProcedureBindingTable {
+    if (std.mem.eql(u8, &input.root.artifact.key.bytes, &key.bytes)) {
+        return &input.root.artifact.top_level_procedure_bindings;
+    }
+    for (input.imports) |imported| {
+        if (std.mem.eql(u8, &imported.key.bytes, &key.bytes)) {
+            return imported.top_level_procedure_bindings;
+        }
+    }
+    for (input.root.relation_artifacts) |related| {
+        if (std.mem.eql(u8, &related.key.bytes, &key.bytes)) {
+            return related.top_level_procedure_bindings;
+        }
+    }
+    return null;
 }
 
 fn verifyProgram(program: *const Program) void {

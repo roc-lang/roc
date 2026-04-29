@@ -137,6 +137,11 @@ fn hashU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
     hasher.update(&bytes);
 }
 
+fn hashByteSlice(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
+    hashU32(hasher, @intCast(bytes.len));
+    hasher.update(bytes);
+}
+
 fn hashModuleIdentity(identity: ModuleIdentity) [32]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hashU32(&hasher, identity.module_idx);
@@ -149,6 +154,18 @@ fn hashModuleIdentity(identity: ModuleIdentity) [32]u8 {
 
 fn hashCheckingContextIdentity(identity: CheckingContextIdentity) [32]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    if (identity.platform_requirement_context) |context| {
+        hasher.update(&[_]u8{1});
+        hasher.update(&context.bytes);
+    } else {
+        hasher.update(&[_]u8{0});
+    }
+    if (identity.platform_app_relation) |relation| {
+        hasher.update(&[_]u8{1});
+        hasher.update(&relation.bytes);
+    } else {
+        hasher.update(&[_]u8{0});
+    }
     hashU32(&hasher, @intCast(identity.imports.len));
     for (identity.imports) |import_identity| {
         hashU32(&hasher, @intFromEnum(import_identity.import_idx));
@@ -173,10 +190,32 @@ fn artifactRef(key: CheckedModuleArtifactKey) canonical.ArtifactRef {
     return .{ .bytes = key.bytes };
 }
 
+pub const PlatformRequirementContextKey = struct {
+    bytes: [32]u8 = [_]u8{0} ** 32,
+
+    pub fn compute(
+        platform_identity: ModuleIdentity,
+        platform_required_declarations_hash: [32]u8,
+    ) PlatformRequirementContextKey {
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        const platform_identity_hash = hashModuleIdentity(platform_identity);
+        hasher.update(&platform_identity_hash);
+        hasher.update(&platform_required_declarations_hash);
+        return .{ .bytes = hasher.finalResult() };
+    }
+};
+
 pub const CheckingContextIdentity = struct {
     imports: []ImportIdentity = &.{},
+    platform_requirement_context: ?PlatformRequirementContextKey = null,
+    platform_app_relation: ?PlatformAppRelationKey = null,
 
-    pub fn fromModule(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!CheckingContextIdentity {
+    pub fn fromModule(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        platform_requirement_context: ?PlatformRequirementContextKey,
+        platform_app_relation: ?PlatformAppRelationKey,
+    ) Allocator.Error!CheckingContextIdentity {
         const module_env = module.moduleEnvConst();
         const imported_names = module_env.imports.imports.items.items;
         const imports = try allocator.alloc(ImportIdentity, imported_names.len);
@@ -190,7 +229,11 @@ pub const CheckingContextIdentity = struct {
             };
         }
 
-        return .{ .imports = imports };
+        return .{
+            .imports = imports,
+            .platform_requirement_context = platform_requirement_context,
+            .platform_app_relation = platform_app_relation,
+        };
     }
 
     pub fn deinit(self: *CheckingContextIdentity, allocator: Allocator) void {
@@ -207,6 +250,8 @@ pub const PublishImportArtifact = struct {
 pub const PublishInputs = struct {
     module_env_storage: ModuleEnvStorage,
     imports: []const PublishImportArtifact = &.{},
+    platform_requirement_context: ?PlatformRequirementContextKey = null,
+    platform_app_relation: ?PlatformAppRelation = null,
 };
 
 pub const ExportTable = struct {
@@ -280,6 +325,7 @@ pub const RootRequestTable = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         compile_time_roots: *const CompileTimeRootTable,
+        platform_required_bindings: *const PlatformRequiredBindingTable,
     ) Allocator.Error!RootRequestTable {
         var requests = std.ArrayList(RootRequest).empty;
         errdefer requests.deinit(allocator);
@@ -297,12 +343,12 @@ pub const RootRequestTable = struct {
             });
         }
 
-        for (module_env.requires_types.items.items, 0..) |required_type, i| {
+        for (platform_required_bindings.bindings, 0..) |binding, i| {
             try appendRoot(&requests, allocator, .{
                 .module_idx = module.moduleIndex(),
                 .kind = .platform_required_binding,
                 .source = .{ .required_binding = @intCast(i) },
-                .checked_type = ModuleEnv.varFrom(required_type.type_anno),
+                .checked_type = ModuleEnv.varFrom(module_env.requires_types.items.items[binding.requires_idx].type_anno),
                 .abi = .platform,
                 .exposure = .platform_required,
             });
@@ -406,7 +452,6 @@ pub const CheckedProcedureBody = union(enum) {
     source_expr: CIR.Expr.Idx,
     promoted_callable_wrapper: canonical.PromotedCallableWrapperId,
     hosted_wrapper: canonical.HostedWrapperId,
-    platform_required_wrapper: u32,
     intrinsic_wrapper: canonical.IntrinsicWrapperId,
     entry_wrapper: canonical.EntryWrapperId,
 };
@@ -446,10 +491,15 @@ pub const HostedProcRef = struct {
     proc: canonical.ProcedureValueRef,
 };
 
-pub const PlatformProcRef = struct {
-    module_idx: u32,
-    requires_idx: u32,
-    proc: canonical.ProcedureValueRef,
+pub const TopLevelValueRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    pattern: CIR.Pattern.Idx,
+};
+
+pub const RequiredAppProcedureRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    app_value: TopLevelValueRef,
+    procedure_binding: TopLevelProcedureBindingRef,
 };
 
 pub const PromotedProcedureRef = struct {
@@ -466,7 +516,7 @@ pub const ProcedureBindingRef = union(enum) {
     top_level: TopLevelProcedureBindingRef,
     imported: ImportedProcedureBindingRef,
     hosted: HostedProcRef,
-    platform: PlatformProcRef,
+    platform_required: RequiredAppProcedureRef,
     promoted: PromotedProcedureRef,
 };
 
@@ -553,7 +603,9 @@ pub const ResolvedValueRef = union(enum) {
     top_level_proc: ProcedureUseTemplate,
     imported_proc: ProcedureUseTemplate,
     hosted_proc: ProcedureUseTemplate,
-    platform_proc: ProcedureUseTemplate,
+    platform_required_declaration: PlatformRequiredDeclarationId,
+    platform_required_const: ConstUseTemplate,
+    platform_required_proc: ProcedureUseTemplate,
     promoted_top_level_proc: ProcedureUseTemplate,
 };
 
@@ -576,6 +628,7 @@ pub const ResolvedValueRefTable = struct {
         imports: []const PublishImportArtifact,
         templates: *const CheckedProcedureTemplateTable,
         hosted_procs: *const HostedProcTable,
+        platform_required_declarations: *const PlatformRequiredDeclarationTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
         top_level_values: *const TopLevelValueTable,
     ) Allocator.Error!ResolvedValueRefTable {
@@ -606,6 +659,7 @@ pub const ResolvedValueRefTable = struct {
                 imports,
                 templates,
                 hosted_procs,
+                platform_required_declarations,
                 platform_required_bindings,
                 top_level_values,
             );
@@ -674,6 +728,7 @@ fn classifyValueRef(
     imports: []const PublishImportArtifact,
     templates: *const CheckedProcedureTemplateTable,
     hosted_procs: *const HostedProcTable,
+    platform_required_declarations: *const PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     top_level_values: *const TopLevelValueTable,
 ) Allocator.Error!ResolvedValueRef {
@@ -695,8 +750,8 @@ fn classifyValueRef(
             imports,
         ),
         .e_lookup_required => |required| classifyRequiredValueRef(
-            module,
             required.requires_idx.toU32(),
+            platform_required_declarations,
             platform_required_bindings,
         ),
         else => {
@@ -715,16 +770,18 @@ fn attachUseTypeKey(ref: *ResolvedValueRef, key: canonical.CanonicalTypeKey) voi
     switch (ref.*) {
         .top_level_const => |*use| use.requested_source_ty_template = key,
         .imported_const => |*use| use.requested_source_ty_template = key,
+        .platform_required_const => |*use| use.requested_source_ty_template = key,
         .top_level_proc => |*use| use.source_fn_ty_template = key,
         .imported_proc => |*use| use.source_fn_ty_template = key,
         .hosted_proc => |*use| use.source_fn_ty_template = key,
-        .platform_proc => |*use| use.source_fn_ty_template = key,
+        .platform_required_proc => |*use| use.source_fn_ty_template = key,
         .promoted_top_level_proc => |*use| use.source_fn_ty_template = key,
         .local_param,
         .local_value,
         .local_mutable_version,
         .pattern_binder,
         .local_proc,
+        .platform_required_declaration,
         => {},
     }
 }
@@ -873,28 +930,27 @@ fn classifyImportedValueRef(
 }
 
 fn classifyRequiredValueRef(
-    module: TypedCIR.Module,
     requires_idx: u32,
+    platform_required_declarations: *const PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
 ) ResolvedValueRef {
-    const binding = platformBindingForIndex(platform_required_bindings, requires_idx) orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic(
-                "checked artifact invariant violated: required lookup {d} has no platform binding",
-                .{requires_idx},
-            );
-        }
-        unreachable;
+    const binding = platformBindingForRequiredIndex(platform_required_bindings, requires_idx) orelse {
+        const declaration = platform_required_declarations.lookupByRequiredIndex(requires_idx) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "checked artifact invariant violated: required lookup {d} has no platform declaration",
+                    .{requires_idx},
+                );
+            }
+            unreachable;
+        };
+        return .{ .platform_required_declaration = declaration.id };
     };
 
-    return .{ .platform_proc = .{
-        .binding = .{ .platform = .{
-            .module_idx = module.moduleIndex(),
-            .requires_idx = requires_idx,
-            .proc = binding.proc,
-        } },
-        .source_fn_ty_template = .{},
-    } };
+    return switch (binding.value_use) {
+        .const_value => |const_use| .{ .platform_required_const = const_use },
+        .procedure_value => |proc_use| .{ .platform_required_proc = proc_use },
+    };
 }
 
 fn topLevelDefByPattern(module: TypedCIR.Module, pattern: CIR.Pattern.Idx) ?CIR.Def.Idx {
@@ -918,11 +974,8 @@ fn hostedProcForDef(table: *const HostedProcTable, def_idx: CIR.Def.Idx) ?Hosted
     return null;
 }
 
-fn platformBindingForIndex(table: *const PlatformRequiredBindingTable, requires_idx: u32) ?PlatformRequiredBinding {
-    for (table.bindings) |binding| {
-        if (binding.requires_idx == requires_idx) return binding;
-    }
-    return null;
+fn platformBindingForRequiredIndex(table: *const PlatformRequiredBindingTable, requires_idx: u32) ?PlatformRequiredBinding {
+    return table.lookupByRequiredIndex(requires_idx);
 }
 
 fn localStatementForPattern(module: TypedCIR.Module, pattern: CIR.Pattern.Idx) ?CIR.Statement {
@@ -1008,7 +1061,6 @@ fn sealCheckedProcedureTemplateRefs(
             .source_expr => |expr| try traversal.visitExpr(expr),
             .promoted_callable_wrapper,
             .hosted_wrapper,
-            .platform_required_wrapper,
             .intrinsic_wrapper,
             .entry_wrapper,
             => {},
@@ -1210,7 +1262,6 @@ pub const NestedProcSiteTableRef = struct {
 pub const ProcTarget = union(enum) {
     roc,
     hosted,
-    platform_required,
     intrinsic,
     entry,
     promoted_callable,
@@ -1231,7 +1282,6 @@ pub const CheckedProcedureTemplate = struct {
 pub const CheckedProcedureTemplateTable = struct {
     templates: []CheckedProcedureTemplate = &.{},
     by_def: []?canonical.ProcedureTemplateRef = &.{},
-    by_required_binding: []?canonical.ProcedureTemplateRef = &.{},
 
     pub fn fromModule(
         allocator: Allocator,
@@ -1245,10 +1295,6 @@ pub const CheckedProcedureTemplateTable = struct {
         const by_def = try allocator.alloc(?canonical.ProcedureTemplateRef, module.nodeCount());
         errdefer allocator.free(by_def);
         @memset(by_def, null);
-
-        const by_required_binding = try allocator.alloc(?canonical.ProcedureTemplateRef, module.requiresTypes().len);
-        errdefer allocator.free(by_required_binding);
-        @memset(by_required_binding, null);
 
         const module_name = try names.internModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent());
 
@@ -1287,38 +1333,9 @@ pub const CheckedProcedureTemplateTable = struct {
             });
         }
 
-        for (module.requiresTypes(), 0..) |required_type, i| {
-            const proc_base = try names.internProcBase(.{
-                .module_name = module_name,
-                .export_name = null,
-                .kind = .platform_required_wrapper,
-                .ordinal = @intCast(i),
-            });
-            const template_id: canonical.CheckedProcedureTemplateId = @enumFromInt(@as(u32, @intCast(templates.items.len)));
-            const template_ref = canonical.ProcedureTemplateRef{
-                .artifact = owner_artifact,
-                .proc_base = proc_base,
-                .template = template_id,
-            };
-            by_required_binding[i] = template_ref;
-
-            try templates.append(allocator, .{
-                .proc_base = proc_base,
-                .template_id = template_id,
-                .body = .{ .platform_required_wrapper = @intCast(i) },
-                .checked_fn_var = ModuleEnv.varFrom(required_type.type_anno),
-                .static_dispatch_plans = .{},
-                .resolved_value_refs = .{},
-                .top_level_value_uses = .{},
-                .nested_proc_sites = .{},
-                .target = .platform_required,
-            });
-        }
-
         return .{
             .templates = try templates.toOwnedSlice(allocator),
             .by_def = by_def,
-            .by_required_binding = by_required_binding,
         };
     }
 
@@ -1326,11 +1343,6 @@ pub const CheckedProcedureTemplateTable = struct {
         const raw = @intFromEnum(def_idx);
         if (raw >= self.by_def.len) return null;
         return self.by_def[raw];
-    }
-
-    pub fn lookupByRequiredBinding(self: *const CheckedProcedureTemplateTable, requires_idx: u32) ?canonical.ProcedureTemplateRef {
-        if (requires_idx >= self.by_required_binding.len) return null;
-        return self.by_required_binding[requires_idx];
     }
 
     pub fn asLookup(self: *const CheckedProcedureTemplateTable, module_idx: u32) static_dispatch.ProcedureTemplateLookup {
@@ -1341,7 +1353,6 @@ pub const CheckedProcedureTemplateTable = struct {
     }
 
     pub fn deinit(self: *CheckedProcedureTemplateTable, allocator: Allocator) void {
-        allocator.free(self.by_required_binding);
         allocator.free(self.by_def);
         allocator.free(self.templates);
         self.* = .{};
@@ -1396,42 +1407,255 @@ pub const HostedProcTable = struct {
     }
 };
 
-pub const PlatformRequiredBinding = struct {
-    module_idx: u32,
-    requires_idx: u32,
-    ident: canonical.ExternalSymbolNameId,
-    type_anno: CIR.TypeAnno.Idx,
-    proc: canonical.ProcedureValueRef,
+pub const PlatformAppRelationKey = struct {
+    bytes: [32]u8 = [_]u8{0} ** 32,
+
+    pub fn compute(
+        app_artifact: CheckedModuleArtifactKey,
+        requirement_context: PlatformRequirementContextKey,
+    ) PlatformAppRelationKey {
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update(&app_artifact.bytes);
+        hasher.update(&requirement_context.bytes);
+        return .{ .bytes = hasher.finalResult() };
+    }
 };
 
-pub const PlatformRequiredBindingTable = struct {
-    bindings: []PlatformRequiredBinding = &.{},
+pub const PlatformRequiredDeclarationId = enum(u32) { _ };
+pub const PlatformRequiredBindingId = enum(u32) { _ };
+pub const PlatformRequirementRelationId = enum(u32) { _ };
+
+pub const PlatformRequiredDeclaration = struct {
+    id: PlatformRequiredDeclarationId,
+    module_idx: u32,
+    requires_idx: u32,
+    platform_name: canonical.ExportNameId,
+    declared_source_ty: canonical.CanonicalTypeSchemeKey,
+    type_anno: CIR.TypeAnno.Idx,
+};
+
+pub const PlatformRequiredDeclarationTable = struct {
+    declarations: []PlatformRequiredDeclaration = &.{},
 
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
-        owner_artifact: canonical.ArtifactRef,
-    ) Allocator.Error!PlatformRequiredBindingTable {
-        const module_env = module.moduleEnvConst();
-        const bindings = try allocator.alloc(PlatformRequiredBinding, module_env.requires_types.items.items.len);
-        errdefer allocator.free(bindings);
-        const module_name = try names.internModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent());
+    ) Allocator.Error!PlatformRequiredDeclarationTable {
+        const required_types = module.requiresTypes();
+        const declarations = try allocator.alloc(PlatformRequiredDeclaration, required_types.len);
+        errdefer allocator.free(declarations);
 
-        for (module_env.requires_types.items.items, 0..) |required_type, i| {
-            const external_name = try names.internExternalSymbolIdent(module.identStoreConst(), required_type.ident);
-            const proc_base = try names.internProcBase(.{
-                .module_name = module_name,
-                .export_name = null,
-                .kind = .platform_required_wrapper,
-                .ordinal = @intCast(i),
-            });
-            bindings[i] = .{
+        for (required_types, 0..) |required_type, i| {
+            declarations[i] = .{
+                .id = @enumFromInt(@as(u32, @intCast(i))),
                 .module_idx = module.moduleIndex(),
                 .requires_idx = @intCast(i),
-                .ident = external_name,
+                .platform_name = try names.internExportIdent(module.identStoreConst(), required_type.ident),
+                .declared_source_ty = try canonical_type_keys.schemeFromVar(
+                    allocator,
+                    module.typeStoreConst(),
+                    module.identStoreConst(),
+                    ModuleEnv.varFrom(required_type.type_anno),
+                ),
                 .type_anno = required_type.type_anno,
-                .proc = .{ .artifact = owner_artifact, .proc_base = proc_base },
+            };
+        }
+
+        return .{ .declarations = declarations };
+    }
+
+    pub fn lookupByRequiredIndex(
+        self: *const PlatformRequiredDeclarationTable,
+        requires_idx: u32,
+    ) ?PlatformRequiredDeclaration {
+        for (self.declarations) |declaration| {
+            if (declaration.requires_idx == requires_idx) return declaration;
+        }
+        return null;
+    }
+
+    pub fn lookupByDeclarationId(
+        self: *const PlatformRequiredDeclarationTable,
+        declaration_id: PlatformRequiredDeclarationId,
+    ) ?PlatformRequiredDeclaration {
+        const raw = @intFromEnum(declaration_id);
+        if (raw >= self.declarations.len) return null;
+        return self.declarations[raw];
+    }
+
+    pub fn identityHash(
+        self: *const PlatformRequiredDeclarationTable,
+        names: *const canonical.CanonicalNameStore,
+    ) [32]u8 {
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hashByteSlice(&hasher, "platform_required_declarations");
+        hashU32(&hasher, @intCast(self.declarations.len));
+        for (self.declarations) |declaration| {
+            hashU32(&hasher, declaration.requires_idx);
+            hashByteSlice(&hasher, names.exportNameText(declaration.platform_name));
+            hasher.update(&declaration.declared_source_ty.bytes);
+        }
+        return hasher.finalResult();
+    }
+
+    pub fn deinit(self: *PlatformRequiredDeclarationTable, allocator: Allocator) void {
+        allocator.free(self.declarations);
+        self.* = .{};
+    }
+};
+
+pub const PlatformRequiredValueUse = union(enum) {
+    const_value: ConstUseTemplate,
+    procedure_value: ProcedureUseTemplate,
+};
+
+pub const PlatformRequiredBindingInput = struct {
+    declaration: PlatformRequiredDeclarationId,
+    requires_idx: u32,
+    app_value: TopLevelValueRef,
+    requested_source_ty: canonical.CanonicalTypeKey,
+    checked_relation: PlatformRequirementRelationId,
+    value_use: PlatformRequiredValueUse,
+};
+
+pub const PlatformAppRelation = struct {
+    key: PlatformAppRelationKey,
+    requirement_context: PlatformRequirementContextKey,
+    platform_module_idx: u32,
+    app_artifact: CheckedModuleArtifactKey,
+    bindings: []const PlatformRequiredBindingInput,
+};
+
+pub const PlatformRequiredBinding = struct {
+    id: PlatformRequiredBindingId,
+    relation: PlatformAppRelationKey,
+    module_idx: u32,
+    declaration: PlatformRequiredDeclarationId,
+    requires_idx: u32,
+    app_value: TopLevelValueRef,
+    requested_source_ty: canonical.CanonicalTypeKey,
+    checked_relation: PlatformRequirementRelationId,
+    value_use: PlatformRequiredValueUse,
+};
+
+pub const PlatformRequiredBindingTable = struct {
+    bindings: []PlatformRequiredBinding = &.{},
+
+    pub fn fromRelation(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        module_identity: ModuleIdentity,
+        names: *const canonical.CanonicalNameStore,
+        declarations: *const PlatformRequiredDeclarationTable,
+        relation: ?PlatformAppRelation,
+    ) Allocator.Error!PlatformRequiredBindingTable {
+        const active_relation = relation orelse return .{};
+        if (active_relation.platform_module_idx != module.moduleIndex()) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "checked artifact invariant violated: platform/app relation belongs to module {d}, not platform module {d}",
+                    .{ active_relation.platform_module_idx, module.moduleIndex() },
+                );
+            }
+            unreachable;
+        }
+        if (active_relation.bindings.len != declarations.declarations.len) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "checked artifact invariant violated: platform/app relation has {d} bindings for {d} platform requirements",
+                    .{ active_relation.bindings.len, declarations.declarations.len },
+                );
+            }
+            unreachable;
+        }
+        const expected_requirement_context = PlatformRequirementContextKey.compute(
+            module_identity,
+            declarations.identityHash(names),
+        );
+        if (!std.mem.eql(u8, &active_relation.requirement_context.bytes, &expected_requirement_context.bytes)) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "checked artifact invariant violated: platform/app relation requirement context does not match the current platform requirement declarations",
+                    .{},
+                );
+            }
+            unreachable;
+        }
+        const expected_key = PlatformAppRelationKey.compute(
+            active_relation.app_artifact,
+            active_relation.requirement_context,
+        );
+        if (!std.mem.eql(u8, &active_relation.key.bytes, &expected_key.bytes)) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "checked artifact invariant violated: platform/app relation key does not match the current platform requirement declarations",
+                    .{},
+                );
+            }
+            unreachable;
+        }
+
+        var seen_declarations: []bool = &.{};
+        if (builtin.mode == .Debug) {
+            seen_declarations = try allocator.alloc(bool, declarations.declarations.len);
+            @memset(seen_declarations, false);
+        }
+        defer {
+            if (builtin.mode == .Debug) allocator.free(seen_declarations);
+        }
+
+        const bindings = try allocator.alloc(PlatformRequiredBinding, active_relation.bindings.len);
+        errdefer allocator.free(bindings);
+
+        for (active_relation.bindings, 0..) |binding, i| {
+            const declaration = declarations.lookupByDeclarationId(binding.declaration) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: platform/app binding {d} references unknown requirement declaration",
+                        .{i},
+                    );
+                }
+                unreachable;
+            };
+            const declaration_index: usize = @intCast(@intFromEnum(binding.declaration));
+            if (builtin.mode == .Debug) {
+                if (seen_declarations[declaration_index]) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: platform/app relation binds platform requirement declaration {d} more than once",
+                        .{declaration_index},
+                    );
+                }
+                seen_declarations[declaration_index] = true;
+            }
+            if (declaration.requires_idx != binding.requires_idx) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: platform/app binding {d} maps declaration {d} to required index {d}, expected {d}",
+                        .{ i, declaration_index, binding.requires_idx, declaration.requires_idx },
+                    );
+                }
+                unreachable;
+            }
+            if (!std.mem.eql(u8, &binding.app_value.artifact.bytes, &active_relation.app_artifact.bytes)) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: platform/app binding {d} points at a value outside the app artifact",
+                        .{i},
+                    );
+                }
+                unreachable;
+            }
+            bindings[i] = .{
+                .id = @enumFromInt(@as(u32, @intCast(i))),
+                .relation = active_relation.key,
+                .module_idx = module.moduleIndex(),
+                .declaration = binding.declaration,
+                .requires_idx = binding.requires_idx,
+                .app_value = binding.app_value,
+                .requested_source_ty = binding.requested_source_ty,
+                .checked_relation = binding.checked_relation,
+                .value_use = binding.value_use,
             };
         }
 
@@ -1441,6 +1665,18 @@ pub const PlatformRequiredBindingTable = struct {
     pub fn deinit(self: *PlatformRequiredBindingTable, allocator: Allocator) void {
         allocator.free(self.bindings);
         self.* = .{};
+    }
+
+    pub fn lookupByRequiredIndex(self: *const PlatformRequiredBindingTable, requires_idx: u32) ?PlatformRequiredBinding {
+        for (self.bindings) |binding| {
+            if (binding.requires_idx == requires_idx) return binding;
+        }
+        return null;
+    }
+
+    pub fn lookupByBindingId(self: *const PlatformRequiredBindingTable, binding_id: u32) ?PlatformRequiredBinding {
+        if (binding_id >= self.bindings.len) return null;
+        return self.bindings[binding_id];
     }
 };
 
@@ -1957,6 +2193,7 @@ pub const CheckedModuleArtifact = struct {
     top_level_procedure_bindings: TopLevelProcedureBindingTable,
     root_requests: RootRequestTable,
     hosted_procs: HostedProcTable,
+    platform_required_declarations: PlatformRequiredDeclarationTable,
     platform_required_bindings: PlatformRequiredBindingTable,
     interface_capabilities: ModuleInterfaceCapabilities,
     compile_time_roots: CompileTimeRootTable,
@@ -1972,12 +2209,20 @@ pub const CheckedModuleArtifact = struct {
         return self.module_env.envConst();
     }
 
+    pub fn platformRequirementContextKey(self: *const CheckedModuleArtifact) PlatformRequirementContextKey {
+        return PlatformRequirementContextKey.compute(
+            self.module_identity,
+            self.platform_required_declarations.identityHash(&self.canonical_names),
+        );
+    }
+
     pub fn deinit(self: *CheckedModuleArtifact, allocator: Allocator) void {
         self.comptime_values.deinit(allocator);
         self.promoted_procedures.deinit(allocator);
         self.top_level_values.deinit(allocator);
         self.compile_time_roots.deinit(allocator);
         self.platform_required_bindings.deinit(allocator);
+        self.platform_required_declarations.deinit(allocator);
         self.hosted_procs.deinit(allocator);
         self.root_requests.deinit(allocator);
         self.top_level_procedure_bindings.deinit(allocator);
@@ -2019,9 +2264,22 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(proc.module_idx == self.module_identity.module_idx);
         }
 
+        for (self.platform_required_declarations.declarations, 0..) |declaration, i| {
+            std.debug.assert(@intFromEnum(declaration.id) == i);
+            std.debug.assert(declaration.requires_idx == i);
+            std.debug.assert(declaration.module_idx == self.module_identity.module_idx);
+        }
+
         for (self.platform_required_bindings.bindings, 0..) |binding, i| {
-            std.debug.assert(binding.requires_idx == i);
+            std.debug.assert(@intFromEnum(binding.id) == i);
             std.debug.assert(binding.module_idx == self.module_identity.module_idx);
+            _ = self.platform_required_declarations.lookupByRequiredIndex(binding.requires_idx) orelse {
+                std.debug.panic(
+                    "checked artifact invariant violated: platform required binding {d} has no declaration",
+                    .{i},
+                );
+            };
+            verifyPlatformRequiredValueUse(binding);
         }
 
         for (self.top_level_values.entries) |entry| {
@@ -2057,11 +2315,53 @@ pub const CheckedModuleArtifact = struct {
 
         for (self.resolved_value_refs.records) |record| {
             std.debug.assert(self.resolved_value_refs.by_expr.get(record.expr) != null);
+            if (self.platform_required_bindings.bindings.len > 0) {
+                switch (record.ref) {
+                    .platform_required_declaration => std.debug.panic(
+                        "checked artifact invariant violated: executable platform artifact kept a declaration-only required lookup",
+                        .{},
+                    ),
+                    else => {},
+                }
+            }
         }
 
         verifyLoweringVisibleNamesInterned(self.moduleEnvConst(), &self.canonical_names);
     }
 };
+
+fn verifyPlatformRequiredValueUse(binding: PlatformRequiredBinding) void {
+    if (builtin.mode != .Debug) return;
+
+    switch (binding.value_use) {
+        .const_value => |const_use| {
+            std.debug.assert(std.mem.eql(
+                u8,
+                &const_use.const_ref.artifact.bytes,
+                &binding.app_value.artifact.bytes,
+            ));
+            std.debug.assert(const_use.const_ref.pattern == binding.app_value.pattern);
+        },
+        .procedure_value => |proc_use| switch (proc_use.binding) {
+            .platform_required => |required| {
+                std.debug.assert(std.mem.eql(
+                    u8,
+                    &required.artifact.bytes,
+                    &binding.app_value.artifact.bytes,
+                ));
+                std.debug.assert(required.app_value.pattern == binding.app_value.pattern);
+            },
+            .top_level,
+            .imported,
+            .hosted,
+            .promoted,
+            => std.debug.panic(
+                "checked artifact invariant violated: platform-required procedure use must reference the app requirement binding explicitly",
+                .{},
+            ),
+        },
+    }
+}
 
 pub const ImportedModuleView = struct {
     key: CheckedModuleArtifactKey,
@@ -2072,6 +2372,8 @@ pub const ImportedModuleView = struct {
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
     method_registry: *const static_dispatch.MethodRegistry,
     resolved_value_refs: *const ResolvedValueRefTable,
+    platform_required_declarations: *const PlatformRequiredDeclarationTable,
+    platform_required_bindings: *const PlatformRequiredBindingTable,
     interface_capabilities: *const ModuleInterfaceCapabilities,
     compile_time_roots: *const CompileTimeRootTable,
     top_level_values: *const TopLevelValueTable,
@@ -2081,6 +2383,7 @@ pub const ImportedModuleView = struct {
 pub const LoweringModuleView = struct {
     artifact: *const CheckedModuleArtifact,
     roots: *const RootRequestTable,
+    relation_artifacts: []const ImportedModuleView = &.{},
 };
 
 pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
@@ -2093,6 +2396,8 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
         .method_registry = &artifact.method_registry,
         .resolved_value_refs = &artifact.resolved_value_refs,
+        .platform_required_declarations = &artifact.platform_required_declarations,
+        .platform_required_bindings = &artifact.platform_required_bindings,
         .interface_capabilities = &artifact.interface_capabilities,
         .compile_time_roots = &artifact.compile_time_roots,
         .top_level_values = &artifact.top_level_values,
@@ -2319,6 +2624,7 @@ pub fn loweringView(artifact: *const CheckedModuleArtifact) LoweringModuleView {
     return .{
         .artifact = artifact,
         .roots = &artifact.root_requests,
+        .relation_artifacts = &.{},
     };
 }
 
@@ -2347,7 +2653,15 @@ pub fn publishFromTypedModule(
 
     try internLoweringVisibleNames(module_env, &canonical_names);
 
-    var checking_context_identity = try CheckingContextIdentity.fromModule(allocator, module);
+    var platform_required_declarations = try PlatformRequiredDeclarationTable.fromModule(allocator, module, &canonical_names);
+    errdefer platform_required_declarations.deinit(allocator);
+
+    var checking_context_identity = try CheckingContextIdentity.fromModule(
+        allocator,
+        module,
+        inputs.platform_requirement_context,
+        if (inputs.platform_app_relation) |relation| relation.key else null,
+    );
     errdefer checking_context_identity.deinit(allocator);
 
     const direct_import_artifact_keys = try directImportArtifactKeysFromModule(allocator, module, inputs.imports);
@@ -2383,13 +2697,20 @@ pub fn publishFromTypedModule(
     var hosted_procs = try HostedProcTable.fromModule(allocator, module, &canonical_names, &checked_procedure_templates);
     errdefer hosted_procs.deinit(allocator);
 
-    var platform_required_bindings = try PlatformRequiredBindingTable.fromModule(allocator, module, &canonical_names, owner_artifact);
+    var platform_required_bindings = try PlatformRequiredBindingTable.fromRelation(
+        allocator,
+        module,
+        module_identity,
+        &canonical_names,
+        &platform_required_declarations,
+        inputs.platform_app_relation,
+    );
     errdefer platform_required_bindings.deinit(allocator);
 
     var compile_time_roots = try CompileTimeRootTable.fromModule(allocator, module);
     errdefer compile_time_roots.deinit(allocator);
 
-    var root_requests = try RootRequestTable.fromModule(allocator, module, &compile_time_roots);
+    var root_requests = try RootRequestTable.fromModule(allocator, module, &compile_time_roots, &platform_required_bindings);
     errdefer root_requests.deinit(allocator);
 
     var comptime_values = CompileTimeValueStore.init(allocator);
@@ -2417,6 +2738,7 @@ pub fn publishFromTypedModule(
         inputs.imports,
         &checked_procedure_templates,
         &hosted_procs,
+        &platform_required_declarations,
         &platform_required_bindings,
         &top_level_values,
     );
@@ -2449,6 +2771,7 @@ pub fn publishFromTypedModule(
         .top_level_procedure_bindings = top_level_procedure_bindings,
         .root_requests = root_requests,
         .hosted_procs = hosted_procs,
+        .platform_required_declarations = platform_required_declarations,
         .platform_required_bindings = platform_required_bindings,
         .interface_capabilities = ModuleInterfaceCapabilities.fromModule(module),
         .compile_time_roots = compile_time_roots,
@@ -2485,6 +2808,7 @@ test "artifact views are read-only projections" {
         .top_level_procedure_bindings = .{},
         .root_requests = .{},
         .hosted_procs = .{},
+        .platform_required_declarations = .{},
         .platform_required_bindings = .{},
         .interface_capabilities = .{
             .exported_def_count = 0,

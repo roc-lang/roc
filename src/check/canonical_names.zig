@@ -83,7 +83,6 @@ pub const CanonicalTypeSchemeKey = struct {
 pub const ProcBaseKind = enum {
     checked_source,
     hosted_wrapper,
-    platform_required_wrapper,
     promoted_callable_wrapper,
     intrinsic_wrapper,
     entry_wrapper,
@@ -255,6 +254,10 @@ pub const CanonicalNameStore = struct {
 
     pub fn procBase(self: *const CanonicalNameStore, id: ProcBaseKeyRef) ProcBaseKey {
         return self.proc_bases.items[@intFromEnum(id)];
+    }
+
+    pub fn exportNameText(self: *const CanonicalNameStore, id: ExportNameId) []const u8 {
+        return self.export_names.items[@intFromEnum(id)];
     }
 
     fn freeTextList(self: *CanonicalNameStore, values: []const []const u8) void {
