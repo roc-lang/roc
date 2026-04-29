@@ -9,6 +9,7 @@ const std = @import("std");
 const check = @import("check");
 
 const Ast = @import("ast.zig");
+const LowerType = @import("lower_type.zig");
 const Type = @import("type.zig");
 
 const Allocator = std.mem.Allocator;
@@ -53,6 +54,7 @@ pub const Proc = struct {
     key: canonical.MonoSpecializationKey,
     proc: canonical.ProcedureValueRef,
     local_handle: MonoProcHandle,
+    fn_ty: Type.TypeId,
     body: ?Ast.DefId = null,
 };
 
@@ -83,11 +85,17 @@ pub const Program = struct {
         self.* = Program.init(self.allocator);
     }
 
-    pub fn addProc(self: *Program, key: canonical.MonoSpecializationKey, reserved: ReservedMonoProc) Allocator.Error!void {
+    pub fn addProc(
+        self: *Program,
+        key: canonical.MonoSpecializationKey,
+        reserved: ReservedMonoProc,
+        fn_ty: Type.TypeId,
+    ) Allocator.Error!void {
         try self.procs.append(self.allocator, .{
             .key = key,
             .proc = reserved.proc,
             .local_handle = reserved.local_handle,
+            .fn_ty = fn_ty,
         });
     }
 };
@@ -125,12 +133,60 @@ pub fn run(
         const key = queue.pending.orderedRemove(0);
         queue.markLowering(key);
         const reserved = queue.requested.get(key) orelse unreachable;
-        try program.addProc(key, reserved);
+        const template = checkedTemplateForKey(input, key.template);
+        const fn_ty = try lowerTemplateFnType(allocator, &program, template.artifact, template.template);
+        try program.addProc(key, reserved, fn_ty);
         queue.markLowered(key);
     }
 
     verifyProgram(&program);
     return program;
+}
+
+const CheckedTemplateLookup = struct {
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    template: *const checked_artifact.CheckedProcedureTemplate,
+};
+
+fn checkedTemplateForKey(
+    input: Input,
+    template_ref: canonical.ProcedureTemplateRef,
+) CheckedTemplateLookup {
+    if (std.mem.eql(u8, &input.root.artifact.key.bytes, &template_ref.artifact.bytes)) {
+        return .{
+            .artifact = input.root.artifact,
+            .template = &input.root.artifact.checked_procedure_templates.templates[@intFromEnum(template_ref.template)],
+        };
+    }
+
+    for (input.imports) |imported| {
+        if (!std.mem.eql(u8, &imported.key.bytes, &template_ref.artifact.bytes)) continue;
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic("mono specialization invariant violated: imported template lowering requires an imported template closure", .{});
+        }
+        unreachable;
+    }
+
+    if (@import("builtin").mode == .Debug) {
+        std.debug.panic("mono specialization invariant violated: template artifact was not available to lowering", .{});
+    }
+    unreachable;
+}
+
+fn lowerTemplateFnType(
+    allocator: Allocator,
+    program: *Program,
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    template: *const checked_artifact.CheckedProcedureTemplate,
+) Allocator.Error!Type.TypeId {
+    var lowerer = LowerType.Lowerer.init(
+        allocator,
+        artifact.module_env,
+        &artifact.canonical_names,
+        &program.types,
+    );
+    defer lowerer.deinit();
+    return try lowerer.lowerVar(template.checked_fn_var);
 }
 
 fn templateForRoot(

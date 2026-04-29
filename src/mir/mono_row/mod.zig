@@ -234,6 +234,7 @@ pub const Proc = struct {
     key: canonical.MonoSpecializationKey,
     proc: canonical.ProcedureValueRef,
     local_handle: Mono.Specialize.MonoProcHandle,
+    fn_ty: TypeId,
     body: ?Ast.DefId = null,
 };
 
@@ -299,6 +300,7 @@ pub fn run(allocator: Allocator, mono: Mono.Specialize.Program) Allocator.Error!
             .key = proc.key,
             .proc = proc.proc,
             .local_handle = proc.local_handle,
+            .fn_ty = proc.fn_ty,
             .body = null,
         });
     }
