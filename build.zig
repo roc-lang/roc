@@ -2403,7 +2403,9 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "trace_refcount", trace_refcount);
     build_options.addOption(bool, "trace_modules", trace_modules);
     build_options.addOption(bool, "trace_build", trace_build);
-    build_options.addOption([]const u8, "compiler_version", getCompilerVersion(b, optimize));
+    const compiler_version = getCompilerVersion(b, optimize);
+    build_options.addOption([]const u8, "compiler_version", compiler_version);
+    build_options.addOption([32]u8, "compiler_artifact_hash", getCompilerArtifactHash(b, compiler_version));
     build_options.addOption(bool, "enable_tracy_callstack", flag_tracy_callstack);
     build_options.addOption(bool, "enable_tracy_allocation", flag_tracy_allocation);
     build_options.addOption(u32, "tracy_callstack_depth", flag_tracy_callstack_depth);
@@ -4576,6 +4578,27 @@ fn getCompilerVersion(b: *std.Build, optimize: OptimizeMode) []const u8 {
 
     // Git not available or failed, use fallback
     return std.fmt.allocPrint(b.allocator, "{s}-no-git", .{build_mode}) catch build_mode;
+}
+
+/// Return the semantic checked-artifact compiler hash.
+///
+/// This is intentionally one build-time hash. Checked artifact cache keys must
+/// not separately store compiler version, builtin identity, semantic build
+/// switches, or serialization format identity.
+fn getCompilerArtifactHash(b: *std.Build, compiler_version: []const u8) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update("roc-checked-artifact-v1");
+    hasher.update(compiler_version);
+
+    const builtin_source = std.fs.cwd().readFileAlloc(
+        b.allocator,
+        "src/build/roc/Builtin.roc",
+        32 * 1024 * 1024,
+    ) catch @panic("unable to read Builtin.roc while constructing compiler artifact hash");
+    defer b.allocator.free(builtin_source);
+    hasher.update(builtin_source);
+
+    return hasher.finalResult();
 }
 
 /// Generate glibc stubs at build time for cross-compilation

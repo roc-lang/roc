@@ -64,6 +64,7 @@ pub const ParsedResources = struct {
     checker: *Check,
     typed_cir_modules: check.TypedCIR.Modules,
     checked_artifact: check.CheckedArtifact.CheckedModuleArtifact,
+    import_artifacts: []check.CheckedArtifact.CheckedModuleArtifact,
     expr_idx: CIR.Expr.Idx,
     entry_def_idx: CIR.Def.Idx,
     builtin_module: builtin_loading.LoadedModule,
@@ -81,6 +82,8 @@ pub const ParsedResources = struct {
         self.can.deinit();
         self.parse_ast.deinit();
         self.checked_artifact.deinit(allocator);
+        for (self.import_artifacts) |*artifact| artifact.deinit(allocator);
+        allocator.free(self.import_artifacts);
         self.typed_cir_modules.deinit();
         self.builtin_module.deinit();
         allocator.free(self.imported_envs);
@@ -298,7 +301,21 @@ pub fn parseAndCanonicalizeProgramWrapped(
         extra.owned_source = null;
     }
 
-    var checked_artifact = try check.CheckedArtifact.publishFromTypedModule(allocator, &typed_cir_modules, 0);
+    var import_artifacts = try publishImportArtifacts(allocator, &typed_cir_modules, extra_modules.items.len);
+    errdefer {
+        for (import_artifacts) |*artifact| artifact.deinit(allocator);
+        allocator.free(import_artifacts);
+    }
+
+    const publish_imports = try publishImportKeys(allocator, import_artifacts);
+    defer allocator.free(publish_imports);
+
+    var checked_artifact = try check.CheckedArtifact.publishFromTypedModule(
+        allocator,
+        &typed_cir_modules,
+        0,
+        .{ .imports = publish_imports },
+    );
     errdefer checked_artifact.deinit(allocator);
 
     return .{
@@ -308,6 +325,7 @@ pub fn parseAndCanonicalizeProgramWrapped(
         .checker = main_checked.checker,
         .typed_cir_modules = typed_cir_modules,
         .checked_artifact = checked_artifact,
+        .import_artifacts = import_artifacts,
         .expr_idx = expr_idx,
         .entry_def_idx = entry_def_idx,
         .builtin_module = builtin_module,
@@ -472,15 +490,143 @@ fn lowerParsedProgramToLir(
         .exposure = .private,
     }};
 
+    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, resources.import_artifacts.len);
+    defer allocator.free(import_views);
+    for (resources.import_artifacts, 0..) |*artifact, i| {
+        import_views[i] = check.CheckedArtifact.importedView(artifact);
+    }
+
     return lir.CheckedPipeline.lowerArtifactsToLir(
         allocator,
-        .{ .root = check.CheckedArtifact.loweringView(&resources.checked_artifact) },
+        .{
+            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .imports = import_views,
+        },
         .{ .requests = &root_requests },
         .{
             .module_envs = module_envs,
             .target_usize = target_usize,
         },
     );
+}
+
+fn publishImportArtifacts(
+    allocator: Allocator,
+    typed_cir_modules: *const check.TypedCIR.Modules,
+    extra_module_count: usize,
+) ![]check.CheckedArtifact.CheckedModuleArtifact {
+    var artifacts = std.ArrayList(check.CheckedArtifact.CheckedModuleArtifact).empty;
+    errdefer {
+        for (artifacts.items) |*artifact| artifact.deinit(allocator);
+        artifacts.deinit(allocator);
+    }
+
+    var published_keys = std.ArrayList(check.CheckedArtifact.PublishImportArtifact).empty;
+    defer published_keys.deinit(allocator);
+
+    var builtin_artifact = try check.CheckedArtifact.publishFromTypedModule(
+        allocator,
+        typed_cir_modules,
+        1,
+        .{},
+    );
+    published_keys.append(allocator, .{
+        .module_idx = 1,
+        .key = builtin_artifact.key,
+    }) catch |err| {
+        builtin_artifact.deinit(allocator);
+        return err;
+    };
+    artifacts.append(allocator, builtin_artifact) catch |err| {
+        _ = published_keys.pop();
+        builtin_artifact.deinit(allocator);
+        return err;
+    };
+
+    if (extra_module_count == 0) return try artifacts.toOwnedSlice(allocator);
+
+    const published_extra = try allocator.alloc(bool, extra_module_count);
+    defer allocator.free(published_extra);
+    @memset(published_extra, false);
+
+    var remaining = extra_module_count;
+    while (remaining != 0) {
+        var made_progress = false;
+
+        for (0..extra_module_count) |extra_i| {
+            if (published_extra[extra_i]) continue;
+
+            const module_idx: u32 = @intCast(extra_i + 2);
+            if (!directImportsArePublished(typed_cir_modules.module(module_idx), published_keys.items)) continue;
+
+            var artifact = try check.CheckedArtifact.publishFromTypedModule(
+                allocator,
+                typed_cir_modules,
+                module_idx,
+                .{ .imports = published_keys.items },
+            );
+
+            published_keys.append(allocator, .{
+                .module_idx = module_idx,
+                .key = artifact.key,
+            }) catch |err| {
+                artifact.deinit(allocator);
+                return err;
+            };
+            artifacts.append(allocator, artifact) catch |err| {
+                _ = published_keys.pop();
+                artifact.deinit(allocator);
+                return err;
+            };
+
+            published_extra[extra_i] = true;
+            remaining -= 1;
+            made_progress = true;
+        }
+
+        if (!made_progress) {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.panic("eval helper invariant violated: import artifact publication graph is cyclic or incomplete", .{});
+            }
+            unreachable;
+        }
+    }
+
+    return try artifacts.toOwnedSlice(allocator);
+}
+
+fn directImportsArePublished(
+    module: check.TypedCIR.Module,
+    published: []const check.CheckedArtifact.PublishImportArtifact,
+) bool {
+    const module_env = module.moduleEnvConst();
+    for (module_env.imports.imports.items.items, 0..) |_, i| {
+        const import_idx: CIR.Import.Idx = @enumFromInt(@as(u32, @intCast(i)));
+        const resolved_module_idx = module.resolvedImportModule(import_idx) orelse continue;
+        var found = false;
+        for (published) |artifact| {
+            if (artifact.module_idx == resolved_module_idx) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+    }
+    return true;
+}
+
+fn publishImportKeys(
+    allocator: Allocator,
+    artifacts: []const check.CheckedArtifact.CheckedModuleArtifact,
+) ![]check.CheckedArtifact.PublishImportArtifact {
+    const imports = try allocator.alloc(check.CheckedArtifact.PublishImportArtifact, artifacts.len);
+    for (artifacts, 0..) |artifact, i| {
+        imports[i] = .{
+            .module_idx = artifact.module_identity.module_idx,
+            .key = artifact.key,
+        };
+    }
+    return imports;
 }
 
 fn cleanupCheckedModule(allocator: Allocator, module: CheckedModule) void {

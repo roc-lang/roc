@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const can = @import("can");
 const types = @import("types");
 const TypedCIR = @import("typed_cir.zig");
@@ -17,7 +18,41 @@ const CIR = can.CIR;
 const Var = types.Var;
 
 pub const CheckedModuleArtifactKey = struct {
+    source_hash: [32]u8 = [_]u8{0} ** 32,
+    compiler_artifact_hash: [32]u8 = [_]u8{0} ** 32,
+    module_identity_hash: [32]u8 = [_]u8{0} ** 32,
+    checking_context_identity_hash: [32]u8 = [_]u8{0} ** 32,
+    direct_import_artifact_keys_hash: [32]u8 = [_]u8{0} ** 32,
     bytes: [32]u8 = [_]u8{0} ** 32,
+
+    pub fn compute(
+        source: []const u8,
+        module_identity: ModuleIdentity,
+        checking_context_identity: CheckingContextIdentity,
+        direct_import_artifact_keys: []const CheckedModuleArtifactKey,
+    ) CheckedModuleArtifactKey {
+        const source_hash = hashBytes(source);
+        const compiler_artifact_hash = build_options.compiler_artifact_hash;
+        const module_identity_hash = hashModuleIdentity(module_identity);
+        const checking_context_identity_hash = hashCheckingContextIdentity(checking_context_identity);
+        const direct_import_artifact_keys_hash = hashDirectImportArtifactKeys(direct_import_artifact_keys);
+
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update(&source_hash);
+        hasher.update(&compiler_artifact_hash);
+        hasher.update(&module_identity_hash);
+        hasher.update(&checking_context_identity_hash);
+        hasher.update(&direct_import_artifact_keys_hash);
+
+        return .{
+            .source_hash = source_hash,
+            .compiler_artifact_hash = compiler_artifact_hash,
+            .module_identity_hash = module_identity_hash,
+            .checking_context_identity_hash = checking_context_identity_hash,
+            .direct_import_artifact_keys_hash = direct_import_artifact_keys_hash,
+            .bytes = hasher.finalResult(),
+        };
+    }
 };
 
 pub const ModuleIdentity = struct {
@@ -33,13 +68,83 @@ pub const ImportIdentity = struct {
     resolved_module_idx: ?u32,
 };
 
+fn hashBytes(bytes: []const u8) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(bytes);
+    return hasher.finalResult();
+}
+
+fn hashU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+    var bytes: [4]u8 = undefined;
+    std.mem.writeInt(u32, &bytes, value, .little);
+    hasher.update(&bytes);
+}
+
+fn hashModuleIdentity(identity: ModuleIdentity) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hashU32(&hasher, identity.module_idx);
+    hashU32(&hasher, @intFromEnum(identity.module_name));
+    hashU32(&hasher, @intFromEnum(identity.display_module_name));
+    hashU32(&hasher, @intFromEnum(identity.qualified_module_name));
+    hasher.update(@tagName(identity.kind));
+    return hasher.finalResult();
+}
+
+fn hashCheckingContextIdentity(identity: CheckingContextIdentity) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hashU32(&hasher, @intCast(identity.imports.len));
+    for (identity.imports) |import_identity| {
+        hashU32(&hasher, @intFromEnum(import_identity.import_idx));
+        if (import_identity.resolved_module_idx) |resolved| {
+            hasher.update(&[_]u8{1});
+            hashU32(&hasher, resolved);
+        } else {
+            hasher.update(&[_]u8{0});
+        }
+    }
+    return hasher.finalResult();
+}
+
+fn hashDirectImportArtifactKeys(keys: []const CheckedModuleArtifactKey) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hashU32(&hasher, @intCast(keys.len));
+    for (keys) |key| hasher.update(&key.bytes);
+    return hasher.finalResult();
+}
+
 pub const CheckingContextIdentity = struct {
     imports: []ImportIdentity = &.{},
+
+    pub fn fromModule(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!CheckingContextIdentity {
+        const module_env = module.moduleEnvConst();
+        const imported_names = module_env.imports.imports.items.items;
+        const imports = try allocator.alloc(ImportIdentity, imported_names.len);
+        errdefer allocator.free(imports);
+
+        for (imported_names, 0..) |_, i| {
+            const import_idx: CIR.Import.Idx = @enumFromInt(@as(u32, @intCast(i)));
+            imports[i] = .{
+                .import_idx = import_idx,
+                .resolved_module_idx = module.resolvedImportModule(import_idx),
+            };
+        }
+
+        return .{ .imports = imports };
+    }
 
     pub fn deinit(self: *CheckingContextIdentity, allocator: Allocator) void {
         allocator.free(self.imports);
         self.* = .{};
     }
+};
+
+pub const PublishImportArtifact = struct {
+    module_idx: u32,
+    key: CheckedModuleArtifactKey,
+};
+
+pub const PublishInputs = struct {
+    imports: []const PublishImportArtifact = &.{},
 };
 
 pub const ExportTable = struct {
@@ -549,6 +654,7 @@ pub const CheckedModuleArtifact = struct {
     canonical_names: canonical.CanonicalNameStore,
     module_identity: ModuleIdentity,
     checking_context_identity: CheckingContextIdentity,
+    direct_import_artifact_keys: []CheckedModuleArtifactKey = &.{},
     module_env: *const ModuleEnv,
     exports: ExportTable,
     provides_requires: ProvidesRequiresMetadata,
@@ -576,6 +682,7 @@ pub const CheckedModuleArtifact = struct {
         self.method_registry.deinit(allocator);
         self.provides_requires.deinit(allocator);
         self.exports.deinit(allocator);
+        allocator.free(self.direct_import_artifact_keys);
         self.checking_context_identity.deinit(allocator);
         self.canonical_names.deinit();
     }
@@ -589,6 +696,12 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(request.order == i);
             std.debug.assert(request.module_idx == self.module_identity.module_idx);
         }
+
+        std.debug.assert(std.mem.eql(
+            u8,
+            &self.key.direct_import_artifact_keys_hash,
+            &hashDirectImportArtifactKeys(self.direct_import_artifact_keys),
+        ));
 
         for (self.hosted_procs.procs, 0..) |proc, i| {
             std.debug.assert(proc.deterministic_index == i);
@@ -644,6 +757,41 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
     };
 }
 
+fn directImportArtifactKeysFromModule(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    imports: []const PublishImportArtifact,
+) Allocator.Error![]CheckedModuleArtifactKey {
+    const module_env = module.moduleEnvConst();
+    const imported_names = module_env.imports.imports.items.items;
+    var keys = std.ArrayList(CheckedModuleArtifactKey).empty;
+    errdefer keys.deinit(allocator);
+
+    for (imported_names, 0..) |_, i| {
+        const import_idx: CIR.Import.Idx = @enumFromInt(@as(u32, @intCast(i)));
+        const resolved_module_idx = module.resolvedImportModule(import_idx) orelse continue;
+        const key = publishImportKeyForModule(imports, resolved_module_idx) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "checked artifact publication invariant violated: import {d} resolved to module {d} without a published artifact key",
+                    .{ i, resolved_module_idx },
+                );
+            }
+            unreachable;
+        };
+        try keys.append(allocator, key);
+    }
+
+    return try keys.toOwnedSlice(allocator);
+}
+
+fn publishImportKeyForModule(imports: []const PublishImportArtifact, module_idx: u32) ?CheckedModuleArtifactKey {
+    for (imports) |import_artifact| {
+        if (import_artifact.module_idx == module_idx) return import_artifact.key;
+    }
+    return null;
+}
+
 pub fn loweringView(artifact: *const CheckedModuleArtifact) LoweringModuleView {
     return .{
         .artifact = artifact,
@@ -655,6 +803,7 @@ pub fn publishFromTypedModule(
     allocator: Allocator,
     modules: *const TypedCIR.Modules,
     module_idx: u32,
+    inputs: PublishInputs,
 ) Allocator.Error!CheckedModuleArtifact {
     const module = modules.module(module_idx);
     const module_env = module.moduleEnvConst();
@@ -665,6 +814,25 @@ pub fn publishFromTypedModule(
     const module_name = try canonical_names.internModuleName(module_env.module_name);
     const display_module_name = try canonical_names.internModuleIdent(idents, module_env.display_module_name_idx);
     const qualified_module_name = try canonical_names.internModuleIdent(idents, module_env.qualified_module_ident);
+    const module_identity = ModuleIdentity{
+        .module_idx = module_idx,
+        .module_name = module_name,
+        .display_module_name = display_module_name,
+        .qualified_module_name = qualified_module_name,
+        .kind = module_env.module_kind,
+    };
+
+    var checking_context_identity = try CheckingContextIdentity.fromModule(allocator, module);
+    errdefer checking_context_identity.deinit(allocator);
+
+    const direct_import_artifact_keys = try directImportArtifactKeysFromModule(allocator, module, inputs.imports);
+    errdefer allocator.free(direct_import_artifact_keys);
+    const artifact_key = CheckedModuleArtifactKey.compute(
+        module_env.getSourceAll(),
+        module_identity,
+        checking_context_identity,
+        direct_import_artifact_keys,
+    );
 
     const exports = try allocator.dupe(CIR.Def.Idx, module_env.store.sliceDefs(module_env.exports));
     errdefer allocator.free(exports);
@@ -698,16 +866,11 @@ pub fn publishFromTypedModule(
     errdefer top_level_values.deinit(allocator);
 
     var artifact = CheckedModuleArtifact{
-        .key = .{},
+        .key = artifact_key,
         .canonical_names = canonical_names,
-        .module_identity = .{
-            .module_idx = module_idx,
-            .module_name = module_name,
-            .display_module_name = display_module_name,
-            .qualified_module_name = qualified_module_name,
-            .kind = module_env.module_kind,
-        },
-        .checking_context_identity = .{},
+        .module_identity = module_identity,
+        .checking_context_identity = checking_context_identity,
+        .direct_import_artifact_keys = direct_import_artifact_keys,
         .module_env = module_env,
         .exports = .{ .defs = exports },
         .provides_requires = .{
