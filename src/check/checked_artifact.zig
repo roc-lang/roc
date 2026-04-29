@@ -221,7 +221,11 @@ pub const RootRequest = struct {
 pub const RootRequestTable = struct {
     requests: []RootRequest = &.{},
 
-    pub fn fromModule(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!RootRequestTable {
+    pub fn fromModule(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        compile_time_roots: *const CompileTimeRootTable,
+    ) Allocator.Error!RootRequestTable {
         var requests = std.ArrayList(RootRequest).empty;
         errdefer requests.deinit(allocator);
 
@@ -249,29 +253,20 @@ pub const RootRequestTable = struct {
             });
         }
 
-        for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
-            const stmt = module_env.store.getStatement(statement_idx);
-            if (stmt != .s_expect) continue;
+        for (compile_time_roots.roots) |root| {
             try appendRoot(&requests, allocator, .{
-                .module_idx = module.moduleIndex(),
-                .kind = .test_expect,
-                .source = .{ .statement = statement_idx },
-                .checked_type = ModuleEnv.varFrom(stmt.s_expect.body),
-                .abi = .test_expect,
-                .exposure = .private,
-            });
-        }
-
-        for (module.allDefs()) |def_idx| {
-            const def = module.def(def_idx);
-            if (topLevelExprIsAlreadyProcedure(def.expr.data)) continue;
-            const source_ty = module.defType(def_idx);
-            try appendRoot(&requests, allocator, .{
-                .module_idx = module.moduleIndex(),
-                .kind = if (sourceTypeIsFunction(module, source_ty)) .compile_time_callable else .compile_time_constant,
-                .source = .{ .def = def_idx },
-                .checked_type = source_ty,
-                .abi = .compile_time,
+                .module_idx = root.module_idx,
+                .kind = switch (root.kind) {
+                    .constant => .compile_time_constant,
+                    .callable_binding => .compile_time_callable,
+                    .expect => .test_expect,
+                },
+                .source = root.source,
+                .checked_type = root.checked_type,
+                .abi = switch (root.kind) {
+                    .expect => .test_expect,
+                    .constant, .callable_binding => .compile_time,
+                },
                 .exposure = .private,
             });
         }
@@ -1361,6 +1356,124 @@ pub const ModuleInterfaceCapabilities = struct {
 pub const ComptimeSchemaId = enum(u32) { _ };
 pub const ComptimeValueId = enum(u32) { _ };
 pub const ComptimeRootId = enum(u32) { _ };
+pub const ComptimeDependencySummaryRequestId = enum(u32) { _ };
+pub const ConstGraphReificationPlanId = enum(u32) { _ };
+pub const CallableResultRecordId = enum(u32) { _ };
+
+pub const CompileTimeRootKind = enum {
+    constant,
+    callable_binding,
+    expect,
+};
+
+pub const CompileTimeRootPayload = union(enum) {
+    const_graph: ConstGraphReificationPlanId,
+    callable_result: CallableResultRecordId,
+    expect,
+};
+
+pub const CompileTimeRoot = struct {
+    id: ComptimeRootId,
+    module_idx: u32,
+    kind: CompileTimeRootKind,
+    source: RootSource,
+    pattern: ?CIR.Pattern.Idx,
+    expr: CIR.Expr.Idx,
+    checked_type: Var,
+    dependency_summary_request: ComptimeDependencySummaryRequestId,
+    payload: CompileTimeRootPayload,
+};
+
+pub const CompileTimeRootTable = struct {
+    roots: []CompileTimeRoot = &.{},
+
+    pub fn fromModule(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!CompileTimeRootTable {
+        var roots = std.ArrayList(CompileTimeRoot).empty;
+        errdefer roots.deinit(allocator);
+
+        const module_env = module.moduleEnvConst();
+        for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
+            const stmt = module_env.store.getStatement(statement_idx);
+            if (stmt != .s_expect) continue;
+            try appendRoot(&roots, allocator, .{
+                .module_idx = module.moduleIndex(),
+                .kind = .expect,
+                .source = .{ .statement = statement_idx },
+                .pattern = null,
+                .expr = stmt.s_expect.body,
+                .checked_type = ModuleEnv.varFrom(stmt.s_expect.body),
+                .payload = .expect,
+            });
+        }
+
+        for (module.allDefs()) |def_idx| {
+            const def = module.def(def_idx);
+            if (topLevelExprIsAlreadyProcedure(def.expr.data)) continue;
+
+            const source_ty = module.defType(def_idx);
+            const is_callable = sourceTypeIsFunction(module, source_ty);
+            try appendRoot(&roots, allocator, .{
+                .module_idx = module.moduleIndex(),
+                .kind = if (is_callable) .callable_binding else .constant,
+                .source = .{ .def = def_idx },
+                .pattern = def.pattern.idx,
+                .expr = def.expr.idx,
+                .checked_type = source_ty,
+                .payload = if (is_callable)
+                    .{ .callable_result = @enumFromInt(@as(u32, @intCast(roots.items.len))) }
+                else
+                    .{ .const_graph = @enumFromInt(@as(u32, @intCast(roots.items.len))) },
+            });
+        }
+
+        return .{ .roots = try roots.toOwnedSlice(allocator) };
+    }
+
+    pub fn lookupIdByPattern(self: *const CompileTimeRootTable, pattern: CIR.Pattern.Idx) ?ComptimeRootId {
+        for (self.roots) |root| {
+            if (root.pattern != null and root.pattern.? == pattern) return root.id;
+        }
+        return null;
+    }
+
+    pub fn root(self: *const CompileTimeRootTable, id: ComptimeRootId) CompileTimeRoot {
+        return self.roots[@intFromEnum(id)];
+    }
+
+    pub fn deinit(self: *CompileTimeRootTable, allocator: Allocator) void {
+        allocator.free(self.roots);
+        self.* = .{};
+    }
+
+    const RootWithoutId = struct {
+        module_idx: u32,
+        kind: CompileTimeRootKind,
+        source: RootSource,
+        pattern: ?CIR.Pattern.Idx,
+        expr: CIR.Expr.Idx,
+        checked_type: Var,
+        payload: CompileTimeRootPayload,
+    };
+
+    fn appendRoot(
+        roots: *std.ArrayList(CompileTimeRoot),
+        allocator: Allocator,
+        root: RootWithoutId,
+    ) Allocator.Error!void {
+        const id: ComptimeRootId = @enumFromInt(@as(u32, @intCast(roots.items.len)));
+        try roots.append(allocator, .{
+            .id = id,
+            .module_idx = root.module_idx,
+            .kind = root.kind,
+            .source = root.source,
+            .pattern = root.pattern,
+            .expr = root.expr,
+            .checked_type = root.checked_type,
+            .dependency_summary_request = @enumFromInt(@intFromEnum(id)),
+            .payload = root.payload,
+        });
+    }
+};
 
 pub const ConstRef = struct {
     artifact: CheckedModuleArtifactKey,
@@ -1392,11 +1505,11 @@ pub const TopLevelValueTable = struct {
         module: TypedCIR.Module,
         templates: *const CheckedProcedureTemplateTable,
         artifact_key: CheckedModuleArtifactKey,
+        compile_time_roots: *const CompileTimeRootTable,
         comptime_values: *CompileTimeValueStore,
     ) Allocator.Error!TopLevelValueTable {
         var entries = std.ArrayList(TopLevelValueEntry).empty;
         errdefer entries.deinit(allocator);
-        var callable_root_count: u32 = 0;
 
         for (module.allDefs()) |def_idx| {
             const def = module.def(def_idx);
@@ -1408,9 +1521,26 @@ pub const TopLevelValueTable = struct {
                     .template = template,
                 } };
             } else if (sourceTypeIsFunction(module, source_ty)) blk: {
-                const root: ComptimeRootId = @enumFromInt(callable_root_count);
-                callable_root_count += 1;
-                break :blk .{ .pending_callable_root = root };
+                const root_id = compile_time_roots.lookupIdByPattern(def.pattern.idx) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "checked artifact invariant violated: function-valued binding {d} has no compile-time callable root",
+                            .{@intFromEnum(def.pattern.idx)},
+                        );
+                    }
+                    unreachable;
+                };
+                const root = compile_time_roots.root(root_id);
+                if (root.kind != .callable_binding) {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "checked artifact invariant violated: function-valued binding {d} mapped to non-callable compile-time root",
+                            .{@intFromEnum(def.pattern.idx)},
+                        );
+                    }
+                    unreachable;
+                }
+                break :blk .{ .pending_callable_root = root_id };
             } else .{ .const_ref = try comptime_values.reserveConst(
                 artifact_key,
                 module.moduleIndex(),
@@ -1710,15 +1840,16 @@ pub const CheckedModuleArtifact = struct {
     hosted_procs: HostedProcTable,
     platform_required_bindings: PlatformRequiredBindingTable,
     interface_capabilities: ModuleInterfaceCapabilities,
+    compile_time_roots: CompileTimeRootTable,
     top_level_values: TopLevelValueTable,
     promoted_procedures: PromotedProcedureTable,
-    compile_time_roots_present: bool = false,
     comptime_values: CompileTimeValueStore,
 
     pub fn deinit(self: *CheckedModuleArtifact, allocator: Allocator) void {
         self.comptime_values.deinit(allocator);
         self.promoted_procedures.deinit(allocator);
         self.top_level_values.deinit(allocator);
+        self.compile_time_roots.deinit(allocator);
         self.platform_required_bindings.deinit(allocator);
         self.hosted_procs.deinit(allocator);
         self.root_requests.deinit(allocator);
@@ -1741,6 +1872,11 @@ pub const CheckedModuleArtifact = struct {
         for (self.root_requests.requests, 0..) |request, i| {
             std.debug.assert(request.order == i);
             std.debug.assert(request.module_idx == self.module_identity.module_idx);
+        }
+
+        for (self.compile_time_roots.roots, 0..) |root, i| {
+            std.debug.assert(@intFromEnum(root.id) == i);
+            std.debug.assert(root.module_idx == self.module_identity.module_idx);
         }
 
         std.debug.assert(std.mem.eql(
@@ -1795,6 +1931,7 @@ pub const ImportedModuleView = struct {
     method_registry: *const static_dispatch.MethodRegistry,
     resolved_value_refs: *const ResolvedValueRefTable,
     interface_capabilities: *const ModuleInterfaceCapabilities,
+    compile_time_roots: *const CompileTimeRootTable,
     top_level_values: *const TopLevelValueTable,
     comptime_values: *const CompileTimeValueStore,
 };
@@ -1814,6 +1951,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .method_registry = &artifact.method_registry,
         .resolved_value_refs = &artifact.resolved_value_refs,
         .interface_capabilities = &artifact.interface_capabilities,
+        .compile_time_roots = &artifact.compile_time_roots,
         .top_level_values = &artifact.top_level_values,
         .comptime_values = &artifact.comptime_values,
     };
@@ -2099,14 +2237,17 @@ pub fn publishFromTypedModule(
     var static_dispatch_plans = try static_dispatch.StaticDispatchPlanTable.fromModule(allocator, module, &canonical_names);
     errdefer static_dispatch_plans.deinit(allocator);
 
-    var root_requests = try RootRequestTable.fromModule(allocator, module);
-    errdefer root_requests.deinit(allocator);
-
     var hosted_procs = try HostedProcTable.fromModule(allocator, module, &canonical_names, &checked_procedure_templates);
     errdefer hosted_procs.deinit(allocator);
 
     var platform_required_bindings = try PlatformRequiredBindingTable.fromModule(allocator, module, &canonical_names, owner_artifact);
     errdefer platform_required_bindings.deinit(allocator);
+
+    var compile_time_roots = try CompileTimeRootTable.fromModule(allocator, module);
+    errdefer compile_time_roots.deinit(allocator);
+
+    var root_requests = try RootRequestTable.fromModule(allocator, module, &compile_time_roots);
+    errdefer root_requests.deinit(allocator);
 
     var comptime_values = CompileTimeValueStore.init(allocator);
     errdefer comptime_values.deinit(allocator);
@@ -2116,6 +2257,7 @@ pub fn publishFromTypedModule(
         module,
         &checked_procedure_templates,
         artifact_key,
+        &compile_time_roots,
         &comptime_values,
     );
     errdefer top_level_values.deinit(allocator);
@@ -2161,6 +2303,7 @@ pub fn publishFromTypedModule(
         .hosted_procs = hosted_procs,
         .platform_required_bindings = platform_required_bindings,
         .interface_capabilities = ModuleInterfaceCapabilities.fromModule(module),
+        .compile_time_roots = compile_time_roots,
         .top_level_values = top_level_values,
         .promoted_procedures = .{},
         .comptime_values = comptime_values,
@@ -2200,6 +2343,7 @@ test "artifact views are read-only projections" {
             .provides_count = 0,
             .requires_count = 0,
         },
+        .compile_time_roots = .{},
         .top_level_values = .{},
         .promoted_procedures = .{},
         .comptime_values = CompileTimeValueStore.init(std.testing.allocator),
