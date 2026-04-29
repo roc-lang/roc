@@ -470,9 +470,62 @@ pub const ProcedureBindingRef = union(enum) {
     promoted: PromotedProcedureRef,
 };
 
-pub const TopLevelProcedureBindingRef = struct {
-    proc: canonical.ProcedureValueRef,
-    template: ?canonical.ProcedureTemplateRef,
+pub const TopLevelProcedureBindingRef = enum(u32) { _ };
+pub const CallableEvalTemplateId = enum(u32) { _ };
+
+pub const DirectProcedureBinding = struct {
+    proc_value: canonical.ProcedureValueRef,
+    template: canonical.CallableProcedureTemplateRef,
+};
+
+pub const ProcedureBindingBody = union(enum) {
+    direct_template: DirectProcedureBinding,
+    callable_eval_template: CallableEvalTemplateId,
+};
+
+pub const TopLevelProcedureBinding = struct {
+    source_scheme: canonical.CanonicalTypeSchemeKey,
+    body: ProcedureBindingBody,
+};
+
+pub const TopLevelProcedureBindingTable = struct {
+    bindings: []TopLevelProcedureBinding = &.{},
+
+    pub fn initEmpty() TopLevelProcedureBindingTable {
+        return .{};
+    }
+
+    pub fn appendDirect(
+        self: *TopLevelProcedureBindingTable,
+        allocator: Allocator,
+        source_scheme: canonical.CanonicalTypeSchemeKey,
+        proc_value: canonical.ProcedureValueRef,
+        template: canonical.ProcedureTemplateRef,
+    ) Allocator.Error!TopLevelProcedureBindingRef {
+        const old = self.bindings;
+        const next = try allocator.alloc(TopLevelProcedureBinding, old.len + 1);
+        @memcpy(next[0..old.len], old);
+        if (old.len > 0) allocator.free(old);
+        self.bindings = next;
+        const ref: TopLevelProcedureBindingRef = @enumFromInt(@as(u32, @intCast(old.len)));
+        self.bindings[old.len] = .{
+            .source_scheme = source_scheme,
+            .body = .{ .direct_template = .{
+                .proc_value = proc_value,
+                .template = .{ .checked = template },
+            } },
+        };
+        return ref;
+    }
+
+    pub fn get(self: *const TopLevelProcedureBindingTable, ref: TopLevelProcedureBindingRef) TopLevelProcedureBinding {
+        return self.bindings[@intFromEnum(ref)];
+    }
+
+    pub fn deinit(self: *TopLevelProcedureBindingTable, allocator: Allocator) void {
+        if (self.bindings.len > 0) allocator.free(self.bindings);
+        self.* = .{};
+    }
 };
 
 pub const ImportedProcedureBindingRef = struct {
@@ -1559,6 +1612,7 @@ pub const TopLevelValueTable = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         templates: *const CheckedProcedureTemplateTable,
+        procedure_bindings: *TopLevelProcedureBindingTable,
         artifact_key: CheckedModuleArtifactKey,
         compile_time_roots: *const CompileTimeRootTable,
         comptime_values: *CompileTimeValueStore,
@@ -1571,10 +1625,19 @@ pub const TopLevelValueTable = struct {
             const source_ty = module.defType(def_idx);
             const value: TopLevelValueKind = if (topLevelExprIsAlreadyProcedure(def.expr.data)) blk: {
                 const template = templates.lookupByDef(def_idx) orelse unreachable;
-                break :blk .{ .procedure_binding = .{
-                    .proc = .{ .artifact = template.artifact, .proc_base = template.proc_base },
-                    .template = template,
-                } };
+                const source_scheme = try canonical_type_keys.schemeFromVar(
+                    allocator,
+                    module.typeStoreConst(),
+                    module.identStoreConst(),
+                    source_ty,
+                );
+                const binding = try procedure_bindings.appendDirect(
+                    allocator,
+                    source_scheme,
+                    .{ .artifact = template.artifact, .proc_base = template.proc_base },
+                    template,
+                );
+                break :blk .{ .procedure_binding = binding };
             } else if (sourceTypeIsFunction(module, source_ty)) blk: {
                 const root_id = compile_time_roots.lookupIdByPattern(def.pattern.idx) orelse {
                     if (builtin.mode == .Debug) {
@@ -1891,6 +1954,7 @@ pub const CheckedModuleArtifact = struct {
     static_dispatch_plans: static_dispatch.StaticDispatchPlanTable,
     resolved_value_refs: ResolvedValueRefTable,
     checked_procedure_templates: CheckedProcedureTemplateTable,
+    top_level_procedure_bindings: TopLevelProcedureBindingTable,
     root_requests: RootRequestTable,
     hosted_procs: HostedProcTable,
     platform_required_bindings: PlatformRequiredBindingTable,
@@ -1916,6 +1980,7 @@ pub const CheckedModuleArtifact = struct {
         self.platform_required_bindings.deinit(allocator);
         self.hosted_procs.deinit(allocator);
         self.root_requests.deinit(allocator);
+        self.top_level_procedure_bindings.deinit(allocator);
         self.checked_procedure_templates.deinit(allocator);
         self.resolved_value_refs.deinit(allocator);
         self.static_dispatch_plans.deinit(allocator);
@@ -1962,11 +2027,23 @@ pub const CheckedModuleArtifact = struct {
         for (self.top_level_values.entries) |entry| {
             switch (entry.value) {
                 .const_ref => |const_ref| std.debug.assert(const_ref.module_idx == self.module_identity.module_idx),
-                .procedure_binding => |proc_binding| {
-                    _ = self.canonical_names.procBase(proc_binding.proc.proc_base);
-                    if (proc_binding.template) |template| {
-                        std.debug.assert(template.proc_base == proc_binding.proc.proc_base);
-                        std.debug.assert(std.mem.eql(u8, &template.artifact.bytes, &proc_binding.proc.artifact.bytes));
+                .procedure_binding => |binding_ref| {
+                    const binding = self.top_level_procedure_bindings.get(binding_ref);
+                    switch (binding.body) {
+                        .direct_template => |direct| {
+                            _ = self.canonical_names.procBase(direct.proc_value.proc_base);
+                            switch (direct.template) {
+                                .checked => |template| {
+                                    std.debug.assert(template.proc_base == direct.proc_value.proc_base);
+                                    std.debug.assert(std.mem.eql(u8, &template.artifact.bytes, &direct.proc_value.artifact.bytes));
+                                },
+                                .lifted, .synthetic => std.debug.panic(
+                                    "checked artifact invariant violated: direct top-level binding cannot use lifted or synthetic template",
+                                    .{},
+                                ),
+                            }
+                        },
+                        .callable_eval_template => {},
                     }
                 },
                 .pending_callable_root => std.debug.panic(
@@ -1992,6 +2069,7 @@ pub const ImportedModuleView = struct {
     canonical_names: *const canonical.CanonicalNameStore,
     exports: *const ExportTable,
     checked_procedure_templates: *const CheckedProcedureTemplateTable,
+    top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
     method_registry: *const static_dispatch.MethodRegistry,
     resolved_value_refs: *const ResolvedValueRefTable,
     interface_capabilities: *const ModuleInterfaceCapabilities,
@@ -2012,6 +2090,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .canonical_names = &artifact.canonical_names,
         .exports = &artifact.exports,
         .checked_procedure_templates = &artifact.checked_procedure_templates,
+        .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
         .method_registry = &artifact.method_registry,
         .resolved_value_refs = &artifact.resolved_value_refs,
         .interface_capabilities = &artifact.interface_capabilities,
@@ -2316,10 +2395,14 @@ pub fn publishFromTypedModule(
     var comptime_values = CompileTimeValueStore.init(allocator);
     errdefer comptime_values.deinit(allocator);
 
+    var top_level_procedure_bindings = TopLevelProcedureBindingTable.initEmpty();
+    errdefer top_level_procedure_bindings.deinit(allocator);
+
     var top_level_values = try TopLevelValueTable.fromModule(
         allocator,
         module,
         &checked_procedure_templates,
+        &top_level_procedure_bindings,
         artifact_key,
         &compile_time_roots,
         &comptime_values,
@@ -2363,6 +2446,7 @@ pub fn publishFromTypedModule(
         .static_dispatch_plans = static_dispatch_plans,
         .resolved_value_refs = resolved_value_refs,
         .checked_procedure_templates = checked_procedure_templates,
+        .top_level_procedure_bindings = top_level_procedure_bindings,
         .root_requests = root_requests,
         .hosted_procs = hosted_procs,
         .platform_required_bindings = platform_required_bindings,
@@ -2398,6 +2482,7 @@ test "artifact views are read-only projections" {
         .static_dispatch_plans = .{},
         .resolved_value_refs = .{},
         .checked_procedure_templates = .{},
+        .top_level_procedure_bindings = .{},
         .root_requests = .{},
         .hosted_procs = .{},
         .platform_required_bindings = .{},

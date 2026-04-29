@@ -41,6 +41,19 @@ pub fn fromConcreteVar(
     return .{ .bytes = builder.hasher.finalResult() };
 }
 
+pub fn schemeFromVar(
+    allocator: Allocator,
+    store: *const TypeStore,
+    idents: *const Ident.Store,
+    var_: Var,
+) Allocator.Error!canonical.CanonicalTypeSchemeKey {
+    var builder = Builder.init(allocator, store, idents);
+    defer builder.deinit();
+    builder.writeTag("canonical_type_scheme");
+    try builder.writeVar(var_);
+    return .{ .bytes = builder.hasher.finalResult() };
+}
+
 const Builder = struct {
     allocator: Allocator,
     store: *const TypeStore,
