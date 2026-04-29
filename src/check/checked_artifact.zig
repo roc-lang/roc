@@ -12,6 +12,7 @@ const types = @import("types");
 const TypedCIR = @import("typed_cir.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
 const canonical = @import("canonical_names.zig");
+const canonical_type_keys = @import("canonical_type_keys.zig");
 
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -464,7 +465,8 @@ pub const ResolvedValueRefTable = struct {
             }
 
             const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
-            const resolved_ref = try classifyValueRef(
+            var resolved_ref = try classifyValueRef(
+                allocator,
                 modules,
                 module,
                 expr_idx,
@@ -474,6 +476,13 @@ pub const ResolvedValueRefTable = struct {
                 platform_required_bindings,
                 top_level_values,
             );
+            const checked_type_key = try canonical_type_keys.fromVar(
+                allocator,
+                module.typeStoreConst(),
+                module.identStoreConst(),
+                module.exprType(expr_idx),
+            );
+            attachUseTypeKey(&resolved_ref, checked_type_key);
 
             const id: ResolvedValueRefId = @enumFromInt(@as(u32, @intCast(records.items.len)));
             try records.append(allocator, .{
@@ -525,6 +534,7 @@ pub const ResolvedValueRefTable = struct {
 };
 
 fn classifyValueRef(
+    allocator: Allocator,
     modules: *const TypedCIR.Modules,
     module: TypedCIR.Module,
     expr_idx: CIR.Expr.Idx,
@@ -535,6 +545,7 @@ fn classifyValueRef(
     top_level_values: *const TopLevelValueTable,
 ) Allocator.Error!ResolvedValueRef {
     _ = templates;
+    _ = allocator;
     const expr = module.expr(expr_idx);
     return switch (expr.data) {
         .e_lookup_local => |local| classifyLocalValueRef(
@@ -565,6 +576,24 @@ fn classifyValueRef(
             unreachable;
         },
     };
+}
+
+fn attachUseTypeKey(ref: *ResolvedValueRef, key: canonical.CanonicalTypeKey) void {
+    switch (ref.*) {
+        .top_level_const => |*use| use.requested_source_ty_template = key,
+        .imported_const => |*use| use.requested_source_ty_template = key,
+        .top_level_proc => |*use| use.source_fn_ty_template = key,
+        .imported_proc => |*use| use.source_fn_ty_template = key,
+        .hosted_proc => |*use| use.source_fn_ty_template = key,
+        .platform_proc => |*use| use.source_fn_ty_template = key,
+        .promoted_top_level_proc => |*use| use.source_fn_ty_template = key,
+        .local_param,
+        .local_value,
+        .local_mutable_version,
+        .pattern_binder,
+        .local_proc,
+        => {},
+    }
 }
 
 fn classifyLocalValueRef(
