@@ -1,7 +1,7 @@
 //! Lambda-solved MIR AST.
 //!
 //! Every value-producing occurrence has explicit value-flow metadata. Executable
-//! MIR consumes these ids instead of recovering callable, boxed, or projection
+//! MIR consumes these ids instead of reading callable, boxed, or projection
 //! information from syntax.
 
 const std = @import("std");

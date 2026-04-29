@@ -124,7 +124,8 @@ fn templateForRoot(
 ) ?canonical.ProcedureTemplateRef {
     switch (root.source) {
         .def => |def_idx| return artifact.checked_procedure_templates.lookupByDef(def_idx),
-        .expr, .statement, .required_binding => return null,
+        .required_binding => |requires_idx| return artifact.checked_procedure_templates.lookupByRequiredBinding(requires_idx),
+        .expr, .statement => return null,
     }
 }
 

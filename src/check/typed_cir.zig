@@ -206,7 +206,7 @@ pub const Module = struct {
     module_idx: u32,
     data_store: *ModuleData,
 
-    /// Function-shape view recovered from checked function types.
+    /// Function-shape view read from checked function types.
     pub const FnShape = struct {
         args: []Var,
         ret: Var,

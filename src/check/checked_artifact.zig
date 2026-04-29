@@ -319,6 +319,7 @@ pub const CheckedProcedureBody = union(enum) {
     source_expr: CIR.Expr.Idx,
     promoted_callable_wrapper: canonical.PromotedCallableWrapperId,
     hosted_wrapper: canonical.HostedWrapperId,
+    platform_required_wrapper: u32,
     intrinsic_wrapper: canonical.IntrinsicWrapperId,
     entry_wrapper: canonical.EntryWrapperId,
 };
@@ -367,6 +368,7 @@ pub const CheckedProcedureTemplate = struct {
 pub const CheckedProcedureTemplateTable = struct {
     templates: []CheckedProcedureTemplate = &.{},
     by_def: []?canonical.ProcedureTemplateRef = &.{},
+    by_required_binding: []?canonical.ProcedureTemplateRef = &.{},
 
     pub fn fromModule(
         allocator: Allocator,
@@ -379,6 +381,10 @@ pub const CheckedProcedureTemplateTable = struct {
         const by_def = try allocator.alloc(?canonical.ProcedureTemplateRef, module.nodeCount());
         errdefer allocator.free(by_def);
         @memset(by_def, null);
+
+        const by_required_binding = try allocator.alloc(?canonical.ProcedureTemplateRef, module.requiresTypes().len);
+        errdefer allocator.free(by_required_binding);
+        @memset(by_required_binding, null);
 
         const module_name = try names.internModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent());
 
@@ -416,9 +422,37 @@ pub const CheckedProcedureTemplateTable = struct {
             });
         }
 
+        for (module.requiresTypes(), 0..) |required_type, i| {
+            const proc_base = try names.internProcBase(.{
+                .module_name = module_name,
+                .export_name = null,
+                .kind = .platform_required_wrapper,
+                .ordinal = @intCast(i),
+            });
+            const template_id: canonical.CheckedProcedureTemplateId = @enumFromInt(@as(u32, @intCast(templates.items.len)));
+            const template_ref = canonical.ProcedureTemplateRef{
+                .proc_base = proc_base,
+                .template = template_id,
+            };
+            by_required_binding[i] = template_ref;
+
+            try templates.append(allocator, .{
+                .proc_base = proc_base,
+                .template_id = template_id,
+                .body = .{ .platform_required_wrapper = @intCast(i) },
+                .checked_fn_var = ModuleEnv.varFrom(required_type.type_anno),
+                .static_dispatch_plans = .{},
+                .resolved_value_refs = .{},
+                .top_level_value_uses = .{},
+                .nested_proc_sites = .{},
+                .target = .platform_required,
+            });
+        }
+
         return .{
             .templates = try templates.toOwnedSlice(allocator),
             .by_def = by_def,
+            .by_required_binding = by_required_binding,
         };
     }
 
@@ -426,6 +460,11 @@ pub const CheckedProcedureTemplateTable = struct {
         const raw = @intFromEnum(def_idx);
         if (raw >= self.by_def.len) return null;
         return self.by_def[raw];
+    }
+
+    pub fn lookupByRequiredBinding(self: *const CheckedProcedureTemplateTable, requires_idx: u32) ?canonical.ProcedureTemplateRef {
+        if (requires_idx >= self.by_required_binding.len) return null;
+        return self.by_required_binding[requires_idx];
     }
 
     pub fn asLookup(self: *const CheckedProcedureTemplateTable, module_idx: u32) static_dispatch.ProcedureTemplateLookup {
@@ -436,6 +475,7 @@ pub const CheckedProcedureTemplateTable = struct {
     }
 
     pub fn deinit(self: *CheckedProcedureTemplateTable, allocator: Allocator) void {
+        allocator.free(self.by_required_binding);
         allocator.free(self.by_def);
         allocator.free(self.templates);
         self.* = .{};
