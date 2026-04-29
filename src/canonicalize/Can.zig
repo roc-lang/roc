@@ -2319,9 +2319,6 @@ pub fn canonicalizeFile(
         },
         .app => |h| {
             self.env.module_kind = .app;
-            // App modules may have platform requirements that should constrain numeric literals
-            // before defaulting to Dec, so defer numeric defaults until after platform checking
-            self.env.defer_numeric_defaults = true;
             // App headers have 'provides' instead of 'exposes'
             // but we need to track the provided functions for export
             try self.createExposedScope(h.provides);
@@ -2332,7 +2329,6 @@ pub fn canonicalizeFile(
             const main_status = try self.checkMainFunction(false);
             if (main_status == .valid) {
                 self.env.module_kind = .default_app;
-                self.env.defer_numeric_defaults = true;
             } else {
                 // Set to undefined placeholder - will be properly set during validation
                 // when we find the matching type declaration
@@ -2341,9 +2337,6 @@ pub fn canonicalizeFile(
         },
         .default_app => {
             self.env.module_kind = .default_app;
-            // Default app modules may have platform requirements that should constrain numeric literals
-            // before defaulting to Dec, so defer numeric defaults until after platform checking
-            self.env.defer_numeric_defaults = true;
             // Default app modules don't have an exposes list
             // They have a main! function that will be validated
         },

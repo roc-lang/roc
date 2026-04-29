@@ -21,22 +21,18 @@ const unbundle = if (is_freestanding) struct {} else @import("unbundle");
 const Io = @import("io").Io;
 
 const Report = reporting.Report;
-const ReportBuilder = check.ReportBuilder;
 const BuiltinModules = eval.BuiltinModules;
 const compile_package = @import("compile_package.zig");
 const Mode = compile_package.Mode;
 const Allocator = std.mem.Allocator;
 const Allocators = base.Allocators;
 const ModuleEnv = can.ModuleEnv;
-const Can = can.Can;
-const Check = check.Check;
 const PackageEnv = compile_package.PackageEnv;
 const SemanticModuleData = compile_package.SemanticModuleData;
 const ModuleTimingInfo = compile_package.TimingInfo;
 const ImportResolver = compile_package.ImportResolver;
 const ScheduleHook = compile_package.ScheduleHook;
 const CacheManager = @import("cache_manager.zig").CacheManager;
-const platform_requirements = @import("platform_requirements.zig");
 
 // Actor model components
 const coordinator_mod = @import("coordinator.zig");
@@ -570,17 +566,6 @@ pub const BuildEnv = struct {
         // Transfer results back to PackageEnv before platform validation and emission.
         try self.transferCoordinatorResults();
 
-        if (comptime trace_build) {
-            std.debug.print("[BUILD] Results transferred, checking platform requirements...\n", .{});
-        }
-
-        // Check platform requirements
-        try self.checkPlatformRequirements();
-
-        if (comptime trace_build) {
-            std.debug.print("[BUILD] Platform requirements checked, emitting...\n", .{});
-        }
-
         // Deterministic emission
         try self.emitDeterministic();
 
@@ -717,155 +702,6 @@ pub const BuildEnv = struct {
                         }
                     }
                 }
-            }
-        }
-    }
-
-    /// Check that app exports match platform requirements.
-    /// This is called after all modules are compiled and type-checked.
-    fn checkPlatformRequirements(self: *BuildEnv) !void {
-        // Find the app and platform packages
-        var app_pkg_info: ?Package = null;
-        var platform_pkg_info: ?Package = null;
-        var app_pkg_name: ?[]const u8 = null;
-        var platform_pkg_name: ?[]const u8 = null;
-
-        var pkg_it = self.packages.iterator();
-        while (pkg_it.next()) |entry| {
-            const pkg = entry.value_ptr.*;
-            if (pkg.kind == .app) {
-                app_pkg_info = pkg;
-                app_pkg_name = entry.key_ptr.*;
-            } else if (pkg.kind == .platform) {
-                platform_pkg_info = pkg;
-                platform_pkg_name = entry.key_ptr.*;
-            }
-        }
-
-        // If we don't have both an app and a platform, nothing to check
-        const app_name = app_pkg_name orelse {
-            if (comptime trace_build) std.debug.print("[PLAT-CHECK] No app package found\n", .{});
-            return;
-        };
-        const platform_name = platform_pkg_name orelse {
-            if (comptime trace_build) std.debug.print("[PLAT-CHECK] No platform package found\n", .{});
-            return;
-        };
-        const platform_pkg = platform_pkg_info orelse return;
-
-        if (comptime trace_build) {
-            std.debug.print("[PLAT-CHECK] Found app={s} platform={s}\n", .{ app_name, platform_name });
-        }
-
-        // Get the schedulers for both packages
-        const app_sched = self.schedulers.get(app_name) orelse {
-            if (comptime trace_build) std.debug.print("[PLAT-CHECK] No app scheduler found\n", .{});
-            return;
-        };
-        const platform_sched = self.schedulers.get(platform_name) orelse {
-            if (comptime trace_build) std.debug.print("[PLAT-CHECK] No platform scheduler found\n", .{});
-            return;
-        };
-
-        // Get the app's root module env
-        const app_root_env = if (app_sched.getRootSemanticData()) |data| data.env else {
-            if (comptime trace_build) std.debug.print("[PLAT-CHECK] No app root env found\n", .{});
-            return;
-        };
-
-        // Get the platform's root module by finding the module that matches the root file
-        // Note: the package root semantic data must come from the recorded root module id,
-        // not modules.items[0], because that may not be the actual platform root.
-        // root file if other modules (like exposed imports) were scheduled first.
-        const platform_root_module_name = PackageEnv.moduleNameFromPath(platform_pkg.root_file);
-        if (comptime trace_build) {
-            std.debug.print("[PLAT-CHECK] Looking for platform root module: {s} (from path: {s})\n", .{ platform_root_module_name, platform_pkg.root_file });
-        }
-        const platform_root_env = if (platform_sched.getSemanticDataIfDone(platform_root_module_name)) |data| data.env else {
-            if (comptime trace_build) {
-                std.debug.print("[PLAT-CHECK] Platform root env not found\n", .{});
-            }
-            return;
-        };
-
-        if (comptime trace_build) {
-            std.debug.print("[PLAT-CHECK] Platform root env found, requires_types.len={}\n", .{platform_root_env.requires_types.items.items.len});
-        }
-
-        // If the platform has no requires_types, nothing to check
-        if (platform_root_env.requires_types.items.items.len == 0) {
-            return;
-        }
-
-        // Get builtin indices and module
-        const builtin_indices = self.builtin_modules.builtin_indices;
-        const builtin_module_env = self.builtin_modules.builtin_module.env;
-
-        // Build module_envs_map for type resolution
-        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(self.gpa);
-        defer module_envs_map.deinit();
-
-        // Use the shared populateModuleEnvs function to set up auto-imported types
-        try Can.populateModuleEnvs(&module_envs_map, app_root_env, builtin_module_env, builtin_indices);
-
-        // Build builtin context for the type checker
-        const builtin_ctx = Check.BuiltinContext{
-            .module_name = app_root_env.qualified_module_ident,
-            .bool_stmt = builtin_indices.bool_type,
-            .try_stmt = builtin_indices.try_type,
-            .str_stmt = builtin_indices.str_type,
-            .builtin_module = builtin_module_env,
-            .builtin_indices = builtin_indices,
-        };
-
-        // Create type checker for the app module
-        var checker = try Check.init(
-            self.gpa,
-            &app_root_env.types,
-            app_root_env,
-            &.{}, // No imported modules needed for checking exports
-            &module_envs_map,
-            &app_root_env.store.regions,
-            builtin_ctx,
-        );
-        defer checker.deinit();
-
-        var platform_to_app_idents = try platform_requirements.buildPlatformToAppIdents(
-            self.gpa,
-            platform_root_env,
-            app_root_env,
-        );
-        defer platform_to_app_idents.deinit();
-
-        // Check platform requirements against app exports
-        try checker.checkPlatformRequirements(platform_root_env, &platform_to_app_idents);
-
-        // Now finalize numeric defaults for the app module. This must happen AFTER
-        // checkPlatformRequirements so that numeric literals can be constrained by
-        // platform types (e.g., I64) before defaulting to Dec.
-        try checker.finalizeNumericDefaults();
-
-        // If there are type problems, convert them to reports and emit via sink
-        if (checker.problems.problems.items.len > 0) {
-            const app_root_module = app_sched.getRootModule() orelse return;
-
-            var rb = try ReportBuilder.init(
-                self.gpa,
-                app_root_env,
-                app_root_env,
-                &checker.snapshots,
-                &checker.problems,
-                app_root_module.path,
-                &.{},
-                &checker.import_mapping,
-                &checker.regions,
-            );
-            defer rb.deinit();
-
-            for (checker.problems.problems.items) |prob| {
-                const rep = rb.build(prob) catch continue;
-                // Emit via sink with the module name (not path) to match other reports
-                self.sink.emitReport(app_name, app_root_module.name, rep);
             }
         }
     }

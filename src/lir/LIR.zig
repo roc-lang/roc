@@ -111,13 +111,6 @@ pub const LiteralValue = union(enum) {
     proc_ref: LirProcSpecId,
 };
 
-/// How a value-producing statement physically materializes its result.
-pub const ResultMaterialization = enum {
-    direct,
-    copy_from_borrowed_input,
-    fresh_aggregate,
-};
-
 /// Reference-producing operation lowered by `assign_ref`.
 pub const RefOp = union(enum) {
     local: LocalId,

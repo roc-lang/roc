@@ -2,18 +2,6 @@
 //!
 //! Lists use copy-on-write semantics to minimize allocations when shared across contexts.
 //! Seamless slice optimization reduces memory overhead for substring operations.
-//!
-//! ## Ownership Semantics
-//!
-//! See `OWNERSHIP.md` for the canonical terminology. Functions in this module
-//! follow these patterns:
-//!
-//! - **Borrow**: Function reads argument, caller retains ownership
-//! - **Consume**: Function takes ownership, caller loses access
-//! - **Copy-on-Write**: Consumes arg; if unique, mutates in place; if shared, allocates new
-//! - **Seamless Slice**: Result shares data with arg via incref'd slice
-//!
-//! Each function documents its ownership semantics in its doc comment.
 const std = @import("std");
 const builtin = @import("builtin");
 

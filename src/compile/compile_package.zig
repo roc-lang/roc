@@ -1148,7 +1148,8 @@ pub const PackageEnv = struct {
 
     /// Combined canonicalization and type checking function for snapshot tool
     /// This ensures the SAME module_envs map is used for both phases
-    /// Note: Does NOT run compile-time evaluation - caller should do that separately if needed
+    /// Snapshot-only type inspection must not publish post-check lowering input.
+    /// Checked-artifact publication owns compile-time evaluation for real builds.
     /// IMPORTANT: The returned checker holds a pointer to module_envs_out, so caller must keep
     /// module_envs_out alive until they're done using the checker (e.g., for type printing)
     pub fn canonicalizeAndTypeCheckModule(
@@ -1196,14 +1197,7 @@ pub const PackageEnv = struct {
         );
         errdefer checker.deinit();
 
-        // For app modules with platform requirements, defer finalizing numeric defaults
-        // until after platform requirements are checked, so numeric literals can be
-        // constrained by platform types (e.g., I64) before defaulting to Dec.
-        if (env.defer_numeric_defaults) {
-            try checker.checkFileSkipNumericDefaults();
-        } else {
-            try checker.checkFile();
-        }
+        try checker.checkFile();
 
         return checker;
     }
@@ -1326,14 +1320,7 @@ pub const PackageEnv = struct {
         );
         errdefer checker.deinit();
 
-        // For app modules with platform requirements, defer finalizing numeric defaults
-        // until after platform requirements are checked, so numeric literals can be
-        // constrained by platform types (e.g., I64) before defaulting to Dec.
-        if (env.defer_numeric_defaults) {
-            try checker.checkFileSkipNumericDefaults();
-        } else {
-            try checker.checkFile();
-        }
+        try checker.checkFile();
 
         module_envs_map.deinit();
 

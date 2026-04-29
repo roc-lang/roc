@@ -1347,19 +1347,8 @@ fn copyBuiltinTypes(self: *Self) !void {
     self.builtin_types_copied = true;
 }
 
-/// Check the types for all defs in a file.
-/// Set `skip_numeric_defaults` to true for app modules that have platform requirements -
-/// in that case, `finalizeNumericDefaults()` should be called AFTER `checkPlatformRequirements()`
-/// so that numeric literals can be constrained by platform types first.
 pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     return self.checkFileInternal(false);
-}
-
-/// Check the types for all defs in a file, optionally skipping numeric defaults finalization.
-/// Use this for app modules with platform requirements, then call `finalizeNumericDefaults()`
-/// after `checkPlatformRequirements()`.
-pub fn checkFileSkipNumericDefaults(self: *Self) std.mem.Allocator.Error!void {
-    return self.checkFileInternal(true);
 }
 
 fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator.Error!void {
@@ -1492,9 +1481,6 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.checkAllConstraints(&env);
     try self.resolveNumericLiteralsFromContext(&env);
 
-    // Finalize numeric defaults unless skipped (for app modules with platform requirements,
-    // this should be called after checkPlatformRequirements() so platform types can
-    // constrain numeric literals first)
     if (!skip_numeric_defaults) {
         try self.finalizeNumericDefaultsInternal(&env);
 
@@ -1591,7 +1577,7 @@ fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
             // We *do not* create a real alias here. Instead, we unify the alias
             // stmt directly with the backing variable not the alias wrapper,
             // so that it can be substituted with the app's concrete type during
-            // checkPlatformRequirements.
+            // checked artifact co-finalization.
             _ = try self.unify(stmt_var, alias_rhs_var, env);
         }
 
@@ -1599,272 +1585,6 @@ fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         //   { [Model : model] for main : { init : model, ... } }
         //                                ^^^^^^^^^^^^^^^^^^^^^^
         try self.generateAnnoTypeInPlace(required_type.type_anno, env, .annotation);
-    }
-}
-
-/// Check that the app's exported values match the platform's required types.
-///
-/// This should be called after checkFile() to verify that app exports conform
-/// to the platform's requirements.
-///
-/// The `platform_to_app_idents` map translates platform ident indices to app ident indices,
-/// built by the caller to avoid string lookups during type checking.
-///
-/// TODO: There are some non-type errors that this function produces (like
-/// if the required alias or definition) are not found These errors could be
-/// reporter in czer.
-pub fn checkPlatformRequirements(
-    self: *Self,
-    platform_env: *const ModuleEnv,
-    platform_to_app_idents: *const std.AutoHashMap(Ident.Idx, Ident.Idx),
-) std.mem.Allocator.Error!void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    // Ensure the type store is filled to match the number of regions.
-    // This is necessary because checkPlatformRequirements may be called with a
-    // fresh Check instance that hasn't had checkFile() called on it.
-    try ensureTypeStoreIsFilled(self);
-    try self.copyBuiltinTypes();
-
-    // Create a solver env for type operations
-    var env = try self.env_pool.acquire();
-    defer self.env_pool.release(env);
-
-    // Push thru to outermost
-    std.debug.assert(env.rank() == .generalized);
-    try env.var_pool.pushRank();
-
-    // Iterate over the platform's required types
-    const requires_types_slice = platform_env.requires_types.items.items;
-    for (requires_types_slice) |required_type| {
-        // Look up the pre-translated app ident for this platform requirement
-        const app_required_ident = platform_to_app_idents.get(required_type.ident);
-
-        // Find the matching export in the app
-        const app_exports_slice = self.cir.store.sliceDefs(self.cir.exports);
-        var found_export: ?CIR.Def.Idx = null;
-
-        for (app_exports_slice) |def_idx| {
-            const def = self.cir.store.getDef(def_idx);
-            const pattern = self.cir.store.getPattern(def.pattern);
-
-            if (pattern == .assign) {
-                // Compare ident indices - if app_required_ident is null, there's no match
-                if (app_required_ident != null and pattern.assign.ident.eql(app_required_ident.?)) {
-                    found_export = def_idx;
-                    break;
-                }
-            }
-        }
-
-        if (found_export) |export_def_idx| {
-            // Get the app export's type variable
-            const export_def = self.cir.store.getDef(export_def_idx);
-            const export_var = ModuleEnv.varFrom(export_def.pattern);
-
-            // Copy the required type from the platform's type store into the app's type store
-            // First, convert the type annotation to a type variable in the platform's context
-            const required_type_var = ModuleEnv.varFrom(required_type.type_anno);
-
-            // Copy the type from the platform's type store
-            const copied_required_var = try self.copyVar(required_type_var, platform_env, required_type.region);
-
-            // Instantiate the copied variable before unifying (to avoid poisoning the cached copy)
-            // IMPORTANT: When we instantiate this rigid here, it is instantiated as a flex
-            const instantiated_required_var = try self.instantiateVar(copied_required_var, &env, .{ .explicit = required_type.region });
-
-            // Get the type aliases (eg [Model : model]) for this required type
-            const type_aliases_range = required_type.type_aliases;
-            const all_aliases = platform_env.for_clause_aliases.items.items;
-            const type_aliases_slice = all_aliases[@intFromEnum(type_aliases_range.start)..][0..type_aliases_range.count];
-
-            // Extract flex name -> instantiated var mappings from the var_map.
-            // Only process flex vars that are declared in the for-clause type aliases.
-            // Other flex vars (like those from open tag union extensions `..others`)
-            // are polymorphic and don't need to be unified with app-provided aliases.
-            var var_map_iter = self.var_map.iterator();
-            while (var_map_iter.next()) |entry| {
-                const fresh_var = entry.value_ptr.*;
-                const resolved = self.types.resolveVar(fresh_var);
-                switch (resolved.desc.content) {
-                    // Note that here we match on a flex var. Because the
-                    // type is instantiated any rigid in the platform
-                    // required type become flex
-                    .flex => |flex| {
-                        // Named flex vars come from rigid vars or named extensions (like `.._others`).
-                        // Anonymous flex vars (from `..` syntax) have no name and are skipped.
-                        const flex_name = flex.name orelse continue;
-
-                        // Check if this flex var is in the list of rigid vars declared
-                        // in the for-clause type aliases. If not, it's from an open tag
-                        // union extension (like `..others`) and doesn't need to be stored.
-                        var found_in_required_aliases = false;
-                        for (type_aliases_slice) |alias| {
-                            const app_rigid_name = platform_to_app_idents.get(alias.rigid_name) orelse continue;
-                            if (app_rigid_name.eql(flex_name)) {
-                                found_in_required_aliases = true;
-                                break;
-                            }
-                        }
-
-                        if (found_in_required_aliases) {
-                            // Store the rigid (now instantiated flex) name -> instantiated var mapping in the app's module env
-                            // Use cir.gpa since rigid_vars belongs to the ModuleEnv
-                            try self.cir.rigid_vars.put(self.cir.gpa, flex_name, fresh_var);
-                        }
-                    },
-                    else => {},
-                }
-            }
-
-            // For each for-clause type alias (e.g., [Model : model]), look up the app's
-            // corresponding type alias and unify it with the rigid type variable.
-            // This substitutes concrete app types for platform rigid type variables.
-            for (type_aliases_slice) |alias| {
-                // Translate the platform's alias name to the app's namespace
-                const app_alias_name = platform_to_app_idents.get(alias.alias_name) orelse {
-                    const expected_alias_ident = try self.cir.insertIdent(
-                        Ident.for_text(platform_env.getIdentText(alias.alias_name)),
-                    );
-                    _ = try self.problems.appendProblem(self.gpa, .{ .platform_alias_not_found = .{
-                        .expected_alias_ident = expected_alias_ident,
-                        .ctx = .not_found,
-                    } });
-                    try self.unifyWith(instantiated_required_var, .err, &env);
-                    try self.unifyWith(export_var, .err, &env);
-                    return;
-                };
-
-                // Look up the rigid var we stored earlier.
-                // rigid_vars is keyed by the APP's ident index (the rigid name was translated when copied),
-                // so we translate the platform's rigid_name to the app's ident space using the pre-built map.
-                const app_rigid_name = platform_to_app_idents.get(alias.rigid_name) orelse {
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic("Expected to find platform alias rigid var ident {s} in module", .{
-                            platform_env.getIdentText(alias.rigid_name),
-                        });
-                    }
-                    try self.unifyWith(instantiated_required_var, .err, &env);
-                    try self.unifyWith(export_var, .err, &env);
-                    return;
-                };
-                const rigid_var = self.cir.rigid_vars.get(app_rigid_name) orelse {
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic("Expected to find rigid var in map {s} in instantiate platform required type", .{
-                            platform_env.getIdentText(alias.rigid_name),
-                        });
-                    }
-                    try self.unifyWith(instantiated_required_var, .err, &env);
-                    try self.unifyWith(export_var, .err, &env);
-                    return;
-                };
-
-                // Look up the app's type alias's (eg Model) body (the underlying type, not the alias wrapper)
-                const app_type_var = self.findTypeAliasBodyVar(app_alias_name) orelse {
-                    const expected_alias_ident = try self.cir.insertIdent(
-                        Ident.for_text(platform_env.getIdentText(alias.alias_name)),
-                    );
-                    _ = try self.problems.appendProblem(self.gpa, .{ .platform_alias_not_found = .{
-                        .expected_alias_ident = expected_alias_ident,
-                        .ctx = .found_but_not_alias,
-                    } });
-                    try self.unifyWith(instantiated_required_var, .err, &env);
-                    try self.unifyWith(export_var, .err, &env);
-                    return;
-                };
-
-                // Now unify the (now-flex) var with the app's type alias body.
-                // This properly handles rank propagation (unlike dangerousSetVarRedirect).
-                _ = try self.unify(rigid_var, app_type_var, &env);
-            }
-
-            // Unify the platform's required type with the app's export type.
-            // This constrains type variables in the export (e.g., closure params)
-            // to match the platform's expected types. After this, the fresh vars
-            // stored in rigid_vars will redirect to the concrete app types.
-            // Context is set for error messages about which platform requirement wasn't satisfied.
-            const app_ident = app_required_ident orelse try self.cir.insertIdent(
-                Ident.for_text(platform_env.getIdentText(required_type.ident)),
-            );
-            _ = try self.unifyInContext(instantiated_required_var, export_var, &env, .{
-                .platform_requirement = .{ .required_ident = app_ident },
-            });
-        } else {
-            // If we got here, it means that the the definition was not found in
-            // the module's *export* list
-            const expected_def_ident = try self.cir.insertIdent(
-                Ident.for_text(platform_env.getIdentText(required_type.ident)),
-            );
-            _ = try self.problems.appendProblem(self.gpa, .{
-                .platform_def_not_found = .{
-                    .expected_def_ident = expected_def_ident,
-                    .ctx = blk: {
-                        // We know the def is not exported, but here we check
-                        // if it's defined *but not exported* in the module so
-                        // we can show a nicer error message
-
-                        var found_def: ?CIR.Def.Idx = null;
-
-                        // Check all defs in the module
-                        const app_defs_slice = self.cir.store.sliceDefs(self.cir.all_defs);
-                        for (app_defs_slice) |def_idx| {
-                            const def = self.cir.store.getDef(def_idx);
-                            const pattern = self.cir.store.getPattern(def.pattern);
-
-                            if (pattern == .assign) {
-                                // Compare ident indices - if app_required_ident is null, there's no match
-                                if (app_required_ident != null and pattern.assign.ident.eql(app_required_ident.?)) {
-                                    found_def = def_idx;
-                                    break;
-                                }
-                            }
-                        }
-
-                        // Break with more specific context
-                        if (found_def == null) {
-                            break :blk .not_found;
-                        } else {
-                            break :blk .found_but_not_exported;
-                        }
-                    },
-                },
-            });
-        }
-        // Note: If the export is not found, the canonicalizer should have already reported an error
-    }
-
-    // Process any deferred static dispatch constraints that arose from unifying
-    // platform types with app types. Without this, constraints on app expressions
-    // (e.g., method calls like `args.drop_first(1)`) whose receiver types are only
-    // resolved by platform requirements would never get their dispatch targets set.
-    //
-    // Skip entries whose constraints are all from_numeral — these are numeric literal
-    // constraints whose flex vars were unified with non-numeric platform types (e.g.,
-    // Err(1) where the platform expects Err([Exit(I32)])). They will be resolved
-    // later by finalizeNumericDefaults; processing them here would produce spurious
-    // "missing method" errors.
-    {
-        var i: usize = 0;
-        while (i < env.deferred_static_dispatch_constraints.items.items.len) {
-            const dc = env.deferred_static_dispatch_constraints.items.items[i];
-            const constraints = self.types.sliceStaticDispatchConstraints(dc.constraints);
-            var all_from_numeral = true;
-            for (constraints) |c| {
-                if (c.origin != .from_numeral) {
-                    all_from_numeral = false;
-                    break;
-                }
-            }
-            if (all_from_numeral) {
-                _ = env.deferred_static_dispatch_constraints.items.orderedRemove(i);
-            } else {
-                i += 1;
-            }
-        }
-        if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
-            try self.checkStaticDispatchConstraints(&env, false);
-        }
     }
 }
 
@@ -6759,31 +6479,6 @@ fn resolveNumericLiteralsFromContext(self: *Self, env: *Env) std.mem.Allocator.E
     // now have their dispatch constraints deferred, and checkAllConstraints
     // will resolve them through the normal dispatch machinery.
     try self.checkAllConstraints(env);
-}
-
-/// Default any remaining from_numeral flex vars to Dec.
-///
-/// By the time this runs, resolveNumericLiteralsFromContext has already
-/// unified from_numeral vars that had concrete peers in their binop
-/// constraints (e.g., U64 from List.len). The only vars still flex here
-/// are those with genuinely no numeric context, so Dec is correct.
-///
-/// For app modules with platform requirements, this should be called AFTER
-/// `checkPlatformRequirements()` so that platform types can constrain
-/// numeric literals first. Use `checkFileSkipNumericDefaults()` in that case.
-pub fn finalizeNumericDefaults(self: *Self) std.mem.Allocator.Error!void {
-    var env = try self.env_pool.acquire();
-    defer self.env_pool.release(env);
-    try env.var_pool.pushRank();
-    std.debug.assert(env.rank() == .outermost);
-
-    try self.finalizeNumericDefaultsInternal(&env);
-
-    // After finalizing numeric defaults, resolve any remaining deferred
-    // static dispatch constraints (e.g., Dec.plus, Dec.to_str).
-    if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
-        try self.checkStaticDispatchConstraints(&env, true);
-    }
 }
 
 fn finalizeNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Error!void {

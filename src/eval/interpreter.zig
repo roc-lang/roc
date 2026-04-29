@@ -1537,15 +1537,9 @@ pub const Interpreter = struct {
                     stack.append(self.allocator, assign.next) catch return;
                 },
                 .assign_ref => |assign| {
-                    debugPrint("    {d}: assign_ref target={d} result={s} materialization={s} op={any} next={d}\n", .{
+                    debugPrint("    {d}: assign_ref target={d} op={any} next={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(assign.target),
-                        switch (assign.result) {
-                            .fresh => "fresh",
-                            .alias_of => "alias_of",
-                            .borrow_of => "borrow_of",
-                        },
-                        @tagName(assign.ownership.materialization),
                         assign.op,
                         @intFromEnum(assign.next),
                     });
@@ -1560,15 +1554,10 @@ pub const Interpreter = struct {
                     stack.append(self.allocator, assign.next) catch return;
                 },
                 .assign_call => |assign| {
-                    debugPrint("    {d}: assign_call proc={d} target={d} result={s} args=", .{
+                    debugPrint("    {d}: assign_call proc={d} target={d} args=", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(assign.proc),
                         @intFromEnum(assign.target),
-                        switch (assign.result) {
-                            .fresh => "fresh",
-                            .alias_of => "alias_of",
-                            .borrow_of => "borrow_of",
-                        },
                     });
                     for (self.store.getLocalSpan(assign.args)) |arg_local| {
                         debugPrint("{d} ", .{@intFromEnum(arg_local)});
@@ -1608,14 +1597,6 @@ pub const Interpreter = struct {
                     });
                     for (self.store.getLocalSpan(assign.fields)) |field_local| {
                         debugPrint("{d} ", .{@intFromEnum(field_local)});
-                    }
-                    debugPrint("consumed=", .{});
-                    for (self.store.getLocalSpan(assign.ownership.consumed_owned_inputs)) |local| {
-                        debugPrint("{d} ", .{@intFromEnum(local)});
-                    }
-                    debugPrint("retained=", .{});
-                    for (self.store.getLocalSpan(assign.ownership.retained_borrows)) |local| {
-                        debugPrint("{d} ", .{@intFromEnum(local)});
                     }
                     debugPrint("next={d}\n", .{
                         @intFromEnum(assign.next),

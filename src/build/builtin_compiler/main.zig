@@ -1221,10 +1221,6 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) !std.ArrayList(CIR.Def.Id
                     }
                     const lookup_span = try env.store.exprSpanFrom(exprs_start);
 
-                    // Verify arity matches the ownership table (single source of truth).
-                    // This runs at build time, so a mismatch fails the build.
-                    std.debug.assert(num_params == low_level_op.getArgOwnership().len);
-
                     // Create e_run_low_level body expression
                     const body_idx = try env.addExpr(.{ .e_run_low_level = .{
                         .op = low_level_op,

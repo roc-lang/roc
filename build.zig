@@ -2902,27 +2902,6 @@ pub fn build(b: *std.Build) void {
         eval_host_effects_run_args,
     );
 
-    const eval_legacy_test = b.addTest(.{
-        .name = "eval_legacy_test",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/eval/eval_legacy_test_root.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-        }),
-        .filters = test_filters,
-    });
-    configureBackend(eval_legacy_test, target);
-    roc_modules.addModuleDependencies(eval_legacy_test, .eval);
-    eval_legacy_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
-    eval_legacy_test.step.dependOn(&write_compiled_builtins.step);
-
-    const run_eval_legacy_test = b.addRunArtifact(eval_legacy_test);
-    if (run_args.len != 0) {
-        run_eval_legacy_test.addArgs(run_args);
-    }
-    eval_test_step.dependOn(&run_eval_legacy_test.step);
-
     const playground_exe = b.addExecutable(.{
         .name = "playground",
         .root_module = b.createModule(.{

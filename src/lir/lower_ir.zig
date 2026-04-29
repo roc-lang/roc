@@ -2,7 +2,7 @@
 //!
 //! This stage consumes executable IR and committed logical layouts. It is not
 //! allowed to inspect checked CIR, MIR builders, method names, source syntax, or
-//! ownership summaries. Reference counting is inserted later by `arc.zig`.
+//! reference-counting policy. Reference counting is inserted later by `arc.zig`.
 
 const std = @import("std");
 const base = @import("base");

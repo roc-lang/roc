@@ -116,7 +116,6 @@ test "ModuleEnv.Serialized roundtrip" {
         .idents = ModuleEnv.CommonIdents.find(&common),
         .import_mapping = types.import_mapping.ImportMapping.init(deser_alloc),
         .method_idents = deserialized_ptr.method_idents.deserializeInto(@intFromPtr(buffer.ptr)),
-        .rigid_vars = std.AutoHashMapUnmanaged(base.Ident.Idx, types.Var){},
     };
 
     // Verify original data before serialization was correct

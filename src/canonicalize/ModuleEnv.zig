@@ -418,10 +418,6 @@ for_clause_aliases: ForClauseAlias.SafeList,
 /// Platform provides entries mapping Roc identifiers to FFI symbols.
 /// Populated during canonicalization for platform modules. Empty for non-platform modules.
 provides_entries: ProvidesEntry.SafeList,
-/// Rigid type variable mappings from platform for-clause after unification.
-/// Maps rigid names (e.g., "model") to their resolved type variables in the app's type store.
-/// Populated during checkPlatformRequirements when the platform has a for-clause.
-rigid_vars: std.AutoHashMapUnmanaged(Ident.Idx, TypeVar),
 /// All builtin stmts (temporary until module imports are working)
 builtin_statements: CIR.Statement.Span,
 /// All external declarations referenced in this module
@@ -461,11 +457,6 @@ import_mapping: types_mod.import_mapping.ImportMapping,
 /// Enables O(1) index-based method lookup during type checking and evaluation.
 /// Populated during canonicalization when methods are defined in associated blocks.
 method_idents: MethodIdents,
-
-/// Whether to defer finalizing numeric defaults until after platform requirements are checked.
-/// Set to true for app modules that have platform imports, so that numeric literals can be
-/// constrained by platform types (e.g., I64) before defaulting to Dec.
-defer_numeric_defaults: bool = false,
 
 /// A type alias mapping from a for-clause: [Model : model]
 /// Maps an alias name (Model) to a rigid variable name (model)
@@ -575,7 +566,6 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .requires_types = try RequiredType.SafeList.initCapacity(gpa, 4),
         .for_clause_aliases = try ForClauseAlias.SafeList.initCapacity(gpa, 4),
         .provides_entries = try ProvidesEntry.SafeList.initCapacity(gpa, 4),
-        .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
         .builtin_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(gpa, 16),
         .imports = CIR.Import.Store.init(),
@@ -599,7 +589,6 @@ pub fn deinit(self: *Self) void {
     self.requires_types.deinit(self.gpa);
     self.for_clause_aliases.deinit(self.gpa);
     self.provides_entries.deinit(self.gpa);
-    self.rigid_vars.deinit(self.gpa);
     self.imports.deinit(self.gpa);
     self.import_mapping.deinit();
     self.method_idents.deinit(self.gpa);
@@ -638,10 +627,6 @@ pub fn deinitCachedModule(self: *Self) void {
     // import_mapping is initialized empty during deserialization and may have
     // items added later, so we need to free it
     self.import_mapping.deinit();
-
-    // rigid_vars is initialized empty during deserialization and may have
-    // items added during type checking, so we need to free it
-    self.rigid_vars.deinit(self.gpa);
 
     // If enableRuntimeInserts was called on the interner, it allocated new memory
     // that needs to be freed. The interner.deinit checks supports_inserts internally
@@ -2476,7 +2461,6 @@ pub const Serialized = extern struct {
     requires_types: RequiredType.SafeList.Serialized,
     for_clause_aliases: ForClauseAlias.SafeList.Serialized,
     provides_entries: ProvidesEntry.SafeList.Serialized,
-    rigid_vars_reserved: [4]u64, // Reserved space for rigid_vars (AutoHashMapUnmanaged is ~32 bytes), initialized at runtime
     builtin_statements: CIR.Statement.Span,
     external_decls: CIR.ExternalDecl.SafeList.Serialized,
     imports: CIR.Import.Store.Serialized,
@@ -2530,9 +2514,6 @@ pub const Serialized = extern struct {
         self.display_module_name_idx_reserved = @bitCast(env.display_module_name_idx);
         self.qualified_module_ident_reserved = @bitCast(env.qualified_module_ident);
         self.evaluation_order_reserved = 0;
-        // rigid_vars is runtime-only and initialized fresh during deserialization
-        self.rigid_vars_reserved = .{ 0, 0, 0, 0 };
-
         // Serialize well-known identifier indices directly (no lookup needed during deserialization)
         self.idents = env.idents;
         // import_mapping is runtime-only and initialized fresh during deserialization
@@ -2581,7 +2562,6 @@ pub const Serialized = extern struct {
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
-            .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
         };
 
         return env;
@@ -2627,7 +2607,6 @@ pub const Serialized = extern struct {
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
-            .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
         };
 
         return env;

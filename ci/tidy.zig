@@ -623,7 +623,6 @@ const DeadFilesDetector = struct {
             "parallel_cli_runner.zig", // Parallel CLI test runner executable
             "test_harness.zig", // Shared test harness (added via b.addModule)
             "test_env_pkg.zig", // Typed CIR package root used via build root_source_file
-            "eval_legacy_test_root.zig", // Eval legacy suite root used via build root_source_file
             "module_env_serialization_test_root.zig", // Serialization suite root used via build root_source_file
             "mono_emit_test_root.zig", // Mono emit suite root used via build root_source_file
             "cor_pipeline_test_root.zig", // Cor pipeline suite root used via build root_source_file

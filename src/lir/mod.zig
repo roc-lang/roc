@@ -27,8 +27,6 @@ pub const JoinPointId = LIR.JoinPointId;
 pub const LiteralValue = LIR.LiteralValue;
 /// Platform-hosted proc metadata.
 pub const HostedProc = LIR.HostedProc;
-/// Physical result materialization kind attached to value-producing statements.
-pub const ResultMaterialization = LIR.ResultMaterialization;
 /// Ref-producing operations lowerable by `assign_ref`.
 pub const RefOp = LIR.RefOp;
 /// Canonical statement/control-flow node.

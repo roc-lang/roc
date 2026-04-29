@@ -80,8 +80,6 @@ pub const Interpreter = interpreter.Interpreter;
 pub const LirInterpreter = real_interpreter.Interpreter;
 /// Production-faithful RocOps recorder used by eval tests.
 pub const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
-/// Backward-compatible export for existing eval test helpers and tests.
-pub const TestEnv = RuntimeHostEnv;
 /// Bytebox runner for wasm modules.
 pub const wasm_runner = if (builtin.target.os.tag == .freestanding) struct {
     pub const EvalError = error{WasmExecFailed};
@@ -104,6 +102,5 @@ test "eval tests" {
     std.testing.refAllDecls(@import("stack.zig"));
     std.testing.refAllDecls(@import("test_helpers.zig"));
     std.testing.refAllDecls(@import("test/RuntimeHostEnv.zig"));
-    std.testing.refAllDecls(@import("test/TestEnv.zig"));
     std.testing.refAllDecls(@import("test/stack_test.zig"));
 }

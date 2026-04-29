@@ -10,7 +10,6 @@ pub const TargetsConfig = targets_config.TargetsConfig;
 pub const single_module = @import("compile_module.zig");
 pub const module_discovery = @import("module_discovery.zig");
 pub const dependency_sort = @import("dependency_sort.zig");
-pub const platform_requirements = @import("platform_requirements.zig");
 pub const threading = @import("threading.zig");
 
 // Actor model components
@@ -91,7 +90,6 @@ test "compile tests" {
     std.testing.refAllDecls(@import("compile_package.zig"));
     std.testing.refAllDecls(@import("module_discovery.zig"));
     std.testing.refAllDecls(@import("dependency_sort.zig"));
-    std.testing.refAllDecls(@import("platform_requirements.zig"));
 
     // Actor model components
     std.testing.refAllDecls(@import("messages.zig"));

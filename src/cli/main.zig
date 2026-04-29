@@ -2343,10 +2343,6 @@ pub fn setupSharedMemoryWithCoordinator(ctx: *CliContext, roc_file_path: []const
     // Run coordinator loop
     try coord.coordinatorLoop();
 
-    // Check that app exports match platform requirements
-    // This must happen after all modules are type-checked
-    try checkPlatformRequirementsFromCoordinator(&coord, ctx, &builtin_modules);
-
     // Populate header with module offsets from coordinator
     var module_idx: u32 = 0;
     var app_env_offset: u64 = 0;
@@ -2641,112 +2637,6 @@ fn extractNonPlatformPackages(
     }
 
     return packages;
-}
-
-/// Check that app exports match platform requirements.
-/// This is called after all modules are compiled and type-checked.
-/// This mirrors the logic in compile_build.zig's BuildEnv.checkPlatformRequirements.
-fn checkPlatformRequirementsFromCoordinator(
-    coord: *Coordinator,
-    ctx: *CliContext,
-    builtin_modules: *eval.BuiltinModules,
-) !void {
-    // Find app and platform packages
-    const app_pkg = coord.getPackage("app") orelse return;
-    const pf_pkg = coord.getPackage("pf") orelse return;
-
-    // Get the app's root module env
-    const app_root_id = app_pkg.root_module_id orelse return;
-    const app_root_env: *ModuleEnv = app_pkg.modules.items[app_root_id].env orelse return;
-
-    // Get the platform's root module env (the "main" module containing the requires clause)
-    var platform_root_env: ?*ModuleEnv = null;
-    for (pf_pkg.modules.items) |*mod| {
-        if (std.mem.eql(u8, mod.name, "main") or std.mem.eql(u8, mod.name, "main.roc")) {
-            if (mod.env) |env| {
-                platform_root_env = env;
-                break;
-            }
-        }
-    }
-    const pf_root_env = platform_root_env orelse return;
-
-    // If the platform has no requires_types, nothing to check
-    if (pf_root_env.requires_types.items.items.len == 0) {
-        return;
-    }
-
-    // Get builtin indices and module
-    const builtin_indices = builtin_modules.builtin_indices;
-    const builtin_module_env = builtin_modules.builtin_module.env;
-
-    // Build module_envs_map for type resolution
-    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(ctx.gpa);
-    defer module_envs_map.deinit();
-
-    // Use the shared populateModuleEnvs function to set up auto-imported types
-    try Can.populateModuleEnvs(&module_envs_map, app_root_env, builtin_module_env, builtin_indices);
-
-    // Build builtin context for the type checker
-    const builtin_ctx = Check.BuiltinContext{
-        .module_name = app_root_env.qualified_module_ident,
-        .bool_stmt = builtin_indices.bool_type,
-        .try_stmt = builtin_indices.try_type,
-        .str_stmt = builtin_indices.str_type,
-        .builtin_module = builtin_module_env,
-        .builtin_indices = builtin_indices,
-    };
-
-    // Create type checker for the app module
-    var checker = try Check.init(
-        ctx.gpa,
-        &app_root_env.types,
-        app_root_env,
-        &.{}, // No imported modules needed for checking exports
-        &module_envs_map,
-        &app_root_env.store.regions,
-        builtin_ctx,
-    );
-    defer checker.deinit();
-
-    var platform_to_app_idents = try compile.platform_requirements.buildPlatformToAppIdents(
-        ctx.gpa,
-        pf_root_env,
-        app_root_env,
-    );
-    defer platform_to_app_idents.deinit();
-
-    // Check platform requirements against app exports
-    try checker.checkPlatformRequirements(pf_root_env, &platform_to_app_idents);
-
-    // Now finalize numeric defaults for the app module. This must happen AFTER
-    // checkPlatformRequirements so that numeric literals can be constrained by
-    // platform types (e.g., I64) before defaulting to Dec.
-    try checker.finalizeNumericDefaults();
-
-    // If there are type problems, convert them to reports and add to app module
-    if (checker.problems.problems.items.len > 0) {
-        const app_module = &app_pkg.modules.items[app_root_id];
-        const app_path = app_module.path;
-
-        var rb = try check.ReportBuilder.init(
-            ctx.gpa,
-            app_root_env,
-            app_root_env,
-            &checker.snapshots,
-            &checker.problems,
-            app_path,
-            &.{},
-            &checker.import_mapping,
-            &checker.regions,
-        );
-        defer rb.deinit();
-
-        for (checker.problems.problems.items) |prob| {
-            const rep = rb.build(prob) catch continue;
-            try app_module.reports.append(ctx.gpa, rep);
-        }
-    }
 }
 
 /// Extract exposed modules from a platform's main.roc file
