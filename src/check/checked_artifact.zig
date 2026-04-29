@@ -583,7 +583,7 @@ fn classifyLocalValueRef(
                     .source_fn_ty_template = .{},
                 } };
             },
-            .callable_eval_template => {
+            .pending_callable_root => {
                 if (builtin.mode == .Debug) {
                     std.debug.panic(
                         "checked artifact invariant violated: callable top-level binding {d} was not sealed before publication",
@@ -1065,6 +1065,7 @@ pub const ModuleInterfaceCapabilities = struct {
 
 pub const ComptimeSchemaId = enum(u32) { _ };
 pub const ComptimeValueId = enum(u32) { _ };
+pub const ComptimeRootId = enum(u32) { _ };
 
 pub const ConstRef = struct {
     artifact: CheckedModuleArtifactKey,
@@ -1078,7 +1079,7 @@ pub const ConstRef = struct {
 pub const TopLevelValueKind = union(enum) {
     const_ref: ConstRef,
     procedure_binding: TopLevelProcedureBindingRef,
-    callable_eval_template: u32,
+    pending_callable_root: ComptimeRootId,
 };
 
 pub const TopLevelValueEntry = struct {
@@ -1096,6 +1097,7 @@ pub const TopLevelValueTable = struct {
         module: TypedCIR.Module,
         templates: *const CheckedProcedureTemplateTable,
         artifact_key: CheckedModuleArtifactKey,
+        comptime_values: *CompileTimeValueStore,
     ) Allocator.Error!TopLevelValueTable {
         var entries = std.ArrayList(TopLevelValueEntry).empty;
         errdefer entries.deinit(allocator);
@@ -1108,14 +1110,12 @@ pub const TopLevelValueTable = struct {
                     .proc = .{ .artifact = template.artifact, .proc_base = template.proc_base },
                     .template = template,
                 } };
-            } else .{ .const_ref = .{
-                .artifact = artifact_key,
-                .module_idx = module.moduleIndex(),
-                .pattern = def.pattern.idx,
-                .schema = @enumFromInt(@intFromEnum(def_idx)),
-                .value = @enumFromInt(@intFromEnum(def_idx)),
-                .source_type = module.defType(def_idx),
-            } };
+            } else .{ .const_ref = try comptime_values.reserveConst(
+                artifact_key,
+                module.moduleIndex(),
+                def.pattern.idx,
+                module.defType(def_idx),
+            ) };
 
             try entries.append(allocator, .{
                 .module_idx = module.moduleIndex(),
@@ -1150,11 +1150,246 @@ pub const PromotedProcedureTable = struct {
     }
 };
 
-pub const CompileTimeValueStore = struct {
-    schemas_len: u32 = 0,
-    values_len: u32 = 0,
+pub const ComptimeWrappedSchema = struct {
+    type_name: canonical.NominalTypeKey,
+    backing: ComptimeSchemaId,
+    is_opaque: bool = false,
+};
 
-    pub fn deinit(_: *CompileTimeValueStore, _: Allocator) void {}
+pub const ComptimeFieldSchema = struct {
+    name: canonical.RecordFieldLabelId,
+    schema: ComptimeSchemaId,
+};
+
+pub const ComptimeVariantSchema = struct {
+    name: canonical.TagLabelId,
+    payloads: []ComptimeSchemaId,
+};
+
+pub const ComptimeSchema = union(enum) {
+    pending,
+    zst,
+    int: types.Int.Precision,
+    frac: types.Frac.Precision,
+    str,
+    list: ComptimeSchemaId,
+    box: ComptimeSchemaId,
+    tuple: []ComptimeSchemaId,
+    record: []ComptimeFieldSchema,
+    tag_union: []ComptimeVariantSchema,
+    alias: ComptimeWrappedSchema,
+    nominal: ComptimeWrappedSchema,
+};
+
+pub const ComptimeVariantValue = struct {
+    variant_index: u32,
+    payloads: []ComptimeValueId,
+};
+
+pub const ComptimeValue = union(enum) {
+    pending,
+    zst,
+    int_bytes: [16]u8,
+    f32: f32,
+    f64: f64,
+    dec: [16]u8,
+    str: []u8,
+    list: []ComptimeValueId,
+    box: ComptimeValueId,
+    tuple: []ComptimeValueId,
+    record: []ComptimeValueId,
+    tag_union: ComptimeVariantValue,
+    alias: ComptimeValueId,
+    nominal: ComptimeValueId,
+    callable: canonical.ProcedureCallableRef,
+};
+
+pub const ComptimeBinding = struct {
+    pattern: CIR.Pattern.Idx,
+    schema: ComptimeSchemaId,
+    value: ComptimeValueId,
+};
+
+pub const CompileTimeValueStore = struct {
+    allocator: Allocator,
+    schemas: std.ArrayList(ComptimeSchema),
+    values: std.ArrayList(ComptimeValue),
+    bindings: []ComptimeBinding = &.{},
+    by_pattern: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, ComptimeBinding) = .{},
+
+    pub fn init(allocator: Allocator) CompileTimeValueStore {
+        return .{
+            .allocator = allocator,
+            .schemas = .empty,
+            .values = .empty,
+        };
+    }
+
+    pub fn reserveConst(
+        self: *CompileTimeValueStore,
+        artifact_key: CheckedModuleArtifactKey,
+        module_idx: u32,
+        pattern: CIR.Pattern.Idx,
+        source_type: Var,
+    ) Allocator.Error!ConstRef {
+        const schema = try self.addSchema(.pending);
+        const value = try self.addValue(.pending);
+        try self.bind(pattern, schema, value);
+        return .{
+            .artifact = artifact_key,
+            .module_idx = module_idx,
+            .pattern = pattern,
+            .schema = schema,
+            .value = value,
+            .source_type = source_type,
+        };
+    }
+
+    pub fn addSchema(self: *CompileTimeValueStore, schema: ComptimeSchema) Allocator.Error!ComptimeSchemaId {
+        const id: ComptimeSchemaId = @enumFromInt(@as(u32, @intCast(self.schemas.items.len)));
+        try self.schemas.append(self.allocator, schema);
+        return id;
+    }
+
+    pub fn overwriteSchema(self: *CompileTimeValueStore, id: ComptimeSchemaId, schema: ComptimeSchema) void {
+        self.deinitSchema(&self.schemas.items[@intFromEnum(id)]);
+        self.schemas.items[@intFromEnum(id)] = schema;
+    }
+
+    pub fn addValue(self: *CompileTimeValueStore, value: ComptimeValue) Allocator.Error!ComptimeValueId {
+        const id: ComptimeValueId = @enumFromInt(@as(u32, @intCast(self.values.items.len)));
+        try self.values.append(self.allocator, value);
+        return id;
+    }
+
+    pub fn overwriteValue(self: *CompileTimeValueStore, id: ComptimeValueId, value: ComptimeValue) void {
+        self.deinitValue(&self.values.items[@intFromEnum(id)]);
+        self.values.items[@intFromEnum(id)] = value;
+    }
+
+    pub fn bind(
+        self: *CompileTimeValueStore,
+        pattern: CIR.Pattern.Idx,
+        schema: ComptimeSchemaId,
+        value: ComptimeValueId,
+    ) Allocator.Error!void {
+        try self.by_pattern.put(self.allocator, pattern, .{
+            .pattern = pattern,
+            .schema = schema,
+            .value = value,
+        });
+    }
+
+    pub fn sealBindings(self: *CompileTimeValueStore) Allocator.Error!void {
+        self.allocator.free(self.bindings);
+        self.bindings = &.{};
+
+        const count = self.by_pattern.count();
+        const bindings = try self.allocator.alloc(ComptimeBinding, count);
+        errdefer self.allocator.free(bindings);
+
+        var it = self.by_pattern.valueIterator();
+        var i: usize = 0;
+        while (it.next()) |binding| : (i += 1) {
+            bindings[i] = binding.*;
+        }
+
+        std.mem.sort(ComptimeBinding, bindings, {}, struct {
+            fn lessThan(_: void, a: ComptimeBinding, b: ComptimeBinding) bool {
+                return @intFromEnum(a.pattern) < @intFromEnum(b.pattern);
+            }
+        }.lessThan);
+
+        self.bindings = bindings;
+    }
+
+    pub fn lookupBinding(self: *const CompileTimeValueStore, pattern: CIR.Pattern.Idx) ?ComptimeBinding {
+        return self.by_pattern.get(pattern);
+    }
+
+    pub fn verifySealed(self: *const CompileTimeValueStore) void {
+        if (builtin.mode != .Debug) return;
+
+        for (self.schemas.items) |schema| {
+            switch (schema) {
+                .pending => std.debug.panic(
+                    "checked artifact invariant violated: published compile-time schema store contains a pending schema",
+                    .{},
+                ),
+                else => {},
+            }
+        }
+
+        for (self.values.items) |value| {
+            switch (value) {
+                .pending => std.debug.panic(
+                    "checked artifact invariant violated: published compile-time value store contains a pending value",
+                    .{},
+                ),
+                else => {},
+            }
+        }
+
+        for (self.bindings) |binding| {
+            std.debug.assert(@intFromEnum(binding.schema) < self.schemas.items.len);
+            std.debug.assert(@intFromEnum(binding.value) < self.values.items.len);
+            const by_pattern = self.by_pattern.get(binding.pattern) orelse unreachable;
+            std.debug.assert(by_pattern.schema == binding.schema);
+            std.debug.assert(by_pattern.value == binding.value);
+        }
+    }
+
+    fn deinitSchema(self: *CompileTimeValueStore, schema: *ComptimeSchema) void {
+        switch (schema.*) {
+            .pending,
+            .zst,
+            .int,
+            .frac,
+            .str,
+            .list,
+            .box,
+            .alias,
+            .nominal,
+            => {},
+            .tuple => |items| self.allocator.free(items),
+            .record => |fields| self.allocator.free(fields),
+            .tag_union => |variants| {
+                for (variants) |variant| self.allocator.free(variant.payloads);
+                self.allocator.free(variants);
+            },
+        }
+    }
+
+    fn deinitValue(self: *CompileTimeValueStore, value: *ComptimeValue) void {
+        switch (value.*) {
+            .pending,
+            .zst,
+            .int_bytes,
+            .f32,
+            .f64,
+            .dec,
+            .box,
+            .alias,
+            .nominal,
+            .callable,
+            => {},
+            .str => |bytes| self.allocator.free(bytes),
+            .list => |items| self.allocator.free(items),
+            .tuple => |items| self.allocator.free(items),
+            .record => |items| self.allocator.free(items),
+            .tag_union => |variant| self.allocator.free(variant.payloads),
+        }
+    }
+
+    pub fn deinit(self: *CompileTimeValueStore, _: Allocator) void {
+        for (self.values.items) |*value| self.deinitValue(value);
+        for (self.schemas.items) |*schema| self.deinitSchema(schema);
+        self.allocator.free(self.bindings);
+        self.by_pattern.deinit(self.allocator);
+        self.values.deinit(self.allocator);
+        self.schemas.deinit(self.allocator);
+        self.* = CompileTimeValueStore.init(self.allocator);
+    }
 };
 
 pub const CheckedModuleArtifact = struct {
@@ -1233,9 +1468,14 @@ pub const CheckedModuleArtifact = struct {
                         std.debug.assert(std.mem.eql(u8, &template.artifact.bytes, &proc_binding.proc.artifact.bytes));
                     }
                 },
-                .callable_eval_template => {},
+                .pending_callable_root => std.debug.panic(
+                    "checked artifact invariant violated: published top-level value table contains pending callable root",
+                    .{},
+                ),
             }
         }
+
+        self.comptime_values.verifySealed();
 
         for (self.resolved_value_refs.records) |record| {
             std.debug.assert(self.resolved_value_refs.by_expr.get(record.expr) != null);
@@ -1567,8 +1807,18 @@ pub fn publishFromTypedModule(
     var platform_required_bindings = try PlatformRequiredBindingTable.fromModule(allocator, module, &canonical_names, owner_artifact);
     errdefer platform_required_bindings.deinit(allocator);
 
-    var top_level_values = try TopLevelValueTable.fromModule(allocator, module, &checked_procedure_templates, artifact_key);
+    var comptime_values = CompileTimeValueStore.init(allocator);
+    errdefer comptime_values.deinit(allocator);
+
+    var top_level_values = try TopLevelValueTable.fromModule(
+        allocator,
+        module,
+        &checked_procedure_templates,
+        artifact_key,
+        &comptime_values,
+    );
     errdefer top_level_values.deinit(allocator);
+    try comptime_values.sealBindings();
 
     var resolved_value_refs = try ResolvedValueRefTable.fromModule(
         allocator,
@@ -1604,7 +1854,7 @@ pub fn publishFromTypedModule(
         .interface_capabilities = ModuleInterfaceCapabilities.fromModule(module),
         .top_level_values = top_level_values,
         .promoted_procedures = .{},
-        .comptime_values = .{},
+        .comptime_values = comptime_values,
     };
     artifact.verifyPublished();
     return artifact;
@@ -1643,7 +1893,7 @@ test "artifact views are read-only projections" {
         },
         .top_level_values = .{},
         .promoted_procedures = .{},
-        .comptime_values = .{},
+        .comptime_values = CompileTimeValueStore.init(std.testing.allocator),
     };
     defer artifact.deinit(std.testing.allocator);
 
