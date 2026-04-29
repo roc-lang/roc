@@ -33,6 +33,7 @@ const module_discovery = @import("module_discovery.zig");
 const roc_target = @import("roc_target");
 
 const Check = check.Check;
+const CheckedArtifact = check.CheckedArtifact;
 const Can = can.Can;
 const Report = reporting.Report;
 const ModuleEnv = can.ModuleEnv;
@@ -42,7 +43,7 @@ const CanonicalizeImport = messages.CanonicalizeImport;
 
 const OwnedSemanticState = struct {
     module_env: ModuleEnv,
-    comptime_values: ?eval.comptime_value.Store = null,
+    checked_artifact: ?CheckedArtifact.CheckedModuleArtifact = null,
 };
 
 /// Deserialize BuiltinIndices from the binary data generated at build time
@@ -139,9 +140,9 @@ const ModuleState = struct {
         return if (self.semantic) |*semantic| &semantic.module_env else null;
     }
 
-    fn comptimeValues(self: *ModuleState) ?*eval.comptime_value.Store {
+    fn checkedArtifact(self: *ModuleState) ?*CheckedArtifact.CheckedModuleArtifact {
         if (self.semantic) |*semantic| {
-            if (semantic.comptime_values) |*values| return values;
+            if (semantic.checked_artifact) |*artifact| return artifact;
         }
         return null;
     }
@@ -150,7 +151,7 @@ const ModuleState = struct {
         const env = self.moduleEnv() orelse return null;
         return .{
             .env = env,
-            .comptime_values = self.comptimeValues(),
+            .checked_artifact = self.checkedArtifact(),
         };
     }
 
@@ -160,23 +161,23 @@ const ModuleState = struct {
         } else {
             self.semantic = .{
                 .module_env = env,
-                .comptime_values = null,
+                .checked_artifact = null,
             };
         }
     }
 
-    fn replaceComptimeValues(self: *ModuleState, values: eval.comptime_value.Store) void {
+    fn replaceCheckedArtifact(self: *ModuleState, artifact: CheckedArtifact.CheckedModuleArtifact) void {
         if (self.semantic) |*semantic| {
-            if (semantic.comptime_values) |*existing| existing.deinit();
-            semantic.comptime_values = values;
+            if (semantic.checked_artifact) |*existing| existing.deinit(existing.canonical_names.allocator);
+            semantic.checked_artifact = artifact;
             return;
         }
-        std.debug.panic("compile_package.ModuleState.replaceComptimeValues missing module env for {s}", .{self.name});
+        std.debug.panic("compile_package.ModuleState.replaceCheckedArtifact missing module env for {s}", .{self.name});
     }
 
     fn deinit(self: *ModuleState, gpa: Allocator) void {
         if (self.semantic) |*semantic| {
-            if (semantic.comptime_values) |*values| values.deinit();
+            if (semantic.checked_artifact) |*artifact| artifact.deinit(gpa);
         }
         if (comptime trace_build) {
             std.debug.print("[MOD DEINIT DETAIL] {s}: checking cached_ast\n", .{self.name});
@@ -296,24 +297,24 @@ const ModuleState = struct {
 /// Semantic facts retained for a checked module.
 pub const SemanticModuleData = struct {
     env: *ModuleEnv,
-    comptime_values: ?*const eval.comptime_value.Store,
+    checked_artifact: ?*const CheckedArtifact.CheckedModuleArtifact,
 };
 
 /// Owned output from type checking before module state takes retained facts.
 pub const TypeCheckOutput = struct {
     checker: Check,
-    comptime_values: ?eval.comptime_value.Store = null,
+    checked_artifact: ?CheckedArtifact.CheckedModuleArtifact = null,
 
     pub fn deinit(self: *TypeCheckOutput) void {
-        if (self.comptime_values) |*values| values.deinit();
+        if (self.checked_artifact) |*artifact| artifact.deinit(artifact.canonical_names.allocator);
         self.checker.deinit();
     }
 
-    pub fn takeComptimeValues(self: *TypeCheckOutput) eval.comptime_value.Store {
-        const values = self.comptime_values orelse
-            std.debug.panic("compile.typeCheckOutput missing comptime values", .{});
-        self.comptime_values = null;
-        return values;
+    pub fn takeCheckedArtifact(self: *TypeCheckOutput) CheckedArtifact.CheckedModuleArtifact {
+        const artifact = self.checked_artifact orelse
+            std.debug.panic("compile.typeCheckOutput missing checked artifact", .{});
+        self.checked_artifact = null;
+        return artifact;
     }
 };
 
@@ -1309,7 +1310,7 @@ pub const PackageEnv = struct {
 
         return .{
             .checker = checker,
-            .comptime_values = undefined,
+            .checked_artifact = undefined,
         };
     }
 
@@ -1370,7 +1371,7 @@ pub const PackageEnv = struct {
             self.io,
         );
         defer typecheck_output.deinit();
-        st.replaceComptimeValues(typecheck_output.takeComptimeValues());
+        st.replaceCheckedArtifact(typecheck_output.takeCheckedArtifact());
         const check_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
         if (!threading.is_freestanding) {
             self.total_type_checking_ns += @intCast(check_end - check_start);

@@ -35,6 +35,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const threading = @import("threading.zig");
 const can = @import("can");
+const check = @import("check");
 const parse = @import("parse");
 const reporting = @import("reporting");
 const eval = @import("eval");
@@ -149,7 +150,7 @@ pub const ModuleState = struct {
     /// Filesystem path to the .roc file
     path: []const u8,
     /// Owned semantic module payload. Earlier phases populate only `module_env`;
-    /// type checking later fills in `comptime_values`.
+    /// type checking later fills in the checked artifact.
     semantic: ?OwnedSemanticModuleData = null,
     /// Cached AST from parsing (owned, null after canonicalization)
     cached_ast: ?*AST,
@@ -204,9 +205,9 @@ pub const ModuleState = struct {
         return if (self.semantic) |*semantic| semantic.module_env else null;
     }
 
-    fn comptimeValues(self: *ModuleState) ?*eval.comptime_value.Store {
+    fn checkedArtifact(self: *ModuleState) ?*check.CheckedArtifact.CheckedModuleArtifact {
         if (self.semantic) |*semantic| {
-            if (semantic.comptime_values) |*values| return values;
+            if (semantic.checked_artifact) |*artifact| return artifact;
         }
         return null;
     }
@@ -215,7 +216,7 @@ pub const ModuleState = struct {
         const env = self.moduleEnv() orelse return null;
         return .{
             .env = env,
-            .comptime_values = self.comptimeValues(),
+            .checked_artifact = self.checkedArtifact(),
         };
     }
 
@@ -225,23 +226,23 @@ pub const ModuleState = struct {
         } else {
             self.semantic = .{
                 .module_env = env,
-                .comptime_values = null,
+                .checked_artifact = null,
             };
         }
     }
 
-    fn replaceComptimeValues(self: *ModuleState, values: eval.comptime_value.Store) void {
+    fn replaceCheckedArtifact(self: *ModuleState, artifact: check.CheckedArtifact.CheckedModuleArtifact) void {
         if (self.semantic) |*semantic| {
-            if (semantic.comptime_values) |*existing| existing.deinit();
-            semantic.comptime_values = values;
+            if (semantic.checked_artifact) |*existing| existing.deinit(existing.canonical_names.allocator);
+            semantic.checked_artifact = artifact;
             return;
         }
-        std.debug.panic("compile.coordinator.ModuleState.replaceComptimeValues missing module env for {s}", .{self.name});
+        std.debug.panic("compile.coordinator.ModuleState.replaceCheckedArtifact missing module env for {s}", .{self.name});
     }
 
     pub fn deinit(self: *ModuleState, gpa: Allocator, owns_module_data: bool) void {
         if (self.semantic) |*semantic| {
-            if (semantic.comptime_values) |*values| values.deinit();
+            if (semantic.checked_artifact) |*artifact| artifact.deinit(gpa);
         }
         if (comptime trace_build) {
             std.debug.print("[MOD DEINIT] {s}: starting, semantic={}, ast={}, owns={}\n", .{
@@ -1186,13 +1187,13 @@ pub const Coordinator = struct {
 
         // Take ownership of semantic module data
         mod.replaceModuleEnv(result.semantic.module_env);
-        if (result.semantic.comptime_values) |values| {
-            mod.replaceComptimeValues(values);
+        if (result.semantic.checked_artifact) |artifact| {
+            mod.replaceCheckedArtifact(artifact);
         } else if (mod.semantic) |*semantic| {
-            if (semantic.comptime_values) |*existing| existing.deinit();
-            semantic.comptime_values = null;
+            if (semantic.checked_artifact) |*existing| existing.deinit(existing.canonical_names.allocator);
+            semantic.checked_artifact = null;
         }
-        result.semantic.comptime_values = null;
+        result.semantic.checked_artifact = null;
 
         // Append reports - we take ownership, so clear result.reports after copying
         for (result.reports.items) |rep| {
@@ -1453,13 +1454,13 @@ pub const Coordinator = struct {
 
         // Set module from cache - mark as Done immediately since semantic data is complete
         mod.replaceModuleEnv(result.semantic.module_env);
-        if (result.semantic.comptime_values) |values| {
-            mod.replaceComptimeValues(values);
+        if (result.semantic.checked_artifact) |artifact| {
+            mod.replaceCheckedArtifact(artifact);
         } else if (mod.semantic) |*semantic| {
-            if (semantic.comptime_values) |*existing| existing.deinit();
-            semantic.comptime_values = null;
+            if (semantic.checked_artifact) |*existing| existing.deinit(existing.canonical_names.allocator);
+            semantic.checked_artifact = null;
         }
-        result.semantic.comptime_values = null;
+        result.semantic.checked_artifact = null;
         mod.was_cache_hit = true;
         mod.phase = .Done;
         mod.visit_color = .black;
@@ -2389,7 +2390,7 @@ pub const Coordinator = struct {
                     .path = task.path,
                     .semantic = .{
                         .module_env = env,
-                        .comptime_values = null,
+                        .checked_artifact = null,
                     },
                     .reports = std.ArrayList(Report).empty,
                     .type_check_ns = 0,
@@ -2430,7 +2431,7 @@ pub const Coordinator = struct {
                     .path = task.path,
                     .semantic = .{
                         .module_env = env,
-                        .comptime_values = null,
+                        .checked_artifact = null,
                     },
                     .reports = reports,
                     .type_check_ns = 0,
@@ -2450,7 +2451,7 @@ pub const Coordinator = struct {
         // Free imported_envs slice (owned by coordinator)
         self.gpa.free(task.imported_envs);
 
-        const comptime_values = typecheck_output.takeComptimeValues();
+        const checked_artifact = typecheck_output.takeCheckedArtifact();
 
         return .{
             .type_checked = .{
@@ -2460,7 +2461,7 @@ pub const Coordinator = struct {
                 .path = task.path,
                 .semantic = .{
                     .module_env = env,
-                    .comptime_values = comptime_values,
+                    .checked_artifact = checked_artifact,
                 },
                 .reports = reports,
                 .type_check_ns = if (threads_available) @intCast(check_end - start_time) else 0,

@@ -25,8 +25,6 @@ pub fn backendAvailable(backend_kind: EvalBackend) bool {
     };
 }
 
-/// Compile-time value representation for the dev backend
-pub const comptime_value = @import("comptime_value.zig");
 /// Executable memory for running generated code (re-exported from backend module)
 const backend = @import("backend");
 pub const ExecutableMemory = backend.ExecutableMemory;
@@ -97,7 +95,6 @@ pub const test_helpers = @import("test_helpers.zig");
 
 test "eval tests" {
     std.testing.refAllDecls(@This());
-    std.testing.refAllDecls(@import("comptime_value.zig"));
     std.testing.refAllDecls(@import("BuiltinModules.zig"));
     std.testing.refAllDecls(@import("builtins.zig"));
     std.testing.refAllDecls(@import("crash_context.zig"));

@@ -646,11 +646,11 @@ pub const BuildEnv = struct {
                     const env = coord_semantic.module_env;
                     sched_mod.semantic = .{
                         .module_env = env.*,
-                        .comptime_values = coord_semantic.comptime_values,
+                        .checked_artifact = coord_semantic.checked_artifact,
                     };
                     sched_mod.was_from_cache = coord_mod.was_cache_hit;
 
-                    coord_semantic.comptime_values = null;
+                    coord_semantic.checked_artifact = null;
 
                     // Free the heap-allocated struct wrapper.
                     // IMPORTANT: Use env.gpa, not self.gpa, because the env was
@@ -2119,7 +2119,7 @@ pub const BuildEnv = struct {
                         .name = sched_mod.name,
                         .semantic = .{
                             .env = env_ptr,
-                            .comptime_values = if (semantic.comptime_values) |*values| values else null,
+                            .checked_artifact = if (semantic.checked_artifact) |*artifact| artifact else null,
                         },
                         .source = source,
                         .package_name = pkg_name,

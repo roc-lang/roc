@@ -8,13 +8,14 @@
 
 const std = @import("std");
 const can = @import("can");
+const check = @import("check");
 const parse = @import("parse");
 const reporting = @import("reporting");
-const eval = @import("eval");
 const cache_module = @import("cache_module.zig");
 const cache_manager = @import("cache_manager.zig");
 
 const ModuleEnv = can.ModuleEnv;
+const CheckedArtifact = check.CheckedArtifact;
 const CacheData = cache_module.CacheModule.CacheData;
 const ImportInfo = cache_manager.ImportInfo;
 const Report = reporting.Report;
@@ -191,10 +192,10 @@ pub const CanonicalizedResult = struct {
 /// Result of successfully type-checking a module
 pub const OwnedSemanticModuleData = struct {
     module_env: *ModuleEnv,
-    comptime_values: ?eval.comptime_value.Store = null,
+    checked_artifact: ?CheckedArtifact.CheckedModuleArtifact = null,
 
     pub fn deinit(self: *OwnedSemanticModuleData) void {
-        if (self.comptime_values) |*values| values.deinit();
+        if (self.checked_artifact) |*artifact| artifact.deinit(artifact.canonical_names.allocator);
     }
 };
 
