@@ -34,6 +34,8 @@ const roc_target = @import("roc_target");
 
 const Check = check.Check;
 const CheckedArtifact = check.CheckedArtifact;
+const CheckedModules = check.TypedCIR.Modules;
+const CheckedModuleSource = CheckedModules.SourceModule;
 const Can = can.Can;
 const Report = reporting.Report;
 const ModuleEnv = can.ModuleEnv;
@@ -1307,14 +1309,33 @@ pub const PackageEnv = struct {
 
         module_envs_map.deinit();
 
+        var source_modules = try gpa.alloc(CheckedModuleSource, imported_envs.len + 1);
+        defer gpa.free(source_modules);
+        for (imported_envs, 0..) |imported_env, i| {
+            source_modules[i] = .{ .precompiled = @constCast(imported_env) };
+        }
+
+        const checked_module_idx_usize = imported_envs.len;
+        const checked_module_idx: u32 = @intCast(checked_module_idx_usize);
+        source_modules[checked_module_idx_usize] = .{ .precompiled = env };
+
+        var typed_modules = try CheckedModules.init(gpa, source_modules);
+        defer typed_modules.deinit();
+
+        var checked_artifact = try CheckedArtifact.publishFromTypedModule(
+            gpa,
+            &typed_modules,
+            checked_module_idx,
+            .{ .imports = imported_artifacts },
+        );
+        errdefer checked_artifact.deinit(gpa);
+
         _ = target;
         _ = io;
-        _ = imported_artifacts;
-        @compileError("Phase 2 must publish compile-time values during checked artifact finalization");
 
         return .{
             .checker = checker,
-            .checked_artifact = undefined,
+            .checked_artifact = checked_artifact,
         };
     }
 
