@@ -44,7 +44,7 @@ const AST = parse.AST;
 const CanonicalizeImport = messages.CanonicalizeImport;
 
 const OwnedSemanticState = struct {
-    module_env: ModuleEnv,
+    module_env: ?*ModuleEnv,
     checked_artifact: ?CheckedArtifact.CheckedModuleArtifact = null,
 };
 
@@ -141,7 +141,11 @@ const ModuleState = struct {
     was_from_cache: bool = false,
 
     fn moduleEnv(self: *ModuleState) ?*ModuleEnv {
-        return if (self.semantic) |*semantic| &semantic.module_env else null;
+        if (self.semantic) |*semantic| {
+            if (semantic.checked_artifact) |*artifact| return artifact.moduleEnv();
+            return semantic.module_env;
+        }
+        return null;
     }
 
     fn checkedArtifact(self: *ModuleState) ?*CheckedArtifact.CheckedModuleArtifact {
@@ -159,7 +163,7 @@ const ModuleState = struct {
         };
     }
 
-    fn replaceModuleEnv(self: *ModuleState, env: ModuleEnv) void {
+    fn replaceModuleEnv(self: *ModuleState, env: *ModuleEnv) void {
         if (self.semantic) |*semantic| {
             semantic.module_env = env;
         } else {
@@ -173,6 +177,7 @@ const ModuleState = struct {
     fn replaceCheckedArtifact(self: *ModuleState, artifact: CheckedArtifact.CheckedModuleArtifact) void {
         if (self.semantic) |*semantic| {
             if (semantic.checked_artifact) |*existing| existing.deinit(existing.canonical_names.allocator);
+            semantic.module_env = null;
             semantic.checked_artifact = artifact;
             return;
         }
@@ -203,36 +208,46 @@ const ModuleState = struct {
         // - Call full env.deinit() to free all allocations
         // - Free the source which was heap-allocated
         if (!self.was_from_cache) {
-            if (self.moduleEnv()) |e| {
-                // IMPORTANT: Use e.gpa, not the passed-in gpa, because source was allocated
-                // with e.gpa (page_allocator in multi-threaded mode).
-                const env_alloc = e.gpa;
-                const source = e.common.source;
-                if (comptime trace_build) {
-                    std.debug.print("[MOD DEINIT DETAIL] {s}: source={}, calling env.deinit\n", .{ self.name, @intFromPtr(source.ptr) });
+            if (self.semantic) |*semantic| {
+                if (semantic.checked_artifact == null) {
+                    if (semantic.module_env) |e| {
+                        // IMPORTANT: Use e.gpa, not the passed-in gpa, because source was allocated
+                        // with e.gpa (page_allocator in multi-threaded mode).
+                        const env_alloc = e.gpa;
+                        const source = e.common.source;
+                        if (comptime trace_build) {
+                            std.debug.print("[MOD DEINIT DETAIL] {s}: source={}, calling env.deinit\n", .{ self.name, @intFromPtr(source.ptr) });
+                        }
+                        e.deinit();
+                        if (comptime trace_build) {
+                            std.debug.print("[MOD DEINIT DETAIL] {s}: freeing source\n", .{self.name});
+                        }
+                        if (source.len > 0) env_alloc.free(@constCast(source));
+                        env_alloc.destroy(e);
+                    }
                 }
-                e.deinit();
-                if (comptime trace_build) {
-                    std.debug.print("[MOD DEINIT DETAIL] {s}: freeing source\n", .{self.name});
-                }
-                if (source.len > 0) env_alloc.free(source);
             }
         } else {
-            if (self.moduleEnv()) |e| {
-                if (comptime trace_build) {
-                    std.debug.print("[MOD DEINIT DETAIL] {s}: calling env.deinitCachedModule (heap-allocated hash maps only)\n", .{self.name});
+            if (self.semantic) |*semantic| {
+                if (semantic.checked_artifact == null) {
+                    if (semantic.module_env) |e| {
+                        if (comptime trace_build) {
+                            std.debug.print("[MOD DEINIT DETAIL] {s}: calling env.deinitCachedModule (heap-allocated hash maps only)\n", .{self.name});
+                        }
+                        // IMPORTANT: Use e.gpa, not the passed-in gpa, because source was allocated
+                        // with e.gpa (page_allocator in multi-threaded mode).
+                        const env_alloc = e.gpa;
+                        // The source is heap-allocated separately (read from file), not part of the cache buffer.
+                        // We need to free it even for cached modules.
+                        const source = e.common.source;
+                        e.deinitCachedModule();
+                        if (comptime trace_build) {
+                            std.debug.print("[MOD DEINIT DETAIL] {s}: freeing source for cached module\n", .{self.name});
+                        }
+                        if (source.len > 0) env_alloc.free(@constCast(source));
+                        env_alloc.destroy(e);
+                    }
                 }
-                // IMPORTANT: Use e.gpa, not the passed-in gpa, because source was allocated
-                // with e.gpa (page_allocator in multi-threaded mode).
-                const env_alloc = e.gpa;
-                // The source is heap-allocated separately (read from file), not part of the cache buffer.
-                // We need to free it even for cached modules.
-                const source = e.common.source;
-                e.deinitCachedModule();
-                if (comptime trace_build) {
-                    std.debug.print("[MOD DEINIT DETAIL] {s}: freeing source for cached module\n", .{self.name});
-                }
-                if (source.len > 0) env_alloc.free(source);
             }
         }
         if (comptime trace_build) {
@@ -849,7 +864,16 @@ pub const PackageEnv = struct {
 
         // line starts for diagnostics and consistent positions
 
-        var env = try ModuleEnv.init(self.gpa, src);
+        const env = try self.gpa.create(ModuleEnv);
+        errdefer self.gpa.destroy(env);
+        env.* = try ModuleEnv.init(self.gpa, src);
+        var env_owned_by_state = false;
+        errdefer {
+            if (!env_owned_by_state) {
+                env.deinit();
+                if (src.len > 0) self.gpa.free(src);
+            }
+        }
         // init CIR fields
         try env.initCIRFields(st.name);
 
@@ -857,9 +881,13 @@ pub const PackageEnv = struct {
 
         // replace env - save old source to free it after deinit
         const old_source = if (st.moduleEnv()) |old| old.common.source else null;
-        if (st.moduleEnv()) |old| old.deinit();
-        if (old_source) |s| self.gpa.free(s);
+        if (st.moduleEnv()) |old| {
+            old.deinit();
+            old.gpa.destroy(old);
+        }
+        if (old_source) |s| self.gpa.free(@constCast(s));
         st.replaceModuleEnv(env);
+        env_owned_by_state = true;
 
         // Parse AST and cache for reuse in doCanonicalize (avoids double parsing)
         // IMPORTANT: Use st.moduleEnv().?.common (not local env.common) so the AST's pointer
@@ -1326,7 +1354,10 @@ pub const PackageEnv = struct {
             gpa,
             &typed_modules,
             checked_module_idx,
-            .{ .imports = imported_artifacts },
+            .{
+                .module_env_storage = .{ .checked_source = env },
+                .imports = imported_artifacts,
+            },
         );
         errdefer checked_artifact.deinit(gpa);
 

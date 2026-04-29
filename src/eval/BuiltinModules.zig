@@ -68,7 +68,12 @@ pub const BuiltinModules = struct {
             allocator,
             &typed_modules,
             0,
-            .{},
+            .{
+                .module_env_storage = .{ .compiled_buffer = .{
+                    .env = builtin_module.env,
+                    .buffer = builtin_module.buffer,
+                } },
+            },
         );
         errdefer checked_artifact.deinit(allocator);
 
@@ -83,6 +88,5 @@ pub const BuiltinModules = struct {
     /// Clean up all resources
     pub fn deinit(self: *BuiltinModules) void {
         self.checked_artifact.deinit(self.allocator);
-        self.builtin_module.deinit();
     }
 };

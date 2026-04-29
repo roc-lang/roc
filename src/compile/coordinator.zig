@@ -202,7 +202,11 @@ pub const ModuleState = struct {
     }
 
     fn moduleEnv(self: *ModuleState) ?*ModuleEnv {
-        return if (self.semantic) |*semantic| semantic.module_env else null;
+        if (self.semantic) |*semantic| {
+            if (semantic.checked_artifact) |*artifact| return artifact.moduleEnv();
+            return semantic.module_env;
+        }
+        return null;
     }
 
     fn checkedArtifact(self: *ModuleState) ?*check.CheckedArtifact.CheckedModuleArtifact {
@@ -262,31 +266,36 @@ pub const ModuleState = struct {
 
         // Free module env if present (only if we own module data)
         if (owns_module_data) {
-            if (self.moduleEnv()) |env| {
-                // IMPORTANT: env stores its own allocator (env.gpa) which was used to create it.
-                // We must use env.gpa for cleanup, not the passed-in gpa, because in multi-threaded
-                // mode, env.gpa is page_allocator while gpa is the coordinator's allocator.
-                const env_alloc = env.gpa;
-                const source = env.common.source;
-                if (self.was_cache_hit) {
-                    // For cached modules, the env is heap-allocated but some fields
-                    // point into the cache buffer. Use deinitCachedModule() which only
-                    // frees heap-allocated parts (types, store.regions, imports map).
-                    if (comptime trace_build) {
-                        std.debug.print("[MOD DEINIT] {s}: deinit cached module env\n", .{self.name});
-                    }
-                    env.deinitCachedModule();
-                    env_alloc.destroy(env);
+            if (self.semantic) |*semantic| {
+                if (semantic.checked_artifact != null) {
+                    // The checked artifact owns the ModuleEnv after publication.
                 } else {
-                    if (comptime trace_build) {
-                        std.debug.print("[MOD DEINIT] {s}: freeing env\n", .{self.name});
+                    const env = semantic.module_env;
+                    // IMPORTANT: env stores its own allocator (env.gpa) which was used to create it.
+                    // We must use env.gpa for cleanup, not the passed-in gpa, because in multi-threaded
+                    // mode, env.gpa is page_allocator while gpa is the coordinator's allocator.
+                    const env_alloc = env.gpa;
+                    const source = env.common.source;
+                    if (self.was_cache_hit) {
+                        // For cached modules, the env is heap-allocated but some fields
+                        // point into the cache buffer. Use deinitCachedModule() which only
+                        // frees heap-allocated parts (types, store.regions, imports map).
+                        if (comptime trace_build) {
+                            std.debug.print("[MOD DEINIT] {s}: deinit cached module env\n", .{self.name});
+                        }
+                        env.deinitCachedModule();
+                        env_alloc.destroy(env);
+                    } else {
+                        if (comptime trace_build) {
+                            std.debug.print("[MOD DEINIT] {s}: freeing env\n", .{self.name});
+                        }
+                        env.deinit();
+                        env_alloc.destroy(env);
                     }
-                    env.deinit();
-                    env_alloc.destroy(env);
+                    // Free the heap-allocated source (it's NOT part of the cache buffer)
+                    // Source was allocated with the same allocator used for env creation
+                    if (source.len > 0) env_alloc.free(@constCast(source));
                 }
-                // Free the heap-allocated source (it's NOT part of the cache buffer)
-                // Source was allocated with the same allocator used for env creation
-                if (source.len > 0) env_alloc.free(source);
             }
         }
 

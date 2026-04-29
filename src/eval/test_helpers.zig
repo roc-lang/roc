@@ -85,7 +85,6 @@ pub const ParsedResources = struct {
         for (self.import_artifacts) |*artifact| artifact.deinit(allocator);
         allocator.free(self.import_artifacts);
         self.typed_cir_modules.deinit();
-        self.builtin_module.deinit();
         allocator.free(self.imported_envs);
         allocator.destroy(self.checker);
         allocator.destroy(self.can);
@@ -200,7 +199,8 @@ pub fn parseAndCanonicalizeProgramWrapped(
         "Builtin",
         compiled_builtins.builtin_source,
     );
-    errdefer builtin_module.deinit();
+    var builtin_module_owned_by_artifact = false;
+    errdefer if (!builtin_module_owned_by_artifact) builtin_module.deinit();
 
     var extra_modules = std.ArrayList(CheckedModule).empty;
     errdefer {
@@ -277,16 +277,10 @@ pub fn parseAndCanonicalizeProgramWrapped(
 
     var source_modules = try allocator.alloc(ModuleSourceFile, extra_modules.items.len + 2);
     defer allocator.free(source_modules);
-    source_modules[0] = .{ .owned_checked = .{
-        .env = main_checked.module_env,
-        .owned_source = main_checked.owned_source,
-    } };
+    source_modules[0] = .{ .precompiled = main_checked.module_env };
     source_modules[1] = .{ .precompiled = builtin_module.env };
     for (extra_modules.items, 0..) |extra, i| {
-        source_modules[i + 2] = .{ .owned_checked = .{
-            .env = extra.module_env,
-            .owned_source = extra.owned_source,
-        } };
+        source_modules[i + 2] = .{ .precompiled = extra.module_env };
     }
 
     const typed_cir_modules = try check.TypedCIR.Modules.init(allocator, source_modules);
@@ -294,14 +288,13 @@ pub fn parseAndCanonicalizeProgramWrapped(
         var owned_modules = typed_cir_modules;
         owned_modules.deinit();
     }
-    main_checked.published_owns_module_env = true;
-    main_checked.owned_source = null;
-    for (extra_modules.items) |*extra| {
-        extra.published_owns_module_env = true;
-        extra.owned_source = null;
-    }
-
-    var import_artifacts = try publishImportArtifacts(allocator, &typed_cir_modules, extra_modules.items.len);
+    var import_artifacts = try publishImportArtifacts(
+        allocator,
+        &typed_cir_modules,
+        &builtin_module,
+        extra_modules.items,
+        &builtin_module_owned_by_artifact,
+    );
     errdefer {
         for (import_artifacts) |*artifact| artifact.deinit(allocator);
         allocator.free(import_artifacts);
@@ -314,9 +307,14 @@ pub fn parseAndCanonicalizeProgramWrapped(
         allocator,
         &typed_cir_modules,
         0,
-        .{ .imports = publish_imports },
+        .{
+            .module_env_storage = .{ .checked_source = main_checked.module_env },
+            .imports = publish_imports,
+        },
     );
     errdefer checked_artifact.deinit(allocator);
+    main_checked.published_owns_module_env = true;
+    main_checked.owned_source = null;
 
     return .{
         .module_env = main_checked.module_env,
@@ -513,8 +511,11 @@ fn lowerParsedProgramToLir(
 fn publishImportArtifacts(
     allocator: Allocator,
     typed_cir_modules: *const check.TypedCIR.Modules,
-    extra_module_count: usize,
+    builtin_module: *builtin_loading.LoadedModule,
+    extra_modules: []CheckedModule,
+    builtin_module_owned_by_artifact: *bool,
 ) ![]check.CheckedArtifact.CheckedModuleArtifact {
+    const extra_module_count = extra_modules.len;
     var artifacts = std.ArrayList(check.CheckedArtifact.CheckedModuleArtifact).empty;
     errdefer {
         for (artifacts.items) |*artifact| artifact.deinit(allocator);
@@ -528,8 +529,14 @@ fn publishImportArtifacts(
         allocator,
         typed_cir_modules,
         1,
-        .{},
+        .{
+            .module_env_storage = .{ .compiled_buffer = .{
+                .env = builtin_module.env,
+                .buffer = builtin_module.buffer,
+            } },
+        },
     );
+    builtin_module_owned_by_artifact.* = true;
     published_keys.append(allocator, .{
         .module_idx = 1,
         .key = builtin_artifact.key,
@@ -563,8 +570,13 @@ fn publishImportArtifacts(
                 allocator,
                 typed_cir_modules,
                 module_idx,
-                .{ .imports = published_keys.items },
+                .{
+                    .module_env_storage = .{ .checked_source = extra_modules[extra_i].module_env },
+                    .imports = published_keys.items,
+                },
             );
+            extra_modules[extra_i].published_owns_module_env = true;
+            extra_modules[extra_i].owned_source = null;
 
             published_keys.append(allocator, .{
                 .module_idx = module_idx,

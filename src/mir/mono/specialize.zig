@@ -116,8 +116,8 @@ pub fn run(
         const template = templateForRoot(input.root.artifact, root) orelse continue;
         const requested_mono_fn_ty = try canonical_type_keys.fromVar(
             allocator,
-            &input.root.artifact.module_env.types,
-            input.root.artifact.module_env.getIdentStoreConst(),
+            &input.root.artifact.moduleEnvConst().types,
+            input.root.artifact.moduleEnvConst().getIdentStoreConst(),
             root.checked_type,
         );
         const request = MonoSpecializationRequest{
@@ -181,7 +181,7 @@ fn lowerTemplateFnType(
 ) Allocator.Error!Type.TypeId {
     var lowerer = LowerType.Lowerer.init(
         allocator,
-        artifact.module_env,
+        artifact.moduleEnvConst(),
         &artifact.canonical_names,
         &program.types,
     );

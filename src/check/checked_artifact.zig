@@ -8,6 +8,7 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 const base = @import("base");
 const can = @import("can");
+const collections = @import("collections");
 const types = @import("types");
 const TypedCIR = @import("typed_cir.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
@@ -19,6 +20,59 @@ const Ident = base.Ident;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const Var = types.Var;
+const CompactWriter = collections.CompactWriter;
+
+pub const ModuleEnvStorage = union(enum) {
+    checked_source: *ModuleEnv,
+    compiled_buffer: struct {
+        env: *ModuleEnv,
+        buffer: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
+    },
+    cached_buffer: struct {
+        env: *ModuleEnv,
+        buffer: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
+        source: []const u8,
+    },
+
+    pub fn env(self: *const ModuleEnvStorage) *ModuleEnv {
+        return switch (self.*) {
+            .checked_source => |module_env| module_env,
+            .compiled_buffer => |compiled| compiled.env,
+            .cached_buffer => |cached| cached.env,
+        };
+    }
+
+    pub fn envConst(self: *const ModuleEnvStorage) *const ModuleEnv {
+        return self.env();
+    }
+
+    pub fn deinit(self: *ModuleEnvStorage) void {
+        switch (self.*) {
+            .checked_source => |module_env| {
+                const env_alloc = module_env.gpa;
+                const source = module_env.common.source;
+                module_env.deinit();
+                if (source.len > 0) env_alloc.free(@constCast(source));
+                env_alloc.destroy(module_env);
+            },
+            .compiled_buffer => |compiled| {
+                const env_alloc = compiled.env.gpa;
+                compiled.env.common.idents.interner.deinit(env_alloc);
+                compiled.env.imports.deinitMapOnly(env_alloc);
+                env_alloc.destroy(compiled.env);
+                env_alloc.free(compiled.buffer);
+            },
+            .cached_buffer => |cached| {
+                const env_alloc = cached.env.gpa;
+                cached.env.deinitCachedModule();
+                if (cached.source.len > 0) env_alloc.free(@constCast(cached.source));
+                env_alloc.destroy(cached.env);
+                env_alloc.free(cached.buffer);
+            },
+        }
+        self.* = undefined;
+    }
+};
 
 pub const CheckedModuleArtifactKey = struct {
     source_hash: [32]u8 = [_]u8{0} ** 32,
@@ -151,6 +205,7 @@ pub const PublishImportArtifact = struct {
 };
 
 pub const PublishInputs = struct {
+    module_env_storage: ModuleEnvStorage,
     imports: []const PublishImportArtifact = &.{},
 };
 
@@ -1829,7 +1884,7 @@ pub const CheckedModuleArtifact = struct {
     module_identity: ModuleIdentity,
     checking_context_identity: CheckingContextIdentity,
     direct_import_artifact_keys: []CheckedModuleArtifactKey = &.{},
-    module_env: *const ModuleEnv,
+    module_env: ModuleEnvStorage,
     exports: ExportTable,
     provides_requires: ProvidesRequiresMetadata,
     method_registry: static_dispatch.MethodRegistry,
@@ -1844,6 +1899,14 @@ pub const CheckedModuleArtifact = struct {
     top_level_values: TopLevelValueTable,
     promoted_procedures: PromotedProcedureTable,
     comptime_values: CompileTimeValueStore,
+
+    pub fn moduleEnv(self: *CheckedModuleArtifact) *ModuleEnv {
+        return self.module_env.env();
+    }
+
+    pub fn moduleEnvConst(self: *const CheckedModuleArtifact) *const ModuleEnv {
+        return self.module_env.envConst();
+    }
 
     pub fn deinit(self: *CheckedModuleArtifact, allocator: Allocator) void {
         self.comptime_values.deinit(allocator);
@@ -1862,6 +1925,7 @@ pub const CheckedModuleArtifact = struct {
         allocator.free(self.direct_import_artifact_keys);
         self.checking_context_identity.deinit(allocator);
         self.canonical_names.deinit();
+        self.module_env.deinit();
     }
 
     pub fn verifyPublished(self: *const CheckedModuleArtifact) void {
@@ -1918,7 +1982,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(self.resolved_value_refs.by_expr.get(record.expr) != null);
         }
 
-        verifyLoweringVisibleNamesInterned(self.module_env, &self.canonical_names);
+        verifyLoweringVisibleNamesInterned(self.moduleEnvConst(), &self.canonical_names);
     }
 };
 
@@ -2289,7 +2353,7 @@ pub fn publishFromTypedModule(
         .module_identity = module_identity,
         .checking_context_identity = checking_context_identity,
         .direct_import_artifact_keys = direct_import_artifact_keys,
-        .module_env = module_env,
+        .module_env = inputs.module_env_storage,
         .exports = .{ .defs = exports },
         .provides_requires = .{
             .provides = provides,
@@ -2348,7 +2412,10 @@ test "artifact views are read-only projections" {
         .promoted_procedures = .{},
         .comptime_values = CompileTimeValueStore.init(std.testing.allocator),
     };
-    defer artifact.deinit(std.testing.allocator);
+    defer {
+        artifact.comptime_values.deinit(std.testing.allocator);
+        artifact.canonical_names.deinit();
+    }
 
     const imported = importedView(&artifact);
     const lowering = loweringView(&artifact);

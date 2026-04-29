@@ -644,18 +644,14 @@ pub const BuildEnv = struct {
                     }
 
                     const env = coord_semantic.module_env;
+                    const checked_artifact = coord_semantic.checked_artifact;
                     sched_mod.semantic = .{
-                        .module_env = env.*,
-                        .checked_artifact = coord_semantic.checked_artifact,
+                        .module_env = if (checked_artifact == null) env else null,
+                        .checked_artifact = checked_artifact,
                     };
                     sched_mod.was_from_cache = coord_mod.was_cache_hit;
 
                     coord_semantic.checked_artifact = null;
-
-                    // Free the heap-allocated struct wrapper.
-                    // IMPORTANT: Use env.gpa, not self.gpa, because the env was
-                    // allocated with env.gpa (page_allocator in multi-threaded mode).
-                    env.gpa.destroy(env);
 
                     // Clear coordinator ownership to prevent double-free during deinit.
                     coord_mod.semantic = null;
@@ -2127,7 +2123,10 @@ pub const BuildEnv = struct {
             for (sched.modules.items, 0..) |*sched_mod, mod_idx| {
                 // Skip modules without env (not compiled or failed)
                 if (sched_mod.semantic) |*semantic| {
-                    const env_ptr: *ModuleEnv = &semantic.module_env;
+                    const env_ptr: *ModuleEnv = if (semantic.checked_artifact) |*artifact|
+                        artifact.moduleEnv()
+                    else
+                        semantic.module_env orelse continue;
                     const source = env_ptr.common.source;
 
                     // Determine if this is platform main or sibling
