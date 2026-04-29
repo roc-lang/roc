@@ -77,60 +77,74 @@ pub const MethodRegistry = struct {
         self.* = .{};
     }
 
-    pub fn fromTypedModules(
+    pub fn fromModule(
         allocator: Allocator,
-        modules: *const TypedCIR.Modules,
+        module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
-        local_templates: ?*const ProcedureTemplateLookup,
+        local_templates: *const ProcedureTemplateLookup,
     ) Allocator.Error!MethodRegistry {
         var entries = std.ArrayList(MethodRegistryEntry).empty;
         errdefer entries.deinit(allocator);
 
-        var module_idx: u32 = 0;
-        while (module_idx < modules.moduleCount()) : (module_idx += 1) {
-            const module = modules.module(module_idx);
-            const module_env = module.moduleEnvConst();
-            const idents = module.identStoreConst();
-            const module_name = try names.internModuleIdent(idents, module.qualifiedModuleIdent());
+        const module_idx = module.moduleIndex();
+        if (module_idx != local_templates.module_idx) {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.panic(
+                    "checked static dispatch registry invariant violated: template lookup module {d} does not match module {d}",
+                    .{ local_templates.module_idx, module_idx },
+                );
+            }
+            unreachable;
+        }
 
-            for (module.methodIdentEntries()) |entry| {
-                const def_node_idx = module_env.getExposedNodeIndexById(entry.value) orelse {
+        const module_env = module.moduleEnvConst();
+        const idents = module.identStoreConst();
+        const module_name = try names.internModuleIdent(idents, module.qualifiedModuleIdent());
+
+        for (module.methodIdentEntries()) |entry| {
+            const def_node_idx = module_env.getExposedNodeIndexById(entry.value) orelse {
+                if (@import("builtin").mode == .Debug) {
                     std.debug.panic(
                         "checked static dispatch registry invariant violated: method ident {d} has no exposed definition",
                         .{@as(u32, @bitCast(entry.value))},
                     );
-                };
-                const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(def_node_idx)));
-                const export_name = try names.internExportIdent(idents, entry.value);
-                const proc_base = try names.internProcBase(.{
-                    .module_name = module_name,
-                    .export_name = export_name,
-                    .kind = .checked_source,
-                    .ordinal = @intFromEnum(def_idx),
-                });
-                const template = if (local_templates != null and module_idx == local_templates.?.module_idx)
-                    local_templates.?.templateForDef(def_idx)
-                else
-                    null;
-                const proc_artifact = if (template) |template_ref| template_ref.artifact else canonical.ArtifactRef{};
+                }
+                unreachable;
+            };
+            const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(def_node_idx)));
+            const template = local_templates.templateForDef(def_idx) orelse {
+                if (@import("builtin").mode == .Debug) {
+                    std.debug.panic(
+                        "checked static dispatch registry invariant violated: method def {d} has no checked procedure template",
+                        .{@intFromEnum(def_idx)},
+                    );
+                }
+                unreachable;
+            };
+            const export_name = try names.internExportIdent(idents, entry.value);
+            const proc_base = try names.internProcBase(.{
+                .module_name = module_name,
+                .export_name = export_name,
+                .kind = .checked_source,
+                .ordinal = @intFromEnum(def_idx),
+            });
 
-                try entries.append(allocator, .{
-                    .key = .{
-                        .owner = .{ .nominal = .{
-                            .module_name = module_name,
-                            .type_name = try names.internTypeIdent(idents, entry.key.type_ident),
-                        } },
-                        .method = try names.internMethodIdent(idents, entry.key.method_ident),
-                    },
-                    .target = .{
-                        .module_idx = module_idx,
-                        .def_idx = def_idx,
-                        .proc = .{ .artifact = proc_artifact, .proc_base = proc_base },
-                        .template = template,
-                        .callable_var = ModuleEnv.varFrom(def_idx),
-                    },
-                });
-            }
+            try entries.append(allocator, .{
+                .key = .{
+                    .owner = .{ .nominal = .{
+                        .module_name = module_name,
+                        .type_name = try names.internTypeIdent(idents, entry.key.type_ident),
+                    } },
+                    .method = try names.internMethodIdent(idents, entry.key.method_ident),
+                },
+                .target = .{
+                    .module_idx = module_idx,
+                    .def_idx = def_idx,
+                    .proc = .{ .artifact = template.artifact, .proc_base = proc_base },
+                    .template = template,
+                    .callable_var = ModuleEnv.varFrom(def_idx),
+                },
+            });
         }
 
         return .{ .entries = try entries.toOwnedSlice(allocator) };
