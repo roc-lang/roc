@@ -183,6 +183,7 @@ pub const RootRequestKind = enum {
     repl_expr,
     dev_expr,
     compile_time_constant,
+    compile_time_callable,
 };
 
 pub const RootAbi = enum {
@@ -264,11 +265,12 @@ pub const RootRequestTable = struct {
         for (module.allDefs()) |def_idx| {
             const def = module.def(def_idx);
             if (topLevelExprIsAlreadyProcedure(def.expr.data)) continue;
+            const source_ty = module.defType(def_idx);
             try appendRoot(&requests, allocator, .{
                 .module_idx = module.moduleIndex(),
-                .kind = .compile_time_constant,
+                .kind = if (sourceTypeIsFunction(module, source_ty)) .compile_time_callable else .compile_time_constant,
                 .source = .{ .def = def_idx },
-                .checked_type = module.defType(def_idx),
+                .checked_type = source_ty,
                 .abi = .compile_time,
                 .exposure = .private,
             });
@@ -313,6 +315,34 @@ fn topLevelExprIsAlreadyProcedure(expr: CIR.Expr) bool {
         .e_lambda, .e_closure, .e_anno_only, .e_hosted_lambda => true,
         else => false,
     };
+}
+
+fn sourceTypeIsFunction(module: TypedCIR.Module, var_: Var) bool {
+    const store = module.typeStoreConst();
+    var current = var_;
+    while (true) {
+        const resolved = store.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                current = store.getAliasBackingVar(alias);
+                continue;
+            },
+            .structure => |flat| return switch (flat) {
+                .fn_pure, .fn_effectful, .fn_unbound => true,
+                else => false,
+            },
+            .err => return false,
+            .flex, .rigid => {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: top-level source type {d} was not fully resolved before publication",
+                        .{@intFromEnum(var_)},
+                    );
+                }
+                unreachable;
+            },
+        }
+    }
 }
 
 fn isHostedProcedureExpr(expr: CIR.Expr) bool {
@@ -714,7 +744,7 @@ fn classifyImportedValueRef(
         unreachable;
     }
     const def = imported_module.def(target_def);
-    if (topLevelExprIsAlreadyProcedure(def.expr.data)) {
+    if (sourceTypeIsFunction(imported_module, imported_module.defType(target_def))) {
         return .{ .imported_proc = .{
             .binding = .{ .imported = .{
                 .artifact = import_key,
@@ -1366,26 +1396,32 @@ pub const TopLevelValueTable = struct {
     ) Allocator.Error!TopLevelValueTable {
         var entries = std.ArrayList(TopLevelValueEntry).empty;
         errdefer entries.deinit(allocator);
+        var callable_root_count: u32 = 0;
 
         for (module.allDefs()) |def_idx| {
             const def = module.def(def_idx);
+            const source_ty = module.defType(def_idx);
             const value: TopLevelValueKind = if (topLevelExprIsAlreadyProcedure(def.expr.data)) blk: {
                 const template = templates.lookupByDef(def_idx) orelse unreachable;
                 break :blk .{ .procedure_binding = .{
                     .proc = .{ .artifact = template.artifact, .proc_base = template.proc_base },
                     .template = template,
                 } };
+            } else if (sourceTypeIsFunction(module, source_ty)) blk: {
+                const root: ComptimeRootId = @enumFromInt(callable_root_count);
+                callable_root_count += 1;
+                break :blk .{ .pending_callable_root = root };
             } else .{ .const_ref = try comptime_values.reserveConst(
                 artifact_key,
                 module.moduleIndex(),
                 def.pattern.idx,
-                module.defType(def_idx),
+                source_ty,
             ) };
 
             try entries.append(allocator, .{
                 .module_idx = module.moduleIndex(),
                 .pattern = def.pattern.idx,
-                .source_type = module.defType(def_idx),
+                .source_type = source_ty,
                 .value = value,
             });
         }
