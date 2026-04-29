@@ -112,6 +112,10 @@ fn hashDirectImportArtifactKeys(keys: []const CheckedModuleArtifactKey) [32]u8 {
     return hasher.finalResult();
 }
 
+fn artifactRef(key: CheckedModuleArtifactKey) canonical.ArtifactRef {
+    return .{ .bytes = key.bytes };
+}
+
 pub const CheckingContextIdentity = struct {
     imports: []ImportIdentity = &.{},
 
@@ -833,6 +837,7 @@ pub const CheckedProcedureTemplateTable = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
+        owner_artifact: canonical.ArtifactRef,
     ) Allocator.Error!CheckedProcedureTemplateTable {
         var templates = std.ArrayList(CheckedProcedureTemplate).empty;
         errdefer templates.deinit(allocator);
@@ -863,6 +868,7 @@ pub const CheckedProcedureTemplateTable = struct {
             });
             const template_id: canonical.CheckedProcedureTemplateId = @enumFromInt(@as(u32, @intCast(templates.items.len)));
             const template_ref = canonical.ProcedureTemplateRef{
+                .artifact = owner_artifact,
                 .proc_base = proc_base,
                 .template = template_id,
             };
@@ -890,6 +896,7 @@ pub const CheckedProcedureTemplateTable = struct {
             });
             const template_id: canonical.CheckedProcedureTemplateId = @enumFromInt(@as(u32, @intCast(templates.items.len)));
             const template_ref = canonical.ProcedureTemplateRef{
+                .artifact = owner_artifact,
                 .proc_base = proc_base,
                 .template = template_id,
             };
@@ -971,7 +978,10 @@ pub const HostedProcTable = struct {
                     .expr_idx = def.expr.idx,
                     .external_symbol_name = try names.internExternalSymbolIdent(module.identStoreConst(), hosted.symbol_name),
                     .deterministic_index = @intCast(procs.items.len),
-                    .proc = .{ .proc_base = templates.lookupByDef(def_idx).?.proc_base },
+                    .proc = .{
+                        .artifact = templates.lookupByDef(def_idx).?.artifact,
+                        .proc_base = templates.lookupByDef(def_idx).?.proc_base,
+                    },
                 }),
                 else => {},
             }
@@ -1001,6 +1011,7 @@ pub const PlatformRequiredBindingTable = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
+        owner_artifact: canonical.ArtifactRef,
     ) Allocator.Error!PlatformRequiredBindingTable {
         const module_env = module.moduleEnvConst();
         const bindings = try allocator.alloc(PlatformRequiredBinding, module_env.requires_types.items.items.len);
@@ -1020,7 +1031,7 @@ pub const PlatformRequiredBindingTable = struct {
                 .requires_idx = @intCast(i),
                 .ident = external_name,
                 .type_anno = required_type.type_anno,
-                .proc = .{ .proc_base = proc_base },
+                .proc = .{ .artifact = owner_artifact, .proc_base = proc_base },
             };
         }
 
@@ -1092,7 +1103,7 @@ pub const TopLevelValueTable = struct {
             const value: TopLevelValueKind = if (topLevelExprIsAlreadyProcedure(def.expr.data)) blk: {
                 const template = templates.lookupByDef(def_idx) orelse unreachable;
                 break :blk .{ .procedure_binding = .{
-                    .proc = .{ .proc_base = template.proc_base },
+                    .proc = .{ .artifact = template.artifact, .proc_base = template.proc_base },
                     .template = template,
                 } };
             } else .{ .const_ref = .{
@@ -1215,7 +1226,10 @@ pub const CheckedModuleArtifact = struct {
                 .const_ref => |const_ref| std.debug.assert(const_ref.module_idx == self.module_identity.module_idx),
                 .procedure_binding => |proc_binding| {
                     _ = self.canonical_names.procBase(proc_binding.proc.proc_base);
-                    if (proc_binding.template) |template| std.debug.assert(template.proc_base == proc_binding.proc.proc_base);
+                    if (proc_binding.template) |template| {
+                        std.debug.assert(template.proc_base == proc_binding.proc.proc_base);
+                        std.debug.assert(std.mem.eql(u8, &template.artifact.bytes, &proc_binding.proc.artifact.bytes));
+                    }
                 },
                 .callable_eval_template => {},
             }
@@ -1346,7 +1360,9 @@ pub fn publishFromTypedModule(
     const requires = try allocator.dupe(ModuleEnv.RequiredType, module_env.requires_types.items.items);
     errdefer allocator.free(requires);
 
-    var checked_procedure_templates = try CheckedProcedureTemplateTable.fromModule(allocator, module, &canonical_names);
+    const owner_artifact = artifactRef(artifact_key);
+
+    var checked_procedure_templates = try CheckedProcedureTemplateTable.fromModule(allocator, module, &canonical_names, owner_artifact);
     errdefer checked_procedure_templates.deinit(allocator);
     const template_lookup = checked_procedure_templates.asLookup(module_idx);
 
@@ -1362,7 +1378,7 @@ pub fn publishFromTypedModule(
     var hosted_procs = try HostedProcTable.fromModule(allocator, module, &canonical_names, &checked_procedure_templates);
     errdefer hosted_procs.deinit(allocator);
 
-    var platform_required_bindings = try PlatformRequiredBindingTable.fromModule(allocator, module, &canonical_names);
+    var platform_required_bindings = try PlatformRequiredBindingTable.fromModule(allocator, module, &canonical_names, owner_artifact);
     errdefer platform_required_bindings.deinit(allocator);
 
     var top_level_values = try TopLevelValueTable.fromModule(allocator, module, &checked_procedure_templates, artifact_key);

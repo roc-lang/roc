@@ -112,6 +112,7 @@ pub const MethodRegistry = struct {
                     local_templates.?.templateForDef(def_idx)
                 else
                     null;
+                const proc_artifact = if (template) |template_ref| template_ref.artifact else canonical.ArtifactRef{};
 
                 try entries.append(allocator, .{
                     .key = .{
@@ -124,7 +125,7 @@ pub const MethodRegistry = struct {
                     .target = .{
                         .module_idx = module_idx,
                         .def_idx = def_idx,
-                        .proc = .{ .proc_base = proc_base },
+                        .proc = .{ .artifact = proc_artifact, .proc_base = proc_base },
                         .template = template,
                         .callable_var = ModuleEnv.varFrom(def_idx),
                     },

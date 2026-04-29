@@ -28,11 +28,17 @@ pub const EntryWrapperId = enum(u32) { _ };
 pub const PromotedCallableNodeId = enum(u32) { _ };
 pub const PromotedCallableBodyPlanId = enum(u32) { _ };
 
+pub const ArtifactRef = struct {
+    bytes: [32]u8 = [_]u8{0} ** 32,
+};
+
 pub const ProcedureValueRef = struct {
+    artifact: ArtifactRef = .{},
     proc_base: ProcBaseKeyRef,
 };
 
 pub const ProcedureTemplateRef = struct {
+    artifact: ArtifactRef = .{},
     proc_base: ProcBaseKeyRef,
     template: CheckedProcedureTemplateId,
 };

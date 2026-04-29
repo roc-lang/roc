@@ -134,7 +134,9 @@ fn verifyProgram(program: *const Program) void {
     for (program.root_procs.items) |root| {
         var found = false;
         for (program.procs.items) |proc| {
-            if (proc.proc.proc_base == root.proc_base) {
+            if (std.mem.eql(u8, &proc.proc.artifact.bytes, &root.artifact.bytes) and
+                proc.proc.proc_base == root.proc_base)
+            {
                 found = true;
                 break;
             }
@@ -170,7 +172,7 @@ pub const Queue = struct {
         if (self.requested.get(key)) |existing| return existing;
 
         const reserved = ReservedMonoProc{
-            .proc = .{ .proc_base = request.template.proc_base },
+            .proc = .{ .artifact = request.template.artifact, .proc_base = request.template.proc_base },
             .local_handle = @enumFromInt(@as(u32, @intCast(self.requested.count()))),
             .state = .reserved,
         };

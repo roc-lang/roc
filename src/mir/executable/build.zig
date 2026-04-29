@@ -77,7 +77,11 @@ pub fn run(allocator: Allocator, solved: LambdaSolved.Solve.Program) Allocator.E
 
 fn executableProcForSource(program: *const Program, source_proc: canonical.ProcedureValueRef) ?Ast.ExecutableProcId {
     for (program.procs.items) |proc| {
-        if (proc.source_proc.proc_base == source_proc.proc_base) return proc.executable_proc;
+        if (std.mem.eql(u8, &proc.source_proc.artifact.bytes, &source_proc.artifact.bytes) and
+            proc.source_proc.proc_base == source_proc.proc_base)
+        {
+            return proc.executable_proc;
+        }
     }
     return null;
 }
