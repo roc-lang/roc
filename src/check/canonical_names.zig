@@ -197,6 +197,34 @@ pub const CanonicalNameStore = struct {
         return internText(ExternalSymbolNameId, self.allocator, &self.external_symbol_names, &self.external_symbol_name_by_text, idents.getText(ident));
     }
 
+    pub fn lookupModuleIdent(self: *const CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) ?ModuleNameId {
+        return self.module_name_by_text.get(idents.getText(ident));
+    }
+
+    pub fn lookupTypeIdent(self: *const CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) ?TypeNameId {
+        return self.type_name_by_text.get(idents.getText(ident));
+    }
+
+    pub fn lookupMethodIdent(self: *const CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) ?MethodNameId {
+        return self.method_name_by_text.get(idents.getText(ident));
+    }
+
+    pub fn lookupRecordFieldIdent(self: *const CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) ?RecordFieldLabelId {
+        return self.record_field_label_by_text.get(idents.getText(ident));
+    }
+
+    pub fn lookupTagIdent(self: *const CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) ?TagLabelId {
+        return self.tag_label_by_text.get(idents.getText(ident));
+    }
+
+    pub fn lookupExportIdent(self: *const CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) ?ExportNameId {
+        return self.export_name_by_text.get(idents.getText(ident));
+    }
+
+    pub fn lookupExternalSymbolIdent(self: *const CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) ?ExternalSymbolNameId {
+        return self.external_symbol_name_by_text.get(idents.getText(ident));
+    }
+
     pub fn internProcBase(self: *CanonicalNameStore, key: ProcBaseKey) Allocator.Error!ProcBaseKeyRef {
         self.scratch_key.clearRetainingCapacity();
         try self.scratch_key.writer(self.allocator).print("proc:{d}:{s}:{d}:{d}|", .{

@@ -6,6 +6,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
+const base = @import("base");
 const can = @import("can");
 const types = @import("types");
 const TypedCIR = @import("typed_cir.zig");
@@ -13,6 +14,7 @@ const static_dispatch = @import("static_dispatch_registry.zig");
 const canonical = @import("canonical_names.zig");
 
 const Allocator = std.mem.Allocator;
+const Ident = base.Ident;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const Var = types.Var;
@@ -1238,6 +1240,8 @@ pub const CheckedModuleArtifact = struct {
         for (self.resolved_value_refs.records) |record| {
             std.debug.assert(self.resolved_value_refs.by_expr.get(record.expr) != null);
         }
+
+        verifyLoweringVisibleNamesInterned(self.module_env, &self.canonical_names);
     }
 };
 
@@ -1309,6 +1313,186 @@ fn publishImportKeyForModule(imports: []const PublishImportArtifact, module_idx:
     return null;
 }
 
+const InternLoweringVisibleNameVisitor = struct {
+    names: *canonical.CanonicalNameStore,
+    idents: *const Ident.Store,
+
+    fn recordField(self: *@This(), ident: Ident.Idx) Allocator.Error!void {
+        _ = try self.names.internRecordFieldIdent(self.idents, ident);
+    }
+
+    fn tag(self: *@This(), ident: Ident.Idx) Allocator.Error!void {
+        _ = try self.names.internTagIdent(self.idents, ident);
+    }
+
+    fn method(self: *@This(), ident: Ident.Idx) Allocator.Error!void {
+        _ = try self.names.internMethodIdent(self.idents, ident);
+    }
+
+    fn typeName(self: *@This(), ident: Ident.Idx) Allocator.Error!void {
+        _ = try self.names.internTypeIdent(self.idents, ident);
+    }
+
+    fn exportName(self: *@This(), ident: Ident.Idx) Allocator.Error!void {
+        _ = try self.names.internExportIdent(self.idents, ident);
+    }
+
+    fn externalSymbol(self: *@This(), ident: Ident.Idx) Allocator.Error!void {
+        _ = try self.names.internExternalSymbolIdent(self.idents, ident);
+    }
+};
+
+const VerifyLoweringVisibleNameVisitor = struct {
+    names: *const canonical.CanonicalNameStore,
+    idents: *const Ident.Store,
+
+    fn recordField(self: *@This(), ident: Ident.Idx) Allocator.Error!void {
+        std.debug.assert(self.names.lookupRecordFieldIdent(self.idents, ident) != null);
+    }
+
+    fn tag(self: *@This(), ident: Ident.Idx) Allocator.Error!void {
+        std.debug.assert(self.names.lookupTagIdent(self.idents, ident) != null);
+    }
+
+    fn method(self: *@This(), ident: Ident.Idx) Allocator.Error!void {
+        std.debug.assert(self.names.lookupMethodIdent(self.idents, ident) != null);
+    }
+
+    fn typeName(self: *@This(), ident: Ident.Idx) Allocator.Error!void {
+        std.debug.assert(self.names.lookupTypeIdent(self.idents, ident) != null);
+    }
+
+    fn exportName(self: *@This(), ident: Ident.Idx) Allocator.Error!void {
+        std.debug.assert(self.names.lookupExportIdent(self.idents, ident) != null);
+    }
+
+    fn externalSymbol(self: *@This(), ident: Ident.Idx) Allocator.Error!void {
+        std.debug.assert(self.names.lookupExternalSymbolIdent(self.idents, ident) != null);
+    }
+};
+
+fn internLoweringVisibleNames(
+    module_env: *const ModuleEnv,
+    names: *canonical.CanonicalNameStore,
+) Allocator.Error!void {
+    var visitor = InternLoweringVisibleNameVisitor{
+        .names = names,
+        .idents = module_env.getIdentStoreConst(),
+    };
+    try scanLoweringVisibleNames(module_env, &visitor);
+}
+
+fn verifyLoweringVisibleNamesInterned(
+    module_env: *const ModuleEnv,
+    names: *const canonical.CanonicalNameStore,
+) void {
+    if (builtin.mode != .Debug) return;
+    var visitor = VerifyLoweringVisibleNameVisitor{
+        .names = names,
+        .idents = module_env.getIdentStoreConst(),
+    };
+    scanLoweringVisibleNames(module_env, &visitor) catch unreachable;
+}
+
+fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allocator.Error!void {
+    const store = &module_env.store;
+    var raw_node_idx: u32 = 0;
+    while (raw_node_idx < store.nodes.len()) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        const tag = store.nodes.get(node_idx).tag;
+        switch (tag) {
+            .record_field => {
+                const field = store.getRecordField(@enumFromInt(raw_node_idx));
+                try visitor.recordField(field.name);
+            },
+            .record_destruct => {
+                const destruct = store.getRecordDestruct(@enumFromInt(raw_node_idx));
+                switch (destruct.kind) {
+                    .Rest => {},
+                    .Required, .SubPattern => try visitor.recordField(destruct.label),
+                }
+            },
+            .expr_typed_int,
+            .expr_typed_frac,
+            .expr_tag,
+            .expr_zero_argument_tag,
+            .expr_closure,
+            .expr_field_access,
+            .expr_method_call,
+            .expr_dispatch_call,
+            .expr_method_eq,
+            .expr_type_method_call,
+            .expr_type_dispatch_call,
+            .expr_hosted_lambda,
+            => {
+                const expr = store.getExpr(@enumFromInt(raw_node_idx));
+                switch (expr) {
+                    .e_typed_int => |typed| try visitor.typeName(typed.type_name),
+                    .e_typed_frac => |typed| try visitor.typeName(typed.type_name),
+                    .e_tag => |tag_expr| try visitor.tag(tag_expr.name),
+                    .e_zero_argument_tag => |tag_expr| {
+                        try visitor.tag(tag_expr.name);
+                        try visitor.tag(tag_expr.closure_name);
+                    },
+                    .e_closure => |closure| try visitor.tag(closure.tag_name),
+                    .e_field_access => |field_access| try visitor.recordField(field_access.field_name),
+                    .e_method_call => |method_call| try visitor.method(method_call.method_name),
+                    .e_dispatch_call => |dispatch_call| try visitor.method(dispatch_call.method_name),
+                    .e_method_eq => try visitor.method(module_env.idents.is_eq),
+                    .e_type_method_call => |type_method_call| try visitor.method(type_method_call.method_name),
+                    .e_type_dispatch_call => |type_dispatch_call| try visitor.method(type_dispatch_call.method_name),
+                    .e_hosted_lambda => |hosted| try visitor.externalSymbol(hosted.symbol_name),
+                    else => {},
+                }
+            },
+            .pattern_applied_tag => {
+                const pattern = store.getPattern(@enumFromInt(raw_node_idx));
+                switch (pattern) {
+                    .applied_tag => |tag_pattern| try visitor.tag(tag_pattern.name),
+                    else => {},
+                }
+            },
+            .type_header => {
+                const header = store.getTypeHeader(@enumFromInt(raw_node_idx));
+                try visitor.typeName(header.name);
+                try visitor.typeName(header.relative_name);
+            },
+            .ty_apply,
+            .ty_lookup,
+            .ty_tag,
+            => {
+                const anno = store.getTypeAnno(@enumFromInt(raw_node_idx));
+                switch (anno) {
+                    .apply => |apply| try visitor.typeName(apply.name),
+                    .lookup => |lookup| try visitor.typeName(lookup.name),
+                    .tag => |tag_anno| try visitor.tag(tag_anno.name),
+                    else => {},
+                }
+            },
+            .ty_record_field => {
+                const field = store.getAnnoRecordField(@enumFromInt(raw_node_idx));
+                try visitor.recordField(field.name);
+            },
+            .where_method,
+            .where_alias,
+            => {
+                const where_clause = store.getWhereClause(@enumFromInt(raw_node_idx));
+                switch (where_clause) {
+                    .w_method => |method| try visitor.method(method.method_name),
+                    .w_alias => |alias| try visitor.typeName(alias.alias_name),
+                    .w_malformed => {},
+                }
+            },
+            .exposed_item => {
+                const item = store.getExposedItem(@enumFromInt(raw_node_idx));
+                try visitor.exportName(item.name);
+                if (item.alias) |alias| try visitor.exportName(alias);
+            },
+            else => {},
+        }
+    }
+}
+
 pub fn loweringView(artifact: *const CheckedModuleArtifact) LoweringModuleView {
     return .{
         .artifact = artifact,
@@ -1338,6 +1522,8 @@ pub fn publishFromTypedModule(
         .qualified_module_name = qualified_module_name,
         .kind = module_env.module_kind,
     };
+
+    try internLoweringVisibleNames(module_env, &canonical_names);
 
     var checking_context_identity = try CheckingContextIdentity.fromModule(allocator, module);
     errdefer checking_context_identity.deinit(allocator);
