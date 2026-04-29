@@ -1159,6 +1159,7 @@ pub const Coordinator = struct {
                 .path = mod.path,
                 .module_env = mod.moduleEnv().?,
                 .imported_envs = try self.buildTypecheckImportedEnvs(pkg, mod),
+                .imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod),
             },
         });
     }
@@ -1893,6 +1894,64 @@ pub const Coordinator = struct {
         return try imported_envs.toOwnedSlice(self.gpa);
     }
 
+    fn buildTypecheckImportedArtifacts(
+        self: *Coordinator,
+        pkg: *PackageState,
+        mod: *ModuleState,
+    ) ![]const check.CheckedArtifact.PublishImportArtifact {
+        var imports = std.ArrayList(check.CheckedArtifact.PublishImportArtifact).empty;
+        errdefer imports.deinit(self.gpa);
+
+        const module_env = mod.moduleEnv().?;
+        const direct_imports = module_env.imports.imports.items.items;
+        for (direct_imports, 0..) |str_idx, i| {
+            const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
+            const import_name = module_env.getString(str_idx);
+            const resolved_module_idx = module_env.imports.getResolvedModule(import_idx) orelse continue;
+
+            if (std.mem.eql(u8, import_name, "Builtin")) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("checked artifact publication invariant violated: Builtin import has no published artifact", .{});
+                }
+                unreachable;
+            }
+
+            if (pkg.module_names.get(import_name)) |imp_id| {
+                const imp = pkg.getModule(imp_id).?;
+                const artifact = imp.checkedArtifact() orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "checked artifact publication invariant violated: local import {s} has no published artifact",
+                            .{import_name},
+                        );
+                    }
+                    unreachable;
+                };
+                try imports.append(self.gpa, .{
+                    .module_idx = resolved_module_idx,
+                    .key = artifact.key,
+                });
+                continue;
+            }
+
+            const artifact = self.getExternalArtifact(pkg.name, import_name) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "checked artifact publication invariant violated: external import {s} has no published artifact",
+                        .{import_name},
+                    );
+                }
+                unreachable;
+            };
+            try imports.append(self.gpa, .{
+                .module_idx = resolved_module_idx,
+                .key = artifact.key,
+            });
+        }
+
+        return try imports.toOwnedSlice(self.gpa);
+    }
+
     /// Try to unblock a module waiting on imports
     fn tryUnblock(self: *Coordinator, pkg: *PackageState, module_id: ModuleId) !void {
         const mod = pkg.getModule(module_id) orelse return;
@@ -2074,6 +2133,19 @@ pub const Coordinator = struct {
 
         return if (target_pkg.getSemanticDataIfDone(qualified.module)) |semantic|
             semantic.env
+        else
+            null;
+    }
+
+    pub fn getExternalArtifact(self: *Coordinator, source_pkg: []const u8, import_name: []const u8) ?*const check.CheckedArtifact.CheckedModuleArtifact {
+        const qualified = base.module_path.parseQualifiedImport(import_name) orelse return null;
+
+        const source = self.packages.get(source_pkg) orelse return null;
+        const target_pkg_name = source.shorthands.get(qualified.qualifier) orelse return null;
+        const target_pkg = self.packages.get(target_pkg_name) orelse return null;
+
+        return if (target_pkg.getSemanticDataIfDone(qualified.module)) |semantic|
+            semantic.checked_artifact
         else
             null;
     }
@@ -2379,9 +2451,12 @@ pub const Coordinator = struct {
             env,
             self.builtin_modules.builtin_module.env,
             task.imported_envs,
+            task.imported_artifacts,
             self.target,
             self.io,
         ) catch {
+            self.gpa.free(task.imported_envs);
+            self.gpa.free(task.imported_artifacts);
             return .{
                 .type_checked = .{
                     .package_name = task.package_name,
@@ -2423,6 +2498,7 @@ pub const Coordinator = struct {
         ) catch {
             // On allocation failure, return result with empty reports
             self.gpa.free(task.imported_envs);
+            self.gpa.free(task.imported_artifacts);
             return .{
                 .type_checked = .{
                     .package_name = task.package_name,
@@ -2450,6 +2526,7 @@ pub const Coordinator = struct {
 
         // Free imported_envs slice (owned by coordinator)
         self.gpa.free(task.imported_envs);
+        self.gpa.free(task.imported_artifacts);
 
         const checked_artifact = typecheck_output.takeCheckedArtifact();
 

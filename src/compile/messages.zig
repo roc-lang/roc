@@ -105,6 +105,8 @@ pub const TypeCheckTask = struct {
     module_env: *ModuleEnv,
     /// Imported module environments (read-only pointers to completed modules)
     imported_envs: []const *ModuleEnv,
+    /// Published checked artifact keys for direct imports, keyed by typed-CIR module index
+    imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
 };
 
 /// Task sent to workers - contains ALL inputs needed for the operation

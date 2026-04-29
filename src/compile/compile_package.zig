@@ -104,6 +104,8 @@ pub const ImportResolver = struct {
     isReady: *const fn (ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) bool,
     /// Get a pointer to the external ModuleEnv once ready (null if not ready)
     getEnv: *const fn (ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) ?*ModuleEnv,
+    /// Get the published checked artifact for the external import once ready (null if not ready)
+    getArtifact: *const fn (ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) ?*const CheckedArtifact.CheckedModuleArtifact,
     /// Resolve a local module import to a filesystem path within the current package
     resolveLocalPath: *const fn (ctx: ?*anyopaque, current_package: []const u8, root_dir: []const u8, import_name: []const u8) []const u8,
 };
@@ -1263,6 +1265,7 @@ pub const PackageEnv = struct {
         env: *ModuleEnv,
         builtin_module_env: *const ModuleEnv,
         imported_envs: []const *ModuleEnv,
+        imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         target: roc_target.RocTarget,
         io: ?Io,
     ) !TypeCheckOutput {
@@ -1306,6 +1309,7 @@ pub const PackageEnv = struct {
 
         _ = target;
         _ = io;
+        _ = imported_artifacts;
         @compileError("Phase 2 must publish compile-time values during checked artifact finalization");
 
         return .{
@@ -1321,8 +1325,7 @@ pub const PackageEnv = struct {
         // Build the array of all available modules for this module's imports
         const import_count = env.imports.imports.items.items.len;
         var imported_envs = try std.ArrayList(*ModuleEnv).initCapacity(self.gpa, import_count);
-        // NOTE: Don't deinit 'imported_envs' yet - comptime_evaluator holds a reference to imported_envs.items
-
+        var imported_artifacts = std.ArrayList(CheckedArtifact.PublishImportArtifact).empty;
         // Always include Builtin first
         try imported_envs.append(self.gpa, self.builtin_modules.builtin_module.env);
         env.imports.clearResolvedModules();
@@ -1347,6 +1350,19 @@ pub const PackageEnv = struct {
                         const resolved_module_idx: u32 = @intCast(imported_envs.items.len);
                         try imported_envs.append(self.gpa, ext_env_ptr);
                         env.imports.setResolvedModule(import_idx, resolved_module_idx);
+                        const artifact = r.getArtifact(r.ctx, self.package_name, import_name) orelse {
+                            if (@import("builtin").mode == .Debug) {
+                                std.debug.panic(
+                                    "checked artifact publication invariant violated: external import {s} has no checked artifact",
+                                    .{import_name},
+                                );
+                            }
+                            unreachable;
+                        };
+                        try imported_artifacts.append(self.gpa, .{
+                            .module_idx = resolved_module_idx,
+                            .key = artifact.key,
+                        });
                     }
                     // External env not ready; skip (tryUnblock should have prevented this)
                 }
@@ -1358,6 +1374,19 @@ pub const PackageEnv = struct {
                 const resolved_module_idx: u32 = @intCast(imported_envs.items.len);
                 try imported_envs.append(self.gpa, child_env_ptr);
                 env.imports.setResolvedModule(import_idx, resolved_module_idx);
+                const artifact = child.checkedArtifact() orelse {
+                    if (@import("builtin").mode == .Debug) {
+                        std.debug.panic(
+                            "checked artifact publication invariant violated: local import {s} has no checked artifact",
+                            .{child.name},
+                        );
+                    }
+                    unreachable;
+                };
+                try imported_artifacts.append(self.gpa, .{
+                    .module_idx = resolved_module_idx,
+                    .key = artifact.key,
+                });
             }
         }
 
@@ -1367,6 +1396,7 @@ pub const PackageEnv = struct {
             env,
             self.builtin_modules.builtin_module.env,
             imported_envs.items,
+            imported_artifacts.items,
             self.target,
             self.io,
         );
@@ -1404,6 +1434,7 @@ pub const PackageEnv = struct {
 
         // Now we can safely deinit the 'imported_envs' ArrayList
         imported_envs.deinit(self.gpa);
+        imported_artifacts.deinit(self.gpa);
 
         // Note: We no longer need to free the 'imported_envs' items because they now point directly
         // to ModuleEnv instances stored in the modules ArrayList, not to heap-allocated copies.

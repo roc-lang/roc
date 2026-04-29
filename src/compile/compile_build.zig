@@ -958,6 +958,26 @@ pub const BuildEnv = struct {
             null;
     }
 
+    fn resolverGetArtifact(ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) ?*const check.CheckedArtifact.CheckedModuleArtifact {
+        var self: *ResolverCtx = @ptrCast(@alignCast(ctx.?));
+        const cur_pkg = self.ws.packages.get(current_package) orelse return null;
+
+        const qualified = base.module_path.parseQualifiedImport(import_name) orelse {
+            const cur_sched = self.ws.schedulers.get(current_package) orelse return null;
+            return if (cur_sched.*.getSemanticDataIfDone(import_name)) |semantic|
+                semantic.checked_artifact
+            else
+                null;
+        };
+
+        const ref = cur_pkg.shorthands.get(qualified.qualifier) orelse return null;
+        const sched = self.ws.schedulers.get(ref.name) orelse return null;
+        return if (sched.*.getSemanticDataIfDone(qualified.module)) |semantic|
+            semantic.checked_artifact
+        else
+            null;
+    }
+
     fn resolverResolveLocalPath(ctx: ?*anyopaque, _: []const u8, root_dir: []const u8, import_name: []const u8) []const u8 {
         var self: *ResolverCtx = @ptrCast(@alignCast(ctx.?));
         return self.ws.dottedToPath(root_dir, import_name) catch import_name;
@@ -973,6 +993,7 @@ pub const BuildEnv = struct {
             .scheduleExternal = resolverScheduleExternal,
             .isReady = resolverIsReady,
             .getEnv = resolverGetEnv,
+            .getArtifact = resolverGetArtifact,
             .resolveLocalPath = resolverResolveLocalPath,
         };
     }
