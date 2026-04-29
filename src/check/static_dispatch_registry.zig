@@ -168,8 +168,12 @@ pub const StaticDispatchCallPlan = struct {
     result_mode: StaticDispatchResultMode,
 };
 
+pub const StaticDispatchPlanId = enum(u32) { _ };
+
 pub const StaticDispatchPlanTable = struct {
     plans: []StaticDispatchCallPlan = &.{},
+    by_expr: std.AutoHashMapUnmanaged(CIR.Expr.Idx, StaticDispatchPlanId) = .{},
+    template_refs: []StaticDispatchPlanId = &.{},
 
     pub fn fromModule(
         allocator: Allocator,
@@ -181,6 +185,8 @@ pub const StaticDispatchPlanTable = struct {
             for (plans.items) |plan| allocator.free(plan.args);
             plans.deinit(allocator);
         }
+        var by_expr: std.AutoHashMapUnmanaged(CIR.Expr.Idx, StaticDispatchPlanId) = .{};
+        errdefer by_expr.deinit(allocator);
 
         var node_idx: u32 = 0;
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
@@ -196,6 +202,7 @@ pub const StaticDispatchPlanTable = struct {
             const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
             const expr = module.expr(expr_idx);
             const idents = module.identStoreConst();
+            const plan_id: StaticDispatchPlanId = @enumFromInt(@as(u32, @intCast(plans.items.len)));
             switch (expr.data) {
                 .e_dispatch_call => |dispatch_call| {
                     const explicit_args = module.sliceExpr(dispatch_call.args);
@@ -242,12 +249,38 @@ pub const StaticDispatchPlanTable = struct {
                 },
                 else => unreachable,
             }
+            try by_expr.put(allocator, expr_idx, plan_id);
         }
 
-        return .{ .plans = try plans.toOwnedSlice(allocator) };
+        return .{
+            .plans = try plans.toOwnedSlice(allocator),
+            .by_expr = by_expr,
+        };
+    }
+
+    pub fn lookupByExpr(self: *const StaticDispatchPlanTable, expr: CIR.Expr.Idx) ?StaticDispatchPlanId {
+        return self.by_expr.get(expr);
+    }
+
+    pub fn appendTemplateRefSpan(
+        self: *StaticDispatchPlanTable,
+        allocator: Allocator,
+        refs: []const StaticDispatchPlanId,
+    ) Allocator.Error!struct { start: u32, len: u32 } {
+        const start: u32 = @intCast(self.template_refs.len);
+        if (refs.len == 0) return .{ .start = start, .len = 0 };
+        const old = self.template_refs;
+        const next = try allocator.alloc(StaticDispatchPlanId, old.len + refs.len);
+        @memcpy(next[0..old.len], old);
+        @memcpy(next[old.len..], refs);
+        allocator.free(old);
+        self.template_refs = next;
+        return .{ .start = start, .len = @intCast(refs.len) };
     }
 
     pub fn deinit(self: *StaticDispatchPlanTable, allocator: Allocator) void {
+        allocator.free(self.template_refs);
+        self.by_expr.deinit(allocator);
         for (self.plans) |plan| allocator.free(plan.args);
         allocator.free(self.plans);
         self.* = .{};

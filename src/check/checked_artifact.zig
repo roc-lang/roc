@@ -433,6 +433,7 @@ pub const ResolvedValueRefRecord = struct {
 pub const ResolvedValueRefTable = struct {
     records: []ResolvedValueRefRecord = &.{},
     by_expr: std.AutoHashMapUnmanaged(CIR.Expr.Idx, ResolvedValueRefId) = .{},
+    template_refs: []ResolvedValueRefId = &.{},
 
     pub fn fromModule(
         allocator: Allocator,
@@ -495,7 +496,28 @@ pub const ResolvedValueRefTable = struct {
         return self.records[@intFromEnum(id)];
     }
 
+    pub fn lookupIdByExpr(self: *const ResolvedValueRefTable, expr: CIR.Expr.Idx) ?ResolvedValueRefId {
+        return self.by_expr.get(expr);
+    }
+
+    pub fn appendTemplateRefSpan(
+        self: *ResolvedValueRefTable,
+        allocator: Allocator,
+        refs: []const ResolvedValueRefId,
+    ) Allocator.Error!ResolvedValueRefTableRef {
+        const start: u32 = @intCast(self.template_refs.len);
+        if (refs.len == 0) return .{ .start = start, .len = 0 };
+        const old = self.template_refs;
+        const next = try allocator.alloc(ResolvedValueRefId, old.len + refs.len);
+        @memcpy(next[0..old.len], old);
+        @memcpy(next[old.len..], refs);
+        allocator.free(old);
+        self.template_refs = next;
+        return .{ .start = start, .len = @intCast(refs.len) };
+    }
+
     pub fn deinit(self: *ResolvedValueRefTable, allocator: Allocator) void {
+        allocator.free(self.template_refs);
         self.by_expr.deinit(allocator);
         allocator.free(self.records);
         self.* = .{};
@@ -798,6 +820,220 @@ fn isLocalProcExpr(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) bool {
         else => false,
     };
 }
+
+fn sealCheckedProcedureTemplateRefs(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    templates: *CheckedProcedureTemplateTable,
+    static_dispatch_plans: *static_dispatch.StaticDispatchPlanTable,
+    resolved_value_refs: *ResolvedValueRefTable,
+) Allocator.Error!void {
+    var traversal = ExprTraversal.init(allocator, module);
+    defer traversal.deinit();
+
+    var value_refs = std.ArrayList(ResolvedValueRefId).empty;
+    defer value_refs.deinit(allocator);
+
+    var dispatch_refs = std.ArrayList(static_dispatch.StaticDispatchPlanId).empty;
+    defer dispatch_refs.deinit(allocator);
+
+    for (templates.templates) |*template| {
+        traversal.clear();
+        value_refs.clearRetainingCapacity();
+        dispatch_refs.clearRetainingCapacity();
+
+        switch (template.body) {
+            .source_expr => |expr| try traversal.visitExpr(expr),
+            .promoted_callable_wrapper,
+            .hosted_wrapper,
+            .platform_required_wrapper,
+            .intrinsic_wrapper,
+            .entry_wrapper,
+            => {},
+        }
+
+        for (traversal.exprs.items) |expr| {
+            if (resolved_value_refs.lookupIdByExpr(expr)) |ref_id| {
+                try value_refs.append(allocator, ref_id);
+            }
+            if (static_dispatch_plans.lookupByExpr(expr)) |plan_id| {
+                try dispatch_refs.append(allocator, plan_id);
+            }
+        }
+
+        template.resolved_value_refs = try resolved_value_refs.appendTemplateRefSpan(allocator, value_refs.items);
+        const dispatch_span = try static_dispatch_plans.appendTemplateRefSpan(allocator, dispatch_refs.items);
+        template.static_dispatch_plans = .{
+            .start = dispatch_span.start,
+            .len = dispatch_span.len,
+        };
+    }
+}
+
+const ExprTraversal = struct {
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    visited: std.AutoHashMap(CIR.Expr.Idx, void),
+    exprs: std.ArrayList(CIR.Expr.Idx),
+
+    fn init(allocator: Allocator, module: TypedCIR.Module) ExprTraversal {
+        return .{
+            .allocator = allocator,
+            .module = module,
+            .visited = std.AutoHashMap(CIR.Expr.Idx, void).init(allocator),
+            .exprs = .empty,
+        };
+    }
+
+    fn deinit(self: *ExprTraversal) void {
+        self.exprs.deinit(self.allocator);
+        self.visited.deinit();
+    }
+
+    fn clear(self: *ExprTraversal) void {
+        self.exprs.clearRetainingCapacity();
+        self.visited.clearRetainingCapacity();
+    }
+
+    fn visitExpr(self: *ExprTraversal, expr_idx: CIR.Expr.Idx) Allocator.Error!void {
+        const entry = try self.visited.getOrPut(expr_idx);
+        if (entry.found_existing) return;
+        try self.exprs.append(self.allocator, expr_idx);
+
+        const expr = self.module.expr(expr_idx).data;
+        switch (expr) {
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_str_segment,
+            .e_bytes_literal,
+            .e_lookup_local,
+            .e_lookup_external,
+            .e_lookup_required,
+            .e_empty_list,
+            .e_empty_record,
+            .e_zero_argument_tag,
+            .e_crash,
+            .e_ellipsis,
+            .e_anno_only,
+            .e_runtime_error,
+            .e_hosted_lambda,
+            => {},
+            .e_str => |str| try self.visitExprSpan(str.span),
+            .e_list => |list| try self.visitExprSpan(list.elems),
+            .e_tuple => |tuple| try self.visitExprSpan(tuple.elems),
+            .e_match => |match_expr| {
+                try self.visitExpr(match_expr.cond);
+                for (self.module.matchBranchSlice(match_expr.branches)) |branch_idx| {
+                    const branch = self.module.getMatchBranch(branch_idx);
+                    if (branch.guard) |guard| try self.visitExpr(guard);
+                    try self.visitExpr(branch.value);
+                }
+            },
+            .e_if => |if_expr| {
+                for (self.module.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                    const branch = self.module.getIfBranch(branch_idx);
+                    try self.visitExpr(branch.cond);
+                    try self.visitExpr(branch.body);
+                }
+                try self.visitExpr(if_expr.final_else);
+            },
+            .e_call => |call| {
+                try self.visitExpr(call.func);
+                try self.visitExprSpan(call.args);
+            },
+            .e_record => |record| {
+                if (record.ext) |ext| try self.visitExpr(ext);
+                for (self.module.sliceRecordFields(record.fields)) |field_idx| {
+                    const field = self.module.getRecordField(field_idx);
+                    try self.visitExpr(field.value);
+                }
+            },
+            .e_block => |block| {
+                for (self.module.sliceStatements(block.stmts)) |stmt_idx| {
+                    try self.visitStmt(self.module.getStatement(stmt_idx));
+                }
+                try self.visitExpr(block.final_expr);
+            },
+            .e_tag => |tag| try self.visitExprSpan(tag.args),
+            .e_nominal => |nominal| try self.visitExpr(nominal.backing_expr),
+            .e_nominal_external => |nominal| try self.visitExpr(nominal.backing_expr),
+            .e_closure => |closure| try self.visitExpr(closure.lambda_idx),
+            .e_lambda => |lambda| try self.visitExpr(lambda.body),
+            .e_binop => |binop| {
+                try self.visitExpr(binop.lhs);
+                try self.visitExpr(binop.rhs);
+            },
+            .e_unary_minus => |unary| try self.visitExpr(unary.expr),
+            .e_unary_not => |unary| try self.visitExpr(unary.expr),
+            .e_field_access => |access| try self.visitExpr(access.receiver),
+            .e_method_call => |call| {
+                try self.visitExpr(call.receiver);
+                try self.visitExprSpan(call.args);
+            },
+            .e_dispatch_call => |call| {
+                try self.visitExpr(call.receiver);
+                try self.visitExprSpan(call.args);
+            },
+            .e_structural_eq => |eq| {
+                try self.visitExpr(eq.lhs);
+                try self.visitExpr(eq.rhs);
+            },
+            .e_method_eq => |eq| {
+                try self.visitExpr(eq.lhs);
+                try self.visitExpr(eq.rhs);
+            },
+            .e_type_method_call => |call| try self.visitExprSpan(call.args),
+            .e_type_dispatch_call => |call| try self.visitExprSpan(call.args),
+            .e_tuple_access => |access| try self.visitExpr(access.tuple),
+            .e_dbg => |dbg| try self.visitExpr(dbg.expr),
+            .e_expect => |expect| try self.visitExpr(expect.body),
+            .e_return => |return_expr| try self.visitExpr(return_expr.expr),
+            .e_for => |for_expr| {
+                try self.visitExpr(for_expr.expr);
+                try self.visitExpr(for_expr.body);
+            },
+            .e_run_low_level => |low_level| try self.visitExprSpan(low_level.args),
+        }
+    }
+
+    fn visitExprSpan(self: *ExprTraversal, span: CIR.Expr.Span) Allocator.Error!void {
+        for (self.module.sliceExpr(span)) |expr| try self.visitExpr(expr);
+    }
+
+    fn visitStmt(self: *ExprTraversal, stmt: CIR.Statement) Allocator.Error!void {
+        switch (stmt) {
+            .s_decl => |decl| try self.visitExpr(decl.expr),
+            .s_var => |var_| try self.visitExpr(var_.expr),
+            .s_reassign => |reassign| try self.visitExpr(reassign.expr),
+            .s_dbg => |dbg| try self.visitExpr(dbg.expr),
+            .s_expr => |expr| try self.visitExpr(expr.expr),
+            .s_expect => |expect| try self.visitExpr(expect.body),
+            .s_for => |for_stmt| {
+                try self.visitExpr(for_stmt.expr);
+                try self.visitExpr(for_stmt.body);
+            },
+            .s_while => |while_stmt| {
+                try self.visitExpr(while_stmt.cond);
+                try self.visitExpr(while_stmt.body);
+            },
+            .s_return => |return_stmt| try self.visitExpr(return_stmt.expr),
+            .s_crash,
+            .s_break,
+            .s_import,
+            .s_alias_decl,
+            .s_nominal_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => {},
+        }
+    }
+};
 
 pub const TopLevelUseSummaryRef = struct {
     start: u32 = 0,
@@ -1831,6 +2067,14 @@ pub fn publishFromTypedModule(
         &top_level_values,
     );
     errdefer resolved_value_refs.deinit(allocator);
+
+    try sealCheckedProcedureTemplateRefs(
+        allocator,
+        module,
+        &checked_procedure_templates,
+        &static_dispatch_plans,
+        &resolved_value_refs,
+    );
 
     var artifact = CheckedModuleArtifact{
         .key = artifact_key,
