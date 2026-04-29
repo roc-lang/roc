@@ -72,6 +72,14 @@ pub const CanonicalTypeKey = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 };
 
+pub const CanonicalTypeTemplateKey = struct {
+    bytes: [32]u8 = [_]u8{0} ** 32,
+};
+
+pub const CanonicalTypeSchemeKey = struct {
+    bytes: [32]u8 = [_]u8{0} ** 32,
+};
+
 pub const ProcBaseKind = enum {
     checked_source,
     hosted_wrapper,

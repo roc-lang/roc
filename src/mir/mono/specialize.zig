@@ -14,6 +14,7 @@ const Type = @import("type.zig");
 const Allocator = std.mem.Allocator;
 const checked_artifact = check.CheckedArtifact;
 const canonical = check.CanonicalNames;
+const canonical_type_keys = check.CanonicalTypeKeys;
 
 pub const MonoProcHandle = enum(u32) { _ };
 
@@ -105,9 +106,15 @@ pub fn run(
 
     for (roots) |root| {
         const template = templateForRoot(input.root.artifact, root) orelse continue;
+        const requested_mono_fn_ty = try canonical_type_keys.fromVar(
+            allocator,
+            &input.root.artifact.module_env.types,
+            input.root.artifact.module_env.getIdentStoreConst(),
+            root.checked_type,
+        );
         const request = MonoSpecializationRequest{
             .template = template,
-            .requested_mono_fn_ty = .{},
+            .requested_mono_fn_ty = requested_mono_fn_ty,
             .reason = .{ .root = root },
         };
         const reserved = try queue.reserve(request);
@@ -216,7 +223,7 @@ test "mono specialization queue reserves once" {
     };
     const request = MonoSpecializationRequest{
         .template = template,
-        .requested_mono_fn_ty = .{},
+        .requested_mono_fn_ty = .{ .bytes = [_]u8{1} ** 32 },
         .reason = .{ .comptime_dependency_summary = 0 },
     };
 
