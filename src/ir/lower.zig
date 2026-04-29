@@ -14,16 +14,19 @@ pub const Program = struct {
     allocator: Allocator,
     store: Ast.Store,
     layouts: Layout.Graph,
+    root_procs: std.ArrayList(Ast.ProcRef),
 
     pub fn init(allocator: Allocator) Program {
         return .{
             .allocator = allocator,
             .store = Ast.Store.init(allocator),
             .layouts = Layout.Graph.init(allocator),
+            .root_procs = .empty,
         };
     }
 
     pub fn deinit(self: *Program) void {
+        self.root_procs.deinit(self.allocator);
         self.layouts.deinit();
         self.store.deinit();
         self.* = Program.init(self.allocator);
@@ -36,6 +39,8 @@ pub fn fromExecutable(allocator: Allocator, executable: mir.Executable.Build.Pro
 
     var program = Program.init(allocator);
     errdefer program.deinit();
+
+    try program.root_procs.appendSlice(allocator, input.root_procs.items);
 
     input.deinit();
     return program;

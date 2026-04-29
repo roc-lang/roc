@@ -22,6 +22,7 @@ pub const Program = struct {
     types: Type.Store,
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
+    root_procs: std.ArrayList(canonical.ProcedureValueRef),
     solve_sessions: std.ArrayList(repr.RepresentationSolveSession),
     proc_instances: std.ArrayList(repr.ProcRepresentationInstance),
 
@@ -31,6 +32,7 @@ pub const Program = struct {
             .types = Type.Store.init(allocator),
             .ast = Ast.Store.init(allocator),
             .procs = .empty,
+            .root_procs = .empty,
             .solve_sessions = .empty,
             .proc_instances = .empty,
         };
@@ -39,6 +41,7 @@ pub const Program = struct {
     pub fn deinit(self: *Program) void {
         self.proc_instances.deinit(self.allocator);
         self.solve_sessions.deinit(self.allocator);
+        self.root_procs.deinit(self.allocator);
         self.procs.deinit(self.allocator);
         self.ast.deinit();
         self.types.deinit();
@@ -62,6 +65,7 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
             .representation_instance = instance,
         });
     }
+    try program.root_procs.appendSlice(allocator, input.root_procs.items);
 
     input.deinit();
     return program;

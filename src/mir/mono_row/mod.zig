@@ -242,6 +242,7 @@ pub const Program = struct {
     types: Mono.Type.Store,
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
+    root_procs: std.ArrayList(canonical.ProcedureValueRef),
 
     pub fn init(allocator: Allocator) Program {
         return .{
@@ -249,10 +250,12 @@ pub const Program = struct {
             .types = Mono.Type.Store.init(allocator),
             .ast = Ast.Store.init(allocator),
             .procs = .empty,
+            .root_procs = .empty,
         };
     }
 
     pub fn deinit(self: *Program) void {
+        self.root_procs.deinit(self.allocator);
         self.procs.deinit(self.allocator);
         self.ast.deinit();
         self.types.deinit();
@@ -299,7 +302,10 @@ pub fn run(allocator: Allocator, mono: Mono.Specialize.Program) Allocator.Error!
             .body = null,
         });
     }
+    try program.root_procs.appendSlice(allocator, owned_mono.root_procs.items);
+    owned_mono.root_procs.clearRetainingCapacity();
     owned_mono.ast.deinit();
+    owned_mono.root_procs.deinit(allocator);
     owned_mono.procs.deinit(allocator);
 
     const result = Result{

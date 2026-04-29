@@ -52,6 +52,7 @@ pub const Program = struct {
     types: Type.Store,
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
+    root_procs: std.ArrayList(canonical.ProcedureValueRef),
 
     pub fn init(allocator: Allocator) Program {
         return .{
@@ -59,10 +60,12 @@ pub const Program = struct {
             .types = Type.Store.init(allocator),
             .ast = Ast.Store.init(allocator),
             .procs = .empty,
+            .root_procs = .empty,
         };
     }
 
     pub fn deinit(self: *Program) void {
+        self.root_procs.deinit(self.allocator);
         self.procs.deinit(self.allocator);
         self.ast.deinit();
         self.types.deinit();
@@ -87,6 +90,7 @@ pub fn run(allocator: Allocator, row_result: MonoRow.Result) Allocator.Error!Pro
             .body = null,
         });
     }
+    try program.root_procs.appendSlice(allocator, input.program.root_procs.items);
 
     input.deinit();
     return program;

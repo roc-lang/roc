@@ -6,6 +6,10 @@ const std = @import("std");
 pub const LIR = @import("LIR.zig");
 /// Flat storage for statement-only LIR nodes and spans.
 pub const LirStore = @import("LirStore.zig");
+/// Source-blind IR-to-LIR lowering boundary.
+pub const LowerIr = @import("lower_ir.zig");
+/// Public checked-artifact-to-LIR lowering entrypoint.
+pub const CheckedPipeline = @import("checked_pipeline.zig");
 /// Mechanical ARC insertion over explicit LIR values and control flow.
 pub const Arc = @import("arc.zig");
 
@@ -46,5 +50,7 @@ test "lir tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(LIR);
     std.testing.refAllDecls(LirStore);
+    std.testing.refAllDecls(LowerIr);
+    std.testing.refAllDecls(CheckedPipeline);
     std.testing.refAllDecls(Arc);
 }

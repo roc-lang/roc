@@ -55,6 +55,7 @@ pub const Program = struct {
     types: Type.Store,
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
+    root_procs: std.ArrayList(canonical.ProcedureValueRef),
 
     pub fn init(allocator: Allocator) Program {
         return .{
@@ -62,10 +63,12 @@ pub const Program = struct {
             .types = Type.Store.init(allocator),
             .ast = Ast.Store.init(allocator),
             .procs = .empty,
+            .root_procs = .empty,
         };
     }
 
     pub fn deinit(self: *Program) void {
+        self.root_procs.deinit(self.allocator);
         self.procs.deinit(self.allocator);
         self.ast.deinit();
         self.types.deinit();
@@ -80,6 +83,64 @@ pub const Program = struct {
         });
     }
 };
+
+pub fn run(
+    allocator: Allocator,
+    view: checked_artifact.LoweringModuleView,
+    roots: []const checked_artifact.RootRequest,
+) Allocator.Error!Program {
+    var program = Program.init(allocator);
+    errdefer program.deinit();
+
+    var queue = Queue.init(allocator);
+    defer queue.deinit();
+
+    for (roots) |root| {
+        const template = templateForRoot(view.artifact, root) orelse continue;
+        const request = MonoSpecializationRequest{
+            .template = template,
+            .requested_mono_fn_ty = .{},
+            .reason = .{ .root = root },
+        };
+        const reserved = try queue.reserve(request);
+        try program.root_procs.append(allocator, reserved.proc);
+    }
+
+    while (queue.pending.items.len != 0) {
+        const key = queue.pending.orderedRemove(0);
+        queue.markLowering(key);
+        const reserved = queue.requested.get(key) orelse unreachable;
+        try program.addProc(key, reserved);
+        queue.markLowered(key);
+    }
+
+    verifyProgram(&program);
+    return program;
+}
+
+fn templateForRoot(
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    root: checked_artifact.RootRequest,
+) ?canonical.ProcedureTemplateRef {
+    switch (root.source) {
+        .def => |def_idx| return artifact.checked_procedure_templates.lookupByDef(def_idx),
+        .expr, .statement, .required_binding => return null,
+    }
+}
+
+fn verifyProgram(program: *const Program) void {
+    if (@import("builtin").mode != .Debug) return;
+    for (program.root_procs.items) |root| {
+        var found = false;
+        for (program.procs.items) |proc| {
+            if (proc.proc.proc_base == root.proc_base) {
+                found = true;
+                break;
+            }
+        }
+        std.debug.assert(found);
+    }
+}
 
 pub const Queue = struct {
     allocator: Allocator,
