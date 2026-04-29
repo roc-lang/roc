@@ -25,6 +25,11 @@ pub const MonoSpecializationReason = union(enum) {
     comptime_dependency_summary: u32,
 };
 
+pub const Input = struct {
+    root: checked_artifact.LoweringModuleView,
+    imports: []const checked_artifact.ImportedModuleView = &.{},
+};
+
 pub const MonoSpecializationRequest = struct {
     template: canonical.ProcedureTemplateRef,
     requested_mono_fn_ty: canonical.CanonicalTypeKey,
@@ -52,6 +57,7 @@ pub const Proc = struct {
 
 pub const Program = struct {
     allocator: Allocator,
+    root_artifact_key: checked_artifact.CheckedModuleArtifactKey,
     types: Type.Store,
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
@@ -60,6 +66,7 @@ pub const Program = struct {
     pub fn init(allocator: Allocator) Program {
         return .{
             .allocator = allocator,
+            .root_artifact_key = .{},
             .types = Type.Store.init(allocator),
             .ast = Ast.Store.init(allocator),
             .procs = .empty,
@@ -86,17 +93,18 @@ pub const Program = struct {
 
 pub fn run(
     allocator: Allocator,
-    view: checked_artifact.LoweringModuleView,
+    input: Input,
     roots: []const checked_artifact.RootRequest,
 ) Allocator.Error!Program {
     var program = Program.init(allocator);
     errdefer program.deinit();
+    program.root_artifact_key = input.root.artifact.key;
 
     var queue = Queue.init(allocator);
     defer queue.deinit();
 
     for (roots) |root| {
-        const template = templateForRoot(view.artifact, root) orelse continue;
+        const template = templateForRoot(input.root.artifact, root) orelse continue;
         const request = MonoSpecializationRequest{
             .template = template,
             .requested_mono_fn_ty = .{},

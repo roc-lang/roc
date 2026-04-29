@@ -54,7 +54,10 @@ pub fn lowerArtifactsToLir(
 ) LowerResourceError!LoweredProgram {
     artifacts.root.artifact.verifyPublished();
 
-    var mono = try mir.Mono.Specialize.run(allocator, artifacts.root, roots.requests);
+    var mono = try mir.Mono.Specialize.run(allocator, .{
+        .root = artifacts.root,
+        .imports = artifacts.imports,
+    }, roots.requests);
     errdefer mono.deinit();
 
     var row_finalized = try mir.MonoRow.run(allocator, mono);
