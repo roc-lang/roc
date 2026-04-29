@@ -92,6 +92,8 @@ pub const wasm_runner = if (builtin.target.os.tag == .freestanding) struct {
         return error.WasmExecFailed;
     }
 } else @import("wasm_runner.zig");
+/// Shared eval test helpers routed through checked artifacts.
+pub const test_helpers = @import("test_helpers.zig");
 
 test "eval tests" {
     std.testing.refAllDecls(@This());
@@ -103,6 +105,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("interpreter_values.zig"));
     std.testing.refAllDecls(@import("interpreter.zig"));
     std.testing.refAllDecls(@import("stack.zig"));
+    std.testing.refAllDecls(@import("test_helpers.zig"));
     std.testing.refAllDecls(@import("test/RuntimeHostEnv.zig"));
     std.testing.refAllDecls(@import("test/TestEnv.zig"));
     std.testing.refAllDecls(@import("test/stack_test.zig"));
