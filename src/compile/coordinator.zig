@@ -1317,17 +1317,11 @@ pub const Coordinator = struct {
                     }
                 }
 
-                const has_comptime_bindings = if (mod.comptimeValues()) |values| !values.isEmpty() else false;
-                const comptime_values = if (mod.comptimeValues()) |values|
-                    @as(?*const eval.comptime_value.Store, values)
-                else
-                    null;
-                if (cache.store(full_cache_key, env, comptime_values, error_count, warning_count)) |_| {
+                if (cache.store(full_cache_key, env, error_count, warning_count)) |_| {
                     // Store metadata for fast path lookup only after the full semantic cache is written.
                     cache.storeMetadata(
                         source_hash,
                         full_cache_key,
-                        has_comptime_bindings,
                         imports.items,
                         error_count,
                         warning_count,
@@ -1659,7 +1653,6 @@ pub const Coordinator = struct {
             meta.full_cache_key,
             source,
             mod.name,
-            meta.has_comptime_bindings,
         );
 
         if (cache_result != .hit) {
@@ -1686,13 +1679,6 @@ pub const Coordinator = struct {
         // Note: The module_env stores a reference to source, so we do NOT free source here.
         // The source will be freed when the module is deinitialized.
         mod.replaceModuleEnv(cache_result.hit.module_env);
-        if (cache_result.hit.comptime_values) |values| {
-            mod.replaceComptimeValues(values);
-        } else if (mod.semantic) |*semantic| {
-            if (semantic.comptime_values) |*existing| existing.deinit();
-            semantic.comptime_values = null;
-        }
-
         // Override qualified_module_ident for cache correctness.
         // The cache is keyed by file content, so the serialized value may be
         // from a different package alias (e.g., "pf.Color" vs "platform.Color").

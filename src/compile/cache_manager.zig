@@ -3,7 +3,6 @@
 const std = @import("std");
 const io_mod = @import("io");
 const can = @import("can");
-const eval = @import("eval");
 
 const CacheReporting = @import("cache_reporting.zig").CacheReporting;
 const CacheModule = @import("cache_module.zig").CacheModule;
@@ -17,7 +16,6 @@ const CacheConfig = @import("cache_config.zig").CacheConfig;
 pub const CacheResult = union(enum) {
     hit: struct {
         module_env: *ModuleEnv,
-        comptime_values: ?eval.comptime_value.Store = null,
         error_count: u32,
         warning_count: u32,
         /// The backing buffer that contains the deserialized ModuleEnv data.
@@ -34,7 +32,6 @@ pub const CacheResult = union(enum) {
     pub fn deinit(self: *CacheResult, allocator: Allocator) void {
         switch (self.*) {
             .hit => |*h| {
-                if (h.comptime_values) |*values| values.deinit();
                 h.cache_data.deinit(allocator);
             },
             .miss, .not_enabled => {},
@@ -64,8 +61,6 @@ pub const CacheMetadata = struct {
     imports: []ImportInfo,
     /// The full cache key to load the ModuleEnv
     full_cache_key: [32]u8,
-    /// Whether the checked module retained compile-time constants that this cache format cannot restore
-    has_comptime_bindings: bool,
     /// Error count from last compilation
     error_count: u32,
     /// Warning count from last compilation
@@ -177,7 +172,6 @@ pub const CacheManager = struct {
         self: *Self,
         cache_key: [32]u8,
         module_env: *const ModuleEnv,
-        comptime_values: ?*const eval.comptime_value.Store,
         error_count: u32,
         warning_count: u32,
     ) !void {
@@ -230,10 +224,6 @@ pub const CacheManager = struct {
             self.stats.recordStoreFailure();
             return err;
         };
-
-        if (comptime_values) |values| {
-            try self.storeComptimeValues(cache_key, values);
-        }
 
         self.stats.recordStore(cache_data.len);
     }
@@ -405,61 +395,6 @@ pub const CacheManager = struct {
         };
     }
 
-    fn getComptimeValuesFilePath(self: *Self, cache_key: [32]u8) ![]u8 {
-        const cache_path = try self.getCacheFilePath(cache_key);
-        defer self.allocator.free(cache_path);
-        return std.fmt.allocPrint(self.allocator, "{s}.ctv", .{cache_path});
-    }
-
-    fn storeComptimeValues(
-        self: *Self,
-        cache_key: [32]u8,
-        values: *const eval.comptime_value.Store,
-    ) !void {
-        const bytes = values.serialize(self.allocator) catch |err| {
-            self.verboseLog("Failed to serialize comptime values: {}\n", .{err});
-            self.stats.recordStoreFailure();
-            return err;
-        };
-        defer self.allocator.free(bytes);
-
-        const path = self.getComptimeValuesFilePath(cache_key) catch |err| {
-            self.stats.recordStoreFailure();
-            return err;
-        };
-        defer self.allocator.free(path);
-
-        const temp_path = std.fmt.allocPrint(self.allocator, "{s}.tmp", .{path}) catch |err| {
-            self.stats.recordStoreFailure();
-            return err;
-        };
-        defer self.allocator.free(temp_path);
-
-        self.io.writeFile(temp_path, bytes) catch |err| {
-            self.verboseLog("Failed to write comptime-values temp file {s}: {}\n", .{ temp_path, err });
-            self.stats.recordStoreFailure();
-            return err;
-        };
-
-        self.io.rename(temp_path, path) catch |err| {
-            self.verboseLog("Failed to rename comptime-values file {s} -> {s}: {}\n", .{ temp_path, path, err });
-            self.stats.recordStoreFailure();
-            return err;
-        };
-    }
-
-    fn loadComptimeValues(self: *Self, cache_key: [32]u8) !eval.comptime_value.Store {
-        const path = try self.getComptimeValuesFilePath(cache_key);
-        defer self.allocator.free(path);
-
-        if (!self.io.fileExists(path)) return error.FileNotFound;
-
-        const bytes = try self.io.readFile(path, self.allocator);
-        defer self.allocator.free(bytes);
-
-        return try eval.comptime_value.Store.deserialize(self.allocator, bytes);
-    }
-
     /// Compute source-only hash (without compiler version) for metadata lookups.
     /// This allows checking metadata before we know if we need to compile.
     pub fn computeSourceHash(source: []const u8) [32]u8 {
@@ -516,10 +451,10 @@ pub const CacheManager = struct {
 
     /// Parse metadata from binary format.
     /// Format: [4 bytes: import_count][4 bytes: error_count][4 bytes: warning_count]
-    ///         [32 bytes: full_cache_key][1 byte: has_comptime_bindings]
+    ///         [32 bytes: full_cache_key]
     ///         [for each import: [4 bytes: pkg_len][pkg_bytes][4 bytes: mod_len][mod_bytes]]
     fn parseMetadata(self: *Self, data: []const u8) !CacheMetadata {
-        if (data.len < 45) return error.InvalidMetadata; // Minimum: 4+4+4+32+1 bytes header
+        if (data.len < 44) return error.InvalidMetadata; // Minimum: 4+4+4+32 bytes header
 
         var offset: usize = 0;
 
@@ -537,13 +472,6 @@ pub const CacheManager = struct {
         var full_cache_key: [32]u8 = undefined;
         @memcpy(&full_cache_key, data[offset..][0..32]);
         offset += 32;
-
-        const has_comptime_bindings = switch (data[offset]) {
-            0 => false,
-            1 => true,
-            else => return error.InvalidMetadata,
-        };
-        offset += 1;
 
         // Allocate imports array
         const imports = try self.allocator.alloc(ImportInfo, import_count);
@@ -624,7 +552,6 @@ pub const CacheManager = struct {
         return CacheMetadata{
             .imports = imports,
             .full_cache_key = full_cache_key,
-            .has_comptime_bindings = has_comptime_bindings,
             .error_count = error_count,
             .warning_count = warning_count,
         };
@@ -635,7 +562,6 @@ pub const CacheManager = struct {
         self: *Self,
         source_hash: [32]u8,
         full_cache_key: [32]u8,
-        has_comptime_bindings: bool,
         imports: []const ImportInfo,
         error_count: u32,
         warning_count: u32,
@@ -651,9 +577,9 @@ pub const CacheManager = struct {
         };
 
         // Calculate total size needed
-        // Header: 4 (import_count) + 4 (error_count) + 4 (warning_count) + 32 (full_cache_key) + 1 (has_comptime_bindings) = 45
+        // Header: 4 (import_count) + 4 (error_count) + 4 (warning_count) + 32 (full_cache_key) = 44
         // Per import: 4 (pkg_len) + pkg_len + 4 (mod_len) + mod_len + 32 (source_hash)
-        var total_size: usize = 45;
+        var total_size: usize = 44;
         for (imports) |imp| {
             total_size += 8 + imp.package.len + imp.module.len + 32;
         }
@@ -677,9 +603,6 @@ pub const CacheManager = struct {
         // Write full cache key
         @memcpy(buffer[offset..][0..32], &full_cache_key);
         offset += 32;
-
-        buffer[offset] = if (has_comptime_bindings) 1 else 0;
-        offset += 1;
 
         // Write imports
         for (imports) |imp| {
@@ -723,7 +646,6 @@ pub const CacheManager = struct {
         cache_key: [32]u8,
         source: []const u8,
         module_name: []const u8,
-        has_comptime_bindings: bool,
     ) CacheResult {
         if (!self.config.enabled) {
             return .not_enabled;
@@ -747,26 +669,12 @@ pub const CacheManager = struct {
         };
         errdefer mapped_cache.deinit(self.allocator);
 
-        var comptime_values: ?eval.comptime_value.Store = null;
-        if (has_comptime_bindings) {
-            comptime_values = self.loadComptimeValues(cache_key) catch {
-                self.stats.recordInvalidation();
-                mapped_cache.deinit(self.allocator);
-                return CacheResult{ .miss = .{ .key = cache_key } };
-            };
-        }
-
         // Restore from cache
-        var result = self.restoreFromCache(mapped_cache, source, module_name) catch {
-            if (comptime_values) |*values| values.deinit();
+        const result = self.restoreFromCache(mapped_cache, source, module_name) catch {
             self.stats.recordInvalidation();
             mapped_cache.deinit(self.allocator);
             return CacheResult{ .miss = .{ .key = cache_key } };
         };
-        switch (result) {
-            .hit => |*hit| hit.comptime_values = comptime_values,
-            else => {},
-        }
 
         self.stats.recordHit(mapped_cache.data().len);
         // Transfer ownership of cache_data to result - do NOT deinit here
