@@ -1485,7 +1485,7 @@ pub const ResolvedValueRef = union(enum) {
 pub const ResolvedValueRefRecord = struct {
     expr: CIR.Expr.Idx,
     ref: ResolvedValueRef,
-    checked_ty: Var,
+    checked_ty: CheckedTypeId,
     scope_depth: u32,
 };
 
@@ -1504,6 +1504,7 @@ pub const ResolvedValueRefTable = struct {
         platform_required_declarations: *const PlatformRequiredDeclarationTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
         top_level_values: *const TopLevelValueTable,
+        checked_types: *const CheckedTypeStore,
     ) Allocator.Error!ResolvedValueRefTable {
         const module = modules.module(module_idx);
         var records = std.ArrayList(ResolvedValueRefRecord).empty;
@@ -1543,12 +1544,18 @@ pub const ResolvedValueRefTable = struct {
                 module.exprType(expr_idx),
             );
             attachUseTypeKey(&resolved_ref, checked_type_key);
+            const checked_ty = checked_types.rootForKey(checked_type_key) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("checked artifact invariant violated: resolved value ref type root was not published", .{});
+                }
+                unreachable;
+            };
 
             const id: ResolvedValueRefId = @enumFromInt(@as(u32, @intCast(records.items.len)));
             try records.append(allocator, .{
                 .expr = expr_idx,
                 .ref = resolved_ref,
-                .checked_ty = module.exprType(expr_idx),
+                .checked_ty = checked_ty,
                 .scope_depth = 0,
             });
             try by_expr.put(allocator, expr_idx, id);
@@ -1787,7 +1794,6 @@ fn classifyImportedValueRef(
             .pattern = def.pattern.idx,
             .schema = @enumFromInt(@intFromEnum(target_def)),
             .value = @enumFromInt(@intFromEnum(target_def)),
-            .source_type = imported_module.defType(target_def),
         },
         .requested_source_ty_template = .{},
     } };
@@ -2682,7 +2688,7 @@ pub const CompileTimeRoot = struct {
     source: RootSource,
     pattern: ?CIR.Pattern.Idx,
     expr: CIR.Expr.Idx,
-    checked_type: Var,
+    checked_type: CheckedTypeId,
     dependency_summary_request: ComptimeDependencySummaryRequestId,
     payload: CompileTimeRootPayload,
 };
@@ -2690,7 +2696,11 @@ pub const CompileTimeRoot = struct {
 pub const CompileTimeRootTable = struct {
     roots: []CompileTimeRoot = &.{},
 
-    pub fn fromModule(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!CompileTimeRootTable {
+    pub fn fromModule(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        checked_types: *const CheckedTypeStore,
+    ) Allocator.Error!CompileTimeRootTable {
         var roots = std.ArrayList(CompileTimeRoot).empty;
         errdefer roots.deinit(allocator);
 
@@ -2704,7 +2714,7 @@ pub const CompileTimeRootTable = struct {
                 .source = .{ .statement = statement_idx },
                 .pattern = null,
                 .expr = stmt.s_expect.body,
-                .checked_type = ModuleEnv.varFrom(stmt.s_expect.body),
+                .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(stmt.s_expect.body)),
                 .payload = .expect,
             });
         }
@@ -2721,7 +2731,7 @@ pub const CompileTimeRootTable = struct {
                 .source = .{ .def = def_idx },
                 .pattern = def.pattern.idx,
                 .expr = def.expr.idx,
-                .checked_type = source_ty,
+                .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, source_ty),
                 .payload = if (is_callable)
                     .{ .callable_result = @enumFromInt(@as(u32, @intCast(roots.items.len))) }
                 else
@@ -2754,7 +2764,7 @@ pub const CompileTimeRootTable = struct {
         source: RootSource,
         pattern: ?CIR.Pattern.Idx,
         expr: CIR.Expr.Idx,
-        checked_type: Var,
+        checked_type: CheckedTypeId,
         payload: CompileTimeRootPayload,
     };
 
@@ -2784,7 +2794,6 @@ pub const ConstRef = struct {
     pattern: CIR.Pattern.Idx,
     schema: ComptimeSchemaId,
     value: ComptimeValueId,
-    source_type: Var,
 };
 
 pub const TopLevelValueKind = union(enum) {
@@ -2795,7 +2804,6 @@ pub const TopLevelValueKind = union(enum) {
 pub const TopLevelValueEntry = struct {
     module_idx: u32,
     pattern: CIR.Pattern.Idx,
-    source_type: Var,
     value: TopLevelValueKind,
 };
 
@@ -2879,13 +2887,11 @@ pub const TopLevelValueTable = struct {
                 artifact_key,
                 module.moduleIndex(),
                 def.pattern.idx,
-                source_ty,
             ) };
 
             try entries.append(allocator, .{
                 .module_idx = module.moduleIndex(),
                 .pattern = def.pattern.idx,
-                .source_type = source_ty,
                 .value = value,
             });
         }
@@ -2910,7 +2916,6 @@ pub const PromotedProcedure = struct {
     proc: canonical.ProcedureValueRef,
     template: canonical.ProcedureTemplateRef,
     source_binding: CIR.Pattern.Idx,
-    source_type: Var,
 };
 
 pub const PromotedProcedureTable = struct {
@@ -3002,7 +3007,6 @@ pub const CompileTimeValueStore = struct {
         artifact_key: CheckedModuleArtifactKey,
         module_idx: u32,
         pattern: CIR.Pattern.Idx,
-        source_type: Var,
     ) Allocator.Error!ConstRef {
         const schema = try self.addSchema(.pending);
         const value = try self.addValue(.pending);
@@ -3013,7 +3017,6 @@ pub const CompileTimeValueStore = struct {
             .pattern = pattern,
             .schema = schema,
             .value = value,
-            .source_type = source_type,
         };
     }
 
@@ -4047,7 +4050,7 @@ pub fn publishFromTypedModule(
     );
     errdefer platform_required_bindings.deinit(allocator);
 
-    var compile_time_roots = try CompileTimeRootTable.fromModule(allocator, module);
+    var compile_time_roots = try CompileTimeRootTable.fromModule(allocator, module, &checked_types);
     errdefer compile_time_roots.deinit(allocator);
 
     var root_requests = try RootRequestTable.fromModule(
@@ -4113,6 +4116,7 @@ pub fn publishFromTypedModule(
         &platform_required_declarations,
         &platform_required_bindings,
         &top_level_values,
+        &checked_types,
     );
     errdefer resolved_value_refs.deinit(allocator);
 
