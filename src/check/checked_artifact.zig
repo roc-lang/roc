@@ -2402,7 +2402,6 @@ pub const ResolvedValueRefRecord = struct {
 
 pub const ResolvedValueRefTable = struct {
     records: []ResolvedValueRefRecord = &.{},
-    by_expr: std.AutoHashMapUnmanaged(CIR.Expr.Idx, ResolvedValueRefId) = .{},
     by_checked_expr: []?ResolvedValueRefId = &.{},
     template_refs: []ResolvedValueRefId = &.{},
 
@@ -2423,8 +2422,6 @@ pub const ResolvedValueRefTable = struct {
         var records = std.ArrayList(ResolvedValueRefRecord).empty;
         errdefer records.deinit(allocator);
 
-        var by_expr: std.AutoHashMapUnmanaged(CIR.Expr.Idx, ResolvedValueRefId) = .{};
-        errdefer by_expr.deinit(allocator);
         const by_checked_expr = try allocator.alloc(?ResolvedValueRefId, checked_bodies.exprs.len);
         errdefer allocator.free(by_checked_expr);
         @memset(by_checked_expr, null);
@@ -2483,24 +2480,13 @@ pub const ResolvedValueRefTable = struct {
                 .checked_ty = checked_ty,
                 .scope_depth = 0,
             });
-            try by_expr.put(allocator, expr_idx, id);
             by_checked_expr[@intFromEnum(checked_expr)] = id;
         }
 
         return .{
             .records = try records.toOwnedSlice(allocator),
-            .by_expr = by_expr,
             .by_checked_expr = by_checked_expr,
         };
-    }
-
-    pub fn lookupByExpr(self: *const ResolvedValueRefTable, expr: CIR.Expr.Idx) ?ResolvedValueRefRecord {
-        const id = self.by_expr.get(expr) orelse return null;
-        return self.records[@intFromEnum(id)];
-    }
-
-    pub fn lookupIdByExpr(self: *const ResolvedValueRefTable, expr: CIR.Expr.Idx) ?ResolvedValueRefId {
-        return self.by_expr.get(expr);
     }
 
     pub fn lookupIdByCheckedExpr(self: *const ResolvedValueRefTable, expr: CheckedExprId) ?ResolvedValueRefId {
@@ -2528,7 +2514,6 @@ pub const ResolvedValueRefTable = struct {
     pub fn deinit(self: *ResolvedValueRefTable, allocator: Allocator) void {
         allocator.free(self.template_refs);
         allocator.free(self.by_checked_expr);
-        self.by_expr.deinit(allocator);
         allocator.free(self.records);
         self.* = .{};
     }
@@ -2854,27 +2839,22 @@ fn isLocalProcExpr(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) bool {
 
 fn sealCheckedProcedureTemplateRefs(
     allocator: Allocator,
-    module: TypedCIR.Module,
+    checked_bodies: *const CheckedBodyStore,
     templates: *CheckedProcedureTemplateTable,
     static_dispatch_plans: *static_dispatch.StaticDispatchPlanTable,
     resolved_value_refs: *ResolvedValueRefTable,
 ) Allocator.Error!void {
-    var traversal = ExprTraversal.init(allocator, module);
-    defer traversal.deinit();
-
-    var value_refs = std.ArrayList(ResolvedValueRefId).empty;
-    defer value_refs.deinit(allocator);
-
-    var dispatch_refs = std.ArrayList(static_dispatch.StaticDispatchPlanId).empty;
-    defer dispatch_refs.deinit(allocator);
+    var collector = CheckedTemplateRefCollector.init(allocator, checked_bodies);
+    defer collector.deinit();
 
     for (templates.templates) |*template| {
-        traversal.clear();
-        value_refs.clearRetainingCapacity();
-        dispatch_refs.clearRetainingCapacity();
+        collector.clear();
 
         switch (template.body) {
-            .checked_body => |_| {},
+            .checked_body => |body_id| {
+                const body = checked_bodies.body(body_id);
+                try collector.collectExpr(body.root_expr);
+            },
             .promoted_callable_wrapper,
             .hosted_wrapper,
             .intrinsic_wrapper,
@@ -2882,17 +2862,8 @@ fn sealCheckedProcedureTemplateRefs(
             => {},
         }
 
-        for (traversal.exprs.items) |expr| {
-            if (resolved_value_refs.lookupIdByExpr(expr)) |ref_id| {
-                try value_refs.append(allocator, ref_id);
-            }
-            if (static_dispatch_plans.lookupByExpr(expr)) |plan_id| {
-                try dispatch_refs.append(allocator, plan_id);
-            }
-        }
-
-        template.resolved_value_refs = try resolved_value_refs.appendTemplateRefSpan(allocator, value_refs.items);
-        const dispatch_span = try static_dispatch_plans.appendTemplateRefSpan(allocator, dispatch_refs.items);
+        template.resolved_value_refs = try resolved_value_refs.appendTemplateRefSpan(allocator, collector.value_refs.items);
+        const dispatch_span = try static_dispatch_plans.appendTemplateRefSpan(allocator, collector.dispatch_refs.items);
         template.static_dispatch_plans = .{
             .start = dispatch_span.start,
             .len = dispatch_span.len,
@@ -2900,166 +2871,247 @@ fn sealCheckedProcedureTemplateRefs(
     }
 }
 
-const ExprTraversal = struct {
+const CheckedTemplateRefCollector = struct {
     allocator: Allocator,
-    module: TypedCIR.Module,
-    visited: std.AutoHashMap(CIR.Expr.Idx, void),
-    exprs: std.ArrayList(CIR.Expr.Idx),
+    checked_bodies: *const CheckedBodyStore,
+    value_refs: std.ArrayList(ResolvedValueRefId),
+    dispatch_refs: std.ArrayList(static_dispatch.StaticDispatchPlanId),
+    visited_exprs: std.AutoHashMap(CheckedExprId, void),
+    visited_patterns: std.AutoHashMap(CheckedPatternId, void),
+    visited_statements: std.AutoHashMap(CheckedStatementId, void),
 
-    fn init(allocator: Allocator, module: TypedCIR.Module) ExprTraversal {
+    fn init(allocator: Allocator, checked_bodies: *const CheckedBodyStore) CheckedTemplateRefCollector {
         return .{
             .allocator = allocator,
-            .module = module,
-            .visited = std.AutoHashMap(CIR.Expr.Idx, void).init(allocator),
-            .exprs = .empty,
+            .checked_bodies = checked_bodies,
+            .value_refs = .empty,
+            .dispatch_refs = .empty,
+            .visited_exprs = std.AutoHashMap(CheckedExprId, void).init(allocator),
+            .visited_patterns = std.AutoHashMap(CheckedPatternId, void).init(allocator),
+            .visited_statements = std.AutoHashMap(CheckedStatementId, void).init(allocator),
         };
     }
 
-    fn deinit(self: *ExprTraversal) void {
-        self.exprs.deinit(self.allocator);
-        self.visited.deinit();
+    fn deinit(self: *CheckedTemplateRefCollector) void {
+        self.visited_statements.deinit();
+        self.visited_patterns.deinit();
+        self.visited_exprs.deinit();
+        self.dispatch_refs.deinit(self.allocator);
+        self.value_refs.deinit(self.allocator);
     }
 
-    fn clear(self: *ExprTraversal) void {
-        self.exprs.clearRetainingCapacity();
-        self.visited.clearRetainingCapacity();
+    fn clear(self: *CheckedTemplateRefCollector) void {
+        self.value_refs.clearRetainingCapacity();
+        self.dispatch_refs.clearRetainingCapacity();
+        self.visited_exprs.clearRetainingCapacity();
+        self.visited_patterns.clearRetainingCapacity();
+        self.visited_statements.clearRetainingCapacity();
     }
 
-    fn visitExpr(self: *ExprTraversal, expr_idx: CIR.Expr.Idx) Allocator.Error!void {
-        const entry = try self.visited.getOrPut(expr_idx);
+    fn collectExpr(self: *CheckedTemplateRefCollector, expr_id: CheckedExprId) Allocator.Error!void {
+        const entry = try self.visited_exprs.getOrPut(expr_id);
         if (entry.found_existing) return;
-        try self.exprs.append(self.allocator, expr_idx);
 
-        const expr = self.module.expr(expr_idx).data;
-        switch (expr) {
-            .e_num,
-            .e_frac_f32,
-            .e_frac_f64,
-            .e_dec,
-            .e_dec_small,
-            .e_typed_int,
-            .e_typed_frac,
-            .e_str_segment,
-            .e_bytes_literal,
-            .e_lookup_local,
-            .e_lookup_external,
-            .e_lookup_required,
-            .e_empty_list,
-            .e_empty_record,
-            .e_zero_argument_tag,
-            .e_crash,
-            .e_ellipsis,
-            .e_anno_only,
-            .e_runtime_error,
-            .e_hosted_lambda,
+        const expr = self.checked_bodies.expr(expr_id);
+        switch (expr.data) {
+            .lookup_local => |lookup| {
+                if (lookup.resolved) |ref_id| try self.value_refs.append(self.allocator, ref_id);
+            },
+            .lookup_external => |ref_id| {
+                if (ref_id) |id| try self.value_refs.append(self.allocator, id);
+            },
+            .lookup_required => |ref_id| {
+                if (ref_id) |id| try self.value_refs.append(self.allocator, id);
+            },
+            .dispatch_call,
+            .method_eq,
+            .type_dispatch_call,
+            => |plan_id| {
+                if (plan_id) |id| try self.dispatch_refs.append(self.allocator, id);
+            },
+            .str,
+            .list,
+            .tuple,
+            => |items| {
+                for (items) |item| try self.collectExpr(item);
+            },
+            .match_ => |match| {
+                try self.collectExpr(match.cond);
+                for (match.branches) |branch| {
+                    for (branch.patterns) |branch_pattern| try self.collectPattern(branch_pattern.pattern);
+                    if (branch.guard) |guard| try self.collectExpr(guard);
+                    try self.collectExpr(branch.value);
+                }
+            },
+            .if_ => |if_| {
+                for (if_.branches) |branch| {
+                    try self.collectExpr(branch.cond);
+                    try self.collectExpr(branch.body);
+                }
+                try self.collectExpr(if_.final_else);
+            },
+            .call => |call| {
+                try self.collectExpr(call.func);
+                for (call.args) |arg| try self.collectExpr(arg);
+            },
+            .record => |record| {
+                if (record.ext) |ext| try self.collectExpr(ext);
+                for (record.fields) |field| try self.collectExpr(field.value);
+            },
+            .block => |block| {
+                for (block.statements) |statement| try self.collectStatement(statement);
+                try self.collectExpr(block.final_expr);
+            },
+            .tag => |tag| {
+                for (tag.args) |arg| try self.collectExpr(arg);
+            },
+            .nominal => |nominal| try self.collectExpr(nominal.backing_expr),
+            .closure => |closure| try self.collectExpr(closure.lambda),
+            .lambda => |lambda| {
+                for (lambda.args) |arg| try self.collectPattern(arg);
+                try self.collectExpr(lambda.body);
+            },
+            .binop => |binop| {
+                try self.collectExpr(binop.lhs);
+                try self.collectExpr(binop.rhs);
+            },
+            .unary_minus => |child| try self.collectExpr(child),
+            .unary_not => |child| try self.collectExpr(child),
+            .field_access => |field| try self.collectExpr(field.receiver),
+            .method_call => |method| {
+                try self.collectExpr(method.receiver);
+                for (method.args) |arg| try self.collectExpr(arg);
+            },
+            .structural_eq => |eq| {
+                try self.collectExpr(eq.lhs);
+                try self.collectExpr(eq.rhs);
+            },
+            .type_method_call => |method| {
+                for (method.args) |arg| try self.collectExpr(arg);
+            },
+            .tuple_access => |access| try self.collectExpr(access.tuple),
+            .dbg => |child| try self.collectExpr(child),
+            .expect => |child| try self.collectExpr(child),
+            .return_ => |ret| {
+                try self.collectExpr(ret.expr);
+                try self.collectExpr(ret.lambda);
+            },
+            .for_ => |for_| {
+                try self.collectPattern(for_.pattern);
+                try self.collectExpr(for_.expr);
+                try self.collectExpr(for_.body);
+            },
+            .hosted_lambda => |hosted| {
+                for (hosted.args) |arg| try self.collectPattern(arg);
+            },
+            .run_low_level => |run| {
+                for (run.args) |arg| try self.collectExpr(arg);
+            },
+            .num,
+            .frac_f32,
+            .frac_f64,
+            .dec,
+            .dec_small,
+            .typed_int,
+            .typed_frac,
+            .str_segment,
+            .bytes_literal,
+            .empty_list,
+            .empty_record,
+            .zero_argument_tag,
+            .runtime_error,
+            .crash,
+            .ellipsis,
+            .anno_only,
+            .pending,
             => {},
-            .e_str => |str| try self.visitExprSpan(str.span),
-            .e_list => |list| try self.visitExprSpan(list.elems),
-            .e_tuple => |tuple| try self.visitExprSpan(tuple.elems),
-            .e_match => |match_expr| {
-                try self.visitExpr(match_expr.cond);
-                for (self.module.matchBranchSlice(match_expr.branches)) |branch_idx| {
-                    const branch = self.module.getMatchBranch(branch_idx);
-                    if (branch.guard) |guard| try self.visitExpr(guard);
-                    try self.visitExpr(branch.value);
-                }
-            },
-            .e_if => |if_expr| {
-                for (self.module.sliceIfBranches(if_expr.branches)) |branch_idx| {
-                    const branch = self.module.getIfBranch(branch_idx);
-                    try self.visitExpr(branch.cond);
-                    try self.visitExpr(branch.body);
-                }
-                try self.visitExpr(if_expr.final_else);
-            },
-            .e_call => |call| {
-                try self.visitExpr(call.func);
-                try self.visitExprSpan(call.args);
-            },
-            .e_record => |record| {
-                if (record.ext) |ext| try self.visitExpr(ext);
-                for (self.module.sliceRecordFields(record.fields)) |field_idx| {
-                    const field = self.module.getRecordField(field_idx);
-                    try self.visitExpr(field.value);
-                }
-            },
-            .e_block => |block| {
-                for (self.module.sliceStatements(block.stmts)) |stmt_idx| {
-                    try self.visitStmt(self.module.getStatement(stmt_idx));
-                }
-                try self.visitExpr(block.final_expr);
-            },
-            .e_tag => |tag| try self.visitExprSpan(tag.args),
-            .e_nominal => |nominal| try self.visitExpr(nominal.backing_expr),
-            .e_nominal_external => |nominal| try self.visitExpr(nominal.backing_expr),
-            .e_closure => |closure| try self.visitExpr(closure.lambda_idx),
-            .e_lambda => |lambda| try self.visitExpr(lambda.body),
-            .e_binop => |binop| {
-                try self.visitExpr(binop.lhs);
-                try self.visitExpr(binop.rhs);
-            },
-            .e_unary_minus => |unary| try self.visitExpr(unary.expr),
-            .e_unary_not => |unary| try self.visitExpr(unary.expr),
-            .e_field_access => |access| try self.visitExpr(access.receiver),
-            .e_method_call => |call| {
-                try self.visitExpr(call.receiver);
-                try self.visitExprSpan(call.args);
-            },
-            .e_dispatch_call => |call| {
-                try self.visitExpr(call.receiver);
-                try self.visitExprSpan(call.args);
-            },
-            .e_structural_eq => |eq| {
-                try self.visitExpr(eq.lhs);
-                try self.visitExpr(eq.rhs);
-            },
-            .e_method_eq => |eq| {
-                try self.visitExpr(eq.lhs);
-                try self.visitExpr(eq.rhs);
-            },
-            .e_type_method_call => |call| try self.visitExprSpan(call.args),
-            .e_type_dispatch_call => |call| try self.visitExprSpan(call.args),
-            .e_tuple_access => |access| try self.visitExpr(access.tuple),
-            .e_dbg => |dbg| try self.visitExpr(dbg.expr),
-            .e_expect => |expect| try self.visitExpr(expect.body),
-            .e_return => |return_expr| try self.visitExpr(return_expr.expr),
-            .e_for => |for_expr| {
-                try self.visitExpr(for_expr.expr);
-                try self.visitExpr(for_expr.body);
-            },
-            .e_run_low_level => |low_level| try self.visitExprSpan(low_level.args),
         }
     }
 
-    fn visitExprSpan(self: *ExprTraversal, span: CIR.Expr.Span) Allocator.Error!void {
-        for (self.module.sliceExpr(span)) |expr| try self.visitExpr(expr);
+    fn collectPattern(self: *CheckedTemplateRefCollector, pattern_id: CheckedPatternId) Allocator.Error!void {
+        const entry = try self.visited_patterns.getOrPut(pattern_id);
+        if (entry.found_existing) return;
+
+        const pattern = self.checked_bodies.patterns[@intFromEnum(pattern_id)];
+        switch (pattern.data) {
+            .as => |child| try self.collectPattern(child),
+            .applied_tag => |tag| {
+                for (tag.args) |arg| try self.collectPattern(arg);
+            },
+            .nominal => |nominal| try self.collectPattern(nominal.backing_pattern),
+            .record_destructure => |destructs| {
+                for (destructs) |destruct| switch (destruct.kind) {
+                    .required => |child| try self.collectPattern(child),
+                    .sub_pattern => |child| try self.collectPattern(child),
+                    .rest => |child| try self.collectPattern(child),
+                };
+            },
+            .list => |list| {
+                for (list.patterns) |child| try self.collectPattern(child);
+                if (list.rest) |rest| {
+                    if (rest.pattern) |child| try self.collectPattern(child);
+                }
+            },
+            .tuple => |items| {
+                for (items) |child| try self.collectPattern(child);
+            },
+            .pending,
+            .assign,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            .underscore,
+            .runtime_error,
+            => {},
+        }
     }
 
-    fn visitStmt(self: *ExprTraversal, stmt: CIR.Statement) Allocator.Error!void {
-        switch (stmt) {
-            .s_decl => |decl| try self.visitExpr(decl.expr),
-            .s_var => |var_| try self.visitExpr(var_.expr),
-            .s_reassign => |reassign| try self.visitExpr(reassign.expr),
-            .s_dbg => |dbg| try self.visitExpr(dbg.expr),
-            .s_expr => |expr| try self.visitExpr(expr.expr),
-            .s_expect => |expect| try self.visitExpr(expect.body),
-            .s_for => |for_stmt| {
-                try self.visitExpr(for_stmt.expr);
-                try self.visitExpr(for_stmt.body);
+    fn collectStatement(self: *CheckedTemplateRefCollector, statement_id: CheckedStatementId) Allocator.Error!void {
+        const entry = try self.visited_statements.getOrPut(statement_id);
+        if (entry.found_existing) return;
+
+        const statement = self.checked_bodies.statements[@intFromEnum(statement_id)];
+        switch (statement.data) {
+            .decl => |decl| {
+                try self.collectPattern(decl.pattern);
+                try self.collectExpr(decl.expr);
             },
-            .s_while => |while_stmt| {
-                try self.visitExpr(while_stmt.cond);
-                try self.visitExpr(while_stmt.body);
+            .var_ => |var_| {
+                try self.collectPattern(var_.pattern);
+                try self.collectExpr(var_.expr);
             },
-            .s_return => |return_stmt| try self.visitExpr(return_stmt.expr),
-            .s_crash,
-            .s_break,
-            .s_import,
-            .s_alias_decl,
-            .s_nominal_decl,
-            .s_type_anno,
-            .s_type_var_alias,
-            .s_runtime_error,
+            .reassign => |reassign| {
+                try self.collectPattern(reassign.pattern);
+                try self.collectExpr(reassign.expr);
+            },
+            .dbg => |child| try self.collectExpr(child),
+            .expr => |child| try self.collectExpr(child),
+            .expect => |child| try self.collectExpr(child),
+            .return_ => |ret| {
+                try self.collectExpr(ret.expr);
+                try self.collectExpr(ret.lambda);
+            },
+            .for_ => |for_| {
+                try self.collectPattern(for_.pattern);
+                try self.collectExpr(for_.expr);
+                try self.collectExpr(for_.body);
+            },
+            .while_ => |while_| {
+                try self.collectExpr(while_.cond);
+                try self.collectExpr(while_.body);
+            },
+            .pending,
+            .crash,
+            .break_,
+            .import_,
+            .alias_decl,
+            .nominal_decl,
+            .type_anno,
+            .type_var_alias,
+            .runtime_error,
             => {},
         }
     }
@@ -3073,6 +3125,78 @@ pub const TopLevelUseSummaryRef = struct {
 pub const NestedProcSiteTableRef = struct {
     start: u32 = 0,
     len: u32 = 0,
+};
+
+pub const NestedProcKind = enum {
+    local_function,
+    closure,
+    desugared_closure,
+};
+
+pub const NestedProcPathComponent = union(enum) {
+    expr: CheckedExprId,
+    pattern: CheckedPatternId,
+    statement: CheckedStatementId,
+    branch: u32,
+    desugar: u32,
+};
+
+pub const NestedProcSite = struct {
+    site: canonical.NestedProcSiteId,
+    owner_template: canonical.ProcedureTemplateRef,
+    site_path: []const NestedProcPathComponent,
+    kind: NestedProcKind,
+    checked_expr: ?CheckedExprId,
+    checked_pattern: ?CheckedPatternId,
+};
+
+pub const NestedProcSiteTable = struct {
+    sites: []NestedProcSite = &.{},
+    template_refs: []canonical.NestedProcSiteId = &.{},
+
+    pub fn fromTemplates(
+        allocator: Allocator,
+        checked_bodies: *const CheckedBodyStore,
+        templates: *CheckedProcedureTemplateTable,
+    ) Allocator.Error!NestedProcSiteTable {
+        var builder = NestedProcSiteBuilder.init(allocator, checked_bodies);
+        defer builder.deinitScratch();
+        errdefer builder.deinitAll();
+
+        for (templates.templates) |*template| {
+            const start: u32 = @intCast(builder.template_refs.items.len);
+            switch (template.body) {
+                .checked_body => |body_id| try builder.scanCheckedBody(body_id, template),
+                .promoted_callable_wrapper,
+                .hosted_wrapper,
+                .intrinsic_wrapper,
+                .entry_wrapper,
+                => {},
+            }
+            template.nested_proc_sites = .{
+                .start = start,
+                .len = @intCast(builder.template_refs.items.len - start),
+            };
+        }
+
+        const sites = try builder.sites.toOwnedSlice(allocator);
+        errdefer {
+            for (sites) |site| allocator.free(site.site_path);
+            allocator.free(sites);
+        }
+
+        return .{
+            .sites = sites,
+            .template_refs = try builder.template_refs.toOwnedSlice(allocator),
+        };
+    }
+
+    pub fn deinit(self: *NestedProcSiteTable, allocator: Allocator) void {
+        for (self.sites) |site| allocator.free(site.site_path);
+        allocator.free(self.sites);
+        allocator.free(self.template_refs);
+        self.* = .{};
+    }
 };
 
 pub const ProcTarget = union(enum) {
@@ -3214,6 +3338,293 @@ pub const CheckedProcedureTemplateTable = struct {
 
 pub const CheckedProcedureTemplateTableView = struct {
     templates: []const CheckedProcedureTemplate = &.{},
+};
+
+const NestedProcSiteBuilder = struct {
+    allocator: Allocator,
+    checked_bodies: *const CheckedBodyStore,
+    sites: std.ArrayList(NestedProcSite),
+    template_refs: std.ArrayList(canonical.NestedProcSiteId),
+    path: std.ArrayList(NestedProcPathComponent),
+
+    fn init(allocator: Allocator, checked_bodies: *const CheckedBodyStore) NestedProcSiteBuilder {
+        return .{
+            .allocator = allocator,
+            .checked_bodies = checked_bodies,
+            .sites = .empty,
+            .template_refs = .empty,
+            .path = .empty,
+        };
+    }
+
+    fn deinitScratch(self: *NestedProcSiteBuilder) void {
+        self.path.deinit(self.allocator);
+    }
+
+    fn deinitAll(self: *NestedProcSiteBuilder) void {
+        for (self.sites.items) |site| self.allocator.free(site.site_path);
+        self.sites.deinit(self.allocator);
+        self.template_refs.deinit(self.allocator);
+        self.path.deinit(self.allocator);
+        self.* = NestedProcSiteBuilder.init(self.allocator, self.checked_bodies);
+    }
+
+    fn scanCheckedBody(
+        self: *NestedProcSiteBuilder,
+        body_id: CheckedBodyId,
+        _: *const CheckedProcedureTemplate,
+    ) Allocator.Error!void {
+        const body = self.checked_bodies.body(body_id);
+        self.path.clearRetainingCapacity();
+        try self.scanExpr(body.root_expr, body.owner_template, true);
+    }
+
+    fn addSite(
+        self: *NestedProcSiteBuilder,
+        owner: canonical.ProcedureTemplateRef,
+        kind: NestedProcKind,
+        checked_expr: ?CheckedExprId,
+        checked_pattern: ?CheckedPatternId,
+    ) Allocator.Error!void {
+        const site: canonical.NestedProcSiteId = @enumFromInt(@as(u32, @intCast(self.sites.items.len)));
+        const copied_path = try self.allocator.dupe(NestedProcPathComponent, self.path.items);
+        errdefer self.allocator.free(copied_path);
+
+        try self.sites.append(self.allocator, .{
+            .site = site,
+            .owner_template = owner,
+            .site_path = copied_path,
+            .kind = kind,
+            .checked_expr = checked_expr,
+            .checked_pattern = checked_pattern,
+        });
+        try self.template_refs.append(self.allocator, site);
+    }
+
+    fn scanExpr(
+        self: *NestedProcSiteBuilder,
+        expr_id: CheckedExprId,
+        owner: canonical.ProcedureTemplateRef,
+        suppress_current_site: bool,
+    ) Allocator.Error!void {
+        try self.path.append(self.allocator, .{ .expr = expr_id });
+        defer self.path.items.len -= 1;
+
+        const expr = self.checked_bodies.expr(expr_id);
+        switch (expr.data) {
+            .closure => |closure| {
+                if (!suppress_current_site) {
+                    try self.addSite(owner, .closure, expr_id, null);
+                }
+                try self.scanExpr(closure.lambda, owner, true);
+            },
+            .lambda => |lambda| {
+                if (!suppress_current_site) {
+                    try self.addSite(owner, .local_function, expr_id, null);
+                }
+                for (lambda.args) |arg| try self.scanPattern(arg, owner);
+                try self.scanExpr(lambda.body, owner, false);
+            },
+            .str,
+            .list,
+            .tuple,
+            => |items| {
+                for (items) |item| try self.scanExpr(item, owner, false);
+            },
+            .match_ => |match| {
+                try self.scanExpr(match.cond, owner, false);
+                for (match.branches, 0..) |branch, i| {
+                    try self.path.append(self.allocator, .{ .branch = @intCast(i) });
+                    for (branch.patterns) |branch_pattern| try self.scanPattern(branch_pattern.pattern, owner);
+                    if (branch.guard) |guard| try self.scanExpr(guard, owner, false);
+                    try self.scanExpr(branch.value, owner, false);
+                    self.path.items.len -= 1;
+                }
+            },
+            .if_ => |if_| {
+                for (if_.branches) |branch| {
+                    try self.scanExpr(branch.cond, owner, false);
+                    try self.scanExpr(branch.body, owner, false);
+                }
+                try self.scanExpr(if_.final_else, owner, false);
+            },
+            .call => |call| {
+                try self.scanExpr(call.func, owner, false);
+                for (call.args) |arg| try self.scanExpr(arg, owner, false);
+            },
+            .record => |record| {
+                if (record.ext) |ext| try self.scanExpr(ext, owner, false);
+                for (record.fields) |field| try self.scanExpr(field.value, owner, false);
+            },
+            .block => |block| {
+                for (block.statements) |statement| try self.scanStatement(statement, owner);
+                try self.scanExpr(block.final_expr, owner, false);
+            },
+            .tag => |tag| {
+                for (tag.args) |arg| try self.scanExpr(arg, owner, false);
+            },
+            .nominal => |nominal| try self.scanExpr(nominal.backing_expr, owner, false),
+            .binop => |binop| {
+                try self.scanExpr(binop.lhs, owner, false);
+                try self.scanExpr(binop.rhs, owner, false);
+            },
+            .unary_minus => |child| try self.scanExpr(child, owner, false),
+            .unary_not => |child| try self.scanExpr(child, owner, false),
+            .dbg => |child| try self.scanExpr(child, owner, false),
+            .expect => |child| try self.scanExpr(child, owner, false),
+            .return_ => |ret| {
+                try self.scanExpr(ret.expr, owner, false);
+                try self.scanExpr(ret.lambda, owner, true);
+            },
+            .field_access => |field| try self.scanExpr(field.receiver, owner, false),
+            .method_call => |method| {
+                try self.scanExpr(method.receiver, owner, false);
+                for (method.args) |arg| try self.scanExpr(arg, owner, false);
+            },
+            .structural_eq => |eq| {
+                try self.scanExpr(eq.lhs, owner, false);
+                try self.scanExpr(eq.rhs, owner, false);
+            },
+            .type_method_call => |method| {
+                for (method.args) |arg| try self.scanExpr(arg, owner, false);
+            },
+            .tuple_access => |access| try self.scanExpr(access.tuple, owner, false),
+            .for_ => |for_| {
+                try self.scanPattern(for_.pattern, owner);
+                try self.scanExpr(for_.expr, owner, false);
+                try self.scanExpr(for_.body, owner, false);
+            },
+            .hosted_lambda => |hosted| {
+                if (!suppress_current_site) {
+                    try self.addSite(owner, .local_function, expr_id, null);
+                }
+                for (hosted.args) |arg| try self.scanPattern(arg, owner);
+            },
+            .run_low_level => |run| {
+                for (run.args) |arg| try self.scanExpr(arg, owner, false);
+            },
+            .num,
+            .frac_f32,
+            .frac_f64,
+            .dec,
+            .dec_small,
+            .typed_int,
+            .typed_frac,
+            .str_segment,
+            .bytes_literal,
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            .empty_list,
+            .empty_record,
+            .zero_argument_tag,
+            .dispatch_call,
+            .method_eq,
+            .type_dispatch_call,
+            .runtime_error,
+            .crash,
+            .ellipsis,
+            .anno_only,
+            .pending,
+            => {},
+        }
+    }
+
+    fn scanPattern(
+        self: *NestedProcSiteBuilder,
+        pattern_id: CheckedPatternId,
+        owner: canonical.ProcedureTemplateRef,
+    ) Allocator.Error!void {
+        try self.path.append(self.allocator, .{ .pattern = pattern_id });
+        defer self.path.items.len -= 1;
+
+        const pattern = self.checked_bodies.patterns[@intFromEnum(pattern_id)];
+        switch (pattern.data) {
+            .as => |child| try self.scanPattern(child, owner),
+            .applied_tag => |tag| {
+                for (tag.args) |arg| try self.scanPattern(arg, owner);
+            },
+            .nominal => |nominal| try self.scanPattern(nominal.backing_pattern, owner),
+            .record_destructure => |destructs| {
+                for (destructs) |destruct| switch (destruct.kind) {
+                    .required => |child| try self.scanPattern(child, owner),
+                    .sub_pattern => |child| try self.scanPattern(child, owner),
+                    .rest => |child| try self.scanPattern(child, owner),
+                };
+            },
+            .list => |list| {
+                for (list.patterns) |child| try self.scanPattern(child, owner);
+                if (list.rest) |rest| {
+                    if (rest.pattern) |child| try self.scanPattern(child, owner);
+                }
+            },
+            .tuple => |items| {
+                for (items) |child| try self.scanPattern(child, owner);
+            },
+            .pending,
+            .assign,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            .underscore,
+            .runtime_error,
+            => {},
+        }
+    }
+
+    fn scanStatement(
+        self: *NestedProcSiteBuilder,
+        statement_id: CheckedStatementId,
+        owner: canonical.ProcedureTemplateRef,
+    ) Allocator.Error!void {
+        try self.path.append(self.allocator, .{ .statement = statement_id });
+        defer self.path.items.len -= 1;
+
+        const statement = self.checked_bodies.statements[@intFromEnum(statement_id)];
+        switch (statement.data) {
+            .decl => |decl| {
+                try self.scanPattern(decl.pattern, owner);
+                try self.scanExpr(decl.expr, owner, false);
+            },
+            .var_ => |var_| {
+                try self.scanPattern(var_.pattern, owner);
+                try self.scanExpr(var_.expr, owner, false);
+            },
+            .reassign => |reassign| {
+                try self.scanPattern(reassign.pattern, owner);
+                try self.scanExpr(reassign.expr, owner, false);
+            },
+            .dbg => |child| try self.scanExpr(child, owner, false),
+            .expr => |child| try self.scanExpr(child, owner, false),
+            .expect => |child| try self.scanExpr(child, owner, false),
+            .return_ => |ret| {
+                try self.scanExpr(ret.expr, owner, false);
+                try self.scanExpr(ret.lambda, owner, true);
+            },
+            .for_ => |for_| {
+                try self.scanPattern(for_.pattern, owner);
+                try self.scanExpr(for_.expr, owner, false);
+                try self.scanExpr(for_.body, owner, false);
+            },
+            .while_ => |while_| {
+                try self.scanExpr(while_.cond, owner, false);
+                try self.scanExpr(while_.body, owner, false);
+            },
+            .pending,
+            .crash,
+            .break_,
+            .import_,
+            .alias_decl,
+            .nominal_decl,
+            .type_anno,
+            .type_var_alias,
+            .runtime_error,
+            => {},
+        }
+    }
 };
 
 pub const HostedProc = struct {
@@ -4431,6 +4842,7 @@ pub const CheckedModuleArtifact = struct {
     method_registry: static_dispatch.MethodRegistry,
     static_dispatch_plans: static_dispatch.StaticDispatchPlanTable,
     resolved_value_refs: ResolvedValueRefTable,
+    nested_proc_sites: NestedProcSiteTable = .{},
     checked_procedure_templates: CheckedProcedureTemplateTable,
     top_level_procedure_bindings: TopLevelProcedureBindingTable,
     callable_eval_templates: CallableEvalTemplateTable = .{},
@@ -4477,6 +4889,7 @@ pub const CheckedModuleArtifact = struct {
         self.callable_eval_templates.deinit(allocator);
         self.top_level_procedure_bindings.deinit(allocator);
         self.checked_procedure_templates.deinit(allocator);
+        self.nested_proc_sites.deinit(allocator);
         self.resolved_value_refs.deinit(allocator);
         self.static_dispatch_plans.deinit(allocator);
         self.method_registry.deinit(allocator);
@@ -4564,6 +4977,24 @@ pub const CheckedModuleArtifact = struct {
                 .entry_wrapper,
                 => {},
             }
+
+            const nested_end = template.nested_proc_sites.start + template.nested_proc_sites.len;
+            std.debug.assert(nested_end <= self.nested_proc_sites.template_refs.len);
+            for (self.nested_proc_sites.template_refs[template.nested_proc_sites.start..nested_end]) |site_id| {
+                std.debug.assert(@intFromEnum(site_id) < self.nested_proc_sites.sites.len);
+                const site = self.nested_proc_sites.sites[@intFromEnum(site_id)];
+                std.debug.assert(site.owner_template.template == template.template_id);
+                std.debug.assert(site.owner_template.proc_base == template.proc_base);
+                std.debug.assert(std.mem.eql(u8, &site.owner_template.artifact.bytes, &self.key.bytes));
+            }
+        }
+
+        for (self.nested_proc_sites.sites, 0..) |site, i| {
+            std.debug.assert(@intFromEnum(site.site) == i);
+            std.debug.assert(site.site_path.len > 0);
+            std.debug.assert(@intFromEnum(site.owner_template.template) < self.checked_procedure_templates.templates.len);
+            if (site.checked_expr) |expr| std.debug.assert(@intFromEnum(expr) < self.checked_bodies.exprs.len);
+            if (site.checked_pattern) |pattern| std.debug.assert(@intFromEnum(pattern) < self.checked_bodies.patterns.len);
         }
 
         for (self.platform_required_declarations.declarations, 0..) |declaration, i| {
@@ -4682,6 +5113,7 @@ pub const ImportedModuleView = struct {
     exports: ExportTableView,
     checked_types: CheckedTypeStoreView,
     checked_bodies: CheckedBodyStoreView,
+    nested_proc_sites: *const NestedProcSiteTable,
     exported_procedure_templates: ExportedProcedureTemplateView,
     exported_procedure_bindings: ExportedProcedureBindingView,
     exported_const_templates: ExportedConstTemplateView,
@@ -4707,6 +5139,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .exports = artifact.exports.view(),
         .checked_types = artifact.checked_types.view(),
         .checked_bodies = artifact.checked_bodies.view(),
+        .nested_proc_sites = &artifact.nested_proc_sites,
         .exported_procedure_templates = artifact.exported_procedure_templates.view(),
         .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),
         .exported_const_templates = artifact.exported_const_templates.view(),
@@ -5072,6 +5505,33 @@ pub fn publishFromTypedModule(
     errdefer top_level_values.deinit(allocator);
     try comptime_values.sealBindings();
 
+    var resolved_value_refs = try ResolvedValueRefTable.fromModule(
+        allocator,
+        modules,
+        module_idx,
+        inputs.imports,
+        &checked_procedure_templates,
+        &hosted_procs,
+        &platform_required_declarations,
+        &platform_required_bindings,
+        &top_level_values,
+        &checked_types,
+        &checked_bodies,
+    );
+    errdefer resolved_value_refs.deinit(allocator);
+    checked_bodies.attachResolvedValueRefs(&resolved_value_refs);
+
+    try sealCheckedProcedureTemplateRefs(
+        allocator,
+        &checked_bodies,
+        &checked_procedure_templates,
+        &static_dispatch_plans,
+        &resolved_value_refs,
+    );
+
+    var nested_proc_sites = try NestedProcSiteTable.fromTemplates(allocator, &checked_bodies, &checked_procedure_templates);
+    errdefer nested_proc_sites.deinit(allocator);
+
     var exported_procedure_templates = try ExportedProcedureTemplateTable.fromModule(
         allocator,
         module,
@@ -5091,30 +5551,6 @@ pub fn publishFromTypedModule(
 
     var exported_const_templates = ExportedConstTemplateTable{};
     errdefer exported_const_templates.deinit(allocator);
-
-    var resolved_value_refs = try ResolvedValueRefTable.fromModule(
-        allocator,
-        modules,
-        module_idx,
-        inputs.imports,
-        &checked_procedure_templates,
-        &hosted_procs,
-        &platform_required_declarations,
-        &platform_required_bindings,
-        &top_level_values,
-        &checked_types,
-        &checked_bodies,
-    );
-    errdefer resolved_value_refs.deinit(allocator);
-    checked_bodies.attachResolvedValueRefs(&resolved_value_refs);
-
-    try sealCheckedProcedureTemplateRefs(
-        allocator,
-        module,
-        &checked_procedure_templates,
-        &static_dispatch_plans,
-        &resolved_value_refs,
-    );
 
     var artifact = CheckedModuleArtifact{
         .key = artifact_key,
@@ -5136,6 +5572,7 @@ pub fn publishFromTypedModule(
         .method_registry = method_registry,
         .static_dispatch_plans = static_dispatch_plans,
         .resolved_value_refs = resolved_value_refs,
+        .nested_proc_sites = nested_proc_sites,
         .checked_procedure_templates = checked_procedure_templates,
         .top_level_procedure_bindings = top_level_procedure_bindings,
         .callable_eval_templates = callable_eval_templates,
