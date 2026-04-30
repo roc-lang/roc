@@ -172,12 +172,11 @@ fn lowerTemplateFnType(
 ) Allocator.Error!Type.TypeId {
     var lowerer = LowerType.Lowerer.init(
         allocator,
-        artifact.moduleEnvConst(),
-        &artifact.canonical_names,
+        artifact.checked_types.view(),
         &program.types,
     );
     defer lowerer.deinit();
-    return try lowerer.lowerVar(artifact.checked_types.varForRoot(template.checked_fn_root));
+    return try lowerer.lowerChecked(template.checked_fn_root);
 }
 
 fn templateForRoot(

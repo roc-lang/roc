@@ -1,48 +1,35 @@
-//! Lower checked type-store variables into specialization-local mono MIR types.
+//! Lower checked artifact type payloads into specialization-local mono MIR types.
 //!
-//! This is the only mono-stage code that may inspect the checked type store.
-//! It immediately translates module-local identifiers into canonical checked
-//! names or mono primitives so later MIR stages do not recover type identity from
-//! source names.
+//! Mono lowering consumes only the immutable checked artifact graph. It does not
+//! inspect the checker `types.Store`, raw `Var`s, or module-local identifiers.
 
 const std = @import("std");
 const builtin = @import("builtin");
-const base = @import("base");
-const can = @import("can");
 const check = @import("check");
-const types = @import("types");
 
 const Type = @import("type.zig");
 
 const Allocator = std.mem.Allocator;
-const Ident = base.Ident;
-const ModuleEnv = can.ModuleEnv;
-const Var = types.Var;
-const canonical = check.CanonicalNames;
+const checked_artifact = check.CheckedArtifact;
+
+const CheckedTypeId = checked_artifact.CheckedTypeId;
 
 pub const Lowerer = struct {
     allocator: Allocator,
-    source: *const types.Store,
-    idents: *const Ident.Store,
-    common: ModuleEnv.CommonIdents,
-    names: *const canonical.CanonicalNameStore,
+    source: checked_artifact.CheckedTypeStoreView,
     dest: *Type.Store,
-    lowered: std.AutoHashMap(Var, Type.TypeId),
+    lowered: std.AutoHashMap(CheckedTypeId, Type.TypeId),
 
     pub fn init(
         allocator: Allocator,
-        module_env: *const ModuleEnv,
-        names: *const canonical.CanonicalNameStore,
+        source: checked_artifact.CheckedTypeStoreView,
         dest: *Type.Store,
     ) Lowerer {
         return .{
             .allocator = allocator,
-            .source = &module_env.types,
-            .idents = module_env.getIdentStoreConst(),
-            .common = module_env.idents,
-            .names = names,
+            .source = source,
             .dest = dest,
-            .lowered = std.AutoHashMap(Var, Type.TypeId).init(allocator),
+            .lowered = std.AutoHashMap(CheckedTypeId, Type.TypeId).init(allocator),
         };
     }
 
@@ -50,71 +37,69 @@ pub const Lowerer = struct {
         self.lowered.deinit();
     }
 
-    pub fn lowerVar(self: *Lowerer, var_: Var) Allocator.Error!Type.TypeId {
-        const resolved = self.source.resolveVar(var_);
-        const root = resolved.var_;
-        if (self.lowered.get(root)) |existing| return existing;
+    pub fn lowerChecked(self: *Lowerer, id: CheckedTypeId) Allocator.Error!Type.TypeId {
+        if (self.lowered.get(id)) |existing| return existing;
 
         const placeholder = try self.dest.addType(.placeholder);
-        try self.lowered.put(root, placeholder);
-        const lowered = try self.lowerContent(resolved.desc.content);
+        try self.lowered.put(id, placeholder);
+        const lowered = try self.lowerPayload(self.payload(id));
         self.dest.setType(placeholder, lowered);
         self.dest.debugValidateTypeGraph(placeholder);
         return try self.dest.internTypeId(placeholder);
     }
 
-    fn lowerContent(self: *Lowerer, content: types.Content) Allocator.Error!Type.Content {
-        return switch (content) {
-            .err => invariantViolation("mono type lowering received an erroneous checked type"),
+    fn payload(self: *const Lowerer, id: CheckedTypeId) checked_artifact.CheckedTypePayload {
+        const raw = @intFromEnum(id);
+        if (raw >= self.source.payloads.len) {
+            invariantViolation("mono type lowering received a checked type id outside the published artifact payload graph");
+        }
+        return self.source.payloads[raw];
+    }
+
+    fn lowerPayload(self: *Lowerer, payload: checked_artifact.CheckedTypePayload) Allocator.Error!Type.Content {
+        return switch (payload) {
+            .pending => invariantViolation("mono type lowering received an unpublished checked type payload"),
             .flex => invariantViolation("mono type lowering received an unsolved flex type variable"),
             .rigid => invariantViolation("mono type lowering received an unsolved rigid type variable"),
-            .alias => |alias| blk: {
-                const backing = self.source.getAliasBackingVar(alias);
-                break :blk .{ .link = try self.lowerVar(backing) };
-            },
-            .structure => |flat| try self.lowerFlat(flat),
-        };
-    }
-
-    fn lowerFlat(self: *Lowerer, flat: types.FlatType) Allocator.Error!Type.Content {
-        return switch (flat) {
-            .empty_record => .{ .record = .{ .fields = &.{} } },
-            .empty_tag_union => .{ .tag_union = .{ .tags = &.{} } },
+            .alias => |alias| .{ .link = try self.lowerChecked(alias.backing) },
             .record_unbound => invariantViolation("mono type lowering received an unfinalized open record row"),
             .record => |record| try self.lowerRecord(record),
-            .tuple => |tuple| .{ .tuple = try self.lowerVarRange(tuple.elems) },
-            .nominal_type => |nominal| try self.lowerNominal(nominal),
-            .fn_pure => |func| try self.lowerFunc(func),
-            .fn_effectful => |func| try self.lowerFunc(func),
-            .fn_unbound => |func| try self.lowerFunc(func),
+            .tuple => |elems| .{ .tuple = try self.lowerTypeIds(elems) },
+            .nominal => |nominal| try self.lowerNominal(nominal),
+            .function => |func| try self.lowerFunc(func),
+            .empty_record => .{ .record = .{ .fields = &.{} } },
             .tag_union => |tag_union| try self.lowerTagUnion(tag_union),
+            .empty_tag_union => .{ .tag_union = .{ .tags = &.{} } },
         };
     }
 
-    fn lowerFunc(self: *Lowerer, func: types.Func) Allocator.Error!Type.Content {
+    fn lowerFunc(self: *Lowerer, func: checked_artifact.CheckedFunctionType) Allocator.Error!Type.Content {
         if (func.needs_instantiation) {
             invariantViolation("mono type lowering received a function type that still needs instantiation");
         }
         return .{ .func = .{
-            .args = try self.lowerVarRange(func.args),
+            .args = try self.lowerTypeIds(func.args),
             .lambdas = &.{},
-            .ret = try self.lowerVar(func.ret),
+            .ret = try self.lowerChecked(func.ret),
         } };
     }
 
-    fn lowerRecord(self: *Lowerer, record: types.Record) Allocator.Error!Type.Content {
-        var source_fields = std.ArrayList(SourceField).empty;
+    fn lowerRecord(
+        self: *Lowerer,
+        record: checked_artifact.CheckedRecordType,
+    ) Allocator.Error!Type.Content {
+        var source_fields = std.ArrayList(checked_artifact.CheckedRecordField).empty;
         defer source_fields.deinit(self.allocator);
 
         try self.collectRecordFields(record.fields, record.ext, &source_fields);
-        std.mem.sort(SourceField, source_fields.items, self, SourceField.lessThan);
+        std.mem.sort(checked_artifact.CheckedRecordField, source_fields.items, {}, recordFieldLessThan);
 
         const fields = try self.allocator.alloc(Type.Field, source_fields.items.len);
         errdefer self.allocator.free(fields);
         for (source_fields.items, 0..) |field, i| {
             fields[i] = .{
-                .name = self.recordFieldLabel(field.name),
-                .ty = try self.lowerVar(field.var_),
+                .name = field.name,
+                .ty = try self.lowerChecked(field.ty),
             };
         }
 
@@ -123,56 +108,42 @@ pub const Lowerer = struct {
 
     fn collectRecordFields(
         self: *Lowerer,
-        fields: types.RecordField.SafeMultiList.Range,
-        ext: Var,
-        out: *std.ArrayList(SourceField),
+        fields: []const checked_artifact.CheckedRecordField,
+        ext: CheckedTypeId,
+        out: *std.ArrayList(checked_artifact.CheckedRecordField),
     ) Allocator.Error!void {
-        try self.appendRecordFields(fields, out);
+        try out.appendSlice(self.allocator, fields);
 
         var current = ext;
         while (true) {
-            const resolved = self.source.resolveVar(current);
-            switch (resolved.desc.content) {
-                .alias => |alias| current = self.source.getAliasBackingVar(alias),
-                .structure => |flat| switch (flat) {
-                    .empty_record => return,
-                    .record_unbound => |ext_fields| {
-                        try self.appendRecordFields(ext_fields, out);
-                        return;
-                    },
-                    .record => |ext_record| {
-                        try self.appendRecordFields(ext_record.fields, out);
-                        current = ext_record.ext;
-                    },
-                    else => invariantViolation("record row extension resolved to a non-record type"),
+            switch (self.payload(current)) {
+                .alias => |alias| current = alias.backing,
+                .empty_record => return,
+                .record_unbound => |ext_fields| {
+                    try out.appendSlice(self.allocator, ext_fields);
+                    return;
                 },
-                .err => invariantViolation("record row extension resolved to an erroneous type"),
+                .record => |ext_record| {
+                    try out.appendSlice(self.allocator, ext_record.fields);
+                    current = ext_record.ext;
+                },
+                .pending => invariantViolation("record row extension resolved to an unpublished checked type payload"),
                 .flex => invariantViolation("record row extension stayed as flex after checking"),
                 .rigid => invariantViolation("record row extension stayed as rigid after checking"),
+                else => invariantViolation("record row extension resolved to a non-record type"),
             }
         }
     }
 
-    fn appendRecordFields(
+    fn lowerTagUnion(
         self: *Lowerer,
-        range: types.RecordField.SafeMultiList.Range,
-        out: *std.ArrayList(SourceField),
-    ) Allocator.Error!void {
-        const fields = self.source.getRecordFieldsSlice(range);
-        const names = fields.items(.name);
-        const vars = fields.items(.var_);
-        try out.ensureUnusedCapacity(self.allocator, names.len);
-        for (names, vars) |name, var_| {
-            out.appendAssumeCapacity(.{ .name = name, .var_ = var_ });
-        }
-    }
-
-    fn lowerTagUnion(self: *Lowerer, tag_union: types.TagUnion) Allocator.Error!Type.Content {
-        var source_tags = std.ArrayList(SourceTag).empty;
+        tag_union: checked_artifact.CheckedTagUnionType,
+    ) Allocator.Error!Type.Content {
+        var source_tags = std.ArrayList(checked_artifact.CheckedTag).empty;
         defer source_tags.deinit(self.allocator);
 
         try self.collectTags(tag_union.tags, tag_union.ext, &source_tags);
-        std.mem.sort(SourceTag, source_tags.items, self, SourceTag.lessThan);
+        std.mem.sort(checked_artifact.CheckedTag, source_tags.items, {}, tagLessThan);
 
         const tags = try self.allocator.alloc(Type.Tag, source_tags.items.len);
         @memset(tags, .{ .name = @enumFromInt(0), .args = &.{} });
@@ -185,8 +156,8 @@ pub const Lowerer = struct {
 
         for (source_tags.items, 0..) |tag, i| {
             tags[i] = .{
-                .name = self.tagLabel(tag.name),
-                .args = try self.lowerVarRange(tag.args),
+                .name = tag.name,
+                .args = try self.lowerTypeIds(tag.args),
             };
         }
 
@@ -195,155 +166,87 @@ pub const Lowerer = struct {
 
     fn collectTags(
         self: *Lowerer,
-        tags: types.Tag.SafeMultiList.Range,
-        ext: Var,
-        out: *std.ArrayList(SourceTag),
+        tags: []const checked_artifact.CheckedTag,
+        ext: CheckedTypeId,
+        out: *std.ArrayList(checked_artifact.CheckedTag),
     ) Allocator.Error!void {
-        try self.appendTags(tags, out);
+        try out.appendSlice(self.allocator, tags);
 
         var current = ext;
         while (true) {
-            const resolved = self.source.resolveVar(current);
-            switch (resolved.desc.content) {
-                .alias => |alias| current = self.source.getAliasBackingVar(alias),
-                .structure => |flat| switch (flat) {
-                    .empty_tag_union => return,
-                    .tag_union => |ext_tags| {
-                        try self.appendTags(ext_tags.tags, out);
-                        current = ext_tags.ext;
-                    },
-                    else => invariantViolation("tag-union extension resolved to a non-tag-union type"),
+            switch (self.payload(current)) {
+                .alias => |alias| current = alias.backing,
+                .empty_tag_union => return,
+                .tag_union => |ext_tags| {
+                    try out.appendSlice(self.allocator, ext_tags.tags);
+                    current = ext_tags.ext;
                 },
-                .err => invariantViolation("tag-union extension resolved to an erroneous type"),
+                .pending => invariantViolation("tag-union extension resolved to an unpublished checked type payload"),
                 .flex => invariantViolation("tag-union extension stayed as flex after checking"),
                 .rigid => invariantViolation("tag-union extension stayed as rigid after checking"),
+                else => invariantViolation("tag-union extension resolved to a non-tag-union type"),
             }
         }
     }
 
-    fn appendTags(
-        self: *Lowerer,
-        range: types.Tag.SafeMultiList.Range,
-        out: *std.ArrayList(SourceTag),
-    ) Allocator.Error!void {
-        const tags = self.source.getTagsSlice(range);
-        const names = tags.items(.name);
-        const args = tags.items(.args);
-        try out.ensureUnusedCapacity(self.allocator, names.len);
-        for (names, args) |name, arg_range| {
-            out.appendAssumeCapacity(.{ .name = name, .args = arg_range });
-        }
-    }
-
-    fn lowerNominal(self: *Lowerer, nominal: types.NominalType) Allocator.Error!Type.Content {
-        if (self.primitiveForNominal(nominal)) |primitive| {
-            return .{ .primitive = primitive };
-        }
-
-        const is_builtin = self.isBuiltinOrigin(nominal.origin_module);
-
-        if (is_builtin and nominal.ident.ident_idx.eql(self.common.list)) {
-            const args = self.source.sliceNominalArgs(nominal);
-            if (args.len != 1) invariantViolation("List nominal type did not have exactly one argument");
-            return .{ .list = try self.lowerVar(args[0]) };
-        }
-
-        if (is_builtin and nominal.ident.ident_idx.eql(self.common.box)) {
-            const args = self.source.sliceNominalArgs(nominal);
-            if (args.len != 1) invariantViolation("Box nominal type did not have exactly one argument");
-            return .{ .box = try self.lowerVar(args[0]) };
-        }
-
-        const arg_vars = self.source.sliceNominalArgs(nominal);
-        const args = try self.allocator.alloc(Type.TypeId, arg_vars.len);
-        errdefer self.allocator.free(args);
-        for (arg_vars, 0..) |arg, i| {
-            args[i] = try self.lowerVar(arg);
+    fn lowerNominal(self: *Lowerer, nominal: checked_artifact.CheckedNominalType) Allocator.Error!Type.Content {
+        if (nominal.builtin) |builtin_nominal| {
+            switch (builtin_nominal) {
+                .bool => return .{ .primitive = .bool },
+                .str => return .{ .primitive = .str },
+                .u8 => return .{ .primitive = .u8 },
+                .i8 => return .{ .primitive = .i8 },
+                .u16 => return .{ .primitive = .u16 },
+                .i16 => return .{ .primitive = .i16 },
+                .u32 => return .{ .primitive = .u32 },
+                .i32 => return .{ .primitive = .i32 },
+                .u64 => return .{ .primitive = .u64 },
+                .i64 => return .{ .primitive = .i64 },
+                .u128 => return .{ .primitive = .u128 },
+                .i128 => return .{ .primitive = .i128 },
+                .f32 => return .{ .primitive = .f32 },
+                .f64 => return .{ .primitive = .f64 },
+                .dec => return .{ .primitive = .dec },
+                .list => {
+                    if (nominal.args.len != 1) invariantViolation("List nominal type did not have exactly one argument");
+                    return .{ .list = try self.lowerChecked(nominal.args[0]) };
+                },
+                .box => {
+                    if (nominal.args.len != 1) invariantViolation("Box nominal type did not have exactly one argument");
+                    return .{ .box = try self.lowerChecked(nominal.args[0]) };
+                },
+            }
         }
 
         return .{ .nominal = .{
             .nominal = .{
-                .module_name = self.moduleName(nominal.origin_module),
-                .type_name = self.typeName(nominal.ident.ident_idx),
+                .module_name = nominal.origin_module,
+                .type_name = nominal.name,
             },
             .is_opaque = nominal.is_opaque,
-            .args = args,
-            .backing = try self.lowerVar(self.source.getNominalBackingVar(nominal)),
+            .args = try self.lowerTypeIds(nominal.args),
+            .backing = try self.lowerChecked(nominal.backing),
         } };
     }
 
-    fn primitiveForNominal(self: *Lowerer, nominal: types.NominalType) ?Type.Prim {
-        if (!self.isBuiltinOrigin(nominal.origin_module)) return null;
-
-        const ident = nominal.ident.ident_idx;
-        if (ident.eql(self.common.str) or ident.eql(self.common.builtin_str)) return .str;
-        if (ident.eql(self.common.bool) or ident.eql(self.common.bool_type)) return .bool;
-        if (ident.eql(self.common.u8) or ident.eql(self.common.u8_type)) return .u8;
-        if (ident.eql(self.common.i8) or ident.eql(self.common.i8_type)) return .i8;
-        if (ident.eql(self.common.u16) or ident.eql(self.common.u16_type)) return .u16;
-        if (ident.eql(self.common.i16) or ident.eql(self.common.i16_type)) return .i16;
-        if (ident.eql(self.common.u32) or ident.eql(self.common.u32_type)) return .u32;
-        if (ident.eql(self.common.i32) or ident.eql(self.common.i32_type)) return .i32;
-        if (ident.eql(self.common.u64) or ident.eql(self.common.u64_type)) return .u64;
-        if (ident.eql(self.common.i64) or ident.eql(self.common.i64_type)) return .i64;
-        if (ident.eql(self.common.u128) or ident.eql(self.common.u128_type)) return .u128;
-        if (ident.eql(self.common.i128) or ident.eql(self.common.i128_type)) return .i128;
-        if (ident.eql(self.common.f32) or ident.eql(self.common.f32_type)) return .f32;
-        if (ident.eql(self.common.f64) or ident.eql(self.common.f64_type)) return .f64;
-        if (ident.eql(self.common.dec) or ident.eql(self.common.dec_type)) return .dec;
-        return null;
-    }
-
-    fn isBuiltinOrigin(self: *Lowerer, origin: Ident.Idx) bool {
-        return origin.eql(self.common.builtin_module) or
-            std.mem.eql(u8, self.idents.getText(origin), self.idents.getText(self.common.builtin_module));
-    }
-
-    fn lowerVarRange(self: *Lowerer, range: Var.SafeList.Range) Allocator.Error![]const Type.TypeId {
-        const vars = self.source.sliceVars(range);
-        if (vars.len == 0) return &.{};
-        const out = try self.allocator.alloc(Type.TypeId, vars.len);
+    fn lowerTypeIds(self: *Lowerer, ids: []const CheckedTypeId) Allocator.Error![]const Type.TypeId {
+        if (ids.len == 0) return &.{};
+        const out = try self.allocator.alloc(Type.TypeId, ids.len);
         errdefer self.allocator.free(out);
-        for (vars, 0..) |var_, i| {
-            out[i] = try self.lowerVar(var_);
+        for (ids, 0..) |id, i| {
+            out[i] = try self.lowerChecked(id);
         }
         return out;
     }
-
-    fn moduleName(self: *Lowerer, ident: Ident.Idx) canonical.ModuleNameId {
-        return self.names.lookupModuleIdent(self.idents, ident) orelse invariantViolation("nominal module name was not published in canonical names");
-    }
-
-    fn typeName(self: *Lowerer, ident: Ident.Idx) canonical.TypeNameId {
-        return self.names.lookupTypeIdent(self.idents, ident) orelse invariantViolation("nominal type name was not published in canonical names");
-    }
-
-    fn recordFieldLabel(self: *Lowerer, ident: Ident.Idx) canonical.RecordFieldLabelId {
-        return self.names.lookupRecordFieldIdent(self.idents, ident) orelse invariantViolation("record field label was not published in canonical names");
-    }
-
-    fn tagLabel(self: *Lowerer, ident: Ident.Idx) canonical.TagLabelId {
-        return self.names.lookupTagIdent(self.idents, ident) orelse invariantViolation("tag label was not published in canonical names");
-    }
-
-    const SourceField = struct {
-        name: Ident.Idx,
-        var_: Var,
-
-        fn lessThan(ctx: *Lowerer, a: SourceField, b: SourceField) bool {
-            return std.mem.lessThan(u8, ctx.idents.getText(a.name), ctx.idents.getText(b.name));
-        }
-    };
-
-    const SourceTag = struct {
-        name: Ident.Idx,
-        args: Var.SafeList.Range,
-
-        fn lessThan(ctx: *Lowerer, a: SourceTag, b: SourceTag) bool {
-            return std.mem.lessThan(u8, ctx.idents.getText(a.name), ctx.idents.getText(b.name));
-        }
-    };
 };
+
+fn recordFieldLessThan(_: void, a: checked_artifact.CheckedRecordField, b: checked_artifact.CheckedRecordField) bool {
+    return @intFromEnum(a.name) < @intFromEnum(b.name);
+}
+
+fn tagLessThan(_: void, a: checked_artifact.CheckedTag, b: checked_artifact.CheckedTag) bool {
+    return @intFromEnum(a.name) < @intFromEnum(b.name);
+}
 
 fn invariantViolation(comptime message: []const u8) noreturn {
     if (builtin.mode == .Debug) {
