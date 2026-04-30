@@ -7272,6 +7272,138 @@ solution to imported generic specialization, because it would make importers
 reconstruct semantic payload from exporter-local state instead of consuming the
 published artifact data.
 
+#### Imported Canonical Name Remapping
+
+Canonical name ids stored inside a checked artifact are dense ids owned by that
+artifact's `CanonicalNameStore`. They are canonical because they are derived from
+canonical bytes while the owning `Ident.Store` was known, but the dense id value
+itself is not globally meaningful across artifacts unless the implementation
+uses one global content-addressed canonical-name store for all artifacts in the
+process. The final architecture must not rely on that. It must treat a pair
+like:
+
+```text
+artifact A: RecordFieldLabelId(0) == "x"
+artifact B: RecordFieldLabelId(0) == "y"
+```
+
+as two different artifact-local ids until both have been remapped into the same
+lowering-run canonical-name store. Without this remapping, imported checked type
+payloads can be cloned into mono MIR with foreign row labels, and row
+finalization can incorrectly treat unrelated fields or tags as equal merely
+because their artifact-local dense ids match.
+
+For example, suppose an imported module exports a generic procedure whose
+instantiated body mentions `{ x: I64 }`, and the root module independently
+interned `y` as its first record field label. If mono specialization copies the
+imported `RecordFieldLabelId(0)` directly into the root lowering run, the
+imported `x` field can be indistinguishable from the root `y` field. That would
+produce wrong row-finalized MIR. This is a compiler design error, not a verifier
+preference.
+
+Every `CheckedModuleArtifact` must therefore publish a read-only canonical-name
+view. The exact Zig names may differ, but the view must expose canonical bytes
+for every lowering-visible name kind:
+
+```zig
+const CanonicalNameView = struct {
+    module_names: Span([]const u8),
+    type_names: Span([]const u8),
+    method_names: Span([]const u8),
+    record_field_labels: Span([]const u8),
+    tag_labels: Span([]const u8),
+    export_names: Span([]const u8),
+    external_symbol_names: Span([]const u8),
+};
+```
+
+This view is artifact data. It is not source lookup, not an `Ident.Store`, and
+not a fallback. It is the published canonical byte table that justifies the
+artifact-local ids already stored in checked payloads.
+
+Every MIR-family lowering run must own one lowering-run canonical-name store.
+The artifact resolver must remap all imported artifact-local canonical name ids
+into that lowering-run store before any imported checked payload reaches mono
+MIR, row-finalized mono MIR, lifted MIR, lambda-solved MIR, executable MIR, IR,
+LIR, cache keys produced by lowering, or backend semantic inputs.
+
+Conceptual resolver support:
+
+```zig
+const ArtifactNameResolver = struct {
+    lowering_names: *CanonicalNameStore,
+    artifacts: Span(ImportedModuleView),
+
+    fn moduleName(artifact: CheckedModuleArtifactKey, id: ModuleNameId) ModuleNameId;
+    fn typeName(artifact: CheckedModuleArtifactKey, id: TypeNameId) TypeNameId;
+    fn methodName(artifact: CheckedModuleArtifactKey, id: MethodNameId) MethodNameId;
+    fn recordFieldLabel(artifact: CheckedModuleArtifactKey, id: RecordFieldLabelId) RecordFieldLabelId;
+    fn tagLabel(artifact: CheckedModuleArtifactKey, id: TagLabelId) TagLabelId;
+    fn exportName(artifact: CheckedModuleArtifactKey, id: ExportNameId) ExportNameId;
+    fn externalSymbolName(artifact: CheckedModuleArtifactKey, id: ExternalSymbolNameId) ExternalSymbolNameId;
+};
+```
+
+The resolver implementation reads canonical bytes from the source artifact's
+`CanonicalNameView` and interns those bytes into the lowering-run
+`CanonicalNameStore`. It may cache remap tables keyed by
+`CheckedModuleArtifactKey` and source name id. Cache misses in these remap
+tables are ordinary construction work, not heuristic lookup. A requested source
+name id outside the artifact's published name table is a compiler invariant
+violation: debug assertion immediately, release `unreachable`.
+
+The artifact resolver must return remapped clones for imported checked payloads.
+It must not hand out borrowed imported payloads that still contain
+artifact-local canonical ids unless the consumer is explicitly artifact-local and
+will not compare those ids with ids from any other artifact. Mono MIR lowering is
+not such a consumer; it always works in a lowering-run identity space.
+
+Name remapping is required for every lowering-visible payload that stores a
+canonical name id, including:
+
+- `CheckedTypePayload.alias.name` and `.origin_module`
+- `CheckedTypePayload.nominal.name` and `.origin_module`
+- record type fields and record expressions
+- tag-union type tags, tag expressions, tag patterns, and tag-payload metadata
+- method names in checked expressions, static dispatch plans, constraints, and
+  method registry keys
+- type names in typed literals or nominal metadata
+- export names, module names, hosted ABI names, platform requirement names, and
+  external symbol names
+- any future checked body, compile-time value graph, callable template,
+  promoted-procedure, or bridge metadata that carries a canonical name id
+
+The clone-instantiated checked source type graph used by mono specialization must
+therefore contain only lowering-run canonical name ids. `ConcreteSourceTypeRef`
+payloads that point at imported artifacts must be cloned through
+`ArtifactNameResolver` before they are registered as local concrete payloads.
+`ConcreteSourceTypeStore` may keep artifact refs as visibility handles, but a
+payload that is lowered into mono types must first be converted into the
+lowering-run name space.
+
+Canonical type keys remain byte-derived stable identities. Remapping dense
+canonical-name ids must not change the canonical type key of a payload. After an
+imported type payload is cloned and remapped into the lowering-run checked type
+graph, debug builds must recompute or compare its canonical key by canonical
+bytes and assert that it equals the source artifact key. Release builds use
+`unreachable` for mismatch. Verifiers must not repair mismatches.
+
+Debug-only verifiers must assert:
+
+- no MIR row shape, method key, static-dispatch plan, hosted/platform record,
+  compile-time value graph, callable-set key, erased adapter key, or executable
+  specialization key contains a foreign artifact-local canonical name id
+- every imported checked type/body/static-dispatch/method-registry payload
+  consumed by mono lowering was remapped through the artifact resolver
+- row finalization compares only lowering-run `RecordFieldLabelId`,
+  `TagLabelId`, and `MethodNameId` values
+- remapping tables are not consulted by release builds except as required to
+  construct the real lowering-run payloads; verifier-only foreign-origin
+  metadata is debug-only
+
+This remapping is not optional and not an optimization. It is required for
+correctness whenever a lowering run consumes more than one checked artifact.
+
 Mono specialization uses an `ArtifactTemplateResolver`-style service:
 
 ```zig
@@ -7279,10 +7411,11 @@ const ArtifactTemplateResolver = struct {
     root: LoweringModuleView,
     imports: Span(ImportedModuleView),
     relations: Span(RelationModuleView),
+    names: ArtifactNameResolver,
 
     fn procedureTemplate(ref: ProcedureTemplateRef) CheckedProcedureTemplateView;
-    fn checkedBody(ref: ArtifactCheckedBodyRef) CheckedBodyView;
-    fn checkedType(ref: ArtifactCheckedTypeRef) CheckedTypeView;
+    fn checkedBody(ref: ArtifactCheckedBodyRef) RemappedCheckedBodyView;
+    fn checkedType(ref: ArtifactCheckedTypeRef) RemappedCheckedTypeView;
     fn typeScheme(ref: ArtifactCheckedTypeSchemeRef) CheckedTypeSchemeView;
 };
 ```
@@ -7305,10 +7438,12 @@ cycle-safe:
 2. Map every generalized source variable in the selected
    `CheckedTypeScheme` to one fresh specialization-local variable.
 3. Clone aliases, nominals, records, tag unions, tuples, functions, static
-   dispatch constraints, and recursive refs through that map.
+   dispatch constraints, and recursive refs through that map, remapping every
+   canonical name id through `ArtifactNameResolver` as the clone is written.
 4. Clone the concrete requested source type payload named by
    `ConcreteSourceTypeRef` into the same specialization-local checked type
-   store.
+   store, again remapping imported canonical names before the payload becomes
+   local to the lowering run.
 5. Debug-assert that the cloned requested payload's canonical key equals the
    `MonoSpecializationKey.requested_mono_fn_ty` for this request; release builds
    use `unreachable` for mismatch.
@@ -7348,6 +7483,7 @@ const ArtifactPrivateCaptureNodeRef = ArtifactRef;
 const ImportedModuleView = struct {
     key: CheckedModuleArtifactKey,
     module_identity: ModuleIdentity,
+    canonical_names: CanonicalNameView,
     exports: ExportTableView,
     checked_types: CheckedTypeStoreView,
     checked_bodies: CheckedBodyStoreView,
@@ -8006,9 +8142,26 @@ recover canonical identity by guessing which `Ident.Store` an `Ident.Idx` came
 from, by comparing display text in the wrong store, or by reinserting names into a
 fresh local store and treating the new local indexes as equivalent.
 
+Dense canonical name ids are local to the `CanonicalNameStore` that produced
+them unless the implementation has explicitly chosen a single global
+content-addressed canonical-name store for all artifacts. The required final
+architecture does not depend on such a global store. It requires imported
+artifact-local canonical name ids to be remapped through the published
+`CanonicalNameView` and the lowering-run `CanonicalNameStore` before they enter
+MIR. Later stages must never compare `RecordFieldLabelId`, `TagLabelId`,
+`MethodNameId`, `TypeNameId`, `ModuleNameId`, `ExportNameId`, or
+`ExternalSymbolNameId` values that came from different artifact-local stores.
+
+Remapping from published canonical bytes is not source reconstruction. The bytes
+are checked artifact data produced during checking finalization. Re-reading an
+exporter's `ModuleEnv`, `Ident.Store`, source text, export table, or declaration
+environment to recover these names is forbidden.
+
 Debug-only artifact and MIR verifiers must reject:
 
 - any exported, cached, or imported key that contains raw `Ident.Idx`
+- any MIR payload that contains an imported artifact-local canonical name id
+  instead of a lowering-run canonical name id
 - any row-shape, method, static-dispatch, callable-set, capture-shape, erased
   adapter, executable-specialization, or compile-time value key that contains raw
   `Symbol`
@@ -11143,6 +11296,14 @@ LIR semantic inputs, and backend semantic inputs. Any post-check value that need
 a source-facing or ABI-facing name must store the appropriate canonical name id
 such as `RecordFieldLabelId`, `TagLabelId`, `MethodNameId`, `ExportNameId`, or
 `ExternalSymbolNameId`.
+
+Forbid foreign artifact-local canonical name ids in exported MIR nodes,
+row-shape keys, method keys, static-dispatch plans consumed by mono MIR,
+compile-time value graphs, hosted/platform tables, executable specialization
+keys, callable-set keys, capture-shape keys, erased adapter keys, LIR semantic
+inputs, and backend semantic inputs. Imported checked artifact data must be
+remapped into the lowering-run canonical-name store before any of those records
+are created.
 
 Forbid raw type-store ids in executable specialization keys.
 
