@@ -7,6 +7,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const base = @import("base");
+const builtins = @import("builtins");
 const can = @import("can");
 const collections = @import("collections");
 const types = @import("types");
@@ -22,6 +23,7 @@ const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const Var = types.Var;
 const CompactWriter = collections.CompactWriter;
+const StringLiteral = base.StringLiteral;
 
 pub const ModuleEnvStorage = union(enum) {
     checked_source: *ModuleEnv,
@@ -525,6 +527,7 @@ pub const CheckedPatternId = checked_ids.CheckedPatternId;
 pub const CheckedStatementId = checked_ids.CheckedStatementId;
 pub const CheckedTypeId = checked_ids.CheckedTypeId;
 pub const CheckedTypeSchemeId = checked_ids.CheckedTypeSchemeId;
+pub const StaticDispatchPlanId = static_dispatch.StaticDispatchPlanId;
 
 pub const CheckedTypeRoot = struct {
     id: CheckedTypeId,
@@ -1057,21 +1060,275 @@ pub const CheckedBody = struct {
     owner_template: canonical.ProcedureTemplateRef,
 };
 
+pub const CheckedStringLiteralId = enum(u32) { _ };
+
+pub const CheckedRecordField = struct {
+    label: canonical.RecordFieldLabelId,
+    value: CheckedExprId,
+};
+
+pub const CheckedIfBranch = struct {
+    cond: CheckedExprId,
+    body: CheckedExprId,
+};
+
+pub const CheckedMatchBranchPattern = struct {
+    pattern: CheckedPatternId,
+    degenerate: bool,
+};
+
+pub const CheckedMatchBranch = struct {
+    patterns: []const CheckedMatchBranchPattern,
+    value: CheckedExprId,
+    guard: ?CheckedExprId,
+};
+
+pub const CheckedCapture = struct {
+    pattern: CheckedPatternId,
+    scope_depth: u32,
+};
+
+pub const CheckedRecordDestructKind = union(enum) {
+    required: CheckedPatternId,
+    sub_pattern: CheckedPatternId,
+    rest: CheckedPatternId,
+};
+
+pub const CheckedRecordDestruct = struct {
+    label: canonical.RecordFieldLabelId,
+    kind: CheckedRecordDestructKind,
+};
+
+pub const CheckedListRestPattern = struct {
+    index: u32,
+    pattern: ?CheckedPatternId,
+};
+
+pub const CheckedStatementData = union(enum) {
+    pending,
+    decl: struct { pattern: CheckedPatternId, expr: CheckedExprId },
+    var_: struct { pattern: CheckedPatternId, expr: CheckedExprId },
+    reassign: struct { pattern: CheckedPatternId, expr: CheckedExprId },
+    crash: CheckedStringLiteralId,
+    dbg: CheckedExprId,
+    expr: CheckedExprId,
+    expect: CheckedExprId,
+    for_: struct { pattern: CheckedPatternId, expr: CheckedExprId, body: CheckedExprId },
+    while_: struct { cond: CheckedExprId, body: CheckedExprId },
+    break_,
+    return_: struct { expr: CheckedExprId, lambda: CheckedExprId },
+    import_,
+    alias_decl,
+    nominal_decl,
+    type_anno,
+    type_var_alias,
+    runtime_error,
+};
+
+pub const CheckedPatternData = union(enum) {
+    pending,
+    assign,
+    as: CheckedPatternId,
+    applied_tag: struct {
+        name: canonical.TagLabelId,
+        args: []const CheckedPatternId,
+    },
+    nominal: struct {
+        backing_pattern: CheckedPatternId,
+        backing_type: CIR.Expr.NominalBackingType,
+    },
+    record_destructure: []const CheckedRecordDestruct,
+    list: struct {
+        patterns: []const CheckedPatternId,
+        rest: ?CheckedListRestPattern,
+    },
+    tuple: []const CheckedPatternId,
+    num_literal: struct {
+        value: CIR.IntValue,
+        kind: CIR.NumKind,
+    },
+    small_dec_literal: struct {
+        value: CIR.SmallDecValue,
+        has_suffix: bool,
+    },
+    dec_literal: struct {
+        value: builtins.dec.RocDec,
+        has_suffix: bool,
+    },
+    frac_f32_literal: f32,
+    frac_f64_literal: f64,
+    str_literal: CheckedStringLiteralId,
+    underscore,
+    runtime_error,
+};
+
+pub const CheckedExprData = union(enum) {
+    pending,
+    num: struct {
+        value: CIR.IntValue,
+        kind: CIR.NumKind,
+    },
+    frac_f32: struct {
+        value: f32,
+        has_suffix: bool,
+    },
+    frac_f64: struct {
+        value: f64,
+        has_suffix: bool,
+    },
+    dec: struct {
+        value: builtins.dec.RocDec,
+        has_suffix: bool,
+    },
+    dec_small: struct {
+        value: CIR.SmallDecValue,
+        has_suffix: bool,
+    },
+    typed_int: struct {
+        value: CIR.IntValue,
+        type_name: canonical.TypeNameId,
+    },
+    typed_frac: struct {
+        value: CIR.IntValue,
+        type_name: canonical.TypeNameId,
+    },
+    str_segment: CheckedStringLiteralId,
+    str: []const CheckedExprId,
+    bytes_literal: CheckedStringLiteralId,
+    lookup_local: struct {
+        pattern: CheckedPatternId,
+        resolved: ?ResolvedValueRefId,
+    },
+    lookup_external: ?ResolvedValueRefId,
+    lookup_required: ?ResolvedValueRefId,
+    list: []const CheckedExprId,
+    empty_list,
+    tuple: []const CheckedExprId,
+    match_: struct {
+        cond: CheckedExprId,
+        branches: []const CheckedMatchBranch,
+        is_try_suffix: bool,
+    },
+    if_: struct {
+        branches: []const CheckedIfBranch,
+        final_else: CheckedExprId,
+    },
+    call: struct {
+        func: CheckedExprId,
+        args: []const CheckedExprId,
+        called_via: base.CalledVia,
+    },
+    record: struct {
+        fields: []const CheckedRecordField,
+        ext: ?CheckedExprId,
+    },
+    empty_record,
+    block: struct {
+        statements: []const CheckedStatementId,
+        final_expr: CheckedExprId,
+    },
+    tag: struct {
+        name: canonical.TagLabelId,
+        args: []const CheckedExprId,
+    },
+    nominal: struct {
+        backing_expr: CheckedExprId,
+        backing_type: CIR.Expr.NominalBackingType,
+    },
+    zero_argument_tag: struct {
+        closure_name: canonical.TagLabelId,
+        name: canonical.TagLabelId,
+    },
+    closure: struct {
+        lambda: CheckedExprId,
+        captures: []const CheckedCapture,
+        tag_name: canonical.TagLabelId,
+    },
+    lambda: struct {
+        args: []const CheckedPatternId,
+        body: CheckedExprId,
+    },
+    binop: struct {
+        op: CIR.Expr.Binop.Op,
+        lhs: CheckedExprId,
+        rhs: CheckedExprId,
+    },
+    unary_minus: CheckedExprId,
+    unary_not: CheckedExprId,
+    field_access: struct {
+        receiver: CheckedExprId,
+        field_name: canonical.RecordFieldLabelId,
+    },
+    method_call: struct {
+        receiver: CheckedExprId,
+        method_name: canonical.MethodNameId,
+        args: []const CheckedExprId,
+    },
+    dispatch_call: ?StaticDispatchPlanId,
+    structural_eq: struct {
+        lhs: CheckedExprId,
+        rhs: CheckedExprId,
+        negated: bool,
+    },
+    method_eq: ?StaticDispatchPlanId,
+    type_method_call: struct {
+        method_name: canonical.MethodNameId,
+        args: []const CheckedExprId,
+    },
+    type_dispatch_call: ?StaticDispatchPlanId,
+    tuple_access: struct {
+        tuple: CheckedExprId,
+        elem_index: u32,
+    },
+    runtime_error,
+    crash: CheckedStringLiteralId,
+    dbg: CheckedExprId,
+    expect: CheckedExprId,
+    ellipsis,
+    anno_only,
+    return_: struct {
+        expr: CheckedExprId,
+        lambda: CheckedExprId,
+        context: CheckedReturnContext,
+    },
+    for_: struct {
+        pattern: CheckedPatternId,
+        expr: CheckedExprId,
+        body: CheckedExprId,
+    },
+    hosted_lambda: struct {
+        symbol_name: canonical.ExternalSymbolNameId,
+        args: []const CheckedPatternId,
+    },
+    run_low_level: struct {
+        op: CIR.Expr.LowLevel,
+        args: []const CheckedExprId,
+    },
+};
+
+pub const CheckedReturnContext = enum {
+    return_expr,
+    try_suffix,
+};
+
 pub const CheckedExpr = struct {
     id: CheckedExprId,
     ty: CheckedTypeId,
     source_region: base.Region,
+    data: CheckedExprData,
 };
 
 pub const CheckedPattern = struct {
     id: CheckedPatternId,
     ty: CheckedTypeId,
     source_region: base.Region,
+    data: CheckedPatternData,
 };
 
 pub const CheckedStatement = struct {
     id: CheckedStatementId,
     source_region: base.Region,
+    data: CheckedStatementData,
 };
 
 pub const CheckedBodyStoreView = struct {
@@ -1079,6 +1336,7 @@ pub const CheckedBodyStoreView = struct {
     exprs: []const CheckedExpr = &.{},
     patterns: []const CheckedPattern = &.{},
     statements: []const CheckedStatement = &.{},
+    string_literals: []const []const u8 = &.{},
 };
 
 pub const CheckedBodyStore = struct {
@@ -1086,6 +1344,7 @@ pub const CheckedBodyStore = struct {
     exprs: []CheckedExpr = &.{},
     patterns: []CheckedPattern = &.{},
     statements: []CheckedStatement = &.{},
+    string_literals: []const []const u8 = &.{},
     expr_by_node: []?CheckedExprId = &.{},
     pattern_by_node: []?CheckedPatternId = &.{},
     statement_by_node: []?CheckedStatementId = &.{},
@@ -1093,16 +1352,23 @@ pub const CheckedBodyStore = struct {
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
+        names: *canonical.CanonicalNameStore,
         checked_types: *const CheckedTypeStore,
     ) Allocator.Error!CheckedBodyStore {
         var exprs = std.ArrayList(CheckedExpr).empty;
         errdefer exprs.deinit(allocator);
+        errdefer deinitCheckedExprList(allocator, exprs.items);
         var patterns = std.ArrayList(CheckedPattern).empty;
         errdefer patterns.deinit(allocator);
+        errdefer deinitCheckedPatternList(allocator, patterns.items);
         var statements = std.ArrayList(CheckedStatement).empty;
         errdefer statements.deinit(allocator);
+        errdefer deinitCheckedStatementList(allocator, statements.items);
         var bodies = std.ArrayList(CheckedBody).empty;
         errdefer bodies.deinit(allocator);
+        var string_builder = CheckedStringLiteralBuilder.init(allocator, module);
+        errdefer string_builder.deinitAll();
+        defer string_builder.deinitScratch();
         const expr_by_node = try allocator.alloc(?CheckedExprId, module.nodeCount());
         errdefer allocator.free(expr_by_node);
         const pattern_by_node = try allocator.alloc(?CheckedPatternId, module.nodeCount());
@@ -1136,6 +1402,7 @@ pub const CheckedBodyStore = struct {
                     .id = id,
                     .ty = ty,
                     .source_region = module.regionAt(node),
+                    .data = .pending,
                 });
                 expr_by_node[node_idx] = id;
             } else if (isPatternNodeTag(tag)) {
@@ -1157,6 +1424,7 @@ pub const CheckedBodyStore = struct {
                     .id = id,
                     .ty = ty,
                     .source_region = module.regionAt(node),
+                    .data = .pending,
                 });
                 pattern_by_node[node_idx] = id;
             } else if (isStatementNodeTag(tag)) {
@@ -1164,8 +1432,35 @@ pub const CheckedBodyStore = struct {
                 try statements.append(allocator, .{
                     .id = id,
                     .source_region = module.regionAt(node),
+                    .data = .pending,
                 });
                 statement_by_node[node_idx] = id;
+            }
+        }
+
+        var copier = CheckedBodyPayloadCopier{
+            .allocator = allocator,
+            .module = module,
+            .names = names,
+            .expr_by_node = expr_by_node,
+            .pattern_by_node = pattern_by_node,
+            .statement_by_node = statement_by_node,
+            .string_builder = &string_builder,
+        };
+
+        node_idx = 0;
+        while (node_idx < module.nodeCount()) : (node_idx += 1) {
+            const node: CIR.Node.Idx = @enumFromInt(node_idx);
+            const tag = module.nodeTag(node);
+            if (isExprNodeTag(tag)) {
+                const id = expr_by_node[node_idx] orelse unreachable;
+                exprs.items[@intFromEnum(id)].data = try copier.copyExprData(@enumFromInt(node_idx));
+            } else if (isPatternNodeTag(tag)) {
+                const id = pattern_by_node[node_idx] orelse unreachable;
+                patterns.items[@intFromEnum(id)].data = try copier.copyPatternData(@enumFromInt(node_idx));
+            } else if (isStatementNodeTag(tag)) {
+                const id = statement_by_node[node_idx] orelse unreachable;
+                statements.items[@intFromEnum(id)].data = try copier.copyStatementData(@enumFromInt(node_idx));
             }
         }
 
@@ -1174,6 +1469,7 @@ pub const CheckedBodyStore = struct {
             .exprs = try exprs.toOwnedSlice(allocator),
             .patterns = try patterns.toOwnedSlice(allocator),
             .statements = try statements.toOwnedSlice(allocator),
+            .string_literals = try string_builder.toOwnedSlice(),
             .expr_by_node = expr_by_node,
             .pattern_by_node = pattern_by_node,
             .statement_by_node = statement_by_node,
@@ -1186,6 +1482,7 @@ pub const CheckedBodyStore = struct {
             .exprs = self.exprs,
             .patterns = self.patterns,
             .statements = self.statements,
+            .string_literals = self.string_literals,
         };
     }
 
@@ -1207,6 +1504,71 @@ pub const CheckedBodyStore = struct {
         const raw = @intFromEnum(pattern);
         if (raw >= self.pattern_by_node.len) return null;
         return self.pattern_by_node[raw];
+    }
+
+    pub fn attachStaticDispatchPlans(
+        self: *CheckedBodyStore,
+        plans: *const static_dispatch.StaticDispatchPlanTable,
+    ) void {
+        var iter = plans.by_expr.iterator();
+        while (iter.next()) |entry| {
+            const checked_expr = self.exprIdForSource(entry.key_ptr.*) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: static dispatch expression {d} has no checked expression id",
+                        .{@intFromEnum(entry.key_ptr.*)},
+                    );
+                }
+                unreachable;
+            };
+            switch (&self.exprs[@intFromEnum(checked_expr)].data) {
+                .dispatch_call => |slot| slot.* = entry.value_ptr.*,
+                .method_eq => |slot| slot.* = entry.value_ptr.*,
+                .type_dispatch_call => |slot| slot.* = entry.value_ptr.*,
+                else => {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "checked artifact invariant violated: static dispatch plan {d} points at non-dispatch checked expression {d}",
+                            .{ @intFromEnum(entry.value_ptr.*), @intFromEnum(checked_expr) },
+                        );
+                    }
+                    unreachable;
+                },
+            }
+        }
+    }
+
+    pub fn attachResolvedValueRefs(
+        self: *CheckedBodyStore,
+        refs: *const ResolvedValueRefTable,
+    ) void {
+        for (refs.records, 0..) |record, i| {
+            const ref_id: ResolvedValueRefId = @enumFromInt(@as(u32, @intCast(i)));
+            const indexed = refs.lookupIdByCheckedExpr(record.expr) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: resolved value ref {d} is missing from checked expression index",
+                        .{i},
+                    );
+                }
+                unreachable;
+            };
+            std.debug.assert(ref_id == indexed);
+            switch (&self.exprs[@intFromEnum(record.expr)].data) {
+                .lookup_local => |lookup| lookup.resolved = ref_id,
+                .lookup_external => |slot| slot.* = ref_id,
+                .lookup_required => |slot| slot.* = ref_id,
+                else => {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "checked artifact invariant violated: resolved value ref {d} points at non-lookup checked expression {d}",
+                            .{ i, @intFromEnum(record.expr) },
+                        );
+                    }
+                    unreachable;
+                },
+            }
+        }
     }
 
     pub fn appendBody(
@@ -1232,6 +1594,11 @@ pub const CheckedBodyStore = struct {
         allocator.free(self.statement_by_node);
         allocator.free(self.pattern_by_node);
         allocator.free(self.expr_by_node);
+        for (self.string_literals) |literal| allocator.free(literal);
+        allocator.free(self.string_literals);
+        deinitCheckedStatementList(allocator, self.statements);
+        deinitCheckedPatternList(allocator, self.patterns);
+        deinitCheckedExprList(allocator, self.exprs);
         allocator.free(self.statements);
         allocator.free(self.patterns);
         allocator.free(self.exprs);
@@ -1239,6 +1606,543 @@ pub const CheckedBodyStore = struct {
         self.* = .{};
     }
 };
+
+const CheckedStringLiteralBuilder = struct {
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    strings: std.ArrayList([]const u8),
+    by_literal: std.AutoHashMapUnmanaged(StringLiteral.Idx, CheckedStringLiteralId) = .{},
+
+    fn init(allocator: Allocator, module: TypedCIR.Module) CheckedStringLiteralBuilder {
+        return .{
+            .allocator = allocator,
+            .module = module,
+            .strings = .empty,
+        };
+    }
+
+    fn intern(self: *CheckedStringLiteralBuilder, literal: StringLiteral.Idx) Allocator.Error!CheckedStringLiteralId {
+        if (self.by_literal.get(literal)) |existing| return existing;
+
+        const id: CheckedStringLiteralId = @enumFromInt(@as(u32, @intCast(self.strings.items.len)));
+        const owned = try self.allocator.dupe(u8, self.module.getString(literal));
+        errdefer self.allocator.free(owned);
+        try self.strings.append(self.allocator, owned);
+        try self.by_literal.put(self.allocator, literal, id);
+        return id;
+    }
+
+    fn toOwnedSlice(self: *CheckedStringLiteralBuilder) Allocator.Error![]const []const u8 {
+        return try self.strings.toOwnedSlice(self.allocator);
+    }
+
+    fn deinitScratch(self: *CheckedStringLiteralBuilder) void {
+        self.by_literal.deinit(self.allocator);
+    }
+
+    fn deinitAll(self: *CheckedStringLiteralBuilder) void {
+        for (self.strings.items) |literal| self.allocator.free(literal);
+        self.strings.deinit(self.allocator);
+        self.by_literal.deinit(self.allocator);
+        self.* = CheckedStringLiteralBuilder.init(self.allocator, self.module);
+    }
+};
+
+const CheckedBodyPayloadCopier = struct {
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    expr_by_node: []const ?CheckedExprId,
+    pattern_by_node: []const ?CheckedPatternId,
+    statement_by_node: []const ?CheckedStatementId,
+    string_builder: *CheckedStringLiteralBuilder,
+
+    fn copyExprData(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error!CheckedExprData {
+        const expr = self.module.expr(expr_idx).data;
+        return switch (expr) {
+            .e_num => |num| .{ .num = .{ .value = num.value, .kind = num.kind } },
+            .e_frac_f32 => |frac| .{ .frac_f32 = .{ .value = frac.value, .has_suffix = frac.has_suffix } },
+            .e_frac_f64 => |frac| .{ .frac_f64 = .{ .value = frac.value, .has_suffix = frac.has_suffix } },
+            .e_dec => |dec| .{ .dec = .{ .value = dec.value, .has_suffix = dec.has_suffix } },
+            .e_dec_small => |dec| .{ .dec_small = .{ .value = dec.value, .has_suffix = dec.has_suffix } },
+            .e_typed_int => |typed| .{ .typed_int = .{
+                .value = typed.value,
+                .type_name = try self.names.internTypeIdent(self.module.identStoreConst(), typed.type_name),
+            } },
+            .e_typed_frac => |typed| .{ .typed_frac = .{
+                .value = typed.value,
+                .type_name = try self.names.internTypeIdent(self.module.identStoreConst(), typed.type_name),
+            } },
+            .e_str_segment => |str| .{ .str_segment = try self.string_builder.intern(str.literal) },
+            .e_str => |str| .{ .str = try self.copyExprSpan(str.span) },
+            .e_bytes_literal => |bytes| .{ .bytes_literal = try self.string_builder.intern(bytes.literal) },
+            .e_lookup_local => |lookup| .{ .lookup_local = .{
+                .pattern = self.checkedPattern(lookup.pattern_idx),
+                .resolved = null,
+            } },
+            .e_lookup_external => .{ .lookup_external = null },
+            .e_lookup_required => .{ .lookup_required = null },
+            .e_list => |list| .{ .list = try self.copyExprSpan(list.elems) },
+            .e_empty_list => .empty_list,
+            .e_tuple => |tuple| .{ .tuple = try self.copyExprSpan(tuple.elems) },
+            .e_match => |match| .{ .match_ = .{
+                .cond = self.checkedExpr(match.cond),
+                .branches = try self.copyMatchBranches(match.branches),
+                .is_try_suffix = match.is_try_suffix,
+            } },
+            .e_if => |if_| .{ .if_ = .{
+                .branches = try self.copyIfBranches(if_.branches),
+                .final_else = self.checkedExpr(if_.final_else),
+            } },
+            .e_call => |call| .{ .call = .{
+                .func = self.checkedExpr(call.func),
+                .args = try self.copyExprSpan(call.args),
+                .called_via = call.called_via,
+            } },
+            .e_record => |record| .{ .record = .{
+                .fields = try self.copyRecordFields(record.fields),
+                .ext = if (record.ext) |ext| self.checkedExpr(ext) else null,
+            } },
+            .e_empty_record => .empty_record,
+            .e_block => |block| .{ .block = .{
+                .statements = try self.copyStatementSpan(block.stmts),
+                .final_expr = self.checkedExpr(block.final_expr),
+            } },
+            .e_tag => |tag| .{ .tag = .{
+                .name = try self.names.internTagIdent(self.module.identStoreConst(), tag.name),
+                .args = try self.copyExprSpan(tag.args),
+            } },
+            .e_nominal => |nominal| .{ .nominal = .{
+                .backing_expr = self.checkedExpr(nominal.backing_expr),
+                .backing_type = nominal.backing_type,
+            } },
+            .e_nominal_external => |nominal| .{ .nominal = .{
+                .backing_expr = self.checkedExpr(nominal.backing_expr),
+                .backing_type = nominal.backing_type,
+            } },
+            .e_zero_argument_tag => |tag| .{ .zero_argument_tag = .{
+                .closure_name = try self.names.internTagIdent(self.module.identStoreConst(), tag.closure_name),
+                .name = try self.names.internTagIdent(self.module.identStoreConst(), tag.name),
+            } },
+            .e_closure => |closure| .{ .closure = .{
+                .lambda = self.checkedExpr(closure.lambda_idx),
+                .captures = try self.copyCaptures(closure.captures),
+                .tag_name = try self.names.internTagIdent(self.module.identStoreConst(), closure.tag_name),
+            } },
+            .e_lambda => |lambda| .{ .lambda = .{
+                .args = try self.copyPatternSpan(lambda.args),
+                .body = self.checkedExpr(lambda.body),
+            } },
+            .e_binop => |binop| .{ .binop = .{
+                .op = binop.op,
+                .lhs = self.checkedExpr(binop.lhs),
+                .rhs = self.checkedExpr(binop.rhs),
+            } },
+            .e_unary_minus => |unary| .{ .unary_minus = self.checkedExpr(unary.expr) },
+            .e_unary_not => |unary| .{ .unary_not = self.checkedExpr(unary.expr) },
+            .e_field_access => |field| .{ .field_access = .{
+                .receiver = self.checkedExpr(field.receiver),
+                .field_name = try self.names.internRecordFieldIdent(self.module.identStoreConst(), field.field_name),
+            } },
+            .e_method_call => |method| .{ .method_call = .{
+                .receiver = self.checkedExpr(method.receiver),
+                .method_name = try self.names.internMethodIdent(self.module.identStoreConst(), method.method_name),
+                .args = try self.copyExprSpan(method.args),
+            } },
+            .e_dispatch_call => .{ .dispatch_call = null },
+            .e_structural_eq => |eq| .{ .structural_eq = .{
+                .lhs = self.checkedExpr(eq.lhs),
+                .rhs = self.checkedExpr(eq.rhs),
+                .negated = eq.negated,
+            } },
+            .e_method_eq => .{ .method_eq = null },
+            .e_type_method_call => |method| .{ .type_method_call = .{
+                .method_name = try self.names.internMethodIdent(self.module.identStoreConst(), method.method_name),
+                .args = try self.copyExprSpan(method.args),
+            } },
+            .e_type_dispatch_call => .{ .type_dispatch_call = null },
+            .e_tuple_access => |access| .{ .tuple_access = .{
+                .tuple = self.checkedExpr(access.tuple),
+                .elem_index = access.elem_index,
+            } },
+            .e_runtime_error => .runtime_error,
+            .e_crash => |crash| .{ .crash = try self.string_builder.intern(crash.msg) },
+            .e_dbg => |dbg| .{ .dbg = self.checkedExpr(dbg.expr) },
+            .e_expect => |expect| .{ .expect = self.checkedExpr(expect.body) },
+            .e_ellipsis => .ellipsis,
+            .e_anno_only => .anno_only,
+            .e_return => |ret| .{ .return_ = .{
+                .expr = self.checkedExpr(ret.expr),
+                .lambda = self.checkedExpr(ret.lambda),
+                .context = switch (ret.context) {
+                    .return_expr => .return_expr,
+                    .try_suffix => .try_suffix,
+                },
+            } },
+            .e_for => |for_| .{ .for_ = .{
+                .pattern = self.checkedPattern(for_.patt),
+                .expr = self.checkedExpr(for_.expr),
+                .body = self.checkedExpr(for_.body),
+            } },
+            .e_hosted_lambda => |hosted| .{ .hosted_lambda = .{
+                .symbol_name = try self.names.internExternalSymbolIdent(self.module.identStoreConst(), hosted.symbol_name),
+                .args = try self.copyPatternSpan(hosted.args),
+            } },
+            .e_run_low_level => |run| .{ .run_low_level = .{
+                .op = run.op,
+                .args = try self.copyExprSpan(run.args),
+            } },
+        };
+    }
+
+    fn copyPatternData(self: *@This(), pattern_idx: CIR.Pattern.Idx) Allocator.Error!CheckedPatternData {
+        const pattern = self.module.pattern(pattern_idx).data;
+        return switch (pattern) {
+            .assign => .assign,
+            .as => |as| .{ .as = self.checkedPattern(as.pattern) },
+            .applied_tag => |tag| .{ .applied_tag = .{
+                .name = try self.names.internTagIdent(self.module.identStoreConst(), tag.name),
+                .args = try self.copyPatternSpan(tag.args),
+            } },
+            .nominal => |nominal| .{ .nominal = .{
+                .backing_pattern = self.checkedPattern(nominal.backing_pattern),
+                .backing_type = nominal.backing_type,
+            } },
+            .nominal_external => |nominal| .{ .nominal = .{
+                .backing_pattern = self.checkedPattern(nominal.backing_pattern),
+                .backing_type = nominal.backing_type,
+            } },
+            .record_destructure => |record| .{ .record_destructure = try self.copyRecordDestructs(record.destructs) },
+            .list => |list| .{ .list = .{
+                .patterns = try self.copyPatternSpan(list.patterns),
+                .rest = if (list.rest_info) |rest| .{
+                    .index = rest.index,
+                    .pattern = if (rest.pattern) |rest_pattern| self.checkedPattern(rest_pattern) else null,
+                } else null,
+            } },
+            .tuple => |tuple| .{ .tuple = try self.copyPatternSpan(tuple.patterns) },
+            .num_literal => |num| .{ .num_literal = .{ .value = num.value, .kind = num.kind } },
+            .small_dec_literal => |dec| .{ .small_dec_literal = .{ .value = dec.value, .has_suffix = dec.has_suffix } },
+            .dec_literal => |dec| .{ .dec_literal = .{ .value = dec.value, .has_suffix = dec.has_suffix } },
+            .frac_f32_literal => |frac| .{ .frac_f32_literal = frac.value },
+            .frac_f64_literal => |frac| .{ .frac_f64_literal = frac.value },
+            .str_literal => |str| .{ .str_literal = try self.string_builder.intern(str.literal) },
+            .underscore => .underscore,
+            .runtime_error => .runtime_error,
+        };
+    }
+
+    fn copyStatementData(self: *@This(), statement_idx: CIR.Statement.Idx) Allocator.Error!CheckedStatementData {
+        const statement = self.module.getStatement(statement_idx);
+        return switch (statement) {
+            .s_decl => |decl| .{ .decl = .{ .pattern = self.checkedPattern(decl.pattern), .expr = self.checkedExpr(decl.expr) } },
+            .s_var => |var_| .{ .var_ = .{ .pattern = self.checkedPattern(var_.pattern_idx), .expr = self.checkedExpr(var_.expr) } },
+            .s_reassign => |reassign| .{ .reassign = .{ .pattern = self.checkedPattern(reassign.pattern_idx), .expr = self.checkedExpr(reassign.expr) } },
+            .s_crash => |crash| .{ .crash = try self.string_builder.intern(crash.msg) },
+            .s_dbg => |dbg| .{ .dbg = self.checkedExpr(dbg.expr) },
+            .s_expr => |expr| .{ .expr = self.checkedExpr(expr.expr) },
+            .s_expect => |expect| .{ .expect = self.checkedExpr(expect.body) },
+            .s_for => |for_| .{ .for_ = .{
+                .pattern = self.checkedPattern(for_.patt),
+                .expr = self.checkedExpr(for_.expr),
+                .body = self.checkedExpr(for_.body),
+            } },
+            .s_while => |while_| .{ .while_ = .{
+                .cond = self.checkedExpr(while_.cond),
+                .body = self.checkedExpr(while_.body),
+            } },
+            .s_break => .break_,
+            .s_return => |ret| .{ .return_ = .{
+                .expr = self.checkedExpr(ret.expr),
+                .lambda = self.checkedExpr(ret.lambda),
+            } },
+            .s_import => .import_,
+            .s_alias_decl => .alias_decl,
+            .s_nominal_decl => .nominal_decl,
+            .s_type_anno => .type_anno,
+            .s_type_var_alias => .type_var_alias,
+            .s_runtime_error => .runtime_error,
+        };
+    }
+
+    fn copyExprSpan(self: *@This(), span: CIR.Expr.Span) Allocator.Error![]const CheckedExprId {
+        const source = self.module.sliceExpr(span);
+        if (source.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedExprId, source.len);
+        for (source, 0..) |expr, i| out[i] = self.checkedExpr(expr);
+        return out;
+    }
+
+    fn copyPatternSpan(self: *@This(), span: CIR.Pattern.Span) Allocator.Error![]const CheckedPatternId {
+        const source = self.module.slicePatterns(span);
+        if (source.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedPatternId, source.len);
+        for (source, 0..) |pattern, i| out[i] = self.checkedPattern(pattern);
+        return out;
+    }
+
+    fn copyStatementSpan(self: *@This(), span: CIR.Statement.Span) Allocator.Error![]const CheckedStatementId {
+        const source = self.module.sliceStatements(span);
+        if (source.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedStatementId, source.len);
+        for (source, 0..) |statement, i| out[i] = self.checkedStatement(statement);
+        return out;
+    }
+
+    fn copyRecordFields(self: *@This(), span: CIR.RecordField.Span) Allocator.Error![]const CheckedRecordField {
+        const source = self.module.sliceRecordFields(span);
+        if (source.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedRecordField, source.len);
+        for (source, 0..) |field_idx, i| {
+            const field = self.module.getRecordField(field_idx);
+            out[i] = .{
+                .label = try self.names.internRecordFieldIdent(self.module.identStoreConst(), field.name),
+                .value = self.checkedExpr(field.value),
+            };
+        }
+        return out;
+    }
+
+    fn copyIfBranches(self: *@This(), span: CIR.Expr.IfBranch.Span) Allocator.Error![]const CheckedIfBranch {
+        const source = self.module.sliceIfBranches(span);
+        if (source.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedIfBranch, source.len);
+        for (source, 0..) |branch_idx, i| {
+            const branch = self.module.getIfBranch(branch_idx);
+            out[i] = .{
+                .cond = self.checkedExpr(branch.cond),
+                .body = self.checkedExpr(branch.body),
+            };
+        }
+        return out;
+    }
+
+    fn copyMatchBranches(self: *@This(), span: CIR.Expr.Match.Branch.Span) Allocator.Error![]const CheckedMatchBranch {
+        const source = self.module.matchBranchSlice(span);
+        if (source.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedMatchBranch, source.len);
+        var initialized: usize = 0;
+        errdefer {
+            for (out[0..initialized]) |branch| self.allocator.free(branch.patterns);
+            self.allocator.free(out);
+        }
+        for (source, 0..) |branch_idx, i| {
+            const branch = self.module.getMatchBranch(branch_idx);
+            out[i] = .{
+                .patterns = try self.copyMatchBranchPatterns(branch.patterns),
+                .value = self.checkedExpr(branch.value),
+                .guard = if (branch.guard) |guard| self.checkedExpr(guard) else null,
+            };
+            initialized += 1;
+        }
+        return out;
+    }
+
+    fn copyMatchBranchPatterns(self: *@This(), span: CIR.Expr.Match.BranchPattern.Span) Allocator.Error![]const CheckedMatchBranchPattern {
+        const source = self.module.sliceMatchBranchPatterns(span);
+        if (source.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedMatchBranchPattern, source.len);
+        for (source, 0..) |branch_pattern_idx, i| {
+            const branch_pattern = self.module.getMatchBranchPattern(branch_pattern_idx);
+            out[i] = .{
+                .pattern = self.checkedPattern(branch_pattern.pattern),
+                .degenerate = branch_pattern.degenerate,
+            };
+        }
+        return out;
+    }
+
+    fn copyCaptures(self: *@This(), span: CIR.Expr.Capture.Span) Allocator.Error![]const CheckedCapture {
+        const source = self.module.moduleEnvConst().store.sliceCaptures(span);
+        if (source.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedCapture, source.len);
+        for (source, 0..) |capture_idx, i| {
+            const capture = self.module.moduleEnvConst().store.getCapture(capture_idx);
+            out[i] = .{
+                .pattern = self.checkedPattern(capture.pattern_idx),
+                .scope_depth = capture.scope_depth,
+            };
+        }
+        return out;
+    }
+
+    fn copyRecordDestructs(self: *@This(), span: CIR.Pattern.RecordDestruct.Span) Allocator.Error![]const CheckedRecordDestruct {
+        const source = self.module.sliceRecordDestructs(span);
+        if (source.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedRecordDestruct, source.len);
+        for (source, 0..) |destruct_idx, i| {
+            const destruct = self.module.getRecordDestruct(destruct_idx);
+            out[i] = .{
+                .label = try self.names.internRecordFieldIdent(self.module.identStoreConst(), destruct.label),
+                .kind = switch (destruct.kind) {
+                    .Required => |pattern| .{ .required = self.checkedPattern(pattern) },
+                    .SubPattern => |pattern| .{ .sub_pattern = self.checkedPattern(pattern) },
+                    .Rest => |pattern| .{ .rest = self.checkedPattern(pattern) },
+                },
+            };
+        }
+        return out;
+    }
+
+    fn checkedExpr(self: *const @This(), expr: CIR.Expr.Idx) CheckedExprId {
+        const raw = @intFromEnum(expr);
+        if (raw < self.expr_by_node.len) {
+            if (self.expr_by_node[raw]) |id| return id;
+        }
+        if (builtin.mode == .Debug) {
+            std.debug.panic("checked artifact invariant violated: expression {d} was not copied into checked body store", .{raw});
+        }
+        unreachable;
+    }
+
+    fn checkedPattern(self: *const @This(), pattern: CIR.Pattern.Idx) CheckedPatternId {
+        const raw = @intFromEnum(pattern);
+        if (raw < self.pattern_by_node.len) {
+            if (self.pattern_by_node[raw]) |id| return id;
+        }
+        if (builtin.mode == .Debug) {
+            std.debug.panic("checked artifact invariant violated: pattern {d} was not copied into checked body store", .{raw});
+        }
+        unreachable;
+    }
+
+    fn checkedStatement(self: *const @This(), statement: CIR.Statement.Idx) CheckedStatementId {
+        const raw = @intFromEnum(statement);
+        if (raw < self.statement_by_node.len) {
+            if (self.statement_by_node[raw]) |id| return id;
+        }
+        if (builtin.mode == .Debug) {
+            std.debug.panic("checked artifact invariant violated: statement {d} was not copied into checked body store", .{raw});
+        }
+        unreachable;
+    }
+};
+
+fn deinitCheckedExprList(allocator: Allocator, exprs: []CheckedExpr) void {
+    for (exprs) |*expr| deinitCheckedExprData(allocator, &expr.data);
+}
+
+fn deinitCheckedPatternList(allocator: Allocator, patterns: []CheckedPattern) void {
+    for (patterns) |*pattern| deinitCheckedPatternData(allocator, &pattern.data);
+}
+
+fn deinitCheckedStatementList(allocator: Allocator, statements: []CheckedStatement) void {
+    for (statements) |*statement| deinitCheckedStatementData(allocator, &statement.data);
+}
+
+fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
+    switch (data.*) {
+        .pending,
+        .num,
+        .frac_f32,
+        .frac_f64,
+        .dec,
+        .dec_small,
+        .typed_int,
+        .typed_frac,
+        .str_segment,
+        .bytes_literal,
+        .lookup_local,
+        .lookup_external,
+        .lookup_required,
+        .empty_list,
+        .empty_record,
+        .zero_argument_tag,
+        .dispatch_call,
+        .structural_eq,
+        .method_eq,
+        .type_dispatch_call,
+        .tuple_access,
+        .runtime_error,
+        .crash,
+        .dbg,
+        .expect,
+        .ellipsis,
+        .anno_only,
+        .return_,
+        .for_,
+        => {},
+        .str => |items| allocator.free(items),
+        .list => |items| allocator.free(items),
+        .tuple => |items| allocator.free(items),
+        .match_ => |match| {
+            for (match.branches) |branch| allocator.free(branch.patterns);
+            allocator.free(match.branches);
+        },
+        .if_ => |if_| allocator.free(if_.branches),
+        .call => |call| allocator.free(call.args),
+        .record => |record| allocator.free(record.fields),
+        .block => |block| allocator.free(block.statements),
+        .tag => |tag| allocator.free(tag.args),
+        .nominal => {},
+        .closure => |closure| allocator.free(closure.captures),
+        .lambda => |lambda| allocator.free(lambda.args),
+        .binop => {},
+        .unary_minus,
+        .unary_not,
+        => {},
+        .field_access => {},
+        .method_call => |method| allocator.free(method.args),
+        .type_method_call => |method| allocator.free(method.args),
+        .hosted_lambda => |hosted| allocator.free(hosted.args),
+        .run_low_level => |run| allocator.free(run.args),
+    }
+    data.* = .pending;
+}
+
+fn deinitCheckedPatternData(allocator: Allocator, data: *CheckedPatternData) void {
+    switch (data.*) {
+        .pending,
+        .assign,
+        .as,
+        .nominal,
+        .num_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .str_literal,
+        .underscore,
+        .runtime_error,
+        => {},
+        .applied_tag => |tag| allocator.free(tag.args),
+        .record_destructure => |destructs| allocator.free(destructs),
+        .list => |list| allocator.free(list.patterns),
+        .tuple => |patterns| allocator.free(patterns),
+    }
+    data.* = .pending;
+}
+
+fn deinitCheckedStatementData(_: Allocator, data: *CheckedStatementData) void {
+    data.* = .pending;
+}
+
+fn verifyCheckedExprDataPublished(data: CheckedExprData) void {
+    switch (data) {
+        .pending => std.debug.panic("checked artifact invariant violated: checked expression payload was not filled", .{}),
+        .lookup_local => |lookup| std.debug.assert(lookup.resolved != null),
+        .lookup_external => |ref| std.debug.assert(ref != null),
+        .lookup_required => |ref| std.debug.assert(ref != null),
+        .dispatch_call => |plan| std.debug.assert(plan != null),
+        .method_eq => |plan| std.debug.assert(plan != null),
+        .type_dispatch_call => |plan| std.debug.assert(plan != null),
+        else => {},
+    }
+}
+
+fn verifyCheckedPatternDataPublished(data: CheckedPatternData) void {
+    switch (data) {
+        .pending => std.debug.panic("checked artifact invariant violated: checked pattern payload was not filled", .{}),
+        else => {},
+    }
+}
+
+fn verifyCheckedStatementDataPublished(data: CheckedStatementData) void {
+    switch (data) {
+        .pending => std.debug.panic("checked artifact invariant violated: checked statement payload was not filled", .{}),
+        else => {},
+    }
+}
 
 fn isExprNodeTag(tag: CIR.Node.Tag) bool {
     return std.mem.startsWith(u8, @tagName(tag), "expr_");
@@ -1499,6 +2403,7 @@ pub const ResolvedValueRefRecord = struct {
 pub const ResolvedValueRefTable = struct {
     records: []ResolvedValueRefRecord = &.{},
     by_expr: std.AutoHashMapUnmanaged(CIR.Expr.Idx, ResolvedValueRefId) = .{},
+    by_checked_expr: []?ResolvedValueRefId = &.{},
     template_refs: []ResolvedValueRefId = &.{},
 
     pub fn fromModule(
@@ -1520,6 +2425,9 @@ pub const ResolvedValueRefTable = struct {
 
         var by_expr: std.AutoHashMapUnmanaged(CIR.Expr.Idx, ResolvedValueRefId) = .{};
         errdefer by_expr.deinit(allocator);
+        const by_checked_expr = try allocator.alloc(?ResolvedValueRefId, checked_bodies.exprs.len);
+        errdefer allocator.free(by_checked_expr);
+        @memset(by_checked_expr, null);
 
         var node_idx: u32 = 0;
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
@@ -1576,11 +2484,13 @@ pub const ResolvedValueRefTable = struct {
                 .scope_depth = 0,
             });
             try by_expr.put(allocator, expr_idx, id);
+            by_checked_expr[@intFromEnum(checked_expr)] = id;
         }
 
         return .{
             .records = try records.toOwnedSlice(allocator),
             .by_expr = by_expr,
+            .by_checked_expr = by_checked_expr,
         };
     }
 
@@ -1591,6 +2501,12 @@ pub const ResolvedValueRefTable = struct {
 
     pub fn lookupIdByExpr(self: *const ResolvedValueRefTable, expr: CIR.Expr.Idx) ?ResolvedValueRefId {
         return self.by_expr.get(expr);
+    }
+
+    pub fn lookupIdByCheckedExpr(self: *const ResolvedValueRefTable, expr: CheckedExprId) ?ResolvedValueRefId {
+        const raw = @intFromEnum(expr);
+        if (raw >= self.by_checked_expr.len) return null;
+        return self.by_checked_expr[raw];
     }
 
     pub fn appendTemplateRefSpan(
@@ -1611,6 +2527,7 @@ pub const ResolvedValueRefTable = struct {
 
     pub fn deinit(self: *ResolvedValueRefTable, allocator: Allocator) void {
         allocator.free(self.template_refs);
+        allocator.free(self.by_checked_expr);
         self.by_expr.deinit(allocator);
         allocator.free(self.records);
         self.* = .{};
@@ -3582,11 +4499,18 @@ pub const CheckedModuleArtifact = struct {
         for (self.checked_bodies.exprs, 0..) |expr, i| {
             std.debug.assert(@intFromEnum(expr.id) == i);
             std.debug.assert(@intFromEnum(expr.ty) < self.checked_types.roots.len);
+            verifyCheckedExprDataPublished(expr.data);
         }
 
         for (self.checked_bodies.patterns, 0..) |pattern, i| {
             std.debug.assert(@intFromEnum(pattern.id) == i);
             std.debug.assert(@intFromEnum(pattern.ty) < self.checked_types.roots.len);
+            verifyCheckedPatternDataPublished(pattern.data);
+        }
+
+        for (self.checked_bodies.statements, 0..) |statement, i| {
+            std.debug.assert(@intFromEnum(statement.id) == i);
+            verifyCheckedStatementDataPublished(statement.data);
         }
 
         for (self.checked_procedure_templates.templates, 0..) |template, i| {
@@ -4046,7 +4970,7 @@ pub fn publishFromTypedModule(
     var checked_types = try CheckedTypeStore.fromModule(allocator, module, &canonical_names);
     errdefer checked_types.deinit(allocator);
 
-    var checked_bodies = try CheckedBodyStore.fromModule(allocator, module, &checked_types);
+    var checked_bodies = try CheckedBodyStore.fromModule(allocator, module, &canonical_names, &checked_types);
     errdefer checked_bodies.deinit(allocator);
 
     var checked_procedure_templates = try CheckedProcedureTemplateTable.fromModule(
@@ -4065,6 +4989,7 @@ pub fn publishFromTypedModule(
 
     var static_dispatch_plans = try static_dispatch.StaticDispatchPlanTable.fromModule(allocator, module, &canonical_names, &checked_types, &checked_bodies);
     errdefer static_dispatch_plans.deinit(allocator);
+    checked_bodies.attachStaticDispatchPlans(&static_dispatch_plans);
 
     var hosted_procs = try HostedProcTable.fromModule(allocator, module, &canonical_names, &checked_procedure_templates);
     errdefer hosted_procs.deinit(allocator);
@@ -4149,6 +5074,7 @@ pub fn publishFromTypedModule(
         &checked_bodies,
     );
     errdefer resolved_value_refs.deinit(allocator);
+    checked_bodies.attachResolvedValueRefs(&resolved_value_refs);
 
     try sealCheckedProcedureTemplateRefs(
         allocator,
