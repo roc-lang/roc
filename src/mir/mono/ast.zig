@@ -4,7 +4,6 @@
 const std = @import("std");
 const base = @import("base");
 const check = @import("check");
-const types = @import("types");
 const symbol_mod = @import("symbol");
 const type_mod = @import("type.zig");
 
@@ -231,7 +230,6 @@ pub const Stmt = union(enum) {
 pub const RunDef = struct {
     bind: TypedSymbol,
     body: ExprId,
-    entry_ty: types.Var,
 };
 
 /// Public struct `HostedFnDef`.

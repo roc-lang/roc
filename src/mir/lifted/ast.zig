@@ -7,7 +7,6 @@
 const std = @import("std");
 const base = @import("base");
 const check = @import("check");
-const types = @import("types");
 const symbol_mod = @import("symbol");
 const type_mod = @import("type.zig");
 const row = @import("../mono_row/mod.zig");
@@ -215,7 +214,6 @@ pub const FnDef = struct {
 
 pub const RunDef = struct {
     body: ExprId,
-    entry_ty: types.Var,
 };
 
 pub const HostedFnDef = struct {

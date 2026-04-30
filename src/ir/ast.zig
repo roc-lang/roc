@@ -3,7 +3,6 @@
 const std = @import("std");
 const base = @import("base");
 const mir = @import("mir");
-const types = @import("types");
 const symbol_mod = @import("symbol");
 const layout_mod = @import("layout.zig");
 
@@ -183,7 +182,6 @@ pub const Def = struct {
     body: ?BlockId = null,
     ret_layout: LayoutRef,
     hosted: ?base.HostedProc = null,
-    entry_ty: ?types.Var = null,
 };
 
 /// Owning store for lowered IR nodes and side arrays.
