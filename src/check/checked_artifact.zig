@@ -3190,6 +3190,14 @@ pub const CheckedProcedureTemplateTable = struct {
         return self.by_def[raw];
     }
 
+    pub fn get(self: *const CheckedProcedureTemplateTable, id: canonical.CheckedProcedureTemplateId) CheckedProcedureTemplate {
+        return self.templates[@intFromEnum(id)];
+    }
+
+    pub fn view(self: *const CheckedProcedureTemplateTable) CheckedProcedureTemplateTableView {
+        return .{ .templates = self.templates };
+    }
+
     pub fn asLookup(self: *const CheckedProcedureTemplateTable, module_idx: u32) static_dispatch.ProcedureTemplateLookup {
         return .{
             .module_idx = module_idx,
@@ -3202,6 +3210,10 @@ pub const CheckedProcedureTemplateTable = struct {
         allocator.free(self.templates);
         self.* = .{};
     }
+};
+
+pub const CheckedProcedureTemplateTableView = struct {
+    templates: []const CheckedProcedureTemplate = &.{},
 };
 
 pub const HostedProc = struct {
@@ -4234,6 +4246,7 @@ pub const ExportedProcedureTemplate = struct {
     def: CIR.Def.Idx,
     source_scheme: canonical.CanonicalTypeSchemeKey,
     template: canonical.ProcedureTemplateRef,
+    template_data: CheckedProcedureTemplate,
     template_closure: ImportedTemplateClosureView = .{},
 };
 
@@ -4272,6 +4285,7 @@ pub const ExportedProcedureTemplateTable = struct {
                 .def = def_idx,
                 .source_scheme = source_scheme,
                 .template = template,
+                .template_data = checked_templates.get(template.template),
             });
         }
 

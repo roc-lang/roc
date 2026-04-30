@@ -148,8 +148,10 @@ pub fn run(
 }
 
 const CheckedTemplateLookup = struct {
-    artifact: *const checked_artifact.CheckedModuleArtifact,
-    template: *const checked_artifact.CheckedProcedureTemplate,
+    artifact: checked_artifact.CheckedModuleArtifactKey,
+    checked_types: checked_artifact.CheckedTypeStoreView,
+    checked_bodies: checked_artifact.CheckedBodyStoreView,
+    template: checked_artifact.CheckedProcedureTemplate,
 };
 
 fn checkedTemplateForKey(
@@ -158,14 +160,46 @@ fn checkedTemplateForKey(
 ) CheckedTemplateLookup {
     if (std.mem.eql(u8, &input.root.artifact.key.bytes, &template_ref.artifact.bytes)) {
         return .{
-            .artifact = input.root.artifact,
-            .template = &input.root.artifact.checked_procedure_templates.templates[@intFromEnum(template_ref.template)],
+            .artifact = input.root.artifact.key,
+            .checked_types = input.root.artifact.checked_types.view(),
+            .checked_bodies = input.root.artifact.checked_bodies.view(),
+            .template = input.root.artifact.checked_procedure_templates.get(template_ref.template),
         };
     }
 
     for (input.imports) |imported| {
         if (!std.mem.eql(u8, &imported.key.bytes, &template_ref.artifact.bytes)) continue;
-        debug.invariant(false, "mono specialization invariant violated: imported template lowering requires an imported template closure");
+        for (imported.exported_procedure_templates.templates) |exported| {
+            if (exported.template.proc_base == template_ref.proc_base and
+                exported.template.template == template_ref.template)
+            {
+                return .{
+                    .artifact = imported.key,
+                    .checked_types = imported.checked_types,
+                    .checked_bodies = imported.checked_bodies,
+                    .template = exported.template_data,
+                };
+            }
+        }
+        debug.invariant(false, "mono specialization invariant violated: imported template was not exported or present in the imported closure");
+        unreachable;
+    }
+
+    for (input.root.relation_artifacts) |related| {
+        if (!std.mem.eql(u8, &related.key.bytes, &template_ref.artifact.bytes)) continue;
+        for (related.exported_procedure_templates.templates) |exported| {
+            if (exported.template.proc_base == template_ref.proc_base and
+                exported.template.template == template_ref.template)
+            {
+                return .{
+                    .artifact = related.key,
+                    .checked_types = related.checked_types,
+                    .checked_bodies = related.checked_bodies,
+                    .template = exported.template_data,
+                };
+            }
+        }
+        debug.invariant(false, "mono specialization invariant violated: relation template was not exported or present in the relation closure");
         unreachable;
     }
 
