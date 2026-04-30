@@ -9,11 +9,14 @@ const can = @import("can");
 const types = @import("types");
 const TypedCIR = @import("typed_cir.zig");
 const canonical = @import("canonical_names.zig");
+const checked_ids = @import("checked_ids.zig");
+const canonical_type_keys = @import("canonical_type_keys.zig");
 
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const Var = types.Var;
+const CheckedTypeId = checked_ids.CheckedTypeId;
 
 pub const ProcedureTemplateLookup = struct {
     module_idx: u32,
@@ -61,7 +64,7 @@ pub const MethodTarget = struct {
     def_idx: CIR.Def.Idx,
     proc: canonical.ProcedureValueRef,
     template: ?canonical.ProcedureTemplateRef,
-    callable_var: Var,
+    callable_ty: CheckedTypeId,
 };
 
 pub const MethodRegistryEntry = struct {
@@ -82,6 +85,7 @@ pub const MethodRegistry = struct {
         module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
         local_templates: *const ProcedureTemplateLookup,
+        checked_types: anytype,
     ) Allocator.Error!MethodRegistry {
         var entries = std.ArrayList(MethodRegistryEntry).empty;
         errdefer entries.deinit(allocator);
@@ -142,7 +146,7 @@ pub const MethodRegistry = struct {
                     .def_idx = def_idx,
                     .proc = .{ .artifact = template.artifact, .proc_base = proc_base },
                     .template = template,
-                    .callable_var = ModuleEnv.varFrom(def_idx),
+                    .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(def_idx)),
                 },
             });
         }
@@ -162,8 +166,8 @@ pub const StaticDispatchResultMode = union(enum) {
 pub const StaticDispatchCallPlan = struct {
     expr: CIR.Expr.Idx,
     method: canonical.MethodNameId,
-    dispatcher_var: Var,
-    callable_var: Var,
+    dispatcher_ty: CheckedTypeId,
+    callable_ty: CheckedTypeId,
     args: []const CIR.Expr.Idx,
     result_mode: StaticDispatchResultMode,
 };
@@ -179,6 +183,7 @@ pub const StaticDispatchPlanTable = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
+        checked_types: anytype,
     ) Allocator.Error!StaticDispatchPlanTable {
         var plans = std.ArrayList(StaticDispatchCallPlan).empty;
         errdefer {
@@ -213,8 +218,8 @@ pub const StaticDispatchPlanTable = struct {
                     try plans.append(allocator, .{
                         .expr = expr_idx,
                         .method = try names.internMethodIdent(idents, dispatch_call.method_name),
-                        .dispatcher_var = module.exprType(dispatch_call.receiver),
-                        .callable_var = dispatch_call.constraint_fn_var,
+                        .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(dispatch_call.receiver)),
+                        .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, dispatch_call.constraint_fn_var),
                         .args = args,
                         .result_mode = .value,
                     });
@@ -226,8 +231,8 @@ pub const StaticDispatchPlanTable = struct {
                     try plans.append(allocator, .{
                         .expr = expr_idx,
                         .method = try names.internMethodIdent(idents, dispatch_call.method_name),
-                        .dispatcher_var = ModuleEnv.varFrom(alias_stmt.s_type_var_alias.type_var_anno),
-                        .callable_var = dispatch_call.constraint_fn_var,
+                        .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(alias_stmt.s_type_var_alias.type_var_anno)),
+                        .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, dispatch_call.constraint_fn_var),
                         .args = args,
                         .result_mode = .value,
                     });
@@ -238,8 +243,8 @@ pub const StaticDispatchPlanTable = struct {
                     try plans.append(allocator, .{
                         .expr = expr_idx,
                         .method = try names.internMethodIdent(idents, module.commonIdents().is_eq),
-                        .dispatcher_var = module.exprType(eq.lhs),
-                        .callable_var = eq.constraint_fn_var,
+                        .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(eq.lhs)),
+                        .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, eq.constraint_fn_var),
                         .args = args,
                         .result_mode = .{ .equality = .{
                             .structural_allowed = true,
@@ -286,6 +291,26 @@ pub const StaticDispatchPlanTable = struct {
         self.* = .{};
     }
 };
+
+fn checkedTypeIdForVar(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    checked_types: anytype,
+    var_: Var,
+) Allocator.Error!CheckedTypeId {
+    const key = try canonical_type_keys.fromVar(
+        allocator,
+        module.typeStoreConst(),
+        module.identStoreConst(),
+        var_,
+    );
+    return checked_types.rootForKey(key) orelse {
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic("checked static dispatch invariant violated: dispatch type root was not published", .{});
+        }
+        unreachable;
+    };
+}
 
 test "method registry can be empty" {
     var registry: MethodRegistry = .{};

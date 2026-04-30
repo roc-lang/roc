@@ -17,6 +17,7 @@ pub const report = @import("report.zig");
 /// **Exhaustiveness Checking**
 pub const exhaustive = @import("exhaustive.zig");
 pub const TypedCIR = @import("typed_cir.zig");
+pub const CheckedIds = @import("checked_ids.zig");
 pub const CanonicalNames = @import("canonical_names.zig");
 pub const CanonicalTypeKeys = @import("canonical_type_keys.zig");
 pub const StaticDispatchRegistry = @import("static_dispatch_registry.zig");
@@ -40,6 +41,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("canonical_names.zig"));
     std.testing.refAllDecls(@import("canonical_type_keys.zig"));
     std.testing.refAllDecls(@import("checked_artifact.zig"));
+    std.testing.refAllDecls(@import("checked_ids.zig"));
     std.testing.refAllDecls(@import("typed_cir.zig"));
     std.testing.refAllDecls(@import("snapshot.zig"));
     std.testing.refAllDecls(@import("unify.zig"));

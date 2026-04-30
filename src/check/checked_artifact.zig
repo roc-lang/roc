@@ -11,6 +11,7 @@ const can = @import("can");
 const collections = @import("collections");
 const types = @import("types");
 const TypedCIR = @import("typed_cir.zig");
+const checked_ids = @import("checked_ids.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
 const canonical = @import("canonical_names.zig");
 const canonical_type_keys = @import("canonical_type_keys.zig");
@@ -518,12 +519,12 @@ fn isHostedProcedureExpr(expr: CIR.Expr) bool {
     };
 }
 
-pub const CheckedBodyId = enum(u32) { _ };
-pub const CheckedExprId = enum(u32) { _ };
-pub const CheckedPatternId = enum(u32) { _ };
-pub const CheckedStatementId = enum(u32) { _ };
-pub const CheckedTypeId = enum(u32) { _ };
-pub const CheckedTypeSchemeId = enum(u32) { _ };
+pub const CheckedBodyId = checked_ids.CheckedBodyId;
+pub const CheckedExprId = checked_ids.CheckedExprId;
+pub const CheckedPatternId = checked_ids.CheckedPatternId;
+pub const CheckedStatementId = checked_ids.CheckedStatementId;
+pub const CheckedTypeId = checked_ids.CheckedTypeId;
+pub const CheckedTypeSchemeId = checked_ids.CheckedTypeSchemeId;
 
 pub const CheckedTypeRoot = struct {
     id: CheckedTypeId,
@@ -4031,10 +4032,10 @@ pub fn publishFromTypedModule(
     errdefer checked_procedure_templates.deinit(allocator);
     const template_lookup = checked_procedure_templates.asLookup(module_idx);
 
-    var method_registry = try static_dispatch.MethodRegistry.fromModule(allocator, module, &canonical_names, &template_lookup);
+    var method_registry = try static_dispatch.MethodRegistry.fromModule(allocator, module, &canonical_names, &template_lookup, &checked_types);
     errdefer method_registry.deinit(allocator);
 
-    var static_dispatch_plans = try static_dispatch.StaticDispatchPlanTable.fromModule(allocator, module, &canonical_names);
+    var static_dispatch_plans = try static_dispatch.StaticDispatchPlanTable.fromModule(allocator, module, &canonical_names, &checked_types);
     errdefer static_dispatch_plans.deinit(allocator);
 
     var hosted_procs = try HostedProcTable.fromModule(allocator, module, &canonical_names, &checked_procedure_templates);
