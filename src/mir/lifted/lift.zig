@@ -42,7 +42,7 @@ pub const LiftedCaptureGraph = struct {
 };
 
 pub const Proc = struct {
-    proc: canonical.ProcedureValueRef,
+    proc: canonical.MonoSpecializedProcRef,
     order_key: ProcOrderKey,
     body: ?Ast.DefId = null,
 };
@@ -52,7 +52,7 @@ pub const Program = struct {
     types: Type.Store,
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
-    root_procs: std.ArrayList(canonical.ProcedureValueRef),
+    root_procs: std.ArrayList(canonical.MonoSpecializedProcRef),
 
     pub fn init(allocator: Allocator) Program {
         return .{

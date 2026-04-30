@@ -48,6 +48,32 @@ pub const MonoSpecializationKey = struct {
     requested_mono_fn_ty: CanonicalTypeKey,
 };
 
+pub const MonoSpecializedProcRef = struct {
+    proc: ProcedureValueRef,
+    specialization: MonoSpecializationKey,
+};
+
+pub fn procedureValueRefEql(a: ProcedureValueRef, b: ProcedureValueRef) bool {
+    return std.mem.eql(u8, &a.artifact.bytes, &b.artifact.bytes) and
+        a.proc_base == b.proc_base;
+}
+
+pub fn procedureTemplateRefEql(a: ProcedureTemplateRef, b: ProcedureTemplateRef) bool {
+    return std.mem.eql(u8, &a.artifact.bytes, &b.artifact.bytes) and
+        a.proc_base == b.proc_base and
+        a.template == b.template;
+}
+
+pub fn monoSpecializationKeyEql(a: MonoSpecializationKey, b: MonoSpecializationKey) bool {
+    return std.mem.eql(u8, &a.requested_mono_fn_ty.bytes, &b.requested_mono_fn_ty.bytes) and
+        procedureTemplateRefEql(a.template, b.template);
+}
+
+pub fn monoSpecializedProcRefEql(a: MonoSpecializedProcRef, b: MonoSpecializedProcRef) bool {
+    return procedureValueRefEql(a.proc, b.proc) and
+        monoSpecializationKeyEql(a.specialization, b.specialization);
+}
+
 pub const LiftedProcedureTemplateRef = struct {
     owner_mono_specialization: MonoSpecializationKey,
     site: NestedProcSiteId,

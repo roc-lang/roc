@@ -46,7 +46,7 @@ pub const ReservedState = enum {
 };
 
 pub const ReservedMonoProc = struct {
-    proc: canonical.ProcedureValueRef,
+    proc: canonical.MonoSpecializedProcRef,
     local_handle: MonoProcHandle,
     requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
     state: ReservedState,
@@ -54,7 +54,7 @@ pub const ReservedMonoProc = struct {
 
 pub const Proc = struct {
     key: canonical.MonoSpecializationKey,
-    proc: canonical.ProcedureValueRef,
+    proc: canonical.MonoSpecializedProcRef,
     local_handle: MonoProcHandle,
     fn_ty: Type.TypeId,
     body: ?Ast.DefId = null,
@@ -67,7 +67,7 @@ pub const Program = struct {
     types: Type.Store,
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
-    root_procs: std.ArrayList(canonical.ProcedureValueRef),
+    root_procs: std.ArrayList(canonical.MonoSpecializedProcRef),
 
     pub fn init(allocator: Allocator) Program {
         return .{
@@ -885,8 +885,7 @@ fn verifyProgram(program: *const Program) void {
     for (program.root_procs.items) |root| {
         var found = false;
         for (program.procs.items) |proc| {
-            if (std.mem.eql(u8, &proc.proc.artifact.bytes, &root.artifact.bytes) and
-                proc.proc.proc_base == root.proc_base)
+            if (canonical.monoSpecializedProcRefEql(proc.proc, root))
             {
                 found = true;
                 break;
@@ -934,7 +933,10 @@ pub const Queue = struct {
         }
 
         const reserved = ReservedMonoProc{
-            .proc = .{ .artifact = request.template.artifact, .proc_base = request.template.proc_base },
+            .proc = .{
+                .proc = .{ .artifact = request.template.artifact, .proc_base = request.template.proc_base },
+                .specialization = key,
+            },
             .local_handle = @enumFromInt(@as(u32, @intCast(self.requested.count()))),
             .requested_fn_ty = request.requested_fn_ty,
             .state = .reserved,

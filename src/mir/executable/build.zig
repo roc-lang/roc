@@ -15,7 +15,7 @@ const repr = LambdaSolved.Representation;
 
 pub const Proc = struct {
     executable_proc: Ast.ExecutableProcId,
-    source_proc: canonical.ProcedureValueRef,
+    source_proc: canonical.MonoSpecializedProcRef,
     body: ?Ast.DefId = null,
 };
 
@@ -75,10 +75,9 @@ pub fn run(allocator: Allocator, solved: LambdaSolved.Solve.Program) Allocator.E
     return program;
 }
 
-fn executableProcForSource(program: *const Program, source_proc: canonical.ProcedureValueRef) ?Ast.ExecutableProcId {
+fn executableProcForSource(program: *const Program, source_proc: canonical.MonoSpecializedProcRef) ?Ast.ExecutableProcId {
     for (program.procs.items) |proc| {
-        if (std.mem.eql(u8, &proc.source_proc.artifact.bytes, &source_proc.artifact.bytes) and
-            proc.source_proc.proc_base == source_proc.proc_base)
+        if (canonical.monoSpecializedProcRefEql(proc.source_proc, source_proc))
         {
             return proc.executable_proc;
         }
