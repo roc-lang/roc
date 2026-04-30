@@ -1490,7 +1490,7 @@ pub const ResolvedValueRef = union(enum) {
 };
 
 pub const ResolvedValueRefRecord = struct {
-    expr: CIR.Expr.Idx,
+    expr: CheckedExprId,
     ref: ResolvedValueRef,
     checked_ty: CheckedTypeId,
     scope_depth: u32,
@@ -1533,6 +1533,15 @@ pub const ResolvedValueRefTable = struct {
             }
 
             const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
+            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: resolved value ref expression {d} has no checked expression id",
+                        .{@intFromEnum(expr_idx)},
+                    );
+                }
+                unreachable;
+            };
             var resolved_ref = try classifyValueRef(
                 allocator,
                 modules,
@@ -1561,7 +1570,7 @@ pub const ResolvedValueRefTable = struct {
 
             const id: ResolvedValueRefId = @enumFromInt(@as(u32, @intCast(records.items.len)));
             try records.append(allocator, .{
-                .expr = expr_idx,
+                .expr = checked_expr,
                 .ref = resolved_ref,
                 .checked_ty = checked_ty,
                 .scope_depth = 0,
@@ -3662,7 +3671,7 @@ pub const CheckedModuleArtifact = struct {
         self.comptime_values.verifySealed();
 
         for (self.resolved_value_refs.records) |record| {
-            std.debug.assert(self.resolved_value_refs.by_expr.get(record.expr) != null);
+            std.debug.assert(@intFromEnum(record.expr) < self.checked_bodies.exprs.len);
             if (self.platform_required_bindings.bindings.len > 0) {
                 switch (record.ref) {
                     .platform_required_declaration => std.debug.panic(
