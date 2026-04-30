@@ -137,8 +137,11 @@ pub fn run(
         const key = queue.pending.orderedRemove(0);
         queue.markLowering(key);
         const reserved = queue.requested.get(key) orelse unreachable;
-        _ = checkedTemplateForKey(input, key.template);
-        const fn_ty = try lowerConcreteFnType(allocator, input, &program, reserved.requested_fn_ty);
+        const template_lookup = checkedTemplateForKey(input, key.template);
+        var type_instantiator = TypeInstantiator.init(allocator, input, &program, template_lookup.checked_types);
+        defer type_instantiator.deinit();
+        try type_instantiator.buildFromRequest(template_lookup.template.checked_fn_root, reserved.requested_fn_ty);
+        const fn_ty = try type_instantiator.lowerTemplateType(template_lookup.template.checked_fn_root);
         try program.addProc(key, reserved, fn_ty);
         queue.markLowered(key);
     }
@@ -225,6 +228,551 @@ fn lowerConcreteFnType(
     );
     defer lowerer.deinit();
     return try lowerer.lowerChecked(concrete.source.ty);
+}
+
+const TypeInstantiator = struct {
+    allocator: Allocator,
+    input: Input,
+    program: *Program,
+    template_types: checked_artifact.CheckedTypeStoreView,
+    substitutions: std.AutoHashMap(checked_artifact.CheckedTypeId, checked_artifact.ArtifactCheckedTypeRef),
+    lowered_template: std.AutoHashMap(checked_artifact.CheckedTypeId, Type.TypeId),
+
+    fn init(
+        allocator: Allocator,
+        input: Input,
+        program: *Program,
+        template_types: checked_artifact.CheckedTypeStoreView,
+    ) TypeInstantiator {
+        return .{
+            .allocator = allocator,
+            .input = input,
+            .program = program,
+            .template_types = template_types,
+            .substitutions = std.AutoHashMap(checked_artifact.CheckedTypeId, checked_artifact.ArtifactCheckedTypeRef).init(allocator),
+            .lowered_template = std.AutoHashMap(checked_artifact.CheckedTypeId, Type.TypeId).init(allocator),
+        };
+    }
+
+    fn deinit(self: *TypeInstantiator) void {
+        self.lowered_template.deinit();
+        self.substitutions.deinit();
+    }
+
+    fn buildFromRequest(
+        self: *TypeInstantiator,
+        template_fn_root: checked_artifact.CheckedTypeId,
+        requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!void {
+        const requested = self.program.concrete_source_types.root(requested_fn_ty);
+        try self.unifyTemplateWithConcrete(template_fn_root, requested.source);
+    }
+
+    fn lowerTemplateType(self: *TypeInstantiator, id: checked_artifact.CheckedTypeId) Allocator.Error!Type.TypeId {
+        if (self.substitutions.get(id)) |concrete| {
+            return try self.lowerArtifactRef(concrete);
+        }
+        if (self.lowered_template.get(id)) |existing| return existing;
+
+        const placeholder = try self.program.types.addType(.placeholder);
+        try self.lowered_template.put(id, placeholder);
+        const lowered = try self.lowerTemplatePayload(self.templatePayload(id));
+        self.program.types.setType(placeholder, lowered);
+        self.program.types.debugValidateTypeGraph(placeholder);
+        return try self.program.types.internTypeId(placeholder);
+    }
+
+    fn lowerTemplatePayload(
+        self: *TypeInstantiator,
+        payload: checked_artifact.CheckedTypePayload,
+    ) Allocator.Error!Type.Content {
+        return switch (payload) {
+            .pending => invariantViolation("mono specialization received an unpublished checked type payload"),
+            .flex, .rigid => invariantViolation("mono specialization reached an unmapped generic type variable"),
+            .alias => |alias| .{ .link = try self.lowerTemplateType(alias.backing) },
+            .record_unbound => |fields| .{ .record = .{ .fields = try self.lowerTemplateRecordFieldsOnly(fields) } },
+            .record => |record| .{ .record = .{ .fields = try self.lowerTemplateRecord(record) } },
+            .tuple => |elems| .{ .tuple = try self.lowerTemplateTypeIds(elems) },
+            .nominal => |nominal| try self.lowerTemplateNominal(nominal),
+            .function => |func| .{ .func = .{
+                .args = try self.lowerTemplateTypeIds(func.args),
+                .lambdas = &.{},
+                .ret = try self.lowerTemplateType(func.ret),
+            } },
+            .empty_record => .{ .record = .{ .fields = &.{} } },
+            .tag_union => |tag_union| .{ .tag_union = .{ .tags = try self.lowerTemplateTagUnion(tag_union) } },
+            .empty_tag_union => .{ .tag_union = .{ .tags = &.{} } },
+        };
+    }
+
+    fn lowerTemplateTypeIds(
+        self: *TypeInstantiator,
+        ids: []const checked_artifact.CheckedTypeId,
+    ) Allocator.Error![]const Type.TypeId {
+        if (ids.len == 0) return &.{};
+        const out = try self.allocator.alloc(Type.TypeId, ids.len);
+        errdefer self.allocator.free(out);
+        for (ids, 0..) |id, i| {
+            out[i] = try self.lowerTemplateType(id);
+        }
+        return out;
+    }
+
+    fn lowerTemplateRecordFieldsOnly(
+        self: *TypeInstantiator,
+        fields: []const checked_artifact.CheckedRecordField,
+    ) Allocator.Error![]const Type.Field {
+        if (fields.len == 0) return &.{};
+        const out = try self.allocator.alloc(Type.Field, fields.len);
+        errdefer self.allocator.free(out);
+        for (fields, 0..) |field, i| {
+            out[i] = .{
+                .name = field.name,
+                .ty = try self.lowerTemplateType(field.ty),
+            };
+        }
+        return out;
+    }
+
+    fn lowerTemplateRecord(
+        self: *TypeInstantiator,
+        record: checked_artifact.CheckedRecordType,
+    ) Allocator.Error![]const Type.Field {
+        var fields = std.ArrayList(Type.Field).empty;
+        errdefer fields.deinit(self.allocator);
+        try self.collectTemplateRecordFields(record.fields, record.ext, &fields);
+        std.mem.sort(Type.Field, fields.items, {}, struct {
+            fn lessThan(_: void, a: Type.Field, b: Type.Field) bool {
+                return @intFromEnum(a.name) < @intFromEnum(b.name);
+            }
+        }.lessThan);
+        return try fields.toOwnedSlice(self.allocator);
+    }
+
+    fn collectTemplateRecordFields(
+        self: *TypeInstantiator,
+        fields: []const checked_artifact.CheckedRecordField,
+        ext: checked_artifact.CheckedTypeId,
+        out: *std.ArrayList(Type.Field),
+    ) Allocator.Error!void {
+        for (fields) |field| {
+            try out.append(self.allocator, .{
+                .name = field.name,
+                .ty = try self.lowerTemplateType(field.ty),
+            });
+        }
+
+        if (self.substitutions.get(ext)) |concrete| {
+            try self.collectArtifactRecordFields(concrete, out);
+            return;
+        }
+
+        switch (self.templatePayload(ext)) {
+            .alias => |alias| try self.collectTemplateRecordFields(&.{}, alias.backing, out),
+            .empty_record => {},
+            .record_unbound => |ext_fields| {
+                for (ext_fields) |field| {
+                    try out.append(self.allocator, .{
+                        .name = field.name,
+                        .ty = try self.lowerTemplateType(field.ty),
+                    });
+                }
+            },
+            .record => |ext_record| try self.collectTemplateRecordFields(ext_record.fields, ext_record.ext, out),
+            else => invariantViolation("mono specialization record extension resolved to a non-record type"),
+        }
+    }
+
+    fn collectArtifactRecordFields(
+        self: *TypeInstantiator,
+        ref: checked_artifact.ArtifactCheckedTypeRef,
+        out: *std.ArrayList(Type.Field),
+    ) Allocator.Error!void {
+        const payload = self.artifactPayload(ref);
+        switch (payload) {
+            .alias => |alias| try self.collectArtifactRecordFields(.{ .artifact = ref.artifact, .ty = alias.backing }, out),
+            .empty_record => {},
+            .record_unbound => |fields| {
+                for (fields) |field| {
+                    try out.append(self.allocator, .{
+                        .name = field.name,
+                        .ty = try self.lowerArtifactRef(.{ .artifact = ref.artifact, .ty = field.ty }),
+                    });
+                }
+            },
+            .record => |record| {
+                for (record.fields) |field| {
+                    try out.append(self.allocator, .{
+                        .name = field.name,
+                        .ty = try self.lowerArtifactRef(.{ .artifact = ref.artifact, .ty = field.ty }),
+                    });
+                }
+                try self.collectArtifactRecordFields(.{ .artifact = ref.artifact, .ty = record.ext }, out);
+            },
+            else => invariantViolation("mono specialization concrete record extension resolved to a non-record type"),
+        }
+    }
+
+    fn lowerTemplateTagUnion(
+        self: *TypeInstantiator,
+        tag_union: checked_artifact.CheckedTagUnionType,
+    ) Allocator.Error![]const Type.Tag {
+        var tags = std.ArrayList(Type.Tag).empty;
+        errdefer {
+            for (tags.items) |tag| self.allocator.free(tag.args);
+            tags.deinit(self.allocator);
+        }
+        try self.collectTemplateTags(tag_union.tags, tag_union.ext, &tags);
+        std.mem.sort(Type.Tag, tags.items, {}, struct {
+            fn lessThan(_: void, a: Type.Tag, b: Type.Tag) bool {
+                return @intFromEnum(a.name) < @intFromEnum(b.name);
+            }
+        }.lessThan);
+        return try tags.toOwnedSlice(self.allocator);
+    }
+
+    fn collectTemplateTags(
+        self: *TypeInstantiator,
+        tags: []const checked_artifact.CheckedTag,
+        ext: checked_artifact.CheckedTypeId,
+        out: *std.ArrayList(Type.Tag),
+    ) Allocator.Error!void {
+        for (tags) |tag| {
+            try out.append(self.allocator, .{
+                .name = tag.name,
+                .args = try self.lowerTemplateTypeIds(tag.args),
+            });
+        }
+
+        if (self.substitutions.get(ext)) |concrete| {
+            try self.collectArtifactTags(concrete, out);
+            return;
+        }
+
+        switch (self.templatePayload(ext)) {
+            .alias => |alias| try self.collectTemplateTags(&.{}, alias.backing, out),
+            .empty_tag_union => {},
+            .tag_union => |ext_tags| try self.collectTemplateTags(ext_tags.tags, ext_tags.ext, out),
+            else => invariantViolation("mono specialization tag-union extension resolved to a non-tag-union type"),
+        }
+    }
+
+    fn collectArtifactTags(
+        self: *TypeInstantiator,
+        ref: checked_artifact.ArtifactCheckedTypeRef,
+        out: *std.ArrayList(Type.Tag),
+    ) Allocator.Error!void {
+        switch (self.artifactPayload(ref)) {
+            .alias => |alias| try self.collectArtifactTags(.{ .artifact = ref.artifact, .ty = alias.backing }, out),
+            .empty_tag_union => {},
+            .tag_union => |tag_union| {
+                for (tag_union.tags) |tag| {
+                    try out.append(self.allocator, .{
+                        .name = tag.name,
+                        .args = try self.lowerArtifactTypeIds(ref.artifact, tag.args),
+                    });
+                }
+                try self.collectArtifactTags(.{ .artifact = ref.artifact, .ty = tag_union.ext }, out);
+            },
+            else => invariantViolation("mono specialization concrete tag-union extension resolved to a non-tag-union type"),
+        }
+    }
+
+    fn lowerArtifactTypeIds(
+        self: *TypeInstantiator,
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        ids: []const checked_artifact.CheckedTypeId,
+    ) Allocator.Error![]const Type.TypeId {
+        if (ids.len == 0) return &.{};
+        const out = try self.allocator.alloc(Type.TypeId, ids.len);
+        errdefer self.allocator.free(out);
+        for (ids, 0..) |id, i| {
+            out[i] = try self.lowerArtifactRef(.{ .artifact = artifact, .ty = id });
+        }
+        return out;
+    }
+
+    fn lowerTemplateNominal(
+        self: *TypeInstantiator,
+        nominal: checked_artifact.CheckedNominalType,
+    ) Allocator.Error!Type.Content {
+        if (nominal.builtin) |builtin_nominal| {
+            switch (builtin_nominal) {
+                .bool => return .{ .primitive = .bool },
+                .str => return .{ .primitive = .str },
+                .u8 => return .{ .primitive = .u8 },
+                .i8 => return .{ .primitive = .i8 },
+                .u16 => return .{ .primitive = .u16 },
+                .i16 => return .{ .primitive = .i16 },
+                .u32 => return .{ .primitive = .u32 },
+                .i32 => return .{ .primitive = .i32 },
+                .u64 => return .{ .primitive = .u64 },
+                .i64 => return .{ .primitive = .i64 },
+                .u128 => return .{ .primitive = .u128 },
+                .i128 => return .{ .primitive = .i128 },
+                .f32 => return .{ .primitive = .f32 },
+                .f64 => return .{ .primitive = .f64 },
+                .dec => return .{ .primitive = .dec },
+                .list => {
+                    if (nominal.args.len != 1) invariantViolation("List nominal type did not have exactly one argument");
+                    return .{ .list = try self.lowerTemplateType(nominal.args[0]) };
+                },
+                .box => {
+                    if (nominal.args.len != 1) invariantViolation("Box nominal type did not have exactly one argument");
+                    return .{ .box = try self.lowerTemplateType(nominal.args[0]) };
+                },
+            }
+        }
+
+        return .{ .nominal = .{
+            .nominal = .{
+                .module_name = nominal.origin_module,
+                .type_name = nominal.name,
+            },
+            .is_opaque = nominal.is_opaque,
+            .args = try self.lowerTemplateTypeIds(nominal.args),
+            .backing = try self.lowerTemplateType(nominal.backing),
+        } };
+    }
+
+    fn lowerArtifactRef(
+        self: *TypeInstantiator,
+        ref: checked_artifact.ArtifactCheckedTypeRef,
+    ) Allocator.Error!Type.TypeId {
+        const checked_types = checkedTypesForKey(self.input, ref.artifact) orelse {
+            debug.invariant(false, "mono specialization invariant violated: concrete type ref artifact was not available");
+            unreachable;
+        };
+        var lowerer = LowerType.Lowerer.init(self.allocator, checked_types, &self.program.types);
+        defer lowerer.deinit();
+        return try lowerer.lowerChecked(ref.ty);
+    }
+
+    fn unifyTemplateWithConcrete(
+        self: *TypeInstantiator,
+        template_id: checked_artifact.CheckedTypeId,
+        concrete: checked_artifact.ArtifactCheckedTypeRef,
+    ) Allocator.Error!void {
+        switch (self.templatePayload(template_id)) {
+            .flex, .rigid => {
+                try self.bindTemplateVariable(template_id, concrete);
+                return;
+            },
+            .alias => |alias| {
+                try self.unifyTemplateWithConcrete(alias.backing, concrete);
+                return;
+            },
+            else => {},
+        }
+
+        switch (self.artifactPayload(concrete)) {
+            .alias => |alias| {
+                try self.unifyTemplateWithConcrete(template_id, .{ .artifact = concrete.artifact, .ty = alias.backing });
+                return;
+            },
+            else => {},
+        }
+
+        try self.unifyConcretePayload(template_id, concrete);
+    }
+
+    fn unifyConcretePayload(
+        self: *TypeInstantiator,
+        template_id: checked_artifact.CheckedTypeId,
+        concrete: checked_artifact.ArtifactCheckedTypeRef,
+    ) Allocator.Error!void {
+        const template = self.templatePayload(template_id);
+        const concrete_payload = self.artifactPayload(concrete);
+        switch (template) {
+            .record => |record| switch (concrete_payload) {
+                .record => |concrete_record| try self.unifyRecords(record, concrete.artifact, concrete_record),
+                .empty_record => if (record.fields.len != 0) invariantViolation("mono specialization record arity mismatch"),
+                else => invariantViolation("mono specialization expected a concrete record"),
+            },
+            .record_unbound => |fields| switch (concrete_payload) {
+                .record, .record_unbound => try self.unifyRecordFieldSet(fields, concrete),
+                .empty_record => if (fields.len != 0) invariantViolation("mono specialization record arity mismatch"),
+                else => invariantViolation("mono specialization expected a concrete record row"),
+            },
+            .tuple => |items| switch (concrete_payload) {
+                .tuple => |concrete_items| try self.unifyTypeLists(items, concrete.artifact, concrete_items),
+                else => invariantViolation("mono specialization expected a concrete tuple"),
+            },
+            .nominal => |nominal| switch (concrete_payload) {
+                .nominal => |concrete_nominal| try self.unifyNominals(nominal, concrete.artifact, concrete_nominal),
+                else => invariantViolation("mono specialization expected a concrete nominal"),
+            },
+            .function => |func| switch (concrete_payload) {
+                .function => |concrete_func| {
+                    try self.unifyTypeLists(func.args, concrete.artifact, concrete_func.args);
+                    try self.unifyTemplateWithConcrete(func.ret, .{ .artifact = concrete.artifact, .ty = concrete_func.ret });
+                },
+                else => invariantViolation("mono specialization expected a concrete function"),
+            },
+            .empty_record => switch (concrete_payload) {
+                .empty_record => {},
+                .record => |record| if (record.fields.len != 0) invariantViolation("mono specialization empty record mismatch"),
+                else => invariantViolation("mono specialization expected an empty concrete record"),
+            },
+            .tag_union => |tag_union| switch (concrete_payload) {
+                .tag_union => |concrete_tag_union| try self.unifyTagUnions(tag_union, concrete.artifact, concrete_tag_union),
+                .empty_tag_union => if (tag_union.tags.len != 0) invariantViolation("mono specialization tag-union mismatch"),
+                else => invariantViolation("mono specialization expected a concrete tag union"),
+            },
+            .empty_tag_union => switch (concrete_payload) {
+                .empty_tag_union => {},
+                .tag_union => |tag_union| if (tag_union.tags.len != 0) invariantViolation("mono specialization empty tag-union mismatch"),
+                else => invariantViolation("mono specialization expected an empty concrete tag union"),
+            },
+            .pending, .flex, .rigid, .alias => unreachable,
+        }
+    }
+
+    fn unifyRecords(
+        self: *TypeInstantiator,
+        template: checked_artifact.CheckedRecordType,
+        concrete_artifact: checked_artifact.CheckedModuleArtifactKey,
+        concrete: checked_artifact.CheckedRecordType,
+    ) Allocator.Error!void {
+        try self.unifyRecordFields(template.fields, concrete_artifact, concrete.fields);
+        try self.unifyTemplateWithConcrete(template.ext, .{ .artifact = concrete_artifact, .ty = concrete.ext });
+    }
+
+    fn unifyRecordFieldSet(
+        self: *TypeInstantiator,
+        fields: []const checked_artifact.CheckedRecordField,
+        concrete: checked_artifact.ArtifactCheckedTypeRef,
+    ) Allocator.Error!void {
+        switch (self.artifactPayload(concrete)) {
+            .record => |record| try self.unifyRecordFields(fields, concrete.artifact, record.fields),
+            .record_unbound => |concrete_fields| try self.unifyRecordFields(fields, concrete.artifact, concrete_fields),
+            else => invariantViolation("mono specialization expected concrete record fields"),
+        }
+    }
+
+    fn unifyRecordFields(
+        self: *TypeInstantiator,
+        fields: []const checked_artifact.CheckedRecordField,
+        concrete_artifact: checked_artifact.CheckedModuleArtifactKey,
+        concrete_fields: []const checked_artifact.CheckedRecordField,
+    ) Allocator.Error!void {
+        for (fields) |field| {
+            const concrete_field = findRecordField(concrete_fields, field.name) orelse {
+                invariantViolation("mono specialization record field was missing in concrete type");
+            };
+            try self.unifyTemplateWithConcrete(field.ty, .{ .artifact = concrete_artifact, .ty = concrete_field.ty });
+        }
+    }
+
+    fn unifyNominals(
+        self: *TypeInstantiator,
+        template: checked_artifact.CheckedNominalType,
+        concrete_artifact: checked_artifact.CheckedModuleArtifactKey,
+        concrete: checked_artifact.CheckedNominalType,
+    ) Allocator.Error!void {
+        if (template.builtin != concrete.builtin or
+            template.name != concrete.name or
+            template.origin_module != concrete.origin_module or
+            template.args.len != concrete.args.len)
+        {
+            invariantViolation("mono specialization nominal mismatch");
+        }
+        try self.unifyTypeLists(template.args, concrete_artifact, concrete.args);
+    }
+
+    fn unifyTagUnions(
+        self: *TypeInstantiator,
+        template: checked_artifact.CheckedTagUnionType,
+        concrete_artifact: checked_artifact.CheckedModuleArtifactKey,
+        concrete: checked_artifact.CheckedTagUnionType,
+    ) Allocator.Error!void {
+        for (template.tags) |tag| {
+            const concrete_tag = findTag(concrete.tags, tag.name) orelse {
+                invariantViolation("mono specialization tag was missing in concrete type");
+            };
+            try self.unifyTypeLists(tag.args, concrete_artifact, concrete_tag.args);
+        }
+        try self.unifyTemplateWithConcrete(template.ext, .{ .artifact = concrete_artifact, .ty = concrete.ext });
+    }
+
+    fn unifyTypeLists(
+        self: *TypeInstantiator,
+        template: []const checked_artifact.CheckedTypeId,
+        concrete_artifact: checked_artifact.CheckedModuleArtifactKey,
+        concrete: []const checked_artifact.CheckedTypeId,
+    ) Allocator.Error!void {
+        if (template.len != concrete.len) invariantViolation("mono specialization type arity mismatch");
+        for (template, concrete) |template_id, concrete_id| {
+            try self.unifyTemplateWithConcrete(template_id, .{ .artifact = concrete_artifact, .ty = concrete_id });
+        }
+    }
+
+    fn bindTemplateVariable(
+        self: *TypeInstantiator,
+        template_id: checked_artifact.CheckedTypeId,
+        concrete: checked_artifact.ArtifactCheckedTypeRef,
+    ) Allocator.Error!void {
+        if (self.substitutions.get(template_id)) |existing| {
+            const existing_key = self.checkedTypeKey(existing);
+            const concrete_key = self.checkedTypeKey(concrete);
+            if (!std.mem.eql(u8, &existing_key.bytes, &concrete_key.bytes)) {
+                invariantViolation("mono specialization generic variable mapped to incompatible concrete types");
+            }
+            return;
+        }
+        try self.substitutions.put(template_id, concrete);
+    }
+
+    fn templatePayload(self: *const TypeInstantiator, id: checked_artifact.CheckedTypeId) checked_artifact.CheckedTypePayload {
+        const raw = @intFromEnum(id);
+        if (raw >= self.template_types.payloads.len) invariantViolation("mono specialization template type id was outside published payloads");
+        return self.template_types.payloads[raw];
+    }
+
+    fn artifactPayload(self: *const TypeInstantiator, ref: checked_artifact.ArtifactCheckedTypeRef) checked_artifact.CheckedTypePayload {
+        const checked_types = checkedTypesForKey(self.input, ref.artifact) orelse {
+            debug.invariant(false, "mono specialization invariant violated: concrete type artifact was not available");
+            unreachable;
+        };
+        const raw = @intFromEnum(ref.ty);
+        if (raw >= checked_types.payloads.len) invariantViolation("mono specialization concrete type id was outside published payloads");
+        return checked_types.payloads[raw];
+    }
+
+    fn checkedTypeKey(self: *const TypeInstantiator, ref: checked_artifact.ArtifactCheckedTypeRef) canonical.CanonicalTypeKey {
+        const checked_types = checkedTypesForKey(self.input, ref.artifact) orelse {
+            debug.invariant(false, "mono specialization invariant violated: concrete type key artifact was not available");
+            unreachable;
+        };
+        const raw = @intFromEnum(ref.ty);
+        if (raw >= checked_types.roots.len) invariantViolation("mono specialization concrete type id was outside published roots");
+        return checked_types.roots[raw].key;
+    }
+};
+
+fn findRecordField(
+    fields: []const checked_artifact.CheckedRecordField,
+    name: canonical.RecordFieldLabelId,
+) ?checked_artifact.CheckedRecordField {
+    for (fields) |field| {
+        if (field.name == name) return field;
+    }
+    return null;
+}
+
+fn findTag(
+    tags: []const checked_artifact.CheckedTag,
+    name: canonical.TagLabelId,
+) ?checked_artifact.CheckedTag {
+    for (tags) |tag| {
+        if (tag.name == name) return tag;
+    }
+    return null;
+}
+
+fn invariantViolation(comptime message: []const u8) noreturn {
+    debug.invariant(false, message);
+    unreachable;
 }
 
 fn checkedTypesForKey(
