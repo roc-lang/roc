@@ -4874,12 +4874,18 @@ pub const ExportedProcedureBindingTable = struct {
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
+        checked_types: *const CheckedTypeStore,
+        checked_templates: *const CheckedProcedureTemplateTable,
         top_level_values: *const TopLevelValueTable,
         procedure_bindings: *const TopLevelProcedureBindingTable,
+        callable_eval_templates: *const CallableEvalTemplateTable,
         artifact_key: CheckedModuleArtifactKey,
     ) Allocator.Error!ExportedProcedureBindingTable {
         var bindings = std.ArrayList(ImportedProcedureBindingView).empty;
-        errdefer bindings.deinit(allocator);
+        errdefer {
+            for (bindings.items) |*binding| deinitImportedTemplateClosure(allocator, &binding.template_closure);
+            bindings.deinit(allocator);
+        }
 
         const module_env = module.moduleEnvConst();
         for (module_env.store.sliceDefs(module_env.exports)) |def_idx| {
@@ -4894,6 +4900,16 @@ pub const ExportedProcedureBindingTable = struct {
                 .direct_template => |direct| .{ .direct_template = direct },
                 .callable_eval_template => |template| .{ .callable_eval_template = template },
             };
+            var template_closure = try buildProcedureBindingClosure(
+                allocator,
+                artifact_key,
+                checked_types,
+                checked_templates,
+                callable_eval_templates,
+                binding.body,
+            );
+            errdefer deinitImportedTemplateClosure(allocator, &template_closure);
+
             try bindings.append(allocator, .{
                 .binding = .{
                     .artifact = artifact_key,
@@ -4903,7 +4919,9 @@ pub const ExportedProcedureBindingTable = struct {
                 },
                 .source_scheme = binding.source_scheme,
                 .body = body,
+                .template_closure = template_closure,
             });
+            template_closure = .{};
         }
 
         return .{ .bindings = try bindings.toOwnedSlice(allocator) };
@@ -4914,10 +4932,70 @@ pub const ExportedProcedureBindingTable = struct {
     }
 
     pub fn deinit(self: *ExportedProcedureBindingTable, allocator: Allocator) void {
+        for (self.bindings) |*binding| deinitImportedTemplateClosure(allocator, &binding.template_closure);
         allocator.free(self.bindings);
         self.* = .{};
     }
 };
+
+fn buildProcedureBindingClosure(
+    allocator: Allocator,
+    artifact_key: CheckedModuleArtifactKey,
+    checked_types: *const CheckedTypeStore,
+    checked_templates: *const CheckedProcedureTemplateTable,
+    callable_eval_templates: *const CallableEvalTemplateTable,
+    body: ProcedureBindingBody,
+) Allocator.Error!ImportedTemplateClosureView {
+    return switch (body) {
+        .direct_template => |direct| switch (direct.template) {
+            .checked => |template_ref| buildImportedTemplateClosure(
+                allocator,
+                artifact_key,
+                checked_types,
+                template_ref,
+                checked_templates.get(template_ref.template),
+            ),
+            .lifted, .synthetic => {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("checked artifact invariant violated: exported checked binding cannot reference lifted or synthetic templates before mono", .{});
+                }
+                unreachable;
+            },
+        },
+        .callable_eval_template => |template_id| blk: {
+            const template = callable_eval_templates.get(template_id);
+            const callable_eval_template = try singleton(allocator, ArtifactCallableEvalTemplateRef, .{
+                .artifact = artifact_key,
+                .template = template_id,
+            });
+            errdefer freeConstSlice(allocator, callable_eval_template);
+
+            const checked_type_roots = try singleton(allocator, ArtifactCheckedTypeRef, .{
+                .artifact = artifact_key,
+                .ty = template.checked_fn_root,
+            });
+            errdefer freeConstSlice(allocator, checked_type_roots);
+
+            const scheme = checked_types.schemeForKey(template.source_scheme) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("checked artifact invariant violated: callable eval template references missing checked type scheme", .{});
+                }
+                unreachable;
+            };
+            const checked_type_schemes = try singleton(allocator, ArtifactCheckedTypeSchemeRef, .{
+                .artifact = artifact_key,
+                .scheme = scheme.id,
+            });
+            errdefer freeConstSlice(allocator, checked_type_schemes);
+
+            break :blk .{
+                .checked_type_roots = checked_type_roots,
+                .checked_type_schemes = checked_type_schemes,
+                .callable_eval_templates = callable_eval_template,
+            };
+        },
+    };
+}
 
 pub const ConstTemplate = struct {
     body: CheckedConstBodyRef,
@@ -5153,6 +5231,21 @@ pub const CheckedModuleArtifact = struct {
             for (exported.template_closure.checked_type_schemes) |scheme_ref| {
                 std.debug.assert(std.mem.eql(u8, &scheme_ref.artifact.bytes, &self.key.bytes));
                 std.debug.assert(@intFromEnum(scheme_ref.scheme) < self.checked_types.schemes.len);
+            }
+        }
+
+        for (self.exported_procedure_bindings.bindings) |exported| {
+            std.debug.assert(std.mem.eql(u8, &exported.binding.artifact.bytes, &self.key.bytes));
+            switch (exported.body) {
+                .direct_template => {
+                    std.debug.assert(exported.template_closure.checked_procedure_templates.len > 0);
+                    std.debug.assert(exported.template_closure.checked_type_roots.len > 0);
+                },
+                .callable_eval_template => |template_id| {
+                    std.debug.assert(@intFromEnum(template_id) < self.callable_eval_templates.templates.len);
+                    std.debug.assert(exported.template_closure.callable_eval_templates.len > 0);
+                    std.debug.assert(exported.template_closure.checked_type_roots.len > 0);
+                },
             }
         }
 
@@ -5706,8 +5799,11 @@ pub fn publishFromTypedModule(
     var exported_procedure_bindings = try ExportedProcedureBindingTable.fromModule(
         allocator,
         module,
+        &checked_types,
+        &checked_procedure_templates,
         &top_level_values,
         &top_level_procedure_bindings,
+        &callable_eval_templates,
         artifact_key,
     );
     errdefer exported_procedure_bindings.deinit(allocator);
